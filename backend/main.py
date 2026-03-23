@@ -1,8 +1,11 @@
 """
 AI自动开发系统 - FastAPI主应用
 """
+import os
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import Dict, Any
 import uuid
@@ -33,6 +36,9 @@ app = FastAPI(
     description="从自然语言需求到可运行软件的端到端自动化开发系统",
     version="0.1.0"
 )
+
+# 前端文件目录
+FRONTEND_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend")
 
 # 配置CORS
 app.add_middleware(
@@ -159,6 +165,20 @@ async def execute_project(project_id: str):
         "status": "started",
         "message": "项目执行已开始"
     }
+
+
+# 前端页面路由
+@app.get("/app")
+async def serve_frontend():
+    """提供前端主页面"""
+    index_path = os.path.join(FRONTEND_DIR, "index.html")
+    if os.path.exists(index_path):
+        return FileResponse(index_path)
+    raise HTTPException(status_code=404, detail="Frontend not found")
+
+# 挂载前端静态文件
+if os.path.exists(FRONTEND_DIR):
+    app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
 
 
 if __name__ == "__main__":

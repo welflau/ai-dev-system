@@ -1,5 +1,7 @@
-// API 基础配置
-const API_BASE_URL = 'http://localhost:8000';
+// API 基础配置 - 自动检测是否通过后端服务访问
+const API_BASE_URL = window.location.protocol === 'file:' 
+    ? 'http://localhost:8000' 
+    : window.location.origin;
 
 // 全局状态
 let projects = [];
@@ -85,6 +87,15 @@ async function submitRequirement() {
             showAlert(`需求提交成功！项目ID: ${data.project_id}`, 'success');
             currentProjectId = data.project_id;
 
+            // 将项目添加到本地列表
+            projects.push({
+                id: data.project_id,
+                name: projectName || '未命名项目',
+                description: userInput,
+                status: data.status || 'pending',
+                created_at: new Date().toISOString()
+            });
+
             // 清空表单
             document.getElementById('user-input').value = '';
             document.getElementById('tech-stack').value = '';
@@ -95,7 +106,22 @@ async function submitRequirement() {
                 showPage('projects');
             }, 1000);
         } else {
-            showAlert(`提交失败: ${data.detail || '未知错误'}`, 'error');
+            // 处理错误信息 - detail 可能是字符串或数组
+            let errorMsg = '未知错误';
+            if (data.detail) {
+                if (typeof data.detail === 'string') {
+                    errorMsg = data.detail;
+                } else if (Array.isArray(data.detail)) {
+                    errorMsg = data.detail.map(err => {
+                        if (typeof err === 'string') return err;
+                        // Pydantic 验证错误格式: {loc, msg, type}
+                        return err.msg || JSON.stringify(err);
+                    }).join('; ');
+                } else {
+                    errorMsg = JSON.stringify(data.detail);
+                }
+            }
+            showAlert(`提交失败: ${errorMsg}`, 'error');
         }
     } catch (error) {
         showAlert(`网络错误: ${error.message}`, 'error');

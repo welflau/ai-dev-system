@@ -361,6 +361,17 @@
         </div>
     </div>
 
-    <script src="app.js"></script>
+    <script>
+    // 自动检测 JS 路径
+    (function() {
+        var script = document.createElement('script');
+        if (window.location.protocol === 'file:') {
+            script.src = 'app.js';
+        } else {
+            script.src = '/static/app.js';
+        }
+        document.body.appendChild(script);
+    })();
+    </script>
 </body>
 </html>
