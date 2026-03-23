@@ -158,14 +158,36 @@ async def update_task_status(
 
 @app.post("/api/projects/{project_id}/execute")
 async def execute_project(project_id: str):
-    """执行项目（模拟：将第一个 pending 任务标记为 in_progress）"""
+    """
+    执行项目：
+    1. 先将所有 in_progress 任务标记为 completed（模拟执行完成）
+    2. 再将下一个 pending 任务标记为 in_progress
+    """
     state = orchestrator.get_project_state(project_id)
     if not state:
         raise HTTPException(status_code=404, detail="项目不存在")
 
-    # 找到第一个 pending 任务并标记为进行中
+    completed_tasks = []
     started_tasks = []
+
+    # 第一步：完成所有正在进行的任务
     for phase, tasks in state["tasks_by_phase"].items():
+        for task in tasks:
+            if task["status"] == "in_progress":
+                orchestrator.update_task(
+                    project_id=project_id,
+                    task_id=task["id"],
+                    status=TaskStatus.COMPLETED,
+                )
+                completed_tasks.append(task["name"])
+
+    # 重新获取状态（因为完成任务可能触发阶段推进）
+    state = orchestrator.get_project_state(project_id)
+
+    # 第二步：找到下一个 pending 任务并启动
+    phase_order = ["requirement", "design", "development", "testing", "deployment"]
+    for phase in phase_order:
+        tasks = state["tasks_by_phase"].get(phase, [])
         for task in tasks:
             if task["status"] == "pending":
                 orchestrator.update_task(
@@ -178,10 +200,20 @@ async def execute_project(project_id: str):
         if started_tasks:
             break
 
+    # 构建反馈消息
+    messages = []
+    if completed_tasks:
+        messages.append(f"已完成: {', '.join(completed_tasks)}")
+    if started_tasks:
+        messages.append(f"已启动: {', '.join(started_tasks)}")
+    if not completed_tasks and not started_tasks:
+        messages.append("所有任务已完成！")
+
     return {
         "project_id": project_id,
-        "status": "executing",
-        "message": f"已启动任务: {', '.join(started_tasks)}" if started_tasks else "没有待执行的任务",
+        "status": "executing" if started_tasks else "idle",
+        "message": " | ".join(messages),
+        "completed_tasks": completed_tasks,
         "started_tasks": started_tasks,
     }
 

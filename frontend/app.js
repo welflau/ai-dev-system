@@ -369,20 +369,47 @@ function renderTaskRow(task) {
 // ============ 执行项目 ============
 
 async function executeProject(projectId) {
+    const btn = event ? event.target : null;
+    const originalText = btn ? btn.innerHTML : '';
+
     try {
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading"></span> 执行中...';
+        }
+
         const response = await fetch(`${API_BASE_URL}/api/projects/${projectId}/execute`, {
             method: 'POST',
         });
         const data = await response.json();
 
         if (response.ok) {
+            // 显示执行结果
+            const msg = data.message || '执行完成';
+            if (btn) {
+                btn.innerHTML = '✓ ' + msg;
+                btn.style.background = '#52c41a';
+                setTimeout(() => {
+                    btn.innerHTML = originalText;
+                    btn.style.background = '';
+                    btn.disabled = false;
+                }, 1500);
+            }
             // 刷新项目详情
-            setTimeout(() => viewProject(projectId), 300);
+            setTimeout(() => viewProject(projectId), 500);
         } else {
             alert('执行失败: ' + (data.detail || '未知错误'));
+            if (btn) {
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+            }
         }
     } catch (err) {
         alert('网络错误: ' + err.message);
+        if (btn) {
+            btn.innerHTML = originalText;
+            btn.disabled = false;
+        }
     }
 }
 
