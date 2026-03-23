@@ -2,7 +2,7 @@
 文件操作工具
 """
 import os
-from typing import Optional
+from typing import Dict, Optional
 from .registry import BaseTool
 
 

@@ -111,7 +111,9 @@ class TestFileTools:
         )
         
         assert result["success"] is True
-        assert "subdir/subfile.txt" in result["files"]
+        # 兼容 Windows 和 Linux 路径分隔符
+        normalized_files = [f.replace("\\", "/") for f in result["files"]]
+        assert "subdir/subfile.txt" in normalized_files
 
 
 class TestToolRegistry:
