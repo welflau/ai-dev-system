@@ -1,13 +1,12 @@
-# AI自动开发系统后端
+# AI 自动开发系统后端
 
 ## 技术栈
-- Python 3.10+
-- FastAPI (Web框架)
-- LangGraph (Agent编排)
-- SQLAlchemy (ORM)
-- PostgreSQL (数据库)
-- Redis (缓存和任务队列)
-- Celery (异步任务处理)
+- Python 3.8+
+- FastAPI (Web 框架)
+- SQLite (数据持久化)
+- OpenAI 兼容 API (LLM 引擎)
+- SSE / sse-starlette (实时推送)
+- pytest (92 个测试用例)
 
 ## 安装依赖
 
@@ -15,33 +14,57 @@
 pip install -r requirements.txt
 ```
 
+## 配置 LLM (可选)
+
+```bash
+cp .env.example .env
+# 编辑 .env 填入 LLM_BASE_URL, LLM_API_KEY, LLM_MODEL
+```
+
 ## 运行开发服务器
 
 ```bash
+python main.py
+# 或
 uvicorn main:app --reload --port 8000
 ```
+
+## 访问地址
+
+| 页面 | 地址 |
+|------|------|
+| 前端界面 | http://localhost:8000/app |
+| API 文档 | http://localhost:8000/docs |
+| 健康检查 | http://localhost:8000/health |
 
 ## 项目结构
 
 ```
 backend/
-├── orchestrator/      # 协调器
-│   ├── decomposer.py  # 任务分解器
-│   ├── coordinator.py # 协调引擎
-│   └── state_manager.py
-├── agents/           # 智能体
-│   ├── base.py       # 基类
-│   ├── product.py    # 产品代理
-│   ├── architect.py  # 架构师代理
-│   ├── dev.py        # 开发代理
-│   └── test.py      # 测试代理
-├── tools/           # 工具集成
-│   ├── registry.py   # 工具注册表
-│   ├── git_tool.py   # Git工具
-│   └── file_tool.py  # 文件工具
-├── api/             # API接口
-│   └── routes/
-├── models/          # 数据模型
-├── utils/           # 工具函数
-└── tests/           # 测试
+├── agents/               # 6 个 AI Agent
+│   ├── base.py           # BaseAgent 基类
+│   ├── product.py        # ProductAgent (需求分析)
+│   ├── architect.py      # ArchitectAgent (架构设计)
+│   ├── dev.py            # DevAgent (代码生成)
+│   ├── test_agent.py     # TestAgent (测试生成)
+│   ├── review_agent.py   # ReviewAgent (代码审查)
+│   └── deploy_agent.py   # DeployAgent (部署配置)
+├── orchestrator/         # 协调器
+│   ├── coordinator.py    # Orchestrator + ProductAgentAdapter
+│   ├── decomposer.py     # TaskDecomposer (LLM + 规则引擎)
+│   ├── state_manager.py  # StateManager 内存版
+│   └── db_state_manager.py # DbStateManager SQLite 版
+├── llm/                  # LLM 客户端 (OpenAI 兼容)
+├── tools/                # 工具集成 (Git + 文件)
+├── models/               # 数据模型 (Pydantic)
+├── tests/                # 测试 (92 个用例)
+├── projects/             # Agent 生成的项目输出
+├── config.py             # 集中化配置
+└── main.py               # FastAPI 主应用
+```
+
+## 运行测试
+
+```bash
+python -m pytest tests/ -v
 ```

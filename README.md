@@ -1,78 +1,74 @@
-# AI驱动的全自动软件开发系统
+# AI 驱动的全自动软件开发系统
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
-[![React 18](https://img.shields.io/badge/react-18-61DAFB.svg)](https://reactjs.org/)
+[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![Tests](https://img.shields.io/badge/tests-92%20passed-brightgreen.svg)](backend/tests/)
+[![Version](https://img.shields.io/badge/version-v0.6.0-orange.svg)](ROADMAP.md)
 
-> 用AI智能体协作,从自然语言需求到可运行软件的端到端自动化开发系统
+> 用 AI 智能体协作，从自然语言需求到可运行软件的端到端自动化开发系统
 
 ## 🎯 项目愿景
 
-**"一个大脑,多个智能体,全链自动执行"**
+**"一个大脑，多个智能体，全链自动执行"**
 
-本系统旨在实现软件开发的全流程自动化:
-- 输入: 自然语言描述的需求
-- 输出: 可运行的软件 + 完整文档 + 测试用例
+本系统旨在实现软件开发的全流程自动化：
+- **输入**: 自然语言描述的需求
+- **输出**: 可运行的软件 + 完整文档 + 测试用例 + 部署配置
 
 ## ✨ 核心特性
 
 ### 🧠 AI Orchestrator (协调器)
-- 智能任务分解与依赖管理
-- 多Agent协同工作流编排
-- 状态管理和上下文共享
-- 错误自愈与人工审批
+- 智能任务分解（LLM + 规则引擎双模式）
+- 多 Agent 协同工作流编排
+- Agent 间上下文自动传递
+- SQLite 持久化状态管理
 
-### 🤖 多智能体体系
+### 🤖 6 大智能体
 
-| Agent | 能力 |
-|-------|------|
-| **ProductAgent** | 需求分析、PRD生成、用户故事创建 |
-| **ArchitectAgent** | 系统架构设计、技术栈选型、数据库/API设计 |
-| **DevAgent** | 代码生成、重构、测试编写、Git操作 |
-| **TestAgent** | 测试用例生成、执行、Bug分析、覆盖率分析 |
-| **ReviewAgent** | 代码审查、安全扫描、性能优化 |
-| **DeployAgent** | CI/CD配置、部署自动化 |
-
-### 🛠️ 工具集成层
-- **Git**: 自动创建仓库、分支管理、PR创建
-- **CI/CD**: Jenkins、GitHub Actions集成
-- **项目管理**: Jira、TAPD等工具对接
-- **测试框架**: 自动化测试执行与报告
+| Agent | 能力 | 模式 |
+|-------|------|------|
+| **ProductAgent** | 需求分析、PRD 生成 | LLM + 模板降级 |
+| **ArchitectAgent** | 系统架构设计（7 种方案） | LLM + 模板降级 |
+| **DevAgent** | 代码生成（14 种任务处理器） | LLM + 模板降级 |
+| **TestAgent** | pytest 测试用例生成 | LLM + 模板降级 |
+| **ReviewAgent** | 代码审查（10 种规则 + 评分 A~F） | LLM + 规则引擎 |
+| **DeployAgent** | Docker + CI/CD + Nginx 部署配置 | LLM + 模板降级 |
 
 ### 📊 可视化看板
-- 实时项目进度追踪
-- Agent工作日志展示
-- Git提交统计与分析
-- 构建状态与告警
+- Pipeline 看板视图（需求→架构→开发→测试→部署）
+- SSE 实时推送（替代轮询）
+- 代码语法高亮预览（highlight.js）
+- 项目文件浏览器
+- 实时处理日志面板
+
+### 🛠️ 工具集成层
+- **Git**: 初始化、添加、提交、推送、分支管理
+- **文件**: 读写、目录浏览
+- **打包**: 项目 ZIP 一键下载
 
 ## 🏗️ 系统架构
 
 ```
-用户自然语言指令
+用户自然语言需求
         ↓
-[AI 项目经理 & 协调员] — 任务分解、规划、调用工具、监控状态
-        |
-        |——— 调度与协调 ————
-        |        |              |
-        |        |              |
-    [产品/需求代理]   [开发工程师代理]   [测试工程师代理] ...
-        |        |              |
-        |        |              |
-[Git]  [云平台]  [项目管理工具]  [CI/CD]  [监控]  ← 工具集成层
-        |
+[Orchestrator 协调器] — 任务分解 → 状态管理 → Agent 调度
         ↓
-    项目看板（全流程状态可视化）
+   Agent 池（上下文自动传递）
+   ┌──────────┬──────────┬──────────┬──────────┬──────────┐
+ProductAgent  ArchitectAgent  DevAgent  TestAgent  ReviewAgent  DeployAgent
+   ↓              ↓           ↓          ↓          ↓           ↓
+ PRD 文档      设计文档     代码文件    测试文件    审查报告    部署配置
+                                                    ↓
+                         SSE EventBus → 前端实时更新（Pipeline 看板）
 ```
 
 ## 🚀 快速开始
 
 ### 前置要求
-- Python 3.10+
-- Node.js 18+
-- PostgreSQL 14+
-- Redis 6+
+- Python 3.8+
+- pip
 
-### 安装
+### 安装与启动
 
 ```bash
 # 克隆仓库
@@ -83,126 +79,113 @@ cd ai-dev-system
 cd backend
 pip install -r requirements.txt
 
-# 安装前端依赖
-cd ../frontend
-npm install
+# (可选) 配置 LLM
+cp .env.example .env
+# 编辑 .env 填入你的 API Key
 
 # 启动服务
-cd ../backend
-python -m uvicorn main:app --reload
-
-# 在另一个终端启动前端
-cd frontend
-npm start
+python main.py
 ```
 
-### 使用示例
+### 访问系统
 
-```python
-# 1. 输入需求
-user_input = """
-我想开发一个个人博客系统,需要支持:
-- Markdown文章编辑和预览
-- 评论功能
-- 标签分类
-- 响应式设计
-"""
+| 页面 | 地址 |
+|------|------|
+| 前端界面 | http://localhost:8000/app |
+| API 文档 | http://localhost:8000/docs |
+| 健康检查 | http://localhost:8000/health |
 
-# 2. AI自动处理
-from orchestrator import Orchestrator
+### 使用流程
 
-orchestrator = Orchestrator()
-project_plan = await orchestrator.process_request(user_input)
+1. 打开 http://localhost:8000/app
+2. 点击 **"提交需求"** → 输入自然语言描述
+3. 系统自动分解任务 → 在项目看板查看
+4. 点击 **"一键执行"** → 系统自动完成需求分析、架构设计、代码生成、测试、审查、部署配置
+5. 在 Pipeline 看板实时查看各阶段进度
+6. 下载项目 ZIP 文件
 
-# 3. 自动执行
-await orchestrator.execute_plan(project_plan)
+### 运行测试
 
-# 4. 查看结果
-# - 完整的项目代码
-# - 单元测试
-# - API文档
-# - 部署配置
+```bash
+cd backend
+python -m pytest tests/ -v   # 92 个测试全部通过
 ```
 
 ## 📁 项目结构
 
 ```
 ai-dev-system/
-├── backend/                 # 后端服务
-│   ├── orchestrator/        # 协调器
-│   │   ├── decomposer.py    # 任务分解器
-│   │   ├── coordinator.py   # 协调引擎
-│   │   └── state_manager.py # 状态管理
-│   ├── agents/              # 智能体
-│   │   ├── base.py          # Agent基类
-│   │   ├── product.py       # 产品代理
-│   │   ├── architect.py     # 架构师代理
-│   │   ├── dev.py           # 开发代理
-│   │   └── test.py          # 测试代理
-│   ├── tools/               # 工具集成
-│   │   ├── registry.py      # 工具注册表
-│   │   ├── git_tool.py      # Git工具
-│   │   └── ci_cd_tool.py    # CI/CD工具
-│   ├── api/                 # API接口
-│   └── models/              # 数据模型
-├── frontend/                # 前端应用
-│   ├── src/
-│   │   ├── components/      # 组件
-│   │   ├── pages/           # 页面
-│   │   └── services/        # API调用
-│   └── package.json
-├── docs/                    # 文档
-│   ├── architecture.md      # 架构文档
-│   ├── api.md               # API文档
-│   └── development.md       # 开发指南
-└── tests/                   # 测试
-    ├── unit/
-    ├── integration/
-    └── e2e/
+├── backend/                      # 后端代码
+│   ├── agents/                   # AI Agent 实现
+│   │   ├── base.py               # BaseAgent 抽象基类
+│   │   ├── product.py            # ProductAgent (需求分析)
+│   │   ├── architect.py          # ArchitectAgent (架构设计)
+│   │   ├── dev.py                # DevAgent (代码生成)
+│   │   ├── test_agent.py         # TestAgent (测试生成)
+│   │   ├── review_agent.py       # ReviewAgent (代码审查)
+│   │   └── deploy_agent.py       # DeployAgent (部署配置)
+│   ├── orchestrator/             # 协调器
+│   │   ├── coordinator.py        # Orchestrator + ProductAgentAdapter
+│   │   ├── decomposer.py         # TaskDecomposer (LLM + 规则引擎)
+│   │   ├── state_manager.py      # StateManager 内存版
+│   │   └── db_state_manager.py   # DbStateManager SQLite 版
+│   ├── llm/                      # LLM 客户端
+│   │   └── client.py             # LLMClient (OpenAI 兼容)
+│   ├── models/                   # 数据模型
+│   ├── tools/                    # 开发工具 (Git + 文件)
+│   ├── tests/                    # 测试 (92 个用例)
+│   ├── projects/                 # Agent 生成的项目输出
+│   ├── config.py                 # 集中化配置 (Settings)
+│   └── main.py                   # FastAPI 主应用入口
+├── frontend/                     # 前端代码
+│   ├── index.html                # 主页面 (含全部 CSS + HTML)
+│   └── app.js                    # 应用逻辑 (路由/API/SSE/高亮)
+├── .github/workflows/ci.yml      # GitHub Actions CI
+├── ROADMAP.md                    # 开发路线图
+└── DEVELOPMENT.md                # 详细开发文档
 ```
 
 ## 🛠️ 技术栈
 
 ### 后端
-- **框架**: FastAPI
-- **LLM**: DeepSeek-Coder / GPT-4
-- **Orchestrator**: LangGraph
-- **任务队列**: Celery + Redis
-- **数据库**: PostgreSQL + SQLAlchemy
-- **向量数据库**: Pinecone
+| 技术 | 说明 |
+|------|------|
+| FastAPI | Python 异步 Web 框架 |
+| SQLite | DbStateManager 持久化 |
+| OpenAI 兼容 API | LLM 引擎（支持 CodeBuddy/DeepSeek/Moonshot 等） |
+| SSE (sse-starlette) | 实时事件推送 |
+| pytest | 92 个测试用例 |
 
 ### 前端
-- **框架**: React 18
-- **UI库**: Ant Design Pro
-- **状态管理**: Zustand
-- **HTTP客户端**: Axios
-- **实时通信**: Socket.io
+| 技术 | 说明 |
+|------|------|
+| HTML5 / CSS3 / JavaScript | 纯原生实现，零依赖 |
+| highlight.js (CDN) | 代码语法高亮 |
+| EventSource | SSE 实时更新 |
 
 ## 📊 开发路线图
 
-### Phase 1: 基础框架 (1-2个月)
-- [x] 项目初始化
-- [ ] AI Orchestrator基础架构
-- [ ] ProductAgent实现
-- [ ] 简单Web界面
+### ✅ 已完成
 
-### Phase 2: 多Agent协同 (2-3个月)
-- [ ] ArchitectAgent实现
-- [ ] DevAgent实现
-- [ ] TestAgent实现
-- [ ] Git工具集成
-- [ ] 完整看板系统
+| 阶段 | 版本 | 主要功能 |
+|------|------|---------|
+| 基础框架搭建 | v0.1~v0.2 | ProductAgent + DevAgent + ArchitectAgent + 前端看板 |
+| SQLite 持久化 | v0.3.0 | 数据持久化 + 一键执行 + 文件浏览器 |
+| LLM 智能引擎 | v0.4.0 | 智能任务分解 + 智能代码生成 + 智能架构设计 |
+| Agent 协作 | v0.5.0 | 上下文传递 + TestAgent + SSE 实时推送 + 语法高亮 |
+| 质量 + 部署 | v0.6.0 | ReviewAgent + DeployAgent + ZIP 打包 + Pipeline 看板 |
 
-### Phase 3: 端到端自动化 (3-6个月)
-- [ ] CI/CD集成
-- [ ] ReviewAgent实现
-- [ ] DeployAgent实现
-- [ ] 错误自愈机制
-- [ ] 生产环境部署
+### 🔜 开发中
+
+| 阶段 | 版本 | 计划功能 |
+|------|------|---------|
+| 进阶功能 | v0.7.0 | 多 LLM 支持、项目模板系统、实时协作、Agent 自我进化 |
+
+详细路线图见 [ROADMAP.md](ROADMAP.md)
 
 ## 🤝 贡献指南
 
-我们欢迎任何形式的贡献!
+我们欢迎任何形式的贡献！
 
 1. Fork 本仓库
 2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
@@ -221,10 +204,6 @@ ai-dev-system/
 
 ## 🙏 致谢
 
-- [LangGraph](https://github.com/langchain-ai/langgraph) - Agent工作流编排
-- [Ant Design Pro](https://pro.ant.design/) - 企业级前端解决方案
-- [FastAPI](https://fastapi.tiangolo.com/) - 现代化Web框架
-
----
-
-**注意**: 本项目目前处于早期开发阶段,API和架构可能会有较大变化。欢迎关注或参与贡献!
+- [FastAPI](https://fastapi.tiangolo.com/) - 现代化 Web 框架
+- [highlight.js](https://highlightjs.org/) - 代码语法高亮
+- [sse-starlette](https://github.com/sysid/sse-starlette) - SSE 实时推送
