@@ -72,6 +72,7 @@ logs/
 # Artifacts
 artifacts/
 generated-images/
+backend/projects/
 *.pem
 *.key
 

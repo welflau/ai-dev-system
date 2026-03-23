@@ -16,12 +16,13 @@ from tools.git_tool import (
     GitInitTool, GitAddTool, GitCommitTool, GitPushTool, GitCreateBranchTool
 )
 from orchestrator import Orchestrator
+from orchestrator.db_state_manager import DbStateManager
 
 # 创建FastAPI应用
 app = FastAPI(
     title="AI自动开发系统",
     description="从自然语言需求到可运行软件的端到端自动化开发系统",
-    version="0.2.0"
+    version="0.3.0"
 )
 
 # 前端文件目录
@@ -49,12 +50,17 @@ tool_registry.register(GitCommitTool())
 tool_registry.register(GitPushTool())
 tool_registry.register(GitCreateBranchTool())
 
-# 初始化协调器（配置项目输出目录）
+# 初始化协调器（配置项目输出目录 + SQLite 持久化）
 PROJECTS_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "projects"
 )
 os.makedirs(PROJECTS_DIR, exist_ok=True)
-orchestrator = Orchestrator(work_dir=PROJECTS_DIR)
+
+DB_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "ai_dev_system.db"
+)
+db_state_manager = DbStateManager(db_path=DB_PATH)
+orchestrator = Orchestrator(state_manager=db_state_manager, work_dir=PROJECTS_DIR)
 
 
 # ============ 基础端点 ============
@@ -64,7 +70,7 @@ async def root():
     """根路径"""
     return {
         "message": "AI自动开发系统",
-        "version": "0.2.0",
+        "version": "0.3.0",
         "status": "running"
     }
 
@@ -212,6 +218,129 @@ async def execute_project(project_id: str):
         "agent": result.get("agent", ""),
         "files_created": [os.path.basename(f) if isinstance(f, str) else f for f in files_created],
         "files_count": len(files_created),
+    }
+
+
+@app.post("/api/projects/{project_id}/execute-all")
+async def execute_all_tasks(project_id: str):
+    """
+    一键全量执行：自动依次执行所有 pending 任务直到完成
+    """
+    state = orchestrator.get_project_state(project_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="项目不存在")
+
+    results = []
+    total_files = 0
+    max_iterations = 50  # 安全上限
+
+    for _ in range(max_iterations):
+        # 先完成所有 in_progress 的任务
+        current_state = orchestrator.get_project_state(project_id)
+        for phase, tasks in current_state["tasks_by_phase"].items():
+            for task in tasks:
+                if task["status"] == "in_progress":
+                    orchestrator.update_task(
+                        project_id=project_id,
+                        task_id=task["id"],
+                        status=TaskStatus.COMPLETED,
+                    )
+
+        # 执行下一个
+        result = orchestrator.execute_next_task(project_id)
+        task_name = result.get("task", "")
+
+        if not task_name:
+            # 没有更多任务了
+            break
+
+        files_created = result.get("files_created", [])
+        total_files += len(files_created)
+        results.append({
+            "task": task_name,
+            "agent": result.get("agent", ""),
+            "success": result.get("success", False),
+            "files_count": len(files_created),
+        })
+
+    # 最后把最后一个 in_progress 的任务也完成
+    final_state = orchestrator.get_project_state(project_id)
+    for phase, tasks in final_state["tasks_by_phase"].items():
+        for task in tasks:
+            if task["status"] == "in_progress":
+                orchestrator.update_task(
+                    project_id=project_id,
+                    task_id=task["id"],
+                    status=TaskStatus.COMPLETED,
+                )
+
+    summary = orchestrator.get_project_state(project_id)
+    return {
+        "project_id": project_id,
+        "status": "completed",
+        "message": f"全量执行完成：共执行 {len(results)} 个任务，生成 {total_files} 个文件",
+        "tasks_executed": len(results),
+        "total_files_created": total_files,
+        "results": results,
+        "task_summary": summary["task_summary"] if summary else {},
+    }
+
+
+@app.get("/api/projects/{project_id}/files")
+async def list_project_files(project_id: str):
+    """
+    列出项目生成的所有文件
+    """
+    project_dir = os.path.join(PROJECTS_DIR, project_id)
+    if not os.path.exists(project_dir):
+        return {"project_id": project_id, "files": [], "message": "项目目录尚未创建"}
+
+    files = []
+    for root, dirs, filenames in os.walk(project_dir):
+        for fname in filenames:
+            full_path = os.path.join(root, fname)
+            rel_path = os.path.relpath(full_path, project_dir).replace("\\", "/")
+            size = os.path.getsize(full_path)
+            files.append({
+                "path": rel_path,
+                "name": fname,
+                "size": size,
+                "size_display": f"{size:,} B" if size < 1024 else f"{size/1024:.1f} KB",
+            })
+
+    return {
+        "project_id": project_id,
+        "files": files,
+        "total_files": len(files),
+    }
+
+
+@app.get("/api/projects/{project_id}/files/{file_path:path}")
+async def read_project_file(project_id: str, file_path: str):
+    """
+    读取项目生成的文件内容
+    """
+    full_path = os.path.join(PROJECTS_DIR, project_id, file_path)
+
+    # 安全检查：防止路径穿越
+    abs_project = os.path.abspath(os.path.join(PROJECTS_DIR, project_id))
+    abs_file = os.path.abspath(full_path)
+    if not abs_file.startswith(abs_project):
+        raise HTTPException(status_code=403, detail="路径不允许")
+
+    if not os.path.exists(full_path):
+        raise HTTPException(status_code=404, detail="文件不存在")
+
+    try:
+        with open(full_path, "r", encoding="utf-8") as f:
+            content = f.read()
+    except UnicodeDecodeError:
+        content = "[二进制文件，无法预览]"
+
+    return {
+        "path": file_path,
+        "content": content,
+        "size": os.path.getsize(full_path),
     }
 
 

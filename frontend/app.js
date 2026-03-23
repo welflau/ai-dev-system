@@ -1,6 +1,6 @@
 /**
- * AI 自动开发系统 - 前端应用 v0.2
- * 支持任务分解展示、项目详情、阶段进度追踪
+ * AI 自动开发系统 - 前端应用 v0.3
+ * 支持任务分解展示、项目详情、阶段进度追踪、一键执行、文件浏览
  */
 
 // API 配置
@@ -255,9 +255,15 @@ async function viewProject(projectId) {
                 </div>
 
                 <!-- 操作按钮 -->
-                <div style="margin-top:16px;display:flex;gap:12px">
+                <div style="margin-top:16px;display:flex;gap:12px;flex-wrap:wrap">
                     <button class="btn btn-success btn-sm" onclick="executeProject('${projectId}')">
                         ▶ 执行下一个任务
+                    </button>
+                    <button class="btn btn-primary btn-sm" onclick="executeAllTasks('${projectId}')">
+                        ⚡ 一键全量执行
+                    </button>
+                    <button class="btn btn-default btn-sm" onclick="showProjectFiles('${projectId}')">
+                        📁 查看生成文件
                     </button>
                     <button class="btn btn-default btn-sm" onclick="viewProject('${projectId}')">
                         🔄 刷新
@@ -271,6 +277,24 @@ async function viewProject(projectId) {
                     <h3>任务分解</h3>
                 </div>
                 ${renderTasksByPhase(state.tasks_by_phase)}
+            </div>
+
+            <!-- 文件浏览器（动态加载） -->
+            <div id="files-panel-${projectId}" class="card" style="display:none">
+                <div class="card-header">
+                    <h3>📁 生成的项目文件</h3>
+                    <button class="btn btn-default btn-sm" onclick="showProjectFiles('${projectId}')">🔄 刷新</button>
+                </div>
+                <div id="files-content-${projectId}"></div>
+            </div>
+
+            <!-- 代码预览 -->
+            <div id="code-preview-${projectId}" class="card" style="display:none">
+                <div class="card-header">
+                    <h3 id="code-preview-title-${projectId}">代码预览</h3>
+                    <button class="btn btn-default btn-sm" onclick="document.getElementById('code-preview-${projectId}').style.display='none'">✕ 关闭</button>
+                </div>
+                <pre id="code-preview-content-${projectId}" class="code-block"></pre>
             </div>
 
             <!-- 项目日志 -->
@@ -522,6 +546,139 @@ function formatLogData(data) {
     if (data.task_count) parts.push(`${data.task_count} 个任务`);
     if (data.requirement) parts.push(data.requirement.substring(0, 60));
     return parts.join(' | ') || JSON.stringify(data).substring(0, 80);
+}
+
+// ============ 一键全量执行 ============
+
+async function executeAllTasks(projectId) {
+    const btn = event ? event.target : null;
+    const originalText = btn ? btn.innerHTML : '';
+
+    if (!confirm('确认一键执行所有任务？这将依次执行所有 pending 任务。')) return;
+
+    try {
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading"></span> 全量执行中...';
+        }
+
+        const response = await fetch(`${API_BASE_URL}/api/projects/${projectId}/execute-all`, {
+            method: 'POST',
+        });
+        const data = await response.json();
+
+        if (response.ok) {
+            const msg = data.message || '全量执行完成';
+            if (btn) {
+                btn.innerHTML = `✓ ${msg}`;
+                btn.style.background = '#52c41a';
+                setTimeout(() => {
+                    btn.innerHTML = originalText;
+                    btn.style.background = '';
+                    btn.disabled = false;
+                }, 3000);
+            }
+            // 刷新项目详情
+            setTimeout(() => viewProject(projectId), 500);
+        } else {
+            alert('执行失败: ' + (data.detail || '未知错误'));
+            if (btn) { btn.innerHTML = originalText; btn.disabled = false; }
+        }
+    } catch (err) {
+        alert('网络错误: ' + err.message);
+        if (btn) { btn.innerHTML = originalText; btn.disabled = false; }
+    }
+}
+
+// ============ 项目文件浏览器 ============
+
+async function showProjectFiles(projectId) {
+    const panel = document.getElementById(`files-panel-${projectId}`);
+    const content = document.getElementById(`files-content-${projectId}`);
+    if (!panel || !content) return;
+
+    panel.style.display = 'block';
+    content.innerHTML = '<p style="text-align:center;padding:20px"><span class="loading"></span> 加载文件列表...</p>';
+
+    try {
+        const response = await fetch(`${API_BASE_URL}/api/projects/${projectId}/files`);
+        const data = await response.json();
+
+        if (!response.ok) throw new Error(data.detail || '加载失败');
+
+        const files = data.files || [];
+        if (files.length === 0) {
+            content.innerHTML = `
+                <div class="empty-state" style="padding:24px">
+                    <div class="icon">📂</div>
+                    <p>暂无生成文件，请先执行任务</p>
+                </div>`;
+            return;
+        }
+
+        // 按目录分组
+        const tree = {};
+        files.forEach(f => {
+            const parts = f.path.split('/');
+            const dir = parts.length > 1 ? parts.slice(0, -1).join('/') : '.';
+            if (!tree[dir]) tree[dir] = [];
+            tree[dir].push(f);
+        });
+
+        let html = `<div class="files-summary" style="padding:12px 16px;background:#f6f8fa;border-bottom:1px solid #f0f0f0;font-size:13px;color:rgba(0,0,0,0.55)">
+            共 ${files.length} 个文件
+        </div>`;
+
+        for (const [dir, dirFiles] of Object.entries(tree)) {
+            html += `<div class="file-dir" style="padding:8px 16px;font-weight:600;font-size:13px;color:rgba(0,0,0,0.45);border-bottom:1px solid #f0f0f0">📂 ${escapeHtml(dir)}/</div>`;
+            dirFiles.forEach(f => {
+                const ext = f.name.split('.').pop().toLowerCase();
+                const icon = getFileIcon(ext);
+                html += `
+                    <div class="file-row" onclick="previewFile('${projectId}', '${escapeHtml(f.path)}')" style="padding:10px 16px 10px 32px;display:flex;align-items:center;gap:10px;cursor:pointer;border-bottom:1px solid #fafafa;transition:background 0.15s" onmouseover="this.style.background='#f6f8fa'" onmouseout="this.style.background=''">
+                        <span style="font-size:16px">${icon}</span>
+                        <span style="flex:1;font-size:14px">${escapeHtml(f.name)}</span>
+                        <span style="font-size:12px;color:rgba(0,0,0,0.35)">${f.size_display}</span>
+                    </div>`;
+            });
+        }
+
+        content.innerHTML = html;
+    } catch (err) {
+        content.innerHTML = `<p style="padding:20px;color:#ff4d4f">加载失败: ${escapeHtml(err.message)}</p>`;
+    }
+}
+
+async function previewFile(projectId, filePath) {
+    const titleEl = document.getElementById(`code-preview-title-${projectId}`);
+    const contentEl = document.getElementById(`code-preview-content-${projectId}`);
+    const panel = document.getElementById(`code-preview-${projectId}`);
+    if (!panel || !contentEl) return;
+
+    panel.style.display = 'block';
+    if (titleEl) titleEl.textContent = `📄 ${filePath}`;
+    contentEl.textContent = '加载中...';
+
+    try {
+        const response = await fetch(`${API_BASE_URL}/api/projects/${projectId}/files/${filePath}`);
+        const data = await response.json();
+
+        if (!response.ok) throw new Error(data.detail || '加载失败');
+
+        contentEl.textContent = data.content || '(空文件)';
+    } catch (err) {
+        contentEl.textContent = `加载失败: ${err.message}`;
+    }
+}
+
+function getFileIcon(ext) {
+    const icons = {
+        'py': '🐍', 'js': '📜', 'html': '🌐', 'css': '🎨',
+        'json': '📋', 'md': '📝', 'txt': '📄', 'yml': '⚙️',
+        'yaml': '⚙️', 'sql': '🗃️', 'sh': '🖥️', 'bat': '🖥️',
+        'toml': '⚙️', 'cfg': '⚙️', 'ini': '⚙️', 'env': '🔐',
+    };
+    return icons[ext] || '📄';
 }
 
 // ============ 事件绑定 ============

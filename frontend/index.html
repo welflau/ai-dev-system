@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI 自动开发系统 v0.2</title>
+    <title>AI 自动开发系统 v0.3</title>
     <style>
         * { box-sizing: border-box; }
         body {
@@ -531,6 +531,23 @@
             line-height: 1.7;
         }
 
+        /* ===== 代码预览 ===== */
+        .code-block {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            padding: 16px;
+            border-radius: 8px;
+            overflow-x: auto;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            font-size: 13px;
+            line-height: 1.6;
+            max-height: 500px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+            margin: 0;
+        }
+
         /* ===== 响应式 ===== */
         @media (max-width: 768px) {
             .sidebar { width: 200px; }
@@ -544,7 +561,7 @@
         <div class="sidebar">
             <div class="sidebar-header">
                 <h2>AI 自动开发系统</h2>
-                <div class="version">v0.2.0 - Orchestrator</div>
+                <div class="version">v0.3.0 - Persistent</div>
             </div>
             <div class="menu-item active" data-page="home">🏠 首页</div>
             <div class="menu-item" data-page="submit">📝 提交需求</div>
