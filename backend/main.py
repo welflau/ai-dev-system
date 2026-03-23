@@ -97,11 +97,12 @@ async def process_request(request: ProcessRequest):
         project_id = str(uuid.uuid4())
         
         # 保存项目状态
+        from datetime import datetime
         project_states[project_id] = {
             "project_id": project_id,
             "request": request.dict(),
             "status": "analyzing",
-            "created_at": None  # 需要添加时间戳
+            "created_at": datetime.now().isoformat()
         }
         
         # TODO: 实现任务分解逻辑
@@ -116,17 +117,17 @@ async def process_request(request: ProcessRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/projects/{project_id}/state", response_model=GetProjectStateResponse)
+@app.get("/api/projects/{project_id}/state")
 async def get_project_state(project_id: str):
     """
     获取项目状态
     """
     if project_id not in project_states:
         raise HTTPException(status_code=404, detail="项目不存在")
-    
-    # TODO: 实现完整的状态获取逻辑
+
+    # 获取项目状态
     project_state = project_states[project_id]
-    
+
     # 计算任务摘要
     task_summary = {
         "total": 0,
@@ -135,11 +136,11 @@ async def get_project_state(project_id: str):
         "pending": 0,
         "failed": 0
     }
-    
-    return GetProjectStateResponse(
-        project_state=project_state,
-        task_summary=task_summary
-    )
+
+    return {
+        "project_state": project_state,
+        "task_summary": task_summary
+    }
 
 
 @app.post("/api/projects/{project_id}/execute")

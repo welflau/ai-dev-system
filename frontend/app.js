@@ -71,9 +71,11 @@ async function submitRequirement() {
                 'Content-Type': 'application/json',
             },
             body: JSON.stringify({
-                user_input: userInput,
-                tech_stack: techStack ? techStack.split(',').map(s => s.trim()) : [],
-                project_name: projectName
+                description: userInput,
+                tech_stack: techStack ? {
+                    preference: techStack.split(',').map(s => s.trim()).join(', ')
+                } : null,
+                preferences: projectName ? { project_name: projectName } : null
             }),
         });
 
