@@ -386,6 +386,151 @@
         .empty-state .icon { font-size: 48px; margin-bottom: 16px; }
         .empty-state p { margin: 0; font-size: 14px; }
 
+        /* ===== 使用指引 ===== */
+        .guide-section {
+            margin-bottom: 32px;
+            padding-bottom: 28px;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        .guide-title {
+            font-size: 17px;
+            font-weight: 600;
+            margin: 0 0 16px 0;
+            color: rgba(0,0,0,0.85);
+        }
+        .guide-steps {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        .guide-step {
+            display: flex;
+            gap: 16px;
+            align-items: flex-start;
+        }
+        .step-number {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #1890ff, #096dd9);
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 16px;
+            flex-shrink: 0;
+        }
+        .step-content h5 {
+            margin: 0 0 6px 0;
+            font-size: 15px;
+        }
+        .step-content p {
+            margin: 0 0 8px 0;
+            color: rgba(0,0,0,0.65);
+            font-size: 14px;
+            line-height: 1.7;
+        }
+        .guide-example {
+            background: #f6f8fa;
+            border-left: 3px solid #1890ff;
+            padding: 10px 14px;
+            border-radius: 0 6px 6px 0;
+            font-size: 13px;
+            color: rgba(0,0,0,0.65);
+            line-height: 1.6;
+        }
+        .guide-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+        .guide-table th {
+            background: #fafafa;
+            text-align: left;
+            padding: 10px 14px;
+            font-weight: 600;
+            border-bottom: 2px solid #f0f0f0;
+        }
+        .guide-table td {
+            padding: 10px 14px;
+            border-bottom: 1px solid #f5f5f5;
+            color: rgba(0,0,0,0.65);
+        }
+        .guide-table tr:hover td {
+            background: #fafafa;
+        }
+        .keyword-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 12px;
+        }
+        .keyword-card {
+            padding: 14px;
+            border-radius: 8px;
+            background: #fafafa;
+            border: 1px solid #f0f0f0;
+        }
+        .keyword-tag {
+            display: inline-block;
+            padding: 2px 10px;
+            border-radius: 4px;
+            font-size: 13px;
+            font-weight: 600;
+            margin-bottom: 6px;
+        }
+        .keyword-card p {
+            margin: 0 0 4px 0;
+            font-size: 12px;
+            color: rgba(0,0,0,0.45);
+        }
+        .keyword-desc {
+            font-size: 12px;
+            color: rgba(0,0,0,0.65);
+        }
+        .status-explain {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 14px;
+            background: #fafafa;
+            border-radius: 6px;
+            font-size: 14px;
+        }
+        .method-tag {
+            display: inline-block;
+            padding: 1px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            font-family: monospace;
+        }
+        .method-get { background: #e6f7ff; color: #1890ff; }
+        .method-post { background: #f6ffed; color: #52c41a; }
+        .method-put { background: #fff7e6; color: #fa8c16; }
+        .faq-list {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+        .faq-item {
+            padding: 16px;
+            background: #fafafa;
+            border-radius: 8px;
+            border: 1px solid #f0f0f0;
+        }
+        .faq-q {
+            font-weight: 600;
+            margin-bottom: 8px;
+            font-size: 14px;
+            color: rgba(0,0,0,0.85);
+        }
+        .faq-a {
+            font-size: 14px;
+            color: rgba(0,0,0,0.65);
+            line-height: 1.7;
+        }
+
         /* ===== 响应式 ===== */
         @media (max-width: 768px) {
             .sidebar { width: 200px; }
@@ -406,6 +551,7 @@
             <div class="menu-item" data-page="projects">📊 项目看板</div>
             <div class="menu-item" data-page="project-detail" style="display:none;">📋 项目详情</div>
             <div class="menu-item" data-page="tools">🛠️ 工具列表</div>
+            <div class="menu-item" data-page="guide">📖 使用指引</div>
         </div>
 
         <div class="main-content">
@@ -501,6 +647,214 @@
                     </div>
                     <div id="tools-list" class="tools-grid">
                         <p>加载中...</p>
+                    </div>
+                </div>
+            </div>
+            <!-- ===== 使用指引 ===== -->
+            <div id="page-guide" class="page">
+                <div class="card">
+                    <div class="card-header">
+                        <h3>使用指引</h3>
+                    </div>
+                    
+                    <!-- 快速上手 -->
+                    <div class="guide-section">
+                        <h4 class="guide-title">🚀 快速上手（3 分钟）</h4>
+                        <div class="guide-steps">
+                            <div class="guide-step">
+                                <div class="step-number">1</div>
+                                <div class="step-content">
+                                    <h5>提交需求</h5>
+                                    <p>点击侧边栏 <strong>「📝 提交需求」</strong>，在文本框中用自然语言描述你想要开发的系统。</p>
+                                    <div class="guide-example">
+                                        <strong>示例输入：</strong><br>
+                                        "开发一个用户管理 API 系统，包含登录注册和数据库"
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="guide-step">
+                                <div class="step-number">2</div>
+                                <div class="step-content">
+                                    <h5>查看任务分解</h5>
+                                    <p>系统自动将需求分解为多个开发任务，按 <strong>需求分析 → 架构设计 → 开发实现 → 测试验证 → 部署上线</strong> 五个阶段组织。</p>
+                                    <p>提交后会自动跳转到<strong>项目详情页</strong>，展示所有分解出的任务。</p>
+                                </div>
+                            </div>
+                            <div class="guide-step">
+                                <div class="step-number">3</div>
+                                <div class="step-content">
+                                    <h5>执行与跟踪</h5>
+                                    <p>在项目详情页点击 <strong>「▶ 执行下一个任务」</strong>，系统会按依赖顺序逐个执行任务。每 8 秒自动刷新状态。</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 功能说明 -->
+                    <div class="guide-section">
+                        <h4 class="guide-title">📋 功能说明</h4>
+                        <table class="guide-table">
+                            <thead>
+                                <tr>
+                                    <th>页面</th>
+                                    <th>功能</th>
+                                    <th>说明</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <td><strong>🏠 首页</strong></td>
+                                    <td>概览统计</td>
+                                    <td>查看总项目数、已完成、进行中、可用工具数</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>📝 提交需求</strong></td>
+                                    <td>创建项目</td>
+                                    <td>输入需求描述，可选填技术栈偏好和项目名称</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>📊 项目看板</strong></td>
+                                    <td>项目列表</td>
+                                    <td>查看所有项目及进度，点击进入项目详情</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>📋 项目详情</strong></td>
+                                    <td>任务管理</td>
+                                    <td>按阶段查看任务分解、进度条、统计摘要、日志</td>
+                                </tr>
+                                <tr>
+                                    <td><strong>🛠️ 工具列表</strong></td>
+                                    <td>开发工具</td>
+                                    <td>查看系统已注册的可用开发工具（文件操作、命令执行等）</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- 关键词识别 -->
+                    <div class="guide-section">
+                        <h4 class="guide-title">🔑 需求关键词识别</h4>
+                        <p style="color:rgba(0,0,0,0.65);margin-bottom:12px;">系统通过关键词匹配自动识别需求中的功能模块，生成对应的开发任务：</p>
+                        <div class="keyword-grid">
+                            <div class="keyword-card">
+                                <div class="keyword-tag" style="background:#e6f7ff;color:#1890ff;border:1px solid #91d5ff">API</div>
+                                <p>接口 / 端点 / REST</p>
+                                <span class="keyword-desc">→ 生成 API 设计、路由开发、接口文档任务</span>
+                            </div>
+                            <div class="keyword-card">
+                                <div class="keyword-tag" style="background:#f6ffed;color:#52c41a;border:1px solid #b7eb8f">数据库</div>
+                                <p>数据 / 存储 / 表</p>
+                                <span class="keyword-desc">→ 生成 Schema 设计、ORM 实现、数据迁移任务</span>
+                            </div>
+                            <div class="keyword-card">
+                                <div class="keyword-tag" style="background:#fff7e6;color:#fa8c16;border:1px solid #ffd591">前端</div>
+                                <p>界面 / UI / 页面</p>
+                                <span class="keyword-desc">→ 生成 UI 设计、组件开发、前端集成任务</span>
+                            </div>
+                            <div class="keyword-card">
+                                <div class="keyword-tag" style="background:#f9f0ff;color:#722ed1;border:1px solid #d3adf7">用户</div>
+                                <p>用户管理 / 权限 / 角色</p>
+                                <span class="keyword-desc">→ 生成用户模型、权限系统、角色管理任务</span>
+                            </div>
+                            <div class="keyword-card">
+                                <div class="keyword-tag" style="background:#fff1f0;color:#f5222d;border:1px solid #ffa39e">登录</div>
+                                <p>认证 / 注册 / 鉴权</p>
+                                <span class="keyword-desc">→ 生成认证流程、JWT、注册页面任务</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 任务状态说明 -->
+                    <div class="guide-section">
+                        <h4 class="guide-title">🏷️ 任务状态说明</h4>
+                        <div style="display:flex;gap:16px;flex-wrap:wrap">
+                            <div class="status-explain"><span>⬜</span> <strong>待处理</strong> - 任务尚未开始</div>
+                            <div class="status-explain"><span>🔵</span> <strong>进行中</strong> - 正在执行</div>
+                            <div class="status-explain"><span>✅</span> <strong>已完成</strong> - 任务执行成功</div>
+                            <div class="status-explain"><span>❌</span> <strong>失败</strong> - 执行出错，可重试</div>
+                            <div class="status-explain"><span>⛔</span> <strong>已取消</strong> - 任务被取消</div>
+                        </div>
+                    </div>
+
+                    <!-- Agent 角色 -->
+                    <div class="guide-section">
+                        <h4 class="guide-title">🤖 Agent 角色分工</h4>
+                        <table class="guide-table">
+                            <thead>
+                                <tr><th>角色</th><th>职责</th><th>负责阶段</th></tr>
+                            </thead>
+                            <tbody>
+                                <tr><td><span class="agent-tag">产品</span></td><td>需求分析、功能拆解</td><td>需求分析</td></tr>
+                                <tr><td><span class="agent-tag">架构师</span></td><td>系统设计、技术选型</td><td>架构设计</td></tr>
+                                <tr><td><span class="agent-tag">开发</span></td><td>编码实现、功能开发</td><td>开发实现</td></tr>
+                                <tr><td><span class="agent-tag">测试</span></td><td>测试用例、质量验证</td><td>测试验证</td></tr>
+                                <tr><td><span class="agent-tag">审查</span></td><td>代码审查、文档编写</td><td>测试验证</td></tr>
+                                <tr><td><span class="agent-tag">运维</span></td><td>环境配置、部署上线</td><td>部署上线</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- API 接口 -->
+                    <div class="guide-section">
+                        <h4 class="guide-title">🔌 API 接口一览</h4>
+                        <p style="color:rgba(0,0,0,0.65);margin-bottom:12px;">
+                            后端提供 RESTful API，完整交互文档见 
+                            <a href="/docs" target="_blank" style="color:#1890ff">Swagger UI (/docs)</a>
+                        </p>
+                        <table class="guide-table">
+                            <thead>
+                                <tr><th>方法</th><th>路径</th><th>说明</th></tr>
+                            </thead>
+                            <tbody>
+                                <tr><td><span class="method-tag method-get">GET</span></td><td>/health</td><td>健康检查 + 系统状态</td></tr>
+                                <tr><td><span class="method-tag method-post">POST</span></td><td>/api/process</td><td>提交需求，触发任务分解</td></tr>
+                                <tr><td><span class="method-tag method-get">GET</span></td><td>/api/projects</td><td>获取所有项目列表</td></tr>
+                                <tr><td><span class="method-tag method-get">GET</span></td><td>/api/projects/{id}/state</td><td>获取项目详情 + 任务列表</td></tr>
+                                <tr><td><span class="method-tag method-post">POST</span></td><td>/api/projects/{id}/execute</td><td>执行项目的下一个任务</td></tr>
+                                <tr><td><span class="method-tag method-put">PUT</span></td><td>/api/projects/{id}/tasks/{task_id}</td><td>更新指定任务状态</td></tr>
+                                <tr><td><span class="method-tag method-get">GET</span></td><td>/tools</td><td>查看已注册的开发工具</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- FAQ -->
+                    <div class="guide-section">
+                        <h4 class="guide-title">❓ 常见问题</h4>
+                        <div class="faq-list">
+                            <div class="faq-item">
+                                <div class="faq-q">Q: 需求描述越详细越好吗？</div>
+                                <div class="faq-a">A: 是的。描述中包含的关键词越多（如 API、数据库、前端、登录等），系统能识别出的功能模块就越多，生成的任务也越完整。</div>
+                            </div>
+                            <div class="faq-item">
+                                <div class="faq-q">Q: 技术栈偏好和项目名称是必填的吗？</div>
+                                <div class="faq-a">A: 不是。这两个字段是可选的，不填也不影响任务分解。技术栈偏好会记录在项目信息中，方便后续开发参考。</div>
+                            </div>
+                            <div class="faq-item">
+                                <div class="faq-q">Q: 任务执行失败怎么办？</div>
+                                <div class="faq-a">A: 失败的任务会标红显示。当前版本的任务执行是模拟执行（标记状态变化），后续版本会接入真正的 AI Agent 实现代码生成。</div>
+                            </div>
+                            <div class="faq-item">
+                                <div class="faq-q">Q: 数据保存在哪里？</div>
+                                <div class="faq-a">A: 当前版本数据保存在后端内存中，重启服务会丢失。后续将支持数据库持久化。</div>
+                            </div>
+                            <div class="faq-item">
+                                <div class="faq-q">Q: 怎么查看 API 详细文档？</div>
+                                <div class="faq-a">A: 访问 <a href="/docs" target="_blank" style="color:#1890ff">/docs</a> 查看自动生成的 Swagger UI 交互文档，可以直接在线调试接口。</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 系统版本 -->
+                    <div class="guide-section" style="border-bottom:none;padding-bottom:0">
+                        <h4 class="guide-title">📦 当前版本</h4>
+                        <p style="color:rgba(0,0,0,0.65);line-height:2">
+                            <strong>v0.2.0 - Orchestrator</strong><br>
+                            ✅ 基于规则引擎的任务分解器（5 大关键词匹配）<br>
+                            ✅ 内存版状态管理器（项目全生命周期）<br>
+                            ✅ 协调器串联需求分析→任务分解→状态管理<br>
+                            ✅ 前端看板（阶段进度条、任务分组、日志展示）<br>
+                            🔜 下一版本将实现 AI Agent 驱动的真正代码生成
+                        </p>
                     </div>
                 </div>
             </div>
