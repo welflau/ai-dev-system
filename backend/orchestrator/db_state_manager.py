@@ -69,7 +69,22 @@ class DbStateManager:
                     dependencies TEXT DEFAULT '[]',
                     result TEXT,
                     error_message TEXT,
+                    started_at TEXT,
+                    completed_at TEXT,
+                    duration_seconds REAL,
                     FOREIGN KEY (project_id) REFERENCES projects(project_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS task_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    project_id TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    level TEXT NOT NULL DEFAULT 'info',
+                    message TEXT NOT NULL,
+                    detail TEXT DEFAULT '',
+                    FOREIGN KEY (project_id) REFERENCES projects(project_id),
+                    FOREIGN KEY (task_id) REFERENCES tasks(id)
                 );
 
                 CREATE TABLE IF NOT EXISTS project_logs (
@@ -87,6 +102,10 @@ class DbStateManager:
                     ON tasks(project_id, status);
                 CREATE INDEX IF NOT EXISTS idx_logs_project
                     ON project_logs(project_id);
+                CREATE INDEX IF NOT EXISTS idx_task_logs_task
+                    ON task_logs(task_id);
+                CREATE INDEX IF NOT EXISTS idx_task_logs_project
+                    ON task_logs(project_id);
             """)
 
     # ============ 项目操作 ============
@@ -230,6 +249,22 @@ class DbStateManager:
             if error_message is not None:
                 updates["error_message"] = error_message
 
+            # 记录时间戳
+            if status_val == "in_progress" and old_status != "in_progress":
+                updates["started_at"] = now_iso
+            elif status_val in ("completed", "failed"):
+                updates["completed_at"] = now_iso
+                # 计算耗时
+                started = row["started_at"]
+                if started:
+                    try:
+                        start_dt = datetime.fromisoformat(started)
+                        end_dt = datetime.fromisoformat(now_iso)
+                        duration = (end_dt - start_dt).total_seconds()
+                        updates["duration_seconds"] = round(duration, 2)
+                    except Exception:
+                        pass
+
             set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
             values = list(updates.values()) + [task_id, project_id]
             conn.execute(
@@ -313,6 +348,9 @@ class DbStateManager:
                 "priority": r["priority"],
                 "estimated_hours": r["estimated_hours"],
                 "dependencies": json.loads(r["dependencies"] or "[]"),
+                "started_at": r["started_at"],
+                "completed_at": r["completed_at"],
+                "duration_seconds": r["duration_seconds"],
             })
 
         return phases
@@ -338,6 +376,46 @@ class DbStateManager:
         ]
 
     # ============ 内部方法 ============
+
+    def add_task_log(
+        self,
+        project_id: str,
+        task_id: str,
+        level: str,
+        message: str,
+        detail: str = "",
+    ):
+        """添加任务级别的日志"""
+        now_iso = datetime.now().isoformat()
+        with self._get_conn() as conn:
+            conn.execute(
+                """INSERT INTO task_logs (project_id, task_id, timestamp, level, message, detail)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (project_id, task_id, now_iso, level, message, detail)
+            )
+
+    def get_task_logs(
+        self, project_id: str, task_id: str, limit: int = 100
+    ) -> List[Dict[str, Any]]:
+        """获取某个任务的日志"""
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                """SELECT timestamp, level, message, detail
+                   FROM task_logs
+                   WHERE project_id = ? AND task_id = ?
+                   ORDER BY id ASC LIMIT ?""",
+                (project_id, task_id, limit)
+            ).fetchall()
+
+        return [
+            {
+                "timestamp": r["timestamp"],
+                "level": r["level"],
+                "message": r["message"],
+                "detail": r["detail"],
+            }
+            for r in rows
+        ]
 
     def _advance_phase(self, project_id: str) -> None:
         """根据任务完成情况自动推进项目阶段"""

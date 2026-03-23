@@ -686,6 +686,354 @@
             .sidebar { width: 200px; }
             .main-content { margin-left: 200px; padding: 16px; }
             .stats-grid { grid-template-columns: repeat(2, 1fr); }
+            .pipeline-stages { flex-direction: column; align-items: stretch; }
+            .pipeline-connector { display: none; }
+        }
+
+        /* ===== Pipeline 看板 ===== */
+        .pipeline-container {
+            overflow-x: auto;
+            padding: 8px 0 16px;
+        }
+        .pipeline-stages {
+            display: flex;
+            align-items: flex-start;
+            gap: 0;
+            min-width: max-content;
+        }
+        .pipeline-stage {
+            min-width: 220px;
+            max-width: 280px;
+            flex-shrink: 0;
+        }
+        .pipeline-connector {
+            display: flex;
+            align-items: center;
+            padding-top: 18px;
+            flex-shrink: 0;
+        }
+        .connector-line {
+            width: 40px;
+            height: 2px;
+            background: #d9d9d9;
+            position: relative;
+        }
+        .connector-line::after {
+            content: '';
+            position: absolute;
+            right: -4px;
+            top: -4px;
+            width: 0;
+            height: 0;
+            border-left: 6px solid #d9d9d9;
+            border-top: 5px solid transparent;
+            border-bottom: 5px solid transparent;
+        }
+        .connector-line.active {
+            background: #52c41a;
+        }
+        .connector-line.active::after {
+            border-left-color: #52c41a;
+        }
+
+        /* Stage 头部 */
+        .stage-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 14px;
+            background: #fafafa;
+            border: 2px solid #e8e8e8;
+            border-radius: 8px;
+            cursor: default;
+            transition: all 0.2s;
+            position: relative;
+        }
+        .stage-header.stage-completed {
+            border-color: #b7eb8f;
+            background: #f6ffed;
+        }
+        .stage-header.stage-running {
+            border-color: #91d5ff;
+            background: #e6f7ff;
+            animation: stagePulse 2s ease-in-out infinite;
+        }
+        .stage-header.stage-failed {
+            border-color: #ffa39e;
+            background: #fff1f0;
+        }
+        @keyframes stagePulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(24,144,255,0.15); }
+            50% { box-shadow: 0 0 0 6px rgba(24,144,255,0.08); }
+        }
+        .stage-status-icon {
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            flex-shrink: 0;
+        }
+        .stage-status-icon.icon-pending {
+            background: #f5f5f5;
+            border: 2px solid #d9d9d9;
+        }
+        .stage-status-icon.icon-completed {
+            background: #52c41a;
+            color: white;
+        }
+        .stage-status-icon.icon-running {
+            background: #1890ff;
+            color: white;
+        }
+        .stage-status-icon.icon-failed {
+            background: #ff4d4f;
+            color: white;
+        }
+        .stage-name {
+            font-weight: 600;
+            font-size: 13px;
+            color: rgba(0,0,0,0.85);
+            flex: 1;
+        }
+        .stage-duration {
+            font-size: 11px;
+            color: rgba(0,0,0,0.35);
+            font-family: 'Consolas', monospace;
+        }
+
+        /* Stage 步骤列表 */
+        .stage-steps {
+            margin-top: 6px;
+            border-left: 2px solid #e8e8e8;
+            margin-left: 25px;
+            padding-left: 0;
+        }
+        .stage-steps.steps-completed {
+            border-left-color: #b7eb8f;
+        }
+        .stage-steps.steps-running {
+            border-left-color: #91d5ff;
+        }
+
+        .step-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 7px 12px;
+            margin-left: -2px;
+            border-left: 2px solid transparent;
+            cursor: pointer;
+            transition: all 0.15s;
+            border-radius: 0 6px 6px 0;
+            position: relative;
+        }
+        .step-item:hover {
+            background: #f0f5ff;
+        }
+        .step-item.step-completed {
+            border-left-color: #52c41a;
+        }
+        .step-item.step-running {
+            border-left-color: #1890ff;
+            background: #e6f7ff;
+        }
+        .step-item.step-failed {
+            border-left-color: #ff4d4f;
+            background: #fff1f0;
+        }
+        .step-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        .step-dot.dot-pending { background: #d9d9d9; }
+        .step-dot.dot-completed { background: #52c41a; }
+        .step-dot.dot-running { background: #1890ff; animation: dotPulse 1.5s infinite; }
+        .step-dot.dot-failed { background: #ff4d4f; }
+        @keyframes dotPulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(24,144,255,0.4); }
+            50% { box-shadow: 0 0 0 4px rgba(24,144,255,0.1); }
+        }
+        .step-name {
+            flex: 1;
+            font-size: 12px;
+            color: rgba(0,0,0,0.65);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .step-time {
+            font-size: 11px;
+            color: rgba(0,0,0,0.3);
+            font-family: 'Consolas', monospace;
+            flex-shrink: 0;
+        }
+
+        /* ===== 日志弹窗 ===== */
+        .log-drawer-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.45);
+            z-index: 1000;
+            display: flex;
+            justify-content: flex-end;
+            animation: fadeIn 0.2s ease;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        .log-drawer {
+            width: 560px;
+            max-width: 80vw;
+            background: #1e1e1e;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            animation: slideIn 0.25s ease;
+        }
+        @keyframes slideIn {
+            from { transform: translateX(100%); }
+            to { transform: translateX(0); }
+        }
+        .log-drawer-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 20px;
+            background: #252526;
+            border-bottom: 1px solid #3c3c3c;
+            flex-shrink: 0;
+        }
+        .log-drawer-header h4 {
+            margin: 0;
+            color: #ccc;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .log-drawer-header .close-btn {
+            background: none;
+            border: 1px solid #555;
+            color: #999;
+            width: 28px;
+            height: 28px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .log-drawer-header .close-btn:hover {
+            background: #3c3c3c;
+            color: #fff;
+        }
+        .log-drawer-tabs {
+            display: flex;
+            border-bottom: 1px solid #3c3c3c;
+            background: #252526;
+            flex-shrink: 0;
+        }
+        .log-drawer-tab {
+            padding: 8px 16px;
+            font-size: 12px;
+            color: #888;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            transition: all 0.15s;
+        }
+        .log-drawer-tab:hover { color: #ccc; }
+        .log-drawer-tab.active {
+            color: #4fc3f7;
+            border-bottom-color: #4fc3f7;
+        }
+        .log-drawer-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 0;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            font-size: 12px;
+            line-height: 1.7;
+        }
+        .log-line {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            padding: 3px 16px;
+            border-bottom: 1px solid rgba(255,255,255,0.03);
+        }
+        .log-line:hover {
+            background: rgba(255,255,255,0.03);
+        }
+        .log-line-num {
+            color: #555;
+            min-width: 32px;
+            text-align: right;
+            flex-shrink: 0;
+            user-select: none;
+        }
+        .log-line-time {
+            color: #666;
+            flex-shrink: 0;
+            min-width: 56px;
+        }
+        .log-line-level {
+            flex-shrink: 0;
+            width: 14px;
+            text-align: center;
+        }
+        .log-line-msg {
+            color: #d4d4d4;
+            word-break: break-all;
+        }
+        .log-line-detail {
+            color: #808080;
+        }
+        .ll-step { color: #569cd6; }
+        .ll-info { color: #808080; }
+        .ll-success { color: #4ec9b0; }
+        .ll-warning { color: #dcdcaa; }
+        .ll-error { color: #f44747; }
+        .log-empty-msg {
+            text-align: center;
+            padding: 40px 20px;
+            color: #555;
+        }
+        .log-search {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 16px;
+            background: #252526;
+            border-bottom: 1px solid #3c3c3c;
+            flex-shrink: 0;
+        }
+        .log-search input {
+            flex: 1;
+            background: #3c3c3c;
+            border: 1px solid #555;
+            border-radius: 4px;
+            color: #ccc;
+            padding: 4px 8px;
+            font-size: 12px;
+            outline: none;
+        }
+        .log-search input:focus {
+            border-color: #4fc3f7;
+        }
+        .log-search .match-count {
+            color: #666;
+            font-size: 11px;
+            flex-shrink: 0;
         }
     </style>
 </head>

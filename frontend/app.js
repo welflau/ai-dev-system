@@ -330,10 +330,11 @@ async function viewProject(projectId) {
                 </div>
             </div>
 
-            <!-- 任务列表（按阶段分组） -->
+            <!-- 任务列表（Pipeline 看板） -->
             <div class="card">
                 <div class="card-header">
-                    <h3>任务分解</h3>
+                    <h3>🔄 Pipeline</h3>
+                    <span style="font-size:12px;color:rgba(0,0,0,0.35)">点击步骤查看日志</span>
                 </div>
                 ${renderTasksByPhase(state.tasks_by_phase)}
             </div>
@@ -401,52 +402,110 @@ function renderTasksByPhase(tasksByPhase) {
 
     const phaseOrder = ['requirement', 'design', 'development', 'testing', 'deployment'];
 
-    let html = '';
+    let stagesHtml = '';
+    let isFirst = true;
+
     for (const phase of phaseOrder) {
         const tasks = tasksByPhase[phase];
         if (!tasks || tasks.length === 0) continue;
 
         const config = phaseConfig[phase] || { icon: '📦', label: phase, color: '#999' };
-        const completed = tasks.filter(t => t.status === 'completed').length;
 
-        html += `
-            <div class="phase-section">
-                <div class="phase-header">
-                    <div class="phase-icon" style="background:${config.color}15;color:${config.color}">
-                        ${config.icon}
-                    </div>
-                    <h4>${config.label}</h4>
-                    <span class="phase-count">${completed}/${tasks.length} 完成</span>
+        // 计算 Stage 状态
+        const completed = tasks.filter(t => t.status === 'completed').length;
+        const failed = tasks.filter(t => t.status === 'failed').length;
+        const running = tasks.filter(t => t.status === 'in_progress').length;
+        const total = tasks.length;
+        const allDone = completed === total;
+        const hasRunning = running > 0;
+        const hasFailed = failed > 0;
+
+        // Stage 状态 class
+        let stageClass = '';
+        let iconClass = 'icon-pending';
+        let iconContent = '';
+        if (allDone) {
+            stageClass = 'stage-completed';
+            iconClass = 'icon-completed';
+            iconContent = '✓';
+        } else if (hasFailed) {
+            stageClass = 'stage-failed';
+            iconClass = 'icon-failed';
+            iconContent = '!';
+        } else if (hasRunning || completed > 0) {
+            stageClass = 'stage-running';
+            iconClass = 'icon-running';
+            iconContent = '▸';
+        }
+
+        // 计算 Stage 总耗时
+        let totalDuration = 0;
+        tasks.forEach(t => {
+            if (t.duration_seconds) totalDuration += t.duration_seconds;
+        });
+        const durationStr = totalDuration > 0 ? formatDuration(totalDuration) : '';
+
+        // 连接线
+        if (!isFirst) {
+            const connActive = allDone ? 'active' : '';
+            stagesHtml += `<div class="pipeline-connector"><div class="connector-line ${connActive}"></div></div>`;
+        }
+        isFirst = false;
+
+        // Stage HTML
+        stagesHtml += `
+            <div class="pipeline-stage">
+                <div class="stage-header ${stageClass}">
+                    <div class="stage-status-icon ${iconClass}">${iconContent}</div>
+                    <span class="stage-name">${config.icon} ${config.label}</span>
+                    ${durationStr ? `<span class="stage-duration">${durationStr}</span>` : ''}
                 </div>
-                ${tasks.map(task => renderTaskRow(task)).join('')}
+                <div class="stage-steps ${allDone ? 'steps-completed' : hasRunning ? 'steps-running' : ''}">
+                    ${tasks.map(task => renderPipelineStep(task)).join('')}
+                </div>
             </div>
         `;
     }
 
-    return html || '<p style="color:rgba(0,0,0,0.25);text-align:center;padding:20px">暂无任务数据</p>';
+    if (!stagesHtml) {
+        return '<p style="color:rgba(0,0,0,0.25);text-align:center;padding:20px">暂无任务数据</p>';
+    }
+
+    return `<div class="pipeline-container"><div class="pipeline-stages">${stagesHtml}</div></div>`;
 }
 
-function renderTaskRow(task) {
-    const statusIcon = {
-        'pending': '⬜',
-        'in_progress': '🔵',
-        'completed': '✅',
-        'failed': '❌',
-        'cancelled': '⛔',
-    };
+function renderPipelineStep(task) {
+    let stepClass = '';
+    let dotClass = 'dot-pending';
+
+    if (task.status === 'completed') {
+        stepClass = 'step-completed';
+        dotClass = 'dot-completed';
+    } else if (task.status === 'in_progress') {
+        stepClass = 'step-running';
+        dotClass = 'dot-running';
+    } else if (task.status === 'failed') {
+        stepClass = 'step-failed';
+        dotClass = 'dot-failed';
+    }
+
+    const durationStr = task.duration_seconds ? formatDuration(task.duration_seconds) : '';
 
     return `
-        <div class="task-row">
-            <span>${statusIcon[task.status] || '⬜'}</span>
-            <span class="task-name">${escapeHtml(task.name)}</span>
-            <div class="task-meta">
-                <span class="priority-dot priority-${task.priority || 'medium'}"></span>
-                <span class="agent-tag">${getAgentLabel(task.assigned_agent)}</span>
-                ${task.estimated_hours ? `<span>${task.estimated_hours}h</span>` : ''}
-                <span class="tag tag-${task.status}">${getStatusLabel(task.status)}</span>
-            </div>
+        <div class="step-item ${stepClass}" onclick="openTaskLog('${task.id}', '${escapeHtml(task.name)}', '${task.status}')" title="点击查看日志">
+            <span class="step-dot ${dotClass}"></span>
+            <span class="step-name">${escapeHtml(task.name)}</span>
+            ${durationStr ? `<span class="step-time">${durationStr}</span>` : ''}
         </div>
     `;
+}
+
+function formatDuration(seconds) {
+    if (!seconds || seconds <= 0) return '';
+    if (seconds < 60) return seconds < 1 ? '<1s' : Math.round(seconds) + 's';
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.round(seconds % 60);
+    return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
 }
 
 // ============ 执行项目 ============
@@ -841,6 +900,142 @@ function clearProcessLogs() {
     }
     const badge = document.getElementById('log-count-badge');
     if (badge) badge.textContent = '0 条';
+}
+
+// ============ 任务日志抽屉 ============
+
+async function openTaskLog(taskId, taskName, taskStatus) {
+    // 关闭已有的
+    closeTaskLog();
+
+    // 创建 overlay
+    const overlay = document.createElement('div');
+    overlay.className = 'log-drawer-overlay';
+    overlay.id = 'log-drawer-overlay';
+    overlay.onclick = (e) => {
+        if (e.target === overlay) closeTaskLog();
+    };
+
+    const statusIcon = {
+        'completed': '<span style="color:#52c41a">✓</span>',
+        'in_progress': '<span style="color:#1890ff">●</span>',
+        'failed': '<span style="color:#ff4d4f">✗</span>',
+        'pending': '<span style="color:#999">○</span>',
+    }[taskStatus] || '';
+
+    overlay.innerHTML = `
+        <div class="log-drawer">
+            <div class="log-drawer-header">
+                <h4>${statusIcon} ${escapeHtml(taskName)}</h4>
+                <button class="close-btn" onclick="closeTaskLog()">✕</button>
+            </div>
+            <div class="log-drawer-tabs">
+                <div class="log-drawer-tab active">日志</div>
+                <div class="log-drawer-tab" style="color:#555;cursor:default">配置</div>
+            </div>
+            <div class="log-search">
+                <input type="text" placeholder="Search" id="log-search-input" oninput="filterTaskLogs(this.value)">
+                <span class="match-count" id="log-match-count"></span>
+            </div>
+            <div class="log-drawer-body" id="log-drawer-body">
+                <div class="log-empty-msg"><span class="loading"></span> 加载日志...</div>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(overlay);
+    document.body.style.overflow = 'hidden';
+
+    // 加载日志
+    try {
+        const response = await fetch(`${API_BASE_URL}/api/projects/${currentProjectId}/tasks/${taskId}/logs`);
+        const data = await response.json();
+
+        const body = document.getElementById('log-drawer-body');
+        if (!body) return;
+
+        const logs = data.logs || [];
+        if (logs.length === 0) {
+            body.innerHTML = '<div class="log-empty-msg">暂无日志记录<br><span style="font-size:11px;color:#444">任务执行后会在此显示详细日志</span></div>';
+            return;
+        }
+
+        // 存储到全局供搜索用
+        window._currentTaskLogs = logs;
+
+        body.innerHTML = logs.map((log, i) => renderTaskLogLine(log, i + 1)).join('');
+
+        // 滚动到底部
+        body.scrollTop = body.scrollHeight;
+    } catch (err) {
+        const body = document.getElementById('log-drawer-body');
+        if (body) {
+            body.innerHTML = `<div class="log-empty-msg" style="color:#f44747">加载失败: ${escapeHtml(err.message)}</div>`;
+        }
+    }
+}
+
+function renderTaskLogLine(log, lineNum) {
+    const levelIcons = {
+        step: '▸', info: '•', success: '✓', warning: '⚠', error: '✗',
+    };
+    const icon = levelIcons[log.level] || '•';
+    const levelClass = 'll-' + (log.level || 'info');
+
+    let timeStr = '';
+    if (log.timestamp) {
+        try {
+            const d = new Date(log.timestamp);
+            timeStr = d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        } catch {}
+    }
+
+    const detailHtml = log.detail ? ` <span class="log-line-detail">— ${escapeHtml(log.detail)}</span>` : '';
+
+    return `<div class="log-line" data-msg="${escapeHtml((log.message || '') + ' ' + (log.detail || '')).toLowerCase()}">
+        <span class="log-line-num">${lineNum}</span>
+        <span class="log-line-time">${timeStr}</span>
+        <span class="log-line-level ${levelClass}">${icon}</span>
+        <span class="log-line-msg">${escapeHtml(log.message || '')}${detailHtml}</span>
+    </div>`;
+}
+
+function filterTaskLogs(query) {
+    const body = document.getElementById('log-drawer-body');
+    const countEl = document.getElementById('log-match-count');
+    if (!body) return;
+
+    const lines = body.querySelectorAll('.log-line');
+    const q = (query || '').toLowerCase().trim();
+    let matchCount = 0;
+
+    lines.forEach(line => {
+        if (!q) {
+            line.style.display = '';
+            matchCount++;
+        } else {
+            const msg = line.getAttribute('data-msg') || '';
+            if (msg.includes(q)) {
+                line.style.display = '';
+                matchCount++;
+            } else {
+                line.style.display = 'none';
+            }
+        }
+    });
+
+    if (countEl) {
+        countEl.textContent = q ? `${matchCount}/${lines.length}` : '';
+    }
+}
+
+function closeTaskLog() {
+    const overlay = document.getElementById('log-drawer-overlay');
+    if (overlay) {
+        overlay.remove();
+        document.body.style.overflow = '';
+    }
+    window._currentTaskLogs = null;
 }
 
 // ============ 代码语法高亮（实现） ============

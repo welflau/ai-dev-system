@@ -475,6 +475,22 @@ async def read_project_file(project_id: str, file_path: str):
     }
 
 
+@app.get("/api/projects/{project_id}/tasks/{task_id}/logs")
+async def get_task_logs(project_id: str, task_id: str):
+    """获取某个任务的执行日志"""
+    state = orchestrator.get_project_state(project_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="项目不存在")
+
+    logs = db_state_manager.get_task_logs(project_id, task_id)
+    return {
+        "project_id": project_id,
+        "task_id": task_id,
+        "logs": logs,
+        "count": len(logs),
+    }
+
+
 @app.get("/api/projects/{project_id}/download")
 async def download_project_zip(project_id: str):
     """

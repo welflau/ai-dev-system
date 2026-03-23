@@ -334,9 +334,15 @@ class Orchestrator:
         """
         self._log_callback = callback
 
-    def _emit_log(self, project_id: str, level: str, message: str, detail: str = ""):
-        """发射一条处理日志"""
+    def _emit_log(self, project_id: str, level: str, message: str, detail: str = "", task_id: str = ""):
+        """发射一条处理日志（同时写入 task_logs 表）"""
         logger.info(f"[{project_id[:8]}] [{level}] {message} {detail}")
+        # 写入任务级日志
+        if task_id:
+            try:
+                self.state_manager.add_task_log(project_id, task_id, level, message, detail)
+            except Exception:
+                pass  # add_task_log 可能不存在于旧版 StateManager
         if self._log_callback:
             try:
                 self._log_callback(project_id, level, message, detail)
@@ -559,7 +565,7 @@ class Orchestrator:
         assigned_agent = task.assigned_agent
 
         # 收集前序 Agent 的输出
-        self._emit_log(project_id, "step", f"准备执行: {task_name}", "收集前序上下文...")
+        self._emit_log(project_id, "step", f"准备执行: {task_name}", "收集前序上下文...", task_id=task_id)
         prior_context = self._collect_completed_outputs(project_id)
         ctx_info = []
         if prior_context.get("design_outputs"):
@@ -569,7 +575,7 @@ class Orchestrator:
         if prior_context.get("files_created"):
             ctx_info.append(f"{len(prior_context['files_created'])} 个已有文件")
         if ctx_info:
-            self._emit_log(project_id, "info", "上下文已注入", "、".join(ctx_info))
+            self._emit_log(project_id, "info", "上下文已注入", "、".join(ctx_info), task_id=task_id)
 
         # 构建增强执行上下文（包含前序 Agent 输出）
         context = {
@@ -604,7 +610,7 @@ class Orchestrator:
 
         if agent:
             # 真正执行
-            self._emit_log(project_id, "step", f"分配给 {agent_label}", f"开始执行「{task_name}」")
+            self._emit_log(project_id, "step", f"分配给 {agent_label}", f"开始执行「{task_name}」", task_id=task_id)
             try:
                 result = agent.execute(task_name, context)
                 if result.get("success"):
@@ -614,7 +620,7 @@ class Orchestrator:
                     detail = f"模式: {mode_label}"
                     if files_count:
                         detail += f"，生成 {files_count} 个文件"
-                    self._emit_log(project_id, "success", f"✓ {task_name} 完成", detail)
+                    self._emit_log(project_id, "success", f"✓ {task_name} 完成", detail, task_id=task_id)
                     # 保存输出到上下文（供后续 Agent 使用）
                     self._save_task_output(project_id, agent_key, task_name, result)
                     self.update_task(
@@ -624,7 +630,7 @@ class Orchestrator:
                     return result
                 else:
                     error_msg = result.get("error", "未知错误")
-                    self._emit_log(project_id, "error", f"✗ {task_name} 失败", error_msg)
+                    self._emit_log(project_id, "error", f"✗ {task_name} 失败", error_msg, task_id=task_id)
                     self.update_task(
                         project_id, task_id, TaskStatus.FAILED,
                         error_message=result.get("error", "未知错误"),
@@ -632,7 +638,7 @@ class Orchestrator:
                     return result
             except Exception as e:
                 logger.error(f"Agent {agent_key} 执行异常: {e}")
-                self._emit_log(project_id, "error", f"✗ {agent_label} 执行异常", str(e))
+                self._emit_log(project_id, "error", f"✗ {agent_label} 执行异常", str(e), task_id=task_id)
                 self.update_task(
                     project_id, task_id, TaskStatus.FAILED,
                     error_message=str(e),
@@ -640,7 +646,7 @@ class Orchestrator:
                 return {"success": False, "error": str(e)}
         else:
             # 没有对应 Agent，模拟完成
-            self._emit_log(project_id, "warning", f"{agent_label} 暂未实现", "自动标记为完成")
+            self._emit_log(project_id, "warning", f"{agent_label} 暂未实现", "自动标记为完成", task_id=task_id)
             self.update_task(project_id, task_id, TaskStatus.COMPLETED)
             return {
                 "success": True,
