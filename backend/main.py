@@ -1,11 +1,12 @@
 """
 AI自动开发系统 - FastAPI主应用
 
-v0.5.0: Agent 上下文传递 + TestAgent + ProductAgent + SSE 实时推送
+v0.5.0: Agent 上下文传递 + TestAgent + ProductAgent + SSE 实时推送 + 处理日志
 """
 import os
 import json
 import asyncio
+import time
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -111,6 +112,25 @@ orchestrator = Orchestrator(
     work_dir=PROJECTS_DIR,
     llm_client=llm_client,
 )
+
+
+# 注入日志回调：Orchestrator 处理日志 -> SSE 推送到前端
+def _orchestrator_log_callback(project_id: str, level: str, message: str, detail: str = ""):
+    """将 Orchestrator 的处理日志推送到 SSE 事件总线"""
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            asyncio.ensure_future(event_bus.publish(project_id, "log", {
+                "level": level,
+                "message": message,
+                "detail": detail,
+                "timestamp": time.time(),
+            }))
+    except RuntimeError:
+        pass  # 没有运行中的事件循环时忽略
+
+
+orchestrator.set_log_callback(_orchestrator_log_callback)
 
 
 # ============ 基础端点 ============

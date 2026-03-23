@@ -13,6 +13,8 @@ const API_BASE_URL = window.location.protocol === 'file:'
 let projects = [];
 let currentProjectId = null;
 let sseConnection = null;  // SSE 连接
+let processLogs = [];       // 处理过程日志
+let logPanelCollapsed = false;  // Log 面板折叠状态
 
 // ============ 页面路由 ============
 
@@ -222,6 +224,10 @@ async function loadProjectsFromAPI() {
 // ============ 项目详情 ============
 
 async function viewProject(projectId) {
+    // 如果切换了项目，清空旧日志
+    if (currentProjectId !== projectId) {
+        processLogs = [];
+    }
     currentProjectId = projectId;
     showPage('project-detail');
 
@@ -298,6 +304,26 @@ async function viewProject(projectId) {
                     <button class="btn btn-default btn-sm" onclick="viewProject('${projectId}')">
                         🔄 刷新
                     </button>
+                </div>
+            </div>
+
+            <!-- 实时处理日志 -->
+            <div class="card" style="padding:0;overflow:hidden">
+                <div class="process-log-panel">
+                    <div class="process-log-header" onclick="toggleLogPanel()">
+                        <div class="process-log-title">
+                            <span class="dot-pulse" id="log-pulse"></span>
+                            <span>📋 处理日志</span>
+                        </div>
+                        <div class="process-log-actions">
+                            <span class="log-badge" id="log-count-badge">${processLogs.length} 条</span>
+                            <button class="log-clear-btn" onclick="event.stopPropagation();clearProcessLogs()">清空</button>
+                            <span id="log-toggle-icon" style="font-size:12px">${logPanelCollapsed ? '▶' : '▼'}</span>
+                        </div>
+                    </div>
+                    <div class="process-log-body ${logPanelCollapsed ? 'collapsed' : ''}" id="process-log-body">
+                        ${processLogs.length > 0 ? processLogs.map(renderLogEntry).join('') : '<div class="log-empty">等待执行任务...</div>'}
+                    </div>
                 </div>
             </div>
 
@@ -425,6 +451,8 @@ function renderTaskRow(task) {
 async function executeProject(projectId) {
     const btn = event ? event.target : null;
     const originalText = btn ? btn.innerHTML : '';
+
+    appendProcessLog('step', '用户触发: 执行下一个任务', '');
 
     try {
         if (btn) {
@@ -586,6 +614,8 @@ async function executeAllTasks(projectId) {
 
     if (!confirm('确认一键执行所有任务？这将依次执行所有 pending 任务。')) return;
 
+    appendProcessLog('step', '用户触发: 一键全量执行', '依次执行所有待处理任务');
+
     try {
         if (btn) {
             btn.disabled = true;
@@ -631,6 +661,15 @@ function connectSSE(projectId) {
 
     sseConnection.addEventListener('init', (e) => {
         console.log('[SSE] 已连接，初始状态:', e.data);
+        appendProcessLog('info', 'SSE 连接已建立', '实时推送就绪');
+    });
+
+    sseConnection.addEventListener('log', (e) => {
+        console.log('[SSE] 处理日志:', e.data);
+        try {
+            const data = JSON.parse(e.data);
+            appendProcessLog(data.level || 'info', data.message || '', data.detail || '');
+        } catch {}
     });
 
     sseConnection.addEventListener('task_update', (e) => {
@@ -646,6 +685,7 @@ function connectSSE(projectId) {
         try {
             const data = JSON.parse(e.data);
             showToast(`✓ ${data.task} 完成 (${data.files_count} 个文件)`, 'success');
+            appendProcessLog('success', `第 ${data.step} 步完成: ${data.task}`, `Agent: ${data.agent}，${data.files_count} 个文件`);
         } catch {}
     });
 
@@ -657,6 +697,7 @@ function connectSSE(projectId) {
         try {
             const data = JSON.parse(e.data);
             showToast(data.message || '全量执行完成', 'success');
+            appendProcessLog('success', '全量执行完成', data.message || '');
         } catch {}
     });
 
@@ -711,6 +752,95 @@ function showToast(message, type = 'info') {
 }
 
 // ============ 代码语法高亮 ============
+
+// ============ 处理日志面板 ============
+
+function appendProcessLog(level, message, detail) {
+    const entry = {
+        time: new Date(),
+        level: level,
+        message: message,
+        detail: detail || '',
+    };
+    processLogs.push(entry);
+
+    // 限制最多保留 200 条
+    if (processLogs.length > 200) {
+        processLogs = processLogs.slice(-200);
+    }
+
+    // 实时追加到 DOM（不刷新整个页面）
+    const logBody = document.getElementById('process-log-body');
+    if (logBody) {
+        // 清掉空状态提示
+        const empty = logBody.querySelector('.log-empty');
+        if (empty) empty.remove();
+
+        const div = document.createElement('div');
+        div.innerHTML = renderLogEntry(entry);
+        const el = div.firstElementChild;
+        logBody.appendChild(el);
+
+        // 自动滚动到底部
+        logBody.scrollTop = logBody.scrollHeight;
+    }
+
+    // 更新计数器
+    const badge = document.getElementById('log-count-badge');
+    if (badge) badge.textContent = `${processLogs.length} 条`;
+
+    // 让脉冲点闪一下
+    const pulse = document.getElementById('log-pulse');
+    if (pulse) {
+        pulse.style.background = '#52c41a';
+        setTimeout(() => { pulse.style.background = '#52c41a'; }, 500);
+    }
+}
+
+function renderLogEntry(entry) {
+    const levelIcons = {
+        step:    '▸',
+        info:    '•',
+        success: '✓',
+        warning: '⚠',
+        error:   '✗',
+    };
+    const icon = levelIcons[entry.level] || '•';
+    const timeStr = entry.time instanceof Date
+        ? entry.time.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+        : '';
+    const detailHtml = entry.detail ? `<span class="log-entry-detail">— ${escapeHtml(entry.detail)}</span>` : '';
+
+    return `<div class="log-entry">
+        <span class="log-entry-time">${timeStr}</span>
+        <span class="log-entry-level log-level-${entry.level}">${icon}</span>
+        <span class="log-entry-msg">${escapeHtml(entry.message)}${detailHtml}</span>
+    </div>`;
+}
+
+function toggleLogPanel() {
+    logPanelCollapsed = !logPanelCollapsed;
+    const body = document.getElementById('process-log-body');
+    const icon = document.getElementById('log-toggle-icon');
+    if (body) {
+        body.classList.toggle('collapsed', logPanelCollapsed);
+    }
+    if (icon) {
+        icon.textContent = logPanelCollapsed ? '▶' : '▼';
+    }
+}
+
+function clearProcessLogs() {
+    processLogs = [];
+    const logBody = document.getElementById('process-log-body');
+    if (logBody) {
+        logBody.innerHTML = '<div class="log-empty">日志已清空</div>';
+    }
+    const badge = document.getElementById('log-count-badge');
+    if (badge) badge.textContent = '0 条';
+}
+
+// ============ 代码语法高亮（实现） ============
 
 function highlightCode(code, filename) {
     if (typeof hljs === 'undefined') return escapeHtml(code);

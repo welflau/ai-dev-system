@@ -287,6 +287,10 @@ class Orchestrator:
         # 项目上下文缓存：project_id -> {阶段输出汇总}
         self._project_context: Dict[str, Dict[str, Any]] = {}
 
+        # 日志回调：外部可注入一个 callable(project_id, level, message, detail)
+        # 用于 SSE 推送处理过程日志
+        self._log_callback = None
+
         # 初始化 Agent 池（全部 4 个 Agent 到位）
         self.agents = {
             AgentType.PRODUCT.value: ProductAgentAdapter(work_dir=work_dir, llm_client=llm_client),
@@ -313,6 +317,25 @@ class Orchestrator:
             work_dir=self.work_dir, llm_client=llm_client
         )
 
+    def set_log_callback(self, callback):
+        """
+        设置日志回调函数
+
+        Args:
+            callback: callable(project_id: str, level: str, message: str, detail: str)
+                level: "info" | "success" | "warning" | "error" | "step"
+        """
+        self._log_callback = callback
+
+    def _emit_log(self, project_id: str, level: str, message: str, detail: str = ""):
+        """发射一条处理日志"""
+        logger.info(f"[{project_id[:8]}] [{level}] {message} {detail}")
+        if self._log_callback:
+            try:
+                self._log_callback(project_id, level, message, detail)
+            except Exception as e:
+                logger.warning(f"日志回调失败: {e}")
+
     def process_request(
         self,
         description: str,
@@ -332,6 +355,7 @@ class Orchestrator:
         """
         # 1. 生成项目ID
         project_id = str(uuid.uuid4())
+        self._emit_log(project_id, "step", "创建项目", f"项目 ID: {project_id[:8]}...")
 
         # 2. 构建需求对象
         project_name = (preferences or {}).get("project_name", "")
@@ -345,9 +369,13 @@ class Orchestrator:
             project_name=project_name,
             tech_stack=tech_stack,
         )
+        self._emit_log(project_id, "info", "需求解析完成", f"项目名: {project_name}")
 
         # 3. 任务分解
+        self._emit_log(project_id, "step", "开始任务分解",
+                        "LLM 智能分解" if (self.llm_client and self.llm_client.enabled) else "规则引擎分解")
         tasks = self.decomposer.decompose(requirement)
+        self._emit_log(project_id, "success", f"任务分解完成", f"共 {len(tasks)} 个任务")
 
         # 4. 创建项目状态
         project_state = self.state_manager.create_project(
@@ -355,6 +383,7 @@ class Orchestrator:
             requirement=requirement,
             tasks=tasks,
         )
+        self._emit_log(project_id, "success", "项目状态已持久化")
 
         # 5. 返回结果
         return {
@@ -523,7 +552,17 @@ class Orchestrator:
         assigned_agent = task.assigned_agent
 
         # 收集前序 Agent 的输出
+        self._emit_log(project_id, "step", f"准备执行: {task_name}", "收集前序上下文...")
         prior_context = self._collect_completed_outputs(project_id)
+        ctx_info = []
+        if prior_context.get("design_outputs"):
+            ctx_info.append(f"{len(prior_context['design_outputs'])} 个设计文档")
+        if prior_context.get("dev_outputs"):
+            ctx_info.append(f"{len(prior_context['dev_outputs'])} 个代码模块")
+        if prior_context.get("files_created"):
+            ctx_info.append(f"{len(prior_context['files_created'])} 个已有文件")
+        if ctx_info:
+            self._emit_log(project_id, "info", "上下文已注入", "、".join(ctx_info))
 
         # 构建增强执行上下文（包含前序 Agent 输出）
         context = {
@@ -547,11 +586,28 @@ class Orchestrator:
         )
         agent = self.agents.get(agent_key)
 
+        agent_label = {
+            "product": "产品经理 Agent",
+            "architect": "架构师 Agent",
+            "dev": "开发 Agent",
+            "test": "测试 Agent",
+            "review": "审查 Agent",
+            "deploy": "运维 Agent",
+        }.get(agent_key, f"Agent({agent_key})")
+
         if agent:
             # 真正执行
+            self._emit_log(project_id, "step", f"分配给 {agent_label}", f"开始执行「{task_name}」")
             try:
                 result = agent.execute(task_name, context)
                 if result.get("success"):
+                    mode = result.get("mode", "template")
+                    files_count = len(result.get("files_created", []))
+                    mode_label = "LLM 智能生成" if mode == "llm" else "模板引擎生成"
+                    detail = f"模式: {mode_label}"
+                    if files_count:
+                        detail += f"，生成 {files_count} 个文件"
+                    self._emit_log(project_id, "success", f"✓ {task_name} 完成", detail)
                     # 保存输出到上下文（供后续 Agent 使用）
                     self._save_task_output(project_id, agent_key, task_name, result)
                     self.update_task(
@@ -560,6 +616,8 @@ class Orchestrator:
                     )
                     return result
                 else:
+                    error_msg = result.get("error", "未知错误")
+                    self._emit_log(project_id, "error", f"✗ {task_name} 失败", error_msg)
                     self.update_task(
                         project_id, task_id, TaskStatus.FAILED,
                         error_message=result.get("error", "未知错误"),
@@ -567,6 +625,7 @@ class Orchestrator:
                     return result
             except Exception as e:
                 logger.error(f"Agent {agent_key} 执行异常: {e}")
+                self._emit_log(project_id, "error", f"✗ {agent_label} 执行异常", str(e))
                 self.update_task(
                     project_id, task_id, TaskStatus.FAILED,
                     error_message=str(e),
@@ -574,6 +633,7 @@ class Orchestrator:
                 return {"success": False, "error": str(e)}
         else:
             # 没有对应 Agent，模拟完成
+            self._emit_log(project_id, "warning", f"{agent_label} 暂未实现", "自动标记为完成")
             self.update_task(project_id, task_id, TaskStatus.COMPLETED)
             return {
                 "success": True,
@@ -596,14 +656,27 @@ class Orchestrator:
 
         # 按阶段顺序找下一个 pending 任务
         phase_order = ["requirement", "design", "development", "testing", "deployment"]
+        phase_labels = {
+            "requirement": "需求分析",
+            "design": "架构设计",
+            "development": "开发实现",
+            "testing": "测试验证",
+            "deployment": "部署上线",
+        }
         tasks_by_phase = self.state_manager.get_tasks_by_phase(project_id)
 
         for phase in phase_order:
             tasks = tasks_by_phase.get(phase, [])
             for task_info in tasks:
                 if task_info["status"] == "pending":
+                    self._emit_log(
+                        project_id, "info",
+                        f"进入阶段: {phase_labels.get(phase, phase)}",
+                        f"下一个任务: {task_info['name']}"
+                    )
                     return self.execute_task(project_id, task_info["id"])
 
+        self._emit_log(project_id, "success", "所有任务已完成", "流水线执行结束")
         return {
             "success": True,
             "output": "所有任务已完成！",
