@@ -3,82 +3,93 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI 自动开发系统</title>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/antd/5.12.2/reset.min.css">
+    <title>AI 自动开发系统 v0.2</title>
     <style>
+        * { box-sizing: border-box; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
             margin: 0;
             padding: 0;
             background: #f0f2f5;
+            color: rgba(0,0,0,0.85);
         }
-        .layout {
-            display: flex;
-            min-height: 100vh;
-        }
+        .layout { display: flex; min-height: 100vh; }
+        
+        /* ===== 侧边栏 ===== */
         .sidebar {
-            width: 256px;
-            background: #001529;
+            width: 240px;
+            background: linear-gradient(180deg, #001529 0%, #002140 100%);
             color: white;
-            padding: 20px 0;
             flex-shrink: 0;
+            position: fixed;
+            height: 100vh;
+            overflow-y: auto;
         }
         .sidebar-header {
-            padding: 20px;
+            padding: 24px 20px;
             text-align: center;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            border-bottom: 1px solid rgba(255,255,255,0.08);
         }
         .sidebar-header h2 {
             color: white;
             margin: 0;
-            font-size: 20px;
+            font-size: 18px;
+            font-weight: 600;
+        }
+        .sidebar-header .version {
+            color: rgba(255,255,255,0.45);
+            font-size: 12px;
+            margin-top: 4px;
         }
         .menu-item {
-            padding: 15px 24px;
+            padding: 14px 24px;
             cursor: pointer;
-            transition: background 0.3s;
+            transition: all 0.2s;
+            font-size: 14px;
+            border-left: 3px solid transparent;
         }
-        .menu-item:hover {
-            background: rgba(255, 255, 255, 0.1);
-        }
+        .menu-item:hover { background: rgba(255,255,255,0.06); }
         .menu-item.active {
-            background: #1890ff;
+            background: rgba(24,144,255,0.15);
+            border-left-color: #1890ff;
+            color: #1890ff;
         }
+
+        /* ===== 主内容 ===== */
         .main-content {
             flex: 1;
+            margin-left: 240px;
             padding: 24px;
-            overflow-y: auto;
+            min-height: 100vh;
         }
-        .page {
-            display: none;
-        }
-        .page.active {
-            display: block;
-        }
+        .page { display: none; }
+        .page.active { display: block; }
+
+        /* ===== 卡片 ===== */
         .card {
             background: white;
             border-radius: 8px;
             padding: 24px;
-            margin-bottom: 24px;
-            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
         }
         .card-header {
             margin-bottom: 20px;
-            padding-bottom: 15px;
+            padding-bottom: 16px;
             border-bottom: 1px solid #f0f0f0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
         }
-        .card-header h3 {
-            margin: 0;
-            font-size: 18px;
-        }
-        .form-group {
-            margin-bottom: 20px;
-        }
+        .card-header h3 { margin: 0; font-size: 18px; }
+
+        /* ===== 表单 ===== */
+        .form-group { margin-bottom: 20px; }
         .form-group label {
             display: block;
             margin-bottom: 8px;
             font-weight: 500;
-            color: rgba(0, 0, 0, 0.85);
+            font-size: 14px;
         }
         .form-group input,
         .form-group textarea,
@@ -86,164 +97,300 @@
             width: 100%;
             padding: 8px 12px;
             border: 1px solid #d9d9d9;
-            border-radius: 4px;
+            border-radius: 6px;
             font-size: 14px;
             transition: all 0.3s;
+            font-family: inherit;
         }
         .form-group input:focus,
-        .form-group textarea:focus,
-        .form-group select:focus {
+        .form-group textarea:focus {
             border-color: #40a9ff;
             outline: none;
-            box-shadow: 0 0 0 2px rgba(64, 169, 255, 0.2);
+            box-shadow: 0 0 0 2px rgba(64,169,255,0.2);
         }
-        .form-group textarea {
-            min-height: 120px;
-            resize: vertical;
-        }
+        .form-group textarea { min-height: 120px; resize: vertical; }
+
+        /* ===== 按钮 ===== */
         .btn {
             padding: 8px 16px;
             border: none;
-            border-radius: 4px;
+            border-radius: 6px;
             cursor: pointer;
             font-size: 14px;
-            transition: all 0.3s;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
         }
-        .btn-primary {
-            background: #1890ff;
-            color: white;
-        }
-        .btn-primary:hover {
-            background: #40a9ff;
-        }
-        .btn-primary:disabled {
-            background: #d9d9d9;
-            cursor: not-allowed;
-        }
+        .btn-primary { background: #1890ff; color: white; }
+        .btn-primary:hover { background: #40a9ff; }
+        .btn-primary:disabled { background: #d9d9d9; cursor: not-allowed; }
+        .btn-success { background: #52c41a; color: white; }
+        .btn-success:hover { background: #73d13d; }
+        .btn-default { background: #fafafa; color: rgba(0,0,0,0.65); border: 1px solid #d9d9d9; }
+        .btn-default:hover { border-color: #1890ff; color: #1890ff; }
+        .btn-sm { padding: 4px 10px; font-size: 12px; }
+        .btn-back { margin-bottom: 16px; }
+
+        /* ===== 统计卡片 ===== */
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
-            gap: 20px;
+            gap: 16px;
             margin-bottom: 24px;
         }
         .stat-card {
             background: white;
-            padding: 24px;
+            padding: 20px;
             border-radius: 8px;
-            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
         }
         .stat-card .number {
-            font-size: 32px;
+            font-size: 28px;
             font-weight: bold;
-            margin-bottom: 8px;
+            margin-bottom: 4px;
         }
         .stat-card .label {
-            color: rgba(0, 0, 0, 0.45);
-            font-size: 14px;
+            color: rgba(0,0,0,0.45);
+            font-size: 13px;
         }
-        .task-list {
-            list-style: none;
-            padding: 0;
-            margin: 0;
-        }
-        .task-item {
-            background: white;
-            padding: 16px;
+
+        /* ===== 标签 ===== */
+        .tag {
+            padding: 2px 8px;
             border-radius: 4px;
+            font-size: 12px;
+            display: inline-block;
+            white-space: nowrap;
+        }
+        .tag-pending { background: #fafafa; border: 1px solid #d9d9d9; color: rgba(0,0,0,0.45); }
+        .tag-in_progress, .tag-in-progress, .tag-analyzing {
+            background: #e6f7ff; border: 1px solid #91d5ff; color: #1890ff;
+        }
+        .tag-completed { background: #f6ffed; border: 1px solid #b7eb8f; color: #52c41a; }
+        .tag-failed { background: #fff1f0; border: 1px solid #ffa39e; color: #f5222d; }
+
+        /* ===== 进度条 ===== */
+        .progress-bar-container {
+            width: 100%;
+            height: 8px;
+            background: #f0f0f0;
+            border-radius: 4px;
+            overflow: hidden;
+            margin: 12px 0;
+        }
+        .progress-bar-fill {
+            height: 100%;
+            border-radius: 4px;
+            transition: width 0.5s ease;
+            background: linear-gradient(90deg, #1890ff, #52c41a);
+        }
+        .progress-text {
+            font-size: 13px;
+            color: rgba(0,0,0,0.45);
+        }
+
+        /* ===== 项目列表项 ===== */
+        .project-card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
             margin-bottom: 12px;
-            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+            cursor: pointer;
+            transition: all 0.2s;
+            border: 2px solid transparent;
+        }
+        .project-card:hover {
+            border-color: #1890ff;
+            box-shadow: 0 2px 8px rgba(24,144,255,0.15);
+        }
+        .project-card-header {
             display: flex;
             justify-content: space-between;
-            align-items: center;
+            align-items: flex-start;
+            margin-bottom: 8px;
         }
-        .task-item .task-info h4 {
-            margin: 0 0 8px 0;
+        .project-card-header h4 {
+            margin: 0;
             font-size: 16px;
         }
-        .task-item .task-info p {
-            margin: 0;
-            color: rgba(0, 0, 0, 0.45);
-            font-size: 14px;
+        .project-card p {
+            margin: 0 0 8px 0;
+            color: rgba(0,0,0,0.45);
+            font-size: 13px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
         }
-        .tag {
-            padding: 4px 8px;
-            border-radius: 2px;
+        .project-card-meta {
+            display: flex;
+            gap: 16px;
             font-size: 12px;
+            color: rgba(0,0,0,0.35);
         }
-        .tag-pending {
-            background: #fafafa;
-            border: 1px solid #d9d9d9;
+
+        /* ===== 阶段面板 ===== */
+        .phase-section {
+            margin-bottom: 24px;
         }
-        .tag-in-progress {
-            background: #e6f7ff;
-            border: 1px solid #91d5ff;
-            color: #1890ff;
+        .phase-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid #f0f0f0;
         }
-        .tag-completed {
-            background: #f6ffed;
-            border: 1px solid #b7eb8f;
-            color: #52c41a;
-        }
-        .tag-failed {
-            background: #fff1f0;
-            border: 1px solid #ffa39e;
-            color: #f5222d;
-        }
-        .loading {
-            display: inline-block;
-            width: 16px;
-            height: 16px;
-            border: 2px solid #f3f3f3;
-            border-top: 2px solid #1890ff;
+        .phase-icon {
+            width: 28px;
+            height: 28px;
             border-radius: 50%;
-            animation: spin 1s linear infinite;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            flex-shrink: 0;
         }
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
+        .phase-header h4 { margin: 0; font-size: 15px; }
+        .phase-count {
+            font-size: 12px;
+            color: rgba(0,0,0,0.45);
+            margin-left: auto;
         }
-        .alert {
-            padding: 16px;
-            border-radius: 4px;
-            margin-bottom: 16px;
+
+        /* ===== 任务项 ===== */
+        .task-row {
+            display: flex;
+            align-items: center;
+            padding: 10px 12px;
+            border-radius: 6px;
+            margin-bottom: 6px;
+            background: #fafafa;
+            gap: 12px;
+            transition: background 0.2s;
         }
-        .alert-success {
-            background: #f6ffed;
-            border: 1px solid #b7eb8f;
-            color: #52c41a;
+        .task-row:hover { background: #f0f5ff; }
+        .task-row .task-name {
+            flex: 1;
+            font-size: 14px;
+            font-weight: 500;
         }
-        .alert-error {
-            background: #fff1f0;
-            border: 1px solid #ffa39e;
-            color: #f5222d;
+        .task-row .task-meta {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            font-size: 12px;
+            color: rgba(0,0,0,0.45);
         }
-        .alert-info {
-            background: #e6f7ff;
-            border: 1px solid #91d5ff;
-            color: #1890ff;
+        .agent-tag {
+            padding: 1px 6px;
+            border-radius: 3px;
+            font-size: 11px;
+            background: #f5f5f5;
+            border: 1px solid #e8e8e8;
         }
-        .hidden {
-            display: none !important;
+        .priority-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
         }
+        .priority-high { background: #ff4d4f; }
+        .priority-medium { background: #faad14; }
+        .priority-low { background: #52c41a; }
+
+        /* ===== 摘要横条 ===== */
+        .summary-bar {
+            display: flex;
+            gap: 24px;
+            padding: 16px 20px;
+            background: #fafafa;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        .summary-item {
+            text-align: center;
+        }
+        .summary-item .num {
+            font-size: 24px;
+            font-weight: bold;
+        }
+        .summary-item .lbl {
+            font-size: 12px;
+            color: rgba(0,0,0,0.45);
+        }
+
+        /* ===== 日志 ===== */
+        .log-list {
+            max-height: 200px;
+            overflow-y: auto;
+            font-size: 13px;
+        }
+        .log-item {
+            padding: 6px 0;
+            border-bottom: 1px solid #f5f5f5;
+            display: flex;
+            gap: 12px;
+        }
+        .log-time { color: rgba(0,0,0,0.35); white-space: nowrap; font-size: 12px; }
+        .log-event { color: #1890ff; font-weight: 500; }
+
+        /* ===== 工具网格 ===== */
         .tools-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-            gap: 20px;
+            grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+            gap: 16px;
         }
         .tool-card {
             background: white;
             padding: 20px;
             border-radius: 8px;
-            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
         }
-        .tool-card h4 {
-            margin: 0 0 12px 0;
-            color: #1890ff;
+        .tool-card h4 { margin: 0 0 8px 0; color: #1890ff; }
+        .tool-card p { margin: 0; color: rgba(0,0,0,0.65); line-height: 1.5; font-size: 13px; }
+
+        /* ===== 提示 ===== */
+        .alert {
+            padding: 12px 16px;
+            border-radius: 6px;
+            margin-bottom: 16px;
+            font-size: 14px;
         }
-        .tool-card p {
-            margin: 0;
-            color: rgba(0, 0, 0, 0.65);
-            line-height: 1.6;
+        .alert-success { background: #f6ffed; border: 1px solid #b7eb8f; color: #389e0d; }
+        .alert-error { background: #fff1f0; border: 1px solid #ffa39e; color: #cf1322; }
+        .alert-info { background: #e6f7ff; border: 1px solid #91d5ff; color: #096dd9; }
+        .hidden { display: none !important; }
+
+        /* ===== 加载动画 ===== */
+        .loading {
+            display: inline-block;
+            width: 16px; height: 16px;
+            border: 2px solid #f3f3f3;
+            border-top: 2px solid #1890ff;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* ===== 空状态 ===== */
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: rgba(0,0,0,0.25);
+        }
+        .empty-state .icon { font-size: 48px; margin-bottom: 16px; }
+        .empty-state p { margin: 0; font-size: 14px; }
+
+        /* ===== 响应式 ===== */
+        @media (max-width: 768px) {
+            .sidebar { width: 200px; }
+            .main-content { margin-left: 200px; padding: 16px; }
+            .stats-grid { grid-template-columns: repeat(2, 1fr); }
         }
     </style>
 </head>
@@ -252,31 +399,25 @@
         <div class="sidebar">
             <div class="sidebar-header">
                 <h2>AI 自动开发系统</h2>
+                <div class="version">v0.2.0 - Orchestrator</div>
             </div>
-            <div class="menu-item active" data-page="home">
-                🏠 首页
-            </div>
-            <div class="menu-item" data-page="submit">
-                📝 提交需求
-            </div>
-            <div class="menu-item" data-page="projects">
-                📊 项目看板
-            </div>
-            <div class="menu-item" data-page="tools">
-                🛠️ 工具列表
-            </div>
+            <div class="menu-item active" data-page="home">🏠 首页</div>
+            <div class="menu-item" data-page="submit">📝 提交需求</div>
+            <div class="menu-item" data-page="projects">📊 项目看板</div>
+            <div class="menu-item" data-page="project-detail" style="display:none;">📋 项目详情</div>
+            <div class="menu-item" data-page="tools">🛠️ 工具列表</div>
         </div>
 
         <div class="main-content">
-            <!-- 首页 -->
+            <!-- ===== 首页 ===== -->
             <div id="page-home" class="page active">
                 <div class="card">
                     <div class="card-header">
                         <h3>欢迎使用 AI 自动开发系统</h3>
                     </div>
-                    <p style="margin-bottom: 20px; line-height: 1.6;">
-                        这是一个从自然语言需求到可运行软件的端到端自动化开发系统。
-                        只需描述你的需求，AI 将自动完成项目规划、架构设计、代码生成、测试和部署。
+                    <p style="margin-bottom: 20px; line-height: 1.8; color: rgba(0,0,0,0.65);">
+                        从自然语言需求到可运行软件的端到端自动化开发系统。
+                        只需描述你的需求，AI 将自动完成 <strong>需求分析 → 架构设计 → 代码生成 → 测试 → 部署</strong> 全流程。
                     </p>
                     <div class="stats-grid">
                         <div class="stat-card">
@@ -284,15 +425,15 @@
                             <div class="label">总项目数</div>
                         </div>
                         <div class="stat-card">
-                            <div class="number" style="color: #52c41a;" id="stat-completed">0</div>
+                            <div class="number" style="color:#52c41a" id="stat-completed">0</div>
                             <div class="label">已完成</div>
                         </div>
                         <div class="stat-card">
-                            <div class="number" style="color: #1890ff;" id="stat-in-progress">0</div>
+                            <div class="number" style="color:#1890ff" id="stat-in-progress">0</div>
                             <div class="label">进行中</div>
                         </div>
                         <div class="stat-card">
-                            <div class="number" style="color: #722ed1;" id="stat-tools-available">8</div>
+                            <div class="number" style="color:#722ed1" id="stat-tools-available">8</div>
                             <div class="label">可用工具</div>
                         </div>
                     </div>
@@ -302,7 +443,7 @@
                 </div>
             </div>
 
-            <!-- 提交需求页面 -->
+            <!-- ===== 提交需求 ===== -->
             <div id="page-submit" class="page">
                 <div class="card">
                     <div class="card-header">
@@ -311,7 +452,7 @@
                     <div id="submit-alert" class="alert hidden"></div>
                     <div class="form-group">
                         <label for="user-input">项目描述 *</label>
-                        <textarea id="user-input" placeholder="例如：我想开发一个简单的待办事项应用，包含添加、删除、标记完成等功能..."></textarea>
+                        <textarea id="user-input" placeholder="例如：开发一个用户管理系统，包含登录注册、API接口、数据库设计..."></textarea>
                     </div>
                     <div class="form-group">
                         <label for="tech-stack">技术栈偏好</label>
@@ -319,7 +460,7 @@
                     </div>
                     <div class="form-group">
                         <label for="project-name">项目名称</label>
-                        <input type="text" id="project-name" placeholder="例如：todo-app">
+                        <input type="text" id="project-name" placeholder="例如：user-system">
                     </div>
                     <button class="btn btn-primary" id="submit-btn" onclick="submitRequirement()">
                         <span id="submit-btn-text">提交需求</span>
@@ -327,49 +468,49 @@
                 </div>
             </div>
 
-            <!-- 项目看板页面 -->
+            <!-- ===== 项目看板 ===== -->
             <div id="page-projects" class="page">
                 <div class="card">
                     <div class="card-header">
                         <h3>项目看板</h3>
+                        <button class="btn btn-default btn-sm" onclick="loadProjectsFromAPI()">🔄 刷新</button>
                     </div>
-                    <div id="projects-list" style="margin-bottom: 20px;">
-                        <p style="color: rgba(0, 0, 0, 0.45); text-align: center; padding: 40px;">
-                            暂无项目，请先提交需求
-                        </p>
+                    <div id="projects-list">
+                        <div class="empty-state">
+                            <div class="icon">📂</div>
+                            <p>暂无项目，请先提交需求</p>
+                        </div>
                     </div>
-                    <button class="btn btn-primary" onclick="loadProjects()">
-                        🔄 刷新项目列表
-                    </button>
                 </div>
             </div>
 
-            <!-- 工具列表页面 -->
+            <!-- ===== 项目详情 ===== -->
+            <div id="page-project-detail" class="page">
+                <button class="btn btn-default btn-back" onclick="showPage('projects')">← 返回项目列表</button>
+                <div id="project-detail-content">
+                    <p>加载中...</p>
+                </div>
+            </div>
+
+            <!-- ===== 工具列表 ===== -->
             <div id="page-tools" class="page">
                 <div class="card">
                     <div class="card-header">
                         <h3>已注册工具</h3>
+                        <button class="btn btn-default btn-sm" onclick="loadTools()">🔄 刷新</button>
                     </div>
                     <div id="tools-list" class="tools-grid">
                         <p>加载中...</p>
                     </div>
-                    <button class="btn btn-primary" onclick="loadTools()" style="margin-top: 20px;">
-                        🔄 刷新工具列表
-                    </button>
                 </div>
             </div>
         </div>
     </div>
 
     <script>
-    // 自动检测 JS 路径
     (function() {
         var script = document.createElement('script');
-        if (window.location.protocol === 'file:') {
-            script.src = 'app.js';
-        } else {
-            script.src = '/static/app.js';
-        }
+        script.src = (window.location.protocol === 'file:') ? 'app.js' : '/static/app.js';
         document.body.appendChild(script);
     })();
     </script>
