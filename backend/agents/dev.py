@@ -146,6 +146,8 @@ class DevAgent:
         """
         使用 LLM 智能生成代码
 
+        利用上下文传递的架构设计和已有文件信息，让代码生成与设计保持一致。
+
         Returns:
             成功返回 {files_created, output, mode}，失败返回 None
         """
@@ -154,6 +156,27 @@ class DevAgent:
 
         project_name = context.get("project_name", "项目")
         tech_stack = context.get("tech_stack") or {}
+        design_outputs = context.get("design_outputs", [])
+        existing_files = context.get("existing_files", [])
+
+        # 构建架构上下文（来自 ArchitectAgent 的输出）
+        design_section = ""
+        if design_outputs:
+            design_items = []
+            for d in design_outputs:
+                design_items.append(
+                    f"- [{d.get('task', '')}] {d.get('output', '')}"
+                )
+            design_section = f"""
+架构设计参考（由架构 Agent 生成，请严格遵循）：
+{chr(10).join(design_items[:10])}"""
+
+        # 构建已有文件列表（避免重复生成）
+        files_section = ""
+        if existing_files:
+            files_section = f"""
+项目已有文件（不要重复生成这些文件，除非需要修改）：
+{chr(10).join(f'- {f}' for f in existing_files[:30])}"""
 
         prompt = f"""请为以下开发任务生成代码：
 
@@ -161,6 +184,8 @@ class DevAgent:
 任务名称：{task_name}
 需求描述：{requirement}
 技术栈：{json.dumps(tech_stack, ensure_ascii=False) if tech_stack else 'Python / FastAPI / SQLite'}
+{design_section}
+{files_section}
 
 请生成所有需要的文件，返回 JSON 格式。"""
 

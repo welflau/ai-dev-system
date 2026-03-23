@@ -1,11 +1,16 @@
 """
 AI自动开发系统 - FastAPI主应用
+
+v0.5.0: Agent 上下文传递 + TestAgent + ProductAgent + SSE 实时推送
 """
 import os
+import json
+import asyncio
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from sse_starlette.sse import EventSourceResponse
 from typing import Dict, Any, Optional
 
 from config import settings
@@ -26,6 +31,40 @@ app = FastAPI(
     description="从自然语言需求到可运行软件的端到端自动化开发系统",
     version=settings.APP_VERSION,
 )
+
+# ============ SSE 事件总线 ============
+
+class EventBus:
+    """简易 SSE 事件总线，支持多客户端订阅项目事件"""
+
+    def __init__(self):
+        # project_id -> list[asyncio.Queue]
+        self._subscribers: Dict[str, list] = {}
+
+    def subscribe(self, project_id: str) -> asyncio.Queue:
+        """订阅某项目的事件流"""
+        q: asyncio.Queue = asyncio.Queue()
+        if project_id not in self._subscribers:
+            self._subscribers[project_id] = []
+        self._subscribers[project_id].append(q)
+        return q
+
+    def unsubscribe(self, project_id: str, q: asyncio.Queue):
+        """取消订阅"""
+        subs = self._subscribers.get(project_id, [])
+        if q in subs:
+            subs.remove(q)
+        if not subs and project_id in self._subscribers:
+            del self._subscribers[project_id]
+
+    async def publish(self, project_id: str, event: str, data: Dict[str, Any]):
+        """向所有订阅者推送事件"""
+        subs = self._subscribers.get(project_id, [])
+        msg = json.dumps(data, ensure_ascii=False)
+        for q in subs:
+            await q.put({"event": event, "data": msg})
+
+event_bus = EventBus()
 
 # 初始化 LLM 客户端
 llm_client = LLMClient(
@@ -81,7 +120,7 @@ async def root():
     """根路径"""
     return {
         "message": "AI自动开发系统",
-        "version": "0.3.0",
+        "version": "0.5.0",
         "status": "running"
     }
 
@@ -260,7 +299,7 @@ async def execute_project(project_id: str):
 
     files_created = result.get("files_created", [])
 
-    return {
+    response_data = {
         "project_id": project_id,
         "status": "executing" if task_name else "idle",
         "message": " | ".join(messages) if messages else "所有任务已完成！",
@@ -270,6 +309,11 @@ async def execute_project(project_id: str):
         "files_created": [os.path.basename(f) if isinstance(f, str) else f for f in files_created],
         "files_count": len(files_created),
     }
+
+    # SSE 推送任务状态更新
+    asyncio.ensure_future(event_bus.publish(project_id, "task_update", response_data))
+
+    return response_data
 
 
 @app.post("/api/projects/{project_id}/execute-all")
@@ -314,6 +358,15 @@ async def execute_all_tasks(project_id: str):
             "files_count": len(files_created),
         })
 
+        # SSE 推送每步进度
+        asyncio.ensure_future(event_bus.publish(project_id, "task_progress", {
+            "task": task_name,
+            "agent": result.get("agent", ""),
+            "success": result.get("success", False),
+            "step": len(results),
+            "files_count": len(files_created),
+        }))
+
     # 最后把最后一个 in_progress 的任务也完成
     final_state = orchestrator.get_project_state(project_id)
     for phase, tasks in final_state["tasks_by_phase"].items():
@@ -326,7 +379,7 @@ async def execute_all_tasks(project_id: str):
                 )
 
     summary = orchestrator.get_project_state(project_id)
-    return {
+    response_data = {
         "project_id": project_id,
         "status": "completed",
         "message": f"全量执行完成：共执行 {len(results)} 个任务，生成 {total_files} 个文件",
@@ -335,6 +388,11 @@ async def execute_all_tasks(project_id: str):
         "results": results,
         "task_summary": summary["task_summary"] if summary else {},
     }
+
+    # SSE 推送全量执行完成
+    asyncio.ensure_future(event_bus.publish(project_id, "execute_all_done", response_data))
+
+    return response_data
 
 
 @app.get("/api/projects/{project_id}/files")
@@ -393,6 +451,51 @@ async def read_project_file(project_id: str, file_path: str):
         "content": content,
         "size": os.path.getsize(full_path),
     }
+
+
+# ============ SSE 实时推送 ============
+
+@app.get("/api/projects/{project_id}/events")
+async def project_events(project_id: str):
+    """
+    SSE 实时推送项目事件流
+
+    前端通过 EventSource 订阅，替代 8 秒轮询。
+    事件类型：task_update, task_progress, execute_all_done
+    """
+    state = orchestrator.get_project_state(project_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="项目不存在")
+
+    queue = event_bus.subscribe(project_id)
+
+    async def event_generator():
+        try:
+            # 先推送一次当前状态作为初始数据
+            current = orchestrator.get_project_state(project_id)
+            if current:
+                yield {
+                    "event": "init",
+                    "data": json.dumps({
+                        "task_summary": current["task_summary"],
+                        "phase": current["phase"],
+                    }, ensure_ascii=False),
+                }
+
+            # 持续监听事件队列
+            while True:
+                try:
+                    msg = await asyncio.wait_for(queue.get(), timeout=30)
+                    yield msg
+                except asyncio.TimeoutError:
+                    # 30 秒无事件，发送心跳保活
+                    yield {"event": "heartbeat", "data": "ping"}
+        except asyncio.CancelledError:
+            pass
+        finally:
+            event_bus.unsubscribe(project_id, queue)
+
+    return EventSourceResponse(event_generator())
 
 
 # ============ 前端服务 ============

@@ -1,6 +1,7 @@
 /**
- * AI 自动开发系统 - 前端应用 v0.4
- * 支持 LLM 配置、任务分解展示、项目详情、阶段进度追踪、一键执行、文件浏览
+ * AI 自动开发系统 - 前端应用 v0.5
+ * 支持 LLM 配置、任务分解展示、项目详情、阶段进度追踪、
+ * 一键执行、文件浏览、SSE 实时推送、代码语法高亮
  */
 
 // API 配置
@@ -11,6 +12,7 @@ const API_BASE_URL = window.location.protocol === 'file:'
 // 全局状态
 let projects = [];
 let currentProjectId = null;
+let sseConnection = null;  // SSE 连接
 
 // ============ 页面路由 ============
 
@@ -27,6 +29,11 @@ function showPage(pageName) {
     const detailMenu = document.querySelector('[data-page="project-detail"]');
     if (detailMenu) {
         detailMenu.style.display = (pageName === 'project-detail') ? 'block' : 'none';
+    }
+
+    // 离开项目详情页时断开 SSE
+    if (pageName !== 'project-detail') {
+        disconnectSSE();
     }
 
     // 页面初始化
@@ -217,6 +224,9 @@ async function loadProjectsFromAPI() {
 async function viewProject(projectId) {
     currentProjectId = projectId;
     showPage('project-detail');
+
+    // 连接 SSE 实时推送
+    connectSSE(projectId);
 
     const container = document.getElementById('project-detail-content');
     container.innerHTML = '<p style="text-align:center;padding:40px"><span class="loading"></span> 加载项目详情...</p>';
@@ -610,7 +620,125 @@ async function executeAllTasks(projectId) {
     }
 }
 
-// ============ 项目文件浏览器 ============
+// ============ SSE 实时推送 ============
+
+function connectSSE(projectId) {
+    // 关闭旧连接
+    disconnectSSE();
+
+    const url = `${API_BASE_URL}/api/projects/${projectId}/events`;
+    sseConnection = new EventSource(url);
+
+    sseConnection.addEventListener('init', (e) => {
+        console.log('[SSE] 已连接，初始状态:', e.data);
+    });
+
+    sseConnection.addEventListener('task_update', (e) => {
+        console.log('[SSE] 任务更新:', e.data);
+        // 自动刷新项目详情
+        if (currentProjectId === projectId) {
+            viewProject(projectId);
+        }
+    });
+
+    sseConnection.addEventListener('task_progress', (e) => {
+        console.log('[SSE] 任务进度:', e.data);
+        try {
+            const data = JSON.parse(e.data);
+            showToast(`✓ ${data.task} 完成 (${data.files_count} 个文件)`, 'success');
+        } catch {}
+    });
+
+    sseConnection.addEventListener('execute_all_done', (e) => {
+        console.log('[SSE] 全量执行完成:', e.data);
+        if (currentProjectId === projectId) {
+            viewProject(projectId);
+        }
+        try {
+            const data = JSON.parse(e.data);
+            showToast(data.message || '全量执行完成', 'success');
+        } catch {}
+    });
+
+    sseConnection.addEventListener('heartbeat', () => {
+        // 心跳包，无需处理
+    });
+
+    sseConnection.onerror = () => {
+        console.log('[SSE] 连接中断，将在 5 秒后重连...');
+        disconnectSSE();
+        setTimeout(() => {
+            if (currentProjectId === projectId) {
+                connectSSE(projectId);
+            }
+        }, 5000);
+    };
+}
+
+function disconnectSSE() {
+    if (sseConnection) {
+        sseConnection.close();
+        sseConnection = null;
+    }
+}
+
+function showToast(message, type = 'info') {
+    // 简易 Toast 提示
+    let container = document.getElementById('toast-container');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'toast-container';
+        container.style.cssText = 'position:fixed;top:20px;right:20px;z-index:9999;display:flex;flex-direction:column;gap:8px';
+        document.body.appendChild(container);
+    }
+
+    const colors = {
+        success: { bg: '#f6ffed', border: '#b7eb8f', text: '#389e0d' },
+        error: { bg: '#fff1f0', border: '#ffa39e', text: '#cf1322' },
+        info: { bg: '#e6f7ff', border: '#91d5ff', text: '#096dd9' },
+    };
+    const c = colors[type] || colors.info;
+
+    const toast = document.createElement('div');
+    toast.style.cssText = `padding:12px 20px;border-radius:8px;font-size:14px;background:${c.bg};border:1px solid ${c.border};color:${c.text};box-shadow:0 4px 12px rgba(0,0,0,0.1);transition:all 0.3s;opacity:1;max-width:400px`;
+    toast.textContent = message;
+    container.appendChild(toast);
+
+    setTimeout(() => {
+        toast.style.opacity = '0';
+        setTimeout(() => toast.remove(), 300);
+    }, 4000);
+}
+
+// ============ 代码语法高亮 ============
+
+function highlightCode(code, filename) {
+    if (typeof hljs === 'undefined') return escapeHtml(code);
+
+    // 根据文件名推断语言
+    const ext = (filename || '').split('.').pop().toLowerCase();
+    const langMap = {
+        'py': 'python', 'js': 'javascript', 'ts': 'typescript',
+        'html': 'html', 'css': 'css', 'json': 'json',
+        'md': 'markdown', 'yml': 'yaml', 'yaml': 'yaml',
+        'sh': 'bash', 'bash': 'bash', 'sql': 'sql',
+        'toml': 'ini', 'ini': 'ini', 'cfg': 'ini',
+        'xml': 'xml', 'jsx': 'javascript', 'tsx': 'typescript',
+    };
+
+    const lang = langMap[ext];
+    if (lang) {
+        try {
+            return hljs.highlight(code, { language: lang }).value;
+        } catch { /* fall through */ }
+    }
+    // 自动检测
+    try {
+        return hljs.highlightAuto(code).value;
+    } catch {
+        return escapeHtml(code);
+    }
+}
 
 async function showProjectFiles(projectId) {
     const panel = document.getElementById(`files-panel-${projectId}`);
@@ -676,7 +804,11 @@ async function previewFile(projectId, filePath) {
     if (!panel || !contentEl) return;
 
     panel.style.display = 'block';
-    if (titleEl) titleEl.textContent = `📄 ${filePath}`;
+    if (titleEl) {
+        const ext = filePath.split('.').pop().toLowerCase();
+        const langLabel = { py: 'Python', js: 'JavaScript', html: 'HTML', css: 'CSS', json: 'JSON', md: 'Markdown', yml: 'YAML', sql: 'SQL' }[ext] || ext.toUpperCase();
+        titleEl.innerHTML = `📄 ${escapeHtml(filePath)} <span class="code-lang-tag">${langLabel}</span>`;
+    }
     contentEl.textContent = '加载中...';
 
     try {
@@ -685,7 +817,9 @@ async function previewFile(projectId, filePath) {
 
         if (!response.ok) throw new Error(data.detail || '加载失败');
 
-        contentEl.textContent = data.content || '(空文件)';
+        const code = data.content || '(空文件)';
+        // 使用 highlight.js 语法高亮
+        contentEl.innerHTML = highlightCode(code, filePath);
     } catch (err) {
         contentEl.textContent = `加载失败: ${err.message}`;
     }
@@ -840,11 +974,13 @@ window.addEventListener('DOMContentLoaded', () => {
     showPage('home');
 });
 
-// 自动刷新项目状态（项目详情页，每 8 秒）
-setInterval(() => {
-    if (currentProjectId &&
-        document.getElementById('page-project-detail') &&
-        document.getElementById('page-project-detail').classList.contains('active')) {
-        viewProject(currentProjectId);
-    }
-}, 8000);
+// SSE 降级：仅在 EventSource 不可用时回退到 30 秒轮询
+if (typeof EventSource === 'undefined') {
+    setInterval(() => {
+        if (currentProjectId &&
+            document.getElementById('page-project-detail') &&
+            document.getElementById('page-project-detail').classList.contains('active')) {
+            viewProject(currentProjectId);
+        }
+    }, 30000);
+}

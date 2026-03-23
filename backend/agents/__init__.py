@@ -3,5 +3,6 @@
 """
 from .dev import DevAgent
 from .architect import ArchitectAgent
+from .test_agent import TestAgent
 
-__all__ = ["DevAgent", "ArchitectAgent"]
+__all__ = ["DevAgent", "ArchitectAgent", "TestAgent"]

@@ -34,7 +34,7 @@ class Settings:
 
     # --- App ---
     APP_NAME: str = os.getenv("APP_NAME", "AI Dev System")
-    APP_VERSION: str = "0.4.0"
+    APP_VERSION: str = "0.5.0"
     DEBUG: bool = os.getenv("DEBUG", "False").lower() in ("true", "1", "yes")
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 

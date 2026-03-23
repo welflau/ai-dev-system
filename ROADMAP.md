@@ -1,6 +1,6 @@
 # 开发计划
 
-## 阶段一: 基础框架搭建 (MVP)
+## 阶段一: 基础框架搭建 (MVP) ✅
 
 ### 1.1 后端基础架构 ✅
 - [x] 创建项目目录结构
@@ -50,35 +50,116 @@
 
 ---
 
-## 阶段二: 高级功能 (v0.3.0)
+## 阶段二: SQLite 持久化 + 体验升级 (v0.3.0) ✅
 
-### 2.1 数据持久化
-- [ ] SQLite 数据库替代内存存储
-- [ ] 项目数据重启后不丢失
-- [ ] 数据库迁移支持
+### 2.1 SQLite 持久化 ✅
+- [x] DbStateManager - SQLite 数据库替代内存存储
+- [x] 项目/任务/日志数据重启后不丢失
+- [x] 与内存版 StateManager 相同接口，无缝切换
+- [x] 17 个专属测试全部通过
 
-### 2.2 执行体验升级
-- [ ] 一键全量执行（自动依次执行所有任务直到完成）
-- [ ] 任务执行结果展示（在前端展示 Agent 生成的代码内容）
-- [ ] 执行日志实时滚动
+### 2.2 执行体验升级 ✅
+- [x] 一键全量执行 (/api/projects/{id}/execute-all)
+- [x] 自动依次执行所有 pending 任务直到完成
+- [x] 前端增加 ⚡ 一键全量执行按钮
 
-### 2.3 项目文件管理
-- [ ] 项目文件浏览器（查看 Agent 生成的文件树）
-- [ ] 代码预览（语法高亮）
-- [ ] 项目打包下载（ZIP）
+### 2.3 项目文件管理 ✅
+- [x] 项目文件浏览器 (API: 列出文件树 + 读取文件内容)
+- [x] 代码预览（深色主题）
+- [x] 路径安全检查（防目录穿越）
 
-### 2.4 前端体验优化
-- [ ] 版本升级到 v0.3.0
-- [ ] 深色模式 / 主题切换
-- [ ] 任务执行动画效果
+### 2.4 前端体验优化 ✅
+- [x] 版本升级到 v0.3.0
+- [x] 使用指引页面（快速上手 + FAQ + API 一览）
 
 ---
 
-## 当前进度: 阶段二开发中
+## 阶段三: LLM 智能引擎 (v0.4.0) ✅
 
-### 阶段一总结 ✅
-- **51个测试全部通过** (8 工具 + 21 协调器 + 22 Agent/集成)
-- **DevAgent**: 基于模板的代码生成，支持 14 种任务
-- **ArchitectAgent**: 基于模板的架构设计，支持 7 种方案
-- **Orchestrator**: 集成 Agent 池，execute_task 调用真正的 Agent 执行
-- **前端**: 6 个页面 (首页/提交/看板/详情/工具/指引)
+### 3.1 LLM 客户端层 ✅
+- [x] LLMClient 类 (backend/llm/client.py)
+- [x] 同步: generate(), chat(), chat_with_tools(), stream()
+- [x] 异步: agenerate(), achat(), astream()
+- [x] OpenAI 兼容 API 格式（支持 CodeBuddy/DeepSeek/Moonshot 等）
+- [x] 自动降级: LLM 不可用时返回 [LLM_UNAVAILABLE]
+
+### 3.2 集中化配置管理 ✅
+- [x] Settings 类 (backend/config.py)
+- [x] 环境变量: LLM_BASE_URL, LLM_API_KEY, LLM_MODEL
+- [x] .env 文件支持（.gitignore 已忽略）
+
+### 3.3 智能任务分解 ✅
+- [x] LLM 模式: 自然语言需求 → JSON 任务列表
+- [x] 规则引擎降级方案（原关键词匹配逻辑保留）
+
+### 3.4 智能架构设计 ✅
+- [x] 每个设计方法支持 LLM 生成 + 模板降级双模式
+
+### 3.5 智能代码生成 ✅
+- [x] 无匹配 handler 时自动尝试 LLM 生成多文件代码
+
+### 3.6 前端 LLM 配置面板 ✅
+- [x] API 端点: GET /api/llm/status, POST /api/llm/test, POST /api/llm/config
+- [x] 前端配置页面 + 连接测试
+
+---
+
+## 阶段四: Agent 协作 + 实时推送 (v0.5.0) ✅
+
+### 4.1 Agent 间上下文传递 ✅
+- [x] Orchestrator 维护 _project_context 缓存
+- [x] ArchitectAgent 输出 → DevAgent 上下文（设计文档驱动代码生成）
+- [x] DevAgent 输出 → TestAgent 上下文（已有代码驱动测试生成）
+- [x] 自动收集已生成文件列表（避免重复生成）
+
+### 4.2 TestAgent 实现 ✅
+- [x] LLM 模式：根据已有代码智能生成 pytest 测试
+- [x] 模板降级：conftest.py + 模块测试 + pytest.ini
+- [x] 读取项目代码文件供 LLM 参考
+
+### 4.3 ProductAgent 接入 ✅
+- [x] ProductAgentAdapter 同步适配器（桥接原 async 接口）
+- [x] LLM 模式：智能需求分析 + PRD 生成
+- [x] 模板降级：关键词提取 + 基础 PRD 文档
+
+### 4.4 DevAgent 增强 ✅
+- [x] _llm_generate_code 注入架构设计上下文
+- [x] 注入已有文件列表（避免重复生成）
+
+### 4.5 SSE 实时推送 ✅
+- [x] EventBus 事件总线（支持多客户端订阅）
+- [x] /api/projects/{id}/events SSE 端点
+- [x] 前端 EventSource 订阅（替代 8 秒轮询）
+- [x] 心跳保活 + 自动重连
+- [x] Toast 通知系统
+
+### 4.6 代码语法高亮 ✅
+- [x] highlight.js 集成（CDN 加载）
+- [x] 自动语言检测（Python/JS/HTML/CSS/JSON 等）
+- [x] 文件类型标签显示
+
+---
+
+## 阶段五: 质量 + 部署 (v0.6.0) 🔜
+
+### 5.1 ReviewAgent 实现
+- [ ] 代码审查 Agent（代码规范检查、安全漏洞扫描）
+- [ ] LLM + 规则引擎双模式
+
+### 5.2 DeployAgent 实现
+- [ ] 部署 Agent（Dockerfile + docker-compose 生成）
+- [ ] CI/CD 配置生成
+
+### 5.3 项目打包下载
+- [ ] ZIP 打包项目文件
+- [ ] 一键下载按钮
+
+### 5.4 多 LLM 支持
+- [ ] 不同 Agent 可配置不同 LLM
+- [ ] 模型性能对比
+
+### 5.5 更多测试
+- [ ] TestAgent 单元测试
+- [ ] ProductAgentAdapter 单元测试
+- [ ] SSE 端点集成测试
+- [ ] 端到端测试 (E2E)

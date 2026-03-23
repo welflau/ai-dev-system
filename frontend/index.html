@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI 自动开发系统 v0.4</title>
+    <title>AI 自动开发系统 v0.5</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
     <style>
         * { box-sizing: border-box; }
         body {
@@ -531,10 +532,10 @@
             line-height: 1.7;
         }
 
-        /* ===== 代码预览 ===== */
+        /* ===== 代码预览（highlight.js 集成） ===== */
         .code-block {
-            background: #1e1e1e;
-            color: #d4d4d4;
+            background: #0d1117;
+            color: #c9d1d9;
             padding: 16px;
             border-radius: 8px;
             overflow-x: auto;
@@ -543,9 +544,23 @@
             line-height: 1.6;
             max-height: 500px;
             overflow-y: auto;
-            white-space: pre-wrap;
-            word-break: break-all;
+            white-space: pre;
+            word-break: normal;
             margin: 0;
+            tab-size: 4;
+        }
+        .code-block code {
+            background: none !important;
+            padding: 0 !important;
+        }
+        .code-lang-tag {
+            display: inline-block;
+            padding: 2px 8px;
+            background: rgba(24,144,255,0.1);
+            color: #1890ff;
+            border-radius: 4px;
+            font-size: 12px;
+            margin-bottom: 8px;
         }
 
         /* ===== 响应式 ===== */
@@ -561,7 +576,7 @@
         <div class="sidebar">
             <div class="sidebar-header">
                 <h2>AI 自动开发系统</h2>
-                <div class="version">v0.4.0 - LLM Powered</div>
+                <div class="version">v0.5.0 - Agent Context + SSE</div>
             </div>
             <div class="menu-item active" data-page="home">🏠 首页</div>
             <div class="menu-item" data-page="submit">📝 提交需求</div>
@@ -928,14 +943,15 @@
                     <div class="guide-section" style="border-bottom:none;padding-bottom:0">
                         <h4 class="guide-title">📦 当前版本</h4>
                         <p style="color:rgba(0,0,0,0.65);line-height:2">
-                            <strong>v0.4.0 - LLM Powered</strong><br>
-                            ✅ LLM 智能任务分解（支持 OpenAI 兼容 API）<br>
-                            ✅ LLM 智能架构设计 + 代码生成<br>
-                            ✅ 自动降级到模板引擎（LLM 不可用时）<br>
-                            ✅ 前端 LLM 配置面板 + 连接测试<br>
+                            <strong>v0.5.0 - Agent Context + SSE</strong><br>
+                            ✅ Agent 间上下文传递（架构→开发→测试）<br>
+                            ✅ TestAgent 自动测试生成<br>
+                            ✅ ProductAgent 需求分析 + PRD 生成<br>
+                            ✅ SSE 实时推送（替代轮询）<br>
+                            ✅ 代码语法高亮（highlight.js）<br>
+                            ✅ LLM 智能任务分解 + 代码生成<br>
                             ✅ SQLite 数据持久化<br>
-                            ✅ 项目文件浏览器 + 代码预览<br>
-                            ✅ 一键全量执行
+                            ✅ 项目文件浏览器 + 代码预览
                         </p>
                     </div>
                 </div>
@@ -943,6 +959,7 @@
         </div>
     </div>
 
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
     <script>
     (function() {
         var script = document.createElement('script');
