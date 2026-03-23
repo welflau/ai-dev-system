@@ -1,20 +1,38 @@
 """
 架构师代理（ArchitectAgent）
 负责技术架构设计、数据库结构设计、系统方案输出
-基于模板引擎实现（不依赖 LLM）
+
+LLM 模式：使用大模型生成专业架构方案
+降级模式：使用模板引擎生成基础方案
 """
 import os
+import logging
 from typing import Dict, Any, List
 from datetime import datetime
 from models.enums import AgentType, TaskType
 
+logger = logging.getLogger(__name__)
+
+# LLM 架构设计系统提示词
+ARCHITECT_SYSTEM_PROMPT = """你是一位资深软件架构师。你的职责是根据需求生成专业的技术方案文档。
+
+输出要求：
+1. 使用 Markdown 格式
+2. 内容专业、结构清晰
+3. 包含具体的技术选型理由
+4. 包含架构图（用 ASCII/文本描述）
+5. 适合中小型团队落地执行
+
+你直接输出 Markdown 文档内容，不要包含 ```markdown 代码块标记。"""
+
 
 class ArchitectAgent:
-    """架构师代理 - 基于模板的架构方案生成"""
+    """架构师代理 - LLM 智能设计 + 模板降级"""
 
-    def __init__(self, work_dir: str = "projects"):
+    def __init__(self, work_dir: str = "projects", llm_client=None):
         self.agent_type = AgentType.ARCHITECT
         self.work_dir = work_dir
+        self.llm_client = llm_client
 
     def get_capabilities(self) -> List[str]:
         return [
@@ -27,6 +45,10 @@ class ArchitectAgent:
 
     def get_supported_tasks(self) -> List[str]:
         return [TaskType.DESIGN.value]
+
+    @property
+    def _llm_available(self) -> bool:
+        return self.llm_client is not None and self.llm_client.enabled
 
     def execute(self, task_name: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -86,6 +108,47 @@ class ArchitectAgent:
             f.write(content)
         return filepath
 
+    # ------------------------------------------------------------------
+    #  LLM 辅助方法
+    # ------------------------------------------------------------------
+
+    def _llm_generate_doc(
+        self,
+        task_type: str,
+        requirement: str,
+        context: Dict,
+        extra_instructions: str = "",
+    ) -> str:
+        """使用 LLM 生成设计文档，失败返回空字符串"""
+        if not self._llm_available:
+            return ""
+
+        project_name = context.get("project_name", "系统")
+        tech_stack = context.get("tech_stack") or {}
+
+        prompt = f"""请为以下项目生成{task_type}文档：
+
+项目名称：{project_name}
+需求描述：{requirement}
+技术栈偏好：{tech_stack if tech_stack else '未指定，请给出推荐'}
+
+{extra_instructions}"""
+
+        try:
+            response = self.llm_client.chat(
+                messages=[{"role": "user", "content": prompt}],
+                system=ARCHITECT_SYSTEM_PROMPT,
+                temperature=0.4,
+                max_tokens=4096,
+            )
+            if response and response != "[LLM_UNAVAILABLE]":
+                logger.info(f"LLM 生成{task_type}文档成功")
+                return response
+        except Exception as e:
+            logger.warning(f"LLM 生成{task_type}文档失败: {e}")
+
+        return ""
+
     # ==================== 系统架构设计 ====================
 
     def _design_architecture(
@@ -94,9 +157,44 @@ class ArchitectAgent:
         """生成系统架构设计文档"""
         files_created = []
         project_name = context.get("project_name", "系统")
+
+        # 尝试 LLM 生成
+        llm_content = self._llm_generate_doc(
+            "系统架构设计",
+            requirement,
+            context,
+            extra_instructions="""文档必须包含：
+1. 架构概览（架构模式选择及理由）
+2. 系统分层（用 ASCII 图展示）
+3. 模块划分（表格：模块名、职责、依赖）
+4. 技术选型（表格：层级、技术、说明）
+5. 数据流（用文本流程描述）
+6. 安全设计
+7. 部署架构""",
+        )
+
+        if llm_content:
+            files_created.append(self._write_file(
+                f"{project_dir}/docs/architecture.md",
+                llm_content,
+            ))
+            return {
+                "files_created": files_created,
+                "output": f"架构设计完成（LLM 生成）",
+                "mode": "llm",
+            }
+
+        # 降级：模板生成
+        return self._template_design_architecture(project_dir, requirement, context)
+
+    def _template_design_architecture(
+        self, project_dir: str, requirement: str, context: Dict
+    ) -> Dict[str, Any]:
+        """模板生成系统架构设计文档（降级方案）"""
+        files_created = []
+        project_name = context.get("project_name", "系统")
         req_lower = requirement.lower()
 
-        # 分析需求特征
         features = []
         if any(kw in req_lower for kw in ["api", "接口", "端点"]):
             features.append("RESTful API")
@@ -185,9 +283,10 @@ class ArchitectAgent:
 
         return {
             "files_created": files_created,
-            "output": f"架构设计完成：{architecture_pattern}，识别 {len(features)} 个核心模块",
+            "output": f"架构设计完成（模板生成）：{architecture_pattern}，识别 {len(features)} 个核心模块",
             "features": features,
             "pattern": architecture_pattern,
+            "mode": "template",
         }
 
     def _recommend_tech_stack(self, features: List[str]) -> str:
@@ -223,6 +322,36 @@ class ArchitectAgent:
         self, project_dir: str, requirement: str, context: Dict
     ) -> Dict[str, Any]:
         """生成数据库结构设计"""
+        # 尝试 LLM 生成
+        llm_content = self._llm_generate_doc(
+            "数据库设计",
+            requirement,
+            context,
+            extra_instructions="""文档必须包含：
+1. ER 模型（每张表的字段、类型、说明用表格展示）
+2. 表之间的关联关系
+3. 索引策略
+4. 数据库选型建议""",
+        )
+
+        if llm_content:
+            files_created = [self._write_file(
+                f"{project_dir}/docs/database_design.md",
+                llm_content,
+            )]
+            return {
+                "files_created": files_created,
+                "output": "数据库设计完成（LLM 生成）",
+                "mode": "llm",
+            }
+
+        # 降级：模板生成
+        return self._template_design_database(project_dir, requirement, context)
+
+    def _template_design_database(
+        self, project_dir: str, requirement: str, context: Dict
+    ) -> Dict[str, Any]:
+        """模板生成数据库设计（降级方案）"""
         files_created = []
         req_lower = requirement.lower()
 
@@ -268,7 +397,6 @@ class ArchitectAgent:
                 ],
             })
 
-        # 生成 ER 文档
         table_docs = []
         for t in tables:
             cols = "\n".join(
@@ -304,8 +432,9 @@ class ArchitectAgent:
 
         return {
             "files_created": files_created,
-            "output": f"数据库设计完成，包含 {len(tables)} 张表",
+            "output": f"数据库设计完成（模板生成），包含 {len(tables)} 张表",
             "tables": [t["name"] for t in tables],
+            "mode": "template",
         }
 
     # ==================== API 接口设计 ====================
@@ -314,6 +443,36 @@ class ArchitectAgent:
         self, project_dir: str, requirement: str, context: Dict
     ) -> Dict[str, Any]:
         """生成 API 接口设计文档"""
+        llm_content = self._llm_generate_doc(
+            "API 接口设计",
+            requirement,
+            context,
+            extra_instructions="""文档必须包含：
+1. 基本约定（Base URL、数据格式、认证方式、分页）
+2. 端点列表（表格：方法、路径、说明）
+3. 统一响应格式（成功/错误的 JSON 示例）
+4. 关键接口的请求/响应示例
+5. HTTP 状态码说明""",
+        )
+
+        if llm_content:
+            files_created = [self._write_file(
+                f"{project_dir}/docs/api_design.md",
+                llm_content,
+            )]
+            return {
+                "files_created": files_created,
+                "output": "API 接口设计完成（LLM 生成）",
+                "mode": "llm",
+            }
+
+        # 降级：模板生成
+        return self._template_design_api(project_dir, requirement, context)
+
+    def _template_design_api(
+        self, project_dir: str, requirement: str, context: Dict
+    ) -> Dict[str, Any]:
+        """模板生成 API 设计（降级方案）"""
         files_created = []
         req_lower = requirement.lower()
 
@@ -400,8 +559,9 @@ class ArchitectAgent:
 
         return {
             "files_created": files_created,
-            "output": f"API 接口设计完成，共 {len(endpoints)} 个端点",
+            "output": f"API 接口设计完成（模板生成），共 {len(endpoints)} 个端点",
             "endpoints_count": len(endpoints),
+            "mode": "template",
         }
 
     # ==================== 其他设计 ====================
@@ -416,6 +576,30 @@ class ArchitectAgent:
         self, project_dir: str, requirement: str, context: Dict
     ) -> Dict[str, Any]:
         """UI 界面设计"""
+        llm_content = self._llm_generate_doc(
+            "UI 界面设计",
+            requirement,
+            context,
+            extra_instructions="""文档必须包含：
+1. 设计原则
+2. 页面结构和导航
+3. 色彩方案
+4. 布局方案
+5. 关键页面线框描述""",
+        )
+
+        if llm_content:
+            files_created = [self._write_file(
+                f"{project_dir}/docs/ui_design.md",
+                llm_content,
+            )]
+            return {
+                "files_created": files_created,
+                "output": "UI 界面设计完成（LLM 生成）",
+                "mode": "llm",
+            }
+
+        # 降级
         files_created = []
         project_name = context.get("project_name", "应用")
 
@@ -454,15 +638,38 @@ class ArchitectAgent:
 
         return {
             "files_created": files_created,
-            "output": "UI 界面设计方案完成",
+            "output": "UI 界面设计方案完成（模板生成）",
+            "mode": "template",
         }
 
     def _design_user_system(
         self, project_dir: str, requirement: str, context: Dict
     ) -> Dict[str, Any]:
         """用户系统设计"""
-        files_created = []
+        llm_content = self._llm_generate_doc(
+            "用户系统设计",
+            requirement,
+            context,
+            extra_instructions="""文档必须包含：
+1. 认证流程（注册、登录、鉴权）
+2. 角色权限设计
+3. 安全措施
+4. Token 管理策略""",
+        )
 
+        if llm_content:
+            files_created = [self._write_file(
+                f"{project_dir}/docs/user_system_design.md",
+                llm_content,
+            )]
+            return {
+                "files_created": files_created,
+                "output": "用户系统设计完成（LLM 生成）",
+                "mode": "llm",
+            }
+
+        # 降级
+        files_created = []
         files_created.append(self._write_file(
             f"{project_dir}/docs/user_system_design.md",
             f"""# 用户系统设计
@@ -493,7 +700,8 @@ class ArchitectAgent:
 
         return {
             "files_created": files_created,
-            "output": "用户系统设计完成（认证流程 + 角色权限）",
+            "output": "用户系统设计完成（模板生成）",
+            "mode": "template",
         }
 
     def _design_generic(

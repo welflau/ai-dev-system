@@ -1,21 +1,55 @@
 """
 开发代理（DevAgent）
 负责代码生成、项目初始化、功能开发
-基于模板引擎实现（不依赖 LLM）
+
+LLM 模式：使用大模型智能生成代码
+降级模式：使用模板引擎生成基础代码
 """
 import os
 import json
+import logging
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 from models.enums import AgentType, TaskType
 
+logger = logging.getLogger(__name__)
+
+# LLM 代码生成系统提示词
+DEV_SYSTEM_PROMPT = """你是一位资深 Python 全栈开发工程师。
+你的职责是根据任务描述生成高质量、可直接运行的代码。
+
+技术栈：Python 3.10+, FastAPI, Pydantic, SQLAlchemy, SQLite
+
+代码规范：
+1. 包含完整的 docstring 和类型注解
+2. 遵循 PEP 8 规范
+3. 代码可直接运行，不需要额外修改
+4. 包含必要的错误处理
+5. 使用中文注释
+
+你必须返回严格的 JSON 格式（不要包含 markdown 代码块标记），结构如下：
+{
+  "files": [
+    {
+      "path": "相对文件路径（如 src/api/user.py）",
+      "content": "完整的文件内容"
+    }
+  ],
+  "summary": "一句话描述做了什么"
+}"""
+
 
 class DevAgent:
-    """开发代理 - 基于模板的代码生成"""
+    """开发代理 - LLM 智能生成 + 模板降级"""
 
-    def __init__(self, work_dir: str = "projects"):
+    def __init__(self, work_dir: str = "projects", llm_client=None):
         self.agent_type = AgentType.DEV
         self.work_dir = work_dir
+        self.llm_client = llm_client
+
+    @property
+    def _llm_available(self) -> bool:
+        return self.llm_client is not None and self.llm_client.enabled
 
     def get_capabilities(self) -> List[str]:
         return [
@@ -70,7 +104,16 @@ class DevAgent:
                 break
 
         if not handler:
-            # 通用代码生成
+            # 没有匹配的模板 handler → 先尝试 LLM 生成
+            llm_result = self._llm_generate_code(task_name, project_dir, requirement, context)
+            if llm_result:
+                return {
+                    "success": True,
+                    "agent": self.agent_type.value,
+                    "task": task_name,
+                    **llm_result,
+                }
+            # LLM 也不可用 → 通用模板兜底
             handler = self._generate_generic_code
 
         try:
@@ -88,6 +131,93 @@ class DevAgent:
                 "task": task_name,
                 "error": str(e),
             }
+
+    # ------------------------------------------------------------------
+    #  LLM 智能代码生成
+    # ------------------------------------------------------------------
+
+    def _llm_generate_code(
+        self,
+        task_name: str,
+        project_dir: str,
+        requirement: str,
+        context: Dict,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        使用 LLM 智能生成代码
+
+        Returns:
+            成功返回 {files_created, output, mode}，失败返回 None
+        """
+        if not self._llm_available:
+            return None
+
+        project_name = context.get("project_name", "项目")
+        tech_stack = context.get("tech_stack") or {}
+
+        prompt = f"""请为以下开发任务生成代码：
+
+项目名称：{project_name}
+任务名称：{task_name}
+需求描述：{requirement}
+技术栈：{json.dumps(tech_stack, ensure_ascii=False) if tech_stack else 'Python / FastAPI / SQLite'}
+
+请生成所有需要的文件，返回 JSON 格式。"""
+
+        try:
+            response = self.llm_client.chat(
+                messages=[{"role": "user", "content": prompt}],
+                system=DEV_SYSTEM_PROMPT,
+                temperature=0.3,
+                max_tokens=8192,
+            )
+
+            if not response or response == "[LLM_UNAVAILABLE]":
+                return None
+
+            # 解析 LLM 返回的 JSON
+            return self._parse_llm_code_response(response, project_dir)
+
+        except Exception as e:
+            logger.warning(f"LLM 代码生成失败: {e}")
+            return None
+
+    def _parse_llm_code_response(
+        self, response: str, project_dir: str
+    ) -> Optional[Dict[str, Any]]:
+        """解析 LLM 返回的代码 JSON 并写入文件"""
+        text = response.strip()
+        if "```json" in text:
+            text = text.split("```json")[1].split("```")[0].strip()
+        elif "```" in text:
+            text = text.split("```")[1].split("```")[0].strip()
+
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            logger.warning(f"LLM 代码响应 JSON 解析失败: {text[:200]}")
+            return None
+
+        files = data.get("files", [])
+        if not files:
+            return None
+
+        files_created = []
+        for f in files:
+            path = f.get("path", "")
+            content = f.get("content", "")
+            if path and content:
+                full_path = os.path.join(project_dir, path)
+                files_created.append(self._write_file(full_path, content))
+
+        if not files_created:
+            return None
+
+        return {
+            "files_created": files_created,
+            "output": data.get("summary", f"LLM 生成了 {len(files_created)} 个文件"),
+            "mode": "llm",
+        }
 
     def _ensure_dir(self, path: str) -> None:
         """确保目录存在"""

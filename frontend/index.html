@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI 自动开发系统 v0.3</title>
+    <title>AI 自动开发系统 v0.4</title>
     <style>
         * { box-sizing: border-box; }
         body {
@@ -561,13 +561,14 @@
         <div class="sidebar">
             <div class="sidebar-header">
                 <h2>AI 自动开发系统</h2>
-                <div class="version">v0.3.0 - Persistent</div>
+                <div class="version">v0.4.0 - LLM Powered</div>
             </div>
             <div class="menu-item active" data-page="home">🏠 首页</div>
             <div class="menu-item" data-page="submit">📝 提交需求</div>
             <div class="menu-item" data-page="projects">📊 项目看板</div>
             <div class="menu-item" data-page="project-detail" style="display:none;">📋 项目详情</div>
             <div class="menu-item" data-page="tools">🛠️ 工具列表</div>
+            <div class="menu-item" data-page="llm-config">🧠 LLM 配置</div>
             <div class="menu-item" data-page="guide">📖 使用指引</div>
         </div>
 
@@ -599,6 +600,12 @@
                             <div class="number" style="color:#722ed1" id="stat-tools-available">8</div>
                             <div class="label">可用工具</div>
                         </div>
+                    </div>
+                    <div style="display:flex;gap:12px;align-items:center;margin-bottom:20px">
+                        <div id="llm-status-badge" style="display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:20px;font-size:13px;background:#fff1f0;border:1px solid #ffa39e;color:#cf1322">
+                            <span>●</span> LLM 未配置
+                        </div>
+                        <span style="font-size:13px;color:rgba(0,0,0,0.45)" id="llm-model-info"></span>
                     </div>
                     <button class="btn btn-primary" onclick="showPage('submit')">
                         开始新项目 →
@@ -664,6 +671,62 @@
                     </div>
                     <div id="tools-list" class="tools-grid">
                         <p>加载中...</p>
+                    </div>
+                </div>
+            </div>
+            <!-- ===== LLM 配置 ===== -->
+            <div id="page-llm-config" class="page">
+                <div class="card">
+                    <div class="card-header">
+                        <h3>🧠 LLM 配置</h3>
+                        <button class="btn btn-default btn-sm" onclick="loadLLMStatus()">🔄 刷新状态</button>
+                    </div>
+
+                    <!-- 状态面板 -->
+                    <div id="llm-config-status" style="padding:16px 20px;background:#fafafa;border-radius:8px;margin-bottom:20px">
+                        <p style="margin:0;color:rgba(0,0,0,0.45)">加载中...</p>
+                    </div>
+
+                    <!-- 配置表单 -->
+                    <div id="llm-config-alert" class="alert hidden"></div>
+                    <div class="form-group">
+                        <label for="llm-base-url">API Base URL</label>
+                        <input type="text" id="llm-base-url" placeholder="例如: https://api.openai.com/v1">
+                    </div>
+                    <div class="form-group">
+                        <label for="llm-api-key">API Key</label>
+                        <input type="password" id="llm-api-key" placeholder="sk-...">
+                    </div>
+                    <div class="form-group">
+                        <label for="llm-model">模型名称</label>
+                        <input type="text" id="llm-model" placeholder="例如: gpt-4 / deepseek-chat / claude-3">
+                    </div>
+                    <div style="display:flex;gap:12px">
+                        <button class="btn btn-primary" onclick="saveLLMConfig()">保存配置</button>
+                        <button class="btn btn-default" onclick="testLLMConnection()">
+                            <span id="llm-test-text">测试连接</span>
+                        </button>
+                    </div>
+
+                    <!-- 测试结果 -->
+                    <div id="llm-test-result" class="hidden" style="margin-top:16px;padding:16px;border-radius:8px;border:1px solid #f0f0f0;background:#fafafa"></div>
+                </div>
+
+                <div class="card" style="margin-top:16px">
+                    <div class="card-header">
+                        <h3>💡 配置说明</h3>
+                    </div>
+                    <div style="line-height:2;color:rgba(0,0,0,0.65);font-size:14px">
+                        <p><strong>支持的 LLM 提供商</strong>（任何 OpenAI 兼容 API）：</p>
+                        <ul style="margin:4px 0 16px 20px">
+                            <li>OpenAI — <code>https://api.openai.com/v1</code></li>
+                            <li>CodeBuddy — 公司内部 API 地址</li>
+                            <li>DeepSeek — <code>https://api.deepseek.com/v1</code></li>
+                            <li>Moonshot — <code>https://api.moonshot.cn/v1</code></li>
+                            <li>其他 OpenAI 兼容服务...</li>
+                        </ul>
+                        <p><strong>降级模式</strong>：如果未配置 API Key 或 LLM 不可用，系统会自动使用模板引擎生成结果，功能不受影响。</p>
+                        <p><strong>安全说明</strong>：运行时配置仅在当前进程生效，重启后需要重新配置。建议在 <code>backend/.env</code> 文件中持久化配置。</p>
                     </div>
                 </div>
             </div>
@@ -865,12 +928,14 @@
                     <div class="guide-section" style="border-bottom:none;padding-bottom:0">
                         <h4 class="guide-title">📦 当前版本</h4>
                         <p style="color:rgba(0,0,0,0.65);line-height:2">
-                            <strong>v0.2.0 - Orchestrator</strong><br>
-                            ✅ 基于规则引擎的任务分解器（5 大关键词匹配）<br>
-                            ✅ 内存版状态管理器（项目全生命周期）<br>
-                            ✅ 协调器串联需求分析→任务分解→状态管理<br>
-                            ✅ 前端看板（阶段进度条、任务分组、日志展示）<br>
-                            🔜 下一版本将实现 AI Agent 驱动的真正代码生成
+                            <strong>v0.4.0 - LLM Powered</strong><br>
+                            ✅ LLM 智能任务分解（支持 OpenAI 兼容 API）<br>
+                            ✅ LLM 智能架构设计 + 代码生成<br>
+                            ✅ 自动降级到模板引擎（LLM 不可用时）<br>
+                            ✅ 前端 LLM 配置面板 + 连接测试<br>
+                            ✅ SQLite 数据持久化<br>
+                            ✅ 项目文件浏览器 + 代码预览<br>
+                            ✅ 一键全量执行
                         </p>
                     </div>
                 </div>

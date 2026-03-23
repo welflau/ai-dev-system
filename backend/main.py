@@ -8,6 +8,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from typing import Dict, Any, Optional
 
+from config import settings
+from llm import LLMClient
 from models.schemas import ProcessRequest, ProcessResponse
 from models.enums import TaskStatus
 from tools.registry import ToolRegistry
@@ -22,7 +24,16 @@ from orchestrator.db_state_manager import DbStateManager
 app = FastAPI(
     title="AI自动开发系统",
     description="从自然语言需求到可运行软件的端到端自动化开发系统",
-    version="0.3.0"
+    version=settings.APP_VERSION,
+)
+
+# 初始化 LLM 客户端
+llm_client = LLMClient(
+    base_url=settings.LLM_BASE_URL,
+    api_key=settings.LLM_API_KEY,
+    model=settings.LLM_MODEL,
+    timeout=settings.LLM_TIMEOUT,
+    max_retries=settings.LLM_MAX_RETRIES,
 )
 
 # 前端文件目录
@@ -51,16 +62,16 @@ tool_registry.register(GitPushTool())
 tool_registry.register(GitCreateBranchTool())
 
 # 初始化协调器（配置项目输出目录 + SQLite 持久化）
-PROJECTS_DIR = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "projects"
-)
+PROJECTS_DIR = settings.PROJECTS_DIR
 os.makedirs(PROJECTS_DIR, exist_ok=True)
 
-DB_PATH = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "ai_dev_system.db"
-)
+DB_PATH = settings.DB_PATH
 db_state_manager = DbStateManager(db_path=DB_PATH)
-orchestrator = Orchestrator(state_manager=db_state_manager, work_dir=PROJECTS_DIR)
+orchestrator = Orchestrator(
+    state_manager=db_state_manager,
+    work_dir=PROJECTS_DIR,
+    llm_client=llm_client,
+)
 
 
 # ============ 基础端点 ============
@@ -82,7 +93,9 @@ async def health_check():
     return {
         "status": "healthy",
         "tools_available": len(tool_registry.list_tools()),
-        "projects_count": project_count
+        "projects_count": project_count,
+        "llm_enabled": llm_client.enabled,
+        "llm_model": llm_client.model,
     }
 
 
@@ -90,6 +103,44 @@ async def health_check():
 async def list_tools():
     """列出所有可用工具"""
     return {"tools": tool_registry.get_schemas()}
+
+
+# ============ LLM API ============
+
+@app.get("/api/llm/status")
+async def llm_status():
+    """获取 LLM 配置状态"""
+    return llm_client.get_status()
+
+
+@app.post("/api/llm/test")
+async def llm_test():
+    """测试 LLM 连接"""
+    result = llm_client.test_connection()
+    return result
+
+
+@app.post("/api/llm/config")
+async def update_llm_config(
+    base_url: Optional[str] = None,
+    api_key: Optional[str] = None,
+    model: Optional[str] = None,
+):
+    """运行时更新 LLM 配置"""
+    global llm_client
+    llm_client = LLMClient(
+        base_url=base_url or llm_client.base_url,
+        api_key=api_key or llm_client.api_key,
+        model=model or llm_client.model,
+        timeout=settings.LLM_TIMEOUT,
+        max_retries=settings.LLM_MAX_RETRIES,
+    )
+    # 同步更新 orchestrator 中的 llm_client
+    orchestrator.update_llm_client(llm_client)
+    return {
+        "message": "LLM 配置已更新",
+        "status": llm_client.get_status(),
+    }
 
 
 # ============ 项目 API ============

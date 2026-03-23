@@ -1,6 +1,6 @@
 /**
- * AI 自动开发系统 - 前端应用 v0.3
- * 支持任务分解展示、项目详情、阶段进度追踪、一键执行、文件浏览
+ * AI 自动开发系统 - 前端应用 v0.4
+ * 支持 LLM 配置、任务分解展示、项目详情、阶段进度追踪、一键执行、文件浏览
  */
 
 // API 配置
@@ -33,6 +33,7 @@ function showPage(pageName) {
     if (pageName === 'home') loadStats();
     else if (pageName === 'projects') loadProjectsFromAPI();
     else if (pageName === 'tools') loadTools();
+    else if (pageName === 'llm-config') loadLLMStatus();
 }
 
 // ============ 提示信息 ============
@@ -121,6 +122,25 @@ async function loadStats() {
             const h = await healthRes.json();
             setText('stat-tools-available', h.tools_available || 0);
             setText('stat-total-projects', h.projects_count || 0);
+
+            // LLM 状态指示
+            const badge = document.getElementById('llm-status-badge');
+            const modelInfo = document.getElementById('llm-model-info');
+            if (badge) {
+                if (h.llm_enabled) {
+                    badge.style.background = '#f6ffed';
+                    badge.style.borderColor = '#b7eb8f';
+                    badge.style.color = '#389e0d';
+                    badge.innerHTML = '<span>●</span> LLM 已启用';
+                    if (modelInfo) modelInfo.textContent = `模型: ${h.llm_model || 'N/A'}`;
+                } else {
+                    badge.style.background = '#fff1f0';
+                    badge.style.borderColor = '#ffa39e';
+                    badge.style.color = '#cf1322';
+                    badge.innerHTML = '<span>●</span> LLM 未配置（使用模板引擎）';
+                    if (modelInfo) modelInfo.textContent = '点击侧边栏「🧠 LLM 配置」进行设置';
+                }
+            }
         }
 
         if (projectsRes && projectsRes.ok) {
@@ -679,6 +699,131 @@ function getFileIcon(ext) {
         'toml': '⚙️', 'cfg': '⚙️', 'ini': '⚙️', 'env': '🔐',
     };
     return icons[ext] || '📄';
+}
+
+// ============ LLM 配置管理 ============
+
+async function loadLLMStatus() {
+    const statusEl = document.getElementById('llm-config-status');
+    if (!statusEl) return;
+
+    try {
+        const response = await fetch(`${API_BASE_URL}/api/llm/status`);
+        const data = await response.json();
+
+        if (response.ok) {
+            const enabled = data.enabled;
+            statusEl.innerHTML = `
+                <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+                    <div style="width:12px;height:12px;border-radius:50%;background:${enabled ? '#52c41a' : '#ff4d4f'}"></div>
+                    <strong style="font-size:15px">${enabled ? 'LLM 已启用' : 'LLM 未配置'}</strong>
+                </div>
+                <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;font-size:13px;color:rgba(0,0,0,0.65)">
+                    <div><strong>API 地址:</strong> ${escapeHtml(data.base_url || '未设置')}</div>
+                    <div><strong>模型:</strong> ${escapeHtml(data.model || '未设置')}</div>
+                    <div><strong>API Key:</strong> ${data.has_api_key ? '✅ 已配置' : '❌ 未配置'}</div>
+                    <div><strong>超时:</strong> ${data.timeout || 120}s / 重试: ${data.max_retries || 2}次</div>
+                </div>
+            `;
+
+            // 填充表单默认值
+            const baseUrlInput = document.getElementById('llm-base-url');
+            const modelInput = document.getElementById('llm-model');
+            if (baseUrlInput && !baseUrlInput.value) baseUrlInput.value = data.base_url || '';
+            if (modelInput && !modelInput.value) modelInput.value = data.model || '';
+        } else {
+            statusEl.innerHTML = '<p style="color:#ff4d4f">无法获取 LLM 状态</p>';
+        }
+    } catch (err) {
+        statusEl.innerHTML = `<p style="color:#ff4d4f">连接失败: ${escapeHtml(err.message)}</p>`;
+    }
+}
+
+async function saveLLMConfig() {
+    const baseUrl = document.getElementById('llm-base-url').value.trim();
+    const apiKey = document.getElementById('llm-api-key').value.trim();
+    const model = document.getElementById('llm-model').value.trim();
+    const alertEl = document.getElementById('llm-config-alert');
+
+    if (!apiKey && !baseUrl && !model) {
+        showLLMAlert('请至少填写 API Key', 'error');
+        return;
+    }
+
+    try {
+        const params = new URLSearchParams();
+        if (baseUrl) params.append('base_url', baseUrl);
+        if (apiKey) params.append('api_key', apiKey);
+        if (model) params.append('model', model);
+
+        const response = await fetch(`${API_BASE_URL}/api/llm/config?${params.toString()}`, {
+            method: 'POST',
+        });
+        const data = await response.json();
+
+        if (response.ok) {
+            showLLMAlert('LLM 配置已保存！', 'success');
+            // 清空密码框
+            document.getElementById('llm-api-key').value = '';
+            // 刷新状态
+            loadLLMStatus();
+        } else {
+            showLLMAlert(`保存失败: ${data.detail || '未知错误'}`, 'error');
+        }
+    } catch (err) {
+        showLLMAlert(`网络错误: ${err.message}`, 'error');
+    }
+}
+
+async function testLLMConnection() {
+    const btn = document.getElementById('llm-test-text');
+    const resultEl = document.getElementById('llm-test-result');
+    if (!resultEl) return;
+
+    if (btn) btn.innerHTML = '<span class="loading"></span> 测试中...';
+
+    try {
+        const response = await fetch(`${API_BASE_URL}/api/llm/test`, {
+            method: 'POST',
+        });
+        const data = await response.json();
+
+        resultEl.classList.remove('hidden');
+        if (data.success) {
+            resultEl.style.background = '#f6ffed';
+            resultEl.style.borderColor = '#b7eb8f';
+            resultEl.innerHTML = `
+                <div style="color:#389e0d;font-weight:600;margin-bottom:8px">✅ 连接成功！</div>
+                <div style="font-size:13px;color:rgba(0,0,0,0.65)">
+                    <div>模型: ${escapeHtml(data.model || 'N/A')}</div>
+                    <div>响应: ${escapeHtml(data.response || 'N/A')}</div>
+                </div>
+            `;
+        } else {
+            resultEl.style.background = '#fff1f0';
+            resultEl.style.borderColor = '#ffa39e';
+            resultEl.innerHTML = `
+                <div style="color:#cf1322;font-weight:600;margin-bottom:8px">❌ 连接失败</div>
+                <div style="font-size:13px;color:rgba(0,0,0,0.65)">${escapeHtml(data.error || '未知错误')}</div>
+            `;
+        }
+    } catch (err) {
+        resultEl.classList.remove('hidden');
+        resultEl.style.background = '#fff1f0';
+        resultEl.style.borderColor = '#ffa39e';
+        resultEl.innerHTML = `<div style="color:#cf1322">网络错误: ${escapeHtml(err.message)}</div>`;
+    } finally {
+        if (btn) btn.textContent = '测试连接';
+    }
+}
+
+function showLLMAlert(message, type) {
+    const el = document.getElementById('llm-config-alert');
+    if (!el) return;
+    el.textContent = message;
+    el.className = `alert alert-${type}`;
+    el.classList.remove('hidden');
+    setTimeout(() => el.classList.add('hidden'), 4000);
 }
 
 // ============ 事件绑定 ============

@@ -19,17 +19,30 @@ class Orchestrator:
         self,
         state_manager: Optional[StateManager] = None,
         work_dir: str = "projects",
+        llm_client=None,
     ):
-        self.decomposer = TaskDecomposer()
+        self.llm_client = llm_client
+        self.decomposer = TaskDecomposer(llm_client=llm_client)
         self.state_manager = state_manager or StateManager()
         self.work_dir = work_dir
 
         # 初始化 Agent 池
         self.agents = {
-            AgentType.DEV.value: DevAgent(work_dir=work_dir),
-            AgentType.ARCHITECT.value: ArchitectAgent(work_dir=work_dir),
+            AgentType.DEV.value: DevAgent(work_dir=work_dir, llm_client=llm_client),
+            AgentType.ARCHITECT.value: ArchitectAgent(work_dir=work_dir, llm_client=llm_client),
             # product, test, review, deploy 暂用占位
         }
+
+    def update_llm_client(self, llm_client):
+        """运行时更新 LLM 客户端"""
+        self.llm_client = llm_client
+        self.decomposer = TaskDecomposer(llm_client=llm_client)
+        self.agents[AgentType.DEV.value] = DevAgent(
+            work_dir=self.work_dir, llm_client=llm_client
+        )
+        self.agents[AgentType.ARCHITECT.value] = ArchitectAgent(
+            work_dir=self.work_dir, llm_client=llm_client
+        )
 
     def process_request(
         self,
