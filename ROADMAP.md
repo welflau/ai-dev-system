@@ -30,10 +30,11 @@
 - [x] 协调器单元测试 (test_orchestrator.py) - 21个测试用例
 - [x] 后端 API 升级至 v0.2.0 - 完整的项目管理接口
 
-### 1.4 Agent实现(基础版)
+### 1.4 Agent实现(基础版) ✅
 - [x] ProductAgent - 需求分析（框架已实现，需接入LLM）
-- [ ] DevAgent - 代码生成
-- [ ] ArchitectAgent - 架构设计
+- [x] DevAgent - 代码生成（基于模板引擎，14 种任务处理器）
+- [x] ArchitectAgent - 架构设计（基于模板引擎，7 种设计方案）
+- [x] Orchestrator 集成 Agent 执行（execute_task / execute_next_task）
 
 ### 1.5 工具集成 ✅
 - [x] Git工具 (init, add, commit, push, create_branch)
@@ -42,19 +43,20 @@
 ### 1.6 测试和文档
 - [x] 工具单元测试 (8个用例)
 - [x] 协调器单元测试 (21个用例)
-- [ ] API集成测试
+- [x] Agent 单元测试 (17个用例: DevAgent 10 + ArchitectAgent 7)
+- [x] 集成测试 (5个用例: Orchestrator + Agent 端到端)
 - [x] API文档 (FastAPI自动生成)
 - [ ] 开发文档
 
 ---
 
-## 当前进度: 1.3 核心模块实现 ✅
+## 当前进度: 1.4 Agent 实现 ✅
 
 ### 里程碑总结
-- **29个测试全部通过**
-- **后端 v0.2.0**: Orchestrator + TaskDecomposer + StateManager 完整实现
-- **前端 v0.2**: 项目详情页、阶段进度、任务分解展示
-- **任务分解**: 支持 API/数据库/前端/用户/登录 5大关键词匹配
-- **状态管理**: 项目生命周期、任务状态流转、阶段自动推进
+- **51个测试全部通过** (8 工具 + 21 协调器 + 22 Agent/集成)
+- **DevAgent**: 基于模板的代码生成，支持 14 种任务（项目初始化、API、模型、认证、前端、文档等）
+- **ArchitectAgent**: 基于模板的架构设计，支持 7 种方案（系统架构、数据库、API、UI、用户系统等）
+- **Orchestrator 升级**: 集成 Agent 池，execute_task 调用真正的 Agent 执行，生成实际代码文件
+- **前端升级**: 执行按钮展示 Agent 实际输出
 
-### 下一步: 1.4 Agent实现
+### 下一步: 阶段二 - 高级功能

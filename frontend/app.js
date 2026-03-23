@@ -386,14 +386,18 @@ async function executeProject(projectId) {
         if (response.ok) {
             // 显示执行结果
             const msg = data.message || '执行完成';
+            const filesCount = data.files_count || 0;
+            const displayMsg = filesCount > 0
+                ? `✓ ${data.current_task || '任务完成'} (生成 ${filesCount} 个文件)`
+                : `✓ ${msg.substring(0, 60)}`;
             if (btn) {
-                btn.innerHTML = '✓ ' + msg;
+                btn.innerHTML = displayMsg;
                 btn.style.background = '#52c41a';
                 setTimeout(() => {
                     btn.innerHTML = originalText;
                     btn.style.background = '';
                     btn.disabled = false;
-                }, 1500);
+                }, 2000);
             }
             // 刷新项目详情
             setTimeout(() => viewProject(projectId), 500);

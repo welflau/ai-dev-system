@@ -1,11 +1,13 @@
 """
 协调器（Orchestrator）
-核心调度中心，接收需求 -> 分解任务 -> 管理执行
+核心调度中心，接收需求 -> 分解任务 -> 分配Agent -> 管理执行
 """
 import uuid
-from typing import Dict, Any, Optional
+import os
+from typing import Dict, Any, Optional, List
 from models.schemas import Requirement, Task, ProjectPlan
-from models.enums import ProjectPhase, TaskStatus
+from models.enums import ProjectPhase, TaskStatus, AgentType
+from agents import DevAgent, ArchitectAgent
 from .decomposer import TaskDecomposer
 from .state_manager import StateManager
 
@@ -13,9 +15,21 @@ from .state_manager import StateManager
 class Orchestrator:
     """AI项目协调器"""
 
-    def __init__(self, state_manager: Optional[StateManager] = None):
+    def __init__(
+        self,
+        state_manager: Optional[StateManager] = None,
+        work_dir: str = "projects",
+    ):
         self.decomposer = TaskDecomposer()
         self.state_manager = state_manager or StateManager()
+        self.work_dir = work_dir
+
+        # 初始化 Agent 池
+        self.agents = {
+            AgentType.DEV.value: DevAgent(work_dir=work_dir),
+            AgentType.ARCHITECT.value: ArchitectAgent(work_dir=work_dir),
+            # product, test, review, deploy 暂用占位
+        }
 
     def process_request(
         self,
@@ -127,4 +141,105 @@ class Orchestrator:
             "name": task.name,
             "status": task.status if isinstance(task.status, str) else task.status.value,
             "message": f"任务 '{task.name}' 状态已更新为 {task.status if isinstance(task.status, str) else task.status.value}",
+        }
+
+    def execute_task(
+        self, project_id: str, task_id: str
+    ) -> Dict[str, Any]:
+        """
+        执行指定任务：调用对应 Agent 真正执行
+
+        Args:
+            project_id: 项目 ID
+            task_id: 任务 ID
+
+        Returns:
+            执行结果
+        """
+        state = self.state_manager.get_project(project_id)
+        if not state:
+            return {"success": False, "error": "项目不存在"}
+
+        if task_id not in state.tasks:
+            return {"success": False, "error": "任务不存在"}
+
+        task = state.tasks[task_id]
+        task_name = task.name
+        assigned_agent = task.assigned_agent
+
+        # 构建执行上下文
+        context = {
+            "project_id": project_id,
+            "requirement": state.requirements.description if state.requirements else "",
+            "project_name": state.requirements.project_name if state.requirements else "未命名",
+            "tech_stack": state.requirements.tech_stack if state.requirements else None,
+        }
+
+        # 标记为进行中
+        self.update_task(project_id, task_id, TaskStatus.IN_PROGRESS)
+
+        # 找到对应 Agent
+        agent_key = assigned_agent if isinstance(assigned_agent, str) else (
+            assigned_agent.value if assigned_agent else None
+        )
+        agent = self.agents.get(agent_key)
+
+        if agent:
+            # 真正执行
+            try:
+                result = agent.execute(task_name, context)
+                if result.get("success"):
+                    self.update_task(
+                        project_id, task_id, TaskStatus.COMPLETED,
+                        result=result,
+                    )
+                    return result
+                else:
+                    self.update_task(
+                        project_id, task_id, TaskStatus.FAILED,
+                        error_message=result.get("error", "未知错误"),
+                    )
+                    return result
+            except Exception as e:
+                self.update_task(
+                    project_id, task_id, TaskStatus.FAILED,
+                    error_message=str(e),
+                )
+                return {"success": False, "error": str(e)}
+        else:
+            # 没有对应 Agent，模拟完成
+            self.update_task(project_id, task_id, TaskStatus.COMPLETED)
+            return {
+                "success": True,
+                "agent": agent_key or "auto",
+                "task": task_name,
+                "output": f"任务 '{task_name}' 已完成（Agent {agent_key} 暂未实现，自动标记完成）",
+                "files_created": [],
+            }
+
+    def execute_next_task(self, project_id: str) -> Dict[str, Any]:
+        """
+        执行项目的下一个待处理任务
+
+        Returns:
+            执行结果
+        """
+        state = self.state_manager.get_project(project_id)
+        if not state:
+            return {"success": False, "error": "项目不存在"}
+
+        # 按阶段顺序找下一个 pending 任务
+        phase_order = ["requirement", "design", "development", "testing", "deployment"]
+        tasks_by_phase = self.state_manager.get_tasks_by_phase(project_id)
+
+        for phase in phase_order:
+            tasks = tasks_by_phase.get(phase, [])
+            for task_info in tasks:
+                if task_info["status"] == "pending":
+                    return self.execute_task(project_id, task_info["id"])
+
+        return {
+            "success": True,
+            "output": "所有任务已完成！",
+            "files_created": [],
         }

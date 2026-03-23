@@ -49,8 +49,12 @@ tool_registry.register(GitCommitTool())
 tool_registry.register(GitPushTool())
 tool_registry.register(GitCreateBranchTool())
 
-# 初始化协调器
-orchestrator = Orchestrator()
+# 初始化协调器（配置项目输出目录）
+PROJECTS_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "projects"
+)
+os.makedirs(PROJECTS_DIR, exist_ok=True)
+orchestrator = Orchestrator(work_dir=PROJECTS_DIR)
 
 
 # ============ 基础端点 ============
@@ -159,18 +163,17 @@ async def update_task_status(
 @app.post("/api/projects/{project_id}/execute")
 async def execute_project(project_id: str):
     """
-    执行项目：
-    1. 先将所有 in_progress 任务标记为 completed（模拟执行完成）
-    2. 再将下一个 pending 任务标记为 in_progress
+    执行项目的下一个任务：
+    1. 先将所有 in_progress 任务标记为 completed
+    2. 调用对应 Agent 真正执行下一个 pending 任务
     """
     state = orchestrator.get_project_state(project_id)
     if not state:
         raise HTTPException(status_code=404, detail="项目不存在")
 
     completed_tasks = []
-    started_tasks = []
 
-    # 第一步：完成所有正在进行的任务
+    # 第一步：完成所有正在进行的任务（补完上一轮）
     for phase, tasks in state["tasks_by_phase"].items():
         for task in tasks:
             if task["status"] == "in_progress":
@@ -181,40 +184,34 @@ async def execute_project(project_id: str):
                 )
                 completed_tasks.append(task["name"])
 
-    # 重新获取状态（因为完成任务可能触发阶段推进）
-    state = orchestrator.get_project_state(project_id)
-
-    # 第二步：找到下一个 pending 任务并启动
-    phase_order = ["requirement", "design", "development", "testing", "deployment"]
-    for phase in phase_order:
-        tasks = state["tasks_by_phase"].get(phase, [])
-        for task in tasks:
-            if task["status"] == "pending":
-                orchestrator.update_task(
-                    project_id=project_id,
-                    task_id=task["id"],
-                    status=TaskStatus.IN_PROGRESS,
-                )
-                started_tasks.append(task["name"])
-                break
-        if started_tasks:
-            break
+    # 第二步：调用 Agent 真正执行下一个 pending 任务
+    result = orchestrator.execute_next_task(project_id)
 
     # 构建反馈消息
     messages = []
     if completed_tasks:
         messages.append(f"已完成: {', '.join(completed_tasks)}")
-    if started_tasks:
-        messages.append(f"已启动: {', '.join(started_tasks)}")
-    if not completed_tasks and not started_tasks:
-        messages.append("所有任务已完成！")
+
+    task_name = result.get("task", "")
+    if result.get("success") and task_name:
+        messages.append(f"正在执行: {task_name}")
+        output = result.get("output", "")
+        if output:
+            messages.append(output)
+    elif not task_name and result.get("output"):
+        messages.append(result["output"])
+
+    files_created = result.get("files_created", [])
 
     return {
         "project_id": project_id,
-        "status": "executing" if started_tasks else "idle",
-        "message": " | ".join(messages),
+        "status": "executing" if task_name else "idle",
+        "message": " | ".join(messages) if messages else "所有任务已完成！",
         "completed_tasks": completed_tasks,
-        "started_tasks": started_tasks,
+        "current_task": task_name,
+        "agent": result.get("agent", ""),
+        "files_created": [os.path.basename(f) if isinstance(f, str) else f for f in files_created],
+        "files_count": len(files_created),
     }
 
 
