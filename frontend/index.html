@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 自动开发系统</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/antd/5.12.2/reset.min.css">
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background: #f0f2f5;
+        }
+        .layout {
+            display: flex;
+            min-height: 100vh;
+        }
+        .sidebar {
+            width: 256px;
+            background: #001529;
+            color: white;
+            padding: 20px 0;
+            flex-shrink: 0;
+        }
+        .sidebar-header {
+            padding: 20px;
+            text-align: center;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .sidebar-header h2 {
+            color: white;
+            margin: 0;
+            font-size: 20px;
+        }
+        .menu-item {
+            padding: 15px 24px;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+        .menu-item:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+        .menu-item.active {
+            background: #1890ff;
+        }
+        .main-content {
+            flex: 1;
+            padding: 24px;
+            overflow-y: auto;
+        }
+        .page {
+            display: none;
+        }
+        .page.active {
+            display: block;
+        }
+        .card {
+            background: white;
+            border-radius: 8px;
+            padding: 24px;
+            margin-bottom: 24px;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+        }
+        .card-header {
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #f0f0f0;
+        }
+        .card-header h3 {
+            margin: 0;
+            font-size: 18px;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 500;
+            color: rgba(0, 0, 0, 0.85);
+        }
+        .form-group input,
+        .form-group textarea,
+        .form-group select {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #d9d9d9;
+            border-radius: 4px;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+        .form-group input:focus,
+        .form-group textarea:focus,
+        .form-group select:focus {
+            border-color: #40a9ff;
+            outline: none;
+            box-shadow: 0 0 0 2px rgba(64, 169, 255, 0.2);
+        }
+        .form-group textarea {
+            min-height: 120px;
+            resize: vertical;
+        }
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+        .btn-primary {
+            background: #1890ff;
+            color: white;
+        }
+        .btn-primary:hover {
+            background: #40a9ff;
+        }
+        .btn-primary:disabled {
+            background: #d9d9d9;
+            cursor: not-allowed;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 20px;
+            margin-bottom: 24px;
+        }
+        .stat-card {
+            background: white;
+            padding: 24px;
+            border-radius: 8px;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+        }
+        .stat-card .number {
+            font-size: 32px;
+            font-weight: bold;
+            margin-bottom: 8px;
+        }
+        .stat-card .label {
+            color: rgba(0, 0, 0, 0.45);
+            font-size: 14px;
+        }
+        .task-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+        .task-item {
+            background: white;
+            padding: 16px;
+            border-radius: 4px;
+            margin-bottom: 12px;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .task-item .task-info h4 {
+            margin: 0 0 8px 0;
+            font-size: 16px;
+        }
+        .task-item .task-info p {
+            margin: 0;
+            color: rgba(0, 0, 0, 0.45);
+            font-size: 14px;
+        }
+        .tag {
+            padding: 4px 8px;
+            border-radius: 2px;
+            font-size: 12px;
+        }
+        .tag-pending {
+            background: #fafafa;
+            border: 1px solid #d9d9d9;
+        }
+        .tag-in-progress {
+            background: #e6f7ff;
+            border: 1px solid #91d5ff;
+            color: #1890ff;
+        }
+        .tag-completed {
+            background: #f6ffed;
+            border: 1px solid #b7eb8f;
+            color: #52c41a;
+        }
+        .tag-failed {
+            background: #fff1f0;
+            border: 1px solid #ffa39e;
+            color: #f5222d;
+        }
+        .loading {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid #f3f3f3;
+            border-top: 2px solid #1890ff;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .alert {
+            padding: 16px;
+            border-radius: 4px;
+            margin-bottom: 16px;
+        }
+        .alert-success {
+            background: #f6ffed;
+            border: 1px solid #b7eb8f;
+            color: #52c41a;
+        }
+        .alert-error {
+            background: #fff1f0;
+            border: 1px solid #ffa39e;
+            color: #f5222d;
+        }
+        .alert-info {
+            background: #e6f7ff;
+            border: 1px solid #91d5ff;
+            color: #1890ff;
+        }
+        .hidden {
+            display: none !important;
+        }
+        .tools-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 20px;
+        }
+        .tool-card {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+        }
+        .tool-card h4 {
+            margin: 0 0 12px 0;
+            color: #1890ff;
+        }
+        .tool-card p {
+            margin: 0;
+            color: rgba(0, 0, 0, 0.65);
+            line-height: 1.6;
+        }
+    </style>
+</head>
+<body>
+    <div class="layout">
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <h2>AI 自动开发系统</h2>
+            </div>
+            <div class="menu-item active" data-page="home">
+                🏠 首页
+            </div>
+            <div class="menu-item" data-page="submit">
+                📝 提交需求
+            </div>
+            <div class="menu-item" data-page="projects">
+                📊 项目看板
+            </div>
+            <div class="menu-item" data-page="tools">
+                🛠️ 工具列表
+            </div>
+        </div>
+
+        <div class="main-content">
+            <!-- 首页 -->
+            <div id="page-home" class="page active">
+                <div class="card">
+                    <div class="card-header">
+                        <h3>欢迎使用 AI 自动开发系统</h3>
+                    </div>
+                    <p style="margin-bottom: 20px; line-height: 1.6;">
+                        这是一个从自然语言需求到可运行软件的端到端自动化开发系统。
+                        只需描述你的需求，AI 将自动完成项目规划、架构设计、代码生成、测试和部署。
+                    </p>
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <div class="number" id="stat-total-projects">0</div>
+                            <div class="label">总项目数</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="number" style="color: #52c41a;" id="stat-completed">0</div>
+                            <div class="label">已完成</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="number" style="color: #1890ff;" id="stat-in-progress">0</div>
+                            <div class="label">进行中</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="number" style="color: #722ed1;" id="stat-tools-available">8</div>
+                            <div class="label">可用工具</div>
+                        </div>
+                    </div>
+                    <button class="btn btn-primary" onclick="showPage('submit')">
+                        开始新项目 →
+                    </button>
+                </div>
+            </div>
+
+            <!-- 提交需求页面 -->
+            <div id="page-submit" class="page">
+                <div class="card">
+                    <div class="card-header">
+                        <h3>提交开发需求</h3>
+                    </div>
+                    <div id="submit-alert" class="alert hidden"></div>
+                    <div class="form-group">
+                        <label for="user-input">项目描述 *</label>
+                        <textarea id="user-input" placeholder="例如：我想开发一个简单的待办事项应用，包含添加、删除、标记完成等功能..."></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label for="tech-stack">技术栈偏好</label>
+                        <input type="text" id="tech-stack" placeholder="例如：Python, FastAPI, React">
+                    </div>
+                    <div class="form-group">
+                        <label for="project-name">项目名称</label>
+                        <input type="text" id="project-name" placeholder="例如：todo-app">
+                    </div>
+                    <button class="btn btn-primary" id="submit-btn" onclick="submitRequirement()">
+                        <span id="submit-btn-text">提交需求</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- 项目看板页面 -->
+            <div id="page-projects" class="page">
+                <div class="card">
+                    <div class="card-header">
+                        <h3>项目看板</h3>
+                    </div>
+                    <div id="projects-list" style="margin-bottom: 20px;">
+                        <p style="color: rgba(0, 0, 0, 0.45); text-align: center; padding: 40px;">
+                            暂无项目，请先提交需求
+                        </p>
+                    </div>
+                    <button class="btn btn-primary" onclick="loadProjects()">
+                        🔄 刷新项目列表
+                    </button>
+                </div>
+            </div>
+
+            <!-- 工具列表页面 -->
+            <div id="page-tools" class="page">
+                <div class="card">
+                    <div class="card-header">
+                        <h3>已注册工具</h3>
+                    </div>
+                    <div id="tools-list" class="tools-grid">
+                        <p>加载中...</p>
+                    </div>
+                    <button class="btn btn-primary" onclick="loadTools()" style="margin-top: 20px;">
+                        🔄 刷新工具列表
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

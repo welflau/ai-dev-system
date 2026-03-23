@@ -43,7 +43,7 @@ class ToolRegistry:
     def register(self, tool: BaseTool):
         """注册工具"""
         self.tools[tool.name] = tool
-        print(f"✓ 工具已注册: {tool.name}")
+        print(f"[OK] 工具已注册: {tool.name}")
     
     def get(self, name: str) -> Optional[BaseTool]:
         """获取工具"""

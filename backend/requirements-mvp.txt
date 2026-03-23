@@ -1,0 +1,8 @@
+# MVP 核心依赖 - 最小化安装
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic==2.0.3
+python-dotenv==1.0.0
+python-multipart==0.0.6
+gitpython==3.1.40
+httpx==0.25.2
