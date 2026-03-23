@@ -1,0 +1,161 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  # 后端测试
+  backend-test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pytest pytest-cov
+        if [ -f backend/requirements.txt ]; then pip install -r backend/requirements.txt; fi
+
+    - name: Run tests
+      run: |
+        if [ -d backend ]; then
+          cd backend
+          pytest --cov=. --cov-report=xml
+        fi
+
+    - name: Upload coverage
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./backend/coverage.xml
+        flags: backend
+        name: backend-coverage
+
+  # 前端测试
+  frontend-test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+
+    - name: Cache node modules
+      uses: actions/cache@v3
+      with:
+        path: ~/.npm
+        key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+        restore-keys: |
+          ${{ runner.os }}-node-
+
+    - name: Install dependencies
+      run: |
+        if [ -f frontend/package.json ]; then
+          cd frontend
+          npm ci
+        fi
+
+    - name: Run tests
+      run: |
+        if [ -f frontend/package.json ]; then
+          cd frontend
+          npm run test -- --coverage --watchAll=false
+        fi
+
+    - name: Build
+      run: |
+        if [ -f frontend/package.json ]; then
+          cd frontend
+          npm run build
+        fi
+
+  # 代码质量检查
+  lint:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Install Python linting tools
+      run: |
+        pip install black flake8 mypy pylint
+
+    - name: Python lint
+      run: |
+        if [ -d backend ]; then
+          cd backend
+          black --check .
+          flake8 .
+        fi
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+
+    - name: Install ESLint
+      run: |
+        if [ -f frontend/package.json ]; then
+          cd frontend
+          npm install
+          npm run lint
+        fi
+
+  # 构建Docker镜像
+  build-docker:
+    runs-on: ubuntu-latest
+    needs: [backend-test, frontend-test]
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v2
+
+    - name: Login to Docker Hub
+      uses: docker/login-action@v2
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
+
+    - name: Build and push Backend
+      uses: docker/build-push-action@v4
+      with:
+        context: ./backend
+        push: true
+        tags: welflau/ai-dev-system-backend:latest
+        cache-from: type=registry,ref=welflau/ai-dev-system-backend:buildcache
+        cache-to: type=registry,ref=welflau/ai-dev-system-backend:buildcache,mode=max
+
+    - name: Build and push Frontend
+      uses: docker/build-push-action@v4
+      with:
+        context: ./frontend
+        push: true
+        tags: welflau/ai-dev-system-frontend:latest
+        cache-from: type=registry,ref=welflau/ai-dev-system-frontend:buildcache
+        cache-to: type=registry,ref=welflau/ai-dev-system-frontend:buildcache,mode=max
