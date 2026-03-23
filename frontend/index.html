@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI 自动开发系统 v0.5</title>
+    <title>AI 自动开发系统 v0.6</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
     <style>
         * { box-sizing: border-box; }
@@ -681,6 +681,304 @@
             color: rgba(255,255,255,0.25);
         }
 
+        /* ===== 文件浏览器（GitHub 风格） ===== */
+        .file-browser {
+            display: flex;
+            gap: 0;
+            min-height: 600px;
+            border: 1px solid #d0d7de;
+            border-radius: 8px;
+            overflow: hidden;
+            background: #fff;
+        }
+        .file-browser-sidebar {
+            width: 280px;
+            min-width: 240px;
+            max-width: 360px;
+            border-right: 1px solid #d0d7de;
+            background: #f6f8fa;
+            display: flex;
+            flex-direction: column;
+            flex-shrink: 0;
+            overflow: hidden;
+        }
+        .fb-sidebar-header {
+            padding: 12px 16px;
+            border-bottom: 1px solid #d0d7de;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: #fff;
+        }
+        .fb-sidebar-header .fb-repo-name {
+            font-weight: 600;
+            font-size: 14px;
+            color: #0969da;
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .fb-sidebar-header .fb-file-count {
+            font-size: 12px;
+            color: #656d76;
+            flex-shrink: 0;
+        }
+        .fb-search-box {
+            padding: 8px 12px;
+            border-bottom: 1px solid #d0d7de;
+        }
+        .fb-search-box input {
+            width: 100%;
+            padding: 5px 10px;
+            border: 1px solid #d0d7de;
+            border-radius: 6px;
+            font-size: 12px;
+            background: #fff;
+            outline: none;
+        }
+        .fb-search-box input:focus {
+            border-color: #0969da;
+            box-shadow: 0 0 0 3px rgba(9,105,218,0.12);
+        }
+        .fb-tree-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 4px 0;
+        }
+        .fb-tree-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 16px;
+            cursor: pointer;
+            font-size: 13px;
+            color: #1f2328;
+            transition: background 0.1s;
+            border-left: 2px solid transparent;
+            user-select: none;
+        }
+        .fb-tree-item:hover {
+            background: #eaeef2;
+        }
+        .fb-tree-item.active {
+            background: #ddf4ff;
+            border-left-color: #0969da;
+            font-weight: 500;
+        }
+        .fb-tree-item .fb-icon {
+            width: 16px;
+            height: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+            font-size: 14px;
+        }
+        .fb-tree-item .fb-icon-folder { color: #54aeff; }
+        .fb-tree-item .fb-icon-file { color: #656d76; }
+        .fb-tree-item .fb-name {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .fb-tree-item .fb-size {
+            font-size: 11px;
+            color: #656d76;
+            flex-shrink: 0;
+        }
+        .fb-tree-dir {
+            font-weight: 600;
+        }
+        .fb-tree-dir .fb-toggle {
+            width: 16px;
+            height: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 10px;
+            color: #656d76;
+            transition: transform 0.15s;
+            flex-shrink: 0;
+        }
+        .fb-tree-dir.collapsed .fb-toggle {
+            transform: rotate(-90deg);
+        }
+        .fb-tree-children {
+            overflow: hidden;
+        }
+        .fb-tree-children.hidden {
+            display: none;
+        }
+
+        /* 文件浏览器 - 右侧内容区 */
+        .file-browser-main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-width: 0;
+            background: #fff;
+        }
+        .fb-main-header {
+            display: flex;
+            align-items: center;
+            padding: 10px 16px;
+            border-bottom: 1px solid #d0d7de;
+            gap: 12px;
+            background: #f6f8fa;
+            flex-shrink: 0;
+        }
+        .fb-breadcrumb {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            flex: 1;
+            font-size: 14px;
+            overflow: hidden;
+        }
+        .fb-breadcrumb span {
+            color: #656d76;
+        }
+        .fb-breadcrumb .fb-bc-link {
+            color: #0969da;
+            cursor: pointer;
+        }
+        .fb-breadcrumb .fb-bc-link:hover {
+            text-decoration: underline;
+        }
+        .fb-breadcrumb .fb-bc-current {
+            color: #1f2328;
+            font-weight: 600;
+        }
+        .fb-file-info {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 12px;
+            color: #656d76;
+            flex-shrink: 0;
+        }
+        .fb-file-info .fb-info-item {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .fb-tabs {
+            display: flex;
+            border-bottom: 1px solid #d0d7de;
+            background: #fff;
+            flex-shrink: 0;
+        }
+        .fb-tab {
+            padding: 8px 16px;
+            font-size: 13px;
+            color: #656d76;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            transition: all 0.15s;
+        }
+        .fb-tab:hover {
+            color: #1f2328;
+        }
+        .fb-tab.active {
+            color: #1f2328;
+            font-weight: 600;
+            border-bottom-color: #fd8c73;
+        }
+        .fb-code-container {
+            flex: 1;
+            overflow: auto;
+            background: #fff;
+        }
+        .fb-code-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            font-size: 13px;
+            line-height: 1.55;
+            tab-size: 4;
+        }
+        .fb-code-table td {
+            padding: 0;
+            vertical-align: top;
+        }
+        .fb-line-num {
+            width: 1%;
+            min-width: 50px;
+            padding: 0 10px;
+            text-align: right;
+            color: #636c76;
+            user-select: none;
+            white-space: nowrap;
+            background: #fff;
+            cursor: pointer;
+        }
+        .fb-line-num:hover {
+            color: #0969da;
+        }
+        .fb-line-code {
+            padding: 0 12px;
+            white-space: pre;
+            word-break: normal;
+            overflow-x: visible;
+        }
+        .fb-code-table tr:hover td {
+            background: #f6f8fa;
+        }
+        .fb-code-table tr.highlighted td {
+            background: #fff8c5;
+        }
+        .fb-empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            min-height: 400px;
+            color: #656d76;
+            text-align: center;
+            gap: 12px;
+        }
+        .fb-empty-state .fb-empty-icon {
+            font-size: 48px;
+            opacity: 0.5;
+        }
+        .fb-empty-state p {
+            margin: 0;
+            font-size: 14px;
+        }
+        .fb-actions {
+            display: flex;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+        .fb-actions .fb-action-btn {
+            padding: 4px 10px;
+            border: 1px solid #d0d7de;
+            border-radius: 6px;
+            background: #f6f8fa;
+            color: #1f2328;
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.15s;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .fb-actions .fb-action-btn:hover {
+            background: #eaeef2;
+            border-color: #afb8c1;
+        }
+        .fb-loading {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            min-height: 400px;
+            color: #656d76;
+        }
+
         /* ===== 响应式 ===== */
         @media (max-width: 768px) {
             .sidebar { width: 200px; }
@@ -688,6 +986,8 @@
             .stats-grid { grid-template-columns: repeat(2, 1fr); }
             .pipeline-stages { flex-direction: column; align-items: stretch; }
             .pipeline-connector { display: none; }
+            .file-browser { flex-direction: column; }
+            .file-browser-sidebar { width: 100%; max-width: none; border-right: none; border-bottom: 1px solid #d0d7de; max-height: 200px; }
         }
 
         /* ===== Pipeline 看板 ===== */
@@ -1048,6 +1348,7 @@
             <div class="menu-item" data-page="submit">📝 提交需求</div>
             <div class="menu-item" data-page="projects">📊 项目看板</div>
             <div class="menu-item" data-page="project-detail" style="display:none;">📋 项目详情</div>
+            <div class="menu-item" data-page="file-browser" style="display:none;">📂 文件浏览</div>
             <div class="menu-item" data-page="tools">🛠️ 工具列表</div>
             <div class="menu-item" data-page="llm-config">🧠 LLM 配置</div>
             <div class="menu-item" data-page="guide">📖 使用指引</div>
@@ -1140,6 +1441,53 @@
                 <button class="btn btn-default btn-back" onclick="showPage('projects')">← 返回项目列表</button>
                 <div id="project-detail-content">
                     <p>加载中...</p>
+                </div>
+            </div>
+
+            <!-- ===== 文件浏览器 ===== -->
+            <div id="page-file-browser" class="page">
+                <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
+                    <button class="btn btn-default btn-back" style="margin-bottom:0" onclick="showPage('project-detail')">← 返回项目</button>
+                    <h3 style="margin:0;flex:1" id="fb-project-title">文件浏览器</h3>
+                    <button class="btn btn-default btn-sm" onclick="downloadProject(currentProjectId)">📦 打包下载</button>
+                    <button class="btn btn-default btn-sm" onclick="loadFileBrowser(currentProjectId)">🔄 刷新</button>
+                </div>
+                <div id="file-browser-container">
+                    <div class="file-browser">
+                        <div class="file-browser-sidebar">
+                            <div class="fb-sidebar-header">
+                                <span class="fb-repo-name" id="fb-repo-name">项目文件</span>
+                                <span class="fb-file-count" id="fb-file-count"></span>
+                            </div>
+                            <div class="fb-search-box">
+                                <input type="text" placeholder="搜索文件..." id="fb-search-input" oninput="filterFileTree(this.value)">
+                            </div>
+                            <div class="fb-tree-container" id="fb-tree-container">
+                                <div class="fb-loading"><span class="loading"></span>&nbsp;加载中...</div>
+                            </div>
+                        </div>
+                        <div class="file-browser-main">
+                            <div class="fb-main-header" id="fb-main-header" style="display:none">
+                                <div class="fb-breadcrumb" id="fb-breadcrumb"></div>
+                                <div class="fb-file-info" id="fb-file-info"></div>
+                                <div class="fb-actions">
+                                    <button class="fb-action-btn" onclick="copyFileContent()" title="复制文件内容">📋 复制</button>
+                                    <button class="fb-action-btn" onclick="toggleRawView()" id="fb-raw-btn" title="切换原始/高亮">Raw</button>
+                                </div>
+                            </div>
+                            <div class="fb-tabs" id="fb-tabs" style="display:none">
+                                <div class="fb-tab active" data-tab="code" onclick="switchFileTab('code')">Code</div>
+                                <div class="fb-tab" data-tab="preview" onclick="switchFileTab('preview')">Preview</div>
+                            </div>
+                            <div class="fb-code-container" id="fb-code-container">
+                                <div class="fb-empty-state">
+                                    <div class="fb-empty-icon">📂</div>
+                                    <p>选择左侧文件查看内容</p>
+                                    <p style="font-size:12px;color:#8b949e">支持语法高亮和行号显示</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
 

@@ -30,11 +30,15 @@ function showPage(pageName) {
     // 显示/隐藏详情菜单项
     const detailMenu = document.querySelector('[data-page="project-detail"]');
     if (detailMenu) {
-        detailMenu.style.display = (pageName === 'project-detail') ? 'block' : 'none';
+        detailMenu.style.display = (pageName === 'project-detail' || pageName === 'file-browser') ? 'block' : 'none';
+    }
+    const fbMenu = document.querySelector('[data-page="file-browser"]');
+    if (fbMenu) {
+        fbMenu.style.display = (pageName === 'file-browser') ? 'block' : 'none';
     }
 
     // 离开项目详情页时断开 SSE
-    if (pageName !== 'project-detail') {
+    if (pageName !== 'project-detail' && pageName !== 'file-browser') {
         disconnectSSE();
     }
 
@@ -43,6 +47,7 @@ function showPage(pageName) {
     else if (pageName === 'projects') loadProjectsFromAPI();
     else if (pageName === 'tools') loadTools();
     else if (pageName === 'llm-config') loadLLMStatus();
+    else if (pageName === 'file-browser' && currentProjectId) loadFileBrowser(currentProjectId);
 }
 
 // ============ 提示信息 ============
@@ -298,8 +303,8 @@ async function viewProject(projectId) {
                     <button class="btn btn-primary btn-sm" onclick="executeAllTasks('${projectId}')">
                         ⚡ 一键全量执行
                     </button>
-                    <button class="btn btn-default btn-sm" onclick="showProjectFiles('${projectId}')">
-                        📁 查看生成文件
+                    <button class="btn btn-default btn-sm" onclick="openFileBrowser('${projectId}')">
+                        📁 文件浏览器
                     </button>
                     <button class="btn btn-default btn-sm" onclick="downloadProject('${projectId}')">
                         📦 打包下载
@@ -337,24 +342,6 @@ async function viewProject(projectId) {
                     <span style="font-size:12px;color:rgba(0,0,0,0.35)">点击步骤查看日志</span>
                 </div>
                 ${renderTasksByPhase(state.tasks_by_phase)}
-            </div>
-
-            <!-- 文件浏览器（动态加载） -->
-            <div id="files-panel-${projectId}" class="card" style="display:none">
-                <div class="card-header">
-                    <h3>📁 生成的项目文件</h3>
-                    <button class="btn btn-default btn-sm" onclick="showProjectFiles('${projectId}')">🔄 刷新</button>
-                </div>
-                <div id="files-content-${projectId}"></div>
-            </div>
-
-            <!-- 代码预览 -->
-            <div id="code-preview-${projectId}" class="card" style="display:none">
-                <div class="card-header">
-                    <h3 id="code-preview-title-${projectId}">代码预览</h3>
-                    <button class="btn btn-default btn-sm" onclick="document.getElementById('code-preview-${projectId}').style.display='none'">✕ 关闭</button>
-                </div>
-                <pre id="code-preview-content-${projectId}" class="code-block"></pre>
             </div>
 
             <!-- 项目日志 -->
@@ -1067,6 +1054,401 @@ function highlightCode(code, filename) {
         return escapeHtml(code);
     }
 }
+
+// ============ 文件浏览器（GitHub 风格） ============
+
+let fbFiles = [];           // 当前项目的所有文件
+let fbCurrentFile = null;   // 当前选中的文件路径
+let fbRawMode = false;      // 是否原始文本模式
+let fbFileContent = '';     // 当前文件内容缓存
+
+function openFileBrowser(projectId) {
+    currentProjectId = projectId;
+    showPage('file-browser');
+    loadFileBrowser(projectId);
+}
+
+async function loadFileBrowser(projectId) {
+    if (!projectId) projectId = currentProjectId;
+    if (!projectId) return;
+
+    const treeContainer = document.getElementById('fb-tree-container');
+    if (treeContainer) {
+        treeContainer.innerHTML = '<div class="fb-loading"><span class="loading"></span>&nbsp;加载中...</div>';
+    }
+
+    // 获取项目名称
+    try {
+        const stateRes = await fetch(`${API_BASE_URL}/api/projects/${projectId}/state`);
+        if (stateRes.ok) {
+            const stateData = await stateRes.json();
+            const name = stateData.project_state?.name || '未命名项目';
+            const titleEl = document.getElementById('fb-project-title');
+            const repoNameEl = document.getElementById('fb-repo-name');
+            if (titleEl) titleEl.textContent = `📂 ${name}`;
+            if (repoNameEl) repoNameEl.textContent = name;
+        }
+    } catch (e) { /* ignore */ }
+
+    // 加载文件列表
+    try {
+        const response = await fetch(`${API_BASE_URL}/api/projects/${projectId}/files`);
+        const data = await response.json();
+
+        if (!response.ok) throw new Error(data.detail || '加载失败');
+
+        fbFiles = data.files || [];
+        const countEl = document.getElementById('fb-file-count');
+        if (countEl) countEl.textContent = `${fbFiles.length} 个文件`;
+
+        renderFileTree(fbFiles);
+
+        // 重置右侧
+        fbCurrentFile = null;
+        const header = document.getElementById('fb-main-header');
+        const tabs = document.getElementById('fb-tabs');
+        if (header) header.style.display = 'none';
+        if (tabs) tabs.style.display = 'none';
+        const codeContainer = document.getElementById('fb-code-container');
+        if (codeContainer) {
+            codeContainer.innerHTML = `
+                <div class="fb-empty-state">
+                    <div class="fb-empty-icon">📂</div>
+                    <p>选择左侧文件查看内容</p>
+                    <p style="font-size:12px;color:#8b949e">共 ${fbFiles.length} 个文件，支持语法高亮和行号显示</p>
+                </div>`;
+        }
+    } catch (err) {
+        if (treeContainer) {
+            treeContainer.innerHTML = `<div class="fb-empty-state" style="min-height:200px"><p style="color:#cf1322">加载失败: ${escapeHtml(err.message)}</p></div>`;
+        }
+    }
+}
+
+function renderFileTree(files) {
+    const container = document.getElementById('fb-tree-container');
+    if (!container) return;
+
+    if (files.length === 0) {
+        container.innerHTML = `<div class="fb-empty-state" style="min-height:200px;padding:20px"><div class="fb-empty-icon">📂</div><p>暂无文件</p><p style="font-size:12px">请先执行任务生成文件</p></div>`;
+        return;
+    }
+
+    // 构建树结构
+    const tree = {};
+    files.forEach(f => {
+        const parts = f.path.split('/');
+        let current = tree;
+        for (let i = 0; i < parts.length - 1; i++) {
+            if (!current[parts[i]]) {
+                current[parts[i]] = { _isDir: true, _children: {} };
+            }
+            current = current[parts[i]]._children;
+        }
+        current[parts[parts.length - 1]] = { _isDir: false, _file: f };
+    });
+
+    container.innerHTML = renderTreeNode(tree, 0);
+}
+
+function renderTreeNode(node, depth) {
+    let html = '';
+    const indent = depth * 16;
+
+    // 先渲染目录，再渲染文件
+    const dirs = [];
+    const fileItems = [];
+
+    for (const [name, val] of Object.entries(node)) {
+        if (val._isDir) {
+            dirs.push([name, val]);
+        } else if (val._file) {
+            fileItems.push([name, val._file]);
+        }
+    }
+
+    // 排序
+    dirs.sort((a, b) => a[0].localeCompare(b[0]));
+    fileItems.sort((a, b) => a[0].localeCompare(b[0]));
+
+    // 目录
+    dirs.forEach(([name, dir]) => {
+        const childrenHtml = renderTreeNode(dir._children, depth + 1);
+        const dirId = 'fbdir-' + Math.random().toString(36).substr(2, 8);
+        html += `
+            <div class="fb-tree-item fb-tree-dir" style="padding-left:${16 + indent}px" onclick="toggleFbDir('${dirId}', this)">
+                <span class="fb-toggle">▼</span>
+                <span class="fb-icon fb-icon-folder">📁</span>
+                <span class="fb-name">${escapeHtml(name)}</span>
+            </div>
+            <div class="fb-tree-children" id="${dirId}">
+                ${childrenHtml}
+            </div>`;
+    });
+
+    // 文件
+    fileItems.forEach(([name, file]) => {
+        const ext = name.split('.').pop().toLowerCase();
+        const icon = getFileIcon(ext);
+        html += `
+            <div class="fb-tree-item" style="padding-left:${16 + indent + 22}px" onclick="selectFileInBrowser('${escapeHtml(file.path)}')" data-filepath="${escapeHtml(file.path)}" data-filename="${escapeHtml(name.toLowerCase())}">
+                <span class="fb-icon fb-icon-file">${icon}</span>
+                <span class="fb-name">${escapeHtml(name)}</span>
+                <span class="fb-size">${file.size_display}</span>
+            </div>`;
+    });
+
+    return html;
+}
+
+function toggleFbDir(dirId, el) {
+    const children = document.getElementById(dirId);
+    if (!children) return;
+    const isCollapsed = children.classList.contains('hidden');
+    if (isCollapsed) {
+        children.classList.remove('hidden');
+        el.classList.remove('collapsed');
+    } else {
+        children.classList.add('hidden');
+        el.classList.add('collapsed');
+    }
+}
+
+function filterFileTree(query) {
+    const q = (query || '').toLowerCase().trim();
+    const items = document.querySelectorAll('#fb-tree-container .fb-tree-item:not(.fb-tree-dir)');
+    const dirs = document.querySelectorAll('#fb-tree-container .fb-tree-dir');
+    const childrenDivs = document.querySelectorAll('#fb-tree-container .fb-tree-children');
+
+    if (!q) {
+        // 显示所有
+        items.forEach(item => item.style.display = '');
+        dirs.forEach(dir => dir.style.display = '');
+        childrenDivs.forEach(div => div.classList.remove('hidden'));
+        return;
+    }
+
+    // 隐藏所有目录先
+    dirs.forEach(dir => dir.style.display = 'none');
+    childrenDivs.forEach(div => div.style.display = 'none');
+
+    // 过滤文件，匹配的显示（扁平化）
+    items.forEach(item => {
+        const filepath = (item.getAttribute('data-filepath') || '').toLowerCase();
+        const filename = (item.getAttribute('data-filename') || '').toLowerCase();
+        if (filepath.includes(q) || filename.includes(q)) {
+            item.style.display = '';
+            item.style.paddingLeft = '16px';  // 搜索模式下去掉缩进
+        } else {
+            item.style.display = 'none';
+        }
+    });
+}
+
+async function selectFileInBrowser(filePath) {
+    if (!currentProjectId) return;
+
+    fbCurrentFile = filePath;
+    fbRawMode = false;
+
+    // 高亮当前文件
+    document.querySelectorAll('#fb-tree-container .fb-tree-item').forEach(item => {
+        item.classList.toggle('active', item.getAttribute('data-filepath') === filePath);
+    });
+
+    // 显示头部
+    const header = document.getElementById('fb-main-header');
+    const tabs = document.getElementById('fb-tabs');
+    if (header) header.style.display = '';
+    if (tabs) tabs.style.display = '';
+
+    // 面包屑
+    renderBreadcrumb(filePath);
+
+    // 加载中状态
+    const codeContainer = document.getElementById('fb-code-container');
+    if (codeContainer) {
+        codeContainer.innerHTML = '<div class="fb-loading"><span class="loading"></span>&nbsp;加载文件...</div>';
+    }
+
+    try {
+        const response = await fetch(`${API_BASE_URL}/api/projects/${currentProjectId}/files/${filePath}`);
+        const data = await response.json();
+
+        if (!response.ok) throw new Error(data.detail || '加载失败');
+
+        fbFileContent = data.content || '';
+        const fileSize = data.size || 0;
+        const lines = fbFileContent.split('\n');
+
+        // 文件信息
+        const fileInfo = document.getElementById('fb-file-info');
+        if (fileInfo) {
+            const ext = filePath.split('.').pop().toLowerCase();
+            const langLabel = getLangLabel(ext);
+            fileInfo.innerHTML = `
+                <span class="fb-info-item">${lines.length} 行</span>
+                <span class="fb-info-item">${fileSize < 1024 ? fileSize + ' B' : (fileSize / 1024).toFixed(1) + ' KB'}</span>
+                <span class="fb-info-item" style="background:#f1f8ff;padding:2px 8px;border-radius:12px;color:#0969da;font-weight:500">${langLabel}</span>`;
+        }
+
+        // 渲染代码
+        renderCodeView(fbFileContent, filePath);
+
+        // 更新 Tab（Preview 仅对 md/html 有效）
+        const ext = filePath.split('.').pop().toLowerCase();
+        const previewTab = document.querySelector('.fb-tab[data-tab="preview"]');
+        if (previewTab) {
+            previewTab.style.display = ['md', 'html', 'json'].includes(ext) ? '' : 'none';
+        }
+        // 重置到 Code tab
+        document.querySelectorAll('.fb-tab').forEach(t => t.classList.toggle('active', t.getAttribute('data-tab') === 'code'));
+
+    } catch (err) {
+        if (codeContainer) {
+            codeContainer.innerHTML = `<div class="fb-empty-state"><p style="color:#cf1322">加载失败: ${escapeHtml(err.message)}</p></div>`;
+        }
+    }
+}
+
+function renderBreadcrumb(filePath) {
+    const el = document.getElementById('fb-breadcrumb');
+    if (!el) return;
+
+    const parts = filePath.split('/');
+    let html = '<span class="fb-bc-link" onclick="loadFileBrowser()">📂 root</span>';
+
+    for (let i = 0; i < parts.length; i++) {
+        html += '<span>/</span>';
+        if (i === parts.length - 1) {
+            html += `<span class="fb-bc-current">${escapeHtml(parts[i])}</span>`;
+        } else {
+            html += `<span class="fb-bc-link">${escapeHtml(parts[i])}</span>`;
+        }
+    }
+
+    el.innerHTML = html;
+}
+
+function renderCodeView(content, filePath) {
+    const container = document.getElementById('fb-code-container');
+    if (!container) return;
+
+    if (!content && content !== '') {
+        container.innerHTML = '<div class="fb-empty-state"><p>空文件</p></div>';
+        return;
+    }
+
+    const lines = content.split('\n');
+
+    // 语法高亮
+    let highlightedCode;
+    if (fbRawMode) {
+        highlightedCode = escapeHtml(content);
+    } else {
+        highlightedCode = highlightCode(content, filePath);
+    }
+
+    // 将高亮后的代码按行分割
+    const highlightedLines = highlightedCode.split('\n');
+
+    let tableHtml = '<table class="fb-code-table">';
+    for (let i = 0; i < lines.length; i++) {
+        const lineNum = i + 1;
+        const lineCode = highlightedLines[i] !== undefined ? highlightedLines[i] : '';
+        tableHtml += `<tr id="L${lineNum}" onclick="highlightLine(${lineNum})">
+            <td class="fb-line-num">${lineNum}</td>
+            <td class="fb-line-code">${lineCode || ' '}</td>
+        </tr>`;
+    }
+    tableHtml += '</table>';
+
+    container.innerHTML = tableHtml;
+}
+
+function highlightLine(lineNum) {
+    // 移除旧的高亮
+    document.querySelectorAll('.fb-code-table tr.highlighted').forEach(tr => tr.classList.remove('highlighted'));
+    const row = document.getElementById(`L${lineNum}`);
+    if (row) {
+        row.classList.add('highlighted');
+        // 更新 URL hash（不跳转）
+        history.replaceState(null, '', `#L${lineNum}`);
+    }
+}
+
+function toggleRawView() {
+    fbRawMode = !fbRawMode;
+    const btn = document.getElementById('fb-raw-btn');
+    if (btn) {
+        btn.style.background = fbRawMode ? '#0969da' : '';
+        btn.style.color = fbRawMode ? '#fff' : '';
+    }
+    if (fbCurrentFile && fbFileContent !== undefined) {
+        renderCodeView(fbFileContent, fbCurrentFile);
+    }
+}
+
+function copyFileContent() {
+    if (!fbFileContent && fbFileContent !== '') return;
+    navigator.clipboard.writeText(fbFileContent).then(() => {
+        showToast('已复制到剪贴板', 'success');
+    }).catch(() => {
+        showToast('复制失败', 'error');
+    });
+}
+
+function switchFileTab(tab) {
+    document.querySelectorAll('.fb-tab').forEach(t => t.classList.toggle('active', t.getAttribute('data-tab') === tab));
+
+    const container = document.getElementById('fb-code-container');
+    if (!container || !fbFileContent) return;
+
+    if (tab === 'code') {
+        renderCodeView(fbFileContent, fbCurrentFile);
+    } else if (tab === 'preview') {
+        const ext = (fbCurrentFile || '').split('.').pop().toLowerCase();
+        if (ext === 'json') {
+            try {
+                const formatted = JSON.stringify(JSON.parse(fbFileContent), null, 2);
+                container.innerHTML = `<pre style="padding:16px;font-size:13px;line-height:1.6;font-family:Consolas,monospace;overflow:auto;height:100%">${highlightCode(formatted, 'data.json')}</pre>`;
+            } catch {
+                container.innerHTML = `<pre style="padding:16px;font-size:13px">${escapeHtml(fbFileContent)}</pre>`;
+            }
+        } else if (ext === 'md') {
+            // 简单的 Markdown 渲染
+            container.innerHTML = `<div style="padding:24px;line-height:1.8;font-size:14px;max-width:860px">${simpleMarkdown(fbFileContent)}</div>`;
+        } else if (ext === 'html') {
+            container.innerHTML = `<iframe srcdoc="${escapeHtml(fbFileContent)}" style="width:100%;height:100%;border:none"></iframe>`;
+        }
+    }
+}
+
+function simpleMarkdown(text) {
+    // 极简 Markdown 渲染（不依赖第三方库）
+    return escapeHtml(text)
+        .replace(/^### (.+)$/gm, '<h3 style="margin:16px 0 8px;font-size:16px">$1</h3>')
+        .replace(/^## (.+)$/gm, '<h2 style="margin:20px 0 10px;font-size:18px;border-bottom:1px solid #d0d7de;padding-bottom:6px">$1</h2>')
+        .replace(/^# (.+)$/gm, '<h1 style="margin:24px 0 12px;font-size:22px;border-bottom:2px solid #d0d7de;padding-bottom:8px">$1</h1>')
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/`([^`]+)`/g, '<code style="background:#f6f8fa;padding:2px 6px;border-radius:4px;font-size:13px">$1</code>')
+        .replace(/^- (.+)$/gm, '<li style="margin:4px 0;margin-left:20px">$1</li>')
+        .replace(/\n\n/g, '<br><br>')
+        .replace(/\n/g, '<br>');
+}
+
+function getLangLabel(ext) {
+    const map = {
+        py: 'Python', js: 'JavaScript', ts: 'TypeScript', html: 'HTML', css: 'CSS',
+        json: 'JSON', md: 'Markdown', yml: 'YAML', yaml: 'YAML', sql: 'SQL',
+        sh: 'Shell', bash: 'Bash', toml: 'TOML', ini: 'INI', cfg: 'Config',
+        xml: 'XML', txt: 'Text', env: 'Env', jsx: 'JSX', tsx: 'TSX',
+        dockerfile: 'Dockerfile', makefile: 'Makefile',
+    };
+    return map[ext] || ext.toUpperCase();
+}
+
+// ============ 项目 ZIP 下载 ============
 
 async function downloadProject(projectId) {
     const btn = event ? event.target : null;
