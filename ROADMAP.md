@@ -140,26 +140,49 @@
 
 ---
 
-## 阶段五: 质量 + 部署 (v0.6.0) 🔜
+## 阶段五: 质量 + 部署 (v0.6.0) ✅
 
-### 5.1 ReviewAgent 实现
-- [ ] 代码审查 Agent（代码规范检查、安全漏洞扫描）
-- [ ] LLM + 规则引擎双模式
+### 5.1 ReviewAgent 实现 ✅
+- [x] 代码审查 Agent（代码规范检查、安全漏洞扫描）
+- [x] LLM + 规则引擎双模式
+- [x] 10 种审查规则（SEC-001~003、PY-001~005、STYLE-001、DOC-001）
+- [x] Markdown 审查报告生成（评分 A~F）
 
-### 5.2 DeployAgent 实现
-- [ ] 部署 Agent（Dockerfile + docker-compose 生成）
-- [ ] CI/CD 配置生成
+### 5.2 DeployAgent 实现 ✅
+- [x] 部署 Agent（Dockerfile + docker-compose 生成）
+- [x] CI/CD 配置生成（GitHub Actions）
+- [x] Nginx 反向代理配置（自动检测前端）
+- [x] 部署文档自动生成
+- [x] 项目结构智能分析（技术栈、数据库、前端检测）
 
-### 5.3 项目打包下载
-- [ ] ZIP 打包项目文件
-- [ ] 一键下载按钮
+### 5.3 项目打包下载 ✅
+- [x] ZIP 打包项目文件
+- [x] 一键下载按钮（前端）
+- [x] API 端点 GET /api/projects/{id}/download
 
-### 5.4 多 LLM 支持
+### 5.4 更多测试 ✅
+- [x] TestAgent 单元测试（4 个）
+- [x] ReviewAgent 单元测试（7 个）
+- [x] DeployAgent 单元测试（7 个）
+- [x] ProductAgentAdapter 单元测试（6 个）
+- [x] 共计 92 个测试全部通过
+
+---
+
+## 阶段六: 进阶功能 (v0.7.0) 🔜
+
+### 6.1 多 LLM 支持
 - [ ] 不同 Agent 可配置不同 LLM
 - [ ] 模型性能对比
 
-### 5.5 更多测试
-- [ ] TestAgent 单元测试
-- [ ] ProductAgentAdapter 单元测试
-- [ ] SSE 端点集成测试
-- [ ] 端到端测试 (E2E)
+### 6.2 项目模板系统
+- [ ] 预置项目模板（Web API、全栈应用、CLI 工具等）
+- [ ] 自定义模板创建
+
+### 6.3 实时协作
+- [ ] WebSocket 双向通信
+- [ ] 多用户同时操作
+
+### 6.4 Agent 自我进化
+- [ ] 执行历史分析
+- [ ] 自适应提示词优化

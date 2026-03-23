@@ -1,12 +1,14 @@
 """
 AI自动开发系统 - FastAPI主应用
 
-v0.5.0: Agent 上下文传递 + TestAgent + ProductAgent + SSE 实时推送 + 处理日志
+v0.6.0: ReviewAgent + DeployAgent + 项目 ZIP 下载 + 92 个测试
 """
 import os
 import json
 import asyncio
 import time
+import zipfile
+import tempfile
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -140,7 +142,7 @@ async def root():
     """根路径"""
     return {
         "message": "AI自动开发系统",
-        "version": "0.5.0",
+        "version": "0.6.0",
         "status": "running"
     }
 
@@ -471,6 +473,59 @@ async def read_project_file(project_id: str, file_path: str):
         "content": content,
         "size": os.path.getsize(full_path),
     }
+
+
+@app.get("/api/projects/{project_id}/download")
+async def download_project_zip(project_id: str):
+    """
+    打包下载项目所有文件为 ZIP
+
+    返回 ZIP 文件流，前端直接触发下载。
+    """
+    project_dir = os.path.join(PROJECTS_DIR, project_id)
+    if not os.path.exists(project_dir):
+        raise HTTPException(status_code=404, detail="项目目录不存在")
+
+    # 获取项目名称用于 ZIP 文件名
+    state = orchestrator.get_project_state(project_id)
+    project_name = "project"
+    if state:
+        project_name = state.get("name", "project")
+    # 清理文件名（移除特殊字符）
+    safe_name = "".join(
+        c for c in project_name if c.isalnum() or c in ("-", "_", " ")
+    ).strip().replace(" ", "_") or "project"
+
+    # 创建临时 ZIP 文件
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
+    tmp_path = tmp.name
+    tmp.close()
+
+    try:
+        with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for root, dirs, files in os.walk(project_dir):
+                # 跳过 __pycache__
+                dirs[:] = [d for d in dirs if d != "__pycache__"]
+                for fname in files:
+                    full_path = os.path.join(root, fname)
+                    rel_path = os.path.relpath(full_path, project_dir)
+                    # 在 ZIP 中用项目名作为顶层目录
+                    arc_name = os.path.join(safe_name, rel_path)
+                    zf.write(full_path, arc_name)
+
+        return FileResponse(
+            path=tmp_path,
+            media_type="application/zip",
+            filename=f"{safe_name}.zip",
+            headers={
+                "Content-Disposition": f'attachment; filename="{safe_name}.zip"',
+            },
+        )
+    except Exception as e:
+        # 清理临时文件
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        raise HTTPException(status_code=500, detail=f"打包失败: {str(e)}")
 
 
 # ============ SSE 实时推送 ============

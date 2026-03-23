@@ -2,7 +2,7 @@
 协调器（Orchestrator）
 核心调度中心，接收需求 -> 分解任务 -> 分配Agent -> 管理执行
 
-v0.5.0: Agent 间上下文传递 + TestAgent + ProductAgent 接入
+v0.6.0: ReviewAgent + DeployAgent 接入，Agent 池扩充到 6 个
 """
 import uuid
 import os
@@ -11,7 +11,7 @@ import logging
 from typing import Dict, Any, Optional, List
 from models.schemas import Requirement, Task, ProjectPlan
 from models.enums import ProjectPhase, TaskStatus, AgentType
-from agents import DevAgent, ArchitectAgent, TestAgent
+from agents import DevAgent, ArchitectAgent, TestAgent, ReviewAgent, DeployAgent
 from .decomposer import TaskDecomposer
 from .state_manager import StateManager
 
@@ -291,13 +291,14 @@ class Orchestrator:
         # 用于 SSE 推送处理过程日志
         self._log_callback = None
 
-        # 初始化 Agent 池（全部 4 个 Agent 到位）
+        # 初始化 Agent 池（全部 6 个 Agent 到位）
         self.agents = {
             AgentType.PRODUCT.value: ProductAgentAdapter(work_dir=work_dir, llm_client=llm_client),
             AgentType.DEV.value: DevAgent(work_dir=work_dir, llm_client=llm_client),
             AgentType.ARCHITECT.value: ArchitectAgent(work_dir=work_dir, llm_client=llm_client),
             AgentType.TEST.value: TestAgent(work_dir=work_dir, llm_client=llm_client),
-            # review, deploy 暂用占位
+            AgentType.REVIEW.value: ReviewAgent(work_dir=work_dir, llm_client=llm_client),
+            AgentType.DEPLOY.value: DeployAgent(work_dir=work_dir, llm_client=llm_client),
         }
 
     def update_llm_client(self, llm_client):
@@ -314,6 +315,12 @@ class Orchestrator:
             work_dir=self.work_dir, llm_client=llm_client
         )
         self.agents[AgentType.TEST.value] = TestAgent(
+            work_dir=self.work_dir, llm_client=llm_client
+        )
+        self.agents[AgentType.REVIEW.value] = ReviewAgent(
+            work_dir=self.work_dir, llm_client=llm_client
+        )
+        self.agents[AgentType.DEPLOY.value] = DeployAgent(
             work_dir=self.work_dir, llm_client=llm_client
         )
 

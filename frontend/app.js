@@ -301,6 +301,9 @@ async function viewProject(projectId) {
                     <button class="btn btn-default btn-sm" onclick="showProjectFiles('${projectId}')">
                         📁 查看生成文件
                     </button>
+                    <button class="btn btn-default btn-sm" onclick="downloadProject('${projectId}')">
+                        📦 打包下载
+                    </button>
                     <button class="btn btn-default btn-sm" onclick="viewProject('${projectId}')">
                         🔄 刷新
                     </button>
@@ -867,6 +870,57 @@ function highlightCode(code, filename) {
         return hljs.highlightAuto(code).value;
     } catch {
         return escapeHtml(code);
+    }
+}
+
+async function downloadProject(projectId) {
+    const btn = event ? event.target : null;
+    const originalText = btn ? btn.innerHTML : '';
+
+    appendProcessLog('step', '开始打包下载项目...');
+
+    try {
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = '<span class="loading"></span> 打包中...';
+        }
+
+        const response = await fetch(`${API_BASE_URL}/api/projects/${projectId}/download`);
+
+        if (!response.ok) {
+            const err = await response.json();
+            throw new Error(err.detail || '下载失败');
+        }
+
+        // 从响应头获取文件名
+        const disposition = response.headers.get('Content-Disposition');
+        let filename = 'project.zip';
+        if (disposition) {
+            const match = disposition.match(/filename="?([^"]+)"?/);
+            if (match) filename = match[1];
+        }
+
+        // 创建 Blob 并触发下载
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+
+        appendProcessLog('success', `✓ 项目已打包下载`, filename);
+        showToast(`📦 ${filename} 下载成功`, 'success');
+    } catch (err) {
+        appendProcessLog('error', '✗ 打包下载失败', err.message);
+        showToast(`下载失败: ${err.message}`, 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = originalText;
+        }
     }
 }
 
