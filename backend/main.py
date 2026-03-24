@@ -15,9 +15,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import settings
 from database import db
 
-# Windows 上需要使用 WindowsSelectorEventLoopPolicy 来支持 asyncio subprocess
+# Windows 上需要使用 WindowsProactorEventLoopPolicy 来支持 asyncio subprocess (Python 3.14)
 if sys.platform == "win32":
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
 
 @asynccontextmanager
