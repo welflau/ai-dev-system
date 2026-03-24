@@ -518,3 +518,26 @@ async def _log_ticket(
             "created_at": created_at,
         },
     )
+
+
+# ==================== 执行命令 (配置 Tab) ====================
+
+
+@router.get("/api/tickets/{ticket_id}/commands")
+async def get_ticket_commands(ticket_id: str):
+    """获取工单执行命令列表"""
+    commands = await db.fetch_all(
+        "SELECT * FROM ticket_commands WHERE ticket_id = ? ORDER BY created_at, step_order",
+        (ticket_id,),
+    )
+    return {"commands": commands, "total": len(commands)}
+
+
+@router.get("/api/requirements/{requirement_id}/commands")
+async def get_requirement_commands(requirement_id: str):
+    """获取需求下所有执行命令"""
+    commands = await db.fetch_all(
+        "SELECT * FROM ticket_commands WHERE requirement_id = ? ORDER BY created_at, step_order",
+        (requirement_id,),
+    )
+    return {"commands": commands, "total": len(commands)}

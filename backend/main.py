@@ -20,8 +20,8 @@ async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     # 启动时
     print("=" * 60)
-    print("  AI 自动开发系统 v0.7.0")
-    print("  工单管理模式")
+    print("  AI 自动开发系统 v0.8.0")
+    print("  工单管理 + Git 仓库集成")
     print("=" * 60)
 
     await db.connect()
@@ -33,6 +33,9 @@ async def lifespan(app: FastAPI):
         print(f"[LLM] 已配置: {llm_client.base_url} / {llm_client.model}")
     else:
         print("[LLM] 未配置，将使用规则引擎降级")
+
+    from git_manager import PROJECTS_DIR
+    print(f"[Git] 项目仓库目录: {PROJECTS_DIR}")
 
     print(f"[Server] http://localhost:{settings.PORT}")
     print(f"[App] http://localhost:{settings.PORT}/app")
@@ -47,8 +50,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="AI 自动开发系统",
-    version="0.7.0",
-    description="工单驱动的 AI 自动开发管理平台",
+    version="0.8.0",
+    description="工单驱动的 AI 自动开发管理平台 + Git 仓库集成",
     lifespan=lifespan,
 )
 
@@ -77,7 +80,7 @@ app.include_router(tickets_router)
 @app.get("/api/health")
 async def health_check():
     """健康检查"""
-    return {"status": "ok", "version": "0.7.0"}
+    return {"status": "ok", "version": "0.8.0"}
 
 
 @app.get("/api/llm/status")

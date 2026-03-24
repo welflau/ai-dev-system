@@ -49,6 +49,18 @@ class ReviewAgent(BaseAgent):
         issues = rule_results.get("issues", []) + llm_review.get("issues", [])
         passed = len(issues) == 0
 
+        # 生成审查报告 Markdown
+        review_md = "# 代码审查报告\n\n"
+        review_md += f"## 结果: {'✅ 通过' if passed else '❌ 不通过'}\n\n"
+        review_md += f"### 静态规则检查\n- 检查规则: {rule_results.get('rules_checked', 0)} 项\n- 通过: {rule_results.get('rules_passed', 0)} 项\n\n"
+        review_md += f"### 智能审查\n- 质量评分: {llm_review.get('quality_score', '-')}/10\n"
+        if llm_review.get("positive_points"):
+            review_md += "\n**优点:**\n" + "\n".join(f"- {p}" for p in llm_review["positive_points"]) + "\n"
+        if llm_review.get("recommendations"):
+            review_md += "\n**建议:**\n" + "\n".join(f"- {r}" for r in llm_review["recommendations"]) + "\n"
+        if issues:
+            review_md += "\n### 问题列表\n" + "\n".join(f"- {i}" for i in issues) + "\n"
+
         return {
             "status": "success",
             "review": {
@@ -57,6 +69,9 @@ class ReviewAgent(BaseAgent):
                 "llm_review": llm_review,
                 "total_issues": len(issues),
                 "issues": issues,
+            },
+            "files": {
+                "docs/code-review.md": review_md,
             },
         }
 

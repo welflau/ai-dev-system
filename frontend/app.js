@@ -227,6 +227,7 @@ function switchTab(tab) {
     if (tab === 'board') refreshBoard();
     if (tab === 'requirements') loadRequirements();
     if (tab === 'pipeline' && currentPipelineReqId) loadPipeline(currentPipelineReqId);
+    if (tab === 'repo') loadRepoTree();
     if (tab === 'stats') loadStats();
     if (tab === 'logs') loadLogs();
 }
@@ -989,6 +990,8 @@ function switchJobLogTab(tab) {
         loadJobLLMLogs();
     } else if (tab === 'artifacts') {
         loadJobArtifacts();
+    } else if (tab === 'commands') {
+        loadJobCommands();
     } else if (activeJobId) {
         // 重新加载日志
         let stageKey = '';
@@ -1952,4 +1955,249 @@ function tryFormatJson(str) {
     } catch {
         return str;
     }
+}
+
+
+// ==================== 配置 Tab: 执行命令 ====================
+
+async function loadJobCommands() {
+    const entries = document.getElementById('jobLogEntries');
+    entries.innerHTML = '<div class="log-panel-empty">加载执行命令...</div>';
+
+    let ticketId = null;
+    let reqId = null;
+    let stageKey = null;
+    if (currentPipelineData) {
+        reqId = currentPipelineData.requirement?.id;
+        for (const stage of currentPipelineData.stages) {
+            for (const j of (stage.jobs || [])) {
+                if (j.id === activeJobId) {
+                    ticketId = j.ticket_id;
+                    stageKey = stage.key;
+                    break;
+                }
+            }
+            if (stageKey) break;
+        }
+    }
+
+    try {
+        let commands = [];
+        if (ticketId) {
+            const data = await api(`/tickets/${ticketId}/commands`);
+            commands = data.commands || [];
+        } else if (reqId) {
+            const data = await api(`/requirements/${reqId}/commands`);
+            commands = (data.commands || []).filter(c => {
+                if (!stageKey) return true;
+                const agentMap = {
+                    'requirement_analysis': 'ProductAgent',
+                    'architecture': 'ArchitectAgent',
+                    'development': 'DevAgent',
+                    'testing': 'TestAgent',
+                    'deployment': 'DeployAgent',
+                };
+                return c.agent_type === agentMap[stageKey];
+            });
+        }
+
+        if (commands.length === 0) {
+            entries.innerHTML = '<div class="log-panel-empty">暂无执行命令记录</div>';
+            return;
+        }
+
+        const cmdTypeIcons = {
+            write_file: '📝',
+            git_commit: '💾',
+            git_push: '🚀',
+            agent_invoke: '🤖',
+            llm_call: '🧠',
+        };
+
+        const cmdTypeLabels = {
+            write_file: '写入文件',
+            git_commit: 'Git 提交',
+            git_push: 'Git 推送',
+            agent_invoke: 'Agent 调用',
+            llm_call: 'LLM 调用',
+        };
+
+        let html = '<div class="cmd-list">';
+        let currentAction = '';
+        for (const cmd of commands) {
+            // 按 action 分组
+            const actionLabel = `${cmd.agent_type} → ${cmd.action}`;
+            if (actionLabel !== currentAction) {
+                if (currentAction) html += '</div>';
+                currentAction = actionLabel;
+                html += `<div class="cmd-group">
+                    <div class="cmd-group-header">
+                        <span class="cmd-group-icon">🤖</span>
+                        <span class="cmd-group-title">${actionLabel}</span>
+                    </div>`;
+            }
+
+            const icon = cmdTypeIcons[cmd.command_type] || '⚡';
+            const typeLabel = cmdTypeLabels[cmd.command_type] || cmd.command_type;
+            const statusClass = cmd.status === 'success' ? 'cmd-success' : 'cmd-fail';
+            const duration = cmd.duration_ms ? `(${cmd.duration_ms}ms)` : '';
+
+            html += `<div class="cmd-item ${statusClass}">
+                <span class="cmd-step">#${cmd.step_order + 1}</span>
+                <span class="cmd-icon">${icon}</span>
+                <span class="cmd-type">${typeLabel}</span>
+                <span class="cmd-text">${escapeHtml(cmd.command)}</span>
+                <span class="cmd-duration">${duration}</span>
+                <span class="cmd-status-dot ${statusClass}"></span>
+            </div>`;
+        }
+        if (currentAction) html += '</div>';
+        html += '</div>';
+
+        entries.innerHTML = html;
+    } catch (err) {
+        entries.innerHTML = `<div class="log-panel-empty">加载失败: ${err.message}</div>`;
+    }
+}
+
+
+// ==================== 仓库文件浏览 ====================
+
+async function loadRepoTree() {
+    const container = document.getElementById('repoTree');
+    if (!currentProjectId) {
+        container.innerHTML = '<div class="empty-state"><div class="emoji">📂</div><p>请先选择项目</p></div>';
+        return;
+    }
+
+    container.innerHTML = '<div class="empty-state"><div class="emoji">⏳</div><p>加载中...</p></div>';
+
+    try {
+        const tree = await api(`/projects/${currentProjectId}/git/tree`);
+        if (!tree.children || tree.children.length === 0) {
+            container.innerHTML = '<div class="empty-state"><div class="emoji">📂</div><p>仓库为空或尚未初始化</p></div>';
+            return;
+        }
+        container.innerHTML = renderFileTree(tree.children, 0);
+    } catch (err) {
+        container.innerHTML = `<div class="empty-state"><div class="emoji">❌</div><p>加载失败: ${err.message}</p></div>`;
+    }
+}
+
+function renderFileTree(nodes, depth) {
+    let html = '';
+    for (const node of nodes) {
+        const indent = depth * 20;
+        if (node.type === 'directory') {
+            const hasChildren = node.children && node.children.length > 0;
+            html += `<div class="tree-item tree-dir" style="padding-left:${indent}px" onclick="toggleTreeDir(this)">
+                <span class="tree-icon">${hasChildren ? '📂' : '📁'}</span>
+                <span class="tree-name">${escapeHtml(node.name)}</span>
+            </div>`;
+            if (hasChildren) {
+                html += `<div class="tree-children">${renderFileTree(node.children, depth + 1)}</div>`;
+            }
+        } else {
+            const ext = node.name.split('.').pop().toLowerCase();
+            const icon = getFileIcon(ext);
+            const size = node.size ? formatFileSize(node.size) : '';
+            html += `<div class="tree-item tree-file" style="padding-left:${indent}px" onclick="viewRepoFile('${escapeHtml(node.path)}')">
+                <span class="tree-icon">${icon}</span>
+                <span class="tree-name">${escapeHtml(node.name)}</span>
+                <span class="tree-size">${size}</span>
+            </div>`;
+        }
+    }
+    return html;
+}
+
+function toggleTreeDir(el) {
+    const children = el.nextElementSibling;
+    if (children && children.classList.contains('tree-children')) {
+        children.classList.toggle('collapsed');
+        const icon = el.querySelector('.tree-icon');
+        icon.textContent = children.classList.contains('collapsed') ? '📁' : '📂';
+    }
+}
+
+async function viewRepoFile(path) {
+    const viewer = document.getElementById('repoFileViewer');
+    const pathEl = document.getElementById('fileViewerPath');
+    const contentEl = document.getElementById('fileViewerContent');
+
+    viewer.style.display = 'block';
+    pathEl.textContent = path;
+    contentEl.textContent = '加载中...';
+
+    try {
+        const data = await api(`/projects/${currentProjectId}/git/file?path=${encodeURIComponent(path)}`);
+        contentEl.textContent = data.content || '(空文件)';
+    } catch (err) {
+        contentEl.textContent = `加载失败: ${err.message}`;
+    }
+}
+
+function closeFileViewer() {
+    document.getElementById('repoFileViewer').style.display = 'none';
+}
+
+async function loadGitLog() {
+    const panel = document.getElementById('gitLogPanel');
+    const list = document.getElementById('gitLogList');
+    panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
+    if (panel.style.display === 'none') return;
+
+    list.innerHTML = '<div class="log-panel-empty">加载中...</div>';
+
+    try {
+        const data = await api(`/projects/${currentProjectId}/git/log?limit=30`);
+        const commits = data.commits || [];
+        if (commits.length === 0) {
+            list.innerHTML = '<div class="log-panel-empty">暂无提交记录</div>';
+            return;
+        }
+
+        list.innerHTML = commits.map(c => `
+            <div class="git-commit-item">
+                <div class="git-commit-hash">${escapeHtml(c.short_hash)}</div>
+                <div class="git-commit-msg">${escapeHtml(c.message)}</div>
+                <div class="git-commit-meta">
+                    <span>${escapeHtml(c.author)}</span>
+                    <span>${formatTime(c.date)}</span>
+                </div>
+            </div>
+        `).join('');
+    } catch (err) {
+        list.innerHTML = `<div class="log-panel-empty">加载失败: ${err.message}</div>`;
+    }
+}
+
+function getFileIcon(ext) {
+    const icons = {
+        py: '🐍', js: '📜', ts: '📘', html: '🌐', css: '🎨',
+        md: '📝', json: '📋', yml: '⚙️', yaml: '⚙️', toml: '⚙️',
+        txt: '📄', sh: '💻', dockerfile: '🐳', sql: '🗃️',
+        png: '🖼️', jpg: '🖼️', svg: '🖼️', gif: '🖼️',
+    };
+    return icons[ext] || '📄';
+}
+
+function formatFileSize(bytes) {
+    if (bytes < 1024) return `${bytes}B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+}
+
+function formatTime(dateStr) {
+    if (!dateStr) return '-';
+    try {
+        const d = new Date(dateStr);
+        if (isNaN(d.getTime())) return dateStr;
+        return d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+    } catch { return dateStr; }
+}
+
+function escapeHtml(str) {
+    if (!str) return '';
+    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }

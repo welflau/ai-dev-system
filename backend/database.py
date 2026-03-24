@@ -95,6 +95,8 @@ CREATE TABLE IF NOT EXISTS projects (
     status          TEXT NOT NULL DEFAULT 'active',
     tech_stack      TEXT,
     config          TEXT,
+    git_repo_path   TEXT,
+    git_remote_url  TEXT,
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL
 );
@@ -221,6 +223,25 @@ CREATE TABLE IF NOT EXISTS llm_conversations (
 );
 
 -- ============================================================
+-- 工单执行命令表（Pipeline 配置 Tab）
+-- ============================================================
+CREATE TABLE IF NOT EXISTS ticket_commands (
+    id              TEXT PRIMARY KEY,
+    ticket_id       TEXT REFERENCES tickets(id),
+    requirement_id  TEXT REFERENCES requirements(id),
+    project_id      TEXT NOT NULL REFERENCES projects(id),
+    agent_type      TEXT NOT NULL,
+    action          TEXT NOT NULL,
+    step_order      INTEGER NOT NULL DEFAULT 0,
+    command_type    TEXT NOT NULL,
+    command         TEXT NOT NULL,
+    result          TEXT,
+    status          TEXT NOT NULL DEFAULT 'success',
+    duration_ms     INTEGER,
+    created_at      TEXT NOT NULL
+);
+
+-- ============================================================
 -- 索引
 -- ============================================================
 CREATE INDEX IF NOT EXISTS idx_requirements_project ON requirements(project_id);
@@ -238,6 +259,8 @@ CREATE INDEX IF NOT EXISTS idx_artifacts_ticket ON artifacts(ticket_id);
 CREATE INDEX IF NOT EXISTS idx_llm_conversations_ticket ON llm_conversations(ticket_id);
 CREATE INDEX IF NOT EXISTS idx_llm_conversations_requirement ON llm_conversations(requirement_id);
 CREATE INDEX IF NOT EXISTS idx_llm_conversations_project ON llm_conversations(project_id);
+CREATE INDEX IF NOT EXISTS idx_ticket_commands_ticket ON ticket_commands(ticket_id);
+CREATE INDEX IF NOT EXISTS idx_ticket_commands_requirement ON ticket_commands(requirement_id);
 """
 
 

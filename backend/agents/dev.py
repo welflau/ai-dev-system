@@ -41,16 +41,12 @@ class DevAgent(BaseAgent):
 ## 架构设计
 {json.dumps(architecture, ensure_ascii=False, indent=2)}
 
-## 请返回 JSON 格式：
+## 请返回 JSON 格式（注意 files 字段包含真正的文件内容）：
 {{
-  "files_created": [
-    {{
-      "path": "文件路径",
-      "description": "文件描述",
-      "language": "编程语言",
-      "lines_of_code": 行数
-    }}
-  ],
+  "files": {{
+    "src/services/example.py": "# 文件的完整代码内容\\nimport ...\\n...",
+    "src/models/example.py": "# 模型代码\\n..."
+  }},
   "key_implementations": ["关键实现点"],
   "api_endpoints": [
     {{"method": "GET/POST/PUT/DELETE", "path": "/api/xxx", "description": "接口描述"}}
@@ -59,6 +55,11 @@ class DevAgent(BaseAgent):
   "estimated_hours": 实际用时估算,
   "notes": "开发备注"
 }}
+
+关键要求：
+1. files 字典的 key 是相对于项目根目录的文件路径，value 是文件的完整代码内容
+2. 根据模块类型放到对应目录：src/api/、src/models/、src/services/、src/utils/
+3. 生成完整可运行的代码，不要用省略号或注释代替
 """
 
         result = await llm_client.chat_json(
@@ -66,26 +67,112 @@ class DevAgent(BaseAgent):
         )
 
         if result and isinstance(result, dict):
+            files = result.get("files", {})
             return {
                 "status": "success",
                 "dev_result": result,
                 "estimated_hours": result.get("estimated_hours", 4),
+                "files": files if isinstance(files, dict) else {},
             }
 
-        # 降级
+        # 降级：生成模板代码
+        return self._fallback_develop(ticket_title, ticket_description, module)
+
+    def _fallback_develop(self, title: str, description: str, module: str) -> Dict:
+        """规则引擎降级：生成模板代码文件"""
+        safe_name = title.lower().replace(" ", "_").replace("-", "_")[:30]
+        files = {}
+
+        if module in ("backend", "api", "other"):
+            files[f"src/services/{safe_name}.py"] = f'''"""
+{title} - 业务逻辑
+由 AI 自动开发系统生成
+"""
+
+
+class {safe_name.title().replace("_", "")}Service:
+    """{title} 服务类"""
+
+    async def execute(self, params: dict) -> dict:
+        """执行核心逻辑"""
+        # TODO: 实现 {description[:100]}
+        return {{"status": "success", "message": "{title} 完成"}}
+'''
+            files[f"src/api/{safe_name}_router.py"] = f'''"""
+{title} - API 路由
+"""
+from fastapi import APIRouter
+
+router = APIRouter(prefix="/api/{safe_name}", tags=["{safe_name}"])
+
+
+@router.get("")
+async def list_{safe_name}():
+    """获取列表"""
+    return {{"items": [], "total": 0}}
+
+
+@router.post("")
+async def create_{safe_name}(body: dict):
+    """创建"""
+    return {{"status": "success"}}
+'''
+
+        elif module == "frontend":
+            files[f"src/frontend/{safe_name}.js"] = f'''/**
+ * {title} - 前端模块
+ * 由 AI 自动开发系统生成
+ */
+
+class {safe_name.title().replace("_", "")} {{
+    constructor() {{
+        this.container = null;
+    }}
+
+    render(container) {{
+        this.container = container;
+        container.innerHTML = `
+            <div class="{safe_name}">
+                <h2>{title}</h2>
+                <p>{description[:100]}</p>
+            </div>
+        `;
+    }}
+}}
+'''
+
+        elif module == "database":
+            files[f"src/models/{safe_name}.py"] = f'''"""
+{title} - 数据模型
+"""
+from pydantic import BaseModel
+from typing import Optional
+
+
+class {safe_name.title().replace("_", "")}(BaseModel):
+    """数据模型"""
+    id: str
+    name: str
+    description: Optional[str] = None
+    created_at: str
+    updated_at: str
+'''
+
+        # 通用：生成 requirements.txt
+        files["requirements.txt"] = "fastapi>=0.100.0\nuvicorn>=0.22.0\naiosqlite>=0.19.0\npydantic>=2.0.0\n"
+
         return {
             "status": "success",
             "dev_result": {
-                "files_created": [
-                    {"path": f"src/{module}/{ticket_title.lower().replace(' ', '_')}.py", "description": ticket_title, "language": "Python", "lines_of_code": 150}
-                ],
-                "key_implementations": [f"实现了 {ticket_title} 的核心功能"],
+                "files": files,
+                "key_implementations": [f"实现了 {title} 的核心功能"],
                 "api_endpoints": [],
                 "dependencies_added": [],
                 "estimated_hours": 4,
                 "notes": "[规则引擎] 代码开发完成",
             },
             "estimated_hours": 4,
+            "files": files,
         }
 
     async def rework(self, context: Dict[str, Any]) -> Dict[str, Any]:

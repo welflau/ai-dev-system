@@ -26,7 +26,7 @@ class DeployAgent(BaseAgent):
         dev_result = context.get("dev_result", {})
         test_result = context.get("test_result", {})
 
-        prompt = f"""你是一位 DevOps 工程师。请为以下项目生成部署配置。
+        prompt = f"""你是一位 DevOps 工程师。请为以下项目生成部署配置文件。
 
 ## 任务
 {ticket_title}
@@ -37,15 +37,14 @@ class DeployAgent(BaseAgent):
 ## 测试结果
 {json.dumps(test_result, ensure_ascii=False, indent=2)}
 
-请返回 JSON：
+## 请返回 JSON 格式（files 字段包含真正的文件内容）：
 {{
-  "deploy_configs": [
-    {{
-      "type": "dockerfile|docker-compose|nginx|ci-cd",
-      "filename": "文件名",
-      "description": "描述"
-    }}
-  ],
+  "files": {{
+    "build/Dockerfile": "FROM python:3.10-slim\\n...",
+    "build/docker-compose.yml": "version: '3'\\n...",
+    "build/.github/workflows/ci.yml": "name: CI\\n...",
+    "docs/deploy.md": "# 部署文档\\n..."
+  }},
   "deploy_steps": ["部署步骤"],
   "environment": {{
     "runtime": "运行环境",
@@ -57,26 +56,112 @@ class DeployAgent(BaseAgent):
     "expected_status": 200
   }}
 }}
+
+关键要求：files 字典的 value 是文件的完整内容
 """
 
-        result = await llm_client.chat_json([{"role": "user", "content": prompt}])
+        result = await llm_client.chat_json(
+            [{"role": "user", "content": prompt}]
+        )
 
         if result and isinstance(result, dict):
+            files = result.get("files", {})
             return {
                 "status": "success",
                 "deploy_result": result,
+                "files": files if isinstance(files, dict) else {},
             }
 
-        # 降级
+        # 降级：生成标准部署配置
+        return self._fallback_deploy(ticket_title)
+
+    def _fallback_deploy(self, title: str) -> Dict:
+        """规则引擎降级：生成标准部署配置"""
+        files = {}
+
+        files["build/Dockerfile"] = """FROM python:3.10-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY src/ ./src/
+COPY config/ ./config/
+
+EXPOSE 8000
+
+CMD ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+"""
+
+        files["build/docker-compose.yml"] = f"""version: '3.8'
+
+services:
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=sqlite:///data/app.db
+    volumes:
+      - app-data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  app-data:
+"""
+
+        files["build/.github/workflows/ci.yml"] = """name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - run: pip install -r requirements.txt
+      - run: pytest tests/ -v
+"""
+
+        files["docs/deploy.md"] = f"""# 部署文档 - {title}
+
+## 环境要求
+- Python 3.10+
+- Docker & Docker Compose
+
+## 部署步骤
+
+1. 构建镜像: `docker build -t app .`
+2. 启动服务: `docker-compose up -d`
+3. 健康检查: `curl http://localhost:8000/api/health`
+
+## 环境变量
+- `DATABASE_URL`: 数据库连接地址
+- `LLM_API_KEY`: LLM API Key
+
+## 端口
+- 8000: HTTP 服务
+"""
+
         return {
             "status": "success",
             "deploy_result": {
-                "deploy_configs": [
-                    {"type": "dockerfile", "filename": "Dockerfile", "description": "Docker 构建配置"},
-                    {"type": "docker-compose", "filename": "docker-compose.yml", "description": "服务编排配置"},
-                ],
+                "files": files,
                 "deploy_steps": [
-                    "docker build -t ai-dev-system .",
+                    "docker build -t app .",
                     "docker-compose up -d",
                     "运行健康检查",
                 ],
@@ -90,4 +175,5 @@ class DeployAgent(BaseAgent):
                     "expected_status": 200,
                 },
             },
+            "files": files,
         }

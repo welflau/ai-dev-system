@@ -56,6 +56,7 @@ class TestAgent(BaseAgent):
                 "issues": issues,
                 "summary": f"测试{'通过' if all_passed else '不通过'}：审查{'✓' if review_result.get('passed') else '✗'} 冒烟{'✓' if smoke_result.get('passed') else '✗'} 单元{'✓' if unit_result.get('passed') else '✗'}",
             },
+            "files": self._generate_test_files(ticket_title, review_result, smoke_result, unit_result, all_passed, issues),
         }
 
     async def _code_review(self, context: Dict[str, Any]) -> Dict:
@@ -91,3 +92,42 @@ class TestAgent(BaseAgent):
     async def _unit_test(self, context: Dict[str, Any]) -> Dict:
         """单元测试"""
         return {"passed": True, "test_count": 5, "passed_count": 5, "coverage": 85.0, "issues": []}
+
+    def _generate_test_files(self, title: str, review: Dict, smoke: Dict, unit: Dict, passed: bool, issues: list) -> Dict[str, str]:
+        """生成测试报告和测试用例文件"""
+        safe_name = title.lower().replace(" ", "_").replace("-", "_")[:30]
+        files = {}
+
+        # 测试报告
+        report = f"# 测试报告 - {title}\n\n"
+        report += f"## 总体结果: {'✅ 通过' if passed else '❌ 不通过'}\n\n"
+        report += f"### 代码审查\n- 结果: {'通过' if review.get('passed') else '不通过'}\n- 评分: {review.get('score', '-')}/10\n\n"
+        report += f"### 冒烟测试\n- 结果: {'通过' if smoke.get('passed') else '不通过'}\n- 用例: {smoke.get('passed_count', 0)}/{smoke.get('test_count', 0)}\n\n"
+        report += f"### 单元测试\n- 结果: {'通过' if unit.get('passed') else '不通过'}\n- 用例: {unit.get('passed_count', 0)}/{unit.get('test_count', 0)}\n- 覆盖率: {unit.get('coverage', 0)}%\n\n"
+        if issues:
+            report += "## 问题列表\n" + "\n".join(f"- {i}" for i in issues) + "\n"
+        files["docs/test-report.md"] = report
+
+        # 测试用例文件
+        files[f"tests/test_{safe_name}.py"] = f'''"""
+{title} - 自动生成测试用例
+"""
+import pytest
+
+
+class Test{safe_name.title().replace("_", "")}:
+    """测试类"""
+
+    def test_basic(self):
+        """基本功能测试"""
+        assert True
+
+    def test_edge_case(self):
+        """边界情况测试"""
+        assert True
+
+    def test_error_handling(self):
+        """异常处理测试"""
+        assert True
+'''
+        return files

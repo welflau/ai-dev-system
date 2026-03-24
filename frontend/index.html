@@ -50,6 +50,9 @@
                         <a class="nav-item" data-tab="requirements" onclick="switchTab('requirements')">
                             📋 需求列表
                         </a>
+                        <a class="nav-item" data-tab="repo" onclick="switchTab('repo')">
+                            📂 仓库文件
+                        </a>
                         <a class="nav-item" data-tab="stats" onclick="switchTab('stats')">
                             📊 统计面板
                         </a>
@@ -132,6 +135,33 @@
                             <button class="btn btn-primary" onclick="showCreateRequirementModal()">+ 提交需求</button>
                         </div>
                         <div class="requirement-list" id="requirementList"></div>
+                    </div>
+
+                    <!-- Tab: 仓库文件 -->
+                    <div id="tab-repo" class="tab-content">
+                        <div class="page-header">
+                            <h2>📂 仓库文件</h2>
+                            <div class="repo-actions">
+                                <button class="btn btn-sm" onclick="loadRepoTree()">🔄 刷新</button>
+                                <button class="btn btn-sm" onclick="loadGitLog()">📜 提交记录</button>
+                            </div>
+                        </div>
+                        <div class="repo-container">
+                            <div class="repo-tree" id="repoTree">
+                                <div class="empty-state"><div class="emoji">📂</div><p>加载中...</p></div>
+                            </div>
+                            <div class="repo-file-viewer" id="repoFileViewer" style="display:none;">
+                                <div class="file-viewer-header">
+                                    <span class="file-viewer-path" id="fileViewerPath"></span>
+                                    <button class="btn-icon" onclick="closeFileViewer()">&times;</button>
+                                </div>
+                                <pre class="file-viewer-content" id="fileViewerContent"></pre>
+                            </div>
+                        </div>
+                        <div class="git-log-panel" id="gitLogPanel" style="display:none;">
+                            <h3>📜 提交记录</h3>
+                            <div class="git-log-list" id="gitLogList"></div>
+                        </div>
                     </div>
 
                     <!-- Tab: Pipeline -->
@@ -252,6 +282,7 @@
                 <button class="job-log-tab active" onclick="switchJobLogTab('log')">📋 日志</button>
                 <button class="job-log-tab" onclick="switchJobLogTab('ai')">🤖 AI 对话</button>
                 <button class="job-log-tab" onclick="switchJobLogTab('artifacts')">📦 产出文件</button>
+                <button class="job-log-tab" onclick="switchJobLogTab('commands')">⚙️ 配置</button>
             </div>
             <button class="btn-icon" onclick="closeJobLogPanel()">&times;</button>
         </div>

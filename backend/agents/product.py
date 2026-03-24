@@ -72,10 +72,14 @@ class ProductAgent(BaseAgent):
         )
 
         if result and isinstance(result, dict) and "tickets" in result:
+            prd_summary = result.get("prd_summary", "")
             return {
                 "status": "success",
-                "prd_summary": result.get("prd_summary", ""),
+                "prd_summary": prd_summary,
                 "tickets": result["tickets"],
+                "files": {
+                    "docs/PRD.md": f"# PRD - {title}\n\n{prd_summary}\n",
+                },
             }
 
         # LLM 不可用时降级：规则引擎拆单
@@ -117,15 +121,29 @@ class ProductAgent(BaseAgent):
         )
 
         if result and isinstance(result, dict):
+            passed = result.get("passed", True)
+            status = "acceptance_passed" if passed else "acceptance_rejected"
+            review_md = f"# 验收报告 - {ticket_title}\n\n"
+            review_md += f"- 结果: {'通过' if passed else '不通过'}\n"
+            review_md += f"- 评分: {result.get('score', '-')}/10\n"
+            review_md += f"- 意见: {result.get('feedback', '')}\n"
+            if result.get("issues"):
+                review_md += "\n## 问题\n" + "\n".join(f"- {i}" for i in result["issues"]) + "\n"
             return {
-                "status": "acceptance_passed" if result.get("passed", True) else "acceptance_rejected",
+                "status": status,
                 "review": result,
+                "files": {
+                    "docs/acceptance-review.md": review_md,
+                },
             }
 
         # 降级：默认通过
         return {
             "status": "acceptance_passed",
             "review": {"passed": True, "score": 7, "feedback": "规则引擎验收：默认通过", "issues": []},
+            "files": {
+                "docs/acceptance-review.md": f"# 验收报告 - {ticket_title}\n\n- 结果: 通过\n- 评分: 7/10\n- 意见: 规则引擎验收：默认通过\n",
+            },
         }
 
     def _fallback_decompose(self, title: str, description: str, priority: str) -> Dict:
@@ -214,4 +232,7 @@ class ProductAgent(BaseAgent):
             "status": "success",
             "prd_summary": f"[规则引擎] 需求「{title}」已拆分为 {len(tickets)} 个任务单。",
             "tickets": tickets,
+            "files": {
+                "docs/PRD.md": f"# PRD - {title}\n\n[规则引擎] 需求「{title}」已拆分为 {len(tickets)} 个任务单。\n\n## 描述\n\n{description}\n",
+            },
         }

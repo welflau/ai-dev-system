@@ -65,14 +65,53 @@ class ArchitectAgent(BaseAgent):
         )
 
         if result and isinstance(result, dict):
+            arch_md = self._generate_arch_doc(ticket_title, result)
             return {
                 "status": "success",
                 "architecture": result,
                 "estimated_hours": result.get("estimated_hours", 4),
+                "files": {
+                    "docs/architecture.md": arch_md,
+                },
             }
 
         # 降级
         return self._fallback_design(ticket_title, module)
+
+    def _generate_arch_doc(self, title: str, arch: dict) -> str:
+        """根据架构数据生成 Markdown 文档"""
+        lines = [f"# 架构设计 - {title}\n"]
+        lines.append(f"## 架构模式\n{arch.get('architecture_type', '未指定')}\n")
+
+        ts = arch.get("tech_stack", {})
+        if ts:
+            lines.append("## 技术栈\n")
+            for k, v in ts.items():
+                lines.append(f"- **{k}**: {v if isinstance(v, str) else ', '.join(v)}")
+            lines.append("")
+
+        modules = arch.get("module_design", [])
+        if modules:
+            lines.append("## 模块设计\n")
+            for m in modules:
+                lines.append(f"### {m.get('name', '')}")
+                lines.append(f"职责: {m.get('responsibility', '')}")
+                for iface in m.get("interfaces", []):
+                    lines.append(f"- {iface}")
+                lines.append("")
+
+        if arch.get("data_flow"):
+            lines.append(f"## 数据流\n{arch['data_flow']}\n")
+
+        risks = arch.get("risks", [])
+        if risks:
+            lines.append("## 风险点\n" + "\n".join(f"- {r}" for r in risks) + "\n")
+
+        decisions = arch.get("decisions", [])
+        if decisions:
+            lines.append("## 关键决策\n" + "\n".join(f"- {d}" for d in decisions) + "\n")
+
+        return "\n".join(lines)
 
     def _fallback_design(self, title: str, module: str) -> Dict:
         """规则引擎降级架构设计"""
@@ -100,14 +139,18 @@ class ArchitectAgent(BaseAgent):
         }
 
         template = arch_templates.get(module, arch_templates["backend"])
+        arch_result = {
+            **template,
+            "module_design": [{"name": title, "responsibility": f"实现 {title} 功能", "interfaces": []}],
+            "data_flow": "请求 → Controller → Service → Repository → Database",
+            "risks": ["需进一步细化接口设计"],
+            "decisions": ["采用分层架构，保持模块解耦"],
+        }
         return {
             "status": "success",
-            "architecture": {
-                **template,
-                "module_design": [{"name": title, "responsibility": f"实现 {title} 功能", "interfaces": []}],
-                "data_flow": "请求 → Controller → Service → Repository → Database",
-                "risks": ["需进一步细化接口设计"],
-                "decisions": ["采用分层架构，保持模块解耦"],
-            },
+            "architecture": arch_result,
             "estimated_hours": template["estimated_hours"],
+            "files": {
+                "docs/architecture.md": self._generate_arch_doc(title, arch_result),
+            },
         }

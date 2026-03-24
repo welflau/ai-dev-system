@@ -4,6 +4,7 @@ AI 自动开发系统 - Orchestrator 工单编排器
 """
 import json
 import asyncio
+import time
 from typing import Any, Dict, Optional
 from datetime import datetime, timedelta
 
@@ -18,6 +19,7 @@ from models import (
 from utils import generate_id, now_iso
 from events import event_manager
 from llm_client import set_llm_context, clear_llm_context
+from git_manager import git_manager
 
 # Agent 导入
 from agents.product import ProductAgent
@@ -145,6 +147,15 @@ class TicketOrchestrator:
                 "prd_content": prd_summary,
                 "updated_at": now_iso(),
             }, "id = ?", (requirement_id,))
+
+            # === 写入 PRD 文件到 Git 仓库 ===
+            prd_files = result.get("files", {})
+            git_result = None
+            if prd_files:
+                git_result = await self._handle_git_files(
+                    project_id, None, requirement_id,
+                    "ProductAgent", "analyze_and_decompose", result
+                )
 
             # 创建工单
             tickets_data = result.get("tickets", [])
@@ -388,13 +399,19 @@ class TicketOrchestrator:
         action: str,
         result: Dict,
     ):
-        """根据 Agent 执行结果更新工单状态"""
+        """根据 Agent 执行结果更新工单状态 + 写入 Git 仓库"""
         requirement_id = ticket["requirement_id"]
         current_ticket = await db.fetch_one("SELECT * FROM tickets WHERE id = ?", (ticket_id,))
         current_status = current_ticket["status"] if current_ticket else ticket["status"]
 
         # 保存执行结果
         result_json = json.dumps(result, ensure_ascii=False)
+
+        # === 通用：处理 Agent 返回的 files，写入 Git 仓库 ===
+        git_result = await self._handle_git_files(
+            project_id, ticket_id, requirement_id,
+            agent_name, action, result
+        )
 
         if agent_name == "ArchitectAgent":
             # 架构完成
@@ -414,7 +431,12 @@ class TicketOrchestrator:
                 project_id, requirement_id, ticket_id, agent_name,
                 "complete", current_status, new_status,
                 f"架构设计完成，预计开发 {est_hours} 小时",
-                detail_data={"estimated_hours": est_hours, "result_summary": str(result.get("architecture", ""))[:500]},
+                detail_data={
+                    "estimated_hours": est_hours,
+                    "result_summary": str(result.get("architecture", ""))[:500],
+                    "git_commit": git_result.get("commit_hash") if git_result else None,
+                    "git_files": git_result.get("files", []) if git_result else [],
+                },
             )
 
             # 保存架构产物
@@ -427,7 +449,7 @@ class TicketOrchestrator:
                 "name": f"架构设计 - {ticket['title']}",
                 "path": None,
                 "content": result_json,
-                "metadata": None,
+                "metadata": json.dumps({"git": git_result}) if git_result else None,
                 "created_at": now_iso(),
             })
 
@@ -446,8 +468,10 @@ class TicketOrchestrator:
                 "complete", current_status, new_status,
                 "开发完成，等待产品验收",
                 detail_data={
-                    "files_count": len(result.get("files", [])),
-                    "result_summary": str(result.get("summary", result.get("message", "")))[:500],
+                    "files_count": len(result.get("files", {})),
+                    "result_summary": str(result.get("dev_result", {}).get("notes", ""))[:500],
+                    "git_commit": git_result.get("commit_hash") if git_result else None,
+                    "git_files": git_result.get("files", []) if git_result else [],
                 },
             )
 
@@ -461,7 +485,7 @@ class TicketOrchestrator:
                 "name": f"代码 - {ticket['title']}",
                 "path": None,
                 "content": result_json,
-                "metadata": None,
+                "metadata": json.dumps({"git": git_result}) if git_result else None,
                 "created_at": now_iso(),
             })
 
@@ -480,7 +504,8 @@ class TicketOrchestrator:
                 await self._log(
                     project_id, requirement_id, ticket_id, agent_name,
                     "accept", current_status, new_status,
-                    "验收通过，转测试"
+                    "验收通过，转测试",
+                    detail_data={"git_commit": git_result.get("commit_hash") if git_result else None},
                 )
             else:
                 await self._log(
@@ -504,7 +529,11 @@ class TicketOrchestrator:
                 await self._log(
                     project_id, requirement_id, ticket_id, agent_name,
                     "complete", current_status, new_status,
-                    f"测试通过: {result.get('test_result', {}).get('summary', '')}"
+                    f"测试通过: {result.get('test_result', {}).get('summary', '')}",
+                    detail_data={
+                        "git_commit": git_result.get("commit_hash") if git_result else None,
+                        "git_files": git_result.get("files", []) if git_result else [],
+                    },
                 )
 
                 # 保存测试产物
@@ -517,7 +546,7 @@ class TicketOrchestrator:
                     "name": f"测试报告 - {ticket['title']}",
                     "path": None,
                     "content": result_json,
-                    "metadata": None,
+                    "metadata": json.dumps({"git": git_result}) if git_result else None,
                     "created_at": now_iso(),
                 })
             else:
@@ -541,7 +570,11 @@ class TicketOrchestrator:
             await self._log(
                 project_id, requirement_id, ticket_id, agent_name,
                 "complete", current_status, new_status,
-                "部署完成"
+                "部署完成",
+                detail_data={
+                    "git_commit": git_result.get("commit_hash") if git_result else None,
+                    "git_files": git_result.get("files", []) if git_result else [],
+                },
             )
 
             # 保存部署产物
@@ -554,7 +587,7 @@ class TicketOrchestrator:
                 "name": f"部署配置 - {ticket['title']}",
                 "path": None,
                 "content": result_json,
-                "metadata": None,
+                "metadata": json.dumps({"git": git_result}) if git_result else None,
                 "created_at": now_iso(),
             })
 
@@ -576,6 +609,96 @@ class TicketOrchestrator:
         updated_ticket = await db.fetch_one("SELECT * FROM tickets WHERE id = ?", (ticket_id,))
         if updated_ticket and updated_ticket["status"] in self.transition_rules:
             await self.process_ticket(project_id, ticket_id)
+
+    # ==================== Git 文件处理 ====================
+
+    async def _handle_git_files(
+        self,
+        project_id: str,
+        ticket_id: str,
+        requirement_id: str,
+        agent_name: str,
+        action: str,
+        result: Dict,
+    ) -> Optional[Dict]:
+        """从 Agent 结果中提取 files，写入 Git 仓库并提交"""
+        files = result.get("files", {})
+        if not files or not isinstance(files, dict):
+            return None
+
+        start_time = time.time()
+
+        # 确保仓库已初始化
+        if not git_manager.repo_exists(project_id):
+            project = await db.fetch_one("SELECT * FROM projects WHERE id = ?", (project_id,))
+            if project:
+                await git_manager.init_repo(project_id, project["name"], project.get("description", ""))
+
+        # 记录命令：写入文件
+        step = 0
+        for file_path in files.keys():
+            await self._record_command(
+                project_id, ticket_id, requirement_id, agent_name, action,
+                step, "write_file", f"写入文件: {file_path}", "success"
+            )
+            step += 1
+
+        # 写入文件 + 提交
+        commit_msg = f"[{agent_name}] {action}: {len(files)} files"
+        git_result = await git_manager.write_and_commit(
+            project_id, files, commit_msg, agent=agent_name
+        )
+
+        elapsed = int((time.time() - start_time) * 1000)
+
+        # 记录命令：git commit
+        if git_result and git_result.get("commit_hash"):
+            await self._record_command(
+                project_id, ticket_id, requirement_id, agent_name, action,
+                step, "git_commit",
+                f"git commit -m \"{commit_msg}\" → {git_result['commit_hash']}",
+                "success", elapsed
+            )
+            step += 1
+
+            # 记录命令：git push
+            if git_result.get("pushed"):
+                await self._record_command(
+                    project_id, ticket_id, requirement_id, agent_name, action,
+                    step, "git_push", "git push origin main", "success"
+                )
+
+        return git_result
+
+    async def _record_command(
+        self,
+        project_id: str,
+        ticket_id: Optional[str],
+        requirement_id: Optional[str],
+        agent_type: str,
+        action: str,
+        step_order: int,
+        command_type: str,
+        command: str,
+        status: str = "success",
+        duration_ms: int = None,
+    ):
+        """记录执行命令到 ticket_commands 表"""
+        await db.insert("ticket_commands", {
+            "id": generate_id("CMD"),
+            "ticket_id": ticket_id,
+            "requirement_id": requirement_id,
+            "project_id": project_id,
+            "agent_type": agent_type,
+            "action": action,
+            "step_order": step_order,
+            "command_type": command_type,
+            "command": command,
+            "result": None,
+            "status": status,
+            "duration_ms": duration_ms,
+            "created_at": now_iso(),
+        })
 
     async def _check_requirement_completion(self, project_id: str, requirement_id: str):
         """检查需求下所有工单是否都已完成"""

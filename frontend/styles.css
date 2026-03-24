@@ -1969,3 +1969,219 @@ input[type="text"]:focus, input[type="number"]:focus, input[type="password"]:foc
     margin: 0;
     font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
 }
+
+
+/* ==================== 配置 Tab: 执行命令 ==================== */
+
+.cmd-list {
+    padding: 12px;
+}
+
+.cmd-group {
+    margin-bottom: 16px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+}
+
+.cmd-group-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    font-weight: 600;
+    font-size: 13px;
+}
+
+.cmd-group-icon { font-size: 16px; }
+.cmd-group-title { color: var(--text-primary); }
+
+.cmd-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--border-light, rgba(255,255,255,0.04));
+    font-size: 12px;
+    font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+    transition: background 0.15s;
+}
+
+.cmd-item:last-child { border-bottom: none; }
+.cmd-item:hover { background: var(--bg); }
+
+.cmd-step {
+    color: var(--text-muted);
+    min-width: 28px;
+    font-weight: 600;
+}
+
+.cmd-icon { font-size: 14px; min-width: 18px; text-align: center; }
+
+.cmd-type {
+    color: var(--primary);
+    font-weight: 600;
+    min-width: 80px;
+    font-family: inherit;
+}
+
+.cmd-text {
+    flex: 1;
+    color: var(--text-secondary);
+    word-break: break-all;
+}
+
+.cmd-duration {
+    color: var(--text-muted);
+    font-size: 11px;
+    min-width: 60px;
+    text-align: right;
+}
+
+.cmd-status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.cmd-status-dot.cmd-success { background: var(--success); }
+.cmd-status-dot.cmd-fail { background: var(--error); }
+.cmd-item.cmd-fail { background: rgba(255, 77, 79, 0.05); }
+
+
+/* ==================== 仓库文件浏览 ==================== */
+
+.repo-container {
+    display: flex;
+    gap: 16px;
+    min-height: 400px;
+}
+
+.repo-tree {
+    flex: 1;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow-y: auto;
+    max-height: 600px;
+    background: var(--card-bg);
+}
+
+.tree-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    cursor: pointer;
+    font-size: 13px;
+    border-bottom: 1px solid var(--border-light, rgba(255,255,255,0.03));
+    transition: background 0.15s;
+}
+
+.tree-item:hover { background: var(--bg); }
+.tree-icon { font-size: 14px; min-width: 18px; text-align: center; }
+.tree-name { flex: 1; color: var(--text-primary); }
+.tree-size { color: var(--text-muted); font-size: 11px; min-width: 50px; text-align: right; }
+
+.tree-children { /* shown by default */ }
+.tree-children.collapsed { display: none; }
+
+.tree-dir .tree-name { font-weight: 600; }
+
+.repo-file-viewer {
+    flex: 1;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    display: flex;
+    flex-direction: column;
+    background: var(--card-bg);
+}
+
+.file-viewer-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+}
+
+.file-viewer-path {
+    font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+    font-size: 12px;
+    color: var(--primary);
+}
+
+.file-viewer-content {
+    flex: 1;
+    padding: 14px;
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.6;
+    overflow: auto;
+    max-height: 500px;
+    font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+    color: var(--text-secondary);
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+.repo-actions {
+    display: flex;
+    gap: 8px;
+}
+
+/* Git Log */
+.git-log-panel {
+    margin-top: 16px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--card-bg);
+    padding: 16px;
+}
+
+.git-log-panel h3 {
+    margin: 0 0 12px;
+    font-size: 15px;
+}
+
+.git-commit-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border-light, rgba(255,255,255,0.04));
+    font-size: 13px;
+}
+
+.git-commit-item:last-child { border-bottom: none; }
+
+.git-commit-hash {
+    font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+    font-size: 12px;
+    color: var(--primary);
+    background: var(--bg);
+    padding: 2px 8px;
+    border-radius: 4px;
+    min-width: 65px;
+    text-align: center;
+}
+
+.git-commit-msg {
+    flex: 1;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.git-commit-meta {
+    display: flex;
+    gap: 12px;
+    color: var(--text-muted);
+    font-size: 11px;
+    min-width: 200px;
+    justify-content: flex-end;
+}
