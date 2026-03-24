@@ -632,20 +632,54 @@ async function loadRequirements() {
             return;
         }
 
-        list.innerHTML = reqs.map(r => `
-            <div class="requirement-card" onclick="openPipeline('${r.id}')">
-                <div class="req-header">
-                    <span class="req-title">${escHtml(r.title)}</span>
-                    <span class="req-status ${r.status}">${getStatusLabel(r.status)}</span>
-                </div>
-                <div class="req-description">${escHtml(r.description)}</div>
-                <div class="req-meta">
-                    <span>优先级: ${escHtml(r.priority)}</span>
-                    <span>工单: ${r.ticket_count || 0} 个</span>
-                    <span>提交: ${formatDate(r.created_at)}</span>
-                </div>
-            </div>
-        `).join('');
+        // TAPD 风格表格视图
+        let html = `
+        <div class="req-table-header">
+            <span class="req-table-summary">${escHtml(currentProject?.name || '项目')} <span class="req-table-count">(${reqs.length})</span></span>
+        </div>
+        <table class="req-table">
+            <thead>
+                <tr>
+                    <th class="col-title">标题</th>
+                    <th class="col-status">状态</th>
+                    <th class="col-priority">优先级</th>
+                    <th class="col-tickets">工单</th>
+                    <th class="col-module">模块</th>
+                    <th class="col-time">创建时间</th>
+                    <th class="col-actions">操作</th>
+                </tr>
+            </thead>
+            <tbody>`;
+
+        reqs.forEach(r => {
+            const priorityMap = {
+                critical: { label: '紧急', cls: 'critical' },
+                high: { label: 'High', cls: 'high' },
+                medium: { label: 'Middle', cls: 'medium' },
+                low: { label: 'Low', cls: 'low' },
+            };
+            const pInfo = priorityMap[r.priority] || { label: r.priority, cls: 'medium' };
+
+            html += `
+                <tr class="req-table-row" onclick="openPipeline('${r.id}')">
+                    <td class="col-title">
+                        <span class="req-table-title">${escHtml(r.title)}</span>
+                        ${r.description ? `<span class="req-table-desc">${escHtml(r.description)}</span>` : ''}
+                    </td>
+                    <td class="col-status"><span class="req-status-tag ${r.status}">${getStatusLabel(r.status)}</span></td>
+                    <td class="col-priority"><span class="req-priority-tag ${pInfo.cls}">${escHtml(pInfo.label)}</span></td>
+                    <td class="col-tickets">${r.ticket_count || 0}</td>
+                    <td class="col-module">${escHtml(r.module || '-')}</td>
+                    <td class="col-time">${formatDateTime(r.created_at)}</td>
+                    <td class="col-actions" onclick="event.stopPropagation()">
+                        <button class="btn-icon req-action-btn" onclick="showRequirementDetail('${r.id}')" title="详情">📋</button>
+                        <button class="btn-icon req-action-btn req-delete-btn" onclick="deleteReq('${r.id}', '${escHtml(r.title).replace(/'/g, "\\'")}')" title="删除">🗑️</button>
+                    </td>
+                </tr>`;
+        });
+
+        html += '</tbody></table>';
+        list.innerHTML = html;
     } catch (e) {
         list.innerHTML = `<div class="empty-state"><p>加载失败: ${escHtml(e.message)}</p></div>`;
     }
@@ -1207,14 +1241,17 @@ async function showRequirementDetail(reqId) {
         }
 
         // 操作按钮
+        let reqActions = '';
         if (data.status === 'submitted') {
-            html += `
+            reqActions += `<button class="btn btn-primary btn-sm" onclick="decomposeReq('${data.id}')">🤖 AI 拆单</button>`;
+            reqActions += `<button class="btn btn-sm" style="color:var(--error); margin-left:8px;" onclick="cancelReq('${data.id}')">✗ 取消</button>`;
+        }
+        reqActions += `<button class="btn btn-sm" style="color:var(--error); margin-left:8px;" onclick="deleteReq('${data.id}', '${escHtml(data.title).replace(/'/g, "\\'")}')">🗑️ 删除</button>`;
+        html += `
             <div class="drawer-section">
                 <h4>操作</h4>
-                <button class="btn btn-primary btn-sm" onclick="decomposeReq('${data.id}')">🤖 AI 拆单</button>
-                <button class="btn btn-sm" style="color:var(--error); margin-left:8px;" onclick="cancelReq('${data.id}')">✗ 取消</button>
+                <div style="display:flex; gap:8px; flex-wrap:wrap;">${reqActions}</div>
             </div>`;
-        }
 
         // 关联工单
         const tickets = data.tickets || [];
@@ -1264,6 +1301,20 @@ async function cancelReq(reqId) {
         loadRequirements();
     } catch (e) {
         showToast(`取消失败: ${e.message}`, 'error');
+    }
+}
+
+async function deleteReq(reqId, title) {
+    if (!confirm(`确定永久删除需求「${title}」？\n\n此操作将同时删除所有关联工单、日志和产出文件，且不可恢复！`)) return;
+    try {
+        await api(`/projects/${currentProjectId}/requirements/${reqId}/permanent`, { method: 'DELETE' });
+        showToast(`需求「${title}」已永久删除`, 'success');
+        closeDrawer();
+        loadRequirements();
+        loadRequirementFilter();
+        refreshBoard();
+    } catch (e) {
+        showToast(`删除失败: ${e.message}`, 'error');
     }
 }
 

@@ -162,6 +162,46 @@ async def cancel_requirement(project_id: str, req_id: str):
     return {"message": "需求已取消"}
 
 
+@router.delete("/{req_id}/permanent")
+async def delete_requirement(project_id: str, req_id: str):
+    """永久删除需求（物理删除，同时清理关联工单、子任务、日志、产物、LLM会话）"""
+    existing = await db.fetch_one(
+        "SELECT * FROM requirements WHERE id = ? AND project_id = ?",
+        (req_id, project_id),
+    )
+    if not existing:
+        raise HTTPException(404, "需求不存在")
+
+    # 获取关联工单 ID
+    tickets = await db.fetch_all(
+        "SELECT id FROM tickets WHERE requirement_id = ?", (req_id,)
+    )
+    ticket_ids = [t["id"] for t in tickets]
+
+    # 删除关联数据（按依赖顺序）
+    for tid in ticket_ids:
+        await db.delete("subtasks", "ticket_id = ?", (tid,))
+        await db.delete("artifacts", "ticket_id = ?", (tid,))
+        await db.delete("llm_conversations", "ticket_id = ?", (tid,))
+
+    # 删除工单日志（按 requirement_id 和 ticket_id）
+    await db.delete("ticket_logs", "requirement_id = ?", (req_id,))
+    for tid in ticket_ids:
+        await db.delete("ticket_logs", "ticket_id = ?", (tid,))
+
+    # 删除需求级产物和 LLM 会话
+    await db.delete("artifacts", "requirement_id = ? AND ticket_id IS NULL", (req_id,))
+    await db.delete("llm_conversations", "requirement_id = ? AND ticket_id IS NULL", (req_id,))
+
+    # 删除工单
+    await db.delete("tickets", "requirement_id = ?", (req_id,))
+
+    # 删除需求本身
+    await db.delete("requirements", "id = ?", (req_id,))
+
+    return {"message": "需求已永久删除"}
+
+
 @router.get("/{req_id}/pipeline")
 async def get_requirement_pipeline(project_id: str, req_id: str):
     """获取需求的 Pipeline 视图数据 — 蓝盾风格，按阶段分组 + Job + 子任务 + 耗时"""
