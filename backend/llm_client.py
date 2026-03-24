@@ -191,7 +191,13 @@ class LLMClient:
     ) -> str:
         """异步聊天补全（自动根据 api_format 选择后端）+ 自动记录会话"""
         if not self.is_configured:
-            return self._fallback_response(messages)
+            response_text = self._fallback_response(messages)
+            # 即使降级也记录会话，方便 AI 对话 Tab 追溯
+            try:
+                await self._save_conversation(messages, response_text, None, 0)
+            except Exception as e:
+                print(f"[LLM] 保存降级会话记录失败: {e}")
+            return response_text
 
         start_time = time.time()
 

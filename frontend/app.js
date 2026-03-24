@@ -910,6 +910,19 @@ async function loadJobLogs(jobId, stageKey) {
             // 用真正的 ticket_id 获取日志
             const data = await api(`/tickets/${ticketId}/logs`);
             logs = (data.logs || []).reverse();
+        } else if (currentPipelineData) {
+            // 多工单阶段（ticket_id 为 null），从 pipeline 全量日志按 Agent 类型过滤
+            const stageAgentMap = {
+                architecture: 'ArchitectAgent',
+                development: 'DevAgent',
+                testing: 'TestAgent',
+                deployment: 'DeployAgent',
+            };
+            const targetAgent = stageAgentMap[stageKey];
+            logs = (currentPipelineData.logs || []).filter(l =>
+                !targetAgent || l.agent_type === targetAgent || l.agent_type === 'Orchestrator'
+            );
+            logs = logs.reverse();
         } else {
             // 预期 Job（还没执行），无日志
             entries.innerHTML = '<div class="log-panel-empty">该任务尚未执行，暂无日志</div>';
@@ -995,7 +1008,7 @@ async function loadJobLLMLogs() {
     const entries = document.getElementById('jobLogEntries');
     entries.innerHTML = '<div class="log-panel-empty">加载 AI 对话记录...</div>';
 
-    // 查找当前 Job 的 ticket_id
+    // 查找当前 Job 的 ticket_id 和所属阶段
     let ticketId = null;
     let reqId = null;
     let stageKey = null;
@@ -1009,7 +1022,7 @@ async function loadJobLLMLogs() {
                     break;
                 }
             }
-            if (ticketId) break;
+            if (stageKey) break;
         }
     }
 
@@ -1021,6 +1034,20 @@ async function loadJobLLMLogs() {
         } else if (ticketId) {
             const data = await api(`/tickets/${ticketId}/llm-logs`);
             conversations = data.conversations || [];
+        } else if (reqId) {
+            // 多工单阶段（ticket_id 为 null），按需求 ID 查询所有 LLM 日志
+            const data = await api(`/requirements/${reqId}/llm-logs`);
+            // 按阶段对应的 Agent 类型过滤
+            const stageAgentMap = {
+                architecture: 'ArchitectAgent',
+                development: 'DevAgent',
+                testing: 'TestAgent',
+                deployment: 'DeployAgent',
+            };
+            const targetAgent = stageAgentMap[stageKey];
+            conversations = (data.conversations || []).filter(c =>
+                !targetAgent || c.agent_type === targetAgent
+            );
         }
 
         if (conversations.length === 0) {
@@ -1116,7 +1143,7 @@ async function loadJobArtifacts() {
                     break;
                 }
             }
-            if (ticketId) break;
+            if (stageKey) break;
         }
     }
 
@@ -1129,6 +1156,20 @@ async function loadJobArtifacts() {
         } else if (ticketId) {
             const data = await api(`/tickets/${ticketId}/artifacts`);
             artifacts = data.artifacts || [];
+        } else if (reqId) {
+            // 多工单阶段（ticket_id 为 null），按需求 ID 查询所有产出文件
+            const data = await api(`/requirements/${reqId}/artifacts`);
+            // 按阶段对应的产物类型过滤
+            const stageArtifactTypes = {
+                architecture: ['architecture'],
+                development: ['code'],
+                testing: ['test'],
+                deployment: ['deploy_config'],
+            };
+            const targetTypes = stageArtifactTypes[stageKey] || [];
+            artifacts = (data.artifacts || []).filter(a =>
+                targetTypes.length === 0 || targetTypes.includes(a.type)
+            );
         }
 
         if (artifacts.length === 0) {
