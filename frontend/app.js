@@ -20,8 +20,26 @@ let eventSource = null;
 function chineseToPinyin(text) {
     // 常用汉字拼音映射（简化版）
     const pinyinMap = {
+        // 常见词组
+        '我的游戏': 'my-game', '我的项目': 'my-project', '我的应用': 'my-app',
+        '我的工具': 'my-tool', '我的助手': 'my-assistant',
+        '在线游戏': 'online-game', '网络游戏': 'online-game', '手机游戏': 'mobile-game',
+        '电商平台': 'eshop-mall', '网上商城': 'online-shop', '在线商城': 'online-store',
+        '智能助手': 'smart-assistant', 'AI助手': 'ai-assistant', '人工智能': 'ai',
+        '管理系统': 'management-system', '办公系统': 'office-system',
+        '社交平台': 'social-platform', '社区论坛': 'community-forum',
+        '教育平台': 'education-platform', '学习系统': 'learning-system',
+        '医疗系统': 'medical-system', '健康平台': 'health-platform',
+        '金融系统': 'finance-system', '支付平台': 'payment-platform',
+        '视频平台': 'video-platform', '音乐平台': 'music-platform',
+        '娱乐系统': 'entertainment-system', '游戏平台': 'game-platform',
+        '数据分析': 'data-analysis', '数据平台': 'data-platform',
+        '云服务': 'cloud-service', '云平台': 'cloud-platform',
+        '移动应用': 'mobile-app', '网页应用': 'web-app',
+        
+        // 单字映射
         '我': 'wo', '的': 'de', '游戏': 'game', '项目': 'project',
-        '系统': 'system', '平台': 'platform', '应用': 'app', '应用': 'application',
+        '系统': 'system', '平台': 'platform', '应用': 'app', '应用程序': 'application',
         '管理': 'manage', '管理': 'management', '商城': 'mall', '商城': 'shop',
         '博客': 'blog', '论坛': 'forum', '社区': 'community',
         '办公': 'office', '企业': 'enterprise', '学校': 'school',
