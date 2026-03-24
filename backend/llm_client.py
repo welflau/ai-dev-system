@@ -1,6 +1,7 @@
 """
 AI 自动开发系统 - LLM 客户端
-OpenAI 兼容 API 格式，支持同步和异步调用
+支持 Anthropic Messages API（原生）和 OpenAI 兼容 API
+通过 LLM_API_FORMAT 环境变量切换：anthropic / openai（默认 anthropic）
 """
 import json
 import httpx
@@ -9,7 +10,7 @@ from config import settings
 
 
 class LLMClient:
-    """LLM 客户端 — OpenAI 兼容 API"""
+    """LLM 客户端 — 支持 Anthropic Messages API 和 OpenAI 兼容 API"""
 
     def __init__(self):
         self.base_url = settings.LLM_BASE_URL.rstrip("/")
@@ -17,28 +18,97 @@ class LLMClient:
         self.model = settings.LLM_MODEL
         self.timeout = settings.LLM_TIMEOUT
         self.max_retries = settings.LLM_MAX_RETRIES
+        self.api_format = settings.LLM_API_FORMAT  # "anthropic" or "openai"
 
     @property
     def is_configured(self) -> bool:
         """是否已配置 LLM"""
         return bool(self.base_url and self.api_key)
 
-    def _headers(self) -> Dict[str, str]:
+    # ---- Anthropic Messages API ----
+
+    def _anthropic_headers(self) -> Dict[str, str]:
+        return {
+            "x-api-key": self.api_key,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+        }
+
+    def _to_anthropic_payload(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: float,
+        max_tokens: int,
+    ) -> Dict[str, Any]:
+        """将通用 messages 转换为 Anthropic Messages API payload"""
+        system_text = ""
+        user_messages = []
+        for msg in messages:
+            if msg["role"] == "system":
+                system_text += msg["content"] + "\n"
+            else:
+                user_messages.append(msg)
+        # Anthropic 要求至少有一条 user 消息
+        if not user_messages:
+            user_messages = [{"role": "user", "content": "Hello"}]
+        payload: Dict[str, Any] = {
+            "model": self.model,
+            "messages": user_messages,
+            "max_tokens": max_tokens,
+        }
+        if temperature is not None:
+            payload["temperature"] = temperature
+        if system_text.strip():
+            payload["system"] = system_text.strip()
+        return payload
+
+    async def _call_anthropic(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: float,
+        max_tokens: int,
+    ) -> str:
+        """调用 Anthropic Messages API"""
+        url = f"{self.base_url}/v1/messages"
+        payload = self._to_anthropic_payload(messages, temperature, max_tokens)
+
+        for attempt in range(self.max_retries):
+            try:
+                async with httpx.AsyncClient(timeout=self.timeout) as client:
+                    resp = await client.post(
+                        url, headers=self._anthropic_headers(), json=payload
+                    )
+                    resp.raise_for_status()
+                    data = resp.json()
+                    # Anthropic 格式：content[0].text
+                    content_blocks = data.get("content", [])
+                    texts = [
+                        b["text"] for b in content_blocks if b.get("type") == "text"
+                    ]
+                    return "".join(texts) if texts else ""
+            except Exception as e:
+                if attempt == self.max_retries - 1:
+                    print(f"[LLM] Anthropic 调用失败 (attempt {attempt+1}): {e}")
+                    return self._fallback_response(messages)
+                print(f"[LLM] Anthropic 调用重试 {attempt+1}/{self.max_retries}: {e}")
+
+        return self._fallback_response(messages)
+
+    # ---- OpenAI 兼容 API ----
+
+    def _openai_headers(self) -> Dict[str, str]:
         return {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
 
-    async def chat(
+    async def _call_openai(
         self,
         messages: List[Dict[str, str]],
-        temperature: float = 0.7,
-        max_tokens: int = 4096,
+        temperature: float,
+        max_tokens: int,
     ) -> str:
-        """异步聊天补全"""
-        if not self.is_configured:
-            return self._fallback_response(messages)
-
+        """调用 OpenAI 兼容 API"""
         url = f"{self.base_url}/chat/completions"
         payload = {
             "model": self.model,
@@ -50,16 +120,35 @@ class LLMClient:
         for attempt in range(self.max_retries):
             try:
                 async with httpx.AsyncClient(timeout=self.timeout) as client:
-                    resp = await client.post(url, headers=self._headers(), json=payload)
+                    resp = await client.post(
+                        url, headers=self._openai_headers(), json=payload
+                    )
                     resp.raise_for_status()
                     data = resp.json()
                     return data["choices"][0]["message"]["content"]
             except Exception as e:
                 if attempt == self.max_retries - 1:
-                    print(f"[LLM] 调用失败: {e}")
+                    print(f"[LLM] OpenAI 调用失败: {e}")
                     return self._fallback_response(messages)
 
         return self._fallback_response(messages)
+
+    # ---- 统一接口 ----
+
+    async def chat(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+    ) -> str:
+        """异步聊天补全（自动根据 api_format 选择后端）"""
+        if not self.is_configured:
+            return self._fallback_response(messages)
+
+        if self.api_format == "anthropic":
+            return await self._call_anthropic(messages, temperature, max_tokens)
+        else:
+            return await self._call_openai(messages, temperature, max_tokens)
 
     async def generate(self, prompt: str, **kwargs) -> str:
         """简便方法：单次生成"""
@@ -109,7 +198,11 @@ class LLMClient:
 
         try:
             result = await self.generate("Hello, respond with 'ok'.")
-            return {"status": "ok", "message": "连接正常", "response": result[:100]}
+            return {
+                "status": "ok",
+                "message": f"连接正常 (format={self.api_format})",
+                "response": result[:100],
+            }
         except Exception as e:
             return {"status": "error", "message": str(e)}
 
