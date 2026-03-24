@@ -330,8 +330,11 @@
                 </div>
                 <div class="form-group">
                     <label>本地仓库路径</label>
-                    <input type="text" id="projectLocalPath" placeholder="留空则使用默认路径 backend/projects/{project_id}/">
-                    <small class="form-hint">可选：指定本地 Git 仓库的绝对路径（如 D:/MyProject）</small>
+                    <div class="input-with-button">
+                        <input type="text" id="projectLocalPath" placeholder="留空则使用默认路径 backend/projects/{project_id}/">
+                        <button type="button" class="btn btn-sm" onclick="selectLocalPath()" title="选择文件夹">📁</button>
+                    </div>
+                    <small class="form-hint">可选：指定本地 Git 仓库的绝对路径（如 D:/MyProject），或点击右侧按钮选择文件夹</small>
                 </div>
             </div>
             <div class="modal-footer">
@@ -442,6 +445,6 @@
         </div>
     </div>
 
-    <script src="/static/app.js?v=0.8.1"></script>
+    <script src="/static/app.js?v=0.8.2"></script>
 </body>
 </html>

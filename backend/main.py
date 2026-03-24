@@ -162,6 +162,45 @@ async def llm_test():
     return result
 
 
+@app.get("/api/filesystem/available-paths")
+async def get_available_paths():
+    """获取常用的本地路径列表"""
+    import os
+    from pathlib import Path
+
+    # 定义常用的项目路径
+    common_paths = [
+        "D:/Projects/",
+        "D:/AIProjects/",
+        "D:/MyProjects/",
+        "D:/A_Works/",
+        "D:/Works/",
+        "C:/Projects/",
+        "C:/Users/admin/Documents/Projects/",
+        "C:/Users/admin/Documents/",
+    ]
+
+    available_paths = []
+
+    for path_str in common_paths:
+        path = Path(path_str)
+        if path.exists() and path.is_dir():
+            available_paths.append({
+                "path": str(path),
+                "label": path.name,
+                "exists": True
+            })
+        else:
+            # 路径不存在，但可以作为建议
+            available_paths.append({
+                "path": str(path),
+                "label": path.name,
+                "exists": False
+            })
+
+    return {"paths": available_paths}
+
+
 # ==================== 前端静态文件 ====================
 
 # 挂载前端静态文件
