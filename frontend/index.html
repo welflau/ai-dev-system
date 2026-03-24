@@ -134,6 +134,76 @@
                         <div class="requirement-list" id="requirementList"></div>
                     </div>
 
+                    <!-- Tab: Pipeline -->
+                    <div id="tab-pipeline" class="tab-content">
+                        <div class="pipeline-page">
+                            <!-- 返回栏 + 标题 -->
+                            <div class="pipeline-back-bar">
+                                <button class="btn btn-sm" onclick="switchTab('requirements')">← 返回需求列表</button>
+                                <h2 id="pipelineReqTitle">Pipeline</h2>
+                                <span class="req-status" id="pipelineReqStatus"></span>
+                            </div>
+                            <!-- 执行信息栏 -->
+                            <div class="pipeline-info-bar" id="pipelineInfoBar">
+                                <div class="pipeline-exec-status" id="pipelineExecStatus">
+                                    <span class="exec-badge pending">等待中</span>
+                                </div>
+                                <div class="pipeline-timeline">
+                                    <div class="timeline-node">
+                                        <div class="timeline-dot"></div>
+                                        <div class="timeline-label">触发时间</div>
+                                        <div class="timeline-value" id="plTriggerTime">-</div>
+                                    </div>
+                                    <div class="timeline-line"></div>
+                                    <div class="timeline-node">
+                                        <div class="timeline-dot"></div>
+                                        <div class="timeline-label">开始时间</div>
+                                        <div class="timeline-value" id="plStartTime">-</div>
+                                    </div>
+                                    <div class="timeline-line"></div>
+                                    <div class="timeline-node">
+                                        <div class="timeline-dot"></div>
+                                        <div class="timeline-label">结束时间</div>
+                                        <div class="timeline-value" id="plEndTime">-</div>
+                                    </div>
+                                </div>
+                                <div class="pipeline-duration" id="pipelineDuration">
+                                    总耗时: <strong>-</strong>
+                                </div>
+                            </div>
+                            <!-- 控制栏 -->
+                            <div class="pipeline-controls">
+                                <label class="pl-checkbox"><input type="checkbox" id="plExpandJobs" checked onchange="toggleExpandJobs()"> 展开 Job</label>
+                                <a class="pl-link" onclick="scrollToPipelineLogs()">📋 查看日志</a>
+                            </div>
+                            <!-- Stage 主体（横向流水线）-->
+                            <div class="pipeline-body" id="pipelineBody">
+                                <div class="pipeline-stages-row" id="pipelineStagesRow">
+                                    <div class="empty-state"><div class="emoji">⏳</div><p>加载中...</p></div>
+                                </div>
+                            </div>
+                            <!-- 右侧 Job 日志面板 -->
+                            <div class="pipeline-job-log-panel" id="pipelineJobLogPanel" style="display:none;">
+                                <div class="job-log-header">
+                                    <div class="job-log-title">
+                                        <span class="job-log-icon" id="jobLogIcon">✓</span>
+                                        <span id="jobLogTitle">Job</span>
+                                    </div>
+                                    <div class="job-log-tabs">
+                                        <button class="job-log-tab active" onclick="switchJobLogTab('log')">日志</button>
+                                        <button class="job-log-tab" onclick="switchJobLogTab('config')">配置</button>
+                                    </div>
+                                    <button class="btn-icon" onclick="closeJobLogPanel()">&times;</button>
+                                </div>
+                                <div class="job-log-body" id="jobLogBody">
+                                    <div class="job-log-entries" id="jobLogEntries">
+                                        <div class="log-panel-empty">选择一个 Job 查看日志</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                     <!-- Tab: 统计面板 -->
                     <div id="tab-stats" class="tab-content">
                         <h2>项目统计</h2>

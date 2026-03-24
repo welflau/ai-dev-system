@@ -8,6 +8,7 @@
 const API = '/api';
 let currentProjectId = null;
 let currentProject = null;
+let currentPipelineReqId = null;
 let eventSource = null;
 
 // ==================== 初始化 ====================
@@ -225,6 +226,7 @@ function switchTab(tab) {
     // 按需加载数据
     if (tab === 'board') refreshBoard();
     if (tab === 'requirements') loadRequirements();
+    if (tab === 'pipeline' && currentPipelineReqId) loadPipeline(currentPipelineReqId);
     if (tab === 'stats') loadStats();
     if (tab === 'logs') loadLogs();
 }
@@ -615,7 +617,7 @@ async function loadRequirements() {
         }
 
         list.innerHTML = reqs.map(r => `
-            <div class="requirement-card" onclick="showRequirementDetail('${r.id}')">
+            <div class="requirement-card" onclick="openPipeline('${r.id}')">
                 <div class="req-header">
                     <span class="req-title">${escHtml(r.title)}</span>
                     <span class="req-status ${r.status}">${getStatusLabel(r.status)}</span>
@@ -630,6 +632,298 @@ async function loadRequirements() {
         `).join('');
     } catch (e) {
         list.innerHTML = `<div class="empty-state"><p>加载失败: ${escHtml(e.message)}</p></div>`;
+    }
+}
+
+// ==================== Pipeline 视图（蓝盾风格） ====================
+
+let currentPipelineData = null;
+let activeJobId = null;
+
+function openPipeline(reqId) {
+    currentPipelineReqId = reqId;
+    switchTab('pipeline');
+    loadPipeline(reqId);
+}
+
+async function loadPipeline(reqId) {
+    if (!currentProjectId || !reqId) return;
+    const stagesRow = document.getElementById('pipelineStagesRow');
+    stagesRow.innerHTML = '<div class="empty-state"><div class="emoji">⏳</div><p>加载中...</p></div>';
+
+    try {
+        const data = await api(`/projects/${currentProjectId}/requirements/${reqId}/pipeline`);
+        currentPipelineData = data;
+        const req = data.requirement;
+
+        // 更新标题栏
+        document.getElementById('pipelineReqTitle').textContent = req.title;
+        const statusEl = document.getElementById('pipelineReqStatus');
+        statusEl.textContent = getStatusLabel(req.status);
+        statusEl.className = `req-status ${req.status}`;
+
+        // 更新执行信息栏
+        renderPipelineInfoBar(data);
+
+        // 渲染 Stage
+        renderPipelineStages(stagesRow, data.stages);
+
+        // 隐藏日志面板
+        closeJobLogPanel();
+    } catch (e) {
+        stagesRow.innerHTML = `<div class="empty-state"><div class="emoji">❌</div><p>加载失败: ${escHtml(e.message)}</p></div>`;
+    }
+}
+
+function formatDuration(seconds) {
+    if (seconds == null || seconds < 0) return '-';
+    if (seconds < 60) return `00:${String(seconds).padStart(2,'0')}`;
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    if (m < 60) return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+    const h = Math.floor(m / 60);
+    const rm = m % 60;
+    return `${String(h).padStart(2,'0')}:${String(rm).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+}
+
+function renderPipelineInfoBar(data) {
+    // 执行状态 badge
+    const statusMap = {
+        success: { text: '执行成功', cls: 'success' },
+        running: { text: '执行中', cls: 'running' },
+        pending: { text: '等待执行', cls: 'pending' },
+        cancelled: { text: '已取消', cls: 'cancelled' },
+        failed: { text: '执行失败', cls: 'failed' },
+    };
+    const st = statusMap[data.exec_status] || statusMap.pending;
+    document.getElementById('pipelineExecStatus').innerHTML = `<span class="exec-badge ${st.cls}">${st.text}</span>`;
+
+    // 时间线
+    document.getElementById('plTriggerTime').textContent = data.trigger_time ? formatDateTime(data.trigger_time) : '-';
+    document.getElementById('plStartTime').textContent = data.start_time ? formatDateTime(data.start_time) : '-';
+    document.getElementById('plEndTime').textContent = data.end_time ? formatDateTime(data.end_time) : '-';
+
+    // 总耗时
+    document.getElementById('pipelineDuration').innerHTML = `总耗时: <strong>${formatDuration(data.total_duration)}</strong>`;
+}
+
+function renderPipelineStages(container, stages) {
+    const expandJobs = document.getElementById('plExpandJobs')?.checked ?? true;
+    let html = '';
+
+    stages.forEach((stage, idx) => {
+        const cls = stage.status || 'pending';
+        let statusText = '';
+        if (cls === 'done') statusText = '✓ 已完成';
+        else if (cls === 'running') statusText = '● 进行中';
+        else if (cls === 'failed') statusText = '✗ 失败';
+        else statusText = '○ 等待中';
+
+        // Stage 圆点图标
+        let dotContent = stage.icon;
+        if (cls === 'done') dotContent = '✓';
+        if (cls === 'failed') dotContent = '✗';
+
+        html += `<div class="pl-stage ${cls}">
+            <div class="pl-stage-header">
+                <div class="pl-stage-dot">${dotContent}</div>
+                <div class="pl-stage-label">
+                    <div class="pl-stage-name">${escHtml(stage.name)}</div>
+                    <div class="pl-stage-status-text">${statusText}</div>
+                </div>
+            </div>
+            <div class="pl-stage-jobs">`;
+
+        // 渲染 Jobs
+        const jobs = stage.jobs || [];
+        if (jobs.length === 0 && cls !== 'pending') {
+            html += `<div style="font-size:12px; color:var(--text-muted); padding:8px 0;">暂无任务</div>`;
+        }
+
+        jobs.forEach((job) => {
+            const jobCls = job.status || 'pending';
+            const jobIcon = jobCls === 'done' ? '✓' : (jobCls === 'running' ? '●' : (jobCls === 'failed' ? '✗' : '○'));
+            const isActive = activeJobId === job.id;
+            const dur = formatDuration(job.duration);
+
+            html += `<div class="pl-job-card ${isActive ? 'active' : ''}" data-job-id="${job.id}" onclick="selectJob('${job.id}', '${stage.key}')">
+                <div class="pl-job-header">
+                    <span class="pl-job-status-icon ${jobCls}">${jobIcon}</span>
+                    <span class="pl-job-name">${escHtml(job.title)}</span>
+                    <span class="pl-job-duration">${dur}</span>
+                    <span class="pl-job-expand ${expandJobs ? 'open' : ''}" onclick="event.stopPropagation(); toggleJobExpand(this)">▾</span>
+                </div>
+                <div class="pl-job-subtasks ${expandJobs ? 'expanded' : ''}">`;
+
+            // 子任务
+            const subtasks = job.subtasks || [];
+            subtasks.forEach(st => {
+                const stIcon = st.status === 'completed' ? '✓' : (st.status === 'in_progress' ? '●' : '○');
+                const stDur = formatDuration(st.duration);
+                html += `<div class="pl-subtask-item">
+                    <span class="pl-subtask-icon ${st.status}">${stIcon}</span>
+                    <span class="pl-subtask-name">${escHtml(st.title)}</span>
+                    <span class="pl-subtask-duration">${stDur}</span>
+                </div>`;
+            });
+
+            html += `</div></div>`; // close pl-job-subtasks, pl-job-card
+        });
+
+        html += `</div></div>`; // close pl-stage-jobs, pl-stage
+    });
+
+    container.innerHTML = html;
+}
+
+function toggleExpandJobs() {
+    const expanded = document.getElementById('plExpandJobs')?.checked ?? true;
+    document.querySelectorAll('.pl-job-subtasks').forEach(el => {
+        el.classList.toggle('expanded', expanded);
+    });
+    document.querySelectorAll('.pl-job-expand').forEach(el => {
+        el.classList.toggle('open', expanded);
+    });
+}
+
+function toggleJobExpand(arrow) {
+    const card = arrow.closest('.pl-job-card');
+    const subtasks = card?.querySelector('.pl-job-subtasks');
+    if (subtasks) {
+        subtasks.classList.toggle('expanded');
+        arrow.classList.toggle('open');
+    }
+}
+
+async function selectJob(jobId, stageKey) {
+    activeJobId = jobId;
+    // 高亮当前 Job 卡片
+    document.querySelectorAll('.pl-job-card').forEach(el => el.classList.remove('active'));
+    const card = document.querySelector(`.pl-job-card[data-job-id="${jobId}"]`);
+    if (card) card.classList.add('active');
+
+    // 打开日志面板
+    const panel = document.getElementById('pipelineJobLogPanel');
+    panel.style.display = 'flex';
+
+    // 查找 Job 数据
+    let job = null;
+    if (currentPipelineData) {
+        for (const stage of currentPipelineData.stages) {
+            for (const j of (stage.jobs || [])) {
+                if (j.id === jobId) { job = j; break; }
+            }
+            if (job) break;
+        }
+    }
+
+    const titleEl = document.getElementById('jobLogTitle');
+    const iconEl = document.getElementById('jobLogIcon');
+    titleEl.textContent = job ? job.title : 'Job';
+
+    if (job) {
+        const cls = job.status || 'pending';
+        iconEl.textContent = cls === 'done' ? '✓' : (cls === 'running' ? '●' : (cls === 'failed' ? '✗' : '○'));
+        iconEl.style.background = cls === 'done' ? 'var(--success)' : (cls === 'running' ? 'var(--info)' : (cls === 'failed' ? 'var(--error)' : 'var(--text-muted)'));
+    }
+
+    // 加载日志
+    await loadJobLogs(jobId, stageKey);
+}
+
+async function loadJobLogs(jobId, stageKey) {
+    const entries = document.getElementById('jobLogEntries');
+    entries.innerHTML = '<div class="log-panel-empty">加载日志...</div>';
+
+    try {
+        // 如果是需求分析阶段的 Job，从需求日志获取
+        let logs = [];
+        if (stageKey === 'requirement_analysis' && currentPipelineData) {
+            // 从 pipeline data 中的 logs 字段过滤
+            logs = (currentPipelineData.logs || []).filter(l => l.agent_type === 'ProductAgent' || l.agent_type === 'System');
+            logs = logs.reverse(); // 按时间正序
+        } else {
+            // 从工单日志 API 获取
+            const data = await api(`/tickets/${jobId}/logs`);
+            logs = (data.logs || []).reverse();
+        }
+
+        if (logs.length === 0) {
+            entries.innerHTML = '<div class="log-panel-empty">暂无日志</div>';
+            return;
+        }
+
+        let html = '';
+        logs.forEach((log, i) => {
+            let message = '';
+            try {
+                const parsed = JSON.parse(log.detail || '{}');
+                message = parsed.message || '';
+            } catch { message = log.detail || ''; }
+
+            const level = log.level || 'info';
+            const agent = log.agent_type || 'System';
+            const action = log.action || '';
+            const time = formatTime(log.created_at) || '';
+
+            // 格式化日志行（类似蓝盾输出格式）
+            let prefix = '';
+            if (log.from_status && log.to_status) {
+                prefix = `[${getStatusLabel(log.from_status)} → ${getStatusLabel(log.to_status)}] `;
+            }
+
+            const text = `${time} [${agent}] ${action ? action + ': ' : ''}${prefix}${message}`;
+            const textCls = level === 'error' ? 'error' : (level === 'warn' ? 'warn' : 'info');
+
+            html += `<div class="job-log-line">
+                <span class="job-log-line-num">${i + 1}</span>
+                <span class="job-log-line-text ${textCls}">${escHtml(text)}</span>
+            </div>`;
+        });
+
+        entries.innerHTML = html;
+        // 滚动到底部
+        const body = document.getElementById('jobLogBody');
+        if (body) body.scrollTop = body.scrollHeight;
+    } catch (e) {
+        entries.innerHTML = `<div class="log-panel-empty">加载失败: ${escHtml(e.message)}</div>`;
+    }
+}
+
+function closeJobLogPanel() {
+    activeJobId = null;
+    const panel = document.getElementById('pipelineJobLogPanel');
+    if (panel) panel.style.display = 'none';
+    document.querySelectorAll('.pl-job-card').forEach(el => el.classList.remove('active'));
+}
+
+function switchJobLogTab(tab) {
+    document.querySelectorAll('.job-log-tab').forEach(el => el.classList.remove('active'));
+    event.target.classList.add('active');
+    // 只有 log tab 有实现，config tab 显示占位
+    const entries = document.getElementById('jobLogEntries');
+    if (tab === 'config') {
+        entries.innerHTML = '<div class="log-panel-empty">配置信息暂未实现</div>';
+    } else if (activeJobId) {
+        // 重新加载日志
+        let stageKey = '';
+        if (currentPipelineData) {
+            for (const stage of currentPipelineData.stages) {
+                if ((stage.jobs || []).some(j => j.id === activeJobId)) {
+                    stageKey = stage.key;
+                    break;
+                }
+            }
+        }
+        loadJobLogs(activeJobId, stageKey);
+    }
+}
+
+function scrollToPipelineLogs() {
+    const panel = document.getElementById('pipelineJobLogPanel');
+    if (panel) {
+        panel.style.display = 'flex';
+        panel.scrollIntoView({ behavior: 'smooth' });
     }
 }
 
@@ -869,6 +1163,8 @@ function connectSSE(projectId) {
             const data = JSON.parse(e.data);
             console.log('[SSE] ticket_status_changed:', data);
             refreshBoard();
+            // 同步刷新 Pipeline
+            if (currentPipelineReqId) loadPipeline(currentPipelineReqId);
         });
 
         eventSource.addEventListener('requirement_decomposed', (e) => {
@@ -878,6 +1174,8 @@ function connectSSE(projectId) {
             refreshBoard();
             loadRequirements();
             loadRequirementFilter();
+            // 同步刷新 Pipeline
+            if (currentPipelineReqId) loadPipeline(currentPipelineReqId);
         });
 
         eventSource.addEventListener('requirement_completed', (e) => {

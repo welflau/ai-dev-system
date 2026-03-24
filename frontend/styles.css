@@ -1103,6 +1103,505 @@ input[type="text"]:focus, input[type="number"]:focus, input[type="password"]:foc
     font-size: 14px;
 }
 
+/* ==================== Pipeline 视图（蓝盾风格） ==================== */
+
+.pipeline-page {
+    padding: 0;
+    position: relative;
+}
+
+.pipeline-back-bar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 16px;
+}
+.pipeline-back-bar h2 {
+    font-size: 18px;
+    font-weight: 600;
+    flex: 1;
+}
+
+/* --- 执行信息栏 --- */
+.pipeline-info-bar {
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    padding: 12px 16px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+}
+
+.pipeline-exec-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.exec-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 12px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 600;
+}
+.exec-badge.success { background: rgba(34,197,94,0.15); color: var(--success); border: 1px solid rgba(34,197,94,0.3); }
+.exec-badge.running { background: rgba(59,130,246,0.15); color: var(--info); border: 1px solid rgba(59,130,246,0.3); animation: pipelinePulse 2s ease-in-out infinite; }
+.exec-badge.pending { background: rgba(107,114,128,0.15); color: var(--text-muted); border: 1px solid rgba(107,114,128,0.3); }
+.exec-badge.cancelled { background: rgba(239,68,68,0.15); color: var(--error); border: 1px solid rgba(239,68,68,0.3); }
+.exec-badge.failed { background: rgba(239,68,68,0.15); color: var(--error); border: 1px solid rgba(239,68,68,0.3); }
+
+.pipeline-timeline {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    flex: 1;
+}
+.timeline-node {
+    text-align: center;
+    min-width: 100px;
+}
+.timeline-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--border-light);
+    margin: 0 auto 4px;
+    border: 2px solid var(--bg-card);
+    box-shadow: 0 0 0 1px var(--border-light);
+}
+.timeline-label {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+.timeline-value {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-top: 2px;
+}
+.timeline-line {
+    flex: 1;
+    height: 1px;
+    background: var(--border-light);
+    margin-top: -20px;
+    min-width: 30px;
+    position: relative;
+}
+.timeline-line::after {
+    content: '';
+    position: absolute;
+    right: -1px;
+    top: -3px;
+    width: 0;
+    height: 0;
+    border-left: 5px solid var(--border-light);
+    border-top: 3px solid transparent;
+    border-bottom: 3px solid transparent;
+}
+
+.pipeline-duration {
+    font-size: 13px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+.pipeline-duration strong {
+    color: var(--text);
+    font-weight: 700;
+}
+
+/* --- 控制栏 --- */
+.pipeline-controls {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 16px;
+    font-size: 13px;
+}
+.pl-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+.pl-checkbox input { cursor: pointer; }
+.pl-link {
+    color: var(--info);
+    cursor: pointer;
+    text-decoration: none;
+}
+.pl-link:hover { text-decoration: underline; }
+
+/* --- Stage 横向布局 --- */
+.pipeline-body {
+    position: relative;
+}
+
+.pipeline-stages-row {
+    display: flex;
+    gap: 0;
+    overflow-x: auto;
+    padding-bottom: 16px;
+    align-items: flex-start;
+    min-height: 200px;
+}
+
+/* 单个 Stage */
+.pl-stage {
+    flex: 0 0 auto;
+    min-width: 200px;
+    max-width: 280px;
+    position: relative;
+    padding: 0 4px;
+}
+
+/* Stage 之间的连接线 + 箭头 */
+.pl-stage:not(:last-child)::after {
+    content: '';
+    position: absolute;
+    top: 20px;
+    left: 50%;
+    width: 100%;
+    height: 2px;
+    background: var(--border);
+    z-index: 0;
+}
+.pl-stage.done:not(:last-child)::after {
+    background: var(--success);
+}
+.pl-stage.running:not(:last-child)::after {
+    background: linear-gradient(90deg, var(--success) 50%, var(--border) 50%);
+}
+
+/* Stage 头部圆形节点 */
+.pl-stage-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+    position: relative;
+    z-index: 1;
+}
+
+.pl-stage-dot {
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    flex-shrink: 0;
+    border: 3px solid var(--border);
+    background: var(--bg-card);
+    z-index: 2;
+    transition: all 0.3s;
+}
+
+.pl-stage.pending .pl-stage-dot {
+    border-color: var(--border-light);
+    color: var(--text-muted);
+}
+.pl-stage.running .pl-stage-dot {
+    border-color: var(--info);
+    background: rgba(59,130,246,0.15);
+    color: var(--info);
+    animation: pipelinePulse 2s ease-in-out infinite;
+}
+.pl-stage.done .pl-stage-dot {
+    border-color: var(--success);
+    background: rgba(34,197,94,0.15);
+    color: var(--success);
+}
+.pl-stage.failed .pl-stage-dot {
+    border-color: var(--error);
+    background: rgba(239,68,68,0.15);
+    color: var(--error);
+}
+
+@keyframes pipelinePulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(59,130,246,0.3); }
+    50% { box-shadow: 0 0 0 8px rgba(59,130,246,0); }
+}
+
+.pl-stage-label {
+    flex: 1;
+    min-width: 0;
+}
+.pl-stage-name {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.pl-stage.pending .pl-stage-name {
+    color: var(--text-muted);
+}
+.pl-stage-status-text {
+    font-size: 11px;
+    margin-top: 1px;
+    color: var(--text-muted);
+}
+.pl-stage.done .pl-stage-status-text { color: var(--success); }
+.pl-stage.running .pl-stage-status-text { color: var(--info); }
+.pl-stage.failed .pl-stage-status-text { color: var(--error); }
+
+/* --- Job 卡片 --- */
+.pl-stage-jobs {
+    margin-left: 16px;
+    padding-left: 16px;
+    border-left: 2px solid var(--border);
+}
+.pl-stage.done .pl-stage-jobs { border-left-color: rgba(34,197,94,0.3); }
+.pl-stage.running .pl-stage-jobs { border-left-color: rgba(59,130,246,0.3); }
+
+.pl-job-card {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    margin-bottom: 8px;
+    overflow: hidden;
+    cursor: pointer;
+    transition: var(--transition);
+}
+.pl-job-card:hover {
+    border-color: var(--primary);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+}
+.pl-job-card.active {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px rgba(79,70,229,0.25);
+}
+
+.pl-job-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    position: relative;
+}
+
+.pl-job-status-icon {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    flex-shrink: 0;
+    color: white;
+}
+.pl-job-status-icon.done { background: var(--success); }
+.pl-job-status-icon.running { background: var(--info); animation: dotPulse 1.5s ease-in-out infinite; }
+.pl-job-status-icon.pending { background: var(--text-muted); opacity: 0.5; }
+.pl-job-status-icon.failed { background: var(--error); }
+
+.pl-job-name {
+    flex: 1;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.pl-job-duration {
+    font-size: 11px;
+    color: var(--accent-light);
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.pl-job-expand {
+    font-size: 12px;
+    color: var(--text-muted);
+    cursor: pointer;
+    user-select: none;
+    transition: transform 0.2s;
+}
+.pl-job-expand.open { transform: rotate(180deg); }
+
+/* Job 子任务列表 */
+.pl-job-subtasks {
+    padding: 0;
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.3s ease;
+}
+.pl-job-subtasks.expanded {
+    max-height: 600px;
+    padding: 0 10px 6px;
+}
+
+.pl-subtask-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+    font-size: 12px;
+    color: var(--text-secondary);
+    border-top: 1px dashed rgba(46,51,69,0.3);
+}
+.pl-subtask-item:first-child {
+    border-top: 1px solid var(--border);
+}
+
+.pl-subtask-icon {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 8px;
+    flex-shrink: 0;
+    color: white;
+}
+.pl-subtask-icon.completed { background: var(--success); }
+.pl-subtask-icon.in_progress { background: var(--info); animation: dotPulse 1.5s ease-in-out infinite; }
+.pl-subtask-icon.pending { background: var(--text-muted); opacity: 0.4; }
+
+.pl-subtask-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.pl-subtask-duration {
+    font-size: 11px;
+    color: var(--accent-light);
+    white-space: nowrap;
+}
+
+/* Stage 之间竖虚线连接 */
+.pl-job-connector {
+    width: 1px;
+    height: 6px;
+    background: var(--border);
+    margin-left: 9px;
+}
+
+/* --- Job 日志面板 --- */
+.pipeline-job-log-panel {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-top: 16px;
+    max-height: 400px;
+    display: flex;
+    flex-direction: column;
+}
+
+.job-log-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 14px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+.job-log-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    flex: 1;
+}
+.job-log-icon {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    background: var(--success);
+    color: white;
+}
+.job-log-tabs {
+    display: flex;
+    gap: 0;
+}
+.job-log-tab {
+    padding: 4px 14px;
+    font-size: 12px;
+    font-weight: 500;
+    background: transparent;
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    cursor: pointer;
+    transition: var(--transition);
+}
+.job-log-tab:first-child { border-radius: 4px 0 0 4px; }
+.job-log-tab:last-child { border-radius: 0 4px 4px 0; border-left: 0; }
+.job-log-tab.active {
+    background: var(--primary);
+    color: white;
+    border-color: var(--primary);
+}
+
+.job-log-body {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+    max-height: 350px;
+}
+
+.job-log-entries {
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    padding: 8px 0;
+}
+
+.job-log-line {
+    display: flex;
+    padding: 1px 14px;
+    gap: 10px;
+    transition: background 0.15s;
+}
+.job-log-line:hover {
+    background: var(--bg-hover);
+}
+
+.job-log-line-num {
+    color: var(--text-muted);
+    flex-shrink: 0;
+    width: 32px;
+    text-align: right;
+    user-select: none;
+}
+
+.job-log-line-text {
+    flex: 1;
+    word-break: break-word;
+    color: var(--text);
+}
+
+.job-log-line-text.info { color: var(--text); }
+.job-log-line-text.warn { color: var(--warning); }
+.job-log-line-text.error { color: var(--error); }
+.job-log-line-text.output-normal { color: var(--text-secondary); }
+.job-log-line-text.output-except { color: var(--warning); }
+
+@keyframes dotPulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+
 /* ==================== 滚动条 ==================== */
 
 ::-webkit-scrollbar { width: 6px; height: 6px; }
