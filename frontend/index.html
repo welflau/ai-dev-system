@@ -3,1783 +3,233 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI 自动开发系统 v0.6</title>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
-    <style>
-        * { box-sizing: border-box; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-            margin: 0;
-            padding: 0;
-            background: #f0f2f5;
-            color: rgba(0,0,0,0.85);
-        }
-        .layout { display: flex; min-height: 100vh; }
-        
-        /* ===== 侧边栏 ===== */
-        .sidebar {
-            width: 240px;
-            background: linear-gradient(180deg, #001529 0%, #002140 100%);
-            color: white;
-            flex-shrink: 0;
-            position: fixed;
-            height: 100vh;
-            overflow-y: auto;
-        }
-        .sidebar-header {
-            padding: 24px 20px;
-            text-align: center;
-            border-bottom: 1px solid rgba(255,255,255,0.08);
-        }
-        .sidebar-header h2 {
-            color: white;
-            margin: 0;
-            font-size: 18px;
-            font-weight: 600;
-        }
-        .sidebar-header .version {
-            color: rgba(255,255,255,0.45);
-            font-size: 12px;
-            margin-top: 4px;
-        }
-        .menu-item {
-            padding: 14px 24px;
-            cursor: pointer;
-            transition: all 0.2s;
-            font-size: 14px;
-            border-left: 3px solid transparent;
-        }
-        .menu-item:hover { background: rgba(255,255,255,0.06); }
-        .menu-item.active {
-            background: rgba(24,144,255,0.15);
-            border-left-color: #1890ff;
-            color: #1890ff;
-        }
-
-        /* ===== 主内容 ===== */
-        .main-content {
-            flex: 1;
-            margin-left: 240px;
-            padding: 24px;
-            min-height: 100vh;
-        }
-        .page { display: none; }
-        .page.active { display: block; }
-
-        /* ===== 卡片 ===== */
-        .card {
-            background: white;
-            border-radius: 8px;
-            padding: 24px;
-            margin-bottom: 20px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
-        }
-        .card-header {
-            margin-bottom: 20px;
-            padding-bottom: 16px;
-            border-bottom: 1px solid #f0f0f0;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        .card-header h3 { margin: 0; font-size: 18px; }
-
-        /* ===== 表单 ===== */
-        .form-group { margin-bottom: 20px; }
-        .form-group label {
-            display: block;
-            margin-bottom: 8px;
-            font-weight: 500;
-            font-size: 14px;
-        }
-        .form-group input,
-        .form-group textarea,
-        .form-group select {
-            width: 100%;
-            padding: 8px 12px;
-            border: 1px solid #d9d9d9;
-            border-radius: 6px;
-            font-size: 14px;
-            transition: all 0.3s;
-            font-family: inherit;
-        }
-        .form-group input:focus,
-        .form-group textarea:focus {
-            border-color: #40a9ff;
-            outline: none;
-            box-shadow: 0 0 0 2px rgba(64,169,255,0.2);
-        }
-        .form-group textarea { min-height: 120px; resize: vertical; }
-
-        /* ===== 按钮 ===== */
-        .btn {
-            padding: 8px 16px;
-            border: none;
-            border-radius: 6px;
-            cursor: pointer;
-            font-size: 14px;
-            transition: all 0.2s;
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-        }
-        .btn-primary { background: #1890ff; color: white; }
-        .btn-primary:hover { background: #40a9ff; }
-        .btn-primary:disabled { background: #d9d9d9; cursor: not-allowed; }
-        .btn-success { background: #52c41a; color: white; }
-        .btn-success:hover { background: #73d13d; }
-        .btn-default { background: #fafafa; color: rgba(0,0,0,0.65); border: 1px solid #d9d9d9; }
-        .btn-default:hover { border-color: #1890ff; color: #1890ff; }
-        .btn-sm { padding: 4px 10px; font-size: 12px; }
-        .btn-back { margin-bottom: 16px; }
-
-        /* ===== 统计卡片 ===== */
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 16px;
-            margin-bottom: 24px;
-        }
-        .stat-card {
-            background: white;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
-        }
-        .stat-card .number {
-            font-size: 28px;
-            font-weight: bold;
-            margin-bottom: 4px;
-        }
-        .stat-card .label {
-            color: rgba(0,0,0,0.45);
-            font-size: 13px;
-        }
-
-        /* ===== 标签 ===== */
-        .tag {
-            padding: 2px 8px;
-            border-radius: 4px;
-            font-size: 12px;
-            display: inline-block;
-            white-space: nowrap;
-        }
-        .tag-pending { background: #fafafa; border: 1px solid #d9d9d9; color: rgba(0,0,0,0.45); }
-        .tag-in_progress, .tag-in-progress, .tag-analyzing {
-            background: #e6f7ff; border: 1px solid #91d5ff; color: #1890ff;
-        }
-        .tag-completed { background: #f6ffed; border: 1px solid #b7eb8f; color: #52c41a; }
-        .tag-failed { background: #fff1f0; border: 1px solid #ffa39e; color: #f5222d; }
-
-        /* ===== 进度条 ===== */
-        .progress-bar-container {
-            width: 100%;
-            height: 8px;
-            background: #f0f0f0;
-            border-radius: 4px;
-            overflow: hidden;
-            margin: 12px 0;
-        }
-        .progress-bar-fill {
-            height: 100%;
-            border-radius: 4px;
-            transition: width 0.5s ease;
-            background: linear-gradient(90deg, #1890ff, #52c41a);
-        }
-        .progress-text {
-            font-size: 13px;
-            color: rgba(0,0,0,0.45);
-        }
-
-        /* ===== 项目列表项 ===== */
-        .project-card {
-            background: white;
-            padding: 20px;
-            border-radius: 8px;
-            margin-bottom: 12px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
-            cursor: pointer;
-            transition: all 0.2s;
-            border: 2px solid transparent;
-        }
-        .project-card:hover {
-            border-color: #1890ff;
-            box-shadow: 0 2px 8px rgba(24,144,255,0.15);
-        }
-        .project-card-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: flex-start;
-            margin-bottom: 8px;
-        }
-        .project-card-header h4 {
-            margin: 0;
-            font-size: 16px;
-        }
-        .project-card p {
-            margin: 0 0 8px 0;
-            color: rgba(0,0,0,0.45);
-            font-size: 13px;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-        .project-card-meta {
-            display: flex;
-            gap: 16px;
-            font-size: 12px;
-            color: rgba(0,0,0,0.35);
-        }
-
-        /* ===== 阶段面板 ===== */
-        .phase-section {
-            margin-bottom: 24px;
-        }
-        .phase-header {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            margin-bottom: 12px;
-            padding-bottom: 8px;
-            border-bottom: 2px solid #f0f0f0;
-        }
-        .phase-icon {
-            width: 28px;
-            height: 28px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 14px;
-            flex-shrink: 0;
-        }
-        .phase-header h4 { margin: 0; font-size: 15px; }
-        .phase-count {
-            font-size: 12px;
-            color: rgba(0,0,0,0.45);
-            margin-left: auto;
-        }
-
-        /* ===== 任务项 ===== */
-        .task-row {
-            display: flex;
-            align-items: center;
-            padding: 10px 12px;
-            border-radius: 6px;
-            margin-bottom: 6px;
-            background: #fafafa;
-            gap: 12px;
-            transition: background 0.2s;
-        }
-        .task-row:hover { background: #f0f5ff; }
-        .task-row .task-name {
-            flex: 1;
-            font-size: 14px;
-            font-weight: 500;
-        }
-        .task-row .task-meta {
-            display: flex;
-            gap: 8px;
-            align-items: center;
-            font-size: 12px;
-            color: rgba(0,0,0,0.45);
-        }
-        .agent-tag {
-            padding: 1px 6px;
-            border-radius: 3px;
-            font-size: 11px;
-            background: #f5f5f5;
-            border: 1px solid #e8e8e8;
-        }
-        .priority-dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            display: inline-block;
-        }
-        .priority-high { background: #ff4d4f; }
-        .priority-medium { background: #faad14; }
-        .priority-low { background: #52c41a; }
-
-        /* ===== 摘要横条 ===== */
-        .summary-bar {
-            display: flex;
-            gap: 24px;
-            padding: 16px 20px;
-            background: #fafafa;
-            border-radius: 8px;
-            margin-bottom: 20px;
-        }
-        .summary-item {
-            text-align: center;
-        }
-        .summary-item .num {
-            font-size: 24px;
-            font-weight: bold;
-        }
-        .summary-item .lbl {
-            font-size: 12px;
-            color: rgba(0,0,0,0.45);
-        }
-
-        /* ===== 日志 ===== */
-        .log-list {
-            max-height: 200px;
-            overflow-y: auto;
-            font-size: 13px;
-        }
-        .log-item {
-            padding: 6px 0;
-            border-bottom: 1px solid #f5f5f5;
-            display: flex;
-            gap: 12px;
-        }
-        .log-time { color: rgba(0,0,0,0.35); white-space: nowrap; font-size: 12px; }
-        .log-event { color: #1890ff; font-weight: 500; }
-
-        /* ===== 工具网格 ===== */
-        .tools-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-            gap: 16px;
-        }
-        .tool-card {
-            background: white;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
-        }
-        .tool-card h4 { margin: 0 0 8px 0; color: #1890ff; }
-        .tool-card p { margin: 0; color: rgba(0,0,0,0.65); line-height: 1.5; font-size: 13px; }
-
-        /* ===== 提示 ===== */
-        .alert {
-            padding: 12px 16px;
-            border-radius: 6px;
-            margin-bottom: 16px;
-            font-size: 14px;
-        }
-        .alert-success { background: #f6ffed; border: 1px solid #b7eb8f; color: #389e0d; }
-        .alert-error { background: #fff1f0; border: 1px solid #ffa39e; color: #cf1322; }
-        .alert-info { background: #e6f7ff; border: 1px solid #91d5ff; color: #096dd9; }
-        .hidden { display: none !important; }
-
-        /* ===== 加载动画 ===== */
-        .loading {
-            display: inline-block;
-            width: 16px; height: 16px;
-            border: 2px solid #f3f3f3;
-            border-top: 2px solid #1890ff;
-            border-radius: 50%;
-            animation: spin 0.8s linear infinite;
-        }
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-
-        /* ===== 空状态 ===== */
-        .empty-state {
-            text-align: center;
-            padding: 60px 20px;
-            color: rgba(0,0,0,0.25);
-        }
-        .empty-state .icon { font-size: 48px; margin-bottom: 16px; }
-        .empty-state p { margin: 0; font-size: 14px; }
-
-        /* ===== 使用指引 ===== */
-        .guide-section {
-            margin-bottom: 32px;
-            padding-bottom: 28px;
-            border-bottom: 1px solid #f0f0f0;
-        }
-        .guide-title {
-            font-size: 17px;
-            font-weight: 600;
-            margin: 0 0 16px 0;
-            color: rgba(0,0,0,0.85);
-        }
-        .guide-steps {
-            display: flex;
-            flex-direction: column;
-            gap: 20px;
-        }
-        .guide-step {
-            display: flex;
-            gap: 16px;
-            align-items: flex-start;
-        }
-        .step-number {
-            width: 36px;
-            height: 36px;
-            border-radius: 50%;
-            background: linear-gradient(135deg, #1890ff, #096dd9);
-            color: white;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: bold;
-            font-size: 16px;
-            flex-shrink: 0;
-        }
-        .step-content h5 {
-            margin: 0 0 6px 0;
-            font-size: 15px;
-        }
-        .step-content p {
-            margin: 0 0 8px 0;
-            color: rgba(0,0,0,0.65);
-            font-size: 14px;
-            line-height: 1.7;
-        }
-        .guide-example {
-            background: #f6f8fa;
-            border-left: 3px solid #1890ff;
-            padding: 10px 14px;
-            border-radius: 0 6px 6px 0;
-            font-size: 13px;
-            color: rgba(0,0,0,0.65);
-            line-height: 1.6;
-        }
-        .guide-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 14px;
-        }
-        .guide-table th {
-            background: #fafafa;
-            text-align: left;
-            padding: 10px 14px;
-            font-weight: 600;
-            border-bottom: 2px solid #f0f0f0;
-        }
-        .guide-table td {
-            padding: 10px 14px;
-            border-bottom: 1px solid #f5f5f5;
-            color: rgba(0,0,0,0.65);
-        }
-        .guide-table tr:hover td {
-            background: #fafafa;
-        }
-        .keyword-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-            gap: 12px;
-        }
-        .keyword-card {
-            padding: 14px;
-            border-radius: 8px;
-            background: #fafafa;
-            border: 1px solid #f0f0f0;
-        }
-        .keyword-tag {
-            display: inline-block;
-            padding: 2px 10px;
-            border-radius: 4px;
-            font-size: 13px;
-            font-weight: 600;
-            margin-bottom: 6px;
-        }
-        .keyword-card p {
-            margin: 0 0 4px 0;
-            font-size: 12px;
-            color: rgba(0,0,0,0.45);
-        }
-        .keyword-desc {
-            font-size: 12px;
-            color: rgba(0,0,0,0.65);
-        }
-        .status-explain {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            padding: 8px 14px;
-            background: #fafafa;
-            border-radius: 6px;
-            font-size: 14px;
-        }
-        .method-tag {
-            display: inline-block;
-            padding: 1px 8px;
-            border-radius: 4px;
-            font-size: 12px;
-            font-weight: 600;
-            font-family: monospace;
-        }
-        .method-get { background: #e6f7ff; color: #1890ff; }
-        .method-post { background: #f6ffed; color: #52c41a; }
-        .method-put { background: #fff7e6; color: #fa8c16; }
-        .faq-list {
-            display: flex;
-            flex-direction: column;
-            gap: 16px;
-        }
-        .faq-item {
-            padding: 16px;
-            background: #fafafa;
-            border-radius: 8px;
-            border: 1px solid #f0f0f0;
-        }
-        .faq-q {
-            font-weight: 600;
-            margin-bottom: 8px;
-            font-size: 14px;
-            color: rgba(0,0,0,0.85);
-        }
-        .faq-a {
-            font-size: 14px;
-            color: rgba(0,0,0,0.65);
-            line-height: 1.7;
-        }
-
-        /* ===== 代码预览（highlight.js 集成） ===== */
-        .code-block {
-            background: #0d1117;
-            color: #c9d1d9;
-            padding: 16px;
-            border-radius: 8px;
-            overflow-x: auto;
-            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
-            font-size: 13px;
-            line-height: 1.6;
-            max-height: 500px;
-            overflow-y: auto;
-            white-space: pre;
-            word-break: normal;
-            margin: 0;
-            tab-size: 4;
-        }
-        .code-block code {
-            background: none !important;
-            padding: 0 !important;
-        }
-        .code-lang-tag {
-            display: inline-block;
-            padding: 2px 8px;
-            background: rgba(24,144,255,0.1);
-            color: #1890ff;
-            border-radius: 4px;
-            font-size: 12px;
-            margin-bottom: 8px;
-        }
-
-        /* ===== 实时处理日志面板 ===== */
-        .process-log-panel {
-            border: 1px solid #e8e8e8;
-            border-radius: 8px;
-            overflow: hidden;
-            transition: all 0.3s;
-        }
-        .process-log-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 12px 16px;
-            background: linear-gradient(135deg, #001529 0%, #002140 100%);
-            color: #fff;
-            cursor: pointer;
-            user-select: none;
-        }
-        .process-log-header:hover {
-            background: linear-gradient(135deg, #002140 0%, #003366 100%);
-        }
-        .process-log-title {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            font-size: 14px;
-            font-weight: 500;
-        }
-        .process-log-title .dot-pulse {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background: #52c41a;
-            display: inline-block;
-            animation: pulse 1.5s ease-in-out infinite;
-        }
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.3; }
-        }
-        .process-log-actions {
-            display: flex;
-            gap: 8px;
-            align-items: center;
-        }
-        .log-badge {
-            background: rgba(255,255,255,0.15);
-            padding: 2px 8px;
-            border-radius: 10px;
-            font-size: 11px;
-        }
-        .log-clear-btn {
-            background: none;
-            border: 1px solid rgba(255,255,255,0.25);
-            color: rgba(255,255,255,0.65);
-            padding: 2px 8px;
-            border-radius: 4px;
-            font-size: 11px;
-            cursor: pointer;
-        }
-        .log-clear-btn:hover {
-            background: rgba(255,255,255,0.1);
-            color: #fff;
-        }
-        .process-log-body {
-            max-height: 360px;
-            overflow-y: auto;
-            background: #0d1117;
-            padding: 0;
-            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
-            font-size: 12px;
-            line-height: 1.7;
-        }
-        .process-log-body.collapsed {
-            max-height: 0;
-            padding: 0;
-            overflow: hidden;
-        }
-        .log-entry {
-            display: flex;
-            align-items: flex-start;
-            gap: 8px;
-            padding: 4px 12px;
-            border-bottom: 1px solid rgba(255,255,255,0.04);
-            transition: background 0.15s;
-        }
-        .log-entry:hover {
-            background: rgba(255,255,255,0.03);
-        }
-        .log-entry-time {
-            color: rgba(255,255,255,0.3);
-            white-space: nowrap;
-            flex-shrink: 0;
-            min-width: 58px;
-        }
-        .log-entry-level {
-            flex-shrink: 0;
-            width: 16px;
-            text-align: center;
-        }
-        .log-entry-msg {
-            color: #c9d1d9;
-            word-break: break-all;
-        }
-        .log-entry-detail {
-            color: rgba(255,255,255,0.4);
-            margin-left: 4px;
-        }
-        .log-level-step { color: #58a6ff; }
-        .log-level-info { color: #8b949e; }
-        .log-level-success { color: #3fb950; }
-        .log-level-warning { color: #d29922; }
-        .log-level-error { color: #f85149; }
-        .log-empty {
-            text-align: center;
-            padding: 24px 16px;
-            color: rgba(255,255,255,0.25);
-        }
-
-        /* ===== 文件浏览器（GitHub 风格） ===== */
-        .file-browser {
-            display: flex;
-            gap: 0;
-            min-height: 600px;
-            border: 1px solid #d0d7de;
-            border-radius: 8px;
-            overflow: hidden;
-            background: #fff;
-        }
-        .file-browser-sidebar {
-            width: 280px;
-            min-width: 240px;
-            max-width: 360px;
-            border-right: 1px solid #d0d7de;
-            background: #f6f8fa;
-            display: flex;
-            flex-direction: column;
-            flex-shrink: 0;
-            overflow: hidden;
-        }
-        .fb-sidebar-header {
-            padding: 12px 16px;
-            border-bottom: 1px solid #d0d7de;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            background: #fff;
-        }
-        .fb-sidebar-header .fb-repo-name {
-            font-weight: 600;
-            font-size: 14px;
-            color: #0969da;
-            flex: 1;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-        .fb-sidebar-header .fb-file-count {
-            font-size: 12px;
-            color: #656d76;
-            flex-shrink: 0;
-        }
-        .fb-search-box {
-            padding: 8px 12px;
-            border-bottom: 1px solid #d0d7de;
-        }
-        .fb-search-box input {
-            width: 100%;
-            padding: 5px 10px;
-            border: 1px solid #d0d7de;
-            border-radius: 6px;
-            font-size: 12px;
-            background: #fff;
-            outline: none;
-        }
-        .fb-search-box input:focus {
-            border-color: #0969da;
-            box-shadow: 0 0 0 3px rgba(9,105,218,0.12);
-        }
-        .fb-tree-container {
-            flex: 1;
-            overflow-y: auto;
-            padding: 4px 0;
-        }
-        .fb-tree-item {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            padding: 6px 16px;
-            cursor: pointer;
-            font-size: 13px;
-            color: #1f2328;
-            transition: background 0.1s;
-            border-left: 2px solid transparent;
-            user-select: none;
-        }
-        .fb-tree-item:hover {
-            background: #eaeef2;
-        }
-        .fb-tree-item.active {
-            background: #ddf4ff;
-            border-left-color: #0969da;
-            font-weight: 500;
-        }
-        .fb-tree-item .fb-icon {
-            width: 16px;
-            height: 16px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            flex-shrink: 0;
-            font-size: 14px;
-        }
-        .fb-tree-item .fb-icon-folder { color: #54aeff; }
-        .fb-tree-item .fb-icon-file { color: #656d76; }
-        .fb-tree-item .fb-name {
-            flex: 1;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-        .fb-tree-item .fb-size {
-            font-size: 11px;
-            color: #656d76;
-            flex-shrink: 0;
-        }
-        .fb-tree-dir {
-            font-weight: 600;
-        }
-        .fb-tree-dir .fb-toggle {
-            width: 16px;
-            height: 16px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 10px;
-            color: #656d76;
-            transition: transform 0.15s;
-            flex-shrink: 0;
-        }
-        .fb-tree-dir.collapsed .fb-toggle {
-            transform: rotate(-90deg);
-        }
-        .fb-tree-children {
-            overflow: hidden;
-        }
-        .fb-tree-children.hidden {
-            display: none;
-        }
-
-        /* 文件浏览器 - 右侧内容区 */
-        .file-browser-main {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
-            min-width: 0;
-            background: #fff;
-        }
-        .fb-main-header {
-            display: flex;
-            align-items: center;
-            padding: 10px 16px;
-            border-bottom: 1px solid #d0d7de;
-            gap: 12px;
-            background: #f6f8fa;
-            flex-shrink: 0;
-        }
-        .fb-breadcrumb {
-            display: flex;
-            align-items: center;
-            gap: 4px;
-            flex: 1;
-            font-size: 14px;
-            overflow: hidden;
-        }
-        .fb-breadcrumb span {
-            color: #656d76;
-        }
-        .fb-breadcrumb .fb-bc-link {
-            color: #0969da;
-            cursor: pointer;
-        }
-        .fb-breadcrumb .fb-bc-link:hover {
-            text-decoration: underline;
-        }
-        .fb-breadcrumb .fb-bc-current {
-            color: #1f2328;
-            font-weight: 600;
-        }
-        .fb-file-info {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            font-size: 12px;
-            color: #656d76;
-            flex-shrink: 0;
-        }
-        .fb-file-info .fb-info-item {
-            display: flex;
-            align-items: center;
-            gap: 4px;
-        }
-        .fb-tabs {
-            display: flex;
-            border-bottom: 1px solid #d0d7de;
-            background: #fff;
-            flex-shrink: 0;
-        }
-        .fb-tab {
-            padding: 8px 16px;
-            font-size: 13px;
-            color: #656d76;
-            cursor: pointer;
-            border-bottom: 2px solid transparent;
-            transition: all 0.15s;
-        }
-        .fb-tab:hover {
-            color: #1f2328;
-        }
-        .fb-tab.active {
-            color: #1f2328;
-            font-weight: 600;
-            border-bottom-color: #fd8c73;
-        }
-        .fb-code-container {
-            flex: 1;
-            overflow: auto;
-            background: #fff;
-        }
-        .fb-code-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
-            font-size: 13px;
-            line-height: 1.55;
-            tab-size: 4;
-        }
-        .fb-code-table td {
-            padding: 0;
-            vertical-align: top;
-        }
-        .fb-line-num {
-            width: 1%;
-            min-width: 50px;
-            padding: 0 10px;
-            text-align: right;
-            color: #636c76;
-            user-select: none;
-            white-space: nowrap;
-            background: #fff;
-            cursor: pointer;
-        }
-        .fb-line-num:hover {
-            color: #0969da;
-        }
-        .fb-line-code {
-            padding: 0 12px;
-            white-space: pre;
-            word-break: normal;
-            overflow-x: visible;
-        }
-        .fb-code-table tr:hover td {
-            background: #f6f8fa;
-        }
-        .fb-code-table tr.highlighted td {
-            background: #fff8c5;
-        }
-        .fb-empty-state {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            height: 100%;
-            min-height: 400px;
-            color: #656d76;
-            text-align: center;
-            gap: 12px;
-        }
-        .fb-empty-state .fb-empty-icon {
-            font-size: 48px;
-            opacity: 0.5;
-        }
-        .fb-empty-state p {
-            margin: 0;
-            font-size: 14px;
-        }
-        .fb-actions {
-            display: flex;
-            gap: 8px;
-            flex-shrink: 0;
-        }
-        .fb-actions .fb-action-btn {
-            padding: 4px 10px;
-            border: 1px solid #d0d7de;
-            border-radius: 6px;
-            background: #f6f8fa;
-            color: #1f2328;
-            font-size: 12px;
-            cursor: pointer;
-            transition: all 0.15s;
-            display: flex;
-            align-items: center;
-            gap: 4px;
-        }
-        .fb-actions .fb-action-btn:hover {
-            background: #eaeef2;
-            border-color: #afb8c1;
-        }
-        .fb-loading {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            height: 100%;
-            min-height: 400px;
-            color: #656d76;
-        }
-
-        /* ===== 响应式 ===== */
-        @media (max-width: 768px) {
-            .sidebar { width: 200px; }
-            .main-content { margin-left: 200px; padding: 16px; }
-            .stats-grid { grid-template-columns: repeat(2, 1fr); }
-            .pipeline-stages { flex-direction: column; align-items: stretch; }
-            .pipeline-connector { display: none; }
-            .file-browser { flex-direction: column; }
-            .file-browser-sidebar { width: 100%; max-width: none; border-right: none; border-bottom: 1px solid #d0d7de; max-height: 200px; }
-        }
-
-        /* ===== Pipeline 看板 ===== */
-        .pipeline-container {
-            overflow-x: auto;
-            padding: 8px 0 16px;
-        }
-        .pipeline-stages {
-            display: flex;
-            align-items: flex-start;
-            gap: 0;
-            min-width: max-content;
-        }
-        .pipeline-stage {
-            min-width: 220px;
-            max-width: 280px;
-            flex-shrink: 0;
-        }
-        .pipeline-connector {
-            display: flex;
-            align-items: center;
-            padding-top: 18px;
-            flex-shrink: 0;
-        }
-        .connector-line {
-            width: 40px;
-            height: 2px;
-            background: #d9d9d9;
-            position: relative;
-        }
-        .connector-line::after {
-            content: '';
-            position: absolute;
-            right: -4px;
-            top: -4px;
-            width: 0;
-            height: 0;
-            border-left: 6px solid #d9d9d9;
-            border-top: 5px solid transparent;
-            border-bottom: 5px solid transparent;
-        }
-        .connector-line.active {
-            background: #52c41a;
-        }
-        .connector-line.active::after {
-            border-left-color: #52c41a;
-        }
-
-        /* Stage 头部 */
-        .stage-header {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            padding: 10px 14px;
-            background: #fafafa;
-            border: 2px solid #e8e8e8;
-            border-radius: 8px;
-            cursor: default;
-            transition: all 0.2s;
-            position: relative;
-        }
-        .stage-header.stage-completed {
-            border-color: #b7eb8f;
-            background: #f6ffed;
-        }
-        .stage-header.stage-running {
-            border-color: #91d5ff;
-            background: #e6f7ff;
-            animation: stagePulse 2s ease-in-out infinite;
-        }
-        .stage-header.stage-failed {
-            border-color: #ffa39e;
-            background: #fff1f0;
-        }
-        @keyframes stagePulse {
-            0%, 100% { box-shadow: 0 0 0 0 rgba(24,144,255,0.15); }
-            50% { box-shadow: 0 0 0 6px rgba(24,144,255,0.08); }
-        }
-        .stage-status-icon {
-            width: 22px;
-            height: 22px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 12px;
-            flex-shrink: 0;
-        }
-        .stage-status-icon.icon-pending {
-            background: #f5f5f5;
-            border: 2px solid #d9d9d9;
-        }
-        .stage-status-icon.icon-completed {
-            background: #52c41a;
-            color: white;
-        }
-        .stage-status-icon.icon-running {
-            background: #1890ff;
-            color: white;
-        }
-        .stage-status-icon.icon-failed {
-            background: #ff4d4f;
-            color: white;
-        }
-        .stage-name {
-            font-weight: 600;
-            font-size: 13px;
-            color: rgba(0,0,0,0.85);
-            flex: 1;
-        }
-        .stage-duration {
-            font-size: 11px;
-            color: rgba(0,0,0,0.35);
-            font-family: 'Consolas', monospace;
-        }
-
-        /* Stage 步骤列表 */
-        .stage-steps {
-            margin-top: 6px;
-            border-left: 2px solid #e8e8e8;
-            margin-left: 25px;
-            padding-left: 0;
-        }
-        .stage-steps.steps-completed {
-            border-left-color: #b7eb8f;
-        }
-        .stage-steps.steps-running {
-            border-left-color: #91d5ff;
-        }
-
-        .step-item {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            padding: 7px 12px;
-            margin-left: -2px;
-            border-left: 2px solid transparent;
-            cursor: pointer;
-            transition: all 0.15s;
-            border-radius: 0 6px 6px 0;
-            position: relative;
-        }
-        .step-item:hover {
-            background: #f0f5ff;
-        }
-        .step-item.step-completed {
-            border-left-color: #52c41a;
-        }
-        .step-item.step-running {
-            border-left-color: #1890ff;
-            background: #e6f7ff;
-        }
-        .step-item.step-failed {
-            border-left-color: #ff4d4f;
-            background: #fff1f0;
-        }
-        .step-dot {
-            width: 10px;
-            height: 10px;
-            border-radius: 50%;
-            flex-shrink: 0;
-        }
-        .step-dot.dot-pending { background: #d9d9d9; }
-        .step-dot.dot-completed { background: #52c41a; }
-        .step-dot.dot-running { background: #1890ff; animation: dotPulse 1.5s infinite; }
-        .step-dot.dot-failed { background: #ff4d4f; }
-        @keyframes dotPulse {
-            0%, 100% { box-shadow: 0 0 0 0 rgba(24,144,255,0.4); }
-            50% { box-shadow: 0 0 0 4px rgba(24,144,255,0.1); }
-        }
-        .step-name {
-            flex: 1;
-            font-size: 12px;
-            color: rgba(0,0,0,0.65);
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
-        }
-        .step-time {
-            font-size: 11px;
-            color: rgba(0,0,0,0.3);
-            font-family: 'Consolas', monospace;
-            flex-shrink: 0;
-        }
-
-        /* ===== 日志弹窗 ===== */
-        .log-drawer-overlay {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0,0,0,0.45);
-            z-index: 1000;
-            display: flex;
-            justify-content: flex-end;
-            animation: fadeIn 0.2s ease;
-        }
-        @keyframes fadeIn {
-            from { opacity: 0; }
-            to { opacity: 1; }
-        }
-        .log-drawer {
-            width: 560px;
-            max-width: 80vw;
-            background: #1e1e1e;
-            height: 100%;
-            display: flex;
-            flex-direction: column;
-            animation: slideIn 0.25s ease;
-        }
-        @keyframes slideIn {
-            from { transform: translateX(100%); }
-            to { transform: translateX(0); }
-        }
-        .log-drawer-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 16px 20px;
-            background: #252526;
-            border-bottom: 1px solid #3c3c3c;
-            flex-shrink: 0;
-        }
-        .log-drawer-header h4 {
-            margin: 0;
-            color: #ccc;
-            font-size: 14px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        .log-drawer-header .close-btn {
-            background: none;
-            border: 1px solid #555;
-            color: #999;
-            width: 28px;
-            height: 28px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 14px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-        .log-drawer-header .close-btn:hover {
-            background: #3c3c3c;
-            color: #fff;
-        }
-        .log-drawer-tabs {
-            display: flex;
-            border-bottom: 1px solid #3c3c3c;
-            background: #252526;
-            flex-shrink: 0;
-        }
-        .log-drawer-tab {
-            padding: 8px 16px;
-            font-size: 12px;
-            color: #888;
-            cursor: pointer;
-            border-bottom: 2px solid transparent;
-            transition: all 0.15s;
-        }
-        .log-drawer-tab:hover { color: #ccc; }
-        .log-drawer-tab.active {
-            color: #4fc3f7;
-            border-bottom-color: #4fc3f7;
-        }
-        .log-drawer-body {
-            flex: 1;
-            overflow-y: auto;
-            padding: 0;
-            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
-            font-size: 12px;
-            line-height: 1.7;
-        }
-        .log-line {
-            display: flex;
-            align-items: flex-start;
-            gap: 8px;
-            padding: 3px 16px;
-            border-bottom: 1px solid rgba(255,255,255,0.03);
-        }
-        .log-line:hover {
-            background: rgba(255,255,255,0.03);
-        }
-        .log-line-num {
-            color: #555;
-            min-width: 32px;
-            text-align: right;
-            flex-shrink: 0;
-            user-select: none;
-        }
-        .log-line-time {
-            color: #666;
-            flex-shrink: 0;
-            min-width: 56px;
-        }
-        .log-line-level {
-            flex-shrink: 0;
-            width: 14px;
-            text-align: center;
-        }
-        .log-line-msg {
-            color: #d4d4d4;
-            word-break: break-all;
-        }
-        .log-line-detail {
-            color: #808080;
-        }
-        .ll-step { color: #569cd6; }
-        .ll-info { color: #808080; }
-        .ll-success { color: #4ec9b0; }
-        .ll-warning { color: #dcdcaa; }
-        .ll-error { color: #f44747; }
-        .log-empty-msg {
-            text-align: center;
-            padding: 40px 20px;
-            color: #555;
-        }
-        .log-search {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            padding: 6px 16px;
-            background: #252526;
-            border-bottom: 1px solid #3c3c3c;
-            flex-shrink: 0;
-        }
-        .log-search input {
-            flex: 1;
-            background: #3c3c3c;
-            border: 1px solid #555;
-            border-radius: 4px;
-            color: #ccc;
-            padding: 4px 8px;
-            font-size: 12px;
-            outline: none;
-        }
-        .log-search input:focus {
-            border-color: #4fc3f7;
-        }
-        .log-search .match-count {
-            color: #666;
-            font-size: 11px;
-            flex-shrink: 0;
-        }
-    </style>
+    <title>AI 自动开发系统</title>
+    <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
-    <div class="layout">
-        <div class="sidebar">
-            <div class="sidebar-header">
-                <h2>AI 自动开发系统</h2>
-                <div class="version">v0.6.0 - Quality + Deploy</div>
-            </div>
-            <div class="menu-item active" data-page="home">🏠 首页</div>
-            <div class="menu-item" data-page="submit">📝 提交需求</div>
-            <div class="menu-item" data-page="projects">📊 项目看板</div>
-            <div class="menu-item" data-page="project-detail" style="display:none;">📋 项目详情</div>
-            <div class="menu-item" data-page="file-browser" style="display:none;">📂 文件浏览</div>
-            <div class="menu-item" data-page="tools">🛠️ 工具列表</div>
-            <div class="menu-item" data-page="llm-config">🧠 LLM 配置</div>
-            <div class="menu-item" data-page="guide">📖 使用指引</div>
+    <!-- ==================== 顶栏 ==================== -->
+    <header class="top-bar">
+        <div class="top-bar-left">
+            <div class="logo">🤖 AI Dev System</div>
+            <nav class="breadcrumb" id="breadcrumb">
+                <a href="#" onclick="showProjectList()">项目列表</a>
+            </nav>
         </div>
-
-        <div class="main-content">
-            <!-- ===== 首页 ===== -->
-            <div id="page-home" class="page active">
-                <div class="card">
-                    <div class="card-header">
-                        <h3>欢迎使用 AI 自动开发系统</h3>
-                    </div>
-                    <p style="margin-bottom: 20px; line-height: 1.8; color: rgba(0,0,0,0.65);">
-                        从自然语言需求到可运行软件的端到端自动化开发系统。
-                        只需描述你的需求，AI 将自动完成 <strong>需求分析 → 架构设计 → 代码生成 → 测试 → 部署</strong> 全流程。
-                    </p>
-                    <div class="stats-grid">
-                        <div class="stat-card">
-                            <div class="number" id="stat-total-projects">0</div>
-                            <div class="label">总项目数</div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="number" style="color:#52c41a" id="stat-completed">0</div>
-                            <div class="label">已完成</div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="number" style="color:#1890ff" id="stat-in-progress">0</div>
-                            <div class="label">进行中</div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="number" style="color:#722ed1" id="stat-tools-available">8</div>
-                            <div class="label">可用工具</div>
-                        </div>
-                    </div>
-                    <div style="display:flex;gap:12px;align-items:center;margin-bottom:20px">
-                        <div id="llm-status-badge" style="display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:20px;font-size:13px;background:#fff1f0;border:1px solid #ffa39e;color:#cf1322">
-                            <span>●</span> LLM 未配置
-                        </div>
-                        <span style="font-size:13px;color:rgba(0,0,0,0.45)" id="llm-model-info"></span>
-                    </div>
-                    <button class="btn btn-primary" onclick="showPage('submit')">
-                        开始新项目 →
-                    </button>
-                </div>
+        <div class="top-bar-right">
+            <div class="llm-status" id="llmStatus">
+                <span class="dot"></span>
+                <span class="text">检测中...</span>
             </div>
+        </div>
+    </header>
 
-            <!-- ===== 提交需求 ===== -->
-            <div id="page-submit" class="page">
-                <div class="card">
-                    <div class="card-header">
-                        <h3>提交开发需求</h3>
-                    </div>
-                    <div id="submit-alert" class="alert hidden"></div>
-                    <div class="form-group">
-                        <label for="user-input">项目描述 *</label>
-                        <textarea id="user-input" placeholder="例如：开发一个用户管理系统，包含登录注册、API接口、数据库设计..."></textarea>
-                    </div>
-                    <div class="form-group">
-                        <label for="tech-stack">技术栈偏好</label>
-                        <input type="text" id="tech-stack" placeholder="例如：Python, FastAPI, React">
-                    </div>
-                    <div class="form-group">
-                        <label for="project-name">项目名称</label>
-                        <input type="text" id="project-name" placeholder="例如：user-system">
-                    </div>
-                    <button class="btn btn-primary" id="submit-btn" onclick="submitRequirement()">
-                        <span id="submit-btn-text">提交需求</span>
-                    </button>
-                </div>
+    <!-- ==================== 主内容 ==================== -->
+    <main class="main-container">
+
+        <!-- 项目列表页 -->
+        <section id="projectListPage" class="page active">
+            <div class="page-header">
+                <h1>我的项目</h1>
+                <button class="btn btn-primary" onclick="showCreateProjectModal()">+ 新建项目</button>
             </div>
+            <div class="project-grid" id="projectGrid"></div>
+        </section>
 
-            <!-- ===== 项目看板 ===== -->
-            <div id="page-projects" class="page">
-                <div class="card">
-                    <div class="card-header">
-                        <h3>项目看板</h3>
-                        <button class="btn btn-default btn-sm" onclick="loadProjectsFromAPI()">🔄 刷新</button>
+        <!-- 项目详情页 -->
+        <section id="projectPage" class="page">
+            <div class="project-layout">
+                <!-- 侧栏 -->
+                <aside class="sidebar">
+                    <div class="sidebar-header">
+                        <h3 id="sidebarProjectName"></h3>
                     </div>
-                    <div id="projects-list">
-                        <div class="empty-state">
-                            <div class="icon">📂</div>
-                            <p>暂无项目，请先提交需求</p>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- ===== 项目详情 ===== -->
-            <div id="page-project-detail" class="page">
-                <button class="btn btn-default btn-back" onclick="showPage('projects')">← 返回项目列表</button>
-                <div id="project-detail-content">
-                    <p>加载中...</p>
-                </div>
-            </div>
-
-            <!-- ===== 文件浏览器 ===== -->
-            <div id="page-file-browser" class="page">
-                <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
-                    <button class="btn btn-default btn-back" style="margin-bottom:0" onclick="showPage('project-detail')">← 返回项目</button>
-                    <h3 style="margin:0;flex:1" id="fb-project-title">文件浏览器</h3>
-                    <button class="btn btn-default btn-sm" onclick="downloadProject(currentProjectId)">📦 打包下载</button>
-                    <button class="btn btn-default btn-sm" onclick="loadFileBrowser(currentProjectId)">🔄 刷新</button>
-                </div>
-                <div id="file-browser-container">
-                    <div class="file-browser">
-                        <div class="file-browser-sidebar">
-                            <div class="fb-sidebar-header">
-                                <span class="fb-repo-name" id="fb-repo-name">项目文件</span>
-                                <span class="fb-file-count" id="fb-file-count"></span>
-                            </div>
-                            <div class="fb-search-box">
-                                <input type="text" placeholder="搜索文件..." id="fb-search-input" oninput="filterFileTree(this.value)">
-                            </div>
-                            <div class="fb-tree-container" id="fb-tree-container">
-                                <div class="fb-loading"><span class="loading"></span>&nbsp;加载中...</div>
-                            </div>
-                        </div>
-                        <div class="file-browser-main">
-                            <div class="fb-main-header" id="fb-main-header" style="display:none">
-                                <div class="fb-breadcrumb" id="fb-breadcrumb"></div>
-                                <div class="fb-file-info" id="fb-file-info"></div>
-                                <div class="fb-actions">
-                                    <button class="fb-action-btn" onclick="copyFileContent()" title="复制文件内容">📋 复制</button>
-                                    <button class="fb-action-btn" onclick="toggleRawView()" id="fb-raw-btn" title="切换原始/高亮">Raw</button>
-                                </div>
-                            </div>
-                            <div class="fb-tabs" id="fb-tabs" style="display:none">
-                                <div class="fb-tab active" data-tab="code" onclick="switchFileTab('code')">Code</div>
-                                <div class="fb-tab" data-tab="preview" onclick="switchFileTab('preview')">Preview</div>
-                            </div>
-                            <div class="fb-code-container" id="fb-code-container">
-                                <div class="fb-empty-state">
-                                    <div class="fb-empty-icon">📂</div>
-                                    <p>选择左侧文件查看内容</p>
-                                    <p style="font-size:12px;color:#8b949e">支持语法高亮和行号显示</p>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- ===== 工具列表 ===== -->
-            <div id="page-tools" class="page">
-                <div class="card">
-                    <div class="card-header">
-                        <h3>已注册工具</h3>
-                        <button class="btn btn-default btn-sm" onclick="loadTools()">🔄 刷新</button>
-                    </div>
-                    <div id="tools-list" class="tools-grid">
-                        <p>加载中...</p>
-                    </div>
-                </div>
-            </div>
-            <!-- ===== LLM 配置 ===== -->
-            <div id="page-llm-config" class="page">
-                <div class="card">
-                    <div class="card-header">
-                        <h3>🧠 LLM 配置</h3>
-                        <button class="btn btn-default btn-sm" onclick="loadLLMStatus()">🔄 刷新状态</button>
-                    </div>
-
-                    <!-- 状态面板 -->
-                    <div id="llm-config-status" style="padding:16px 20px;background:#fafafa;border-radius:8px;margin-bottom:20px">
-                        <p style="margin:0;color:rgba(0,0,0,0.45)">加载中...</p>
-                    </div>
-
-                    <!-- 配置表单 -->
-                    <div id="llm-config-alert" class="alert hidden"></div>
-                    <div class="form-group">
-                        <label for="llm-base-url">API Base URL</label>
-                        <input type="text" id="llm-base-url" placeholder="例如: https://api.openai.com/v1">
-                    </div>
-                    <div class="form-group">
-                        <label for="llm-api-key">API Key</label>
-                        <input type="password" id="llm-api-key" placeholder="sk-...">
-                    </div>
-                    <div class="form-group">
-                        <label for="llm-model">模型名称</label>
-                        <input type="text" id="llm-model" placeholder="例如: gpt-4 / deepseek-chat / claude-3">
-                    </div>
-                    <div style="display:flex;gap:12px">
-                        <button class="btn btn-primary" onclick="saveLLMConfig()">保存配置</button>
-                        <button class="btn btn-default" onclick="testLLMConnection()">
-                            <span id="llm-test-text">测试连接</span>
+                    <nav class="sidebar-nav">
+                        <a class="nav-item active" data-tab="board" onclick="switchTab('board')">
+                            📌 工单看板
+                        </a>
+                        <a class="nav-item" data-tab="requirements" onclick="switchTab('requirements')">
+                            📋 需求列表
+                        </a>
+                        <a class="nav-item" data-tab="stats" onclick="switchTab('stats')">
+                            📊 统计面板
+                        </a>
+                        <a class="nav-item" data-tab="logs" onclick="switchTab('logs')">
+                            📝 操作日志
+                        </a>
+                    </nav>
+                    <div class="sidebar-footer">
+                        <button class="btn btn-accent btn-block" onclick="showCreateRequirementModal()">
+                            + 提交需求
                         </button>
                     </div>
+                </aside>
 
-                    <!-- 测试结果 -->
-                    <div id="llm-test-result" class="hidden" style="margin-top:16px;padding:16px;border-radius:8px;border:1px solid #f0f0f0;background:#fafafa"></div>
-                </div>
+                <!-- 主内容区 -->
+                <div class="content-area">
 
-                <div class="card" style="margin-top:16px">
-                    <div class="card-header">
-                        <h3>💡 配置说明</h3>
+                    <!-- Tab: 工单看板 -->
+                    <div id="tab-board" class="tab-content active">
+                        <div class="board-header">
+                            <h2>工单看板</h2>
+                            <div class="board-filters">
+                                <select id="filterRequirement" onchange="refreshBoard()">
+                                    <option value="">全部需求</option>
+                                </select>
+                                <select id="filterModule" onchange="refreshBoard()">
+                                    <option value="">全部模块</option>
+                                    <option value="frontend">前端</option>
+                                    <option value="backend">后端</option>
+                                    <option value="database">数据库</option>
+                                    <option value="api">API</option>
+                                    <option value="testing">测试</option>
+                                    <option value="deploy">部署</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="board" id="kanbanBoard">
+                            <div class="board-column" data-status="pending">
+                                <div class="column-header">
+                                    <span class="column-title">待启动</span>
+                                    <span class="column-count" id="count-pending">0</span>
+                                </div>
+                                <div class="column-body" id="col-pending"></div>
+                            </div>
+                            <div class="board-column" data-status="architecture">
+                                <div class="column-header">
+                                    <span class="column-title">架构中</span>
+                                    <span class="column-count" id="count-architecture">0</span>
+                                </div>
+                                <div class="column-body" id="col-architecture"></div>
+                            </div>
+                            <div class="board-column" data-status="development">
+                                <div class="column-header">
+                                    <span class="column-title">开发中</span>
+                                    <span class="column-count" id="count-development">0</span>
+                                </div>
+                                <div class="column-body" id="col-development"></div>
+                            </div>
+                            <div class="board-column" data-status="testing">
+                                <div class="column-header">
+                                    <span class="column-title">测试中</span>
+                                    <span class="column-count" id="count-testing">0</span>
+                                </div>
+                                <div class="column-body" id="col-testing"></div>
+                            </div>
+                            <div class="board-column" data-status="deployed">
+                                <div class="column-header">
+                                    <span class="column-title">已部署</span>
+                                    <span class="column-count" id="count-deployed">0</span>
+                                </div>
+                                <div class="column-body" id="col-deployed"></div>
+                            </div>
+                        </div>
                     </div>
-                    <div style="line-height:2;color:rgba(0,0,0,0.65);font-size:14px">
-                        <p><strong>支持的 LLM 提供商</strong>（任何 OpenAI 兼容 API）：</p>
-                        <ul style="margin:4px 0 16px 20px">
-                            <li>OpenAI — <code>https://api.openai.com/v1</code></li>
-                            <li>CodeBuddy — 公司内部 API 地址</li>
-                            <li>DeepSeek — <code>https://api.deepseek.com/v1</code></li>
-                            <li>Moonshot — <code>https://api.moonshot.cn/v1</code></li>
-                            <li>其他 OpenAI 兼容服务...</li>
-                        </ul>
-                        <p><strong>降级模式</strong>：如果未配置 API Key 或 LLM 不可用，系统会自动使用模板引擎生成结果，功能不受影响。</p>
-                        <p><strong>安全说明</strong>：运行时配置仅在当前进程生效，重启后需要重新配置。建议在 <code>backend/.env</code> 文件中持久化配置。</p>
+
+                    <!-- Tab: 需求列表 -->
+                    <div id="tab-requirements" class="tab-content">
+                        <div class="page-header">
+                            <h2>需求列表</h2>
+                            <button class="btn btn-primary" onclick="showCreateRequirementModal()">+ 提交需求</button>
+                        </div>
+                        <div class="requirement-list" id="requirementList"></div>
+                    </div>
+
+                    <!-- Tab: 统计面板 -->
+                    <div id="tab-stats" class="tab-content">
+                        <h2>项目统计</h2>
+                        <div class="stats-grid" id="statsGrid"></div>
+                    </div>
+
+                    <!-- Tab: 操作日志 -->
+                    <div id="tab-logs" class="tab-content">
+                        <h2>操作日志</h2>
+                        <div class="log-timeline" id="logTimeline"></div>
                     </div>
                 </div>
             </div>
-            <!-- ===== 使用指引 ===== -->
-            <div id="page-guide" class="page">
-                <div class="card">
-                    <div class="card-header">
-                        <h3>使用指引</h3>
-                    </div>
-                    
-                    <!-- 快速上手 -->
-                    <div class="guide-section">
-                        <h4 class="guide-title">🚀 快速上手（3 分钟）</h4>
-                        <div class="guide-steps">
-                            <div class="guide-step">
-                                <div class="step-number">1</div>
-                                <div class="step-content">
-                                    <h5>提交需求</h5>
-                                    <p>点击侧边栏 <strong>「📝 提交需求」</strong>，在文本框中用自然语言描述你想要开发的系统。</p>
-                                    <div class="guide-example">
-                                        <strong>示例输入：</strong><br>
-                                        "开发一个用户管理 API 系统，包含登录注册和数据库"
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="guide-step">
-                                <div class="step-number">2</div>
-                                <div class="step-content">
-                                    <h5>查看任务分解</h5>
-                                    <p>系统自动将需求分解为多个开发任务，按 <strong>需求分析 → 架构设计 → 开发实现 → 测试验证 → 部署上线</strong> 五个阶段组织。</p>
-                                    <p>提交后会自动跳转到<strong>项目详情页</strong>，展示所有分解出的任务。</p>
-                                </div>
-                            </div>
-                            <div class="guide-step">
-                                <div class="step-number">3</div>
-                                <div class="step-content">
-                                    <h5>执行与跟踪</h5>
-                                    <p>在项目详情页点击 <strong>「▶ 执行下一个任务」</strong>，系统会按依赖顺序逐个执行任务。每 8 秒自动刷新状态。</p>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
+        </section>
+    </main>
 
-                    <!-- 功能说明 -->
-                    <div class="guide-section">
-                        <h4 class="guide-title">📋 功能说明</h4>
-                        <table class="guide-table">
-                            <thead>
-                                <tr>
-                                    <th>页面</th>
-                                    <th>功能</th>
-                                    <th>说明</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <tr>
-                                    <td><strong>🏠 首页</strong></td>
-                                    <td>概览统计</td>
-                                    <td>查看总项目数、已完成、进行中、可用工具数</td>
-                                </tr>
-                                <tr>
-                                    <td><strong>📝 提交需求</strong></td>
-                                    <td>创建项目</td>
-                                    <td>输入需求描述，可选填技术栈偏好和项目名称</td>
-                                </tr>
-                                <tr>
-                                    <td><strong>📊 项目看板</strong></td>
-                                    <td>项目列表</td>
-                                    <td>查看所有项目及进度，点击进入项目详情</td>
-                                </tr>
-                                <tr>
-                                    <td><strong>📋 项目详情</strong></td>
-                                    <td>任务管理</td>
-                                    <td>按阶段查看任务分解、进度条、统计摘要、日志</td>
-                                </tr>
-                                <tr>
-                                    <td><strong>🛠️ 工具列表</strong></td>
-                                    <td>开发工具</td>
-                                    <td>查看系统已注册的可用开发工具（文件操作、命令执行等）</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
+    <!-- ==================== 工单详情抽屉 ==================== -->
+    <div class="drawer-overlay" id="drawerOverlay" onclick="closeDrawer()"></div>
+    <aside class="drawer" id="ticketDrawer">
+        <div class="drawer-header">
+            <div class="drawer-title" id="drawerTitle"></div>
+            <button class="btn-icon" onclick="closeDrawer()">&times;</button>
+        </div>
+        <div class="drawer-body" id="drawerBody"></div>
+    </aside>
 
-                    <!-- 关键词识别 -->
-                    <div class="guide-section">
-                        <h4 class="guide-title">🔑 需求关键词识别</h4>
-                        <p style="color:rgba(0,0,0,0.65);margin-bottom:12px;">系统通过关键词匹配自动识别需求中的功能模块，生成对应的开发任务：</p>
-                        <div class="keyword-grid">
-                            <div class="keyword-card">
-                                <div class="keyword-tag" style="background:#e6f7ff;color:#1890ff;border:1px solid #91d5ff">API</div>
-                                <p>接口 / 端点 / REST</p>
-                                <span class="keyword-desc">→ 生成 API 设计、路由开发、接口文档任务</span>
-                            </div>
-                            <div class="keyword-card">
-                                <div class="keyword-tag" style="background:#f6ffed;color:#52c41a;border:1px solid #b7eb8f">数据库</div>
-                                <p>数据 / 存储 / 表</p>
-                                <span class="keyword-desc">→ 生成 Schema 设计、ORM 实现、数据迁移任务</span>
-                            </div>
-                            <div class="keyword-card">
-                                <div class="keyword-tag" style="background:#fff7e6;color:#fa8c16;border:1px solid #ffd591">前端</div>
-                                <p>界面 / UI / 页面</p>
-                                <span class="keyword-desc">→ 生成 UI 设计、组件开发、前端集成任务</span>
-                            </div>
-                            <div class="keyword-card">
-                                <div class="keyword-tag" style="background:#f9f0ff;color:#722ed1;border:1px solid #d3adf7">用户</div>
-                                <p>用户管理 / 权限 / 角色</p>
-                                <span class="keyword-desc">→ 生成用户模型、权限系统、角色管理任务</span>
-                            </div>
-                            <div class="keyword-card">
-                                <div class="keyword-tag" style="background:#fff1f0;color:#f5222d;border:1px solid #ffa39e">登录</div>
-                                <p>认证 / 注册 / 鉴权</p>
-                                <span class="keyword-desc">→ 生成认证流程、JWT、注册页面任务</span>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- 任务状态说明 -->
-                    <div class="guide-section">
-                        <h4 class="guide-title">🏷️ 任务状态说明</h4>
-                        <div style="display:flex;gap:16px;flex-wrap:wrap">
-                            <div class="status-explain"><span>⬜</span> <strong>待处理</strong> - 任务尚未开始</div>
-                            <div class="status-explain"><span>🔵</span> <strong>进行中</strong> - 正在执行</div>
-                            <div class="status-explain"><span>✅</span> <strong>已完成</strong> - 任务执行成功</div>
-                            <div class="status-explain"><span>❌</span> <strong>失败</strong> - 执行出错，可重试</div>
-                            <div class="status-explain"><span>⛔</span> <strong>已取消</strong> - 任务被取消</div>
-                        </div>
-                    </div>
-
-                    <!-- Agent 角色 -->
-                    <div class="guide-section">
-                        <h4 class="guide-title">🤖 Agent 角色分工</h4>
-                        <table class="guide-table">
-                            <thead>
-                                <tr><th>角色</th><th>职责</th><th>负责阶段</th></tr>
-                            </thead>
-                            <tbody>
-                                <tr><td><span class="agent-tag">产品</span></td><td>需求分析、功能拆解</td><td>需求分析</td></tr>
-                                <tr><td><span class="agent-tag">架构师</span></td><td>系统设计、技术选型</td><td>架构设计</td></tr>
-                                <tr><td><span class="agent-tag">开发</span></td><td>编码实现、功能开发</td><td>开发实现</td></tr>
-                                <tr><td><span class="agent-tag">测试</span></td><td>测试用例、质量验证</td><td>测试验证</td></tr>
-                                <tr><td><span class="agent-tag">审查</span></td><td>代码审查、文档编写</td><td>测试验证</td></tr>
-                                <tr><td><span class="agent-tag">运维</span></td><td>环境配置、部署上线</td><td>部署上线</td></tr>
-                            </tbody>
-                        </table>
-                    </div>
-
-                    <!-- API 接口 -->
-                    <div class="guide-section">
-                        <h4 class="guide-title">🔌 API 接口一览</h4>
-                        <p style="color:rgba(0,0,0,0.65);margin-bottom:12px;">
-                            后端提供 RESTful API，完整交互文档见 
-                            <a href="/docs" target="_blank" style="color:#1890ff">Swagger UI (/docs)</a>
-                        </p>
-                        <table class="guide-table">
-                            <thead>
-                                <tr><th>方法</th><th>路径</th><th>说明</th></tr>
-                            </thead>
-                            <tbody>
-                                <tr><td><span class="method-tag method-get">GET</span></td><td>/health</td><td>健康检查 + 系统状态</td></tr>
-                                <tr><td><span class="method-tag method-post">POST</span></td><td>/api/process</td><td>提交需求，触发任务分解</td></tr>
-                                <tr><td><span class="method-tag method-get">GET</span></td><td>/api/projects</td><td>获取所有项目列表</td></tr>
-                                <tr><td><span class="method-tag method-get">GET</span></td><td>/api/projects/{id}/state</td><td>获取项目详情 + 任务列表</td></tr>
-                                <tr><td><span class="method-tag method-post">POST</span></td><td>/api/projects/{id}/execute</td><td>执行项目的下一个任务</td></tr>
-                                <tr><td><span class="method-tag method-put">PUT</span></td><td>/api/projects/{id}/tasks/{task_id}</td><td>更新指定任务状态</td></tr>
-                                <tr><td><span class="method-tag method-get">GET</span></td><td>/tools</td><td>查看已注册的开发工具</td></tr>
-                            </tbody>
-                        </table>
-                    </div>
-
-                    <!-- FAQ -->
-                    <div class="guide-section">
-                        <h4 class="guide-title">❓ 常见问题</h4>
-                        <div class="faq-list">
-                            <div class="faq-item">
-                                <div class="faq-q">Q: 需求描述越详细越好吗？</div>
-                                <div class="faq-a">A: 是的。描述中包含的关键词越多（如 API、数据库、前端、登录等），系统能识别出的功能模块就越多，生成的任务也越完整。</div>
-                            </div>
-                            <div class="faq-item">
-                                <div class="faq-q">Q: 技术栈偏好和项目名称是必填的吗？</div>
-                                <div class="faq-a">A: 不是。这两个字段是可选的，不填也不影响任务分解。技术栈偏好会记录在项目信息中，方便后续开发参考。</div>
-                            </div>
-                            <div class="faq-item">
-                                <div class="faq-q">Q: 任务执行失败怎么办？</div>
-                                <div class="faq-a">A: 失败的任务会标红显示。当前版本的任务执行是模拟执行（标记状态变化），后续版本会接入真正的 AI Agent 实现代码生成。</div>
-                            </div>
-                            <div class="faq-item">
-                                <div class="faq-q">Q: 数据保存在哪里？</div>
-                                <div class="faq-a">A: 当前版本数据保存在后端内存中，重启服务会丢失。后续将支持数据库持久化。</div>
-                            </div>
-                            <div class="faq-item">
-                                <div class="faq-q">Q: 怎么查看 API 详细文档？</div>
-                                <div class="faq-a">A: 访问 <a href="/docs" target="_blank" style="color:#1890ff">/docs</a> 查看自动生成的 Swagger UI 交互文档，可以直接在线调试接口。</div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- 系统版本 -->
-                    <div class="guide-section" style="border-bottom:none;padding-bottom:0">
-                        <h4 class="guide-title">📦 当前版本</h4>
-                        <p style="color:rgba(0,0,0,0.65);line-height:2">
-                            <strong>v0.6.0 - Quality + Deploy</strong><br>
-                            ✅ ReviewAgent 代码审查（安全+规范+性能）<br>
-                            ✅ DeployAgent 部署配置（Docker+CI/CD+Nginx）<br>
-                            ✅ 项目 ZIP 打包下载<br>
-                            ✅ 实时处理日志面板<br>
-                            ✅ Agent 间上下文传递（架构→开发→测试）<br>
-                            ✅ 6 个 Agent 全部到位<br>
-                            ✅ LLM 智能 + 模板降级双模式<br>
-                            ✅ 92 个测试全部通过
-                        </p>
-                    </div>
+    <!-- ==================== 模态框：新建项目 ==================== -->
+    <div class="modal-overlay" id="createProjectModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>新建项目</h3>
+                <button class="btn-icon" onclick="closeModal('createProjectModal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>项目名称 <span class="required">*</span></label>
+                    <input type="text" id="projectName" placeholder="输入项目名称">
                 </div>
+                <div class="form-group">
+                    <label>项目描述</label>
+                    <textarea id="projectDescription" placeholder="描述项目目标和背景" rows="3"></textarea>
+                </div>
+                <div class="form-group">
+                    <label>技术栈</label>
+                    <input type="text" id="projectTechStack" placeholder="如 Python, FastAPI, React...">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" onclick="closeModal('createProjectModal')">取消</button>
+                <button class="btn btn-primary" onclick="createProject()">创建</button>
             </div>
         </div>
     </div>
 
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-    <script>
-    (function() {
-        var script = document.createElement('script');
-        script.src = (window.location.protocol === 'file:') ? 'app.js' : '/static/app.js';
-        document.body.appendChild(script);
-    })();
-    </script>
+    <!-- ==================== 模态框：提交需求 ==================== -->
+    <div class="modal-overlay" id="createRequirementModal">
+        <div class="modal modal-lg">
+            <div class="modal-header">
+                <h3>提交需求</h3>
+                <button class="btn-icon" onclick="closeModal('createRequirementModal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>需求标题 <span class="required">*</span></label>
+                    <input type="text" id="reqTitle" placeholder="简洁描述你想要实现的功能">
+                </div>
+                <div class="form-group">
+                    <label>需求描述 <span class="required">*</span></label>
+                    <textarea id="reqDescription" placeholder="详细描述功能需求、用户场景、预期效果。描述越清晰，AI 拆单越准确。" rows="6"></textarea>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>优先级</label>
+                        <select id="reqPriority">
+                            <option value="low">低</option>
+                            <option value="medium" selected>中</option>
+                            <option value="high">高</option>
+                            <option value="critical">紧急</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>模块</label>
+                        <input type="text" id="reqModule" placeholder="如：用户模块、支付模块">
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" onclick="closeModal('createRequirementModal')">取消</button>
+                <button class="btn btn-primary" onclick="submitRequirement()">提交并拆单</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== Toast 通知 ==================== -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script src="/static/app.js"></script>
 </body>
 </html>

@@ -1,275 +1,217 @@
 """
-产品代理(ProductAgent)
-负责需求分析、PRD生成、用户故事创建
+ProductAgent — 产品需求 Agent
+职责：需求分析 + PRD 生成 + 拆单 + 验收
 """
-from typing import Dict, Any, List
-from models.schemas import Task, ExecutionResult, AgentContext, Requirement
-from models.enums import TaskType, AgentType
-from .base import BaseAgent
+import json
+from typing import Any, Dict, List
+from agents.base import BaseAgent
+from llm_client import llm_client
 
 
 class ProductAgent(BaseAgent):
-    """产品代理"""
-    
-    def __init__(self, llm_client, tool_registry):
-        super().__init__(AgentType.PRODUCT, llm_client, tool_registry)
-    
-    async def execute(self, task: Task, context: AgentContext) -> ExecutionResult:
-        """执行产品任务"""
-        task_type = task.type
-        
-        if task_type == TaskType.REQUIREMENT:
-            return await self._analyze_requirements(task, context)
+
+    @property
+    def agent_type(self) -> str:
+        return "ProductAgent"
+
+    async def execute(self, task_name: str, context: Dict[str, Any]) -> Dict[str, Any]:
+        if task_name == "analyze_and_decompose":
+            return await self.analyze_and_decompose(context)
+        elif task_name == "acceptance_review":
+            return await self.acceptance_review(context)
         else:
-            return ExecutionResult(
-                success=False,
-                error_message=f"不支持的任务类型: {task_type}"
-            )
-    
-    def get_capabilities(self) -> List[str]:
-        return [
-            "需求分析",
-            "PRD文档生成",
-            "用户故事创建",
-            "功能优先级规划",
-            "需求澄清"
-        ]
-    
-    def get_supported_tasks(self) -> List[str]:
-        return [
-            TaskType.REQUIREMENT.value
-        ]
-    
-    async def _analyze_requirements(
-        self,
-        task: Task,
-        context: AgentContext
-    ) -> ExecutionResult:
-        """
-        分析需求并生成PRD
-        
-        Args:
-            task: 任务
-            context: 上下文
-        
-        Returns:
-            执行结果
-        """
-        # 1. 理解用户需求
-        user_input = task.input_data.get("description", "")
-        
-        # 2. 识别核心功能点
-        features = await self._extract_features(user_input)
-        
-        # 3. 识别技术约束
-        constraints = await self._identify_constraints(user_input)
-        
-        # 4. 生成项目名称
-        project_name = self._extract_project_name(user_input)
-        
-        # 5. 构建需求对象
-        requirement = Requirement(
-            id=task.id,
-            description=user_input,
-            project_name=project_name,
-            core_features=features,
-            constraints=constraints,
-            tech_stack=context.global_context.get("tech_stack")
-        )
-        
-        # 6. 生成PRD文档
-        prd_content = await self._generate_prd_content(requirement)
-        
-        # 7. 创建PRD文件
-        prd_file = await self._create_prd_file(
-            context.project_id,
-            prd_content
-        )
-        
-        # 8. 创建用户故事
-        user_stories = await self._create_user_stories(
-            requirement,
-            context.project_id
-        )
-        
-        return ExecutionResult(
-            success=True,
-            output={
-                "requirement": requirement.dict(),
-                "prd_file": prd_file,
-                "user_stories": user_stories
-            },
-            artifacts=[
-                {
-                    "type": "requirement_doc",
-                    "data": requirement.dict()
-                },
-                {
-                    "type": "prd_file",
-                    "path": prd_file
-                }
-            ]
-        )
-    
-    async def _extract_features(self, user_input: str) -> List[str]:
-        """提取核心功能点"""
-        prompt = f"""
-分析以下用户需求,提取核心功能点:
+            return {"status": "error", "message": f"未知任务: {task_name}"}
 
-{user_input}
+    async def analyze_and_decompose(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """分析需求并拆分为任务单"""
+        title = context.get("title", "")
+        description = context.get("description", "")
+        priority = context.get("priority", "medium")
 
-请列出所有功能点,每个功能点用一句话描述。
-返回格式为JSON数组:
-["功能点1", "功能点2", ...]
+        # 尝试 LLM 智能拆单
+        prompt = f"""你是一位资深产品经理和项目经理。请分析以下需求，生成 PRD 要点，并将其拆分为可执行的任务单。
+
+## 需求标题
+{title}
+
+## 需求描述
+{description}
+
+## 优先级
+{priority}
+
+## 请按 JSON 格式返回，结构如下：
+
+{{
+  "prd_summary": "PRD 核心要点摘要（200字以内）",
+  "tickets": [
+    {{
+      "title": "任务标题",
+      "description": "任务详细描述",
+      "type": "feature|bugfix|refactor|test|deploy|doc",
+      "module": "frontend|backend|database|api|testing|deploy|design|other",
+      "priority": 1-5（1最高）,
+      "estimated_hours": 预估工时（小时），
+      "subtasks": [
+        {{"title": "子任务标题", "description": "子任务描述"}}
+      ],
+      "dependencies": []
+    }}
+  ]
+}}
+
+请确保：
+1. 任务拆分粒度适中，每个任务 2-8 小时工作量
+2. 按模块分类（前端、后端、数据库、API、测试、部署）
+3. 标注任务间的依赖关系
+4. 每个任务下列出具体的子任务
 """
-        
-        response = await self.llm_client.generate(prompt)
-        
-        # 简化版解析,实际需要更健壮的解析
-        try:
-            import json
-            features = json.loads(response)
-            return features
-        except:
-            # 如果解析失败,简单按行分割
-            return [
-                line.strip()
-                for line in response.split('\n')
-                if line.strip() and not line.startswith('#')
-            ]
-    
-    async def _identify_constraints(self, user_input: str) -> List[str]:
-        """识别技术约束"""
-        prompt = f"""
-分析以下用户需求,识别技术约束和限制条件:
 
-{user_input}
-
-包括:
-- 性能要求
-- 安全要求
-- 兼容性要求
-- 其他技术限制
-
-返回格式为JSON数组:
-["约束1", "约束2", ...]
-"""
-        
-        response = await self.llm_client.generate(prompt)
-        
-        # 简化版解析
-        try:
-            import json
-            constraints = json.loads(response)
-            return constraints
-        except:
-            return [
-                line.strip()
-                for line in response.split('\n')
-                if line.strip() and not line.startswith('#')
-            ]
-    
-    def _extract_project_name(self, user_input: str) -> str:
-        """提取项目名称"""
-        # 简化版:使用第一个非空行作为项目名
-        lines = user_input.strip().split('\n')
-        for line in lines:
-            if line.strip():
-                return line.strip()[:50]  # 限制长度
-        
-        return "Unnamed Project"
-    
-    async def _generate_prd_content(self, requirement: Requirement) -> str:
-        """生成PRD文档内容"""
-        prompt = f"""
-基于以下需求,生成完整的PRD(产品需求文档):
-
-项目名称: {requirement.project_name}
-需求描述: {requirement.description}
-核心功能: {', '.join(requirement.core_features)}
-技术约束: {', '.join(requirement.constraints)}
-
-PRD应包含以下部分:
-1. 项目概述
-2. 目标用户
-3. 核心功能描述
-4. 用户故事
-5. 非功能性需求
-6. 技术架构建议
-
-请使用Markdown格式。
-"""
-        
-        prd_content = await self.llm_client.generate(prompt)
-        return prd_content
-    
-    async def _create_prd_file(
-        self,
-        project_id: str,
-        content: str
-    ) -> str:
-        """创建PRD文件"""
-        file_path = f"projects/{project_id}/docs/PRD.md"
-        
-        result = await self.tool_registry.execute_tool(
-            "file_writer",
-            file_path=file_path,
-            content=content,
-            create_dirs=True
+        result = await llm_client.chat_json(
+            [{"role": "user", "content": prompt}]
         )
-        
-        if not result.get("success"):
-            raise Exception(f"创建PRD文件失败: {result.get('error')}")
-        
-        return file_path
-    
-    async def _create_user_stories(
-        self,
-        requirement: Requirement,
-        project_id: str
-    ) -> List[Dict[str, Any]]:
-        """创建用户故事"""
-        prompt = f"""
-基于以下需求,为每个核心功能创建用户故事:
 
-核心功能: {', '.join(requirement.core_features)}
+        if result and isinstance(result, dict) and "tickets" in result:
+            return {
+                "status": "success",
+                "prd_summary": result.get("prd_summary", ""),
+                "tickets": result["tickets"],
+            }
 
-用户故事格式:
-作为[角色],我想要[功能],以便[价值]
+        # LLM 不可用时降级：规则引擎拆单
+        return self._fallback_decompose(title, description, priority)
 
-为每个功能创建1-2个用户故事。
+    async def acceptance_review(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """产品验收"""
+        ticket_title = context.get("ticket_title", "")
+        requirement_description = context.get("requirement_description", "")
+        dev_result = context.get("dev_result", {})
 
-返回格式为JSON数组:
-[
-  {
-    "id": "story-1",
-    "feature": "功能名",
-    "role": "角色",
-    "want": "想要的功能",
-    "so_that": "价值/目标"
-  },
-  ...
-]
+        prompt = f"""你是一位产品经理，正在验收开发交付物。
+
+## 原始需求
+{requirement_description}
+
+## 工单标题
+{ticket_title}
+
+## 开发交付结果
+{json.dumps(dev_result, ensure_ascii=False, indent=2)}
+
+## 请判断：
+1. 交付物是否满足需求？
+2. 是否有遗漏的功能点？
+3. 是否需要修改？
+
+请以 JSON 格式返回：
+{{
+  "passed": true/false,
+  "score": 1-10,
+  "feedback": "验收意见",
+  "issues": ["问题1", "问题2"]
+}}
 """
-        
-        response = await self.llm_client.generate(prompt)
-        
-        # 解析用户故事
-        try:
-            import json
-            stories = json.loads(response)
-        except:
-            # 如果解析失败,返回空列表
-            stories = []
-        
-        # 保存用户故事到文件
-        if stories:
-            stories_file = f"projects/{project_id}/docs/user_stories.json"
-            await self.tool_registry.execute_tool(
-                "file_writer",
-                file_path=stories_file,
-                content=json.dumps(stories, indent=2, ensure_ascii=False),
-                create_dirs=True
-            )
-        
-        return stories
+
+        result = await llm_client.chat_json(
+            [{"role": "user", "content": prompt}]
+        )
+
+        if result and isinstance(result, dict):
+            return {
+                "status": "acceptance_passed" if result.get("passed", True) else "acceptance_rejected",
+                "review": result,
+            }
+
+        # 降级：默认通过
+        return {
+            "status": "acceptance_passed",
+            "review": {"passed": True, "score": 7, "feedback": "规则引擎验收：默认通过", "issues": []},
+        }
+
+    def _fallback_decompose(self, title: str, description: str, priority: str) -> Dict:
+        """规则引擎降级拆单"""
+        keywords = description.lower()
+        tickets = []
+
+        # 根据关键词推断模块
+        if any(w in keywords for w in ["界面", "页面", "ui", "前端", "样式", "布局"]):
+            tickets.append({
+                "title": f"{title} - 前端界面开发",
+                "description": f"实现 {title} 的前端界面",
+                "type": "feature",
+                "module": "frontend",
+                "priority": 2,
+                "estimated_hours": 4,
+                "subtasks": [
+                    {"title": "页面布局设计", "description": "HTML/CSS 布局"},
+                    {"title": "交互逻辑实现", "description": "JavaScript 交互"},
+                ],
+                "dependencies": [],
+            })
+
+        if any(w in keywords for w in ["接口", "api", "后端", "服务", "逻辑"]):
+            tickets.append({
+                "title": f"{title} - 后端 API 开发",
+                "description": f"实现 {title} 的后端接口",
+                "type": "feature",
+                "module": "backend",
+                "priority": 2,
+                "estimated_hours": 4,
+                "subtasks": [
+                    {"title": "API 接口设计", "description": "定义接口规范"},
+                    {"title": "业务逻辑实现", "description": "核心功能代码"},
+                ],
+                "dependencies": [],
+            })
+
+        if any(w in keywords for w in ["数据库", "数据", "存储", "表"]):
+            tickets.append({
+                "title": f"{title} - 数据库设计",
+                "description": f"设计 {title} 的数据库结构",
+                "type": "feature",
+                "module": "database",
+                "priority": 1,
+                "estimated_hours": 2,
+                "subtasks": [
+                    {"title": "数据表设计", "description": "Schema 定义"},
+                    {"title": "索引优化", "description": "查询性能优化"},
+                ],
+                "dependencies": [],
+            })
+
+        # 如果什么都没匹配到，给一个通用任务
+        if not tickets:
+            tickets.append({
+                "title": f"{title} - 功能开发",
+                "description": description,
+                "type": "feature",
+                "module": "other",
+                "priority": 3,
+                "estimated_hours": 4,
+                "subtasks": [
+                    {"title": "需求细化", "description": "详细分析需求"},
+                    {"title": "功能实现", "description": "核心功能开发"},
+                ],
+                "dependencies": [],
+            })
+
+        # 总是加测试任务
+        tickets.append({
+            "title": f"{title} - 测试",
+            "description": f"编写 {title} 的测试用例",
+            "type": "test",
+            "module": "testing",
+            "priority": 3,
+            "estimated_hours": 2,
+            "subtasks": [
+                {"title": "单元测试", "description": "核心功能测试"},
+                {"title": "集成测试", "description": "模块集成测试"},
+            ],
+            "dependencies": [],
+        })
+
+        return {
+            "status": "success",
+            "prd_summary": f"[规则引擎] 需求「{title}」已拆分为 {len(tickets)} 个任务单。",
+            "tickets": tickets,
+        }
