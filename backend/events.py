@@ -52,17 +52,20 @@ class EventManager:
         """发布工单级事件"""
         await self.publish(f"ticket:{ticket_id}", event_type, data)
 
-    async def event_generator(self, channel: str) -> AsyncGenerator[str, None]:
-        """SSE 事件生成器"""
+    async def event_generator(self, channel: str) -> AsyncGenerator[dict, None]:
+        """SSE 事件生成器 — 产出 dict 供 sse_starlette 正确编码 event/data 字段"""
         queue = self.subscribe(channel)
         try:
             while True:
                 try:
                     message = await asyncio.wait_for(queue.get(), timeout=30)
-                    yield f"event: {message['event']}\ndata: {json.dumps(message['data'], ensure_ascii=False)}\n\n"
+                    yield {
+                        "event": message["event"],
+                        "data": json.dumps(message["data"], ensure_ascii=False),
+                    }
                 except asyncio.TimeoutError:
                     # 心跳保活
-                    yield f": heartbeat\n\n"
+                    yield {"event": "heartbeat", "data": ""}
         finally:
             self.unsubscribe(channel, queue)
 
