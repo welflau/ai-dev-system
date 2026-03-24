@@ -1644,3 +1644,190 @@ input[type="text"]:focus, input[type="number"]:focus, input[type="password"]:foc
     .log-entry-action { width: 60px; }
     .log-entry-status { display: none; }
 }
+
+/* ==================== LLM 对话记录样式 ==================== */
+
+.llm-conv-card {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    margin-bottom: 8px;
+    cursor: pointer;
+    transition: border-color 0.2s;
+}
+.llm-conv-card:hover {
+    border-color: var(--primary-light);
+}
+.llm-conv-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    font-size: 12px;
+    flex-wrap: wrap;
+}
+.llm-conv-num {
+    background: var(--primary);
+    color: white;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-weight: 600;
+}
+.llm-conv-agent {
+    color: var(--accent);
+    font-weight: 600;
+}
+.llm-conv-action {
+    color: var(--text-secondary);
+}
+.llm-conv-meta {
+    color: var(--text-muted);
+    font-size: 11px;
+    margin-left: auto;
+}
+.llm-conv-time {
+    color: var(--text-muted);
+    font-size: 11px;
+}
+.llm-conv-detail {
+    border-top: 1px solid var(--border);
+    padding: 12px;
+}
+.llm-conv-section {
+    margin-bottom: 16px;
+}
+.llm-conv-section:last-child {
+    margin-bottom: 0;
+}
+.llm-conv-section h5 {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: 8px;
+}
+.llm-msg {
+    margin-bottom: 8px;
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+}
+.llm-msg-role {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 4px 8px;
+    background: var(--bg);
+}
+.llm-msg.system .llm-msg-role { color: var(--warning); }
+.llm-msg.user .llm-msg-role { color: var(--info); }
+.llm-msg.assistant .llm-msg-role { color: var(--success); }
+.llm-msg-content {
+    padding: 8px;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text-secondary);
+    background: var(--bg);
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 400px;
+    overflow-y: auto;
+    margin: 0;
+    font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+}
+.llm-response-content {
+    padding: 10px;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text);
+    background: var(--bg);
+    border-radius: var(--radius-sm);
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 500px;
+    overflow-y: auto;
+    margin: 0;
+    font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+}
+
+/* ==================== 产出文件样式 ==================== */
+
+.artifact-card {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    margin-bottom: 8px;
+    cursor: pointer;
+    transition: border-color 0.2s;
+}
+.artifact-card:hover {
+    border-color: var(--accent);
+}
+.artifact-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    font-size: 13px;
+}
+.artifact-icon {
+    font-size: 16px;
+}
+.artifact-name {
+    font-weight: 500;
+    color: var(--text);
+}
+.artifact-type {
+    font-size: 11px;
+}
+.artifact-time {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-left: auto;
+}
+.artifact-files {
+    padding: 8px 12px;
+    border-top: 1px solid var(--border);
+}
+.artifact-files h6 {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin: 0 0 6px;
+}
+.artifact-file-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 0;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+.artifact-file-item .file-icon {
+    font-size: 12px;
+}
+.artifact-file-item .file-name {
+    font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+}
+.artifact-file-item .file-lang {
+    font-size: 10px;
+    color: var(--text-muted);
+    background: var(--bg);
+    padding: 1px 4px;
+    border-radius: 3px;
+}
+.artifact-content-expand {
+    border-top: 1px solid var(--border);
+    padding: 0;
+}
+.artifact-raw-content {
+    padding: 10px 12px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-secondary);
+    background: var(--bg);
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 500px;
+    overflow-y: auto;
+    margin: 0;
+    font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+}

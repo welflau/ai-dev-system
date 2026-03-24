@@ -4,9 +4,47 @@ AI 自动开发系统 - LLM 客户端
 通过 LLM_API_FORMAT 环境变量切换：anthropic / openai（默认 anthropic）
 """
 import json
+import time
 import httpx
 from typing import Any, Dict, List, Optional
 from config import settings
+
+
+# ==================== LLM 会话记录上下文 ====================
+
+class _LLMContext:
+    """线程局部变量：记录当前 LLM 调用的关联信息"""
+    ticket_id: Optional[str] = None
+    requirement_id: Optional[str] = None
+    project_id: Optional[str] = None
+    agent_type: Optional[str] = None
+    action: Optional[str] = None
+
+_llm_ctx = _LLMContext()
+
+
+def set_llm_context(
+    ticket_id: str = None,
+    requirement_id: str = None,
+    project_id: str = None,
+    agent_type: str = None,
+    action: str = None,
+):
+    """设置 LLM 调用上下文（在 Agent 执行前调用）"""
+    _llm_ctx.ticket_id = ticket_id
+    _llm_ctx.requirement_id = requirement_id
+    _llm_ctx.project_id = project_id
+    _llm_ctx.agent_type = agent_type
+    _llm_ctx.action = action
+
+
+def clear_llm_context():
+    """清除 LLM 调用上下文"""
+    _llm_ctx.ticket_id = None
+    _llm_ctx.requirement_id = None
+    _llm_ctx.project_id = None
+    _llm_ctx.agent_type = None
+    _llm_ctx.action = None
 
 
 class LLMClient:
@@ -67,8 +105,8 @@ class LLMClient:
         messages: List[Dict[str, str]],
         temperature: float,
         max_tokens: int,
-    ) -> str:
-        """调用 Anthropic Messages API"""
+    ) -> tuple:
+        """调用 Anthropic Messages API，返回 (response_text, usage_dict)"""
         url = f"{self.base_url}/v1/messages"
         payload = self._to_anthropic_payload(messages, temperature, max_tokens)
 
@@ -85,14 +123,19 @@ class LLMClient:
                     texts = [
                         b["text"] for b in content_blocks if b.get("type") == "text"
                     ]
-                    return "".join(texts) if texts else ""
+                    text = "".join(texts) if texts else ""
+                    usage = data.get("usage", {})
+                    return text, {
+                        "input_tokens": usage.get("input_tokens"),
+                        "output_tokens": usage.get("output_tokens"),
+                    }
             except Exception as e:
                 if attempt == self.max_retries - 1:
                     print(f"[LLM] Anthropic 调用失败 (attempt {attempt+1}): {e}")
-                    return self._fallback_response(messages)
+                    return self._fallback_response(messages), None
                 print(f"[LLM] Anthropic 调用重试 {attempt+1}/{self.max_retries}: {e}")
 
-        return self._fallback_response(messages)
+        return self._fallback_response(messages), None
 
     # ---- OpenAI 兼容 API ----
 
@@ -107,8 +150,8 @@ class LLMClient:
         messages: List[Dict[str, str]],
         temperature: float,
         max_tokens: int,
-    ) -> str:
-        """调用 OpenAI 兼容 API"""
+    ) -> tuple:
+        """调用 OpenAI 兼容 API，返回 (response_text, usage_dict)"""
         url = f"{self.base_url}/chat/completions"
         payload = {
             "model": self.model,
@@ -125,13 +168,18 @@ class LLMClient:
                     )
                     resp.raise_for_status()
                     data = resp.json()
-                    return data["choices"][0]["message"]["content"]
+                    text = data["choices"][0]["message"]["content"]
+                    usage = data.get("usage", {})
+                    return text, {
+                        "input_tokens": usage.get("prompt_tokens"),
+                        "output_tokens": usage.get("completion_tokens"),
+                    }
             except Exception as e:
                 if attempt == self.max_retries - 1:
                     print(f"[LLM] OpenAI 调用失败: {e}")
-                    return self._fallback_response(messages)
+                    return self._fallback_response(messages), None
 
-        return self._fallback_response(messages)
+        return self._fallback_response(messages), None
 
     # ---- 统一接口 ----
 
@@ -141,14 +189,59 @@ class LLMClient:
         temperature: float = 0.7,
         max_tokens: int = 4096,
     ) -> str:
-        """异步聊天补全（自动根据 api_format 选择后端）"""
+        """异步聊天补全（自动根据 api_format 选择后端）+ 自动记录会话"""
         if not self.is_configured:
             return self._fallback_response(messages)
 
+        start_time = time.time()
+
         if self.api_format == "anthropic":
-            return await self._call_anthropic(messages, temperature, max_tokens)
+            response_text, usage = await self._call_anthropic(messages, temperature, max_tokens)
         else:
-            return await self._call_openai(messages, temperature, max_tokens)
+            response_text, usage = await self._call_openai(messages, temperature, max_tokens)
+
+        duration_ms = int((time.time() - start_time) * 1000)
+
+        # 异步记录 LLM 会话（不阻塞主流程）
+        try:
+            await self._save_conversation(messages, response_text, usage, duration_ms)
+        except Exception as e:
+            print(f"[LLM] 保存会话记录失败: {e}")
+
+        return response_text
+
+    async def _save_conversation(
+        self,
+        messages: List[Dict[str, str]],
+        response: str,
+        usage: Optional[Dict],
+        duration_ms: int,
+    ):
+        """保存 LLM 会话记录到数据库"""
+        from database import db
+        from utils import generate_id, now_iso
+
+        is_fallback = response.startswith("[LLM_UNAVAILABLE]")
+
+        conv_id = generate_id("LLM")
+        data = {
+            "id": conv_id,
+            "ticket_id": _llm_ctx.ticket_id,
+            "requirement_id": _llm_ctx.requirement_id,
+            "project_id": _llm_ctx.project_id,
+            "agent_type": _llm_ctx.agent_type,
+            "action": _llm_ctx.action,
+            "messages": json.dumps(messages, ensure_ascii=False),
+            "response": response,
+            "model": self.model,
+            "input_tokens": usage.get("input_tokens") if usage else None,
+            "output_tokens": usage.get("output_tokens") if usage else None,
+            "duration_ms": duration_ms,
+            "status": "fallback" if is_fallback else "success",
+            "error": None,
+            "created_at": now_iso(),
+        }
+        await db.insert("llm_conversations", data)
 
     async def generate(self, prompt: str, **kwargs) -> str:
         """简便方法：单次生成"""

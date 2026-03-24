@@ -465,17 +465,33 @@ async function openTicketDrawer(ticketId) {
         if (artifacts.length > 0) {
             html += `
             <div class="drawer-section">
-                <h4>产物 (${artifacts.length})</h4>
-                ${artifacts.map(a => `
+                <h4>产出文件 (${artifacts.length})</h4>
+                ${artifacts.map(a => {
+                    let filesHtml = '';
+                    try {
+                        const parsed = JSON.parse(a.content || '{}');
+                        if (parsed.files && Array.isArray(parsed.files)) {
+                            filesHtml = '<div style="margin-top:6px;">';
+                            parsed.files.forEach(f => {
+                                const fileName = typeof f === 'string' ? f : (f.path || f.name || f.filename || JSON.stringify(f));
+                                filesHtml += `<div style="font-size:12px; color:var(--text-secondary); padding:2px 0;">📄 ${escHtml(fileName)}</div>`;
+                            });
+                            filesHtml += '</div>';
+                        }
+                    } catch {}
+
+                    return `
                     <div style="background:var(--bg-elevated); padding:10px; border-radius:var(--radius-sm); margin-bottom:8px; cursor:pointer;" onclick="toggleArtifactContent(this)">
                         <div style="display:flex; align-items:center; gap:8px; font-size:13px;">
                             <span>${getArtifactIcon(a.type)}</span>
                             <span style="font-weight:500;">${escHtml(a.name || a.type)}</span>
+                            <span class="tag tag-module" style="font-size:11px;">${escHtml(a.type)}</span>
                             <span style="font-size:11px; color:var(--text-muted); margin-left:auto;">${formatDate(a.created_at)}</span>
                         </div>
+                        ${filesHtml}
                         <div class="artifact-content" style="display:none; margin-top:8px; padding:8px; background:var(--bg); border-radius:4px; font-size:12px; color:var(--text-secondary); max-height:300px; overflow-y:auto; white-space:pre-wrap; word-break:break-all;">${escHtml(tryFormatJson(a.content))}</div>
-                    </div>
-                `).join('')}
+                    </div>`;
+                }).join('')}
             </div>`;
         }
 
@@ -916,10 +932,12 @@ function closeJobLogPanel() {
 function switchJobLogTab(tab) {
     document.querySelectorAll('.job-log-tab').forEach(el => el.classList.remove('active'));
     event.target.classList.add('active');
-    // 只有 log tab 有实现，config tab 显示占位
     const entries = document.getElementById('jobLogEntries');
-    if (tab === 'config') {
-        entries.innerHTML = '<div class="log-panel-empty">配置信息暂未实现</div>';
+
+    if (tab === 'ai') {
+        loadJobLLMLogs();
+    } else if (tab === 'artifacts') {
+        loadJobArtifacts();
     } else if (activeJobId) {
         // 重新加载日志
         let stageKey = '';
@@ -932,6 +950,211 @@ function switchJobLogTab(tab) {
             }
         }
         loadJobLogs(activeJobId, stageKey);
+    }
+}
+
+async function loadJobLLMLogs() {
+    const entries = document.getElementById('jobLogEntries');
+    entries.innerHTML = '<div class="log-panel-empty">加载 AI 对话记录...</div>';
+
+    // 查找当前 Job 的 ticket_id
+    let ticketId = null;
+    let reqId = null;
+    let stageKey = null;
+    if (currentPipelineData) {
+        reqId = currentPipelineData.requirement?.id;
+        for (const stage of currentPipelineData.stages) {
+            for (const j of (stage.jobs || [])) {
+                if (j.id === activeJobId) {
+                    ticketId = j.ticket_id;
+                    stageKey = stage.key;
+                    break;
+                }
+            }
+            if (ticketId) break;
+        }
+    }
+
+    try {
+        let conversations = [];
+        if (stageKey === 'requirement_analysis' && reqId) {
+            const data = await api(`/requirements/${reqId}/llm-logs`);
+            conversations = data.conversations || [];
+        } else if (ticketId) {
+            const data = await api(`/tickets/${ticketId}/llm-logs`);
+            conversations = data.conversations || [];
+        }
+
+        if (conversations.length === 0) {
+            entries.innerHTML = '<div class="log-panel-empty">暂无 AI 对话记录</div>';
+            return;
+        }
+
+        let html = '';
+        conversations.forEach((conv, i) => {
+            const time = formatTime(conv.created_at) || '';
+            const agent = conv.agent_type || 'System';
+            const action = conv.action || '';
+            const model = conv.model || '-';
+            const inputTokens = conv.input_tokens || '-';
+            const outputTokens = conv.output_tokens || '-';
+            const duration = conv.duration_ms ? (conv.duration_ms / 1000).toFixed(1) + 's' : '-';
+            const status = conv.status || 'success';
+            const statusIcon = status === 'success' ? '✅' : (status === 'fallback' ? '⚠️' : '❌');
+
+            // 解析 messages
+            let messagesHtml = '';
+            try {
+                const msgs = JSON.parse(conv.messages || '[]');
+                msgs.forEach(msg => {
+                    const role = msg.role || 'user';
+                    const roleLabel = role === 'system' ? '🔧 System' : (role === 'user' ? '👤 User' : '🤖 Assistant');
+                    const roleClass = role === 'system' ? 'system' : (role === 'user' ? 'user' : 'assistant');
+                    // 截断太长的 content
+                    let content = msg.content || '';
+                    const truncated = content.length > 2000;
+                    if (truncated) content = content.slice(0, 2000);
+                    messagesHtml += `<div class="llm-msg ${roleClass}">
+                        <div class="llm-msg-role">${roleLabel}</div>
+                        <pre class="llm-msg-content">${escHtml(content)}${truncated ? '\n... (已截断)' : ''}</pre>
+                    </div>`;
+                });
+            } catch { messagesHtml = '<div class="llm-msg">无法解析消息</div>'; }
+
+            // Response
+            let responseText = conv.response || '';
+            const resTruncated = responseText.length > 3000;
+            if (resTruncated) responseText = responseText.slice(0, 3000);
+
+            html += `<div class="llm-conv-card" onclick="toggleLLMConvDetail(this)">
+                <div class="llm-conv-header">
+                    <span class="llm-conv-num">#${conversations.length - i}</span>
+                    <span class="llm-conv-agent">${escHtml(agent)}</span>
+                    <span class="llm-conv-action">${escHtml(action)}</span>
+                    <span class="llm-conv-meta">${statusIcon} ${escHtml(model)} | 输入 ${inputTokens} tokens | 输出 ${outputTokens} tokens | ${duration}</span>
+                    <span class="llm-conv-time">${time}</span>
+                </div>
+                <div class="llm-conv-detail" style="display:none;">
+                    <div class="llm-conv-section">
+                        <h5>📤 Prompt Messages</h5>
+                        ${messagesHtml}
+                    </div>
+                    <div class="llm-conv-section">
+                        <h5>📥 LLM Response</h5>
+                        <pre class="llm-response-content">${escHtml(responseText)}${resTruncated ? '\n... (已截断)' : ''}</pre>
+                    </div>
+                </div>
+            </div>`;
+        });
+
+        entries.innerHTML = html;
+    } catch (e) {
+        entries.innerHTML = `<div class="log-panel-empty">加载失败: ${escHtml(e.message)}</div>`;
+    }
+}
+
+function toggleLLMConvDetail(el) {
+    const detail = el.querySelector('.llm-conv-detail');
+    if (detail) {
+        detail.style.display = detail.style.display === 'none' ? 'block' : 'none';
+    }
+}
+
+async function loadJobArtifacts() {
+    const entries = document.getElementById('jobLogEntries');
+    entries.innerHTML = '<div class="log-panel-empty">加载产出文件...</div>';
+
+    // 查找当前 Job 的 ticket_id
+    let ticketId = null;
+    let reqId = null;
+    let stageKey = null;
+    if (currentPipelineData) {
+        reqId = currentPipelineData.requirement?.id;
+        for (const stage of currentPipelineData.stages) {
+            for (const j of (stage.jobs || [])) {
+                if (j.id === activeJobId) {
+                    ticketId = j.ticket_id;
+                    stageKey = stage.key;
+                    break;
+                }
+            }
+            if (ticketId) break;
+        }
+    }
+
+    try {
+        let artifacts = [];
+        if (stageKey === 'requirement_analysis' && reqId) {
+            // 需求分析阶段：获取需求级产物
+            const data = await api(`/requirements/${reqId}/artifacts`);
+            artifacts = (data.artifacts || []).filter(a => !a.ticket_id);
+        } else if (ticketId) {
+            const data = await api(`/tickets/${ticketId}/artifacts`);
+            artifacts = data.artifacts || [];
+        }
+
+        if (artifacts.length === 0) {
+            entries.innerHTML = '<div class="log-panel-empty">暂无产出文件</div>';
+            return;
+        }
+
+        let html = '';
+        artifacts.forEach(a => {
+            const icon = getArtifactIcon(a.type);
+            const time = formatDateTime(a.created_at);
+
+            // 解析文件列表（从 content 中提取）
+            let filesHtml = '';
+            let contentPreview = '';
+            try {
+                const parsed = JSON.parse(a.content || '{}');
+                // 提取代码文件列表
+                if (parsed.files && Array.isArray(parsed.files)) {
+                    filesHtml = '<div class="artifact-files"><h6>📁 文件列表</h6>';
+                    parsed.files.forEach(f => {
+                        const fileName = typeof f === 'string' ? f : (f.path || f.name || f.filename || JSON.stringify(f));
+                        const lang = typeof f === 'object' ? (f.language || '') : '';
+                        filesHtml += `<div class="artifact-file-item">
+                            <span class="file-icon">📄</span>
+                            <span class="file-name">${escHtml(fileName)}</span>
+                            ${lang ? `<span class="file-lang">${escHtml(lang)}</span>` : ''}
+                        </div>`;
+                    });
+                    filesHtml += '</div>';
+                }
+                contentPreview = JSON.stringify(parsed, null, 2);
+            } catch {
+                contentPreview = a.content || '';
+            }
+
+            // 截断过长内容
+            const truncated = contentPreview.length > 5000;
+            if (truncated) contentPreview = contentPreview.slice(0, 5000);
+
+            html += `<div class="artifact-card" onclick="toggleArtifactExpand(this)">
+                <div class="artifact-header">
+                    <span class="artifact-icon">${icon}</span>
+                    <span class="artifact-name">${escHtml(a.name || a.type)}</span>
+                    <span class="artifact-type tag tag-module">${escHtml(a.type)}</span>
+                    <span class="artifact-time">${time}</span>
+                </div>
+                ${filesHtml}
+                <div class="artifact-content-expand" style="display:none;">
+                    <pre class="artifact-raw-content">${escHtml(contentPreview)}${truncated ? '\n... (已截断)' : ''}</pre>
+                </div>
+            </div>`;
+        });
+
+        entries.innerHTML = html;
+    } catch (e) {
+        entries.innerHTML = `<div class="log-panel-empty">加载失败: ${escHtml(e.message)}</div>`;
+    }
+}
+
+function toggleArtifactExpand(el) {
+    const content = el.querySelector('.artifact-content-expand');
+    if (content) {
+        content.style.display = content.style.display === 'none' ? 'block' : 'none';
     }
 }
 

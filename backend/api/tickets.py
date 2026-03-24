@@ -398,6 +398,52 @@ async def get_project_stats(project_id: str):
     }
 
 
+# ==================== LLM 会话日志 ====================
+
+
+@router.get("/api/tickets/{ticket_id}/llm-logs")
+async def get_ticket_llm_logs(ticket_id: str):
+    """获取工单关联的 LLM 会话记录"""
+    logs = await db.fetch_all(
+        "SELECT * FROM llm_conversations WHERE ticket_id = ? ORDER BY created_at DESC",
+        (ticket_id,),
+    )
+    return {"conversations": logs, "total": len(logs)}
+
+
+@router.get("/api/requirements/{req_id}/llm-logs")
+async def get_requirement_llm_logs(req_id: str):
+    """获取需求关联的 LLM 会话记录"""
+    logs = await db.fetch_all(
+        "SELECT * FROM llm_conversations WHERE requirement_id = ? ORDER BY created_at DESC",
+        (req_id,),
+    )
+    return {"conversations": logs, "total": len(logs)}
+
+
+# ==================== 产出文件 ====================
+
+
+@router.get("/api/tickets/{ticket_id}/artifacts")
+async def get_ticket_artifacts(ticket_id: str):
+    """获取工单产出文件"""
+    artifacts = await db.fetch_all(
+        "SELECT * FROM artifacts WHERE ticket_id = ? ORDER BY created_at DESC",
+        (ticket_id,),
+    )
+    return {"artifacts": artifacts, "total": len(artifacts)}
+
+
+@router.get("/api/requirements/{req_id}/artifacts")
+async def get_requirement_artifacts(req_id: str):
+    """获取需求关联的全部产出文件"""
+    artifacts = await db.fetch_all(
+        "SELECT a.*, t.title as ticket_title FROM artifacts a LEFT JOIN tickets t ON a.ticket_id = t.id WHERE a.requirement_id = ? ORDER BY a.created_at DESC",
+        (req_id,),
+    )
+    return {"artifacts": artifacts, "total": len(artifacts)}
+
+
 # ==================== SSE 事件 ====================
 
 

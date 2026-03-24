@@ -17,6 +17,7 @@ from models import (
 )
 from utils import generate_id, now_iso
 from events import event_manager
+from llm_client import set_llm_context, clear_llm_context
 
 # Agent 导入
 from agents.product import ProductAgent
@@ -100,12 +101,23 @@ class TicketOrchestrator:
                 {"agent": "ProductAgent", "action": "analyze_and_decompose", "requirement_id": requirement_id},
             )
 
+            # 设置 LLM 上下文（用于记录会话）
+            set_llm_context(
+                ticket_id=None,
+                requirement_id=requirement_id,
+                project_id=project_id,
+                agent_type="ProductAgent",
+                action="analyze_and_decompose",
+            )
+
             # Agent 执行拆单
             result = await agent.execute("analyze_and_decompose", {
                 "title": requirement["title"],
                 "description": requirement["description"],
                 "priority": requirement["priority"],
             })
+
+            clear_llm_context()
 
             if result.get("status") != "success":
                 await self._log(
@@ -332,7 +344,18 @@ class TicketOrchestrator:
             # 模拟处理延迟（让前端能看到状态变化）
             await asyncio.sleep(1)
 
+            # 设置 LLM 上下文
+            set_llm_context(
+                ticket_id=ticket_id,
+                requirement_id=ticket["requirement_id"],
+                project_id=project_id,
+                agent_type=agent_name,
+                action=action,
+            )
+
             result = await agent.execute(action, context)
+
+            clear_llm_context()
 
             # 处理结果
             await self._handle_agent_result(project_id, ticket_id, ticket, agent_name, action, result)
@@ -390,7 +413,8 @@ class TicketOrchestrator:
             await self._log(
                 project_id, requirement_id, ticket_id, agent_name,
                 "complete", current_status, new_status,
-                f"架构设计完成，预计开发 {est_hours} 小时"
+                f"架构设计完成，预计开发 {est_hours} 小时",
+                detail_data={"estimated_hours": est_hours, "result_summary": str(result.get("architecture", ""))[:500]},
             )
 
             # 保存架构产物
@@ -420,7 +444,11 @@ class TicketOrchestrator:
             await self._log(
                 project_id, requirement_id, ticket_id, agent_name,
                 "complete", current_status, new_status,
-                "开发完成，等待产品验收"
+                "开发完成，等待产品验收",
+                detail_data={
+                    "files_count": len(result.get("files", [])),
+                    "result_summary": str(result.get("summary", result.get("message", "")))[:500],
+                },
             )
 
             # 保存代码产物
@@ -641,11 +669,17 @@ class TicketOrchestrator:
         to_status: Optional[str],
         message: str,
         level: str = "info",
+        detail_data: Optional[Dict] = None,
     ):
         """记录日志并推送 SSE 实时事件"""
         log_id = generate_id("LOG")
         created_at = now_iso()
-        detail_json = json.dumps({"message": message}, ensure_ascii=False)
+
+        # 构建丰富的 detail JSON
+        detail_obj = {"message": message}
+        if detail_data:
+            detail_obj.update(detail_data)
+        detail_json = json.dumps(detail_obj, ensure_ascii=False)
 
         await db.insert("ticket_logs", {
             "id": log_id,

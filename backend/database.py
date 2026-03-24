@@ -200,6 +200,27 @@ CREATE TABLE IF NOT EXISTS artifacts (
 );
 
 -- ============================================================
+-- LLM 会话记录表
+-- ============================================================
+CREATE TABLE IF NOT EXISTS llm_conversations (
+    id              TEXT PRIMARY KEY,
+    ticket_id       TEXT REFERENCES tickets(id),
+    requirement_id  TEXT REFERENCES requirements(id),
+    project_id      TEXT REFERENCES projects(id),
+    agent_type      TEXT,
+    action          TEXT,
+    messages        TEXT NOT NULL,
+    response        TEXT,
+    model           TEXT,
+    input_tokens    INTEGER,
+    output_tokens   INTEGER,
+    duration_ms     INTEGER,
+    status          TEXT NOT NULL DEFAULT 'success',
+    error           TEXT,
+    created_at      TEXT NOT NULL
+);
+
+-- ============================================================
 -- 索引
 -- ============================================================
 CREATE INDEX IF NOT EXISTS idx_requirements_project ON requirements(project_id);
@@ -214,6 +235,9 @@ CREATE INDEX IF NOT EXISTS idx_subtasks_ticket ON subtasks(ticket_id);
 CREATE INDEX IF NOT EXISTS idx_ticket_logs_ticket ON ticket_logs(ticket_id);
 CREATE INDEX IF NOT EXISTS idx_ticket_logs_requirement ON ticket_logs(requirement_id);
 CREATE INDEX IF NOT EXISTS idx_artifacts_ticket ON artifacts(ticket_id);
+CREATE INDEX IF NOT EXISTS idx_llm_conversations_ticket ON llm_conversations(ticket_id);
+CREATE INDEX IF NOT EXISTS idx_llm_conversations_requirement ON llm_conversations(requirement_id);
+CREATE INDEX IF NOT EXISTS idx_llm_conversations_project ON llm_conversations(project_id);
 """
 
 
