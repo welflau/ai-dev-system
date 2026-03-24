@@ -182,26 +182,6 @@
                                     <div class="empty-state"><div class="emoji">⏳</div><p>加载中...</p></div>
                                 </div>
                             </div>
-                            <!-- 右侧 Job 日志面板 -->
-                            <div class="pipeline-job-log-panel" id="pipelineJobLogPanel" style="display:none;">
-                                <div class="job-log-header">
-                                    <div class="job-log-title">
-                                        <span class="job-log-icon" id="jobLogIcon">✓</span>
-                                        <span id="jobLogTitle">Job</span>
-                                    </div>
-                                    <div class="job-log-tabs">
-                                        <button class="job-log-tab active" onclick="switchJobLogTab('log')">📋 日志</button>
-                                        <button class="job-log-tab" onclick="switchJobLogTab('ai')">🤖 AI 对话</button>
-                                        <button class="job-log-tab" onclick="switchJobLogTab('artifacts')">📦 产出文件</button>
-                                    </div>
-                                    <button class="btn-icon" onclick="closeJobLogPanel()">&times;</button>
-                                </div>
-                                <div class="job-log-body" id="jobLogBody">
-                                    <div class="job-log-entries" id="jobLogEntries">
-                                        <div class="log-panel-empty">选择一个 Job 查看日志</div>
-                                    </div>
-                                </div>
-                            </div>
                         </div>
                     </div>
 
@@ -259,6 +239,28 @@
             </div>
         </section>
     </main>
+
+    <!-- ==================== Job 日志抽屉 ==================== -->
+    <div class="job-drawer-overlay" id="jobDrawerOverlay" onclick="closeJobLogPanel()"></div>
+    <aside class="job-drawer" id="pipelineJobLogPanel">
+        <div class="job-log-header">
+            <div class="job-log-title">
+                <span class="job-log-icon" id="jobLogIcon">✓</span>
+                <span id="jobLogTitle">Job</span>
+            </div>
+            <div class="job-log-tabs">
+                <button class="job-log-tab active" onclick="switchJobLogTab('log')">📋 日志</button>
+                <button class="job-log-tab" onclick="switchJobLogTab('ai')">🤖 AI 对话</button>
+                <button class="job-log-tab" onclick="switchJobLogTab('artifacts')">📦 产出文件</button>
+            </div>
+            <button class="btn-icon" onclick="closeJobLogPanel()">&times;</button>
+        </div>
+        <div class="job-log-body" id="jobLogBody">
+            <div class="job-log-entries" id="jobLogEntries">
+                <div class="log-panel-empty">选择一个 Job 查看日志</div>
+            </div>
+        </div>
+    </aside>
 
     <!-- ==================== 工单详情抽屉 ==================== -->
     <div class="drawer-overlay" id="drawerOverlay" onclick="closeDrawer()"></div>

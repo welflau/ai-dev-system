@@ -818,9 +818,11 @@ async function selectJob(jobId, stageKey) {
     const card = document.querySelector(`.pl-job-card[data-job-id="${jobId}"]`);
     if (card) card.classList.add('active');
 
-    // 打开日志面板
+    // 打开日志抽屉
     const panel = document.getElementById('pipelineJobLogPanel');
-    panel.style.display = 'flex';
+    const overlay = document.getElementById('jobDrawerOverlay');
+    panel.classList.add('active');
+    overlay.classList.add('active');
 
     // 查找 Job 数据
     let job = null;
@@ -925,7 +927,9 @@ async function loadJobLogs(jobId, stageKey) {
 function closeJobLogPanel() {
     activeJobId = null;
     const panel = document.getElementById('pipelineJobLogPanel');
-    if (panel) panel.style.display = 'none';
+    const overlay = document.getElementById('jobDrawerOverlay');
+    if (panel) panel.classList.remove('active');
+    if (overlay) overlay.classList.remove('active');
     document.querySelectorAll('.pl-job-card').forEach(el => el.classList.remove('active'));
 }
 
@@ -1160,9 +1164,10 @@ function toggleArtifactExpand(el) {
 
 function scrollToPipelineLogs() {
     const panel = document.getElementById('pipelineJobLogPanel');
+    const overlay = document.getElementById('jobDrawerOverlay');
     if (panel) {
-        panel.style.display = 'flex';
-        panel.scrollIntoView({ behavior: 'smooth' });
+        panel.classList.add('active');
+        overlay.classList.add('active');
     }
 }
 
@@ -1543,6 +1548,7 @@ document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
         document.querySelectorAll('.modal-overlay.active').forEach(m => m.classList.remove('active'));
         closeDrawer();
+        closeJobLogPanel();
     }
 });
 
