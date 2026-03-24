@@ -11,13 +11,156 @@ let currentProject = null;
 let currentPipelineReqId = null;
 let eventSource = null;
 
+// ==================== 工具函数 ====================
+
+/**
+ * 中文转拼音（简化版）
+ * 将中文字符转换为拼音，用于生成英文路径
+ */
+function chineseToPinyin(text) {
+    // 常用汉字拼音映射（简化版）
+    const pinyinMap = {
+        '我': 'wo', '的': 'de', '游戏': 'game', '项目': 'project',
+        '系统': 'system', '平台': 'platform', '应用': 'app', '应用': 'application',
+        '管理': 'manage', '管理': 'management', '商城': 'mall', '商城': 'shop',
+        '博客': 'blog', '论坛': 'forum', '社区': 'community',
+        '办公': 'office', '企业': 'enterprise', '学校': 'school',
+        '医疗': 'medical', '医院': 'hospital', '健康': 'health',
+        '金融': 'finance', '银行': 'bank', '支付': 'payment',
+        '教育': 'education', '学习': 'learning', '培训': 'training',
+        '娱乐': 'entertainment', '视频': 'video', '音乐': 'music',
+        '社交': 'social', '聊天': 'chat', '通讯': 'communication',
+        '工具': 'tool', '助手': 'assistant', '服务': 'service',
+        '数据': 'data', '分析': 'analysis', '报表': 'report',
+        '智能': 'smart', '智慧': 'wisdom', 'AI': 'ai', '人工智能': 'ai',
+        '开发': 'dev', '测试': 'test', '运维': 'ops',
+        '前端': 'frontend', '后端': 'backend', '全栈': 'fullstack',
+        '移动': 'mobile', '网页': 'web', '桌面': 'desktop',
+        '云': 'cloud', '服务器': 'server', '数据库': 'database',
+        '用户': 'user', '客户': 'customer', '会员': 'member',
+        '订单': 'order', '商品': 'product', '库存': 'inventory',
+        '购物车': 'cart', '支付': 'pay', '结算': 'checkout',
+        '登录': 'login', '注册': 'register', '认证': 'auth',
+        '权限': 'permission', '角色': 'role', '菜单': 'menu',
+        '设置': 'settings', '配置': 'config', '个人': 'profile',
+        '消息': 'message', '通知': 'notification', '推送': 'push',
+        '搜索': 'search', '筛选': 'filter', '排序': 'sort',
+        '上传': 'upload', '下载': 'download', '导出': 'export',
+        '导入': 'import', '打印': 'print', '预览': 'preview',
+        '编辑': 'edit', '删除': 'delete', '添加': 'add',
+        '创建': 'create', '更新': 'update', '保存': 'save',
+        '取消': 'cancel', '确定': 'confirm', '提交': 'submit',
+        '返回': 'back', '首页': 'home', '关于': 'about',
+        '帮助': 'help', '文档': 'docs', '常见问题': 'faq',
+        '联系': 'contact', '反馈': 'feedback', '建议': 'suggestion',
+        '版本': 'version', '更新日志': 'changelog', '说明': 'readme',
+        '协议': 'license', '隐私': 'privacy', '条款': 'terms',
+        '团队': 'team', '公司': 'company', '品牌': 'brand',
+        '产品': 'product', '解决方案': 'solution', '案例': 'case',
+        '新闻': 'news', '活动': 'event', '公告': 'announcement',
+        '首页': 'index', '列表': 'list', '详情': 'detail',
+        '分类': 'category', '标签': 'tag', '评论': 'comment',
+        '点赞': 'like', '收藏': 'favorite', '分享': 'share',
+        '关注': 'follow', '粉丝': 'follower', '好友': 'friend',
+        '群组': 'group', '频道': 'channel', '话题': 'topic',
+        '帖子': 'post', '文章': 'article', '问答': 'qa',
+        '任务': 'task', '日程': 'schedule', '提醒': 'reminder',
+        '日历': 'calendar', '时钟': 'clock', '天气': 'weather',
+        '地图': 'map', '定位': 'location', '导航': 'navigation',
+        '相机': 'camera', '相册': 'gallery', '图片': 'image',
+        '文件': 'file', '文件夹': 'folder', '压缩包': 'archive',
+        '文档': 'document', '表格': 'spreadsheet', '演示': 'presentation',
+        '音频': 'audio', '视频': 'video', '直播': 'live',
+        '游戏': 'game', '竞技': 'esports', '休闲': 'casual',
+        '角色': 'rpg', '动作': 'action', '策略': 'strategy',
+        '射击': 'shooter', '赛车': 'racing', '体育': 'sports',
+        '冒险': 'adventure', '解谜': 'puzzle', '模拟': 'simulation',
+        '在线': 'online', '离线': 'offline', '多人': 'multiplayer',
+        '单人': 'singleplayer', '合作': 'coop', '对战': 'pvp',
+        '排行榜': 'rank', '成就': 'achievement', '奖励': 'reward',
+        '道具': 'item', '装备': 'equipment', '技能': 'skill',
+        '等级': 'level', '经验': 'exp', '金币': 'gold',
+        '钻石': 'diamond', '点券': 'coupon', '商城': 'store',
+        '充值': 'recharge', '签到': 'checkin', '活动': 'event',
+        '任务': 'quest', '副本': 'dungeon', '世界': 'world',
+        '地图': 'map', '场景': 'scene', '角色': 'character',
+        '职业': 'class', '天赋': 'talent', '符文': 'rune',
+        '装备': 'gear', '武器': 'weapon', '防具': 'armor',
+        '饰品': 'accessory', '消耗品': 'consumable', '材料': 'material',
+        '打造': 'craft', '合成': 'combine', '升级': 'upgrade',
+        '强化': 'enhance', '觉醒': 'awaken', '转职': 'advance',
+        '公会': 'guild', '联盟': 'alliance', '战队': 'team',
+        '战场': 'battlefield', '竞技场': 'arena', '排位': 'ranked',
+        '赛季': 'season', '段位': 'tier', '积分': 'points',
+        '匹配': 'match', '排队': 'queue', '房间': 'room',
+        '聊天': 'chat', '语音': 'voice', '表情': 'emoji',
+        '动作': 'gesture', '动画': 'animation', '特效': 'effect',
+        '音效': 'sound', '背景音乐': 'bgm', '界面': 'ui',
+        '操作': 'control', '按键': 'keybind', '设置': 'settings',
+        '选项': 'options', '帮助': 'help', '教程': 'tutorial',
+        '新手': 'newbie', '引导': 'guide', '提示': 'hint',
+        '提示框': 'tooltip', '对话框': 'dialog', '弹窗': 'modal',
+        '按钮': 'button', '输入框': 'input', '下拉框': 'select',
+        '复选框': 'checkbox', '单选框': 'radio', '开关': 'toggle',
+        '滑块': 'slider', '进度条': 'progress', '加载': 'loading',
+        '刷新': 'refresh', '返回': 'back', '退出': 'exit',
+        '登录': 'login', '注册': 'signup', '找回密码': 'forgot',
+        '账号': 'account', '密码': 'password', '邮箱': 'email',
+        '手机': 'phone', '验证码': 'code', '短信': 'sms',
+        '微信': 'wechat', '支付宝': 'alipay', 'QQ': 'qq'
+    };
+
+    let result = text.toLowerCase();
+    // 先尝试匹配多字词
+    for (const [chinese, pinyin] of Object.entries(pinyinMap)) {
+        result = result.split(chinese).join(pinyin);
+    }
+    // 替换空格和特殊字符为连字符
+    result = result.replace(/[\s\u4e00-\u9fa5，。！？、；：""''（）【】]+/g, '-');
+    // 移除多余连字符
+    result = result.replace(/-+/g, '-').replace(/^-|-$/g, '');
+    // 如果没有结果，使用 base64 编码
+    if (!result) {
+        result = btoa(encodeURIComponent(text)).replace(/=/g, '');
+    }
+    return result;
+}
+
+/**
+ * 根据项目名称生成本地仓库路径
+ */
+function generateLocalPath(projectName) {
+    const englishName = chineseToPinyin(projectName);
+    return `D:/Projects/${englishName}`;
+}
+
 // ==================== 初始化 ====================
 
 document.addEventListener('DOMContentLoaded', () => {
     checkLLMStatus();
     loadProjects();
     initLogPanel();
+    initProjectNameListener();
 });
+
+/**
+ * 初始化项目名称输入监听
+ */
+function initProjectNameListener() {
+    const projectNameInput = document.getElementById('projectName');
+    const localPathInput = document.getElementById('projectLocalPath');
+
+    projectNameInput.addEventListener('input', () => {
+        const name = projectNameInput.value.trim();
+        if (name) {
+            // 自动生成本地路径
+            localPathInput.value = generateLocalPath(name);
+        } else {
+            // 清空时恢复默认提示
+            localPathInput.value = '';
+        }
+    });
+}
 
 // ==================== API 工具函数 ====================
 
@@ -303,7 +446,7 @@ async function createProject() {
     }
 
     try {
-        const body: any = { name, description, tech_stack, git_remote_url };
+        const body = { name, description, tech_stack, git_remote_url };
         if (local_repo_path) {
             body.local_repo_path = local_repo_path;
         }
