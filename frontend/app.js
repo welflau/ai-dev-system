@@ -746,7 +746,7 @@ function renderPipelineStages(container, stages) {
             const isActive = activeJobId === job.id;
             const dur = formatDuration(job.duration);
 
-            html += `<div class="pl-job-card ${isActive ? 'active' : ''}" data-job-id="${job.id}" onclick="selectJob('${job.id}', '${stage.key}')">
+            html += `<div class="pl-job-card ${isActive ? 'active' : ''} ${jobCls === 'pending' ? 'job-pending' : ''}" data-job-id="${job.id}" onclick="selectJob('${job.id}', '${stage.key}')">
                 <div class="pl-job-header">
                     <span class="pl-job-status-icon ${jobCls}">${jobIcon}</span>
                     <span class="pl-job-name">${escHtml(job.title)}</span>
@@ -835,6 +835,18 @@ async function loadJobLogs(jobId, stageKey) {
     const entries = document.getElementById('jobLogEntries');
     entries.innerHTML = '<div class="log-panel-empty">加载日志...</div>';
 
+    // 从 Job 数据中查找真正的 ticket_id
+    let ticketId = null;
+    let job = null;
+    if (currentPipelineData) {
+        for (const stage of currentPipelineData.stages) {
+            for (const j of (stage.jobs || [])) {
+                if (j.id === jobId) { job = j; ticketId = j.ticket_id; break; }
+            }
+            if (job) break;
+        }
+    }
+
     try {
         // 如果是需求分析阶段的 Job，从需求日志获取
         let logs = [];
@@ -842,10 +854,14 @@ async function loadJobLogs(jobId, stageKey) {
             // 从 pipeline data 中的 logs 字段过滤
             logs = (currentPipelineData.logs || []).filter(l => l.agent_type === 'ProductAgent' || l.agent_type === 'System');
             logs = logs.reverse(); // 按时间正序
-        } else {
-            // 从工单日志 API 获取
-            const data = await api(`/tickets/${jobId}/logs`);
+        } else if (ticketId) {
+            // 用真正的 ticket_id 获取日志
+            const data = await api(`/tickets/${ticketId}/logs`);
             logs = (data.logs || []).reverse();
+        } else {
+            // 预期 Job（还没执行），无日志
+            entries.innerHTML = '<div class="log-panel-empty">该任务尚未执行，暂无日志</div>';
+            return;
         }
 
         if (logs.length === 0) {

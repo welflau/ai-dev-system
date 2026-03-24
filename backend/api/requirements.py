@@ -321,19 +321,27 @@ async def get_requirement_pipeline(project_id: str, req_id: str):
         "jobs": analysis_jobs,
     })
 
-    # 阶段 2-5: 基于工单
+    # 阶段 2-5: 所有工单都出现在每个阶段（已完成/进行中/待执行）
     all_statuses = [t["status"] for t in tickets]
+
+    # 每个阶段对应的 Agent 名称（用于没有工单时生成预期 Job）
+    STAGE_AGENTS = {
+        "architecture": "ArchitectAgent",
+        "development": "DevAgent",
+        "testing": "TestAgent",
+        "deployment": "DeployAgent",
+    }
 
     for key, name, icon, stage_statuses_list in STAGE_DEFS[1:]:
         stage_statuses_set = set(stage_statuses_list)
-        stage_tickets = [t for t in tickets if t["status"] in stage_statuses_set]
+        past_set = PAST.get(key, set())
+        pre_set = PRE.get(key, set())
 
         # 判定阶段整体状态
         if not tickets:
             s_status = "pending"
         else:
             in_stage = any(s in stage_statuses_set for s in all_statuses)
-            past_set = PAST.get(key, set())
             non_cancelled = [s for s in all_statuses if s != "cancelled"]
             past_stage = (
                 all(s in past_set for s in non_cancelled)
@@ -344,49 +352,84 @@ async def get_requirement_pipeline(project_id: str, req_id: str):
             elif in_stage:
                 s_status = "running"
             else:
-                pre_set = PRE.get(key, set())
                 if any(s in pre_set for s in all_statuses):
                     s_status = "pending"
                 else:
                     s_status = "done"
 
-        # 构建 jobs（每个工单 = 一个 job）
+        # 构建 jobs — 所有工单都在每个阶段出现
         jobs = []
-        for t in stage_tickets:
-            t_duration = calc_duration(t.get("started_at"), t.get("completed_at"))
-            t_subtasks = []
-            for st in t.get("subtasks", []):
-                st_duration = calc_duration(st.get("created_at"), st.get("completed_at"))
-                t_subtasks.append({
-                    "id": st["id"],
-                    "title": st["title"],
-                    "status": st["status"],
-                    "duration": st_duration,
-                })
+        for t in tickets:
+            if t["status"] == "cancelled":
+                continue  # 已取消工单不显示
 
-            # 如果工单没有子任务，用工单自身作为一个默认子任务
+            # 判定该工单在此阶段的 Job 状态
+            job_status = _ticket_stage_status(t["status"], stage_statuses_set, past_set, pre_set)
+
+            # 计算耗时：只有在该阶段执行过的工单才有耗时
+            if job_status == "done" or job_status == "running":
+                t_duration = calc_duration(t.get("started_at"), t.get("completed_at"))
+            else:
+                t_duration = None
+
+            # 子任务（只有当工单在此阶段时才展示实际子任务）
+            t_subtasks = []
+            if job_status in ("done", "running", "failed"):
+                for st in t.get("subtasks", []):
+                    st_duration = calc_duration(st.get("created_at"), st.get("completed_at"))
+                    t_subtasks.append({
+                        "id": st["id"],
+                        "title": st["title"],
+                        "status": st["status"],
+                        "duration": st_duration,
+                    })
+
+            # 如果该阶段没有子任务，用工单标题作为默认子任务
             if not t_subtasks:
+                default_st_status = "completed" if job_status == "done" else (
+                    "in_progress" if job_status == "running" else "pending"
+                )
                 t_subtasks.append({
                     "title": t["title"],
-                    "status": "completed" if t["status"] in past_set else (
-                        "in_progress" if t["status"] in stage_statuses_set else "pending"
-                    ),
+                    "status": default_st_status,
                     "duration": t_duration,
                 })
 
+            # Job 标题：用 Agent 名称，根据阶段映射
+            agent_for_stage = STAGE_AGENTS.get(key, "")
+            job_title = agent_for_stage or t.get("assigned_agent") or t["title"]
+
             jobs.append({
-                "id": t["id"],
-                "title": t.get("assigned_agent") or t["title"],
-                "status": _ticket_to_job_status(t["status"], stage_statuses_set, past_set),
-                "agent": t.get("assigned_agent"),
+                "id": f"{t['id']}-{key}",
+                "title": job_title,
+                "status": job_status,
+                "agent": agent_for_stage,
                 "duration": t_duration,
-                "started_at": t.get("started_at"),
-                "completed_at": t.get("completed_at"),
+                "started_at": t.get("started_at") if job_status in ("done", "running") else None,
+                "completed_at": t.get("completed_at") if job_status == "done" else None,
                 "subtasks": t_subtasks,
-                "log_count": len(t.get("logs", [])),
+                "log_count": len(t.get("logs", [])) if job_status in ("done", "running", "failed") else 0,
                 "ticket_id": t["id"],
                 "ticket_title": t["title"],
                 "ticket_status": t["status"],
+            })
+
+        # 如果没有工单但需求已进入分析，生成预期 Job（占位）
+        if not jobs and req_status not in ("submitted",):
+            agent_name = STAGE_AGENTS.get(key, name)
+            jobs.append({
+                "id": f"expected-{key}",
+                "title": agent_name,
+                "status": "pending",
+                "agent": agent_name,
+                "duration": None,
+                "started_at": None,
+                "completed_at": None,
+                "subtasks": [{"title": name, "status": "pending", "duration": None}],
+                "log_count": 0,
+                "ticket_id": None,
+                "ticket_title": name,
+                "ticket_status": "pending",
             })
 
         stages.append({
@@ -416,16 +459,22 @@ async def get_requirement_pipeline(project_id: str, req_id: str):
     }
 
 
-def _ticket_to_job_status(ticket_status: str, stage_set: set, past_set: set) -> str:
-    """将工单状态映射为 job 状态: done / running / pending / failed"""
+def _ticket_stage_status(ticket_status: str, stage_set: set, past_set: set, pre_set: set) -> str:
+    """判定工单在某个阶段的 Job 状态: done / running / pending / failed"""
+    # 工单已经过了这个阶段 → done
     if ticket_status in past_set:
         return "done"
+    # 工单正在这个阶段
     if ticket_status in stage_set:
         if "rejected" in ticket_status or "failed" in ticket_status:
             return "failed"
         if "done" in ticket_status or "passed" in ticket_status:
             return "done"
         return "running"
+    # 工单还没到这个阶段 → pending
+    if ticket_status in pre_set or ticket_status == "pending":
+        return "pending"
+    # 兜底
     return "pending"
 
 
