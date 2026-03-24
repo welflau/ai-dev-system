@@ -181,50 +181,22 @@ function initProjectNameListener() {
 }
 
 /**
- * 选择本地路径（弹出文件夹选择对话框）
- * 注意：由于浏览器安全限制，Web 应用无法直接访问文件系统
- * 这个功能需要一个后端 API 来列出可用路径
+ * 选择本地路径（显示常用路径建议）
+ * 由于浏览器安全限制，Web 应用无法调用系统文件夹对话框
+ * 这里显示常用路径供用户选择和编辑
  */
 async function selectLocalPath() {
-    // 尝试使用本地文件系统访问 API（如果后端支持）
     try {
         const response = await api('/filesystem/available-paths');
         if (response.paths && response.paths.length > 0) {
-            // 如果后端返回了可用路径列表，显示选择对话框
+            // 显示路径选择对话框
             showPathSelector(response.paths);
         } else {
-            showToast('后端不支持路径选择，请手动输入路径', 'warning');
+            showToast('无法获取可用路径列表', 'warning');
         }
     } catch (e) {
-        // 后端 API 不存在或不支持，显示提示
-        console.log('路径选择 API 不可用，用户需要手动输入路径');
-        showToast('请在输入框中手动输入路径（如：D:/Projects/my-game）', 'info');
-
-        // 同时提供一些常用路径建议
-        const commonPaths = [
-            'D:/Projects/',
-            'D:/AIProjects/',
-            'D:/MyProjects/',
-            'C:/Projects/',
-            'C:/Users/admin/Documents/Projects/'
-        ];
-
-        // 检查当前输入框的值
-        const localPathInput = document.getElementById('projectLocalPath');
-        const currentValue = localPathInput.value.trim();
-
-        // 如果当前是自动生成的路径，建议一个可用的路径
-        if (currentValue.startsWith('D:/Projects/')) {
-            const projectName = currentValue.replace('D:/Projects/', '');
-            const suggestedPath = `D:/AIProjects/${projectName}`;
-            const useSuggested = confirm(
-                `当前路径可能不存在。\n\n是否使用以下路径？\n${suggestedPath}\n\n点击"确定"使用建议路径，点击"取消"保持当前输入。`
-            );
-
-            if (useSuggested) {
-                localPathInput.value = suggestedPath;
-            }
-        }
+        console.error('获取路径列表失败:', e);
+        showToast('请手动输入路径（如：D:/Projects/my-game）', 'info');
     }
 }
 
@@ -237,10 +209,11 @@ function showPathSelector(paths) {
     modal.className = 'modal-overlay';
     modal.id = 'pathSelectorModal';
 
-    let pathOptions = paths.map(path =>
-        `<div class="path-option" onclick="selectPath('${path}')">
-            <span class="path-icon">📁</span>
-            <span class="path-text">${path}</span>
+    let pathOptions = paths.map(item =>
+        `<div class="path-option" onclick="selectPath('${item.path}')">
+            <span class="path-icon">${item.exists ? '📁' : '📝'}</span>
+            <span class="path-text">${item.path}</span>
+            ${!item.exists ? '<span class="path-hint">（建议）</span>' : ''}
         </div>`
     ).join('');
 
@@ -254,6 +227,7 @@ function showPathSelector(paths) {
                 <div class="path-list">
                     ${pathOptions}
                 </div>
+                <p class="path-tip">💡 提示：选择路径后，请在输入框中手动添加项目文件夹名称（如：/my-game）</p>
             </div>
             <div class="modal-footer">
                 <button class="btn" onclick="closePathSelector()">取消</button>
@@ -269,7 +243,24 @@ function showPathSelector(paths) {
  * 选择的路径
  */
 function selectPath(path) {
-    document.getElementById('projectLocalPath').value = path;
+    const localPathInput = document.getElementById('projectLocalPath');
+    
+    // 如果路径末尾没有斜杠，添加斜杠
+    if (!path.endsWith('/')) {
+        path += '/';
+    }
+    
+    // 获取项目名称
+    const projectName = document.getElementById('projectName').value.trim();
+    if (projectName) {
+        // 自动添加项目名称（英文）
+        const englishName = chineseToPinyin(projectName);
+        localPathInput.value = path + englishName;
+    } else {
+        // 只选择路径，不添加项目名
+        localPathInput.value = path;
+    }
+    
     closeModal('pathSelectorModal');
 }
 
