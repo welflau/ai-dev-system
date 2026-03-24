@@ -115,6 +115,10 @@ class LLMClient:
 
     def _fallback_response(self, messages: List[Dict[str, str]]) -> str:
         """LLM 不可用时的降级响应"""
+        if not self.is_configured:
+            print("[LLM] WARNING: LLM 未配置（缺少 LLM_BASE_URL 或 LLM_API_KEY），使用规则引擎降级。请配置 .env 文件。")
+        else:
+            print("[LLM] WARNING: LLM 调用失败，使用规则引擎降级。")
         return "[LLM_UNAVAILABLE] LLM 服务不可用，使用规则引擎降级处理。"
 
 

@@ -113,10 +113,22 @@ class TicketOrchestrator:
                     "error", "analyzing", "analyzing",
                     f"需求分析失败: {result.get('message', '未知错误')}", "error"
                 )
+                # 回退状态允许重试
+                await db.update("requirements", {
+                    "status": RequirementStatus.SUBMITTED.value,
+                    "updated_at": now_iso(),
+                }, "id = ?", (requirement_id,))
                 return
 
-            # 更新 PRD 内容
+            # 记录是否走了降级路径
             prd_summary = result.get("prd_summary", "")
+            is_fallback = prd_summary.startswith("[规则引擎]")
+            if is_fallback:
+                await self._log(
+                    project_id, requirement_id, None, "ProductAgent",
+                    "info", "analyzing", "analyzing",
+                    "[WARNING] LLM 不可用，使用规则引擎降级拆单", "warning"
+                )
             await db.update("requirements", {
                 "prd_content": prd_summary,
                 "updated_at": now_iso(),
@@ -232,11 +244,27 @@ class TicketOrchestrator:
             print(f"[Orchestrator] 需求处理异常: {e}")
             import traceback
             traceback.print_exc()
-            await self._log(
-                project_id, requirement_id, None, "ProductAgent",
-                "error", None, None,
-                f"需求处理异常: {str(e)}", "error"
-            )
+
+            # 记录错误日志
+            try:
+                await self._log(
+                    project_id, requirement_id, None, "ProductAgent",
+                    "error", "analyzing", "submitted",
+                    f"需求处理异常: {str(e)}", "error"
+                )
+                # 将需求状态回退为已提交，允许用户重试
+                await db.update("requirements", {
+                    "status": RequirementStatus.SUBMITTED.value,
+                    "updated_at": now_iso(),
+                }, "id = ?", (requirement_id,))
+
+                await event_manager.publish_to_project(
+                    project_id,
+                    "requirement_error",
+                    {"requirement_id": requirement_id, "error": str(e)},
+                )
+            except Exception as log_err:
+                print(f"[Orchestrator] 记录错误日志也失败了: {log_err}")
 
     # ==================== 工单流转 ====================
 
@@ -313,12 +341,20 @@ class TicketOrchestrator:
             print(f"[Orchestrator] 工单处理异常: {e}")
             import traceback
             traceback.print_exc()
-            await self._log(
-                project_id, ticket.get("requirement_id") if ticket else None,
-                ticket_id, "Orchestrator",
-                "error", None, None,
-                f"工单处理异常: {str(e)}", "error"
-            )
+            try:
+                await self._log(
+                    project_id, ticket.get("requirement_id") if ticket else None,
+                    ticket_id, "Orchestrator",
+                    "error", None, None,
+                    f"工单处理异常: {str(e)}", "error"
+                )
+                await event_manager.publish_to_project(
+                    project_id,
+                    "ticket_error",
+                    {"ticket_id": ticket_id, "error": str(e)},
+                )
+            except Exception as log_err:
+                print(f"[Orchestrator] 记录错误日志也失败了: {log_err}")
 
     async def _handle_agent_result(
         self,
