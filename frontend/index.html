@@ -324,9 +324,14 @@
                     <input type="text" id="projectTechStack" placeholder="如 Python, FastAPI, React...">
                 </div>
                 <div class="form-group">
-                    <label>Git 远程仓库 URL</label>
-                    <input type="text" id="projectGitRemote" placeholder="https://github.com/username/repo.git">
-                    <small class="form-hint">可选：配置后 Agent 生成的代码将自动推送到远程仓库</small>
+                    <label>Git 远程仓库 URL <span class="required">*</span></label>
+                    <input type="text" id="projectGitRemote" placeholder="https://github.com/username/repo.git" required>
+                    <small class="form-hint">必填：Agent 生成的代码将自动推送到此远程仓库</small>
+                </div>
+                <div class="form-group">
+                    <label>本地仓库路径</label>
+                    <input type="text" id="projectLocalPath" placeholder="留空则使用默认路径 backend/projects/{project_id}/">
+                    <small class="form-hint">可选：指定本地 Git 仓库的绝对路径（如 D:/MyProject）</small>
                 </div>
             </div>
             <div class="modal-footer">

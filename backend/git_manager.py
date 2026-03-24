@@ -32,6 +32,20 @@ class GitManager:
         "build",
     ]
 
+    def __init__(self):
+        # 存储项目 ID 到自定义路径的映射
+        self._custom_paths: Dict[str, str] = {}
+
+    def set_project_path(self, project_id: str, path: str):
+        """设置项目的自定义仓库路径"""
+        self._custom_paths[project_id] = path
+
+    def _repo_path(self, project_id: str) -> Path:
+        """获取项目仓库路径（优先使用自定义路径）"""
+        if project_id in self._custom_paths:
+            return Path(self._custom_paths[project_id])
+        return PROJECTS_DIR / project_id
+
     async def _run_git(self, cwd: str, *args: str) -> tuple:
         """执行 git 命令，返回 (returncode, stdout, stderr)"""
         cmd = ["git"] + list(args)

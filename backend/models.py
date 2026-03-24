@@ -206,7 +206,8 @@ class ProjectCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     description: Optional[str] = None
     tech_stack: Optional[str] = None
-    git_remote_url: Optional[str] = None
+    git_remote_url: str = Field(..., min_length=1, description="Git 远程仓库 URL（必填）")
+    local_repo_path: Optional[str] = Field(None, description="本地仓库路径（可选，默认为 backend/projects/{project_id}/）")
 
 
 class ProjectUpdate(BaseModel):

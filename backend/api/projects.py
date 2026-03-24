@@ -14,16 +14,106 @@ router = APIRouter(prefix="/api/projects", tags=["projects"])
 @router.post("")
 async def create_project(req: ProjectCreate):
     """创建项目"""
+    import os
+
     project_id = generate_id("PRJ")
     now = now_iso()
 
-    # 初始化 Git 仓库
-    repo_path = await git_manager.init_repo(project_id, req.name, req.description or "")
+    # 确定本地仓库路径
+    if req.local_repo_path:
+        # 用户自定义路径
+        repo_path = os.path.abspath(req.local_repo_path)
+        # 注册自定义路径到 GitManager
+        git_manager.set_project_path(project_id, repo_path)
+    else:
+        # 默认路径
+        repo_path = await git_manager.init_repo(project_id, req.name, req.description or "")
 
-    # 如果提供了远程仓库 URL，立即配置
-    remote_url = req.git_remote_url or ""
-    if remote_url:
-        await git_manager.set_remote(project_id, remote_url)
+    # 初始化 Git 仓库
+    if not req.local_repo_path:
+        # 使用默认路径时调用 init_repo 创建目录结构
+        await git_manager.init_repo(project_id, req.name, req.description or "")
+    else:
+        # 自定义路径时，手动创建目录结构和初始化
+        os.makedirs(repo_path, exist_ok=True)
+        # 创建标准目录
+        for d in git_manager.REPO_DIRS:
+            os.makedirs(os.path.join(repo_path, d), exist_ok=True)
+        # 生成 README.md
+        readme = f"""# {req.name}
+
+{req.description or '由 AI 自动开发系统创建的项目'}
+
+## 目录结构
+
+```
+src/         - 源代码
+  api/       - API 接口
+  models/    - 数据模型
+  services/  - 业务逻辑
+  utils/     - 工具函数
+tests/       - 测试代码
+docs/        - 文档
+config/      - 配置文件
+build/       - 构建产物 (Dockerfile, CI/CD 等)
+```
+
+## 由 AI 自动开发系统管理
+
+此仓库中的代码和文档由 AI Agent 自动生成和维护。
+"""
+        readme_path = os.path.join(repo_path, "README.md")
+        if not os.path.exists(readme_path):
+            with open(readme_path, "w", encoding="utf-8") as f:
+                f.write(readme)
+
+        # 生成 .gitignore
+        gitignore = """# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+*.log
+"""
+        gitignore_path = os.path.join(repo_path, ".gitignore")
+        if not os.path.exists(gitignore_path):
+            with open(gitignore_path, "w", encoding="utf-8") as f:
+                f.write(gitignore)
+
+        # git init
+        await git_manager._run_git(repo_path, "init")
+
+    # 配置远程仓库（必填）
+    await git_manager.set_remote(project_id, req.git_remote_url)
+
+    # 初始提交
+    await git_manager._run_git(repo_path, "add", ".")
+    await git_manager._run_git(
+        repo_path, "commit", "-m",
+        f"init: {req.name} - project initialized by AI Dev System",
+        "--author", "AI Dev System <ai@dev-system.local>",
+    )
+
+    # 尝试首次推送
+    push_success = await git_manager.push(project_id)
 
     data = {
         "id": project_id,
@@ -33,12 +123,17 @@ async def create_project(req: ProjectCreate):
         "tech_stack": req.tech_stack or "",
         "config": "{}",
         "git_repo_path": repo_path,
-        "git_remote_url": remote_url,
+        "git_remote_url": req.git_remote_url,
         "created_at": now,
         "updated_at": now,
     }
     await db.insert("projects", data)
-    return {"id": project_id, **data}
+
+    return {
+        "id": project_id,
+        **data,
+        "push_success": push_success,
+    }
 
 
 @router.get("")

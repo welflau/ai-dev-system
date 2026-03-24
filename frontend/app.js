@@ -281,6 +281,7 @@ function showCreateProjectModal() {
     document.getElementById('projectDescription').value = '';
     document.getElementById('projectTechStack').value = '';
     document.getElementById('projectGitRemote').value = '';
+    document.getElementById('projectLocalPath').value = '';
     openModal('createProjectModal');
 }
 
@@ -289,19 +290,39 @@ async function createProject() {
     const description = document.getElementById('projectDescription').value.trim();
     const tech_stack = document.getElementById('projectTechStack').value.trim();
     const git_remote_url = document.getElementById('projectGitRemote').value.trim();
+    const local_repo_path = document.getElementById('projectLocalPath').value.trim();
 
     if (!name) {
         showToast('请输入项目名称', 'warning');
         return;
     }
 
+    if (!git_remote_url) {
+        showToast('请输入 Git 远程仓库 URL', 'warning');
+        return;
+    }
+
     try {
+        const body: any = { name, description, tech_stack, git_remote_url };
+        if (local_repo_path) {
+            body.local_repo_path = local_repo_path;
+        }
+
         const data = await api('/projects', {
             method: 'POST',
-            body: { name, description, tech_stack, git_remote_url },
+            body,
         });
+
         closeModal('createProjectModal');
-        showToast(`项目「${name}」创建成功`, 'success');
+
+        let message = `项目「${name}」创建成功`;
+        if (data.push_success) {
+            message += '，并已推送到远程仓库';
+        } else {
+            message += '（首次推送失败，请检查远程仓库权限）';
+        }
+        showToast(message, data.push_success ? 'success' : 'warning');
+
         showProjectDetail(data.id);
     } catch (e) {
         showToast(`创建失败: ${e.message}`, 'error');
