@@ -431,6 +431,17 @@
     <!-- ==================== Toast 通知 ==================== -->
     <div class="toast-container" id="toastContainer"></div>
 
+    <!-- ==================== 服务日志区域 ==================== -->
+    <div class="server-logs" id="serverLogs">
+        <div class="logs-header">
+            <span>📋 服务日志</span>
+            <button class="btn-icon" onclick="toggleLogs()" title="折叠/展开">▼</button>
+        </div>
+        <div class="logs-content" id="logsContent">
+            <div class="log-entry log-info">正在连接后端服务...</div>
+        </div>
+    </div>
+
     <script src="/static/app.js"></script>
 </body>
 </html>

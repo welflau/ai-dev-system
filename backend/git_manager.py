@@ -2,7 +2,6 @@
 AI 自动开发系统 - Git 仓库管理器
 封装项目级 Git 操作：初始化、文件写入、提交、推送
 """
-import asyncio
 import os
 import json
 from pathlib import Path
@@ -48,23 +47,23 @@ class GitManager:
 
     async def _run_git(self, cwd: str, *args: str) -> tuple:
         """执行 git 命令，返回 (returncode, stdout, stderr)"""
+        import subprocess
         cmd = ["git"] + list(args)
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            cwd=cwd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await proc.communicate()
-        return (
-            proc.returncode,
-            stdout.decode("utf-8", errors="replace").strip(),
-            stderr.decode("utf-8", errors="replace").strip(),
-        )
-
-    def _repo_path(self, project_id: str) -> Path:
-        """获取项目仓库路径"""
-        return PROJECTS_DIR / project_id
+        try:
+            result = subprocess.run(
+                cmd,
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            return (
+                result.returncode,
+                result.stdout.strip(),
+                result.stderr.strip(),
+            )
+        except Exception as e:
+            return (1, "", str(e))
 
     # ==================== 仓库初始化 ====================
 

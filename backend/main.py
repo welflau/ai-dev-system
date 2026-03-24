@@ -2,6 +2,7 @@
 AI 自动开发系统 - 主入口
 FastAPI 应用启动
 """
+import asyncio
 import os
 import sys
 from pathlib import Path
@@ -13,6 +14,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from config import settings
 from database import db
+
+# Windows 上需要使用 WindowsSelectorEventLoopPolicy 来支持 asyncio subprocess
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
 @asynccontextmanager

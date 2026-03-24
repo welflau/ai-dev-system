@@ -2224,3 +2224,146 @@ function escapeHtml(str) {
     if (!str) return '';
     return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
+
+
+// ==================== 服务日志面板 ====================
+
+let serverLogsCollapsed = false;
+
+function initLogPanel() {
+    addLog('info', '前端已加载，开始连接后端服务...');
+    checkServerHealth();
+    // 定期检查后端健康状态
+    setInterval(checkServerHealth, 30000); // 每30秒检查一次
+}
+
+function toggleLogs() {
+    const panel = document.getElementById('serverLogs');
+    serverLogsCollapsed = !serverLogsCollapsed;
+    if (serverLogsCollapsed) {
+        panel.classList.add('collapsed');
+        addLog('info', '日志面板已折叠');
+    } else {
+        panel.classList.remove('collapsed');
+        addLog('info', '日志面板已展开');
+    }
+}
+
+async function checkServerHealth() {
+    try {
+        const start = Date.now();
+        const resp = await fetch('/api/health', { method: 'GET', cache: 'no-store' });
+        const duration = Date.now() - start;
+
+        if (resp.ok) {
+            const data = await resp.json();
+            addLog('success', `后端服务正常 (${duration}ms) - 版本: ${data.version || 'unknown'}`);
+            updateLLMStatusIndicator('available');
+        } else {
+            addLog('error', `后端服务异常 (${resp.status})`);
+            updateLLMStatusIndicator('error');
+        }
+    } catch (e) {
+        addLog('error', `无法连接后端服务: ${e.message}`);
+        updateLLMStatusIndicator('error');
+    }
+}
+
+function addLog(level, message) {
+    const content = document.getElementById('logsContent');
+    const now = new Date();
+    const time = formatDateTime(now);
+    const levelClass = `log-${level}`;
+    const levelEmoji = {
+        info: 'ℹ️',
+        success: '✅',
+        warning: '⚠️',
+        error: '❌'
+    }[level] || '•';
+
+    const entry = document.createElement('div');
+    entry.className = `log-entry ${levelClass}`;
+    entry.innerHTML = `
+        <span class="log-time">${time}</span>
+        <span class="log-message">${levelEmoji} ${escapeHtml(message)}</span>
+    `;
+
+    // 限制日志条数，最多保留50条
+    while (content.children.length >= 50) {
+        content.removeChild(content.firstChild);
+    }
+
+    content.appendChild(entry);
+    content.scrollTop = content.scrollHeight; // 自动滚动到底部
+}
+
+function formatDateTime(date) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    const seconds = String(date.getSeconds()).padStart(2, '0');
+    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+}
+
+// 修改 checkLLMStatus 函数，添加日志记录
+const originalCheckLLMStatus = checkLLMStatus;
+checkLLMStatus = async function() {
+    addLog('info', '检查 LLM 配置状态...');
+    try {
+        await originalCheckLLMStatus();
+        const el = document.getElementById('llmStatus');
+        const text = el.querySelector('.text').textContent;
+        if (text === '可用') {
+            addLog('success', 'LLM 配置正常');
+        } else if (text === '未配置') {
+            addLog('warning', 'LLM 未配置，请点击右上角配置');
+        } else if (text === '不可用') {
+            addLog('error', 'LLM 连接失败，请检查配置');
+        }
+    } catch (e) {
+        addLog('error', `检查 LLM 状态失败: ${e.message}`);
+    }
+};
+
+// 拦截 API 请求，添加日志记录
+const originalApi = api;
+api = async function(path, options = {}) {
+    const startTime = Date.now();
+    addLog('info', `API 请求: ${options.method || 'GET'} ${path}`);
+
+    try {
+        const result = await originalApi(path, options);
+        const duration = Date.now() - startTime;
+        addLog('success', `API 响应: ${path} (${duration}ms)`);
+        return result;
+    } catch (e) {
+        const duration = Date.now() - startTime;
+        addLog('error', `API 失败: ${path} (${duration}ms) - ${e.message}`);
+        throw e;
+    }
+};
+
+function updateLLMStatusIndicator(status) {
+    const el = document.getElementById('llmStatus');
+    const dot = el.querySelector('.dot');
+    const text = el.querySelector('.text');
+
+    el.classList.remove('available', 'error', 'unconfigured');
+    el.classList.add(status);
+
+    if (status === 'available') {
+        text.textContent = '可用';
+        dot.style.background = 'var(--success)';
+    } else if (status === 'error') {
+        text.textContent = '不可用';
+        dot.style.background = 'var(--error)';
+    } else if (status === 'unconfigured') {
+        text.textContent = '未配置';
+        dot.style.background = 'var(--warning)';
+    } else {
+        text.textContent = '检测中';
+        dot.style.background = 'var(--text-muted)';
+    }
+}
