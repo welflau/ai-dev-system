@@ -134,34 +134,6 @@ async def update_requirement(project_id: str, req_id: str, req: RequirementUpdat
     return await get_requirement(project_id, req_id)
 
 
-@router.delete("/{req_id}")
-async def cancel_requirement(project_id: str, req_id: str):
-    """取消需求"""
-    existing = await db.fetch_one(
-        "SELECT * FROM requirements WHERE id = ? AND project_id = ?",
-        (req_id, project_id),
-    )
-    if not existing:
-        raise HTTPException(404, "需求不存在")
-
-    if existing["status"] in ("completed", "cancelled"):
-        raise HTTPException(400, "需求已完成或已取消，无法操作")
-
-    await db.update(
-        "requirements",
-        {"status": "cancelled", "updated_at": now_iso()},
-        "id = ?",
-        (req_id,),
-    )
-
-    await _log_requirement(
-        project_id, req_id, None, "update_status",
-        existing["status"], "cancelled", "需求已取消"
-    )
-
-    return {"message": "需求已取消"}
-
-
 @router.delete("/{req_id}/permanent")
 async def delete_requirement(project_id: str, req_id: str):
     """永久删除需求（物理删除，同时清理关联工单、子任务、日志、产物、LLM会话）"""
@@ -200,6 +172,34 @@ async def delete_requirement(project_id: str, req_id: str):
     await db.delete("requirements", "id = ?", (req_id,))
 
     return {"message": "需求已永久删除"}
+
+
+@router.delete("/{req_id}")
+async def cancel_requirement(project_id: str, req_id: str):
+    """取消需求"""
+    existing = await db.fetch_one(
+        "SELECT * FROM requirements WHERE id = ? AND project_id = ?",
+        (req_id, project_id),
+    )
+    if not existing:
+        raise HTTPException(404, "需求不存在")
+
+    if existing["status"] in ("completed", "cancelled"):
+        raise HTTPException(400, "需求已完成或已取消，无法操作")
+
+    await db.update(
+        "requirements",
+        {"status": "cancelled", "updated_at": now_iso()},
+        "id = ?",
+        (req_id,),
+    )
+
+    await _log_requirement(
+        project_id, req_id, None, "update_status",
+        existing["status"], "cancelled", "需求已取消"
+    )
+
+    return {"message": "需求已取消"}
 
 
 @router.get("/{req_id}/pipeline")
