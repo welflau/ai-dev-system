@@ -280,6 +280,7 @@ function showCreateProjectModal() {
     document.getElementById('projectName').value = '';
     document.getElementById('projectDescription').value = '';
     document.getElementById('projectTechStack').value = '';
+    document.getElementById('projectGitRemote').value = '';
     openModal('createProjectModal');
 }
 
@@ -287,6 +288,7 @@ async function createProject() {
     const name = document.getElementById('projectName').value.trim();
     const description = document.getElementById('projectDescription').value.trim();
     const tech_stack = document.getElementById('projectTechStack').value.trim();
+    const git_remote_url = document.getElementById('projectGitRemote').value.trim();
 
     if (!name) {
         showToast('请输入项目名称', 'warning');
@@ -296,7 +298,7 @@ async function createProject() {
     try {
         const data = await api('/projects', {
             method: 'POST',
-            body: { name, description, tech_stack },
+            body: { name, description, tech_stack, git_remote_url },
         });
         closeModal('createProjectModal');
         showToast(`项目「${name}」创建成功`, 'success');

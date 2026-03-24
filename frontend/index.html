@@ -323,6 +323,11 @@
                     <label>技术栈</label>
                     <input type="text" id="projectTechStack" placeholder="如 Python, FastAPI, React...">
                 </div>
+                <div class="form-group">
+                    <label>Git 远程仓库 URL</label>
+                    <input type="text" id="projectGitRemote" placeholder="https://github.com/username/repo.git">
+                    <small class="form-hint">可选：配置后 Agent 生成的代码将自动推送到远程仓库</small>
+                </div>
             </div>
             <div class="modal-footer">
                 <button class="btn" onclick="closeModal('createProjectModal')">取消</button>

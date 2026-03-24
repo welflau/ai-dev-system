@@ -206,6 +206,7 @@ class ProjectCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     description: Optional[str] = None
     tech_stack: Optional[str] = None
+    git_remote_url: Optional[str] = None
 
 
 class ProjectUpdate(BaseModel):

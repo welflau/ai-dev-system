@@ -20,6 +20,11 @@ async def create_project(req: ProjectCreate):
     # 初始化 Git 仓库
     repo_path = await git_manager.init_repo(project_id, req.name, req.description or "")
 
+    # 如果提供了远程仓库 URL，立即配置
+    remote_url = req.git_remote_url or ""
+    if remote_url:
+        await git_manager.set_remote(project_id, remote_url)
+
     data = {
         "id": project_id,
         "name": req.name,
@@ -28,7 +33,7 @@ async def create_project(req: ProjectCreate):
         "tech_stack": req.tech_stack or "",
         "config": "{}",
         "git_repo_path": repo_path,
-        "git_remote_url": "",
+        "git_remote_url": remote_url,
         "created_at": now,
         "updated_at": now,
     }
