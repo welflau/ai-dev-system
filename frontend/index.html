@@ -16,7 +16,7 @@
             </nav>
         </div>
         <div class="top-bar-right">
-            <div class="llm-status" id="llmStatus">
+            <div class="llm-status" id="llmStatus" onclick="showLLMConfigModal()" style="cursor:pointer;" title="点击配置 LLM">
                 <span class="dot"></span>
                 <span class="text">检测中...</span>
             </div>
@@ -223,6 +223,54 @@
             <div class="modal-footer">
                 <button class="btn" onclick="closeModal('createRequirementModal')">取消</button>
                 <button class="btn btn-primary" onclick="submitRequirement()">提交并拆单</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== 模态框：LLM 配置 ==================== -->
+    <div class="modal-overlay" id="llmConfigModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>⚙️ LLM 配置</h3>
+                <button class="btn-icon" onclick="closeModal('llmConfigModal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p style="font-size:12px; color:var(--text-muted); margin-bottom:16px;">
+                    配置 OpenAI 兼容的 LLM API，用于智能需求拆分、代码生成等 AI 功能。不配置则使用规则引擎降级。
+                </p>
+                <div class="form-group">
+                    <label>API Base URL <span class="required">*</span></label>
+                    <input type="text" id="llmBaseUrl" placeholder="https://api.openai.com/v1">
+                </div>
+                <div class="form-group">
+                    <label>API Key <span class="required">*</span></label>
+                    <div style="position:relative;">
+                        <input type="password" id="llmApiKey" placeholder="sk-..." style="padding-right:40px;">
+                        <button class="btn-icon" onclick="togglePasswordVisibility('llmApiKey', this)" style="position:absolute; right:8px; top:50%; transform:translateY(-50%); font-size:14px;" title="显示/隐藏">👁</button>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>模型名称</label>
+                    <input type="text" id="llmModel" placeholder="gpt-4">
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>超时时间（秒）</label>
+                        <input type="number" id="llmTimeout" placeholder="60" min="10" max="300" value="60">
+                    </div>
+                    <div class="form-group">
+                        <label>最大重试次数</label>
+                        <input type="number" id="llmMaxRetries" placeholder="3" min="0" max="10" value="3">
+                    </div>
+                </div>
+                <div id="llmTestResult" style="display:none; padding:10px; border-radius:var(--radius-sm); font-size:13px; margin-top:8px;"></div>
+            </div>
+            <div class="modal-footer" style="justify-content:space-between;">
+                <button class="btn" onclick="testLLMConnection()" id="llmTestBtn">🔗 测试连接</button>
+                <div>
+                    <button class="btn" onclick="closeModal('llmConfigModal')">取消</button>
+                    <button class="btn btn-primary" onclick="saveLLMConfig()">保存配置</button>
+                </div>
             </div>
         </div>
     </div>

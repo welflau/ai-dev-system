@@ -88,6 +88,61 @@ async def llm_status():
         "configured": llm_client.is_configured,
         "base_url": llm_client.base_url if llm_client.is_configured else None,
         "model": llm_client.model if llm_client.is_configured else None,
+        "timeout": llm_client.timeout,
+        "max_retries": llm_client.max_retries,
+    }
+
+
+@app.post("/api/llm/config")
+async def llm_config(body: dict):
+    """动态更新 LLM 配置并持久化到 .env"""
+    from llm_client import llm_client
+    from config import BASE_DIR
+
+    # 更新运行时
+    if "base_url" in body:
+        llm_client.base_url = (body["base_url"] or "").rstrip("/")
+    if "api_key" in body:
+        llm_client.api_key = body["api_key"] or ""
+    if "model" in body:
+        llm_client.model = body["model"] or "gpt-4"
+    if "timeout" in body:
+        llm_client.timeout = int(body.get("timeout", 60))
+    if "max_retries" in body:
+        llm_client.max_retries = int(body.get("max_retries", 3))
+
+    # 同步更新 settings
+    settings.LLM_BASE_URL = llm_client.base_url
+    settings.LLM_API_KEY = llm_client.api_key
+    settings.LLM_MODEL = llm_client.model
+    settings.LLM_TIMEOUT = llm_client.timeout
+    settings.LLM_MAX_RETRIES = llm_client.max_retries
+
+    # 持久化到 .env
+    env_path = BASE_DIR / ".env"
+    env_lines = {}
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                env_lines[k.strip()] = v.strip()
+
+    env_lines["LLM_BASE_URL"] = llm_client.base_url
+    env_lines["LLM_API_KEY"] = llm_client.api_key
+    env_lines["LLM_MODEL"] = llm_client.model
+    env_lines["LLM_TIMEOUT"] = str(llm_client.timeout)
+    env_lines["LLM_MAX_RETRIES"] = str(llm_client.max_retries)
+
+    env_path.write_text(
+        "\n".join(f"{k}={v}" for k, v in env_lines.items()) + "\n",
+        encoding="utf-8",
+    )
+
+    return {
+        "status": "ok",
+        "configured": llm_client.is_configured,
+        "model": llm_client.model,
     }
 
 

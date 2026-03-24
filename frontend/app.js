@@ -56,9 +56,130 @@ async function checkLLMStatus() {
             el.classList.remove('connected');
             el.querySelector('.text').textContent = 'LLM: 规则引擎模式';
         }
+        // 缓存当前配置用于弹窗回填
+        window._llmConfig = data;
     } catch {
         el.classList.add('disconnected');
         el.querySelector('.text').textContent = 'LLM: 未连接';
+    }
+}
+
+// ==================== LLM 配置弹窗 ====================
+
+async function showLLMConfigModal() {
+    // 先获取最新状态
+    try {
+        const data = await api('/llm/status');
+        document.getElementById('llmBaseUrl').value = data.base_url || '';
+        document.getElementById('llmApiKey').value = '';  // 出于安全不回填 key
+        document.getElementById('llmModel').value = data.model || 'gpt-4';
+        document.getElementById('llmTimeout').value = data.timeout || 60;
+        document.getElementById('llmMaxRetries').value = data.max_retries || 3;
+    } catch {
+        // 使用空值
+        document.getElementById('llmBaseUrl').value = '';
+        document.getElementById('llmApiKey').value = '';
+        document.getElementById('llmModel').value = 'gpt-4';
+        document.getElementById('llmTimeout').value = 60;
+        document.getElementById('llmMaxRetries').value = 3;
+    }
+    // 清除之前的测试结果
+    const resultEl = document.getElementById('llmTestResult');
+    resultEl.style.display = 'none';
+    resultEl.textContent = '';
+    openModal('llmConfigModal');
+}
+
+async function saveLLMConfig() {
+    const base_url = document.getElementById('llmBaseUrl').value.trim();
+    const api_key = document.getElementById('llmApiKey').value.trim();
+    const model = document.getElementById('llmModel').value.trim() || 'gpt-4';
+    const timeout = parseInt(document.getElementById('llmTimeout').value) || 60;
+    const max_retries = parseInt(document.getElementById('llmMaxRetries').value) || 3;
+
+    // 构建 payload（只发送非空字段，api_key 为空时不覆盖已有 key）
+    const payload = { model, timeout, max_retries };
+    if (base_url) payload.base_url = base_url;
+    if (api_key) payload.api_key = api_key;
+
+    try {
+        const data = await api('/llm/config', {
+            method: 'POST',
+            body: payload,
+        });
+        showToast('LLM 配置已保存', 'success');
+        closeModal('llmConfigModal');
+        // 刷新顶栏状态
+        await checkLLMStatus();
+    } catch (e) {
+        showToast(`保存失败: ${e.message}`, 'error');
+    }
+}
+
+async function testLLMConnection() {
+    const resultEl = document.getElementById('llmTestResult');
+    const testBtn = document.getElementById('llmTestBtn');
+
+    // 先保存当前填写的值（临时生效）
+    const base_url = document.getElementById('llmBaseUrl').value.trim();
+    const api_key = document.getElementById('llmApiKey').value.trim();
+    const model = document.getElementById('llmModel').value.trim();
+
+    if (!base_url) {
+        resultEl.style.display = 'block';
+        resultEl.style.background = 'var(--error-bg, rgba(255,90,90,0.1))';
+        resultEl.style.color = 'var(--error)';
+        resultEl.textContent = '请先填写 API Base URL';
+        return;
+    }
+
+    // 先把配置保存到后端（这样测试用的是最新的值）
+    const payload = { base_url, model: model || 'gpt-4' };
+    if (api_key) payload.api_key = api_key;
+    try {
+        await api('/llm/config', { method: 'POST', body: payload });
+    } catch {}
+
+    testBtn.textContent = '⏳ 测试中...';
+    testBtn.disabled = true;
+    resultEl.style.display = 'block';
+    resultEl.style.background = 'var(--bg-elevated)';
+    resultEl.style.color = 'var(--text-secondary)';
+    resultEl.textContent = '正在连接 LLM 服务...';
+
+    try {
+        const data = await api('/llm/test', { method: 'POST' });
+        if (data.status === 'ok') {
+            resultEl.style.background = 'rgba(52,211,153,0.1)';
+            resultEl.style.color = 'var(--success)';
+            resultEl.textContent = `✅ 连接成功！${data.response ? ' 响应: ' + data.response : ''}`;
+        } else if (data.status === 'not_configured') {
+            resultEl.style.background = 'rgba(251,191,36,0.1)';
+            resultEl.style.color = 'var(--warning)';
+            resultEl.textContent = '⚠️ LLM 未配置，请填写 API Key';
+        } else {
+            resultEl.style.background = 'rgba(255,90,90,0.1)';
+            resultEl.style.color = 'var(--error)';
+            resultEl.textContent = `❌ 连接失败: ${data.message || '未知错误'}`;
+        }
+    } catch (e) {
+        resultEl.style.background = 'rgba(255,90,90,0.1)';
+        resultEl.style.color = 'var(--error)';
+        resultEl.textContent = `❌ 请求失败: ${e.message}`;
+    } finally {
+        testBtn.textContent = '🔗 测试连接';
+        testBtn.disabled = false;
+    }
+}
+
+function togglePasswordVisibility(inputId, btn) {
+    const input = document.getElementById(inputId);
+    if (input.type === 'password') {
+        input.type = 'text';
+        btn.textContent = '🔒';
+    } else {
+        input.type = 'password';
+        btn.textContent = '👁';
     }
 }
 
