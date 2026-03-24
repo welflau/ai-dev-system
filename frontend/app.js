@@ -1908,14 +1908,14 @@ function closeModal(id) {
     document.getElementById(id).classList.remove('active');
 }
 
-// 点击 overlay 关闭
-document.querySelectorAll('.modal-overlay').forEach(overlay => {
-    overlay.addEventListener('click', (e) => {
-        if (e.target === overlay) {
-            overlay.classList.remove('active');
-        }
-    });
-});
+// 点击 overlay 不关闭（只通过 ESC 或关闭按钮关闭）
+// document.querySelectorAll('.modal-overlay').forEach(overlay => {
+//     overlay.addEventListener('click', (e) => {
+//         if (e.target === overlay) {
+//             overlay.classList.remove('active');
+//         }
+//     });
+// });
 
 // ESC 关闭
 document.addEventListener('keydown', (e) => {
