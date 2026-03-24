@@ -15,6 +15,7 @@ let eventSource = null;
 document.addEventListener('DOMContentLoaded', () => {
     checkLLMStatus();
     loadProjects();
+    initLogPanel();
 });
 
 // ==================== API 工具函数 ====================
@@ -205,6 +206,9 @@ function showProjectDetail(projectId) {
     showPage('projectPage');
     loadProjectDetail();
     connectSSE(projectId);
+    // 清空日志面板并加载该项目历史日志
+    clearLogPanel();
+    loadLogPanelHistory();
 }
 
 function switchTab(tab) {
@@ -886,6 +890,14 @@ function connectSSE(projectId) {
         eventSource.addEventListener('agent_working', (e) => {
             const data = JSON.parse(e.data);
             console.log('[SSE] agent_working:', data);
+            // agent_working 事件也追加到日志面板（作为实时动态）
+            appendLogEntry({
+                agent_type: data.agent,
+                action: data.action,
+                detail: JSON.stringify({message: `${data.agent} 正在执行 ${data.action}${data.ticket_id ? ' (工单 ' + data.ticket_id.slice(-6) + ')' : ''}${data.requirement_id ? ' (需求 ' + data.requirement_id.slice(-6) + ')' : ''}`}),
+                level: 'info',
+                created_at: new Date().toISOString(),
+            });
         });
 
         eventSource.addEventListener('ticket_rejected', (e) => {
@@ -895,12 +907,35 @@ function connectSSE(projectId) {
         });
 
         eventSource.addEventListener('requirement_analyzing', (e) => {
+            const data = JSON.parse(e.data);
             showToast('ProductAgent 正在分析需求...', 'info');
+            appendLogEntry({
+                agent_type: 'ProductAgent',
+                action: 'analyze',
+                detail: JSON.stringify({message: `开始分析需求「${data.title || data.id}」`}),
+                level: 'info',
+                created_at: new Date().toISOString(),
+            });
         });
 
         eventSource.addEventListener('requirement_created', (e) => {
+            const data = JSON.parse(e.data);
             loadRequirements();
             loadRequirementFilter();
+            appendLogEntry({
+                agent_type: 'System',
+                action: 'create',
+                detail: JSON.stringify({message: `新需求「${data.title}」已创建`}),
+                level: 'info',
+                created_at: new Date().toISOString(),
+            });
+        });
+
+        // SSE: 后端日志实时推送
+        eventSource.addEventListener('log_added', (e) => {
+            const data = JSON.parse(e.data);
+            console.log('[SSE] log_added:', data);
+            appendLogEntry(data);
         });
 
         eventSource.onerror = () => {
@@ -990,6 +1025,225 @@ function showToast(message, type = 'info') {
         toast.style.transition = 'all 0.3s';
         setTimeout(() => toast.remove(), 300);
     }, 4000);
+}
+
+// ==================== 底部日志面板 ====================
+
+let logPanelAutoScroll = true;
+let logPanelCollapsed = false;
+let logPanelNewCount = 0;
+const LOG_PANEL_MAX_ENTRIES = 500;
+
+/**
+ * 初始化日志面板：拖拽调高 + 双击切换
+ */
+function initLogPanel() {
+    const panel = document.getElementById('logPanel');
+    const resize = document.getElementById('logPanelResize');
+    const header = document.getElementById('logPanelHeader');
+    if (!panel || !resize) return;
+
+    // 从 localStorage 恢复状态
+    const savedHeight = localStorage.getItem('logPanelHeight');
+    const savedCollapsed = localStorage.getItem('logPanelCollapsed');
+    if (savedHeight) {
+        panel.style.setProperty('--log-panel-height', savedHeight + 'px');
+        panel.style.height = savedHeight + 'px';
+    }
+    if (savedCollapsed === 'true') {
+        panel.classList.add('collapsed');
+        logPanelCollapsed = true;
+        document.getElementById('logPanelToggle').textContent = '▲';
+    }
+
+    // 拖拽调整高度
+    let startY = 0;
+    let startH = 0;
+    let dragging = false;
+
+    resize.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        dragging = true;
+        startY = e.clientY;
+        startH = panel.offsetHeight;
+        resize.classList.add('dragging');
+        document.body.style.cursor = 'ns-resize';
+        document.body.style.userSelect = 'none';
+    });
+
+    document.addEventListener('mousemove', (e) => {
+        if (!dragging) return;
+        const diff = startY - e.clientY;
+        const newH = Math.min(Math.max(startH + diff, 100), window.innerHeight * 0.6);
+        panel.style.height = newH + 'px';
+        panel.style.setProperty('--log-panel-height', newH + 'px');
+    });
+
+    document.addEventListener('mouseup', () => {
+        if (!dragging) return;
+        dragging = false;
+        resize.classList.remove('dragging');
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+        localStorage.setItem('logPanelHeight', panel.offsetHeight);
+    });
+
+    // 双击标题切换展开/收起
+    header.addEventListener('dblclick', (e) => {
+        if (e.target.tagName === 'SELECT' || e.target.tagName === 'BUTTON') return;
+        toggleLogPanel();
+    });
+}
+
+/**
+ * 切换日志面板展开/收起
+ */
+function toggleLogPanel() {
+    const panel = document.getElementById('logPanel');
+    logPanelCollapsed = !logPanelCollapsed;
+    panel.classList.toggle('collapsed', logPanelCollapsed);
+    document.getElementById('logPanelToggle').textContent = logPanelCollapsed ? '▲' : '▼';
+    localStorage.setItem('logPanelCollapsed', logPanelCollapsed);
+
+    // 展开时清除新消息计数
+    if (!logPanelCollapsed) {
+        logPanelNewCount = 0;
+        const badge = document.getElementById('logPanelBadge');
+        badge.style.display = 'none';
+        badge.textContent = '0';
+    }
+}
+
+/**
+ * 切换自动滚动
+ */
+function toggleAutoScroll() {
+    logPanelAutoScroll = !logPanelAutoScroll;
+    const btn = document.getElementById('autoScrollBtn');
+    btn.style.opacity = logPanelAutoScroll ? '1' : '0.4';
+    btn.title = logPanelAutoScroll ? '自动滚动: 开' : '自动滚动: 关';
+}
+
+/**
+ * 清空日志面板
+ */
+function clearLogPanel() {
+    const entries = document.getElementById('logPanelEntries');
+    entries.innerHTML = '<div class="log-panel-empty">日志已清空</div>';
+    logPanelNewCount = 0;
+    const badge = document.getElementById('logPanelBadge');
+    badge.style.display = 'none';
+}
+
+/**
+ * 追加一条日志到面板
+ */
+function appendLogEntry(log) {
+    const entries = document.getElementById('logPanelEntries');
+    if (!entries) return;
+
+    // 去重：同一条日志不重复显示
+    if (log.id && entries.querySelector(`[data-log-id="${log.id}"]`)) return;
+
+    // 移除空状态提示
+    const empty = entries.querySelector('.log-panel-empty');
+    if (empty) empty.remove();
+
+    // 解析 detail 消息
+    let message = '';
+    try {
+        const parsed = JSON.parse(log.detail || '{}');
+        message = parsed.message || '';
+    } catch {
+        message = log.detail || '';
+    }
+
+    const level = log.level || 'info';
+    const agent = log.agent_type || 'System';
+    const action = log.action || '';
+    const time = formatTime(log.created_at) || new Date().toLocaleTimeString('zh-CN', {hour12: false});
+
+    // 构建状态变化
+    let statusHtml = '';
+    if (log.from_status && log.to_status) {
+        statusHtml = `<span class="log-entry-status">${getStatusLabel(log.from_status)} <span class="arrow">→</span> ${getStatusLabel(log.to_status)}</span>`;
+    }
+
+    const div = document.createElement('div');
+    div.className = `log-entry new ${level}`;
+    if (log.id) div.dataset.logId = log.id;
+    div.innerHTML = `
+        <span class="log-entry-time">${escHtml(time)}</span>
+        <span class="log-entry-level ${level}">${level.toUpperCase()}</span>
+        <span class="log-entry-agent">${escHtml(agent)}</span>
+        <span class="log-entry-action">${escHtml(action)}</span>
+        ${statusHtml}
+        <span class="log-entry-msg">${escHtml(message)}</span>
+    `;
+
+    // 检查筛选条件
+    const levelFilter = document.getElementById('logLevelFilter')?.value || '';
+    const agentFilter = document.getElementById('logAgentFilter')?.value || '';
+    if (levelFilter && level !== levelFilter) div.style.display = 'none';
+    if (agentFilter && agent !== agentFilter) div.style.display = 'none';
+
+    entries.appendChild(div);
+
+    // 移除超出上限的旧日志
+    while (entries.children.length > LOG_PANEL_MAX_ENTRIES) {
+        entries.removeChild(entries.firstChild);
+    }
+
+    // 自动滚动
+    if (logPanelAutoScroll) {
+        const body = document.getElementById('logPanelBody');
+        if (body) body.scrollTop = body.scrollHeight;
+    }
+
+    // 收起状态时显示新消息计数
+    if (logPanelCollapsed) {
+        logPanelNewCount++;
+        const badge = document.getElementById('logPanelBadge');
+        badge.textContent = logPanelNewCount > 99 ? '99+' : logPanelNewCount;
+        badge.style.display = 'inline-block';
+    }
+
+    // 1 秒后移除高亮动画 class
+    setTimeout(() => div.classList.remove('new'), 1000);
+}
+
+/**
+ * 日志面板筛选
+ */
+function filterLogPanel() {
+    const levelFilter = document.getElementById('logLevelFilter')?.value || '';
+    const agentFilter = document.getElementById('logAgentFilter')?.value || '';
+    const entries = document.getElementById('logPanelEntries');
+    if (!entries) return;
+
+    entries.querySelectorAll('.log-entry').forEach(el => {
+        const level = el.querySelector('.log-entry-level')?.textContent?.toLowerCase() || '';
+        const agent = el.querySelector('.log-entry-agent')?.textContent || '';
+        let show = true;
+        if (levelFilter && level !== levelFilter) show = false;
+        if (agentFilter && agent !== agentFilter) show = false;
+        el.style.display = show ? '' : 'none';
+    });
+}
+
+/**
+ * 进入项目后加载历史日志到面板
+ */
+async function loadLogPanelHistory() {
+    if (!currentProjectId) return;
+    try {
+        const data = await api(`/projects/${currentProjectId}/logs?limit=50`);
+        const logs = data.logs || [];
+        // 历史日志按时间正序显示（API 返回 DESC，翻转一下）
+        logs.reverse().forEach(log => appendLogEntry(log));
+    } catch (e) {
+        console.warn('[LogPanel] 加载历史日志失败:', e);
+    }
 }
 
 // ==================== 工具函数 ====================

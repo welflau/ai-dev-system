@@ -606,8 +606,11 @@ class TicketOrchestrator:
         message: str,
         level: str = "info",
     ):
-        """记录日志"""
+        """记录日志并推送 SSE 实时事件"""
         log_id = generate_id("LOG")
+        created_at = now_iso()
+        detail_json = json.dumps({"message": message}, ensure_ascii=False)
+
         await db.insert("ticket_logs", {
             "id": log_id,
             "ticket_id": ticket_id,
@@ -618,10 +621,28 @@ class TicketOrchestrator:
             "action": action,
             "from_status": from_status,
             "to_status": to_status,
-            "detail": json.dumps({"message": message}, ensure_ascii=False),
+            "detail": detail_json,
             "level": level,
-            "created_at": now_iso(),
+            "created_at": created_at,
         })
+
+        # 实时推送日志到前端底部面板
+        await event_manager.publish_to_project(
+            project_id,
+            "log_added",
+            {
+                "id": log_id,
+                "ticket_id": ticket_id,
+                "requirement_id": requirement_id,
+                "agent_type": agent_type,
+                "action": action,
+                "from_status": from_status,
+                "to_status": to_status,
+                "detail": detail_json,
+                "level": level,
+                "created_at": created_at,
+            },
+        )
 
 
 # 全局 Orchestrator

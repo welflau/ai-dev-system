@@ -146,6 +146,45 @@
                         <div class="log-timeline" id="logTimeline"></div>
                     </div>
                 </div>
+
+                <!-- ==================== 底部日志面板 ==================== -->
+                <div class="log-panel" id="logPanel">
+                    <div class="log-panel-resize" id="logPanelResize"></div>
+                    <div class="log-panel-header" id="logPanelHeader">
+                        <div class="log-panel-title">
+                            <span class="log-panel-icon">📋</span>
+                            <span>实时日志</span>
+                            <span class="log-panel-badge" id="logPanelBadge" style="display:none;">0</span>
+                        </div>
+                        <div class="log-panel-actions">
+                            <select id="logLevelFilter" onchange="filterLogPanel()" title="日志级别">
+                                <option value="">全部级别</option>
+                                <option value="info">INFO</option>
+                                <option value="warn">WARN</option>
+                                <option value="error">ERROR</option>
+                            </select>
+                            <select id="logAgentFilter" onchange="filterLogPanel()" title="Agent 筛选">
+                                <option value="">全部 Agent</option>
+                                <option value="ProductAgent">ProductAgent</option>
+                                <option value="ArchitectAgent">ArchitectAgent</option>
+                                <option value="DevAgent">DevAgent</option>
+                                <option value="TestAgent">TestAgent</option>
+                                <option value="ReviewAgent">ReviewAgent</option>
+                                <option value="DeployAgent">DeployAgent</option>
+                                <option value="Orchestrator">Orchestrator</option>
+                            </select>
+                            <button class="btn-icon log-panel-btn" onclick="clearLogPanel()" title="清空日志">🗑️</button>
+                            <button class="btn-icon log-panel-btn" onclick="toggleAutoScroll()" id="autoScrollBtn" title="自动滚动">⬇️</button>
+                            <button class="btn-icon log-panel-btn" onclick="toggleLogPanel()" id="logPanelToggle" title="展开/收起">▼</button>
+                        </div>
+                    </div>
+                    <div class="log-panel-body" id="logPanelBody">
+                        <div class="log-panel-entries" id="logPanelEntries">
+                            <div class="log-panel-empty">等待日志...</div>
+                        </div>
+                    </div>
+                </div>
+
             </div>
         </section>
     </main>

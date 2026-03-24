@@ -211,8 +211,11 @@ async def _log_requirement(
     message: str,
     level: str = "info",
 ):
-    """记录需求操作日志"""
+    """记录需求操作日志并推送 SSE 事件"""
     log_id = generate_id("LOG")
+    created_at = now_iso()
+    detail_json = json.dumps({"message": message}, ensure_ascii=False)
+
     await db.insert("ticket_logs", {
         "id": log_id,
         "ticket_id": None,
@@ -223,7 +226,25 @@ async def _log_requirement(
         "action": action,
         "from_status": from_status,
         "to_status": to_status,
-        "detail": json.dumps({"message": message}, ensure_ascii=False),
+        "detail": detail_json,
         "level": level,
-        "created_at": now_iso(),
+        "created_at": created_at,
     })
+
+    # 实时推送日志
+    await event_manager.publish_to_project(
+        project_id,
+        "log_added",
+        {
+            "id": log_id,
+            "ticket_id": None,
+            "requirement_id": requirement_id,
+            "agent_type": agent_type,
+            "action": action,
+            "from_status": from_status,
+            "to_status": to_status,
+            "detail": detail_json,
+            "level": level,
+            "created_at": created_at,
+        },
+    )
