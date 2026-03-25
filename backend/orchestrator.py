@@ -653,8 +653,17 @@ class TicketOrchestrator:
         start_time = time.time()
 
         # 确保仓库已初始化
+        project = await db.fetch_one("SELECT * FROM projects WHERE id = ?", (project_id,))
+        if project:
+            # 恢复自定义仓库路径映射（防止重启后丢失）
+            repo_path = project.get("git_repo_path")
+            if repo_path and project_id not in git_manager._custom_paths:
+                from git_manager import PROJECTS_DIR
+                default_path = str(PROJECTS_DIR / project_id)
+                if repo_path != default_path:
+                    git_manager.set_project_path(project_id, repo_path)
+
         if not git_manager.repo_exists(project_id):
-            project = await db.fetch_one("SELECT * FROM projects WHERE id = ?", (project_id,))
             if project:
                 await git_manager.init_repo(project_id, project["name"], project.get("description", ""))
 

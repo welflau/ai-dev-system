@@ -14,6 +14,17 @@ logger = logging.getLogger("api.projects")
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
 
+def _ensure_git_path(project: dict):
+    """确保 git_manager 中有项目的自定义路径映射（防止重启后丢失）"""
+    repo_path = project.get("git_repo_path")
+    if repo_path and project["id"] not in git_manager._custom_paths:
+        from git_manager import PROJECTS_DIR
+        default_path = str(PROJECTS_DIR / project["id"])
+        if repo_path != default_path:
+            git_manager.set_project_path(project["id"], repo_path)
+            logger.debug("恢复项目 %s 的仓库路径: %s", project["id"], repo_path)
+
+
 @router.post("")
 async def create_project(req: ProjectCreate):
     """创建项目"""
@@ -121,6 +132,8 @@ async def get_project(project_id: str):
     if not project:
         raise HTTPException(404, "项目不存在")
 
+    _ensure_git_path(project)
+
     # 附带统计信息
     req_count = await db.fetch_one(
         "SELECT COUNT(*) as count FROM requirements WHERE project_id = ?",
@@ -144,6 +157,9 @@ async def get_project(project_id: str):
         },
         "git_repo_exists": git_manager.repo_exists(project_id),
     }
+
+
+
 
 
 @router.put("/{project_id}")
@@ -211,6 +227,8 @@ async def set_git_remote(project_id: str, body: dict):
     if not project:
         raise HTTPException(404, "项目不存在")
 
+    _ensure_git_path(project)
+
     url = body.get("url", "")
     if not url:
         raise HTTPException(400, "远程仓库 URL 不能为空")
@@ -235,6 +253,7 @@ async def get_git_tree(project_id: str):
     if not project:
         raise HTTPException(404, "项目不存在")
 
+    _ensure_git_path(project)
     tree = await git_manager.get_file_tree(project_id)
     return tree
 
@@ -246,6 +265,7 @@ async def get_git_log(project_id: str, limit: int = 20):
     if not project:
         raise HTTPException(404, "项目不存在")
 
+    _ensure_git_path(project)
     logs = await git_manager.get_log(project_id, limit)
     return {"commits": logs, "total": len(logs)}
 
@@ -257,6 +277,7 @@ async def get_git_file(project_id: str, path: str):
     if not project:
         raise HTTPException(404, "项目不存在")
 
+    _ensure_git_path(project)
     content = await git_manager.get_file_content(project_id, path)
     if content is None:
         raise HTTPException(404, "文件不存在")
@@ -271,5 +292,6 @@ async def get_git_diff(project_id: str, commit: str = None):
     if not project:
         raise HTTPException(404, "项目不存在")
 
+    _ensure_git_path(project)
     diff = await git_manager.get_diff(project_id, commit)
     return {"diff": diff}

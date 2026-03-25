@@ -71,8 +71,22 @@ async def lifespan(app: FastAPI):
     else:
         logger.warning("LLM 未配置，将使用规则引擎降级")
 
-    from git_manager import PROJECTS_DIR
+    from git_manager import PROJECTS_DIR, git_manager
     logger.info("Git 项目仓库目录: %s", PROJECTS_DIR)
+
+    # 从数据库恢复自定义 git_repo_path 映射
+    projects = await db.fetch_all(
+        "SELECT id, git_repo_path FROM projects WHERE git_repo_path IS NOT NULL AND git_repo_path != ''"
+    )
+    restored = 0
+    for p in projects:
+        repo_path = p["git_repo_path"]
+        default_path = str(PROJECTS_DIR / p["id"])
+        if repo_path != default_path:
+            git_manager.set_project_path(p["id"], repo_path)
+            restored += 1
+    if restored:
+        logger.info("已恢复 %d 个项目的自定义仓库路径映射", restored)
 
     logger.info("Server: http://localhost:%s", settings.PORT)
     logger.info("App:    http://localhost:%s/app", settings.PORT)
