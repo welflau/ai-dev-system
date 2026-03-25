@@ -121,7 +121,7 @@ app.include_router(chat_router)
 @app.get("/api/health")
 async def health_check():
     """健康检查"""
-    return {"status": "ok", "version": "0.8.0"}
+    return {"status": "ok", "version": "0.9.0"}
 
 
 @app.get("/api/llm/status")
