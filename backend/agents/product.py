@@ -55,16 +55,39 @@ class ProductAgent(BaseAgent):
       "subtasks": [
         {{"title": "子任务标题", "description": "子任务描述"}}
       ],
-      "dependencies": []
+      "dependencies": [0, 2],
+      "children": [
+        {{
+          "title": "子工单标题",
+          "description": "子工单描述",
+          "type": "feature|bugfix|refactor|test|deploy|doc",
+          "module": "frontend|backend|database|api|testing|deploy|design|other",
+          "priority": 1-5,
+          "estimated_hours": 预估工时
+        }}
+      ]
     }}
   ]
 }}
 
+## 关于依赖关系（dependencies）：
+- 用 **数组下标**（从 0 开始）表示当前工单依赖哪些工单
+- 例如：tickets[2] 的 dependencies 为 [0, 1]，表示第 3 个工单需要等第 1 和第 2 个工单完成后才能开始
+- 仔细分析任务间的真实前后依赖关系，例如：数据库设计 → 后端 API → 前端；后端开发 → 测试
+- 没有依赖的工单 dependencies 为空数组 []
+
+## 关于子工单（children）：
+- 如果一个工单较大，可以进一步拆分为子工单
+- 子工单是独立的工单，有自己的完整生命周期
+- 子工单与子任务（subtasks）不同：子任务是轻量的 checklist 项，子工单是完整的工单
+- 子工单是可选的，简单任务不需要拆子工单
+
 请确保：
 1. 任务拆分粒度适中，每个任务 2-8 小时工作量
 2. 按模块分类（前端、后端、数据库、API、测试、部署）
-3. 标注任务间的依赖关系
+3. **必须标注任务间的依赖关系**（用数组下标引用）
 4. 每个任务下列出具体的子任务
+5. 依赖关系不能循环（A 依赖 B 且 B 依赖 A 是不允许的）
 """
 
         result = await llm_client.chat_json(

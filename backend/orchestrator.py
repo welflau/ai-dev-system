@@ -168,15 +168,17 @@ class TicketOrchestrator:
                     "ProductAgent", "analyze_and_decompose", result
                 )
 
-            # 创建工单
+            # 创建工单（两遍：先创建所有工单，再回填依赖 ID）
             tickets_data = result.get("tickets", [])
-            created_tickets = []
+            created_tickets = []        # [ticket_id, ...]
+            idx_to_id = {}              # 索引 → TK-ID 映射
 
+            # === 第一遍：创建所有父工单 ===
             for idx, tk in enumerate(tickets_data):
                 ticket_id = generate_id("TK")
                 now = now_iso()
+                idx_to_id[idx] = ticket_id
 
-                # 创建工单
                 ticket = {
                     "id": ticket_id,
                     "requirement_id": requirement_id,
@@ -194,7 +196,7 @@ class TicketOrchestrator:
                     "estimated_hours": tk.get("estimated_hours"),
                     "actual_hours": None,
                     "estimated_completion": None,
-                    "dependencies": json.dumps(tk.get("dependencies", [])),
+                    "dependencies": "[]",  # 占位，第二遍回填
                     "result": None,
                     "created_at": now,
                     "updated_at": now,
@@ -221,12 +223,68 @@ class TicketOrchestrator:
                         "completed_at": None,
                     })
 
+                # 创建子工单（children）
+                children_data = tk.get("children", [])
+                for ch_idx, ch in enumerate(children_data):
+                    child_id = generate_id("TK")
+                    child_now = now_iso()
+                    child_ticket = {
+                        "id": child_id,
+                        "requirement_id": requirement_id,
+                        "project_id": project_id,
+                        "parent_ticket_id": ticket_id,
+                        "title": ch["title"],
+                        "description": ch.get("description", ""),
+                        "type": ch.get("type", tk.get("type", "feature")),
+                        "module": ch.get("module", tk.get("module", "other")),
+                        "priority": ch.get("priority", tk.get("priority", 3)),
+                        "sort_order": ch_idx,
+                        "status": TicketStatus.PENDING.value,
+                        "assigned_agent": None,
+                        "current_owner": "product",
+                        "estimated_hours": ch.get("estimated_hours"),
+                        "actual_hours": None,
+                        "estimated_completion": None,
+                        "dependencies": "[]",
+                        "result": None,
+                        "created_at": child_now,
+                        "updated_at": child_now,
+                        "started_at": None,
+                        "completed_at": None,
+                    }
+                    await db.insert("tickets", child_ticket)
+
                 # 日志
+                dep_info = ""
+                raw_deps = tk.get("dependencies", [])
+                if raw_deps:
+                    dep_titles = [tickets_data[d]["title"] for d in raw_deps if isinstance(d, int) and 0 <= d < len(tickets_data)]
+                    if dep_titles:
+                        dep_info = f"，依赖: {', '.join(dep_titles)}"
+                children_info = f"，含 {len(children_data)} 个子工单" if children_data else ""
                 await self._log(
                     project_id, requirement_id, ticket_id, "ProductAgent",
                     "create", None, "pending",
-                    f"工单「{tk['title']}」已创建，模块: {tk.get('module', 'other')}"
+                    f"工单「{tk['title']}」已创建，模块: {tk.get('module', 'other')}{dep_info}{children_info}"
                 )
+
+            # === 第二遍：回填依赖 ID（索引 → 真实 TK-ID）===
+            for idx, tk in enumerate(tickets_data):
+                raw_deps = tk.get("dependencies", [])
+                if raw_deps:
+                    dep_ids = []
+                    for d in raw_deps:
+                        if isinstance(d, int) and d in idx_to_id:
+                            dep_ids.append(idx_to_id[d])
+                        elif isinstance(d, str) and d.startswith("TK-"):
+                            dep_ids.append(d)  # 已经是 TK-ID
+                    if dep_ids:
+                        await db.update(
+                            "tickets",
+                            {"dependencies": json.dumps(dep_ids), "updated_at": now_iso()},
+                            "id = ?",
+                            (idx_to_id[idx],),
+                        )
 
             # 更新需求状态为已拆单
             await db.update("requirements", {
@@ -320,6 +378,36 @@ class TicketOrchestrator:
                     ticket["requirement_id"][:12], requirement["status"], ticket_id[:12],
                 )
                 return
+
+            # 检查前置依赖是否完成
+            deps_json = ticket.get("dependencies", "[]")
+            try:
+                dep_ids = json.loads(deps_json) if deps_json else []
+            except (json.JSONDecodeError, TypeError):
+                dep_ids = []
+
+            if dep_ids and ticket["status"] == TicketStatus.PENDING.value:
+                # 查询所有依赖工单的状态
+                pending_deps = []
+                for dep_id in dep_ids:
+                    dep_ticket = await db.fetch_one(
+                        "SELECT id, title, status FROM tickets WHERE id = ?", (dep_id,)
+                    )
+                    if dep_ticket and dep_ticket["status"] != TicketStatus.DEPLOYED.value:
+                        pending_deps.append(dep_ticket)
+
+                if pending_deps:
+                    dep_names = ", ".join(f"#{d['id'][-6:]}({d['title'][:20]})" for d in pending_deps)
+                    logger.info(
+                        "⏳ 工单 %s 等待前置依赖完成: %s",
+                        ticket_id[:12], dep_names,
+                    )
+                    await self._log(
+                        project_id, ticket["requirement_id"], ticket_id, "Orchestrator",
+                        "info", "pending", "pending",
+                        f"等待前置依赖完成: {dep_names}", "info"
+                    )
+                    return  # 依赖未完成，跳过
 
             current_status = ticket["status"]
             rule = self.transition_rules.get(current_status)
@@ -630,6 +718,9 @@ class TicketOrchestrator:
             # 检查需求下所有工单是否都已完成
             await self._check_requirement_completion(project_id, requirement_id)
 
+            # 触发依赖此工单的后续工单
+            await self._trigger_dependents(project_id, ticket_id)
+
         else:
             new_status = current_status
 
@@ -772,6 +863,47 @@ class TicketOrchestrator:
                 "requirement_completed",
                 {"requirement_id": requirement_id},
             )
+
+    async def _trigger_dependents(self, project_id: str, completed_ticket_id: str):
+        """工单完成后，触发依赖它的后续工单流转"""
+        # 查找同项目下所有 pending 且 dependencies 包含此工单 ID 的工单
+        pending_tickets = await db.fetch_all(
+            "SELECT * FROM tickets WHERE project_id = ? AND status = ? AND dependencies IS NOT NULL AND dependencies != '[]'",
+            (project_id, TicketStatus.PENDING.value),
+        )
+
+        for pt in pending_tickets:
+            try:
+                deps = json.loads(pt["dependencies"]) if pt["dependencies"] else []
+            except (json.JSONDecodeError, TypeError):
+                continue
+
+            if completed_ticket_id not in deps:
+                continue
+
+            # 检查该工单的所有依赖是否都已完成
+            all_deps_done = True
+            for dep_id in deps:
+                dep_ticket = await db.fetch_one(
+                    "SELECT status FROM tickets WHERE id = ?", (dep_id,)
+                )
+                if not dep_ticket or dep_ticket["status"] != TicketStatus.DEPLOYED.value:
+                    all_deps_done = False
+                    break
+
+            if all_deps_done:
+                logger.info(
+                    "🔓 工单 %s 的所有前置依赖已完成，开始流转",
+                    pt["id"][:12],
+                )
+                await self._log(
+                    project_id, pt["requirement_id"], pt["id"], "Orchestrator",
+                    "info", "pending", "pending",
+                    f"前置依赖已全部完成（包括 #{completed_ticket_id[-6:]}），开始自动流转", "info"
+                )
+                # 异步触发后续工单流转
+                import asyncio
+                asyncio.create_task(self.process_ticket(project_id, pt["id"]))
 
     async def _build_context(self, ticket: Dict) -> Dict:
         """构建 Agent 执行上下文"""

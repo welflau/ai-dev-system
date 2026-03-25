@@ -548,3 +548,61 @@ async def get_requirement_commands(requirement_id: str):
         (requirement_id,),
     )
     return {"commands": commands, "total": len(commands)}
+
+
+@router.get("/api/projects/{project_id}/ticket-graph")
+async def get_ticket_graph(project_id: str, requirement_id: str = None):
+    """获取工单关系图数据（节点 + 边）"""
+    if requirement_id:
+        tickets = await db.fetch_all(
+            "SELECT * FROM tickets WHERE project_id = ? AND requirement_id = ? ORDER BY sort_order, created_at",
+            (project_id, requirement_id),
+        )
+    else:
+        tickets = await db.fetch_all(
+            "SELECT * FROM tickets WHERE project_id = ? ORDER BY sort_order, created_at",
+            (project_id,),
+        )
+
+    nodes = []
+    edges = []
+    ticket_map = {t["id"]: t for t in tickets}
+
+    for t in tickets:
+        nodes.append({
+            "id": t["id"],
+            "title": t["title"],
+            "status": t["status"],
+            "status_label": STATUS_LABELS.get(t["status"], t["status"]),
+            "type": t.get("type", "feature"),
+            "module": t.get("module", "other"),
+            "priority": t.get("priority", 3),
+            "assigned_agent": t.get("assigned_agent"),
+            "parent_ticket_id": t.get("parent_ticket_id"),
+            "estimated_hours": t.get("estimated_hours"),
+        })
+
+        # 父子关系边
+        if t.get("parent_ticket_id") and t["parent_ticket_id"] in ticket_map:
+            edges.append({
+                "source": t["parent_ticket_id"],
+                "target": t["id"],
+                "type": "parent_child",
+            })
+
+        # 依赖关系边
+        deps_json = t.get("dependencies", "[]")
+        try:
+            deps = json.loads(deps_json) if deps_json else []
+        except (json.JSONDecodeError, TypeError):
+            deps = []
+
+        for dep_id in deps:
+            if isinstance(dep_id, str) and dep_id in ticket_map:
+                edges.append({
+                    "source": dep_id,
+                    "target": t["id"],
+                    "type": "dependency",
+                })
+
+    return {"nodes": nodes, "edges": edges}

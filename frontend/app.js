@@ -483,6 +483,16 @@ function switchTab(tab) {
         if (arrow) arrow.classList.add('expanded');
     }
 
+    // 如果是工单子 tab（board, ticket-list, ticket-graph），高亮工单主按钮并展开抽屉
+    const ticketTabs = ['board', 'ticket-list', 'ticket-graph'];
+    if (ticketTabs.includes(tab)) {
+        document.querySelector('.nav-item-tickets')?.classList.add('active');
+        const drawer = document.getElementById('ticketsDrawer');
+        const arrow = document.getElementById('ticketsArrow');
+        if (drawer) drawer.classList.add('open');
+        if (arrow) { arrow.classList.add('expanded'); arrow.textContent = '▾'; }
+    }
+
     // 内容区切换
     document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
     const tabEl = document.getElementById(`tab-${tab}`);
@@ -492,6 +502,7 @@ function switchTab(tab) {
     if (tab === 'board') refreshBoard();
     if (tab === 'requirements') loadRequirements();
     if (tab === 'ticket-list') loadTicketList();
+    if (tab === 'ticket-graph') loadTicketGraph();
     if (tab === 'pipeline' && currentPipelineReqId) loadPipeline(currentPipelineReqId);
     if (tab === 'repo') loadRepoTree();
     if (tab === 'stats') loadStats();
@@ -499,6 +510,27 @@ function switchTab(tab) {
     if (tab === 'settings-general') loadSettingsGeneral();
     if (tab === 'settings-repo') loadSettingsRepo();
     if (tab === 'settings-agents') loadAgentList();
+}
+
+// ==================== 工单子菜单 ====================
+
+/** 切换工单抽屉展开/收起 */
+function toggleTicketsPanel() {
+    const drawer = document.getElementById('ticketsDrawer');
+    const arrow = document.getElementById('ticketsArrow');
+    if (!drawer || !arrow) return;
+
+    const isOpen = drawer.classList.toggle('open');
+    arrow.classList.toggle('expanded', isOpen);
+    arrow.textContent = isOpen ? '▾' : '▸';
+
+    // 如果展开，默认打开看板
+    if (isOpen) {
+        const activeSubItem = drawer.querySelector('.nav-sub-item.active');
+        if (!activeSubItem) {
+            switchTab('board');
+        }
+    }
 }
 
 // ==================== 设置面板 ====================
@@ -931,6 +963,28 @@ async function openTicketDrawer(ticketId) {
         // 操作按钮
         html += renderTicketActions(data);
 
+        // 依赖关系
+        let depsArr = [];
+        try {
+            depsArr = data.dependencies ? JSON.parse(data.dependencies) : [];
+        } catch (e) { depsArr = []; }
+
+        if (depsArr.length > 0) {
+            html += `
+            <div class="drawer-section">
+                <h4>🔗 前置依赖 (${depsArr.length})</h4>
+                <div class="subtask-list" id="drawerDepsList"></div>
+            </div>`;
+            // 异步加载依赖工单详情
+            setTimeout(() => _loadDependencyDetails(depsArr), 100);
+        }
+
+        // 查找依赖此工单的后续工单（反向依赖）
+        html += `<div id="drawerDependentsSection"></div>`;
+        if (data.id) {
+            setTimeout(() => _loadDependents(data.id, data.project_id), 150);
+        }
+
         // 子工单（child_tickets — 真正的工单，有完整状态机）
         const childTickets = data.child_tickets || [];
         if (childTickets.length > 0) {
@@ -1089,6 +1143,68 @@ function toggleArtifactContent(el) {
 function closeDrawer() {
     document.getElementById('drawerOverlay').classList.remove('active');
     document.getElementById('ticketDrawer').classList.remove('active');
+}
+
+/** 加载前置依赖工单详情 */
+async function _loadDependencyDetails(depIds) {
+    const container = document.getElementById('drawerDepsList');
+    if (!container || !currentProjectId) return;
+
+    let html = '';
+    for (const depId of depIds) {
+        try {
+            const dep = await api(`/projects/${currentProjectId}/tickets/${depId}`);
+            const shortId = (dep.id || '').slice(-6);
+            const statusColor = getStatusColor(dep.status);
+            const statusLabel = dep.status_label || getStatusLabel(dep.status);
+            const isComplete = dep.status === 'deployed';
+            html += `
+            <div class="subtask-item child-ticket-link ${isComplete ? 'completed' : ''}"
+                 onclick="event.stopPropagation(); openTicketDrawer('${dep.id}');"
+                 title="点击查看依赖工单详情">
+                <span class="subtask-icon">${isComplete ? '✅' : '⏳'}</span>
+                <span class="tl-id-badge" style="font-size:11px; margin-right:4px;">#${shortId}</span>
+                <span class="subtask-title" style="flex:1;">${escHtml(dep.title)}</span>
+                <span class="tl-status-badge" style="font-size:11px; border-left:2px solid ${statusColor}; padding:1px 6px;">${escHtml(statusLabel)}</span>
+            </div>`;
+        } catch (e) {
+            html += `<div class="subtask-item"><span class="subtask-icon">❓</span><span class="subtask-title">${depId} (加载失败)</span></div>`;
+        }
+    }
+    container.innerHTML = html;
+}
+
+/** 加载后续依赖工单（依赖此工单的工单） */
+async function _loadDependents(ticketId, projectId) {
+    const section = document.getElementById('drawerDependentsSection');
+    if (!section || !projectId) return;
+
+    try {
+        const data = await api(`/projects/${projectId}/ticket-graph`);
+        const dependents = (data.edges || [])
+            .filter(e => e.type === 'dependency' && e.source === ticketId)
+            .map(e => e.target);
+
+        if (dependents.length === 0) return;
+
+        let html = `<div class="drawer-section"><h4>🔗 后续工单 (${dependents.length})</h4><div class="subtask-list">`;
+        for (const depId of dependents) {
+            const node = (data.nodes || []).find(n => n.id === depId);
+            if (!node) continue;
+            const shortId = (node.id || '').slice(-6);
+            const statusColor = getStatusColor(node.status);
+            html += `
+            <div class="subtask-item child-ticket-link"
+                 onclick="event.stopPropagation(); openTicketDrawer('${node.id}');">
+                <span class="subtask-icon">➡️</span>
+                <span class="tl-id-badge" style="font-size:11px; margin-right:4px;">#${shortId}</span>
+                <span class="subtask-title" style="flex:1;">${escHtml(node.title)}</span>
+                <span class="tl-status-badge" style="font-size:11px; border-left:2px solid ${statusColor}; padding:1px 6px;">${escHtml(node.status_label || '')}</span>
+            </div>`;
+        }
+        html += '</div></div>';
+        section.innerHTML = html;
+    } catch (e) { /* ignore */ }
 }
 
 // ==================== 需求管理 ====================
@@ -1303,6 +1419,253 @@ function renderReqTicketsSubTable(reqId, tickets) {
     html += '</tbody></table>';
     container.innerHTML = html;
 }
+
+// ==================== 工单关系图（SVG 拓扑 + 连线） ====================
+
+/** 加载工单关系图 */
+async function loadTicketGraph() {
+    if (!currentProjectId) return;
+    const container = document.getElementById('ticketGraphContainer');
+    if (!container) return;
+
+    // 填充需求筛选
+    await _populateGraphReqFilter();
+
+    const reqFilter = document.getElementById('graphReqFilter')?.value || '';
+    let url = `/projects/${currentProjectId}/ticket-graph`;
+    if (reqFilter) url += `?requirement_id=${reqFilter}`;
+
+    try {
+        const data = await api(url);
+        renderTicketGraph(container, data.nodes || [], data.edges || []);
+    } catch (e) {
+        container.innerHTML = `<div class="empty-state"><div class="emoji">❌</div><p>加载失败: ${escHtml(e.message)}</p></div>`;
+    }
+}
+
+async function _populateGraphReqFilter() {
+    const sel = document.getElementById('graphReqFilter');
+    if (!sel || !currentProjectId) return;
+    try {
+        const data = await api(`/projects/${currentProjectId}/requirements`);
+        const reqs = data.requirements || [];
+        const current = sel.value;
+        sel.innerHTML = '<option value="">全部需求</option>';
+        reqs.forEach(r => {
+            sel.innerHTML += `<option value="${r.id}" ${r.id === current ? 'selected' : ''}>${escHtml(r.title)}</option>`;
+        });
+    } catch (e) { /* ignore */ }
+}
+
+/** 使用 SVG 渲染工单关系图 */
+function renderTicketGraph(container, nodes, edges) {
+    if (nodes.length === 0) {
+        container.innerHTML = `<div class="empty-state"><div class="emoji">🔗</div><p>暂无工单数据</p></div>`;
+        return;
+    }
+
+    // === 布局算法：按层级分层排列 ===
+    // 1. 分离父节点（无 parent_ticket_id）和子节点
+    const nodeMap = {};
+    nodes.forEach(n => { nodeMap[n.id] = n; });
+
+    // 2. 计算入度（依赖关系），做拓扑排序分层
+    const depEdges = edges.filter(e => e.type === 'dependency');
+    const parentEdges = edges.filter(e => e.type === 'parent_child');
+
+    // 父节点：顶层工单（无 parent_ticket_id）
+    const topNodes = nodes.filter(n => !n.parent_ticket_id);
+    const childNodes = nodes.filter(n => n.parent_ticket_id);
+
+    // 拓扑排序确定层级
+    const inDegree = {};
+    const adjList = {};  // source → [targets]
+    topNodes.forEach(n => { inDegree[n.id] = 0; adjList[n.id] = []; });
+
+    depEdges.forEach(e => {
+        if (inDegree[e.target] !== undefined) {
+            inDegree[e.target] = (inDegree[e.target] || 0) + 1;
+        }
+        if (adjList[e.source]) adjList[e.source].push(e.target);
+    });
+
+    // BFS 分层
+    const layers = [];
+    const assigned = new Set();
+    let queue = topNodes.filter(n => (inDegree[n.id] || 0) === 0).map(n => n.id);
+    if (queue.length === 0) queue = topNodes.map(n => n.id); // fallback
+
+    while (queue.length > 0) {
+        const layer = [];
+        const nextQueue = [];
+        queue.forEach(id => {
+            if (!assigned.has(id)) {
+                assigned.add(id);
+                layer.push(id);
+            }
+        });
+        layers.push(layer);
+
+        layer.forEach(id => {
+            (adjList[id] || []).forEach(targetId => {
+                if (!assigned.has(targetId)) {
+                    inDegree[targetId] = (inDegree[targetId] || 1) - 1;
+                    if (inDegree[targetId] <= 0) {
+                        nextQueue.push(targetId);
+                    }
+                }
+            });
+        });
+        queue = nextQueue;
+        if (layers.length > 20) break; // 安全阀
+    }
+
+    // 未分配的节点放最后一层
+    topNodes.forEach(n => {
+        if (!assigned.has(n.id)) {
+            if (layers.length === 0) layers.push([]);
+            layers[layers.length - 1].push(n.id);
+        }
+    });
+
+    // === 计算坐标 ===
+    const NODE_W = 220, NODE_H = 72, CHILD_H = 50;
+    const GAP_X = 80, GAP_Y = 40, CHILD_GAP = 6;
+    const PADDING = 40;
+
+    const positions = {};  // id → {x, y, w, h}
+
+    // 计算每层节点的总高度（含子节点）
+    function getNodeTotalHeight(nodeId) {
+        const children = childNodes.filter(c => c.parent_ticket_id === nodeId);
+        return NODE_H + children.length * (CHILD_H + CHILD_GAP);
+    }
+
+    let maxX = 0, maxY = 0;
+
+    layers.forEach((layer, layerIdx) => {
+        const x = PADDING + layerIdx * (NODE_W + GAP_X);
+        let y = PADDING;
+
+        layer.forEach(nodeId => {
+            const totalH = getNodeTotalHeight(nodeId);
+            positions[nodeId] = { x, y, w: NODE_W, h: NODE_H };
+
+            // 子节点在父节点下方
+            const children = childNodes.filter(c => c.parent_ticket_id === nodeId);
+            children.forEach((child, ci) => {
+                const cy = y + NODE_H + ci * (CHILD_H + CHILD_GAP);
+                positions[child.id] = { x: x + 24, y: cy, w: NODE_W - 24, h: CHILD_H };
+            });
+
+            y += totalH + GAP_Y;
+        });
+
+        if (y > maxY) maxY = y;
+        if (x + NODE_W > maxX) maxX = x + NODE_W;
+    });
+
+    const svgW = maxX + PADDING;
+    const svgH = maxY + PADDING;
+
+    // === 绘制 SVG ===
+    let svg = `<svg class="ticket-graph-svg" width="${svgW}" height="${svgH}" viewBox="0 0 ${svgW} ${svgH}">`;
+
+    // 箭头标记
+    svg += `
+    <defs>
+        <marker id="arrow-dep" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+            <path d="M0,0 L8,3 L0,6" fill="#e8a735" />
+        </marker>
+        <marker id="arrow-parent" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto" markerUnits="userSpaceOnUse">
+            <path d="M0,0 L8,3 L0,6" fill="#58a6ff" />
+        </marker>
+    </defs>`;
+
+    // 画边（依赖关系 — 黄色虚线箭头）
+    depEdges.forEach(e => {
+        const src = positions[e.source];
+        const tgt = positions[e.target];
+        if (!src || !tgt) return;
+
+        const x1 = src.x + src.w;
+        const y1 = src.y + src.h / 2;
+        const x2 = tgt.x;
+        const y2 = tgt.y + tgt.h / 2;
+
+        // 贝塞尔曲线
+        const cx = (x1 + x2) / 2;
+        svg += `<path d="M${x1},${y1} C${cx},${y1} ${cx},${y2} ${x2},${y2}"
+                  fill="none" stroke="#e8a735" stroke-width="2" stroke-dasharray="6,3"
+                  marker-end="url(#arrow-dep)" class="graph-edge graph-edge-dep" />`;
+
+        // 依赖标签
+        const mx = (x1 + x2) / 2;
+        const my = (y1 + y2) / 2 - 8;
+        svg += `<text x="${mx}" y="${my}" class="graph-edge-label" fill="#e8a735">依赖</text>`;
+    });
+
+    // 画边（父子关系 — 蓝色实线）
+    parentEdges.forEach(e => {
+        const src = positions[e.source];
+        const tgt = positions[e.target];
+        if (!src || !tgt) return;
+
+        const x1 = src.x + 12;
+        const y1 = src.y + src.h;
+        const x2 = tgt.x;
+        const y2 = tgt.y + tgt.h / 2;
+
+        svg += `<path d="M${x1},${y1} L${x1},${y2} L${x2},${y2}"
+                  fill="none" stroke="#58a6ff" stroke-width="1.5"
+                  marker-end="url(#arrow-parent)" class="graph-edge graph-edge-parent" />`;
+    });
+
+    // 画节点
+    nodes.forEach(n => {
+        const pos = positions[n.id];
+        if (!pos) return;
+        const isChild = !!n.parent_ticket_id;
+        const statusColor = getStatusColor(n.status);
+        const shortId = (n.id || '').slice(-6);
+
+        if (isChild) {
+            // 子工单：小卡片
+            svg += `
+            <g class="graph-node graph-node-child" onclick="openTicketDrawer('${n.id}')" style="cursor:pointer;">
+                <rect x="${pos.x}" y="${pos.y}" width="${pos.w}" height="${pos.h}"
+                      rx="4" fill="var(--bg-card)" stroke="${statusColor}" stroke-width="1" />
+                <text x="${pos.x + 8}" y="${pos.y + 18}" class="graph-node-id" fill="var(--text-muted)">#${shortId}</text>
+                <text x="${pos.x + 52}" y="${pos.y + 18}" class="graph-node-title-sm">${escHtml(n.title.slice(0, 22))}</text>
+                <rect x="${pos.x + pos.w - 48}" y="${pos.y + 6}" width="40" height="16" rx="3"
+                      fill="${statusColor}20" stroke="${statusColor}" stroke-width="0.5" />
+                <text x="${pos.x + pos.w - 28}" y="${pos.y + 18}" class="graph-node-status-sm" fill="${statusColor}">${escHtml(n.status_label || '')}</text>
+            </g>`;
+        } else {
+            // 父工单：完整卡片
+            const priorityLabel = {1:'P1',2:'P2',3:'P3',4:'P4',5:'P5'};
+            const pLabel = priorityLabel[n.priority] || 'P3';
+
+            svg += `
+            <g class="graph-node" onclick="openTicketDrawer('${n.id}')" style="cursor:pointer;">
+                <rect x="${pos.x}" y="${pos.y}" width="${pos.w}" height="${pos.h}"
+                      rx="6" fill="var(--bg-card)" stroke="${statusColor}" stroke-width="2" />
+                <rect x="${pos.x}" y="${pos.y}" width="4" height="${pos.h}" rx="2" fill="${statusColor}" />
+                <text x="${pos.x + 12}" y="${pos.y + 20}" class="graph-node-id" fill="var(--text-muted)">#${shortId}</text>
+                <text x="${pos.x + 58}" y="${pos.y + 20}" class="graph-node-priority" fill="var(--text-muted)">${pLabel}</text>
+                <text x="${pos.x + 12}" y="${pos.y + 42}" class="graph-node-title">${escHtml(n.title.slice(0, 24))}</text>
+                <text x="${pos.x + 12}" y="${pos.y + 60}" class="graph-node-meta" fill="var(--text-muted)">${escHtml(n.module || '')} · ${escHtml(n.assigned_agent || '未分配')}</text>
+                <rect x="${pos.x + pos.w - 62}" y="${pos.y + 8}" width="52" height="18" rx="4"
+                      fill="${statusColor}20" stroke="${statusColor}" stroke-width="0.5" />
+                <text x="${pos.x + pos.w - 36}" y="${pos.y + 21}" class="graph-node-status" fill="${statusColor}">${escHtml(n.status_label || '')}</text>
+            </g>`;
+        }
+    });
+
+    svg += '</svg>';
+    container.innerHTML = svg;
+}
+
 
 // ==================== 工单列表（全量工单表格 + 看板视图） ====================
 

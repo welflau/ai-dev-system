@@ -3062,6 +3062,140 @@ input[type="text"]:focus, input[type="number"]:focus, input[type="password"]:foc
     text-decoration: underline;
 }
 
+/* ==================== 侧栏：工单子菜单 ==================== */
+
+.sidebar-tickets-menu {
+    margin: 0;
+}
+
+.nav-item-tickets {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.nav-item-tickets .nav-item-arrow {
+    margin-left: auto;
+    font-size: 11px;
+    transition: transform 0.15s ease;
+}
+.nav-item-tickets .nav-item-arrow.expanded {
+    transform: rotate(0deg);
+}
+
+.tickets-drawer {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.2s ease;
+}
+.tickets-drawer.open {
+    max-height: 200px;
+}
+
+/* ==================== 工单关系图 ==================== */
+
+.ticket-graph-container {
+    width: 100%;
+    min-height: 400px;
+    overflow: auto;
+    background: var(--bg-main);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    position: relative;
+}
+
+.ticket-graph-svg {
+    display: block;
+    min-width: 100%;
+}
+
+.graph-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.graph-legend {
+    display: flex;
+    gap: 16px;
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.graph-legend-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.gl-line {
+    display: inline-block;
+    width: 24px;
+    height: 2px;
+}
+.gl-line.gl-parent {
+    background: #58a6ff;
+}
+.gl-line.gl-dep {
+    background: #e8a735;
+    background-image: repeating-linear-gradient(
+        90deg,
+        #e8a735 0, #e8a735 6px,
+        transparent 6px, transparent 9px
+    );
+}
+
+/* SVG 节点样式 */
+.graph-node {
+    cursor: pointer;
+}
+.graph-node:hover rect:first-of-type {
+    filter: brightness(1.15);
+}
+.graph-node-id {
+    font-size: 11px;
+    font-family: 'SF Mono', Monaco, Consolas, monospace;
+}
+.graph-node-title {
+    font-size: 13px;
+    fill: var(--text-primary);
+    font-weight: 500;
+}
+.graph-node-title-sm {
+    font-size: 11px;
+    fill: var(--text-primary);
+}
+.graph-node-priority {
+    font-size: 10px;
+    font-weight: 600;
+}
+.graph-node-meta {
+    font-size: 10px;
+}
+.graph-node-status {
+    font-size: 10px;
+    text-anchor: middle;
+    font-weight: 500;
+}
+.graph-node-status-sm {
+    font-size: 9px;
+    text-anchor: middle;
+    font-weight: 500;
+}
+
+.graph-edge-label {
+    font-size: 10px;
+    text-anchor: middle;
+    font-weight: 500;
+}
+
+/* 边动画 */
+.graph-edge-dep {
+    animation: dash-flow 1.5s linear infinite;
+}
+@keyframes dash-flow {
+    to { stroke-dashoffset: -18; }
+}
+
 
 /* ==================== 工单列表页：看板视图 ==================== */
 

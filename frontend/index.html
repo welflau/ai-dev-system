@@ -47,15 +47,28 @@
                         <h3 id="sidebarProjectName"></h3>
                     </div>
                     <nav class="sidebar-nav">
-                        <a class="nav-item active" data-tab="board" onclick="switchTab('board')">
-                            📌 工单看板
-                        </a>
                         <a class="nav-item" data-tab="requirements" onclick="switchTab('requirements')">
                             📋 需求列表
                         </a>
-                        <a class="nav-item" data-tab="ticket-list" onclick="switchTab('ticket-list')">
-                            🎫 工单列表
-                        </a>
+                        <!-- 工单子菜单（抽屉式折叠） -->
+                        <div class="sidebar-tickets-menu">
+                            <a class="nav-item nav-item-tickets active" onclick="toggleTicketsPanel()">
+                                <span class="nav-item-icon">🎫</span>
+                                <span>工单</span>
+                                <span class="nav-item-arrow" id="ticketsArrow">▾</span>
+                            </a>
+                            <div class="tickets-drawer open" id="ticketsDrawer">
+                                <a class="nav-item nav-sub-item active" data-tab="board" onclick="switchTab('board')">
+                                    <span class="nav-item-icon">📌</span> 看板
+                                </a>
+                                <a class="nav-item nav-sub-item" data-tab="ticket-list" onclick="switchTab('ticket-list')">
+                                    <span class="nav-item-icon">📋</span> 列表
+                                </a>
+                                <a class="nav-item nav-sub-item" data-tab="ticket-graph" onclick="switchTab('ticket-graph')">
+                                    <span class="nav-item-icon">🔗</span> 关系图
+                                </a>
+                            </div>
+                        </div>
                         <a class="nav-item" data-tab="repo" onclick="switchTab('repo')">
                             📂 仓库文件
                         </a>
@@ -202,6 +215,26 @@
                             </div>
                         </div>
                         <div id="ticketListContent"></div>
+                    </div>
+
+                    <!-- Tab: 工单关系图 -->
+                    <div id="tab-ticket-graph" class="tab-content">
+                        <div class="page-header">
+                            <h2>🔗 工单关系图</h2>
+                            <div class="graph-actions">
+                                <select id="graphReqFilter" onchange="loadTicketGraph()">
+                                    <option value="">全部需求</option>
+                                </select>
+                                <div class="graph-legend">
+                                    <span class="graph-legend-item"><span class="gl-line gl-parent"></span> 父子关系</span>
+                                    <span class="graph-legend-item"><span class="gl-line gl-dep"></span> 前后依赖</span>
+                                </div>
+                                <button class="btn btn-sm" onclick="loadTicketGraph()">🔄 刷新</button>
+                            </div>
+                        </div>
+                        <div class="ticket-graph-container" id="ticketGraphContainer">
+                            <div class="empty-state"><div class="emoji">🔗</div><p>加载中...</p></div>
+                        </div>
                     </div>
 
                     <!-- Tab: 仓库文件 -->
