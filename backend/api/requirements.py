@@ -298,6 +298,8 @@ async def get_requirement_pipeline(project_id: str, req_id: str):
         exec_status = "success"
     elif req_status == "cancelled":
         exec_status = "cancelled"
+    elif req_status == "paused":
+        exec_status = "paused"
     elif req_status in ("submitted",):
         exec_status = "pending"
     else:

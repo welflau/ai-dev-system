@@ -190,8 +190,8 @@ def _build_system_prompt(project: dict, context: dict) -> str:
     req_summary = ""
     if req_list:
         req_lines = []
-        for r in req_list[:5]:
-            req_lines.append(f"  - [{r['status']}] {r['title']} (ID: {r['id'][:12]}...)")
+        for r in req_list[:10]:
+            req_lines.append(f"  - [{r['status']}] {r['title']} (ID: {r['id']})")
         req_summary = "\n".join(req_lines)
     else:
         req_summary = "  暂无需求"
@@ -214,14 +214,35 @@ def _build_system_prompt(project: dict, context: dict) -> str:
 ## 你的能力
 1. **回答问题**：关于项目状态、需求进展、技术方案的任何问题
 2. **创建需求**：当用户描述一个新功能需求时，你可以帮助创建
-3. **查看状态**：汇报当前项目进展、工单状态
-4. **技术建议**：基于项目技术栈给出建议
+3. **管理需求状态**：暂停、恢复、关闭需求的执行
+4. **查看状态**：汇报当前项目进展、工单状态
+5. **技术建议**：基于项目技术栈给出建议
 
 ## 操作指令格式
-当你判断用户想要创建需求时，在回复末尾附加以下格式的指令标记（必须是独立一行）：
+当你判断用户想要执行操作时，在回复末尾附加以下格式的指令标记（必须是独立一行）：
 
+### 创建需求
+当用户想要创建新需求时使用：
 [ACTION:CREATE_REQUIREMENT]
 {{"title": "需求标题", "description": "详细描述", "priority": "medium"}}
+[/ACTION]
+
+### 暂停需求
+当用户想暂停某个需求的执行时使用（需求必须处于 analyzing/decomposed/in_progress 状态）：
+[ACTION:PAUSE_REQUIREMENT]
+{{"requirement_id": "需求ID", "reason": "暂停原因"}}
+[/ACTION]
+
+### 恢复需求
+当用户想恢复已暂停的需求时使用（需求必须处于 paused 状态）：
+[ACTION:RESUME_REQUIREMENT]
+{{"requirement_id": "需求ID"}}
+[/ACTION]
+
+### 关闭需求
+当用户想关闭/取消某个需求时使用（终态需求不可关闭）：
+[ACTION:CLOSE_REQUIREMENT]
+{{"requirement_id": "需求ID", "reason": "关闭原因"}}
 [/ACTION]
 
 priority 可选值：critical, high, medium, low
@@ -229,8 +250,10 @@ priority 可选值：critical, high, medium, low
 ## 注意事项
 - 用中文回复
 - 回答简洁但有信息量
-- 如果用户的描述不够清晰，先询问细节再创建需求
-- 如果不确定用户是否要创建需求，先确认
+- 如果用户的描述不够清晰，先询问细节再执行操作
+- 如果不确定用户想操作哪个需求，列出当前需求让用户选择
+- 如果需求 ID 不明确，用标题关键词匹配当前需求列表中的需求
+- 暂停/恢复/关闭操作必须确认需求存在且状态允许该操作
 """
 
 
@@ -287,6 +310,12 @@ async def _parse_and_execute_action(project_id: str, project: dict, response: st
 
     if action_type == "CREATE_REQUIREMENT":
         return await _execute_create_requirement(project_id, action_data)
+    elif action_type == "PAUSE_REQUIREMENT":
+        return await _execute_pause_requirement(project_id, action_data)
+    elif action_type == "RESUME_REQUIREMENT":
+        return await _execute_resume_requirement(project_id, action_data)
+    elif action_type == "CLOSE_REQUIREMENT":
+        return await _execute_close_requirement(project_id, action_data)
 
     logger.warning("未知操作类型: %s", action_type)
     return None
@@ -357,6 +386,263 @@ async def _execute_create_requirement(project_id: str, data: dict) -> Dict:
         "description": description,
         "priority": priority,
         "message": f"需求「{title}」已创建成功",
+    }
+
+
+async def _execute_pause_requirement(project_id: str, data: dict) -> Dict:
+    """执行暂停需求操作"""
+    from models import RequirementStatus, validate_requirement_transition
+
+    requirement_id = data.get("requirement_id", "").strip()
+    reason = data.get("reason", "用户通过聊天助手暂停").strip()
+
+    if not requirement_id:
+        return {"type": "error", "message": "需求 ID 不能为空"}
+
+    # 支持模糊匹配：如果传入的不是完整 ID，尝试通过标题关键词匹配
+    req = await db.fetch_one(
+        "SELECT * FROM requirements WHERE id = ? AND project_id = ?",
+        (requirement_id, project_id),
+    )
+    if not req:
+        # 尝试通过标题模糊匹配
+        req = await db.fetch_one(
+            "SELECT * FROM requirements WHERE project_id = ? AND title LIKE ? AND status NOT IN ('completed', 'cancelled')",
+            (project_id, f"%{requirement_id}%"),
+        )
+        if req:
+            requirement_id = req["id"]
+        else:
+            return {"type": "error", "message": f"未找到需求「{requirement_id}」"}
+
+    current_status = req["status"]
+    # 验证状态转换是否合法
+    if not validate_requirement_transition(current_status, "paused"):
+        status_label = {"submitted": "已提交", "analyzing": "分析中", "decomposed": "已拆单",
+                       "in_progress": "进行中", "paused": "已暂停", "completed": "已完成",
+                       "cancelled": "已取消"}.get(current_status, current_status)
+        return {"type": "error", "message": f"需求当前状态为「{status_label}」，无法暂停"}
+
+    now = now_iso()
+    await db.update("requirements", {
+        "status": RequirementStatus.PAUSED.value,
+        "updated_at": now,
+    }, "id = ?", (requirement_id,))
+
+    # 写日志
+    log_id = generate_id("LOG")
+    detail_json = json.dumps({"message": f"通过聊天助手暂停需求，原因: {reason}"}, ensure_ascii=False)
+    await db.insert("ticket_logs", {
+        "id": log_id,
+        "ticket_id": None,
+        "subtask_id": None,
+        "requirement_id": requirement_id,
+        "project_id": project_id,
+        "agent_type": "ChatAssistant",
+        "action": "update_status",
+        "from_status": current_status,
+        "to_status": "paused",
+        "detail": detail_json,
+        "level": "info",
+        "created_at": now,
+    })
+
+    # SSE 事件
+    await event_manager.publish_to_project(
+        project_id, "requirement_status_changed",
+        {"id": requirement_id, "title": req["title"], "from": current_status, "to": "paused"},
+    )
+
+    logger.info("聊天助手暂停需求: %s — %s", requirement_id, req["title"])
+
+    return {
+        "type": "requirement_paused",
+        "requirement_id": requirement_id,
+        "title": req["title"],
+        "from_status": current_status,
+        "to_status": "paused",
+        "reason": reason,
+        "message": f"需求「{req['title']}」已暂停",
+    }
+
+
+async def _execute_resume_requirement(project_id: str, data: dict) -> Dict:
+    """执行恢复需求操作"""
+    from models import RequirementStatus, validate_requirement_transition
+
+    requirement_id = data.get("requirement_id", "").strip()
+
+    if not requirement_id:
+        return {"type": "error", "message": "需求 ID 不能为空"}
+
+    req = await db.fetch_one(
+        "SELECT * FROM requirements WHERE id = ? AND project_id = ?",
+        (requirement_id, project_id),
+    )
+    if not req:
+        # 尝试通过标题模糊匹配
+        req = await db.fetch_one(
+            "SELECT * FROM requirements WHERE project_id = ? AND title LIKE ? AND status = 'paused'",
+            (project_id, f"%{requirement_id}%"),
+        )
+        if req:
+            requirement_id = req["id"]
+        else:
+            return {"type": "error", "message": f"未找到需求「{requirement_id}」或需求不处于暂停状态"}
+
+    current_status = req["status"]
+    if current_status != "paused":
+        return {"type": "error", "message": f"需求当前不处于暂停状态（当前: {current_status}），无法恢复"}
+
+    # 恢复到 in_progress 状态
+    new_status = RequirementStatus.IN_PROGRESS.value
+
+    now = now_iso()
+    await db.update("requirements", {
+        "status": new_status,
+        "updated_at": now,
+    }, "id = ?", (requirement_id,))
+
+    # 写日志
+    log_id = generate_id("LOG")
+    detail_json = json.dumps({"message": "通过聊天助手恢复需求执行"}, ensure_ascii=False)
+    await db.insert("ticket_logs", {
+        "id": log_id,
+        "ticket_id": None,
+        "subtask_id": None,
+        "requirement_id": requirement_id,
+        "project_id": project_id,
+        "agent_type": "ChatAssistant",
+        "action": "update_status",
+        "from_status": current_status,
+        "to_status": new_status,
+        "detail": detail_json,
+        "level": "info",
+        "created_at": now,
+    })
+
+    # SSE 事件
+    await event_manager.publish_to_project(
+        project_id, "requirement_status_changed",
+        {"id": requirement_id, "title": req["title"], "from": current_status, "to": new_status},
+    )
+
+    logger.info("聊天助手恢复需求: %s — %s", requirement_id, req["title"])
+
+    # 恢复需求后，自动继续处理未完成的工单
+    try:
+        from orchestrator import orchestrator
+        import asyncio
+        pending_tickets = await db.fetch_all(
+            "SELECT id FROM tickets WHERE requirement_id = ? AND status NOT IN ('deployed', 'cancelled')",
+            (requirement_id,),
+        )
+        for t in pending_tickets:
+            # 用后台方式继续流转
+            asyncio.create_task(orchestrator.process_ticket(project_id, t["id"]))
+        if pending_tickets:
+            logger.info("恢复需求后继续处理 %d 个工单", len(pending_tickets))
+    except Exception as e:
+        logger.warning("恢复工单流转失败: %s", e)
+
+    return {
+        "type": "requirement_resumed",
+        "requirement_id": requirement_id,
+        "title": req["title"],
+        "from_status": current_status,
+        "to_status": new_status,
+        "message": f"需求「{req['title']}」已恢复执行",
+    }
+
+
+async def _execute_close_requirement(project_id: str, data: dict) -> Dict:
+    """执行关闭需求操作"""
+    from models import RequirementStatus
+
+    requirement_id = data.get("requirement_id", "").strip()
+    reason = data.get("reason", "用户通过聊天助手关闭").strip()
+
+    if not requirement_id:
+        return {"type": "error", "message": "需求 ID 不能为空"}
+
+    req = await db.fetch_one(
+        "SELECT * FROM requirements WHERE id = ? AND project_id = ?",
+        (requirement_id, project_id),
+    )
+    if not req:
+        # 尝试通过标题模糊匹配
+        req = await db.fetch_one(
+            "SELECT * FROM requirements WHERE project_id = ? AND title LIKE ? AND status NOT IN ('completed', 'cancelled')",
+            (project_id, f"%{requirement_id}%"),
+        )
+        if req:
+            requirement_id = req["id"]
+        else:
+            return {"type": "error", "message": f"未找到需求「{requirement_id}」"}
+
+    current_status = req["status"]
+    if current_status in ("completed", "cancelled"):
+        status_label = "已完成" if current_status == "completed" else "已取消"
+        return {"type": "error", "message": f"需求已处于终态「{status_label}」，无需操作"}
+
+    now = now_iso()
+    await db.update("requirements", {
+        "status": RequirementStatus.CANCELLED.value,
+        "updated_at": now,
+    }, "id = ?", (requirement_id,))
+
+    # 同时取消该需求下所有未完成的工单
+    cancelled_tickets = 0
+    tickets = await db.fetch_all(
+        "SELECT id, status FROM tickets WHERE requirement_id = ? AND status NOT IN ('deployed', 'cancelled')",
+        (requirement_id,),
+    )
+    for t in tickets:
+        await db.update("tickets", {
+            "status": "cancelled",
+            "updated_at": now,
+        }, "id = ?", (t["id"],))
+        cancelled_tickets += 1
+
+    # 写日志
+    log_id = generate_id("LOG")
+    detail_json = json.dumps({
+        "message": f"通过聊天助手关闭需求，原因: {reason}",
+        "cancelled_tickets": cancelled_tickets,
+    }, ensure_ascii=False)
+    await db.insert("ticket_logs", {
+        "id": log_id,
+        "ticket_id": None,
+        "subtask_id": None,
+        "requirement_id": requirement_id,
+        "project_id": project_id,
+        "agent_type": "ChatAssistant",
+        "action": "update_status",
+        "from_status": current_status,
+        "to_status": "cancelled",
+        "detail": detail_json,
+        "level": "info",
+        "created_at": now,
+    })
+
+    # SSE 事件
+    await event_manager.publish_to_project(
+        project_id, "requirement_status_changed",
+        {"id": requirement_id, "title": req["title"], "from": current_status, "to": "cancelled",
+         "cancelled_tickets": cancelled_tickets},
+    )
+
+    logger.info("聊天助手关闭需求: %s — %s (同时取消 %d 个工单)", requirement_id, req["title"], cancelled_tickets)
+
+    return {
+        "type": "requirement_closed",
+        "requirement_id": requirement_id,
+        "title": req["title"],
+        "from_status": current_status,
+        "to_status": "cancelled",
+        "reason": reason,
+        "cancelled_tickets": cancelled_tickets,
+        "message": f"需求「{req['title']}」已关闭" + (f"，同时取消了 {cancelled_tickets} 个工单" if cancelled_tickets > 0 else ""),
     }
 
 

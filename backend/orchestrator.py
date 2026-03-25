@@ -309,6 +309,18 @@ class TicketOrchestrator:
             if not ticket:
                 return
 
+            # 检查需求是否被暂停或取消
+            requirement = await db.fetch_one(
+                "SELECT status FROM requirements WHERE id = ?",
+                (ticket["requirement_id"],),
+            )
+            if requirement and requirement["status"] in ("paused", "cancelled"):
+                logger.info(
+                    "⏸️ 需求 %s 处于 %s 状态，跳过工单 %s 的流转",
+                    ticket["requirement_id"][:12], requirement["status"], ticket_id[:12],
+                )
+                return
+
             current_status = ticket["status"]
             rule = self.transition_rules.get(current_status)
 

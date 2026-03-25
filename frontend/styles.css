@@ -529,6 +529,7 @@ body {
 .req-status-tag.analyzing { background: rgba(245, 158, 11, 0.15); color: var(--warning); }
 .req-status-tag.decomposed { background: rgba(6, 182, 212, 0.15); color: var(--accent); }
 .req-status-tag.in_progress { background: rgba(79, 70, 229, 0.15); color: var(--primary-light); }
+.req-status-tag.paused { background: rgba(245, 158, 11, 0.18); color: #e67e22; }
 .req-status-tag.completed { background: rgba(34, 197, 94, 0.15); color: var(--success); }
 .req-status-tag.cancelled { background: rgba(107, 114, 128, 0.15); color: var(--text-muted); }
 
@@ -589,6 +590,7 @@ body {
 .req-status.analyzing { background: rgba(245, 158, 11, 0.15); color: var(--warning); }
 .req-status.decomposed { background: rgba(6, 182, 212, 0.15); color: var(--accent); }
 .req-status.in_progress { background: rgba(79, 70, 229, 0.15); color: var(--primary-light); }
+.req-status.paused { background: rgba(245, 158, 11, 0.18); color: #e67e22; }
 .req-status.completed { background: rgba(34, 197, 94, 0.15); color: var(--success); }
 .req-status.cancelled { background: rgba(107, 114, 128, 0.15); color: var(--text-muted); }
 
@@ -1321,6 +1323,7 @@ input[type="text"]:focus, input[type="number"]:focus, input[type="password"]:foc
 .exec-badge.success { background: rgba(34,197,94,0.15); color: var(--success); border: 1px solid rgba(34,197,94,0.3); }
 .exec-badge.running { background: rgba(59,130,246,0.15); color: var(--info); border: 1px solid rgba(59,130,246,0.3); animation: pipelinePulse 2s ease-in-out infinite; }
 .exec-badge.pending { background: rgba(107,114,128,0.15); color: var(--text-muted); border: 1px solid rgba(107,114,128,0.3); }
+.exec-badge.paused { background: rgba(245,158,11,0.15); color: #e67e22; border: 1px solid rgba(245,158,11,0.3); }
 .exec-badge.cancelled { background: rgba(239,68,68,0.15); color: var(--error); border: 1px solid rgba(239,68,68,0.3); }
 .exec-badge.failed { background: rgba(239,68,68,0.15); color: var(--error); border: 1px solid rgba(239,68,68,0.3); }
 

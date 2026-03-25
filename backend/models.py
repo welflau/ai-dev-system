@@ -20,6 +20,7 @@ class RequirementStatus(str, Enum):
     ANALYZING = "analyzing"          # 分析中（ProductAgent）
     DECOMPOSED = "decomposed"        # 已拆单
     IN_PROGRESS = "in_progress"      # 进行中（有工单在执行）
+    PAUSED = "paused"                # 已暂停（用户手动暂停）
     COMPLETED = "completed"          # 已完成（所有工单完成）
     CANCELLED = "cancelled"          # 已取消
 
@@ -164,13 +165,21 @@ REQUIREMENT_TRANSITIONS = {
     ],
     RequirementStatus.ANALYZING: [
         RequirementStatus.DECOMPOSED,
+        RequirementStatus.PAUSED,
     ],
     RequirementStatus.DECOMPOSED: [
         RequirementStatus.IN_PROGRESS,
+        RequirementStatus.PAUSED,
+        RequirementStatus.CANCELLED,
     ],
     RequirementStatus.IN_PROGRESS: [
         RequirementStatus.COMPLETED,
+        RequirementStatus.PAUSED,
         RequirementStatus.CANCELLED,
+    ],
+    RequirementStatus.PAUSED: [
+        RequirementStatus.IN_PROGRESS,  # 恢复执行
+        RequirementStatus.CANCELLED,     # 关闭
     ],
     RequirementStatus.COMPLETED: [],
     RequirementStatus.CANCELLED: [],
@@ -293,5 +302,6 @@ STATUS_LABELS = {
     "analyzing": "分析中",
     "decomposed": "已拆单",
     "in_progress": "进行中",
+    "paused": "已暂停",
     "completed": "已完成",
 }

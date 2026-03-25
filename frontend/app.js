@@ -1499,6 +1499,7 @@ function renderPipelineInfoBar(data) {
         success: { text: '执行成功', cls: 'success' },
         running: { text: '执行中', cls: 'running' },
         pending: { text: '等待执行', cls: 'pending' },
+        paused: { text: '已暂停', cls: 'paused' },
         cancelled: { text: '已取消', cls: 'cancelled' },
         failed: { text: '执行失败', cls: 'failed' },
     };
@@ -2324,6 +2325,23 @@ function connectSSE(projectId) {
             });
         });
 
+        // SSE: 需求状态变更（暂停/恢复/关闭）
+        eventSource.addEventListener('requirement_status_changed', (e) => {
+            const data = JSON.parse(e.data);
+            console.log('[SSE] requirement_status_changed:', data);
+            loadRequirements();
+            refreshBoard();
+            const statusLabels = {paused: '已暂停', in_progress: '已恢复', cancelled: '已关闭'};
+            const label = statusLabels[data.to] || data.to;
+            appendLogEntry({
+                agent_type: 'ChatAssistant',
+                action: 'update_status',
+                detail: JSON.stringify({message: `需求「${data.title}」${label}`}),
+                level: data.to === 'cancelled' ? 'warn' : 'info',
+                created_at: new Date().toISOString(),
+            });
+        });
+
         // SSE: 后端日志实时推送
         eventSource.addEventListener('log_added', (e) => {
             const data = JSON.parse(e.data);
@@ -2825,7 +2843,7 @@ const STATUS_LABELS = {
     testing_in_progress: '测试中', testing_done: '测试通过', testing_failed: '测试不通过',
     deploying: '部署中', deployed: '已部署', cancelled: '已取消',
     submitted: '已提交', analyzing: '分析中', decomposed: '已拆单',
-    in_progress: '进行中', completed: '已完成',
+    in_progress: '进行中', paused: '已暂停', completed: '已完成', cancelled: '已取消',
 };
 
 function getStatusLabel(status) {
@@ -3517,6 +3535,29 @@ async function sendChatMessage() {
             }, 500);
         }
 
+        // 需求状态管理操作
+        if (action && action.type === 'requirement_paused') {
+            showToast(`需求「${action.title}」已暂停`, 'warning');
+            setTimeout(() => {
+                if (typeof loadRequirements === 'function') loadRequirements();
+                if (typeof refreshBoard === 'function') refreshBoard();
+            }, 500);
+        }
+        if (action && action.type === 'requirement_resumed') {
+            showToast(`需求「${action.title}」已恢复执行`, 'success');
+            setTimeout(() => {
+                if (typeof loadRequirements === 'function') loadRequirements();
+                if (typeof refreshBoard === 'function') refreshBoard();
+            }, 500);
+        }
+        if (action && action.type === 'requirement_closed') {
+            showToast(`需求「${action.title}」已关闭`, 'info');
+            setTimeout(() => {
+                if (typeof loadRequirements === 'function') loadRequirements();
+                if (typeof refreshBoard === 'function') refreshBoard();
+            }, 500);
+        }
+
     } catch (e) {
         document.getElementById('chatTyping')?.remove();
         appendChatBubble('assistant', `⚠️ 请求失败: ${e.message}\n\n请检查 LLM 是否已配置。`);
@@ -3549,6 +3590,47 @@ function appendChatBubble(role, content, timestamp = null, action = null) {
                     优先级: ${action.priority || 'medium'}
                 </div>
                 <span class="action-link" onclick="switchTab('requirements')">查看需求列表 →</span>
+            </div>
+        `;
+    } else if (action && action.type === 'requirement_paused') {
+        actionHtml = `
+            <div class="chat-action-card" style="border-left-color: var(--warning, #f0a020);">
+                <div class="action-title">⏸️ 需求已暂停</div>
+                <div class="action-detail">
+                    <strong>${escapeHtml(action.title)}</strong><br>
+                    ${action.reason ? '原因: ' + escapeHtml(action.reason) : ''}
+                </div>
+                <span class="action-link" onclick="switchTab('requirements')">查看需求列表 →</span>
+            </div>
+        `;
+    } else if (action && action.type === 'requirement_resumed') {
+        actionHtml = `
+            <div class="chat-action-card" style="border-left-color: var(--success, #34d058);">
+                <div class="action-title">▶️ 需求已恢复</div>
+                <div class="action-detail">
+                    <strong>${escapeHtml(action.title)}</strong><br>
+                    需求已恢复执行
+                </div>
+                <span class="action-link" onclick="switchTab('requirements')">查看需求列表 →</span>
+            </div>
+        `;
+    } else if (action && action.type === 'requirement_closed') {
+        actionHtml = `
+            <div class="chat-action-card" style="border-left-color: var(--danger, #ea4a5a);">
+                <div class="action-title">🚫 需求已关闭</div>
+                <div class="action-detail">
+                    <strong>${escapeHtml(action.title)}</strong><br>
+                    ${action.reason ? '原因: ' + escapeHtml(action.reason) : ''}
+                    ${action.cancelled_tickets > 0 ? '<br>同时取消了 ' + action.cancelled_tickets + ' 个关联工单' : ''}
+                </div>
+                <span class="action-link" onclick="switchTab('requirements')">查看需求列表 →</span>
+            </div>
+        `;
+    } else if (action && action.type === 'error') {
+        actionHtml = `
+            <div class="chat-action-card" style="border-left-color: var(--danger, #ea4a5a);">
+                <div class="action-title">⚠️ 操作失败</div>
+                <div class="action-detail">${escapeHtml(action.message || '未知错误')}</div>
             </div>
         `;
     }
@@ -3591,8 +3673,10 @@ function showChatWelcome() {
             <div class="chat-welcome-icon">🤖</div>
             <div class="chat-welcome-title">AI 开发助手</div>
             <div class="chat-welcome-desc">
-                我可以帮你：查看项目状态、创建需求、回答技术问题<br>
-                <small>试试说 "帮我创建一个用户登录功能需求"</small>
+                我可以帮你：查看项目状态、创建需求、管理需求执行<br>
+                <small>💡 试试说：</small><br>
+                <small>"帮我创建一个用户登录功能需求"</small><br>
+                <small>"暂停 XX 需求" / "恢复 XX 需求" / "关闭 XX 需求"</small>
             </div>
         </div>
     `;
@@ -3694,6 +3778,12 @@ function scrollChatToBottom() {
 function getStatusColor(status) {
     const colors = {
         'pending': 'var(--text-muted)',
+        'submitted': 'var(--info)',
+        'analyzing': 'var(--warning, #f0a020)',
+        'decomposed': 'var(--accent)',
+        'in_progress': 'var(--primary-light)',
+        'paused': '#e67e22',
+        'completed': 'var(--success)',
         'architecture_in_progress': 'var(--info)',
         'architecture_done': 'var(--success)',
         'development_in_progress': 'var(--info)',
