@@ -57,8 +57,8 @@ async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     # 启动时
     logger.info("=" * 60)
-    logger.info("  AI 自动开发系统 v0.8.0")
-    logger.info("  工单管理 + Git 仓库集成")
+    logger.info("  AI 自动开发系统 v0.9.0")
+    logger.info("  工单管理 + Git 仓库集成 + AI 聊天面板")
     logger.info("=" * 60)
 
     await db.connect()
@@ -87,8 +87,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="AI 自动开发系统",
-    version="0.8.0",
-    description="工单驱动的 AI 自动开发管理平台 + Git 仓库集成",
+    version="0.9.0",
+    description="工单驱动的 AI 自动开发管理平台 + Git 仓库集成 + AI 聊天面板",
     lifespan=lifespan,
 )
 
@@ -106,11 +106,13 @@ from api.projects import router as projects_router
 from api.requirements import router as requirements_router
 from api.tickets import router as tickets_router
 from api.agents import router as agents_router
+from api.chat import router as chat_router
 
 app.include_router(projects_router)
 app.include_router(requirements_router)
 app.include_router(tickets_router)
 app.include_router(agents_router)
+app.include_router(chat_router)
 
 
 # ==================== 系统端点 ====================

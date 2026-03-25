@@ -883,6 +883,10 @@ function renderTicketCard(t) {
 
 async function openTicketDrawer(ticketId) {
     if (!currentProjectId) return;
+
+    // 联动聊天面板 — 设置当前工单上下文
+    chatCurrentTicketId = ticketId;
+
     try {
         const data = await api(`/projects/${currentProjectId}/tickets/${ticketId}`);
         const drawerTitle = document.getElementById('drawerTitle');
@@ -1004,11 +1008,13 @@ function renderTicketActions(ticket) {
     if (ticket.status === 'pending') {
         buttons += `<button class="btn btn-primary btn-sm" onclick="startTicket('${ticket.id}')">▶ 启动</button>`;
     }
+    // 查看 AI 对话按钮
+    buttons += `<button class="btn btn-sm" onclick="selectTicketForChat('${ticket.id}', '${escHtml(ticket.title).replace(/'/g, "\\'")}'); closeDrawer();">💬 AI 对话</button>`;
     if (ticket.status !== 'deployed' && ticket.status !== 'cancelled') {
         buttons += `<button class="btn btn-sm" style="color:var(--error);" onclick="cancelTicket('${ticket.id}')">✗ 取消</button>`;
     }
     if (!buttons) return '';
-    return `<div class="drawer-section"><h4>操作</h4><div style="display:flex; gap:8px;">${buttons}</div></div>`;
+    return `<div class="drawer-section"><h4>操作</h4><div style="display:flex; gap:8px; flex-wrap:wrap;">${buttons}</div></div>`;
 }
 
 async function startTicket(ticketId) {
@@ -2963,4 +2969,453 @@ function updateLLMStatusIndicator(status) {
         text.textContent = '检测中';
         dot.style.background = 'var(--text-muted)';
     }
+}
+
+
+// ==================== 聊天面板 ====================
+
+let chatMode = 'global';           // 'global' | 'job'
+let chatPanelOpen = false;
+let chatHistory = [];               // 全局聊天历史 [{role, content}]
+let chatCurrentTicketId = null;     // Job 模式选中的工单 ID
+let chatCurrentTicketTitle = '';    // Job 模式选中的工单标题
+let chatSending = false;
+
+/**
+ * 切换聊天面板显示/隐藏
+ */
+function toggleChatPanel() {
+    chatPanelOpen = !chatPanelOpen;
+    const layout = document.querySelector('.project-layout');
+    const panel = document.getElementById('chatPanel');
+    const toggleBtn = document.getElementById('chatToggleBtn');
+
+    if (chatPanelOpen) {
+        layout?.classList.add('chat-open');
+        toggleBtn?.classList.add('active');
+        // 加载聊天历史
+        if (chatMode === 'global') {
+            loadChatHistory();
+        }
+    } else {
+        layout?.classList.remove('chat-open');
+        toggleBtn?.classList.remove('active');
+    }
+}
+
+/**
+ * 设置聊天模式
+ */
+function setChatMode(mode) {
+    chatMode = mode;
+
+    // 更新 Tab 样式
+    document.getElementById('chatModeGlobal')?.classList.toggle('active', mode === 'global');
+    document.getElementById('chatModeJob')?.classList.toggle('active', mode === 'job');
+
+    // 更新标题
+    const titleEl = document.getElementById('chatPanelTitle');
+    const iconEl = document.getElementById('chatPanelIcon');
+    const inputArea = document.getElementById('chatPanelInput');
+
+    if (mode === 'global') {
+        titleEl.textContent = 'AI 助手';
+        iconEl.textContent = '💬';
+        inputArea.style.display = '';
+        loadChatHistory();
+    } else {
+        titleEl.textContent = '工单对话';
+        iconEl.textContent = '🔧';
+        if (chatCurrentTicketId) {
+            loadTicketConversations(chatCurrentTicketId);
+            inputArea.style.display = 'none'; // Job 模式只读
+        } else {
+            showJobHint();
+            inputArea.style.display = 'none';
+        }
+    }
+}
+
+/**
+ * 切换聊天模式
+ */
+function toggleChatMode() {
+    setChatMode(chatMode === 'global' ? 'job' : 'global');
+}
+
+/**
+ * 加载全局聊天历史
+ */
+async function loadChatHistory() {
+    if (!currentProjectId) return;
+
+    const container = document.getElementById('chatMessages');
+
+    try {
+        const resp = await originalApi(`/projects/${currentProjectId}/chat/history?limit=50`);
+        const messages = resp.messages || [];
+        chatHistory = messages.map(m => ({ role: m.role, content: m.content }));
+
+        if (messages.length === 0) {
+            showChatWelcome();
+            return;
+        }
+
+        container.innerHTML = '';
+        for (const msg of messages) {
+            appendChatBubble(msg.role, msg.content, msg.created_at, msg.action_data ? JSON.parse(msg.action_data) : null);
+        }
+        scrollChatToBottom();
+    } catch (e) {
+        // 可能是首次使用，表还没创建
+        showChatWelcome();
+    }
+}
+
+/**
+ * 加载工单 AI 对话记录
+ */
+async function loadTicketConversations(ticketId) {
+    if (!currentProjectId || !ticketId) return;
+
+    const container = document.getElementById('chatMessages');
+    container.innerHTML = '<div class="chat-typing"><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div></div>';
+
+    try {
+        const resp = await originalApi(`/projects/${currentProjectId}/chat/ticket/${ticketId}/conversations`);
+        const messages = resp.messages || [];
+        const ticket = resp.ticket || {};
+
+        container.innerHTML = '';
+
+        // 添加工单信息头
+        if (ticket.title) {
+            chatCurrentTicketTitle = ticket.title;
+            const header = document.createElement('div');
+            header.className = 'chat-job-header';
+            header.innerHTML = `
+                <div class="job-status-dot" style="background: ${getStatusColor(ticket.status)}"></div>
+                <div class="job-title">${escapeHtml(ticket.title)}</div>
+                <span class="job-close-btn" onclick="clearJobSelection()" title="取消选择">✕</span>
+            `;
+            container.parentElement.insertBefore(header, container);
+        }
+
+        if (messages.length === 0) {
+            container.innerHTML = `
+                <div class="chat-job-hint">
+                    <div class="hint-icon">📭</div>
+                    <div class="hint-text">该工单暂无 AI 对话记录</div>
+                </div>
+            `;
+            return;
+        }
+
+        for (const msg of messages) {
+            if (msg.is_agent) {
+                // Agent 消息带标签
+                const agentBadge = msg.agent_type ? `<div class="chat-agent-badge">${msg.agent_type} / ${msg.action || ''}</div>` : '';
+                const metaInfo = msg.model ? `<span style="font-size:10px;color:var(--text-muted)">${msg.model} · ${msg.duration_ms || 0}ms · ${(msg.input_tokens || 0)}→${(msg.output_tokens || 0)} tokens</span>` : '';
+
+                const msgEl = document.createElement('div');
+                msgEl.className = `chat-msg ${msg.role}`;
+                msgEl.innerHTML = `
+                    <div class="chat-msg-avatar">${msg.role === 'user' ? '📝' : '🤖'}</div>
+                    <div class="chat-msg-content">
+                        ${agentBadge}
+                        <div class="chat-msg-bubble">${formatChatContent(msg.content)}</div>
+                        <div class="chat-msg-time">${formatTime(msg.created_at)} ${metaInfo}</div>
+                    </div>
+                `;
+                container.appendChild(msgEl);
+            } else {
+                appendChatBubble(msg.role, msg.content, msg.created_at);
+            }
+        }
+        scrollChatToBottom();
+    } catch (e) {
+        container.innerHTML = `
+            <div class="chat-job-hint">
+                <div class="hint-icon">❌</div>
+                <div class="hint-text">加载失败: ${escapeHtml(e.message)}</div>
+            </div>
+        `;
+    }
+}
+
+/**
+ * 发送聊天消息
+ */
+async function sendChatMessage() {
+    if (chatSending || chatMode !== 'global') return;
+
+    const input = document.getElementById('chatInput');
+    const message = input.value.trim();
+    if (!message) return;
+    if (!currentProjectId) {
+        showToast('请先选择一个项目', 'warning');
+        return;
+    }
+
+    chatSending = true;
+    const sendBtn = document.getElementById('chatSendBtn');
+    sendBtn.disabled = true;
+    input.value = '';
+    autoResizeChatInput();
+
+    // 移除欢迎消息
+    const welcome = document.querySelector('.chat-welcome');
+    if (welcome) welcome.remove();
+
+    // 添加用户消息气泡
+    appendChatBubble('user', message);
+    scrollChatToBottom();
+
+    // 添加加载动画
+    const typingEl = document.createElement('div');
+    typingEl.className = 'chat-msg assistant';
+    typingEl.id = 'chatTyping';
+    typingEl.innerHTML = `
+        <div class="chat-msg-avatar">🤖</div>
+        <div class="chat-msg-content">
+            <div class="chat-msg-bubble">
+                <div class="chat-typing">
+                    <div class="chat-typing-dot"></div>
+                    <div class="chat-typing-dot"></div>
+                    <div class="chat-typing-dot"></div>
+                </div>
+            </div>
+        </div>
+    `;
+    document.getElementById('chatMessages').appendChild(typingEl);
+    scrollChatToBottom();
+
+    try {
+        // 构建历史（只取最近 10 条）
+        const historyToSend = chatHistory.slice(-10);
+
+        const resp = await originalApi(`/projects/${currentProjectId}/chat`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                message: message,
+                history: historyToSend,
+            }),
+        });
+
+        // 移除加载动画
+        document.getElementById('chatTyping')?.remove();
+
+        const reply = resp.reply || '(无回复)';
+        const action = resp.action || null;
+
+        // 更新历史
+        chatHistory.push({ role: 'user', content: message });
+        chatHistory.push({ role: 'assistant', content: reply });
+
+        // 添加回复气泡
+        appendChatBubble('assistant', reply, null, action);
+        scrollChatToBottom();
+
+        // 如果创建了需求，刷新需求列表
+        if (action && action.type === 'requirement_created') {
+            showToast(`需求「${action.title}」已创建`, 'success');
+            // 延迟刷新，避免 UI 卡顿
+            setTimeout(() => {
+                if (typeof loadRequirements === 'function') loadRequirements();
+                if (typeof refreshBoard === 'function') refreshBoard();
+            }, 500);
+        }
+
+    } catch (e) {
+        document.getElementById('chatTyping')?.remove();
+        appendChatBubble('assistant', `⚠️ 请求失败: ${e.message}\n\n请检查 LLM 是否已配置。`);
+        scrollChatToBottom();
+    } finally {
+        chatSending = false;
+        sendBtn.disabled = false;
+        input.focus();
+    }
+}
+
+/**
+ * 追加聊天气泡
+ */
+function appendChatBubble(role, content, timestamp = null, action = null) {
+    const container = document.getElementById('chatMessages');
+    const msgEl = document.createElement('div');
+    msgEl.className = `chat-msg ${role}`;
+
+    const avatar = role === 'user' ? '👤' : '🤖';
+    const timeStr = timestamp ? formatTime(timestamp) : formatTime(new Date().toISOString());
+
+    let actionHtml = '';
+    if (action && action.type === 'requirement_created') {
+        actionHtml = `
+            <div class="chat-action-card">
+                <div class="action-title">✅ 需求已创建</div>
+                <div class="action-detail">
+                    <strong>${escapeHtml(action.title)}</strong><br>
+                    优先级: ${action.priority || 'medium'}
+                </div>
+                <span class="action-link" onclick="switchTab('requirements')">查看需求列表 →</span>
+            </div>
+        `;
+    }
+
+    msgEl.innerHTML = `
+        <div class="chat-msg-avatar">${avatar}</div>
+        <div class="chat-msg-content">
+            <div class="chat-msg-bubble">${formatChatContent(content)}</div>
+            ${actionHtml}
+            <div class="chat-msg-time">${timeStr}</div>
+        </div>
+    `;
+    container.appendChild(msgEl);
+}
+
+/**
+ * 格式化聊天内容（简单 Markdown 支持）
+ */
+function formatChatContent(content) {
+    if (!content) return '';
+    let text = escapeHtml(content);
+    // 代码块
+    text = text.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre style="background:var(--bg);padding:8px;border-radius:6px;font-size:12px;overflow-x:auto;margin:4px 0;"><code>$2</code></pre>');
+    // 行内代码
+    text = text.replace(/`([^`]+)`/g, '<code style="background:var(--bg);padding:1px 4px;border-radius:3px;font-size:12px;">$1</code>');
+    // 加粗
+    text = text.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    // 换行
+    text = text.replace(/\n/g, '<br>');
+    return text;
+}
+
+/**
+ * 显示欢迎消息
+ */
+function showChatWelcome() {
+    const container = document.getElementById('chatMessages');
+    container.innerHTML = `
+        <div class="chat-welcome">
+            <div class="chat-welcome-icon">🤖</div>
+            <div class="chat-welcome-title">AI 开发助手</div>
+            <div class="chat-welcome-desc">
+                我可以帮你：查看项目状态、创建需求、回答技术问题<br>
+                <small>试试说 "帮我创建一个用户登录功能需求"</small>
+            </div>
+        </div>
+    `;
+}
+
+/**
+ * 显示 Job 选择提示
+ */
+function showJobHint() {
+    // 移除可能存在的 job header
+    document.querySelector('.chat-job-header')?.remove();
+
+    const container = document.getElementById('chatMessages');
+    container.innerHTML = `
+        <div class="chat-job-hint">
+            <div class="hint-icon">🔧</div>
+            <div class="hint-text">
+                在看板中点击工单卡片<br>
+                或在 Pipeline 中点击 Job 节点<br>
+                即可查看该工单的 AI 对话记录
+            </div>
+        </div>
+    `;
+}
+
+/**
+ * 选中工单并加载对话 — 可从看板卡片点击触发
+ */
+function selectTicketForChat(ticketId, ticketTitle) {
+    chatCurrentTicketId = ticketId;
+    chatCurrentTicketTitle = ticketTitle || '';
+
+    // 如果面板未打开，先打开
+    if (!chatPanelOpen) {
+        toggleChatPanel();
+    }
+
+    // 切换到 Job 模式
+    setChatMode('job');
+}
+
+/**
+ * 清除 Job 选择
+ */
+function clearJobSelection() {
+    chatCurrentTicketId = null;
+    chatCurrentTicketTitle = '';
+    document.querySelector('.chat-job-header')?.remove();
+    showJobHint();
+}
+
+/**
+ * 清空聊天面板
+ */
+function clearChatPanel() {
+    if (chatMode === 'global') {
+        chatHistory = [];
+        showChatWelcome();
+    } else {
+        clearJobSelection();
+    }
+}
+
+/**
+ * 处理键盘事件
+ */
+function handleChatKeydown(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendChatMessage();
+    }
+}
+
+/**
+ * 自动调整输入框高度
+ */
+function autoResizeChatInput() {
+    const textarea = document.getElementById('chatInput');
+    if (!textarea) return;
+    textarea.style.height = 'auto';
+    textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+}
+
+/**
+ * 滚动聊天到底部
+ */
+function scrollChatToBottom() {
+    const body = document.getElementById('chatPanelBody');
+    if (body) {
+        requestAnimationFrame(() => {
+            body.scrollTop = body.scrollHeight;
+        });
+    }
+}
+
+/**
+ * 获取状态颜色
+ */
+function getStatusColor(status) {
+    const colors = {
+        'pending': 'var(--text-muted)',
+        'architecture_in_progress': 'var(--info)',
+        'architecture_done': 'var(--success)',
+        'development_in_progress': 'var(--info)',
+        'development_done': 'var(--success)',
+        'acceptance_passed': 'var(--success)',
+        'acceptance_rejected': 'var(--error)',
+        'testing_in_progress': 'var(--info)',
+        'testing_done': 'var(--success)',
+        'testing_failed': 'var(--error)',
+        'deploying': 'var(--info)',
+        'deployed': 'var(--success)',
+        'cancelled': 'var(--text-muted)',
+    };
+    return colors[status] || 'var(--text-muted)';
 }

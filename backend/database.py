@@ -264,6 +264,19 @@ CREATE TABLE IF NOT EXISTS ticket_commands (
 );
 
 -- ============================================================
+-- 聊天消息表（全局聊天历史）
+-- ============================================================
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id              TEXT PRIMARY KEY,
+    project_id      TEXT NOT NULL REFERENCES projects(id),
+    role            TEXT NOT NULL,
+    content         TEXT NOT NULL,
+    action_type     TEXT,
+    action_data     TEXT,
+    created_at      TEXT NOT NULL
+);
+
+-- ============================================================
 -- 索引
 -- ============================================================
 CREATE INDEX IF NOT EXISTS idx_requirements_project ON requirements(project_id);
@@ -283,6 +296,7 @@ CREATE INDEX IF NOT EXISTS idx_llm_conversations_requirement ON llm_conversation
 CREATE INDEX IF NOT EXISTS idx_llm_conversations_project ON llm_conversations(project_id);
 CREATE INDEX IF NOT EXISTS idx_ticket_commands_ticket ON ticket_commands(ticket_id);
 CREATE INDEX IF NOT EXISTS idx_ticket_commands_requirement ON ticket_commands(requirement_id);
+CREATE INDEX IF NOT EXISTS idx_chat_messages_project ON chat_messages(project_id);
 """
 
 
