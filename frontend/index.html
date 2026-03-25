@@ -92,6 +92,9 @@
                     </div>
                 </aside>
 
+                <!-- Docking 容器（内容区 + 底部日志面板） -->
+                <div class="content-dock-wrapper">
+
                 <!-- 主内容区 -->
                 <div class="content-area">
 
@@ -421,6 +424,8 @@
                     </div>
                 </div>
 
+                </div> <!-- /.content-dock-wrapper -->
+
                 <!-- ==================== 右侧聊天面板 ==================== -->
                 <div class="chat-panel" id="chatPanel">
                     <div class="chat-panel-header">
@@ -649,17 +654,6 @@
     <!-- ==================== Toast 通知 ==================== -->
     <div class="toast-container" id="toastContainer"></div>
 
-    <!-- ==================== 服务日志区域 ==================== -->
-    <div class="server-logs" id="serverLogs">
-        <div class="logs-header">
-            <span>📋 服务日志</span>
-            <button class="btn-icon" onclick="toggleLogs()" title="折叠/展开">▼</button>
-        </div>
-        <div class="logs-content" id="logsContent">
-            <div class="log-entry log-info">正在连接后端服务...</div>
-        </div>
-    </div>
-
-    <script src="/static/app.js?v=0.9.0"></script>
+    <script src="/static/app.js?v=0.9.1"></script>
 </body>
 </html>

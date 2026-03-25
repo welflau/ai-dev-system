@@ -2304,7 +2304,7 @@ function initLogPanel() {
         document.getElementById('logPanelToggle').textContent = '▲';
     }
 
-    // 拖拽调整高度
+    // 拖拽调整高度（Docking 模式）
     let startY = 0;
     let startH = 0;
     let dragging = false;
@@ -2321,8 +2321,11 @@ function initLogPanel() {
 
     document.addEventListener('mousemove', (e) => {
         if (!dragging) return;
+        const wrapper = panel.closest('.content-dock-wrapper');
+        const wrapperH = wrapper ? wrapper.offsetHeight : window.innerHeight * 0.8;
+        const maxH = wrapperH - 100; // 内容区至少保留 100px
         const diff = startY - e.clientY;
-        const newH = Math.min(Math.max(startH + diff, 100), window.innerHeight * 0.6);
+        const newH = Math.min(Math.max(startH + diff, 60), maxH);
         panel.style.height = newH + 'px';
         panel.style.setProperty('--log-panel-height', newH + 'px');
     });
@@ -2341,6 +2344,9 @@ function initLogPanel() {
         if (e.target.tagName === 'SELECT' || e.target.tagName === 'BUTTON') return;
         toggleLogPanel();
     });
+
+    // 初始化服务健康检查
+    initServerHealthCheck();
 }
 
 /**
@@ -2828,26 +2834,18 @@ function escapeHtml(str) {
 }
 
 
-// ==================== 服务日志面板 ====================
+// ==================== 服务健康检查 ====================
 
 let serverLogsExpanded = false;
 
-function initLogPanel() {
+function initServerHealthCheck() {
     addLog('info', '前端已加载，开始连接后端服务...');
     checkServerHealth();
     // 定期检查后端健康状态
     setInterval(checkServerHealth, 30000); // 每30秒检查一次
 }
 
-function toggleLogs() {
-    const panel = document.getElementById('serverLogs');
-    serverLogsExpanded = !serverLogsExpanded;
-    if (serverLogsExpanded) {
-        panel.classList.add('expanded');
-    } else {
-        panel.classList.remove('expanded');
-    }
-}
+// toggleLogs 已废弃（旧服务日志面板已移除，使用 Docking 面板）
 
 async function checkServerHealth() {
     try {
@@ -2870,10 +2868,15 @@ async function checkServerHealth() {
 }
 
 function addLog(level, message) {
-    const content = document.getElementById('logsContent');
+    const content = document.getElementById('logPanelEntries');
+    if (!content) return;
+
+    // 移除空状态提示
+    const empty = content.querySelector('.log-panel-empty');
+    if (empty) empty.remove();
+
     const now = new Date();
     const time = formatDateTime(now);
-    const levelClass = `log-${level}`;
     const levelEmoji = {
         info: 'ℹ️',
         success: '✅',
@@ -2881,20 +2884,39 @@ function addLog(level, message) {
         error: '❌'
     }[level] || '•';
 
+    const levelMap = { info: 'INFO', success: 'INFO', warning: 'WARN', error: 'ERROR' };
+
     const entry = document.createElement('div');
-    entry.className = `log-entry ${levelClass}`;
+    entry.className = `log-entry ${level}`;
     entry.innerHTML = `
-        <span class="log-time">${time}</span>
-        <span class="log-message">${levelEmoji} ${escapeHtml(message)}</span>
+        <span class="log-entry-time">${escapeHtml(time)}</span>
+        <span class="log-entry-level ${levelMap[level] || 'info'}">${levelEmoji}</span>
+        <span class="log-entry-agent">System</span>
+        <span class="log-entry-msg">${escapeHtml(message)}</span>
     `;
 
-    // 限制日志条数，最多保留50条
-    while (content.children.length >= 50) {
+    // 限制日志条数
+    while (content.children.length >= LOG_PANEL_MAX_ENTRIES) {
         content.removeChild(content.firstChild);
     }
 
     content.appendChild(entry);
-    content.scrollTop = content.scrollHeight; // 自动滚动到底部
+
+    // 自动滚动
+    if (logPanelAutoScroll) {
+        const body = document.getElementById('logPanelBody');
+        if (body) body.scrollTop = body.scrollHeight;
+    }
+
+    // 如果面板收起，更新 badge
+    if (logPanelCollapsed) {
+        logPanelNewCount++;
+        const badge = document.getElementById('logPanelBadge');
+        if (badge) {
+            badge.textContent = logPanelNewCount > 99 ? '99+' : logPanelNewCount;
+            badge.style.display = '';
+        }
+    }
 }
 
 function formatDateTime(input) {

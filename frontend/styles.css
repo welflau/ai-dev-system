@@ -191,13 +191,23 @@ body {
 .project-layout {
     display: grid;
     grid-template-columns: var(--sidebar-width) 1fr;
-    grid-template-rows: 1fr auto;
+    grid-template-rows: 1fr;
     height: calc(100vh - var(--topbar-height));
 }
 
 /* 聊天面板展开时的布局 */
 .project-layout.chat-open {
     grid-template-columns: var(--sidebar-width) 1fr var(--chat-panel-width, 380px);
+}
+
+/* 内容+日志 Docking 容器 */
+.content-dock-wrapper {
+    grid-column: 2;
+    grid-row: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
 }
 
 .sidebar {
@@ -208,7 +218,7 @@ body {
     display: flex;
     flex-direction: column;
     padding: 0;
-    grid-row: 1 / 3;
+    grid-row: 1;
 }
 
 .sidebar-header {
@@ -250,7 +260,6 @@ body {
 
 .sidebar-footer {
     padding: 12px;
-    padding-bottom: 48px;  /* 为底部固定的服务日志栏留出空间 */
     border-top: 1px solid var(--border);
 }
 
@@ -258,8 +267,6 @@ body {
     flex: 1;
     overflow-y: auto;
     padding: 20px;
-    grid-column: 2;
-    grid-row: 1;
     min-height: 0;
 }
 
@@ -660,21 +667,22 @@ body {
 /* ==================== 底部日志面板 ==================== */
 
 .log-panel {
-    grid-column: 2;
-    grid-row: 2;
+    flex-shrink: 0;
     display: flex;
     flex-direction: column;
     background: var(--bg-card);
-    border-top: 1px solid var(--border);
+    border-top: 2px solid var(--border);
     position: relative;
     height: var(--log-panel-height, 220px);
     min-height: 36px;
-    max-height: 60vh;
+    max-height: 70vh;
+    transition: height 0s; /* 拖拽时不要动画 */
 }
 
 .log-panel.collapsed {
     height: 36px !important;
     min-height: 36px;
+    border-top: 1px solid var(--border);
 }
 
 .log-panel.collapsed .log-panel-body {
@@ -691,29 +699,42 @@ body {
 
 .log-panel-resize {
     position: absolute;
-    top: -3px;
+    top: -4px;
     left: 0;
     right: 0;
-    height: 6px;
+    height: 8px;
     cursor: ns-resize;
     z-index: 10;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
-.log-panel-resize:hover,
-.log-panel-resize.dragging {
+.log-panel-resize::after {
+    content: '';
+    width: 36px;
+    height: 4px;
+    border-radius: 2px;
+    background: var(--border-light);
+    transition: all 0.2s;
+}
+.log-panel-resize:hover::after,
+.log-panel-resize.dragging::after {
     background: var(--primary);
-    opacity: 0.5;
+    width: 48px;
+    box-shadow: 0 0 8px rgba(79, 70, 229, 0.4);
 }
 
 .log-panel-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 6px 12px;
-    border-bottom: 1px solid var(--border);
+    padding: 0 12px;
+    background: var(--bg-elevated);
     cursor: pointer;
     user-select: none;
     flex-shrink: 0;
     height: 36px;
+    border-bottom: 1px solid var(--border);
 }
 
 .log-panel-title {
@@ -2298,104 +2319,6 @@ input[type="text"]:focus, input[type="number"]:focus, input[type="password"]:foc
 }
 
 
-/* ==================== 服务日志区域 ==================== */
-
-.server-logs {
-    position: fixed;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    background: var(--bg-card);
-    border-top: 1px solid var(--border);
-    z-index: 1000;
-    transition: transform 0.3s ease;
-    transform: translateY(calc(100% - 36px));  /* 默认收起 */
-}
-
-.server-logs.expanded {
-    transform: translateY(0);
-}
-
-.logs-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 8px 16px;
-    background: var(--bg-elevated);
-    border-bottom: 1px solid var(--border);
-    cursor: pointer;
-    user-select: none;
-}
-
-.logs-header span {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--text);
-}
-
-.logs-header .btn-icon {
-    font-size: 12px;
-    color: var(--text-secondary);
-    transition: transform 0.3s ease;
-}
-
-.server-logs .logs-header .btn-icon {
-    transform: rotate(180deg);
-}
-
-.server-logs.expanded .logs-header .btn-icon {
-    transform: rotate(0deg);
-}
-
-.logs-content {
-    max-height: 200px;
-    overflow-y: auto;
-    padding: 12px 16px;
-    background: var(--bg);
-    font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
-    font-size: 12px;
-    line-height: 1.5;
-}
-
-.log-entry {
-    padding: 4px 0;
-    border-bottom: 1px solid var(--border-light, rgba(255,255,255,0.03));
-    display: flex;
-    gap: 8px;
-}
-
-.log-entry:last-child {
-    border-bottom: none;
-}
-
-.log-time {
-    color: var(--text-muted);
-    font-size: 11px;
-    min-width: 140px;
-    flex-shrink: 0;
-}
-
-.log-message {
-    color: var(--text-secondary);
-    word-break: break-all;
-}
-
-.log-entry.log-info .log-message {
-    color: var(--info);
-}
-
-.log-entry.log-success .log-message {
-    color: var(--success);
-}
-
-.log-entry.log-warning .log-message {
-    color: var(--warning);
-}
-
-.log-entry.log-error .log-message {
-    color: var(--error);
-}
-
 /* ==================== 侧栏设置按钮（抽屉式折叠） ==================== */
 
 .sidebar-settings {
@@ -2855,7 +2778,8 @@ input[type="text"]:focus, input[type="number"]:focus, input[type="password"]:foc
 }
 
 .chat-panel {
-    grid-row: 1 / 3;
+    grid-row: 1;
+    grid-column: 3;
     display: none;
     flex-direction: column;
     background: var(--bg-card);
