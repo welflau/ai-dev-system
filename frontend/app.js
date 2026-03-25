@@ -2686,7 +2686,7 @@ function escapeHtml(str) {
 
 // ==================== 服务日志面板 ====================
 
-let serverLogsCollapsed = false;
+let serverLogsExpanded = false;
 
 function initLogPanel() {
     addLog('info', '前端已加载，开始连接后端服务...');
@@ -2697,13 +2697,11 @@ function initLogPanel() {
 
 function toggleLogs() {
     const panel = document.getElementById('serverLogs');
-    serverLogsCollapsed = !serverLogsCollapsed;
-    if (serverLogsCollapsed) {
-        panel.classList.add('collapsed');
-        addLog('info', '日志面板已折叠');
+    serverLogsExpanded = !serverLogsExpanded;
+    if (serverLogsExpanded) {
+        panel.classList.add('expanded');
     } else {
-        panel.classList.remove('collapsed');
-        addLog('info', '日志面板已展开');
+        panel.classList.remove('expanded');
     }
 }
 
