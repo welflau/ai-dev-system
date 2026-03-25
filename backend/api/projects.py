@@ -2,11 +2,14 @@
 AI 自动开发系统 - 项目 API
 """
 import json
+import logging
 from fastapi import APIRouter, HTTPException
 from database import db
 from models import ProjectCreate, ProjectUpdate
 from utils import generate_id, now_iso
 from git_manager import git_manager
+
+logger = logging.getLogger("api.projects")
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
@@ -29,7 +32,7 @@ async def create_project(req: ProjectCreate):
             repo_path = str(git_manager._repo_path(project_id))
 
         # 创建目录结构
-        print(f"[创建项目] 仓库路径: {repo_path}")
+        logger.info("创建项目: %s, 仓库路径: %s", req.name, repo_path)
         os.makedirs(repo_path, exist_ok=True)
         for d in git_manager.REPO_DIRS:
             os.makedirs(os.path.join(repo_path, d), exist_ok=True)
@@ -52,12 +55,12 @@ async def create_project(req: ProjectCreate):
         git_dir = os.path.join(repo_path, ".git")
         if not os.path.isdir(git_dir):
             rc, out, err = await git_manager._run_git(repo_path, "init")
-            print(f"[创建项目] git init: rc={rc}, out={out}, err={err}")
+            logger.info("git init: rc=%d", rc)
 
         # 配置远程仓库
         if req.git_remote_url:
             await git_manager.set_remote(project_id, req.git_remote_url)
-            print(f"[创建项目] 远程仓库已设置: {req.git_remote_url}")
+            logger.info("远程仓库已设置: %s", req.git_remote_url)
 
         # 初始提交
         await git_manager._run_git(repo_path, "add", ".")
@@ -66,14 +69,14 @@ async def create_project(req: ProjectCreate):
             f"init: {req.name} - project initialized by AI Dev System",
             "--author", "AI Dev System <ai@dev-system.local>",
         )
-        print(f"[创建项目] git commit: rc={rc}, out={out}, err={err}")
+        logger.info("git commit: rc=%d", rc)
 
         # 尝试首次推送（允许失败）
         push_success = False
         try:
             push_success = await git_manager.push(project_id)
         except Exception as e:
-            print(f"[创建项目] 首次推送失败（忽略）: {e}")
+            logger.warning("首次推送失败（忽略）: %s", e)
 
         data = {
             "id": project_id,
@@ -89,6 +92,7 @@ async def create_project(req: ProjectCreate):
         }
         await db.insert("projects", data)
 
+        logger.info("项目创建完成: %s (%s)", req.name, project_id)
         return {
             "id": project_id,
             **data,
@@ -97,7 +101,7 @@ async def create_project(req: ProjectCreate):
 
     except Exception as e:
         error_detail = traceback.format_exc()
-        print(f"[创建项目] 错误:\n{error_detail}")
+        logger.error("创建项目失败:\n%s", error_detail)
         raise HTTPException(500, detail=f"创建项目失败: {str(e)}")
 
 
@@ -159,7 +163,7 @@ async def update_project(project_id: str, req: ProjectUpdate):
             try:
                 await git_manager.set_remote(project_id, update_data["git_remote_url"])
             except Exception as e:
-                print(f"[更新项目] 同步 git remote 失败: {e}")
+                logger.warning("同步 git remote 失败: %s", e)
 
     return await get_project(project_id)
 
@@ -167,12 +171,12 @@ async def update_project(project_id: str, req: ProjectUpdate):
 @router.delete("/{project_id}")
 async def delete_project(project_id: str):
     """删除项目及所有关联数据"""
-    print(f"[删除项目] 开始删除: {project_id}")
+    logger.info("开始删除项目: %s", project_id)
     project = await db.fetch_one("SELECT * FROM projects WHERE id = ?", (project_id,))
     if not project:
         raise HTTPException(404, "项目不存在")
 
-    print(f"[删除项目] 找到项目: {project['name']}, 开始级联删除...")
+    logger.info("找到项目: %s, 开始级联删除...", project['name'])
 
     # 级联删除关联数据
     await db.execute("DELETE FROM ticket_commands WHERE ticket_id IN (SELECT id FROM tickets WHERE project_id = ?)", (project_id,))
@@ -184,15 +188,15 @@ async def delete_project(project_id: str):
     await db.execute("DELETE FROM requirements WHERE project_id = ?", (project_id,))
 
     cursor = await db.execute("DELETE FROM projects WHERE id = ?", (project_id,))
-    print(f"[删除项目] DELETE projects rowcount: {cursor.rowcount}")
+    logger.info("DELETE projects rowcount: %d", cursor.rowcount)
 
     # 验证删除结果
     check = await db.fetch_one("SELECT id FROM projects WHERE id = ?", (project_id,))
     if check:
-        print(f"[删除项目] ❌ 验证失败！项目仍然存在: {project_id}")
+        logger.error("验证失败！项目仍然存在: %s", project_id)
         raise HTTPException(500, "删除失败：数据库未能成功删除项目")
     else:
-        print(f"[删除项目] ✅ 验证通过，项目已从数据库移除")
+        logger.info("验证通过，项目已从数据库移除")
 
     return {"message": "项目已删除"}
 

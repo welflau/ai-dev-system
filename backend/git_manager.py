@@ -2,6 +2,7 @@
 AI 自动开发系统 - Git 仓库管理器
 封装项目级 Git 操作：初始化、文件写入、提交、推送
 """
+import logging
 import os
 import json
 from pathlib import Path
@@ -9,6 +10,8 @@ from typing import Dict, List, Optional
 from datetime import datetime
 
 from config import BASE_DIR
+
+logger = logging.getLogger("git")
 
 
 # 项目仓库根目录
@@ -186,7 +189,7 @@ Thumbs.db
             "--author", f"{author} <{author.lower().replace(' ', '-')}@ai-dev-system.local>",
         )
         if rc != 0:
-            print(f"[GitManager] commit failed: {err}")
+            logger.error("git commit failed: %s", err)
             return None
 
         # get commit hash
@@ -204,7 +207,7 @@ Thumbs.db
 
         rc, _, err = await self._run_git(repo_dir, "push", remote, branch)
         if rc != 0:
-            print(f"[GitManager] push failed: {err}")
+            logger.error("git push failed: %s", err)
             return False
         return True
 

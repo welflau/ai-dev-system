@@ -4,6 +4,7 @@ AI 自动开发系统 - Orchestrator 工单编排器
 """
 import json
 import asyncio
+import logging
 import time
 from typing import Any, Dict, Optional
 from datetime import datetime, timedelta
@@ -20,6 +21,8 @@ from utils import generate_id, now_iso
 from events import event_manager
 from llm_client import set_llm_context, clear_llm_context
 from git_manager import git_manager
+
+logger = logging.getLogger("orchestrator")
 
 # Agent 导入
 from agents.product import ProductAgent
@@ -94,6 +97,10 @@ class TicketOrchestrator:
             if not requirement:
                 return
 
+            logger.info("━" * 60)
+            logger.info("📋 开始处理需求: %s「%s」", requirement_id[:12], requirement["title"])
+            logger.info("━" * 60)
+
             agent = self.agents["ProductAgent"]
 
             # 发 SSE：开始分析
@@ -113,11 +120,15 @@ class TicketOrchestrator:
             )
 
             # Agent 执行拆单
+            logger.info("🤖 ProductAgent.analyze_and_decompose 开始执行...")
+            req_start = time.time()
             result = await agent.execute("analyze_and_decompose", {
                 "title": requirement["title"],
                 "description": requirement["description"],
                 "priority": requirement["priority"],
             })
+            req_elapsed = int((time.time() - req_start) * 1000)
+            logger.info("🤖 ProductAgent.analyze_and_decompose 完成 (%dms) → status=%s", req_elapsed, result.get("status"))
 
             clear_llm_context()
 
@@ -264,9 +275,7 @@ class TicketOrchestrator:
                 await self.process_ticket(project_id, ticket_id)
 
         except Exception as e:
-            print(f"[Orchestrator] 需求处理异常: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.error("❌ 需求处理异常: %s", e, exc_info=True)
 
             # 记录错误日志
             try:
@@ -287,7 +296,7 @@ class TicketOrchestrator:
                     {"requirement_id": requirement_id, "error": str(e)},
                 )
             except Exception as log_err:
-                print(f"[Orchestrator] 记录错误日志也失败了: {log_err}")
+                logger.error("记录需求错误日志也失败了: %s", log_err)
 
     # ==================== 工单流转 ====================
 
@@ -313,12 +322,20 @@ class TicketOrchestrator:
 
             agent = self.agents.get(agent_name)
             if not agent:
+                logger.error("Agent %s 不存在!", agent_name)
                 await self._log(
                     project_id, ticket["requirement_id"], ticket_id, agent_name,
                     "error", current_status, current_status,
                     f"Agent {agent_name} 不存在", "error"
                 )
                 return
+
+            logger.info("─" * 50)
+            logger.info(
+                "🎫 工单流转: %s「%s」 %s → %s.%s",
+                ticket_id[:12], ticket["title"][:30],
+                current_status, agent_name, action,
+            )
 
             # 更新到进行中状态
             if next_status:
@@ -364,7 +381,16 @@ class TicketOrchestrator:
                 action=action,
             )
 
+            logger.info("🤖 %s.%s 开始执行...", agent_name, action)
+            agent_start = time.time()
             result = await agent.execute(action, context)
+            agent_elapsed = int((time.time() - agent_start) * 1000)
+            logger.info(
+                "🤖 %s.%s 完成 (%dms) → status=%s, files=%d",
+                agent_name, action, agent_elapsed,
+                result.get("status", "?"),
+                len(result.get("files", {})),
+            )
 
             clear_llm_context()
 
@@ -372,9 +398,7 @@ class TicketOrchestrator:
             await self._handle_agent_result(project_id, ticket_id, ticket, agent_name, action, result)
 
         except Exception as e:
-            print(f"[Orchestrator] 工单处理异常: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.error("❌ 工单处理异常 [%s]: %s", ticket_id[:12] if ticket_id else "?", e, exc_info=True)
             try:
                 await self._log(
                     project_id, ticket.get("requirement_id") if ticket else None,
@@ -388,7 +412,7 @@ class TicketOrchestrator:
                     {"ticket_id": ticket_id, "error": str(e)},
                 )
             except Exception as log_err:
-                print(f"[Orchestrator] 记录错误日志也失败了: {log_err}")
+                logger.error("记录工单错误日志也失败了: %s", log_err)
 
     async def _handle_agent_result(
         self,

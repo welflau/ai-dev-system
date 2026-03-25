@@ -4,10 +4,13 @@ AI 自动开发系统 - LLM 客户端
 通过 LLM_API_FORMAT 环境变量切换：anthropic / openai（默认 anthropic）
 """
 import json
+import logging
 import time
 import httpx
 from typing import Any, Dict, List, Optional
 from config import settings
+
+logger = logging.getLogger("llm")
 
 
 # ==================== LLM 会话记录上下文 ====================
@@ -45,6 +48,27 @@ def clear_llm_context():
     _llm_ctx.project_id = None
     _llm_ctx.agent_type = None
     _llm_ctx.action = None
+
+
+def _truncate(text: str, max_len: int = 200) -> str:
+    """截断文本用于日志显示"""
+    if not text:
+        return "(empty)"
+    if len(text) <= max_len:
+        return text
+    return text[:max_len] + f"... ({len(text)} chars total)"
+
+
+def _ctx_label() -> str:
+    """返回当前上下文标签，用于日志前缀"""
+    parts = []
+    if _llm_ctx.agent_type:
+        parts.append(_llm_ctx.agent_type)
+    if _llm_ctx.action:
+        parts.append(_llm_ctx.action)
+    if _llm_ctx.ticket_id:
+        parts.append(_llm_ctx.ticket_id[:12])
+    return " | ".join(parts) if parts else "no-context"
 
 
 class LLMClient:
@@ -131,9 +155,9 @@ class LLMClient:
                     }
             except Exception as e:
                 if attempt == self.max_retries - 1:
-                    print(f"[LLM] Anthropic 调用失败 (attempt {attempt+1}): {e}")
+                    logger.error("Anthropic 调用失败 (attempt %d/%d): %s", attempt + 1, self.max_retries, e)
                     return self._fallback_response(messages), None
-                print(f"[LLM] Anthropic 调用重试 {attempt+1}/{self.max_retries}: {e}")
+                logger.warning("Anthropic 调用重试 %d/%d: %s", attempt + 1, self.max_retries, e)
 
         return self._fallback_response(messages), None
 
@@ -176,8 +200,9 @@ class LLMClient:
                     }
             except Exception as e:
                 if attempt == self.max_retries - 1:
-                    print(f"[LLM] OpenAI 调用失败: {e}")
+                    logger.error("OpenAI 调用失败 (attempt %d/%d): %s", attempt + 1, self.max_retries, e)
                     return self._fallback_response(messages), None
+                logger.warning("OpenAI 调用重试 %d/%d: %s", attempt + 1, self.max_retries, e)
 
         return self._fallback_response(messages), None
 
@@ -190,14 +215,29 @@ class LLMClient:
         max_tokens: int = 4096,
     ) -> str:
         """异步聊天补全（自动根据 api_format 选择后端）+ 自动记录会话"""
+        ctx = _ctx_label()
+
         if not self.is_configured:
+            logger.warning("[%s] LLM 未配置，降级处理", ctx)
             response_text = self._fallback_response(messages)
-            # 即使降级也记录会话，方便 AI 对话 Tab 追溯
             try:
                 await self._save_conversation(messages, response_text, None, 0)
             except Exception as e:
-                print(f"[LLM] 保存降级会话记录失败: {e}")
+                logger.error("[%s] 保存降级会话记录失败: %s", ctx, e)
             return response_text
+
+        # 提取 prompt 摘要用于日志
+        prompt_summary = ""
+        for msg in messages:
+            if msg["role"] == "user":
+                prompt_summary = _truncate(msg["content"], 150)
+                break
+
+        logger.info(
+            "🚀 [%s] LLM 请求 → %s (model=%s, temp=%.1f, max_tokens=%d)",
+            ctx, self.api_format, self.model, temperature, max_tokens,
+        )
+        logger.info("   📝 Prompt: %s", prompt_summary)
 
         start_time = time.time()
 
@@ -208,11 +248,28 @@ class LLMClient:
 
         duration_ms = int((time.time() - start_time) * 1000)
 
+        # 判断是否降级
+        is_fallback = response_text.startswith("[LLM_UNAVAILABLE]")
+
+        if is_fallback:
+            logger.warning(
+                "⚠️  [%s] LLM 降级响应 (%dms)",
+                ctx, duration_ms,
+            )
+        else:
+            input_t = usage.get("input_tokens", "?") if usage else "?"
+            output_t = usage.get("output_tokens", "?") if usage else "?"
+            logger.info(
+                "✅ [%s] LLM 响应 OK (%dms) tokens: %s→%s | 响应: %s",
+                ctx, duration_ms, input_t, output_t,
+                _truncate(response_text, 120),
+            )
+
         # 异步记录 LLM 会话（不阻塞主流程）
         try:
             await self._save_conversation(messages, response_text, usage, duration_ms)
         except Exception as e:
-            print(f"[LLM] 保存会话记录失败: {e}")
+            logger.error("[%s] 保存会话记录失败: %s", ctx, e)
 
         return response_text
 
@@ -260,6 +317,8 @@ class LLMClient:
         temperature: float = 0.3,
     ) -> Any:
         """聊天并解析 JSON 响应"""
+        ctx = _ctx_label()
+
         # 添加 JSON 格式要求
         system_msg = {
             "role": "system",
@@ -278,16 +337,22 @@ class LLMClient:
             cleaned = "\n".join(lines)
 
         try:
-            return json.loads(cleaned)
+            result = json.loads(cleaned)
+            logger.info("   📦 [%s] JSON 解析成功 (keys: %s)", ctx,
+                        list(result.keys()) if isinstance(result, dict) else f"list[{len(result)}]")
+            return result
         except json.JSONDecodeError:
             # 尝试找到 JSON 部分
             start = cleaned.find("[") if "[" in cleaned else cleaned.find("{")
             end = cleaned.rfind("]") + 1 if "]" in cleaned else cleaned.rfind("}") + 1
             if start >= 0 and end > start:
                 try:
-                    return json.loads(cleaned[start:end])
+                    result = json.loads(cleaned[start:end])
+                    logger.info("   📦 [%s] JSON 二次解析成功 (从位置 %d 提取)", ctx, start)
+                    return result
                 except json.JSONDecodeError:
                     pass
+            logger.error("   ❌ [%s] JSON 解析失败! 原始响应: %s", ctx, _truncate(cleaned, 300))
             return None
 
     async def test_connection(self) -> Dict[str, Any]:
@@ -296,21 +361,24 @@ class LLMClient:
             return {"status": "not_configured", "message": "LLM 未配置"}
 
         try:
+            logger.info("🔗 测试 LLM 连接: %s (%s)", self.base_url, self.api_format)
             result = await self.generate("Hello, respond with 'ok'.")
+            logger.info("🔗 LLM 连接测试通过")
             return {
                 "status": "ok",
                 "message": f"连接正常 (format={self.api_format})",
                 "response": result[:100],
             }
         except Exception as e:
+            logger.error("🔗 LLM 连接测试失败: %s", e)
             return {"status": "error", "message": str(e)}
 
     def _fallback_response(self, messages: List[Dict[str, str]]) -> str:
         """LLM 不可用时的降级响应"""
         if not self.is_configured:
-            print("[LLM] WARNING: LLM 未配置（缺少 LLM_BASE_URL 或 LLM_API_KEY），使用规则引擎降级。请配置 .env 文件。")
+            logger.warning("LLM 未配置（缺少 LLM_BASE_URL 或 LLM_API_KEY），使用规则引擎降级。请配置 .env 文件。")
         else:
-            print("[LLM] WARNING: LLM 调用失败，使用规则引擎降级。")
+            logger.warning("LLM 调用失败，使用规则引擎降级。")
         return "[LLM_UNAVAILABLE] LLM 服务不可用，使用规则引擎降级处理。"
 
 

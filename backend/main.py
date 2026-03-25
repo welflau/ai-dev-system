@@ -3,6 +3,7 @@ AI 自动开发系统 - 主入口
 FastAPI 应用启动
 """
 import asyncio
+import logging
 import os
 import sys
 from pathlib import Path
@@ -15,6 +16,23 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import settings
 from database import db
 
+# ==================== 统一日志配置 ====================
+LOG_FORMAT = "%(asctime)s [%(name)s] %(levelname)s  %(message)s"
+LOG_DATE_FORMAT = "%H:%M:%S"
+
+logging.basicConfig(
+    level=logging.INFO,
+    format=LOG_FORMAT,
+    datefmt=LOG_DATE_FORMAT,
+    handlers=[logging.StreamHandler(sys.stdout)],
+)
+# 降低第三方库日志级别，避免刷屏
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
+logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+
+logger = logging.getLogger("main")
+
 # Windows 上需要使用 WindowsProactorEventLoopPolicy 来支持 asyncio subprocess (Python 3.14)
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
@@ -24,33 +42,33 @@ if sys.platform == "win32":
 async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     # 启动时
-    print("=" * 60)
-    print("  AI 自动开发系统 v0.8.0")
-    print("  工单管理 + Git 仓库集成")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info("  AI 自动开发系统 v0.8.0")
+    logger.info("  工单管理 + Git 仓库集成")
+    logger.info("=" * 60)
 
     await db.connect()
     await db.init_tables()
-    print("[DB] SQLite 数据库就绪")
+    logger.info("SQLite 数据库就绪")
 
     from llm_client import llm_client
     if llm_client.is_configured:
-        print(f"[LLM] 已配置: {llm_client.base_url} / {llm_client.model}")
+        logger.info("LLM 已配置: %s / %s (format=%s)", llm_client.base_url, llm_client.model, llm_client.api_format)
     else:
-        print("[LLM] 未配置，将使用规则引擎降级")
+        logger.warning("LLM 未配置，将使用规则引擎降级")
 
     from git_manager import PROJECTS_DIR
-    print(f"[Git] 项目仓库目录: {PROJECTS_DIR}")
+    logger.info("Git 项目仓库目录: %s", PROJECTS_DIR)
 
-    print(f"[Server] http://localhost:{settings.PORT}")
-    print(f"[App] http://localhost:{settings.PORT}/app")
-    print("=" * 60)
+    logger.info("Server: http://localhost:%s", settings.PORT)
+    logger.info("App:    http://localhost:%s/app", settings.PORT)
+    logger.info("=" * 60)
 
     yield
 
     # 关闭时
     await db.disconnect()
-    print("[DB] 数据库连接已关闭")
+    logger.info("数据库连接已关闭")
 
 
 app = FastAPI(

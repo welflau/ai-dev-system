@@ -4,9 +4,12 @@ SQLite + aiosqlite 异步数据库操作
 """
 import aiosqlite
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from config import settings
+
+logger = logging.getLogger("database")
 
 
 class Database:
@@ -51,7 +54,7 @@ class Database:
                 await self._db.execute(
                     f"ALTER TABLE {table} ADD COLUMN {column} {col_def}"
                 )
-                print(f"[数据库迁移] 已添加列 {table}.{column} ({col_def})")
+                logger.info("数据库迁移: 已添加列 %s.%s (%s)", table, column, col_def)
         await self._db.commit()
 
     # ==================== 通用 CRUD ====================
