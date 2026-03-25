@@ -862,6 +862,30 @@ body {
     word-break: break-word;
 }
 
+/* LLM 调用日志样式 */
+.log-entry.llm-call {
+    background: rgba(139, 92, 246, 0.08);
+    border-left: 2px solid rgba(139, 92, 246, 0.5);
+}
+.log-entry.llm-call:hover {
+    background: rgba(139, 92, 246, 0.14);
+}
+.log-entry-badge {
+    font-size: 10px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-weight: 600;
+    flex-shrink: 0;
+}
+.log-entry-badge.llm-dur {
+    background: rgba(139, 92, 246, 0.2);
+    color: #a78bfa;
+}
+.log-entry-badge.llm-tokens {
+    background: rgba(59, 130, 246, 0.2);
+    color: #60a5fa;
+}
+
 /* 新日志高亮动画 */
 .log-entry.new {
     animation: logFlash 1s ease;

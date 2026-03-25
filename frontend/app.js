@@ -2393,9 +2393,10 @@ function appendLogEntry(log) {
 
     // 解析 detail 消息
     let message = '';
+    let detailParsed = {};
     try {
-        const parsed = JSON.parse(log.detail || '{}');
-        message = parsed.message || '';
+        detailParsed = JSON.parse(log.detail || '{}');
+        message = detailParsed.message || '';
     } catch {
         message = log.detail || '';
     }
@@ -2404,6 +2405,7 @@ function appendLogEntry(log) {
     const agent = log.agent_type || 'System';
     const action = log.action || '';
     const time = formatTime(log.created_at) || new Date().toLocaleTimeString('zh-CN', {hour12: false});
+    const isLlmCall = action === 'llm_call';
 
     // 构建状态变化
     let statusHtml = '';
@@ -2411,15 +2413,28 @@ function appendLogEntry(log) {
         statusHtml = `<span class="log-entry-status">${getStatusLabel(log.from_status)} <span class="arrow">→</span> ${getStatusLabel(log.to_status)}</span>`;
     }
 
+    // LLM 调用的额外标签（tokens + 耗时）
+    let llmBadgesHtml = '';
+    if (isLlmCall && detailParsed.duration_ms) {
+        const dur = detailParsed.duration_ms;
+        const inT = detailParsed.input_tokens || 0;
+        const outT = detailParsed.output_tokens || 0;
+        llmBadgesHtml = `
+            <span class="log-entry-badge llm-dur">${dur >= 1000 ? (dur / 1000).toFixed(1) + 's' : dur + 'ms'}</span>
+            <span class="log-entry-badge llm-tokens">${inT}→${outT}</span>
+        `;
+    }
+
     const div = document.createElement('div');
-    div.className = `log-entry new ${level}`;
+    div.className = `log-entry new ${level}${isLlmCall ? ' llm-call' : ''}`;
     if (log.id) div.dataset.logId = log.id;
     div.innerHTML = `
         <span class="log-entry-time">${escHtml(time)}</span>
-        <span class="log-entry-level ${level}">${level.toUpperCase()}</span>
+        <span class="log-entry-level ${level}">${isLlmCall ? '🤖' : level.toUpperCase()}</span>
         <span class="log-entry-agent">${escHtml(agent)}</span>
-        <span class="log-entry-action">${escHtml(action)}</span>
+        <span class="log-entry-action">${escHtml(isLlmCall ? 'AI调用' : action)}</span>
         ${statusHtml}
+        ${llmBadgesHtml}
         <span class="log-entry-msg">${escHtml(message)}</span>
     `;
 

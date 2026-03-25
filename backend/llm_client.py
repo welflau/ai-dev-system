@@ -306,6 +306,63 @@ class LLMClient:
         }
         await db.insert("llm_conversations", data)
 
+        # === 推送到前端实时日志面板 ===
+        if _llm_ctx.project_id:
+            from events import event_manager
+
+            input_t = usage.get("input_tokens", 0) if usage else 0
+            output_t = usage.get("output_tokens", 0) if usage else 0
+            agent_label = _llm_ctx.agent_type or "System"
+            action_label = _llm_ctx.action or "chat"
+            status_emoji = "⚠️" if is_fallback else "🤖"
+            msg = (
+                f"{status_emoji} AI调用 [{self.model}] "
+                f"{duration_ms}ms, tokens: {input_t}→{output_t}"
+            )
+
+            log_id = generate_id("LOG")
+            created_at = data["created_at"]
+            detail_json = json.dumps({
+                "message": msg,
+                "model": self.model,
+                "input_tokens": input_t,
+                "output_tokens": output_t,
+                "duration_ms": duration_ms,
+                "llm_status": data["status"],
+            }, ensure_ascii=False)
+
+            # 写入 ticket_logs 表（持久化，历史可查）
+            await db.insert("ticket_logs", {
+                "id": log_id,
+                "ticket_id": _llm_ctx.ticket_id,
+                "subtask_id": None,
+                "requirement_id": _llm_ctx.requirement_id,
+                "project_id": _llm_ctx.project_id,
+                "agent_type": agent_label,
+                "action": "llm_call",
+                "from_status": None,
+                "to_status": None,
+                "detail": detail_json,
+                "level": "info",
+                "created_at": created_at,
+            })
+
+            # SSE 实时推送
+            await event_manager.publish_to_project(
+                _llm_ctx.project_id, "log_added", {
+                    "id": log_id,
+                    "ticket_id": _llm_ctx.ticket_id,
+                    "requirement_id": _llm_ctx.requirement_id,
+                    "agent_type": agent_label,
+                    "action": "llm_call",
+                    "from_status": None,
+                    "to_status": None,
+                    "detail": detail_json,
+                    "level": "info",
+                    "created_at": created_at,
+                },
+            )
+
     async def generate(self, prompt: str, **kwargs) -> str:
         """简便方法：单次生成"""
         messages = [{"role": "user", "content": prompt}]
