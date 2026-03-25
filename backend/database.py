@@ -34,6 +34,25 @@ class Database:
         """初始化所有数据表"""
         await self._db.executescript(SCHEMA_SQL)
         await self._db.commit()
+        # 自动迁移：检测并添加缺失的列
+        await self._auto_migrate()
+
+    async def _auto_migrate(self):
+        """自动检测并添加缺失的列（兼容旧数据库）"""
+        migrations = [
+            # (表名, 列名, 列定义)
+            ("projects", "git_repo_path", "TEXT"),
+            ("projects", "git_remote_url", "TEXT"),
+        ]
+        for table, column, col_def in migrations:
+            cursor = await self._db.execute(f"PRAGMA table_info({table})")
+            columns = [row[1] for row in await cursor.fetchall()]
+            if column not in columns:
+                await self._db.execute(
+                    f"ALTER TABLE {table} ADD COLUMN {column} {col_def}"
+                )
+                print(f"[数据库迁移] 已添加列 {table}.{column} ({col_def})")
+        await self._db.commit()
 
     # ==================== 通用 CRUD ====================
 
