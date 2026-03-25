@@ -491,6 +491,7 @@ function switchTab(tab) {
     // 按需加载数据
     if (tab === 'board') refreshBoard();
     if (tab === 'requirements') loadRequirements();
+    if (tab === 'ticket-list') loadTicketList();
     if (tab === 'pipeline' && currentPipelineReqId) loadPipeline(currentPipelineReqId);
     if (tab === 'repo') loadRepoTree();
     if (tab === 'stats') loadStats();
@@ -1104,9 +1105,13 @@ async function submitRequirement() {
     }
 }
 
+// 缓存需求关联工单数据（用于折叠展开）
+let reqTicketsCache = {};
+
 async function loadRequirements() {
     if (!currentProjectId) return;
     const list = document.getElementById('requirementList');
+    reqTicketsCache = {};
 
     try {
         const data = await api(`/projects/${currentProjectId}/requirements`);
@@ -1121,7 +1126,7 @@ async function loadRequirements() {
             return;
         }
 
-        // TAPD 风格表格视图
+        // TAPD 风格表格视图 + 可折叠关联工单
         let html = `
         <div class="req-table-header">
             <span class="req-table-summary">${escHtml(currentProject?.name || '项目')} <span class="req-table-count">(${reqs.length})</span></span>
@@ -1129,6 +1134,7 @@ async function loadRequirements() {
         <table class="req-table">
             <thead>
                 <tr>
+                    <th class="col-expand" style="width:32px;"></th>
                     <th class="col-title">标题</th>
                     <th class="col-status">状态</th>
                     <th class="col-priority">优先级</th>
@@ -1148,21 +1154,32 @@ async function loadRequirements() {
                 low: { label: 'Low', cls: 'low' },
             };
             const pInfo = priorityMap[r.priority] || { label: r.priority, cls: 'medium' };
+            const ticketCount = r.ticket_count || 0;
 
             html += `
-                <tr class="req-table-row" onclick="openPipeline('${r.id}')">
-                    <td class="col-title">
+                <tr class="req-table-row" data-req-id="${r.id}">
+                    <td class="col-expand" onclick="event.stopPropagation(); toggleReqTickets('${r.id}', this);">
+                        ${ticketCount > 0 ? `<span class="req-expand-arrow" id="arrow-${r.id}">▶</span>` : '<span style="width:14px;display:inline-block;"></span>'}
+                    </td>
+                    <td class="col-title" onclick="openPipeline('${r.id}')">
                         <span class="req-table-title">${escHtml(r.title)}</span>
                         ${r.description ? `<span class="req-table-desc">${escHtml(r.description)}</span>` : ''}
                     </td>
                     <td class="col-status"><span class="req-status-tag ${r.status}">${getStatusLabel(r.status)}</span></td>
                     <td class="col-priority"><span class="req-priority-tag ${pInfo.cls}">${escHtml(pInfo.label)}</span></td>
-                    <td class="col-tickets">${r.ticket_count || 0}</td>
+                    <td class="col-tickets">${ticketCount}</td>
                     <td class="col-module">${escHtml(r.module || '-')}</td>
                     <td class="col-time">${formatDateTime(r.created_at)}</td>
                     <td class="col-actions" onclick="event.stopPropagation()">
                         <button class="btn-icon req-action-btn" onclick="showRequirementDetail('${r.id}')" title="详情">📋</button>
                         <button class="btn-icon req-action-btn req-delete-btn" onclick="deleteReq('${r.id}', '${escHtml(r.title).replace(/'/g, "\\'")}')" title="删除">🗑️</button>
+                    </td>
+                </tr>
+                <tr class="req-tickets-row" id="req-tickets-${r.id}" style="display:none;">
+                    <td colspan="8" class="req-tickets-cell">
+                        <div class="req-tickets-container" id="req-tickets-container-${r.id}">
+                            <div style="padding:12px; color:var(--text-muted); font-size:12px;">加载中...</div>
+                        </div>
                     </td>
                 </tr>`;
         });
@@ -1172,6 +1189,257 @@ async function loadRequirements() {
     } catch (e) {
         list.innerHTML = `<div class="empty-state"><p>加载失败: ${escHtml(e.message)}</p></div>`;
     }
+}
+
+/** 切换需求下关联工单的折叠/展开 */
+async function toggleReqTickets(reqId, tdEl) {
+    const row = document.getElementById(`req-tickets-${reqId}`);
+    const arrow = document.getElementById(`arrow-${reqId}`);
+    if (!row) return;
+
+    const isVisible = row.style.display !== 'none';
+    if (isVisible) {
+        row.style.display = 'none';
+        if (arrow) arrow.classList.remove('expanded');
+        return;
+    }
+
+    row.style.display = 'table-row';
+    if (arrow) arrow.classList.add('expanded');
+
+    // 如果已加载过，直接显示
+    if (reqTicketsCache[reqId]) {
+        renderReqTicketsSubTable(reqId, reqTicketsCache[reqId]);
+        return;
+    }
+
+    // 从 API 获取需求详情（含工单列表）
+    try {
+        const data = await api(`/projects/${currentProjectId}/requirements/${reqId}`);
+        const tickets = data.tickets || [];
+        reqTicketsCache[reqId] = tickets;
+        renderReqTicketsSubTable(reqId, tickets);
+    } catch (e) {
+        const container = document.getElementById(`req-tickets-container-${reqId}`);
+        if (container) container.innerHTML = `<div style="padding:12px; color:var(--error); font-size:12px;">加载失败: ${escHtml(e.message)}</div>`;
+    }
+}
+
+/** 渲染需求下折叠的工单子表格 */
+function renderReqTicketsSubTable(reqId, tickets) {
+    const container = document.getElementById(`req-tickets-container-${reqId}`);
+    if (!container) return;
+
+    if (tickets.length === 0) {
+        container.innerHTML = `<div style="padding:12px; color:var(--text-muted); font-size:12px;">暂无关联工单</div>`;
+        return;
+    }
+
+    let html = `<table class="req-sub-ticket-table">
+        <thead><tr>
+            <th>工单标题</th>
+            <th style="width:90px;">状态</th>
+            <th style="width:70px;">类型</th>
+            <th style="width:80px;">模块</th>
+            <th style="width:100px;">Agent</th>
+            <th style="width:60px;">优先级</th>
+        </tr></thead><tbody>`;
+
+    tickets.forEach(t => {
+        const statusColor = getStatusColor(t.status);
+        const priorityLabel = {1:'P1',2:'P2',3:'P3',4:'P4',5:'P5'};
+        const pLabel = priorityLabel[t.priority] || `P${t.priority}`;
+
+        html += `<tr class="req-sub-ticket-row" onclick="openTicketDrawer('${t.id}')">
+            <td>
+                <span class="req-sub-ticket-title">${escHtml(t.title)}</span>
+            </td>
+            <td><span class="ticket-status-dot" style="background:${statusColor};"></span> ${escHtml(t.status_label || getStatusLabel(t.status))}</td>
+            <td><span class="tag tag-type" style="font-size:11px;">${escHtml(t.type || 'feature')}</span></td>
+            <td>${escHtml(t.module || '-')}</td>
+            <td>${t.assigned_agent ? `<span class="tag tag-agent" style="font-size:11px;">${escHtml(t.assigned_agent)}</span>` : '<span style="color:var(--text-muted);">-</span>'}</td>
+            <td><span class="tag tag-priority-${t.priority}" style="font-size:11px;">${pLabel}</span></td>
+        </tr>`;
+    });
+
+    html += '</tbody></table>';
+    container.innerHTML = html;
+}
+
+// ==================== 工单列表（全量工单表格 + 看板视图） ====================
+
+let ticketListViewMode = 'table'; // 'table' | 'board'
+
+function switchTicketListView(mode) {
+    ticketListViewMode = mode;
+    document.getElementById('viewBtnTable')?.classList.toggle('active', mode === 'table');
+    document.getElementById('viewBtnBoard')?.classList.toggle('active', mode === 'board');
+    loadTicketList();
+}
+
+async function loadTicketList() {
+    if (!currentProjectId) return;
+    const content = document.getElementById('ticketListContent');
+    if (!content) return;
+
+    const statusFilter = document.getElementById('ticketListStatusFilter')?.value || '';
+    const moduleFilter = document.getElementById('ticketListModuleFilter')?.value || '';
+
+    try {
+        // 获取所有需求
+        const reqData = await api(`/projects/${currentProjectId}/requirements`);
+        const reqs = reqData.requirements || [];
+
+        // 并行获取每个需求的工单
+        let allTickets = [];
+        const reqMap = {};
+        reqs.forEach(r => { reqMap[r.id] = r; });
+
+        const ticketPromises = reqs.map(async r => {
+            try {
+                const detail = await api(`/projects/${currentProjectId}/requirements/${r.id}`);
+                return (detail.tickets || []).map(t => ({ ...t, req_title: r.title, req_id: r.id }));
+            } catch { return []; }
+        });
+
+        const results = await Promise.all(ticketPromises);
+        results.forEach(tickets => allTickets.push(...tickets));
+
+        // 过滤
+        if (statusFilter) {
+            allTickets = allTickets.filter(t => t.status === statusFilter || t.status.includes(statusFilter));
+        }
+        if (moduleFilter) {
+            allTickets = allTickets.filter(t => t.module === moduleFilter);
+        }
+
+        if (ticketListViewMode === 'board') {
+            renderTicketListBoard(content, allTickets);
+        } else {
+            renderTicketListTable(content, allTickets);
+        }
+    } catch (e) {
+        content.innerHTML = `<div class="empty-state"><p>加载失败: ${escHtml(e.message)}</p></div>`;
+    }
+}
+
+/** 渲染 TAPD 风格工单列表表格 */
+function renderTicketListTable(container, tickets) {
+    if (tickets.length === 0) {
+        container.innerHTML = `<div class="empty-state"><div class="emoji">🎫</div><p>暂无工单</p></div>`;
+        return;
+    }
+
+    let html = `
+    <div class="tl-table-header">
+        <span class="tl-table-summary">全部工单 <span class="tl-table-count">(${tickets.length})</span></span>
+    </div>
+    <table class="tl-table">
+        <thead>
+            <tr>
+                <th class="tl-col-id" style="width:80px;">ID</th>
+                <th class="tl-col-title">标题</th>
+                <th class="tl-col-status" style="width:110px;">状态</th>
+                <th class="tl-col-type" style="width:70px;">类型</th>
+                <th class="tl-col-module" style="width:80px;">模块</th>
+                <th class="tl-col-agent" style="width:120px;">负责 Agent</th>
+                <th class="tl-col-priority" style="width:60px;">优先级</th>
+                <th class="tl-col-req" style="width:160px;">所属需求</th>
+                <th class="tl-col-time" style="width:140px;">创建时间</th>
+            </tr>
+        </thead>
+        <tbody>`;
+
+    tickets.forEach(t => {
+        const statusColor = getStatusColor(t.status);
+        const priorityLabel = {1:'P1',2:'P2',3:'P3',4:'P4',5:'P5'};
+        const pLabel = priorityLabel[t.priority] || `P${t.priority}`;
+        const shortId = (t.id || '').slice(-6);
+
+        html += `
+            <tr class="tl-table-row" onclick="openTicketDrawer('${t.id}')">
+                <td class="tl-col-id"><span class="tl-id-badge">#${shortId}</span></td>
+                <td class="tl-col-title">
+                    <span class="tl-title-text">${escHtml(t.title)}</span>
+                    ${t.description ? `<span class="tl-title-desc">${escHtml(t.description)}</span>` : ''}
+                </td>
+                <td class="tl-col-status">
+                    <span class="tl-status-badge" style="border-left:3px solid ${statusColor};">
+                        ${escHtml(t.status_label || getStatusLabel(t.status))}
+                    </span>
+                </td>
+                <td class="tl-col-type"><span class="tag tag-type" style="font-size:11px;">${escHtml(t.type || 'feature')}</span></td>
+                <td class="tl-col-module">${escHtml(t.module || '-')}</td>
+                <td class="tl-col-agent">${t.assigned_agent ? `<span class="tag tag-agent" style="font-size:11px;">${escHtml(t.assigned_agent)}</span>` : '<span style="color:var(--text-muted);">未分配</span>'}</td>
+                <td class="tl-col-priority"><span class="tag tag-priority-${t.priority}" style="font-size:11px;">${pLabel}</span></td>
+                <td class="tl-col-req"><span class="tl-req-link" onclick="event.stopPropagation(); openPipeline('${t.req_id}');">${escHtml(t.req_title || '-')}</span></td>
+                <td class="tl-col-time">${formatDateTime(t.created_at)}</td>
+            </tr>`;
+    });
+
+    html += '</tbody></table>';
+    container.innerHTML = html;
+}
+
+/** 渲染工单列表的看板视图（简化版，按状态分列） */
+function renderTicketListBoard(container, tickets) {
+    if (tickets.length === 0) {
+        container.innerHTML = `<div class="empty-state"><div class="emoji">📌</div><p>暂无工单</p></div>`;
+        return;
+    }
+
+    // 按状态分组
+    const statusGroups = {
+        pending: { label: '待启动', color: 'var(--text-muted)', tickets: [] },
+        in_progress: { label: '进行中', color: 'var(--info)', tickets: [] },
+        review: { label: '待审查', color: 'var(--warning)', tickets: [] },
+        testing: { label: '测试中', color: 'var(--accent)', tickets: [] },
+        done: { label: '已完成', color: 'var(--success)', tickets: [] },
+    };
+
+    tickets.forEach(t => {
+        const s = t.status;
+        if (s === 'pending') statusGroups.pending.tickets.push(t);
+        else if (s.includes('_in_progress') || s === 'deploying' || s === 'analyzing') statusGroups.in_progress.tickets.push(t);
+        else if (s.includes('review') || s.includes('rejected')) statusGroups.review.tickets.push(t);
+        else if (s.includes('testing')) statusGroups.testing.tickets.push(t);
+        else if (s === 'deployed' || s === 'completed' || s === 'acceptance_passed' || s === 'testing_done') statusGroups.done.tickets.push(t);
+        else statusGroups.pending.tickets.push(t);
+    });
+
+    let html = '<div class="tl-board">';
+    for (const [key, group] of Object.entries(statusGroups)) {
+        html += `
+        <div class="tl-board-column">
+            <div class="tl-board-col-header">
+                <span class="tl-board-col-dot" style="background:${group.color};"></span>
+                <span class="tl-board-col-title">${group.label}</span>
+                <span class="tl-board-col-count">${group.tickets.length}</span>
+            </div>
+            <div class="tl-board-col-body">`;
+
+        if (group.tickets.length === 0) {
+            html += '<div style="padding:16px; text-align:center; color:var(--text-muted); font-size:12px;">暂无</div>';
+        } else {
+            group.tickets.forEach(t => {
+                const pLabel = {1:'P1',2:'P2',3:'P3',4:'P4',5:'P5'}[t.priority] || `P${t.priority}`;
+                html += `
+                <div class="tl-board-card" onclick="openTicketDrawer('${t.id}')">
+                    <div class="tl-board-card-title">${escHtml(t.title)}</div>
+                    <div class="tl-board-card-meta">
+                        <span class="tag tag-priority-${t.priority}" style="font-size:10px;">${pLabel}</span>
+                        ${t.module ? `<span class="tag tag-module" style="font-size:10px;">${escHtml(t.module)}</span>` : ''}
+                        ${t.assigned_agent ? `<span class="tag tag-agent" style="font-size:10px;">${escHtml(t.assigned_agent)}</span>` : ''}
+                    </div>
+                    <div class="tl-board-card-req">${escHtml(t.req_title || '')}</div>
+                </div>`;
+            });
+        }
+
+        html += '</div></div>';
+    }
+    html += '</div>';
+    container.innerHTML = html;
 }
 
 // ==================== Pipeline 视图（蓝盾风格） ====================

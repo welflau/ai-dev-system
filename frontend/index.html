@@ -53,6 +53,9 @@
                         <a class="nav-item" data-tab="requirements" onclick="switchTab('requirements')">
                             📋 需求列表
                         </a>
+                        <a class="nav-item" data-tab="ticket-list" onclick="switchTab('ticket-list')">
+                            🎫 工单列表
+                        </a>
                         <a class="nav-item" data-tab="repo" onclick="switchTab('repo')">
                             📂 仓库文件
                         </a>
@@ -163,6 +166,42 @@
                             <button class="btn btn-primary" onclick="showCreateRequirementModal()">+ 提交需求</button>
                         </div>
                         <div class="requirement-list" id="requirementList"></div>
+                    </div>
+
+                    <!-- Tab: 工单列表 -->
+                    <div id="tab-ticket-list" class="tab-content">
+                        <div class="page-header">
+                            <h2>工单列表</h2>
+                            <div class="ticket-list-actions">
+                                <div class="ticket-list-filters">
+                                    <select id="ticketListStatusFilter" onchange="loadTicketList()">
+                                        <option value="">全部状态</option>
+                                        <option value="pending">待启动</option>
+                                        <option value="product_analysis_in_progress">产品分析中</option>
+                                        <option value="architecture_in_progress">架构设计中</option>
+                                        <option value="development_in_progress">开发中</option>
+                                        <option value="testing_in_progress">测试中</option>
+                                        <option value="review_in_progress">审查中</option>
+                                        <option value="deployed">已部署</option>
+                                        <option value="cancelled">已取消</option>
+                                    </select>
+                                    <select id="ticketListModuleFilter" onchange="loadTicketList()">
+                                        <option value="">全部模块</option>
+                                        <option value="frontend">前端</option>
+                                        <option value="backend">后端</option>
+                                        <option value="database">数据库</option>
+                                        <option value="api">API</option>
+                                        <option value="testing">测试</option>
+                                        <option value="deploy">部署</option>
+                                    </select>
+                                </div>
+                                <div class="ticket-list-view-toggle">
+                                    <button class="btn btn-sm ticket-view-btn active" id="viewBtnTable" onclick="switchTicketListView('table')" title="列表视图">📋</button>
+                                    <button class="btn btn-sm ticket-view-btn" id="viewBtnBoard" onclick="switchTicketListView('board')" title="看板视图">📌</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div id="ticketListContent"></div>
                     </div>
 
                     <!-- Tab: 仓库文件 -->

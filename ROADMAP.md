@@ -169,20 +169,144 @@
 
 ---
 
-## 阶段六: 进阶功能 (v0.7.0) 🔜
+## 阶段六: 工单管理系统 (v0.7.0) ✅
 
-### 6.1 多 LLM 支持
+### 6.1 类 TAPD 工单管理系统 ✅
+- [x] 从 Pipeline 模式升级为三级工单模型：需求单 → 任务单 → 子任务
+- [x] 工单状态机（13 种工单状态 + 6 种需求状态）
+- [x] Agent 接单/流转/日志追溯
+- [x] 5 列看板视图（待办→进行中→待审查→待测试→已完成）
+
+### 6.2 后端架构重写 ✅
+- [x] 单文件模块架构（models.py, orchestrator.py, llm_client.py, database.py, events.py, utils.py）
+- [x] 6 张数据表：projects, requirements, tickets, subtasks, ticket_logs, artifacts
+- [x] 旧 v0.6.0 遗留文件全部清理（26 文件，6477 行删除）
+
+### 6.3 前端 SPA 重写 ✅
+- [x] 完整 SPA 前端（app.js ~600 行）：项目管理、需求提交、看板、工单详情抽屉
+- [x] SSE 实时推送集成
+
+---
+
+## v0.7.1: LLM 会话日志 + 产出文件展示 ✅
+
+- [x] 新增 llm_conversations 表（7 张表总计）
+- [x] llm_client.py: chat() 自动记录会话（prompt/response/tokens/耗时）
+- [x] set_llm_context() / clear_llm_context() 关联工单/需求
+- [x] 新增 API: GET /tickets/{id}/llm-logs, /requirements/{id}/llm-logs, /tickets/{id}/artifacts, /requirements/{id}/artifacts
+- [x] Pipeline Job 面板 3 个 Tab: 📋日志 / 🤖AI对话 / 📦产出文件
+- [x] AI 对话 Tab: 展示完整 prompt/response + tokens/耗时/model/状态
+- [x] 产出文件 Tab: 文件类型 icon/名称/文件列表展开
+- [x] 工单详情抽屉: 产物增加文件列表 + 类型标签
+
+---
+
+## 阶段七: Git 仓库集成 (v0.8.0) ✅
+
+### 7.1 Git 操作管理器 ✅
+- [x] 新增 git_manager.py: 异步 Git 操作（init/write/commit/push/log/tree/diff）
+- [x] 通过 asyncio.create_subprocess_exec 调用 git CLI（不依赖 GitPython）
+- [x] 项目仓库路径: backend/projects/<project_id>/
+- [x] 标准目录结构: src/api/, src/models/, src/services/, src/utils/, tests/, docs/, config/, build/
+
+### 7.2 Agent 文件输出改造 ✅
+- [x] 6 个 Agent 全部改造返回 files 字典：包含真实文件内容（代码/文档/配置）
+- [x] Orchestrator 集成 GitManager：Agent 执行后自动写文件 + commit + push
+
+### 7.3 命令记录 + 前端增强 ✅
+- [x] 新增 ticket_commands 表（8 张表总计），记录每步执行命令
+- [x] projects 表新增 git_repo_path / git_remote_url 字段
+- [x] 创建项目时自动初始化 Git 仓库
+- [x] 新增 10 个 API 端点：git/tree, git/log, git/file, git/diff, git/remote, commands
+- [x] 前端 Job 抽屉新增第 4 个 Tab: ⚙️配置（执行命令列表，类蓝盾 CI 配置视图）
+- [x] 前端侧栏新增 📂仓库文件浏览（文件树 + 文件内容查看 + Git 日志）
+
+---
+
+## 阶段八: AI 聊天面板 (v0.9.0) ✅
+
+### 8.1 聊天面板 UI ✅
+- [x] 右侧聊天面板（可折叠/展开，grid 三栏布局）
+- [x] 模式切换栏（全局对话 / 工单对话）
+- [x] 聊天消息支持简单 Markdown 格式化（代码块/行内代码/加粗）
+
+### 8.2 全局对话模式 ✅
+- [x] 用户与 AI 自由对话，LLM 带项目上下文（需求状态 + 工单概况）
+- [x] 指令解析: AI 回复中提取 [ACTION:CREATE_REQUIREMENT] 自动创建需求
+
+### 8.3 工单对话模式 ✅
+- [x] 选中工单加载该工单的 AI 对话历史（来自 llm_conversations 表）
+- [x] 工单抽屉新增 '💬 AI 对话' 按钮，联动聊天面板
+
+### 8.4 后端支持 ✅
+- [x] 新增 api/chat.py: 3 个端点（POST chat, GET history, GET ticket conversations）
+- [x] 新增 chat_messages 表（9 张表总计）
+
+---
+
+## 阶段九: 沙箱执行 + 真实验证 (v1.0.0) 🔜
+
+> **核心目标**：让整条流水线从"纯 LLM 文本审查"升级为"真实代码执行验证"。
+> 当前 v0.9.0 的所有 Agent（ProductAgent 验收、TestAgent 测试）都是纯 LLM prompt 文本审查，
+> 没有实际编译/构建/运行代码。v1.0 要解决这个根本性问题。
+
+### 9.1 沙箱执行环境 🔜
+- [ ] Docker 沙箱容器：为每个项目创建隔离的执行环境
+- [ ] 支持多语言运行时（Python / Node.js / Go）
+- [ ] 安全隔离：网络限制、资源限额、超时控制
+- [ ] 沙箱生命周期管理（创建 → 执行 → 清理）
+
+### 9.2 构建验证 🔜
+- [ ] DevAgent 代码提交后自动触发构建验证
+- [ ] Python 项目：pip install + import 检查 + 语法校验
+- [ ] 前端项目：npm install + 构建检查
+- [ ] 构建失败自动打回 DevAgent 返工（附带错误日志）
+
+### 9.3 ProductAgent 验收升级 🔜
+- [ ] **真实验收**替代纯文本审查：在沙箱中启动服务 → 调用 API → 验证响应
+- [ ] 前端功能：截图对比 / Playwright 自动化验证
+- [ ] 验收报告附带实际运行证据（HTTP 响应、截图、日志）
+- [ ] 保留 LLM 辅助审查作为补充（审查代码质量、文档完整性）
+
+### 9.4 TestAgent 测试升级 🔜
+- [ ] **真实执行 pytest**：在沙箱中实际运行 DevAgent 生成的测试用例
+- [ ] 冒烟测试：启动服务 → 发送 HTTP 请求 → 验证状态码和响应
+- [ ] 单元测试：subprocess 执行 `python -m pytest` 并解析结果
+- [ ] 测试覆盖率报告（coverage.py 集成）
+- [ ] 替换当前硬编码桩实现（_smoke_test / _unit_test 永远返回 True）
+
+### 9.5 返工循环控制 🔜
+- [ ] 验收/测试打回增加最大重试次数（默认 3 次）
+- [ ] 超过重试次数自动升级为人工介入（状态 → needs_human_review）
+- [ ] 每轮返工附带上一轮的完整错误上下文（而非仅文字描述）
+
+### 9.6 执行日志增强 🔜
+- [ ] 沙箱执行的 stdout/stderr 实时推送到前端
+- [ ] 构建/测试过程的进度条展示
+- [ ] 执行命令的完整时间线视图
+
+---
+
+## 阶段十: 进阶功能 (v1.1.0+) 📋
+
+### 10.1 多 LLM 支持
 - [ ] 不同 Agent 可配置不同 LLM
-- [ ] 模型性能对比
+- [ ] 模型性能对比（成本/质量/速度）
 
-### 6.2 项目模板系统
+### 10.2 项目模板系统
 - [ ] 预置项目模板（Web API、全栈应用、CLI 工具等）
 - [ ] 自定义模板创建
 
-### 6.3 实时协作
+### 10.3 实时协作
 - [ ] WebSocket 双向通信
 - [ ] 多用户同时操作
 
-### 6.4 Agent 自我进化
+### 10.4 Agent 自我进化
 - [ ] 执行历史分析
 - [ ] 自适应提示词优化
+- [ ] 成功/失败模式学习
+
+### 10.5 CI/CD 集成
+- [ ] 对接 GitHub Actions / GitLab CI
+- [ ] 自动触发外部 CI 流水线
+- [ ] 部署状态回写到工单
