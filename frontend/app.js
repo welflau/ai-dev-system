@@ -2753,7 +2753,10 @@ function addLog(level, message) {
     content.scrollTop = content.scrollHeight; // 自动滚动到底部
 }
 
-function formatDateTime(date) {
+function formatDateTime(input) {
+    if (!input) return '-';
+    const date = (input instanceof Date) ? input : new Date(input);
+    if (isNaN(date.getTime())) return String(input);
     const year = date.getFullYear();
     const month = String(date.getMonth() + 1).padStart(2, '0');
     const day = String(date.getDate()).padStart(2, '0');
