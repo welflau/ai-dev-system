@@ -60,6 +60,28 @@
                             📝 操作日志
                         </a>
                     </nav>
+                    <!-- 设置菜单（抽屉式折叠） -->
+                    <div class="sidebar-settings">
+                        <a class="nav-item nav-item-settings" onclick="toggleSettingsPanel()">
+                            <span class="nav-item-icon">⚙️</span>
+                            <span>设置</span>
+                            <span class="nav-item-arrow" id="settingsArrow">▸</span>
+                        </a>
+                        <div class="settings-drawer" id="settingsDrawer">
+                            <a class="nav-item nav-sub-item" data-tab="settings-general" onclick="switchTab('settings-general')">
+                                <span class="nav-item-icon">📋</span> 基本信息
+                            </a>
+                            <a class="nav-item nav-sub-item" data-tab="settings-repo" onclick="switchTab('settings-repo')">
+                                <span class="nav-item-icon">📂</span> 仓库配置
+                            </a>
+                            <a class="nav-item nav-sub-item" data-tab="settings-agents" onclick="switchTab('settings-agents')">
+                                <span class="nav-item-icon">🤖</span> Agent 配置
+                            </a>
+                            <a class="nav-item nav-sub-item" data-tab="settings-danger" onclick="switchTab('settings-danger')">
+                                <span class="nav-item-icon">⚠️</span> 高级设置
+                            </a>
+                        </div>
+                    </div>
                     <div class="sidebar-footer">
                         <button class="btn btn-accent btn-block" onclick="showCreateRequirementModal()">
                             + 提交需求
@@ -225,6 +247,183 @@
                     <div id="tab-logs" class="tab-content">
                         <h2>操作日志</h2>
                         <div class="log-timeline" id="logTimeline"></div>
+                    </div>
+
+                    <!-- Tab: 设置 - 基本信息 -->
+                    <div id="tab-settings-general" class="tab-content">
+                        <div class="settings-page">
+                            <div class="settings-page-header">
+                                <h2>📋 基本信息</h2>
+                                <button class="btn btn-primary btn-sm" onclick="saveProjectSettings()">💾 保存更改</button>
+                            </div>
+                            <div class="settings-card">
+                                <div class="form-group">
+                                    <label>项目名称</label>
+                                    <input type="text" id="settingsProjectName" placeholder="项目名称">
+                                </div>
+                                <div class="form-group">
+                                    <label>项目描述</label>
+                                    <textarea id="settingsProjectDesc" placeholder="项目描述" rows="3"></textarea>
+                                </div>
+                                <div class="form-group">
+                                    <label>技术栈</label>
+                                    <input type="text" id="settingsTechStack" placeholder="Python, FastAPI, React...">
+                                </div>
+                                <div class="form-group">
+                                    <label>项目状态</label>
+                                    <select id="settingsProjectStatus">
+                                        <option value="active">活跃</option>
+                                        <option value="paused">暂停</option>
+                                        <option value="archived">归档</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label>项目 ID</label>
+                                    <input type="text" id="settingsProjectId" readonly disabled>
+                                    <small class="form-hint">系统自动生成，不可修改</small>
+                                </div>
+                                <div class="form-group">
+                                    <label>创建时间</label>
+                                    <input type="text" id="settingsCreatedAt" readonly disabled>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tab: 设置 - 仓库配置 -->
+                    <div id="tab-settings-repo" class="tab-content">
+                        <div class="settings-page">
+                            <div class="settings-page-header">
+                                <h2>📂 仓库配置</h2>
+                                <button class="btn btn-primary btn-sm" onclick="saveRepoSettings()">💾 保存更改</button>
+                            </div>
+                            <div class="settings-card">
+                                <div class="form-group">
+                                    <label>Git 远程仓库 URL</label>
+                                    <div class="input-with-action">
+                                        <input type="text" id="settingsGitRemote" placeholder="https://github.com/username/repo.git">
+                                        <button class="btn btn-sm" onclick="openGitRemoteUrl()" title="在浏览器中打开">🔗</button>
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label>本地仓库路径</label>
+                                    <div class="input-with-action">
+                                        <input type="text" id="settingsRepoPath" readonly disabled>
+                                        <button class="btn btn-sm" onclick="copyToClipboard(document.getElementById('settingsRepoPath').value)" title="复制路径">📋</button>
+                                    </div>
+                                    <small class="form-hint">仓库在本地磁盘的绝对路径</small>
+                                </div>
+                            </div>
+                            <div class="settings-card">
+                                <h3 class="settings-card-title">仓库状态</h3>
+                                <div class="repo-status-grid" id="repoStatusGrid">
+                                    <div class="repo-status-item">
+                                        <span class="repo-status-label">仓库状态</span>
+                                        <span class="repo-status-value" id="repoStatusValue">检测中...</span>
+                                    </div>
+                                    <div class="repo-status-item">
+                                        <span class="repo-status-label">最近提交</span>
+                                        <span class="repo-status-value" id="repoLastCommit">-</span>
+                                    </div>
+                                    <div class="repo-status-item">
+                                        <span class="repo-status-label">文件数量</span>
+                                        <span class="repo-status-value" id="repoFileCount">-</span>
+                                    </div>
+                                </div>
+                                <button class="btn btn-sm" onclick="refreshRepoStatus()" style="margin-top:12px;">🔄 刷新状态</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tab: 设置 - Agent 配置 -->
+                    <div id="tab-settings-agents" class="tab-content">
+                        <div class="settings-page">
+                            <div class="settings-page-header">
+                                <h2>🤖 Agent 配置</h2>
+                            </div>
+                            <div class="settings-card">
+                                <p class="settings-description">项目中使用的 AI Agent 列表，它们自动接单并完成对应阶段的工作。</p>
+                                <div class="agent-list" id="agentListSettings">
+                                    <div class="agent-item">
+                                        <div class="agent-icon">📝</div>
+                                        <div class="agent-info">
+                                            <div class="agent-name">ProductAgent</div>
+                                            <div class="agent-desc">需求分析 → PRD 文档生成</div>
+                                        </div>
+                                        <span class="tag tag-success">启用</span>
+                                    </div>
+                                    <div class="agent-item">
+                                        <div class="agent-icon">🏗️</div>
+                                        <div class="agent-info">
+                                            <div class="agent-name">ArchitectAgent</div>
+                                            <div class="agent-desc">架构设计 → 技术方案</div>
+                                        </div>
+                                        <span class="tag tag-success">启用</span>
+                                    </div>
+                                    <div class="agent-item">
+                                        <div class="agent-icon">💻</div>
+                                        <div class="agent-info">
+                                            <div class="agent-name">DevAgent</div>
+                                            <div class="agent-desc">代码生成 → 源代码文件</div>
+                                        </div>
+                                        <span class="tag tag-success">启用</span>
+                                    </div>
+                                    <div class="agent-item">
+                                        <div class="agent-icon">🧪</div>
+                                        <div class="agent-info">
+                                            <div class="agent-name">TestAgent</div>
+                                            <div class="agent-desc">测试生成 → 测试用例 + 报告</div>
+                                        </div>
+                                        <span class="tag tag-success">启用</span>
+                                    </div>
+                                    <div class="agent-item">
+                                        <div class="agent-icon">🔍</div>
+                                        <div class="agent-info">
+                                            <div class="agent-name">ReviewAgent</div>
+                                            <div class="agent-desc">代码审查 → 审查报告</div>
+                                        </div>
+                                        <span class="tag tag-success">启用</span>
+                                    </div>
+                                    <div class="agent-item">
+                                        <div class="agent-icon">🚀</div>
+                                        <div class="agent-info">
+                                            <div class="agent-name">DeployAgent</div>
+                                            <div class="agent-desc">部署配置 → Dockerfile + CI/CD</div>
+                                        </div>
+                                        <span class="tag tag-success">启用</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tab: 设置 - 高级设置 -->
+                    <div id="tab-settings-danger" class="tab-content">
+                        <div class="settings-page">
+                            <div class="settings-page-header">
+                                <h2>⚠️ 高级设置</h2>
+                            </div>
+                            <div class="settings-card settings-card-danger">
+                                <h3 class="settings-card-title" style="color:var(--danger);">危险区域</h3>
+                                <p class="settings-description">以下操作不可撤销，请谨慎执行。</p>
+                                <div class="danger-actions">
+                                    <div class="danger-action-item">
+                                        <div>
+                                            <strong>归档项目</strong>
+                                            <p>项目将被归档，不再接受新需求。可以后续恢复。</p>
+                                        </div>
+                                        <button class="btn btn-danger-outline btn-sm" onclick="archiveProject()">归档项目</button>
+                                    </div>
+                                    <div class="danger-action-item">
+                                        <div>
+                                            <strong>删除项目</strong>
+                                            <p>永久删除项目及所有关联的需求、工单、日志数据。此操作不可恢复。</p>
+                                        </div>
+                                        <button class="btn btn-danger btn-sm" onclick="deleteProject()">删除项目</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -445,6 +644,6 @@
         </div>
     </div>
 
-    <script src="/static/app.js?v=0.8.3"></script>
+    <script src="/static/app.js?v=0.8.4"></script>
 </body>
 </html>

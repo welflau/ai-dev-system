@@ -469,10 +469,19 @@ function showProjectDetail(projectId) {
 }
 
 function switchTab(tab) {
-    // 侧栏导航高亮
+    // 侧栏导航高亮（主导航项）
     document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
     const activeNav = document.querySelector(`.nav-item[data-tab="${tab}"]`);
     if (activeNav) activeNav.classList.add('active');
+
+    // 如果是设置子 tab，高亮设置主按钮并展开抽屉
+    if (tab.startsWith('settings-')) {
+        document.querySelector('.nav-item-settings')?.classList.add('active');
+        const drawer = document.getElementById('settingsDrawer');
+        const arrow = document.getElementById('settingsArrow');
+        if (drawer) drawer.classList.add('open');
+        if (arrow) arrow.classList.add('expanded');
+    }
 
     // 内容区切换
     document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
@@ -486,6 +495,199 @@ function switchTab(tab) {
     if (tab === 'repo') loadRepoTree();
     if (tab === 'stats') loadStats();
     if (tab === 'logs') loadLogs();
+    if (tab === 'settings-general') loadSettingsGeneral();
+    if (tab === 'settings-repo') loadSettingsRepo();
+}
+
+// ==================== 设置面板 ====================
+
+/** 切换设置抽屉展开/收起 */
+function toggleSettingsPanel() {
+    const drawer = document.getElementById('settingsDrawer');
+    const arrow = document.getElementById('settingsArrow');
+    if (!drawer || !arrow) return;
+
+    const isOpen = drawer.classList.toggle('open');
+    arrow.classList.toggle('expanded', isOpen);
+
+    // 如果展开，默认打开第一个设置子页
+    if (isOpen) {
+        const activeSubItem = drawer.querySelector('.nav-sub-item.active');
+        if (!activeSubItem) {
+            switchTab('settings-general');
+        }
+    }
+}
+
+/** 加载基本信息设置 */
+function loadSettingsGeneral() {
+    if (!currentProject) return;
+    const p = currentProject;
+    document.getElementById('settingsProjectName').value = p.name || '';
+    document.getElementById('settingsProjectDesc').value = p.description || '';
+    document.getElementById('settingsTechStack').value = p.tech_stack || '';
+    document.getElementById('settingsProjectStatus').value = p.status || 'active';
+    document.getElementById('settingsProjectId').value = p.id || '';
+    document.getElementById('settingsCreatedAt').value = formatDateTime(p.created_at) || '';
+}
+
+/** 加载仓库设置 */
+async function loadSettingsRepo() {
+    if (!currentProject) return;
+    const p = currentProject;
+    document.getElementById('settingsGitRemote').value = p.git_remote_url || '';
+    document.getElementById('settingsRepoPath').value = p.git_repo_path || '默认路径';
+
+    // 加载仓库状态
+    await refreshRepoStatus();
+}
+
+/** 刷新仓库状态 */
+async function refreshRepoStatus() {
+    if (!currentProjectId) return;
+    try {
+        // 尝试获取 git log 和 tree
+        const [logData, treeData] = await Promise.allSettled([
+            api(`/projects/${currentProjectId}/git/log?limit=1`),
+            api(`/projects/${currentProjectId}/git/tree`),
+        ]);
+
+        // 仓库状态
+        const statusEl = document.getElementById('repoStatusValue');
+        if (logData.status === 'fulfilled') {
+            statusEl.textContent = '✅ 已初始化';
+            statusEl.style.color = 'var(--success)';
+        } else {
+            statusEl.textContent = '❌ 未初始化';
+            statusEl.style.color = 'var(--danger, #ef4444)';
+        }
+
+        // 最近提交
+        const commitEl = document.getElementById('repoLastCommit');
+        if (logData.status === 'fulfilled' && logData.value?.commits?.length) {
+            const c = logData.value.commits[0];
+            commitEl.textContent = `${c.message || '-'} (${formatDateTime(c.date)})`;
+        } else {
+            commitEl.textContent = '无提交记录';
+        }
+
+        // 文件数量
+        const fileCountEl = document.getElementById('repoFileCount');
+        if (treeData.status === 'fulfilled' && treeData.value?.tree) {
+            const countFiles = (tree) => {
+                let count = 0;
+                for (const item of tree) {
+                    if (item.type === 'file') count++;
+                    else if (item.children) count += countFiles(item.children);
+                }
+                return count;
+            };
+            fileCountEl.textContent = countFiles(treeData.value.tree) + ' 个文件';
+        } else {
+            fileCountEl.textContent = '-';
+        }
+    } catch (e) {
+        console.warn('刷新仓库状态失败:', e);
+    }
+}
+
+/** 保存项目基本设置 */
+async function saveProjectSettings() {
+    if (!currentProjectId) return;
+    const name = document.getElementById('settingsProjectName').value.trim();
+    const description = document.getElementById('settingsProjectDesc').value.trim();
+    const tech_stack = document.getElementById('settingsTechStack').value.trim();
+    const status = document.getElementById('settingsProjectStatus').value;
+
+    if (!name) {
+        showToast('项目名称不能为空', 'error');
+        return;
+    }
+
+    try {
+        await api(`/projects/${currentProjectId}`, 'PUT', { name, description, tech_stack, status });
+        showToast('项目设置已保存', 'success');
+        // 刷新当前项目数据
+        const data = await api(`/projects/${currentProjectId}`);
+        currentProject = data;
+        document.getElementById('sidebarProjectName').textContent = data.name;
+    } catch (e) {
+        showToast(`保存失败: ${e.message}`, 'error');
+    }
+}
+
+/** 保存仓库设置 */
+async function saveRepoSettings() {
+    if (!currentProjectId) return;
+    const git_remote_url = document.getElementById('settingsGitRemote').value.trim();
+
+    try {
+        await api(`/projects/${currentProjectId}`, 'PUT', { git_remote_url });
+        showToast('仓库配置已保存', 'success');
+        const data = await api(`/projects/${currentProjectId}`);
+        currentProject = data;
+    } catch (e) {
+        showToast(`保存失败: ${e.message}`, 'error');
+    }
+}
+
+/** 在浏览器中打开 Git 远程仓库 */
+function openGitRemoteUrl() {
+    const url = document.getElementById('settingsGitRemote')?.value;
+    if (url) {
+        window.open(url.replace(/\.git$/, ''), '_blank');
+    } else {
+        showToast('未配置远程仓库 URL', 'warning');
+    }
+}
+
+/** 复制文本到剪贴板 */
+async function copyToClipboard(text) {
+    if (!text) return;
+    try {
+        await navigator.clipboard.writeText(text);
+        showToast('已复制到剪贴板', 'success');
+    } catch {
+        // fallback
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        showToast('已复制到剪贴板', 'success');
+    }
+}
+
+/** 归档项目 */
+async function archiveProject() {
+    if (!currentProjectId) return;
+    if (!confirm('确定要归档此项目吗？归档后将不再接受新需求。')) return;
+    try {
+        await api(`/projects/${currentProjectId}`, 'PUT', { status: 'archived' });
+        showToast('项目已归档', 'success');
+        showProjectList();
+    } catch (e) {
+        showToast(`归档失败: ${e.message}`, 'error');
+    }
+}
+
+/** 删除项目 */
+async function deleteProject() {
+    if (!currentProjectId) return;
+    const name = currentProject?.name || currentProjectId;
+    const input = prompt(`此操作不可恢复！\n请输入项目名称 "${name}" 确认删除：`);
+    if (input !== name) {
+        if (input !== null) showToast('项目名称不匹配，已取消', 'warning');
+        return;
+    }
+    try {
+        await api(`/projects/${currentProjectId}`, 'DELETE');
+        showToast('项目已删除', 'success');
+        showProjectList();
+    } catch (e) {
+        showToast(`删除失败: ${e.message}`, 'error');
+    }
 }
 
 // ==================== 面包屑 ====================

@@ -154,18 +154,34 @@ async def update_project(project_id: str, req: ProjectUpdate):
         update_data["updated_at"] = now_iso()
         await db.update("projects", update_data, "id = ?", (project_id,))
 
+        # 如果更新了 git_remote_url，同步到 GitManager
+        if "git_remote_url" in update_data and git_manager.repo_exists(project_id):
+            try:
+                await git_manager.set_remote(project_id, update_data["git_remote_url"])
+            except Exception as e:
+                print(f"[更新项目] 同步 git remote 失败: {e}")
+
     return await get_project(project_id)
 
 
 @router.delete("/{project_id}")
 async def delete_project(project_id: str):
-    """删除项目（归档）"""
+    """删除项目及所有关联数据"""
     project = await db.fetch_one("SELECT * FROM projects WHERE id = ?", (project_id,))
     if not project:
         raise HTTPException(404, "项目不存在")
 
-    await db.update("projects", {"status": "archived", "updated_at": now_iso()}, "id = ?", (project_id,))
-    return {"message": "项目已归档"}
+    # 级联删除关联数据
+    await db.execute("DELETE FROM ticket_commands WHERE ticket_id IN (SELECT id FROM tickets WHERE project_id = ?)", (project_id,))
+    await db.execute("DELETE FROM ticket_logs WHERE ticket_id IN (SELECT id FROM tickets WHERE project_id = ?)", (project_id,))
+    await db.execute("DELETE FROM artifacts WHERE ticket_id IN (SELECT id FROM tickets WHERE project_id = ?)", (project_id,))
+    await db.execute("DELETE FROM subtasks WHERE ticket_id IN (SELECT id FROM tickets WHERE project_id = ?)", (project_id,))
+    await db.execute("DELETE FROM llm_conversations WHERE project_id = ?", (project_id,))
+    await db.execute("DELETE FROM tickets WHERE project_id = ?", (project_id,))
+    await db.execute("DELETE FROM requirements WHERE project_id = ?", (project_id,))
+    await db.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+
+    return {"message": "项目已删除"}
 
 
 # ==================== Git 仓库 API ====================

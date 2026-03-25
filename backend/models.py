@@ -215,6 +215,7 @@ class ProjectUpdate(BaseModel):
     description: Optional[str] = None
     tech_stack: Optional[str] = None
     status: Optional[str] = None
+    git_remote_url: Optional[str] = None
 
 
 class RequirementCreate(BaseModel):
