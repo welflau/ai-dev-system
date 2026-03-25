@@ -20,11 +20,25 @@ from database import db
 LOG_FORMAT = "%(asctime)s [%(name)s] %(levelname)s  %(message)s"
 LOG_DATE_FORMAT = "%H:%M:%S"
 
+# Windows 控制台默认 GBK 编码，无法输出 emoji —— 强制 UTF-8
+_console_handler = logging.StreamHandler(sys.stdout)
+_console_handler.setFormatter(logging.Formatter(LOG_FORMAT, datefmt=LOG_DATE_FORMAT))
+if sys.platform == "win32":
+    import io
+    _console_handler.stream = io.TextIOWrapper(
+        sys.stdout.buffer, encoding="utf-8", errors="replace", line_buffering=True,
+    )
+
+# 同时输出到日志文件（便于排查）
+_LOG_DIR = Path(__file__).parent
+_file_handler = logging.FileHandler(
+    _LOG_DIR / "server.log", encoding="utf-8", mode="a",
+)
+_file_handler.setFormatter(logging.Formatter(LOG_FORMAT, datefmt=LOG_DATE_FORMAT))
+
 logging.basicConfig(
     level=logging.INFO,
-    format=LOG_FORMAT,
-    datefmt=LOG_DATE_FORMAT,
-    handlers=[logging.StreamHandler(sys.stdout)],
+    handlers=[_console_handler, _file_handler],
 )
 # 降低第三方库日志级别，避免刷屏
 logging.getLogger("httpx").setLevel(logging.WARNING)
