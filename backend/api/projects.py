@@ -167,9 +167,12 @@ async def update_project(project_id: str, req: ProjectUpdate):
 @router.delete("/{project_id}")
 async def delete_project(project_id: str):
     """删除项目及所有关联数据"""
+    print(f"[删除项目] 开始删除: {project_id}")
     project = await db.fetch_one("SELECT * FROM projects WHERE id = ?", (project_id,))
     if not project:
         raise HTTPException(404, "项目不存在")
+
+    print(f"[删除项目] 找到项目: {project['name']}, 开始级联删除...")
 
     # 级联删除关联数据
     await db.execute("DELETE FROM ticket_commands WHERE ticket_id IN (SELECT id FROM tickets WHERE project_id = ?)", (project_id,))
@@ -179,7 +182,17 @@ async def delete_project(project_id: str):
     await db.execute("DELETE FROM llm_conversations WHERE project_id = ?", (project_id,))
     await db.execute("DELETE FROM tickets WHERE project_id = ?", (project_id,))
     await db.execute("DELETE FROM requirements WHERE project_id = ?", (project_id,))
-    await db.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+
+    cursor = await db.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+    print(f"[删除项目] DELETE projects rowcount: {cursor.rowcount}")
+
+    # 验证删除结果
+    check = await db.fetch_one("SELECT id FROM projects WHERE id = ?", (project_id,))
+    if check:
+        print(f"[删除项目] ❌ 验证失败！项目仍然存在: {project_id}")
+        raise HTTPException(500, "删除失败：数据库未能成功删除项目")
+    else:
+        print(f"[删除项目] ✅ 验证通过，项目已从数据库移除")
 
     return {"message": "项目已删除"}
 

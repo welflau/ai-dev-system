@@ -342,56 +342,9 @@
                                 <h2>🤖 Agent 配置</h2>
                             </div>
                             <div class="settings-card">
-                                <p class="settings-description">项目中使用的 AI Agent 列表，它们自动接单并完成对应阶段的工作。</p>
+                                <p class="settings-description">项目中使用的 AI Agent 列表，点击查看提示词配置。</p>
                                 <div class="agent-list" id="agentListSettings">
-                                    <div class="agent-item">
-                                        <div class="agent-icon">📝</div>
-                                        <div class="agent-info">
-                                            <div class="agent-name">ProductAgent</div>
-                                            <div class="agent-desc">需求分析 → PRD 文档生成</div>
-                                        </div>
-                                        <span class="tag tag-success">启用</span>
-                                    </div>
-                                    <div class="agent-item">
-                                        <div class="agent-icon">🏗️</div>
-                                        <div class="agent-info">
-                                            <div class="agent-name">ArchitectAgent</div>
-                                            <div class="agent-desc">架构设计 → 技术方案</div>
-                                        </div>
-                                        <span class="tag tag-success">启用</span>
-                                    </div>
-                                    <div class="agent-item">
-                                        <div class="agent-icon">💻</div>
-                                        <div class="agent-info">
-                                            <div class="agent-name">DevAgent</div>
-                                            <div class="agent-desc">代码生成 → 源代码文件</div>
-                                        </div>
-                                        <span class="tag tag-success">启用</span>
-                                    </div>
-                                    <div class="agent-item">
-                                        <div class="agent-icon">🧪</div>
-                                        <div class="agent-info">
-                                            <div class="agent-name">TestAgent</div>
-                                            <div class="agent-desc">测试生成 → 测试用例 + 报告</div>
-                                        </div>
-                                        <span class="tag tag-success">启用</span>
-                                    </div>
-                                    <div class="agent-item">
-                                        <div class="agent-icon">🔍</div>
-                                        <div class="agent-info">
-                                            <div class="agent-name">ReviewAgent</div>
-                                            <div class="agent-desc">代码审查 → 审查报告</div>
-                                        </div>
-                                        <span class="tag tag-success">启用</span>
-                                    </div>
-                                    <div class="agent-item">
-                                        <div class="agent-icon">🚀</div>
-                                        <div class="agent-info">
-                                            <div class="agent-name">DeployAgent</div>
-                                            <div class="agent-desc">部署配置 → Dockerfile + CI/CD</div>
-                                        </div>
-                                        <span class="tag tag-success">启用</span>
-                                    </div>
+                                    <div style="text-align:center; padding:20px; color:var(--text-muted); font-size:13px;">加载中...</div>
                                 </div>
                             </div>
                         </div>
@@ -626,6 +579,21 @@
                     <button class="btn" onclick="closeModal('llmConfigModal')">取消</button>
                     <button class="btn btn-primary" onclick="saveLLMConfig()">保存配置</button>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== 模态框：Agent 详情 ==================== -->
+    <div class="modal-overlay" id="agentDetailModal">
+        <div class="modal modal-agent">
+            <div class="modal-header">
+                <h3 id="agentDetailTitle">Agent 详情</h3>
+                <button class="btn-icon" onclick="closeModal('agentDetailModal')">&times;</button>
+            </div>
+            <div class="modal-body" id="agentDetailBody" style="max-height:70vh; overflow-y:auto;">
+            </div>
+            <div class="modal-footer">
+                <button class="btn" onclick="closeModal('agentDetailModal')">关闭</button>
             </div>
         </div>
     </div>

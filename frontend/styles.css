@@ -2533,10 +2533,16 @@ input[type="text"]:focus, input[type="number"]:focus, input[type="password"]:foc
     border-radius: var(--radius-sm);
     border: 1px solid var(--border);
     transition: var(--transition);
+    cursor: pointer;
 }
 
 .agent-item:hover {
     border-color: var(--primary-light);
+    background: rgba(79, 70, 229, 0.04);
+}
+
+.agent-item:active {
+    transform: scale(0.99);
 }
 
 .agent-icon {
@@ -2621,4 +2627,171 @@ input[type="text"]:focus, input[type="number"]:focus, input[type="password"]:foc
 
 .btn-danger-outline:hover {
     background: rgba(245, 158, 11, 0.1);
+}
+
+/* ==================== Agent 详情弹窗 ==================== */
+
+.modal.modal-agent { width: 700px; }
+
+.agent-detail-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 16px 20px;
+    background: rgba(79, 70, 229, 0.06);
+    border-radius: var(--radius-sm);
+    margin-bottom: 16px;
+}
+
+.agent-detail-icon {
+    font-size: 28px;
+    width: 48px;
+    height: 48px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(79, 70, 229, 0.12);
+    border-radius: var(--radius-sm);
+}
+
+.agent-detail-meta {
+    flex: 1;
+}
+
+.agent-detail-meta h3 {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text);
+    margin: 0 0 4px 0;
+}
+
+.agent-detail-meta p {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin: 0;
+}
+
+.agent-params {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+.agent-param-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 100px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.agent-param-chip .param-label {
+    color: var(--text-muted);
+}
+
+.agent-param-chip .param-value {
+    color: var(--primary);
+    font-weight: 600;
+    font-family: var(--font-mono, 'SF Mono', 'Fira Code', monospace);
+}
+
+.agent-prompt-section {
+    margin-bottom: 16px;
+}
+
+.agent-prompt-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 8px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.agent-prompt-label:hover {
+    color: var(--primary);
+}
+
+.agent-prompt-label .prompt-arrow {
+    font-size: 10px;
+    transition: transform 0.2s;
+}
+
+.agent-prompt-label .prompt-arrow.expanded {
+    transform: rotate(90deg);
+}
+
+.agent-prompt-label .prompt-action-tag {
+    padding: 1px 6px;
+    background: rgba(79, 70, 229, 0.1);
+    color: var(--primary);
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 500;
+}
+
+.agent-prompt-code {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 14px 16px;
+    font-size: 12px;
+    font-family: var(--font-mono, 'SF Mono', 'Fira Code', monospace);
+    line-height: 1.65;
+    color: var(--text-secondary);
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 360px;
+    overflow-y: auto;
+}
+
+.agent-prompt-code .prompt-var {
+    color: var(--primary);
+    font-weight: 600;
+    background: rgba(79, 70, 229, 0.08);
+    padding: 0 3px;
+    border-radius: 3px;
+}
+
+.agent-static-rules {
+    margin-top: 12px;
+}
+
+.agent-static-rules h4 {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 8px;
+}
+
+.agent-rules-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 6px;
+}
+
+.agent-rule-chip {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.agent-rule-chip::before {
+    content: '✓';
+    color: var(--success);
+    font-weight: 700;
+    font-size: 11px;
 }

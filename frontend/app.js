@@ -497,6 +497,7 @@ function switchTab(tab) {
     if (tab === 'logs') loadLogs();
     if (tab === 'settings-general') loadSettingsGeneral();
     if (tab === 'settings-repo') loadSettingsRepo();
+    if (tab === 'settings-agents') loadAgentList();
 }
 
 // ==================== 设置面板 ====================
@@ -2098,6 +2099,128 @@ function stopPolling() {
         clearInterval(pollingTimer);
         pollingTimer = null;
     }
+}
+
+// ==================== Agent 配置 ====================
+
+let agentRegistryCache = null;
+
+/** 加载 Agent 列表到设置页 */
+async function loadAgentList() {
+    const container = document.getElementById('agentListSettings');
+    if (!container) return;
+
+    try {
+        if (!agentRegistryCache) {
+            const data = await api('/agents');
+            agentRegistryCache = data.agents || [];
+        }
+
+        if (agentRegistryCache.length === 0) {
+            container.innerHTML = '<div style="text-align:center; padding:20px; color:var(--text-muted); font-size:13px;">暂无 Agent 配置</div>';
+            return;
+        }
+
+        container.innerHTML = agentRegistryCache.map(agent => `
+            <div class="agent-item" onclick="showAgentDetail('${escHtml(agent.name)}')">
+                <div class="agent-icon">${agent.icon || '🤖'}</div>
+                <div class="agent-info">
+                    <div class="agent-name">${escHtml(agent.name)}</div>
+                    <div class="agent-desc">${escHtml(agent.description)}</div>
+                </div>
+                <span class="tag tag-success">${agent.enabled ? '启用' : '停用'}</span>
+            </div>
+        `).join('');
+    } catch (e) {
+        container.innerHTML = '<div style="text-align:center; padding:20px; color:var(--error); font-size:13px;">加载 Agent 列表失败</div>';
+    }
+}
+
+/** 高亮提示词中的变量占位符 {xxx} */
+function highlightPromptVars(text) {
+    return escHtml(text).replace(/\{(\w+)\}/g, '<span class="prompt-var">{$1}</span>');
+}
+
+/** 显示 Agent 详情弹窗 */
+function showAgentDetail(agentName) {
+    if (!agentRegistryCache) return;
+    const agent = agentRegistryCache.find(a => a.name === agentName);
+    if (!agent) return;
+
+    const titleEl = document.getElementById('agentDetailTitle');
+    const bodyEl = document.getElementById('agentDetailBody');
+
+    titleEl.textContent = `${agent.icon || '🤖'} ${agent.name}`;
+
+    let html = '';
+
+    // 头部信息
+    html += `
+    <div class="agent-detail-header">
+        <div class="agent-detail-icon">${agent.icon || '🤖'}</div>
+        <div class="agent-detail-meta">
+            <h3>${escHtml(agent.name)}</h3>
+            <p>角色: ${escHtml(agent.role || '')} · ${escHtml(agent.description)}</p>
+        </div>
+    </div>`;
+
+    // 参数标签
+    html += `
+    <div class="agent-params">
+        <div class="agent-param-chip">
+            <span class="param-label">Temperature</span>
+            <span class="param-value">${agent.temperature ?? '-'}</span>
+        </div>
+        <div class="agent-param-chip">
+            <span class="param-label">Max Tokens</span>
+            <span class="param-value">${agent.max_tokens ?? '-'}</span>
+        </div>
+        <div class="agent-param-chip">
+            <span class="param-label">状态</span>
+            <span class="param-value">${agent.enabled ? '✅ 启用' : '⏸ 停用'}</span>
+        </div>
+    </div>`;
+
+    // 提示词列表
+    if (agent.prompts && agent.prompts.length > 0) {
+        agent.prompts.forEach((prompt, idx) => {
+            const expanded = idx === 0 ? 'expanded' : '';
+            const displayStyle = idx === 0 ? '' : 'style="display:none;"';
+            html += `
+            <div class="agent-prompt-section">
+                <div class="agent-prompt-label" onclick="togglePromptSection(this)">
+                    <span class="prompt-arrow ${expanded}">▶</span>
+                    <span class="prompt-action-tag">${escHtml(prompt.action || '')}</span>
+                    ${escHtml(prompt.label || '提示词')}
+                </div>
+                <div class="agent-prompt-code" ${displayStyle}>${highlightPromptVars(prompt.template || '（无模板）')}</div>
+            </div>`;
+        });
+    }
+
+    // 静态规则（ReviewAgent 专属）
+    if (agent.static_rules && agent.static_rules.length > 0) {
+        html += `
+        <div class="agent-static-rules">
+            <h4>📏 静态审查规则</h4>
+            <div class="agent-rules-grid">
+                ${agent.static_rules.map(rule => `<div class="agent-rule-chip">${escHtml(rule)}</div>`).join('')}
+            </div>
+        </div>`;
+    }
+
+    bodyEl.innerHTML = html;
+    openModal('agentDetailModal');
+}
+
+/** 切换提示词展开/折叠 */
+function togglePromptSection(labelEl) {
+    const arrow = labelEl.querySelector('.prompt-arrow');
+    const codeBlock = labelEl.nextElementSibling;
+    if (!codeBlock) return;
+
+    const isExpanded = arrow.classList.toggle('expanded');
+    codeBlock.style.display = isExpanded ? '' : 'none';
 }
 
 // ==================== 模态框 ====================

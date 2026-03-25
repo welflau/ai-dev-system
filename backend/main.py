@@ -73,10 +73,12 @@ app.add_middleware(
 from api.projects import router as projects_router
 from api.requirements import router as requirements_router
 from api.tickets import router as tickets_router
+from api.agents import router as agents_router
 
 app.include_router(projects_router)
 app.include_router(requirements_router)
 app.include_router(tickets_router)
+app.include_router(agents_router)
 
 
 # ==================== 系统端点 ====================
