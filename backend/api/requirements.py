@@ -17,8 +17,8 @@ router = APIRouter(prefix="/api/projects/{project_id}/requirements", tags=["requ
 
 
 @router.post("")
-async def create_requirement(project_id: str, req: RequirementCreate):
-    """提交需求"""
+async def create_requirement(project_id: str, req: RequirementCreate, background_tasks: BackgroundTasks):
+    """提交需求（创建后自动触发拆单）"""
     # 校验项目存在
     project = await db.fetch_one("SELECT * FROM projects WHERE id = ?", (project_id,))
     if not project:
@@ -52,6 +52,27 @@ async def create_requirement(project_id: str, req: RequirementCreate):
     await event_manager.publish_to_project(
         project_id, "requirement_created", {"id": req_id, "title": req.title}
     )
+
+    # === 自动触发拆单 ===
+    await db.update(
+        "requirements",
+        {"status": RequirementStatus.ANALYZING.value, "updated_at": now_iso()},
+        "id = ?",
+        (req_id,),
+    )
+    data["status"] = RequirementStatus.ANALYZING.value
+
+    await _log_requirement(
+        project_id, req_id, "ProductAgent", "start",
+        "submitted", "analyzing", "ProductAgent 开始分析需求（自动触发）"
+    )
+
+    await event_manager.publish_to_project(
+        project_id, "requirement_analyzing", {"id": req_id, "title": req.title}
+    )
+
+    from orchestrator import orchestrator
+    background_tasks.add_task(orchestrator.handle_requirement, project_id, req_id)
 
     return {"id": req_id, **data}
 
@@ -309,8 +330,10 @@ async def get_requirement_pipeline(project_id: str, req_id: str):
     stages = []
 
     # 阶段 1: 需求分析（特殊处理）
-    if req_status in ("submitted", "analyzing"):
+    if req_status == "analyzing":
         a_status = "running"
+    elif req_status == "submitted":
+        a_status = "pending"
     elif req_status in ("decomposed", "in_progress", "completed"):
         a_status = "done"
     elif req_status == "cancelled":

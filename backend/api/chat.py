@@ -379,13 +379,50 @@ async def _execute_create_requirement(project_id: str, data: dict) -> Dict:
 
     logger.info("聊天助手创建需求: %s — %s", req_id, title)
 
+    # === 自动触发拆单（创建后直接启动分析） ===
+    from models import RequirementStatus
+    await db.update(
+        "requirements",
+        {"status": RequirementStatus.ANALYZING.value, "updated_at": now_iso()},
+        "id = ?",
+        (req_id,),
+    )
+
+    # 写分析启动日志
+    start_log_id = generate_id("LOG")
+    start_detail = json.dumps({"message": "ProductAgent 开始分析需求"}, ensure_ascii=False)
+    await db.insert("ticket_logs", {
+        "id": start_log_id,
+        "ticket_id": None,
+        "subtask_id": None,
+        "requirement_id": req_id,
+        "project_id": project_id,
+        "agent_type": "ProductAgent",
+        "action": "start",
+        "from_status": "submitted",
+        "to_status": "analyzing",
+        "detail": start_detail,
+        "level": "info",
+        "created_at": now_iso(),
+    })
+
+    await event_manager.publish_to_project(
+        project_id, "requirement_analyzing", {"id": req_id, "title": title}
+    )
+
+    # 后台执行拆单（由 Orchestrator 调度）
+    import asyncio
+    from orchestrator import orchestrator
+    asyncio.create_task(orchestrator.handle_requirement(project_id, req_id))
+    logger.info("自动触发需求拆单: %s", req_id)
+
     return {
         "type": "requirement_created",
         "requirement_id": req_id,
         "title": title,
         "description": description,
         "priority": priority,
-        "message": f"需求「{title}」已创建成功",
+        "message": f"需求「{title}」已创建，正在自动分析拆单...",
     }
 
 
