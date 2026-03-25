@@ -245,6 +245,7 @@ body {
 
 .sidebar-footer {
     padding: 12px;
+    padding-bottom: 48px;  /* 为底部固定的服务日志栏留出空间 */
     border-top: 1px solid var(--border);
 }
 
