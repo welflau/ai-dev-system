@@ -605,7 +605,7 @@ async function saveProjectSettings() {
     }
 
     try {
-        await api(`/projects/${currentProjectId}`, 'PUT', { name, description, tech_stack, status });
+        await api(`/projects/${currentProjectId}`, { method: 'PUT', body: { name, description, tech_stack, status } });
         showToast('项目设置已保存', 'success');
         // 刷新当前项目数据
         const data = await api(`/projects/${currentProjectId}`);
@@ -622,7 +622,7 @@ async function saveRepoSettings() {
     const git_remote_url = document.getElementById('settingsGitRemote').value.trim();
 
     try {
-        await api(`/projects/${currentProjectId}`, 'PUT', { git_remote_url });
+        await api(`/projects/${currentProjectId}`, { method: 'PUT', body: { git_remote_url } });
         showToast('仓库配置已保存', 'success');
         const data = await api(`/projects/${currentProjectId}`);
         currentProject = data;
@@ -664,7 +664,7 @@ async function archiveProject() {
     if (!currentProjectId) return;
     if (!confirm('确定要归档此项目吗？归档后将不再接受新需求。')) return;
     try {
-        await api(`/projects/${currentProjectId}`, 'PUT', { status: 'archived' });
+        await api(`/projects/${currentProjectId}`, { method: 'PUT', body: { status: 'archived' } });
         showToast('项目已归档', 'success');
         showProjectList();
     } catch (e) {
@@ -682,7 +682,7 @@ async function deleteProject() {
         return;
     }
     try {
-        await api(`/projects/${currentProjectId}`, 'DELETE');
+        await api(`/projects/${currentProjectId}`, { method: 'DELETE' });
         showToast('项目已删除', 'success');
         showProjectList();
     } catch (e) {
