@@ -3125,6 +3125,36 @@ input[type="text"]:focus, input[type="number"]:focus, input[type="password"]:foc
     height: 100%;
     min-height: 0;
     position: relative;
+    min-width: 300px;
+    max-width: 700px;
+}
+
+/* 聊天面板左侧拖拽条 */
+.chat-panel-resize {
+    position: absolute;
+    left: -4px;
+    top: 0;
+    bottom: 0;
+    width: 8px;
+    cursor: ew-resize;
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.chat-panel-resize::after {
+    content: '';
+    width: 3px;
+    height: 36px;
+    border-radius: 3px;
+    background: var(--border-light);
+    transition: all 0.2s;
+}
+.chat-panel-resize:hover::after,
+.chat-panel-resize.dragging::after {
+    background: var(--primary);
+    height: 48px;
+    box-shadow: 0 0 8px rgba(79, 70, 229, 0.4);
 }
 
 .project-layout.chat-open .chat-panel {

@@ -3312,6 +3312,47 @@ function toggleChatPanel() {
 }
 
 /**
+ * 聊天面板宽度拖拽调整
+ */
+(function initChatPanelResize() {
+    let isDragging = false;
+    let startX = 0;
+    let startWidth = 0;
+
+    document.addEventListener('mousedown', (e) => {
+        const handle = e.target.closest('#chatPanelResize');
+        if (!handle) return;
+        e.preventDefault();
+        isDragging = true;
+        handle.classList.add('dragging');
+        startX = e.clientX;
+        const panel = document.getElementById('chatPanel');
+        startWidth = panel ? panel.offsetWidth : 380;
+        document.body.style.cursor = 'ew-resize';
+        document.body.style.userSelect = 'none';
+    });
+
+    document.addEventListener('mousemove', (e) => {
+        if (!isDragging) return;
+        e.preventDefault();
+        const delta = startX - e.clientX; // 向左拖 = 变宽
+        let newWidth = startWidth + delta;
+        newWidth = Math.max(300, Math.min(700, newWidth));
+
+        // 更新 CSS 变量驱动 grid 布局
+        document.documentElement.style.setProperty('--chat-panel-width', newWidth + 'px');
+    });
+
+    document.addEventListener('mouseup', () => {
+        if (!isDragging) return;
+        isDragging = false;
+        document.getElementById('chatPanelResize')?.classList.remove('dragging');
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+    });
+})();
+
+/**
  * 设置聊天模式
  */
 function setChatMode(mode) {
