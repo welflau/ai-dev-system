@@ -931,19 +931,57 @@ async function openTicketDrawer(ticketId) {
         // 操作按钮
         html += renderTicketActions(data);
 
-        // 子任务
+        // 子工单（child_tickets — 真正的工单，有完整状态机）
+        const childTickets = data.child_tickets || [];
+        if (childTickets.length > 0) {
+            html += `
+            <div class="drawer-section">
+                <h4>子工单 (${childTickets.length})</h4>
+                <div class="subtask-list">
+                    ${childTickets.map(ct => {
+                        const ctShortId = (ct.id || '').slice(-6);
+                        const ctStatusColor = getStatusColor(ct.status);
+                        const ctStatusLabel = ct.status_label || getStatusLabel(ct.status);
+                        return `
+                        <div class="subtask-item child-ticket-link ${ct.status === 'deployed' ? 'completed' : ''}"
+                             onclick="event.stopPropagation(); openTicketDrawer('${ct.id}');"
+                             title="点击查看子工单详情">
+                            <span class="subtask-icon" style="font-size:11px;">🎫</span>
+                            <span class="tl-id-badge" style="font-size:11px; margin-right:4px;">#${ctShortId}</span>
+                            <span class="subtask-title" style="flex:1;">${escHtml(ct.title)}</span>
+                            <span class="tl-status-badge" style="font-size:11px; border-left:2px solid ${ctStatusColor}; padding:1px 6px;">${escHtml(ctStatusLabel)}</span>
+                        </div>`;
+                    }).join('')}
+                </div>
+            </div>`;
+        }
+
+        // 子任务（subtasks — 轻量任务项，关联到子工单）
         const subtasks = data.subtasks || [];
         if (subtasks.length > 0) {
+            // 建立子任务标题到子工单的映射（模糊匹配）
+            const childTicketByTitle = {};
+            childTickets.forEach(ct => {
+                childTicketByTitle[ct.title.toLowerCase().trim()] = ct;
+            });
+
             html += `
             <div class="drawer-section">
                 <h4>子任务 (${subtasks.length})</h4>
                 <div class="subtask-list">
-                    ${subtasks.map(st => `
-                        <div class="subtask-item ${st.status === 'completed' ? 'completed' : ''}">
+                    ${subtasks.map(st => {
+                        // 尝试匹配子工单
+                        const matchedTicket = childTicketByTitle[st.title.toLowerCase().trim()];
+                        const clickAttr = matchedTicket
+                            ? `onclick="event.stopPropagation(); openTicketDrawer('${matchedTicket.id}');" class="subtask-item child-ticket-link ${st.status === 'completed' ? 'completed' : ''}" title="点击查看关联工单 #${(matchedTicket.id || '').slice(-6)}"`
+                            : `class="subtask-item ${st.status === 'completed' ? 'completed' : ''}"`;
+                        const linkIcon = matchedTicket ? ' 🔗' : '';
+                        return `
+                        <div ${clickAttr}>
                             <span class="subtask-icon">${st.status === 'completed' ? '✅' : st.status === 'in_progress' ? '🔄' : '⬜'}</span>
-                            <span class="subtask-title">${escHtml(st.title)}</span>
-                        </div>
-                    `).join('')}
+                            <span class="subtask-title">${escHtml(st.title)}${linkIcon}</span>
+                        </div>`;
+                    }).join('')}
                 </div>
             </div>`;
         }
@@ -1323,16 +1361,87 @@ async function loadTicketList() {
     }
 }
 
-/** 渲染 TAPD 风格工单列表表格 */
+/** 渲染单个工单表格行 */
+function _renderTicketRow(t, isChild) {
+    const statusColor = getStatusColor(t.status);
+    const priorityLabel = {1:'P1',2:'P2',3:'P3',4:'P4',5:'P5'};
+    const pLabel = priorityLabel[t.priority] || `P${t.priority}`;
+    const shortId = (t.id || '').slice(-6);
+    const childCount = t.child_ticket_count || 0;
+    const hasChildren = childCount > 0;
+    const childClass = isChild ? ' tl-child-row' : '';
+    const parentAttr = isChild ? '' : (hasChildren ? ` data-parent-id="${t.id}"` : '');
+
+    // 标题列：父工单有子工单时显示展开箭头
+    let titleHtml = '';
+    if (!isChild && hasChildren) {
+        titleHtml = `
+            <span class="tl-expand-arrow" onclick="event.stopPropagation(); toggleTicketChildren('${t.id}', this)">▶</span>
+            <span class="tl-title-text">${escHtml(t.title)}</span>
+            <span class="tl-child-count-badge">${childCount}</span>`;
+    } else if (isChild) {
+        titleHtml = `
+            <span class="tl-child-indent">└</span>
+            <span class="tl-title-text">${escHtml(t.title)}</span>`;
+    } else {
+        titleHtml = `<span class="tl-title-text">${escHtml(t.title)}</span>`;
+    }
+    if (t.description && !isChild) {
+        titleHtml += `<span class="tl-title-desc">${escHtml(t.description)}</span>`;
+    }
+
+    return `
+        <tr class="tl-table-row${childClass}" ${parentAttr}
+            ${isChild ? `data-child-of="${t.parent_ticket_id}" style="display:none;"` : ''}
+            onclick="openTicketDrawer('${t.id}')">
+            <td class="tl-col-id"><span class="tl-id-badge">#${shortId}</span></td>
+            <td class="tl-col-title">${titleHtml}</td>
+            <td class="tl-col-status">
+                <span class="tl-status-badge" style="border-left:3px solid ${statusColor};">
+                    ${escHtml(t.status_label || getStatusLabel(t.status))}
+                </span>
+            </td>
+            <td class="tl-col-type"><span class="tag tag-type" style="font-size:11px;">${escHtml(t.type || 'feature')}</span></td>
+            <td class="tl-col-module">${escHtml(t.module || '-')}</td>
+            <td class="tl-col-agent">${t.assigned_agent ? `<span class="tag tag-agent" style="font-size:11px;">${escHtml(t.assigned_agent)}</span>` : '<span style="color:var(--text-muted);">未分配</span>'}</td>
+            <td class="tl-col-priority"><span class="tag tag-priority-${t.priority}" style="font-size:11px;">${pLabel}</span></td>
+            <td class="tl-col-req"><span class="tl-req-link" onclick="event.stopPropagation(); openPipeline('${t.req_id}');">${escHtml(t.req_title || '-')}</span></td>
+            <td class="tl-col-time">${formatDateTime(t.created_at)}</td>
+        </tr>`;
+}
+
+/** 展开/收起子工单 */
+function toggleTicketChildren(parentId, arrowEl) {
+    const rows = document.querySelectorAll(`tr[data-child-of="${parentId}"]`);
+    const isExpanded = arrowEl.classList.contains('expanded');
+    rows.forEach(r => r.style.display = isExpanded ? 'none' : '');
+    arrowEl.classList.toggle('expanded', !isExpanded);
+    arrowEl.textContent = isExpanded ? '▶' : '▼';
+}
+
+/** 渲染 TAPD 风格工单列表表格（支持父子工单折叠） */
 function renderTicketListTable(container, tickets) {
     if (tickets.length === 0) {
         container.innerHTML = `<div class="empty-state"><div class="emoji">🎫</div><p>暂无工单</p></div>`;
         return;
     }
 
+    // 分离父工单和子工单
+    const parentTickets = tickets.filter(t => !t.parent_ticket_id);
+    const childMap = {}; // parentId -> [children]
+    tickets.forEach(t => {
+        if (t.parent_ticket_id) {
+            if (!childMap[t.parent_ticket_id]) childMap[t.parent_ticket_id] = [];
+            childMap[t.parent_ticket_id].push(t);
+        }
+    });
+
+    const parentCount = parentTickets.length;
+    const childCount = tickets.length - parentCount;
+
     let html = `
     <div class="tl-table-header">
-        <span class="tl-table-summary">全部工单 <span class="tl-table-count">(${tickets.length})</span></span>
+        <span class="tl-table-summary">全部工单 <span class="tl-table-count">(${parentCount}${childCount > 0 ? ` + ${childCount} 子工单` : ''})</span></span>
     </div>
     <table class="tl-table">
         <thead>
@@ -1350,31 +1459,13 @@ function renderTicketListTable(container, tickets) {
         </thead>
         <tbody>`;
 
-    tickets.forEach(t => {
-        const statusColor = getStatusColor(t.status);
-        const priorityLabel = {1:'P1',2:'P2',3:'P3',4:'P4',5:'P5'};
-        const pLabel = priorityLabel[t.priority] || `P${t.priority}`;
-        const shortId = (t.id || '').slice(-6);
-
-        html += `
-            <tr class="tl-table-row" onclick="openTicketDrawer('${t.id}')">
-                <td class="tl-col-id"><span class="tl-id-badge">#${shortId}</span></td>
-                <td class="tl-col-title">
-                    <span class="tl-title-text">${escHtml(t.title)}</span>
-                    ${t.description ? `<span class="tl-title-desc">${escHtml(t.description)}</span>` : ''}
-                </td>
-                <td class="tl-col-status">
-                    <span class="tl-status-badge" style="border-left:3px solid ${statusColor};">
-                        ${escHtml(t.status_label || getStatusLabel(t.status))}
-                    </span>
-                </td>
-                <td class="tl-col-type"><span class="tag tag-type" style="font-size:11px;">${escHtml(t.type || 'feature')}</span></td>
-                <td class="tl-col-module">${escHtml(t.module || '-')}</td>
-                <td class="tl-col-agent">${t.assigned_agent ? `<span class="tag tag-agent" style="font-size:11px;">${escHtml(t.assigned_agent)}</span>` : '<span style="color:var(--text-muted);">未分配</span>'}</td>
-                <td class="tl-col-priority"><span class="tag tag-priority-${t.priority}" style="font-size:11px;">${pLabel}</span></td>
-                <td class="tl-col-req"><span class="tl-req-link" onclick="event.stopPropagation(); openPipeline('${t.req_id}');">${escHtml(t.req_title || '-')}</span></td>
-                <td class="tl-col-time">${formatDateTime(t.created_at)}</td>
-            </tr>`;
+    // 渲染父工单 + 紧跟其子工单
+    parentTickets.forEach(t => {
+        html += _renderTicketRow(t, false);
+        const children = childMap[t.id] || [];
+        children.forEach(child => {
+            html += _renderTicketRow(child, true);
+        });
     });
 
     html += '</tbody></table>';
@@ -1397,7 +1488,9 @@ function renderTicketListBoard(container, tickets) {
         done: { label: '已完成', color: 'var(--success)', tickets: [] },
     };
 
-    tickets.forEach(t => {
+    // 看板只展示父工单（子工单在父工单详情中查看）
+    const parentOnly = tickets.filter(t => !t.parent_ticket_id);
+    parentOnly.forEach(t => {
         const s = t.status;
         if (s === 'pending') statusGroups.pending.tickets.push(t);
         else if (s.includes('_in_progress') || s === 'deploying' || s === 'analyzing') statusGroups.in_progress.tickets.push(t);

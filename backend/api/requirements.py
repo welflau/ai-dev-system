@@ -117,6 +117,15 @@ async def get_requirement(project_id: str, req_id: str):
         (req_id,),
     )
 
+    # 为每个工单附加子工单数和状态标签
+    from models import STATUS_LABELS
+    for t in tickets:
+        child_count = await db.fetch_one(
+            "SELECT COUNT(*) as count FROM tickets WHERE parent_ticket_id = ?", (t["id"],)
+        )
+        t["child_ticket_count"] = child_count["count"] if child_count else 0
+        t["status_label"] = STATUS_LABELS.get(t["status"], t["status"])
+
     # 获取日志
     logs = await db.fetch_all(
         "SELECT * FROM ticket_logs WHERE requirement_id = ? ORDER BY created_at DESC LIMIT 50",

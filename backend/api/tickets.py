@@ -45,12 +45,17 @@ async def list_tickets(
     sql += " ORDER BY priority ASC, sort_order ASC, created_at ASC"
     tickets = await db.fetch_all(sql, tuple(params))
 
-    # 附带子任务数
+    # 附带子任务数 + 子工单数
     for t in tickets:
         st_count = await db.fetch_one(
             "SELECT COUNT(*) as count FROM subtasks WHERE ticket_id = ?", (t["id"],)
         )
         t["subtask_count"] = st_count["count"] if st_count else 0
+
+        child_count = await db.fetch_one(
+            "SELECT COUNT(*) as count FROM tickets WHERE parent_ticket_id = ?", (t["id"],)
+        )
+        t["child_ticket_count"] = child_count["count"] if child_count else 0
         t["status_label"] = STATUS_LABELS.get(t["status"], t["status"])
 
     return {"tickets": tickets, "total": len(tickets)}
@@ -89,6 +94,8 @@ async def get_ticket(project_id: str, ticket_id: str):
         "SELECT * FROM tickets WHERE parent_ticket_id = ? ORDER BY sort_order, created_at",
         (ticket_id,),
     )
+    for ct in child_tickets:
+        ct["status_label"] = STATUS_LABELS.get(ct["status"], ct["status"])
 
     ticket["status_label"] = STATUS_LABELS.get(ticket["status"], ticket["status"])
 
