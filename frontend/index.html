@@ -695,10 +695,10 @@
                     <div class="form-group">
                         <label>本地文件夹路径 <span class="required">*</span></label>
                         <div class="input-with-button">
-                            <input type="text" id="importLocalPath" placeholder="选择本地项目的文件夹">
-                            <button type="button" class="btn btn-sm" onclick="selectImportLocalPath()" title="选择文件夹">📁</button>
+                            <input type="text" id="importLocalPath" placeholder="输入本地项目的文件夹路径">
+                            <button type="button" class="btn btn-sm" onclick="selectImportLocalPath()" title="点击输入路径">📁</button>
                         </div>
-                        <small class="form-hint">选择包含代码的项目文件夹，将自动检测 Git 信息</small>
+                        <small class="form-hint">输入本地项目文件夹的完整路径（如 D:/MyProject），将自动检测 Git 信息</small>
                     </div>
                 </div>
 
@@ -721,8 +721,8 @@
                 <div class="form-group" id="repoPathGroup">
                     <label>本地仓库路径</label>
                     <div class="input-with-button">
-                        <input type="text" id="importRepoPath" placeholder="留空则自动克隆到 backend/projects/{project_id}/" readonly>
-                        <button type="button" class="btn btn-sm" onclick="selectImportRepoPath()" title="选择文件夹">📁</button>
+                        <input type="text" id="importRepoPath" placeholder="留空则自动克隆到 backend/projects/{project_id}/">
+                        <button type="button" class="btn btn-sm" id="selectRepoPathBtn" onclick="selectImportRepoPath()" title="点击输入路径">📁</button>
                     </div>
                     <small class="form-hint" id="repoPathHint">可选：指定本地 Git 仓库的绝对路径</small>
                 </div>

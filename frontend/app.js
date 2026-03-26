@@ -880,7 +880,7 @@ function handleImportTypeChange() {
     const repoPathGroup = document.getElementById('repoPathGroup');
     const repoPathInput = document.getElementById('importRepoPath');
     const repoPathHint = document.getElementById('repoPathHint');
-    const selectRepoBtn = repoPathGroup.querySelector('.btn-sm');
+    const selectRepoBtn = document.getElementById('selectRepoPathBtn');
 
     if (importType === 'remote') {
         remoteForm.style.display = 'block';
@@ -897,12 +897,12 @@ function handleImportTypeChange() {
     } else {
         remoteForm.style.display = 'none';
         localForm.style.display = 'block';
-        // 本地文件夹模式：本地仓库路径自动填充，不可编辑
+        // 本地文件夹模式：本地仓库路径自动填充到选择框
         repoPathGroup.style.display = 'block';
-        repoPathInput.setAttribute('readonly', 'true');
-        repoPathInput.placeholder = '选择本地文件夹后自动填充';
-        repoPathHint.textContent = '选择本地文件夹后自动配置，不可修改';
-        selectRepoBtn.style.display = 'none';
+        repoPathInput.removeAttribute('readonly');
+        repoPathInput.placeholder = '留空则使用选中的本地文件夹路径';
+        repoPathHint.textContent = '留空则自动使用本地文件夹路径作为仓库路径';
+        selectRepoBtn.style.display = 'flex';
         // 清空之前的远程仓库配置的路径
         if (repoPathInput.value && !document.getElementById('importLocalPath').value) {
             repoPathInput.value = '';
@@ -1016,8 +1016,8 @@ async function importProject() {
 }
 
 function selectImportLocalPath() {
-    // 暂时使用 prompt，实际应使用文件选择对话框
-    const path = prompt('请输入本地文件夹的绝对路径（如 D:/MyProject）:');
+    // 使用 prompt 让用户输入完整路径（浏览器安全限制无法直接获取文件夹绝对路径）
+    const path = prompt('请输入本地文件夹的完整路径（如 D:/MyProject）:');
     if (path) {
         document.getElementById('importLocalPath').value = path;
         // 自动检测项目信息
@@ -1026,8 +1026,8 @@ function selectImportLocalPath() {
 }
 
 function selectImportRepoPath() {
-    // 暂时使用 prompt，实际应使用文件选择对话框
-    const path = prompt('请输入本地仓库的绝对路径（如 D:/MyProject）:');
+    // 使用 prompt 让用户输入完整路径（浏览器安全限制无法直接获取文件夹绝对路径）
+    const path = prompt('请输入本地仓库的完整路径（如 D:/MyProject）:');
     if (path) {
         document.getElementById('importRepoPath').value = path;
     }
