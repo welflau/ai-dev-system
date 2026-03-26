@@ -305,3 +305,92 @@ async def get_git_diff(project_id: str, commit: str = None):
     _ensure_git_path(project)
     diff = await git_manager.get_diff(project_id, commit)
     return {"diff": diff}
+
+
+@router.post("/detect-local")
+async def detect_local_project(body: dict):
+    """检测本地 Git 仓库信息"""
+    import os
+
+    local_path = body.get("local_path", "").strip()
+    if not local_path:
+        raise HTTPException(400, "本地路径不能为空")
+
+    # 转换为绝对路径
+    local_path = os.path.abspath(local_path)
+
+    # 检查路径是否存在
+    if not os.path.exists(local_path):
+        raise HTTPException(404, f"路径不存在: {local_path}")
+
+    # 检查是否是目录
+    if not os.path.isdir(local_path):
+        raise HTTPException(400, "路径必须是目录")
+
+    result = {}
+
+    # 提取项目名称（从路径最后一级目录）
+    result["project_name"] = os.path.basename(local_path).replace("-", " ").replace("_", " ").title()
+
+    # 检查是否是 Git 仓库
+    git_dir = os.path.join(local_path, ".git")
+    is_git_repo = os.path.isdir(git_dir)
+    result["is_git_repo"] = is_git_repo
+
+    if is_git_repo:
+        # 尝试获取远程仓库 URL
+        rc, out, err = await git_manager._run_git(local_path, "remote", "-v")
+        if rc == 0 and out:
+            # 解析远程 URL（第一行，第二列）
+            lines = out.strip().split("\n")
+            if lines:
+                parts = lines[0].split()
+                if len(parts) >= 2:
+                    result["git_remote_url"] = parts[1]
+
+        # 尝试获取项目描述（从 README.md）
+        readme_files = ["README.md", "README.txt", "readme.md", "readme.txt"]
+        for readme_name in readme_files:
+            readme_path = os.path.join(local_path, readme_name)
+            if os.path.exists(readme_path):
+                try:
+                    with open(readme_path, "r", encoding="utf-8", errors="ignore") as f:
+                        lines = f.readlines()
+                        # 获取前100行作为描述
+                        description_lines = []
+                        for line in lines[:100]:
+                            line = line.strip()
+                            if line and not line.startswith("#"):
+                                description_lines.append(line)
+                        if description_lines:
+                            result["description"] = "\n".join(description_lines[:10]) + "..."
+                        break
+                except Exception as e:
+                    logger.warning("读取 README 失败: %s", e)
+                break
+
+        # 尝试检测技术栈（从文件结构）
+        tech_stack = []
+        # 检查 Python
+        if os.path.exists(os.path.join(local_path, "requirements.txt")) or \
+           os.path.exists(os.path.join(local_path, "pyproject.toml")) or \
+           os.path.exists(os.path.join(local_path, "setup.py")):
+            tech_stack.append("Python")
+        # 检查 Node.js
+        if os.path.exists(os.path.join(local_path, "package.json")):
+            tech_stack.append("Node.js")
+        # 检查 Java
+        if os.path.exists(os.path.join(local_path, "pom.xml")) or \
+           os.path.exists(os.path.join(local_path, "build.gradle")):
+            tech_stack.append("Java")
+        # 检查 Go
+        if os.path.exists(os.path.join(local_path, "go.mod")):
+            tech_stack.append("Go")
+        # 检查 Rust
+        if os.path.exists(os.path.join(local_path, "Cargo.toml")):
+            tech_stack.append("Rust")
+
+        if tech_stack:
+            result["tech_stack"] = ", ".join(tech_stack)
+
+    return result

@@ -852,6 +852,161 @@ async function createProject() {
     }
 }
 
+// ==================== 导入现有工程 ====================
+
+function showImportProjectModal() {
+    // 重置表单
+    document.getElementById('importProjectName').value = '';
+    document.getElementById('importProjectDesc').value = '';
+    document.getElementById('importTechStack').value = '';
+    document.getElementById('importGitRemote').value = '';
+    document.getElementById('importLocalPath').value = '';
+    document.getElementById('importRepoPath').value = '';
+
+    // 默认选中远程仓库方式
+    document.querySelector('input[name="importType"][value="remote"]').checked = true;
+    handleImportTypeChange();
+
+    // 隐藏检测信息
+    document.getElementById('detectInfo').style.display = 'none';
+
+    openModal('importProjectModal');
+}
+
+function handleImportTypeChange() {
+    const importType = document.querySelector('input[name="importType"]:checked').value;
+    const remoteForm = document.getElementById('importRemoteForm');
+    const localForm = document.getElementById('importLocalForm');
+
+    if (importType === 'remote') {
+        remoteForm.style.display = 'block';
+        localForm.style.display = 'none';
+    } else {
+        remoteForm.style.display = 'none';
+        localForm.style.display = 'block';
+    }
+}
+
+async function detectLocalProjectInfo() {
+    const localPath = document.getElementById('importLocalPath').value.trim();
+    if (!localPath) {
+        showToast('请先选择本地文件夹', 'warning');
+        return;
+    }
+
+    try {
+        const data = await api('/projects/detect-local', {
+            method: 'POST',
+            body: { local_path: localPath },
+        });
+
+        // 填充检测到的信息
+        if (data.project_name) {
+            document.getElementById('importProjectName').value = data.project_name;
+        }
+        if (data.git_remote_url) {
+            document.getElementById('importGitRemote').value = data.git_remote_url;
+        }
+        if (data.description) {
+            document.getElementById('importProjectDesc').value = data.description;
+        }
+        if (data.tech_stack) {
+            document.getElementById('importTechStack').value = data.tech_stack;
+        }
+
+        // 显示检测信息
+        const detectInfoContent = document.getElementById('detectInfoContent');
+        detectInfoContent.textContent = JSON.stringify(data, null, 2);
+        document.getElementById('detectInfo').style.display = 'block';
+
+        showToast('项目信息检测成功', 'success');
+    } catch (e) {
+        showToast(`检测失败: ${e.message}`, 'error');
+    }
+}
+
+async function importProject() {
+    const importType = document.querySelector('input[name="importType"]:checked').value;
+    const name = document.getElementById('importProjectName').value.trim();
+    const description = document.getElementById('importProjectDesc').value.trim();
+    const tech_stack = document.getElementById('importTechStack').value.trim();
+    const local_repo_path = document.getElementById('importRepoPath').value.trim();
+
+    if (!name) {
+        showToast('请输入项目名称', 'warning');
+        return;
+    }
+
+    let git_remote_url = '';
+    if (importType === 'remote') {
+        git_remote_url = document.getElementById('importGitRemote').value.trim();
+        if (!git_remote_url) {
+            showToast('请输入 Git 远程仓库 URL', 'warning');
+            return;
+        }
+    } else {
+        // 本地导入，检测或手动填写 Git URL
+        git_remote_url = document.getElementById('importGitRemote').value.trim();
+        const localPath = document.getElementById('importLocalPath').value.trim();
+        if (!localPath) {
+            showToast('请选择本地文件夹', 'warning');
+            return;
+        }
+        if (!git_remote_url) {
+            showToast('请填写 Git 远程仓库 URL（或选择包含 .git 的文件夹自动检测）', 'warning');
+            return;
+        }
+        // 如果没有指定 repo_path，使用选中的本地路径
+        if (!local_repo_path) {
+            document.getElementById('importRepoPath').value = localPath;
+        }
+    }
+
+    try {
+        const body = { name, description, tech_stack, git_remote_url };
+        if (local_repo_path) {
+            body.local_repo_path = local_repo_path;
+        }
+
+        const data = await api('/projects', {
+            method: 'POST',
+            body,
+        });
+
+        closeModal('importProjectModal');
+
+        let message = `项目「${name}」导入成功`;
+        if (data.push_success) {
+            message += '，并已推送到远程仓库';
+        } else {
+            message += '（首次推送失败，请检查远程仓库权限）';
+        }
+        showToast(message, data.push_success ? 'success' : 'warning');
+
+        showProjectDetail(data.id);
+    } catch (e) {
+        showToast(`导入失败: ${e.message}`, 'error');
+    }
+}
+
+function selectImportLocalPath() {
+    // 暂时使用 prompt，实际应使用文件选择对话框
+    const path = prompt('请输入本地文件夹的绝对路径（如 D:/MyProject）:');
+    if (path) {
+        document.getElementById('importLocalPath').value = path;
+        // 自动检测项目信息
+        detectLocalProjectInfo();
+    }
+}
+
+function selectImportRepoPath() {
+    // 暂时使用 prompt，实际应使用文件选择对话框
+    const path = prompt('请输入本地仓库的绝对路径（如 D:/MyProject）:');
+    if (path) {
+        document.getElementById('importRepoPath').value = path;
+    }
+}
+
 // ==================== 项目详情 ====================
 
 async function loadProjectDetail() {
