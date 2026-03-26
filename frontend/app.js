@@ -877,13 +877,36 @@ function handleImportTypeChange() {
     const importType = document.querySelector('input[name="importType"]:checked').value;
     const remoteForm = document.getElementById('importRemoteForm');
     const localForm = document.getElementById('importLocalForm');
+    const repoPathGroup = document.getElementById('repoPathGroup');
+    const repoPathInput = document.getElementById('importRepoPath');
+    const repoPathHint = document.getElementById('repoPathHint');
+    const selectRepoBtn = repoPathGroup.querySelector('.btn-sm');
 
     if (importType === 'remote') {
         remoteForm.style.display = 'block';
         localForm.style.display = 'none';
+        // 远程仓库模式：本地仓库路径可选，可编辑
+        repoPathGroup.style.display = 'block';
+        repoPathInput.removeAttribute('readonly');
+        repoPathInput.placeholder = '留空则自动克隆到 backend/projects/{project_id}/';
+        repoPathHint.textContent = '可选：指定本地 Git 仓库的绝对路径';
+        selectRepoBtn.style.display = 'flex';
+        if (document.getElementById('importLocalPath').value) {
+            repoPathInput.value = '';
+        }
     } else {
         remoteForm.style.display = 'none';
         localForm.style.display = 'block';
+        // 本地文件夹模式：本地仓库路径自动填充，不可编辑
+        repoPathGroup.style.display = 'block';
+        repoPathInput.setAttribute('readonly', 'true');
+        repoPathInput.placeholder = '选择本地文件夹后自动填充';
+        repoPathHint.textContent = '选择本地文件夹后自动配置，不可修改';
+        selectRepoBtn.style.display = 'none';
+        // 清空之前的远程仓库配置的路径
+        if (repoPathInput.value && !document.getElementById('importLocalPath').value) {
+            repoPathInput.value = '';
+        }
     }
 }
 
@@ -913,6 +936,9 @@ async function detectLocalProjectInfo() {
         if (data.tech_stack) {
             document.getElementById('importTechStack').value = data.tech_stack;
         }
+
+        // 自动填充本地仓库路径（使用选中的路径）
+        document.getElementById('importRepoPath').value = localPath;
 
         // 显示检测信息
         const detectInfoContent = document.getElementById('detectInfoContent');

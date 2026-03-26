@@ -718,13 +718,13 @@
                     <label>技术栈</label>
                     <input type="text" id="importTechStack" placeholder="如 Python, FastAPI, React...">
                 </div>
-                <div class="form-group">
+                <div class="form-group" id="repoPathGroup">
                     <label>本地仓库路径</label>
                     <div class="input-with-button">
-                        <input type="text" id="importRepoPath" placeholder="留空则自动克隆到 backend/projects/{project_id}/">
+                        <input type="text" id="importRepoPath" placeholder="留空则自动克隆到 backend/projects/{project_id}/" readonly>
                         <button type="button" class="btn btn-sm" onclick="selectImportRepoPath()" title="选择文件夹">📁</button>
                     </div>
-                    <small class="form-hint">可选：指定本地 Git 仓库的绝对路径</small>
+                    <small class="form-hint" id="repoPathHint">可选：指定本地 Git 仓库的绝对路径</small>
                 </div>
 
                 <div class="form-group" id="detectInfo" style="display:none;">

@@ -1186,6 +1186,17 @@ input[type="text"]:focus, input[type="number"]:focus, input[type="password"]:foc
     box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.15);
 }
 
+input[readonly] {
+    background: var(--bg);
+    color: var(--text-muted);
+    cursor: not-allowed;
+}
+
+input[readonly]:focus {
+    border-color: var(--border);
+    box-shadow: none;
+}
+
 /* ==================== 按钮 ==================== */
 
 .btn {
