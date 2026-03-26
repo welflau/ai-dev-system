@@ -30,6 +30,8 @@ async def create_project(req: ProjectCreate):
     """创建项目"""
     import os
     import traceback
+    from api.milestones import generate_roadmap_for_project
+    import asyncio
 
     try:
         project_id = generate_id("PRJ")
@@ -104,6 +106,12 @@ async def create_project(req: ProjectCreate):
         await db.insert("projects", data)
 
         logger.info("项目创建完成: %s (%s)", req.name, project_id)
+
+        # 异步生成初版 Roadmap（不阻塞创建流程）
+        asyncio.create_task(generate_roadmap_for_project(
+            project_id, req.name, req.description or ""
+        ))
+
         return {
             "id": project_id,
             **data,
@@ -203,6 +211,7 @@ async def delete_project(project_id: str):
     await db.execute("DELETE FROM llm_conversations WHERE project_id = ?", (project_id,))
     await db.execute("DELETE FROM tickets WHERE project_id = ?", (project_id,))
     await db.execute("DELETE FROM requirements WHERE project_id = ?", (project_id,))
+    await db.execute("DELETE FROM milestones WHERE project_id = ?", (project_id,))
 
     cursor = await db.execute("DELETE FROM projects WHERE id = ?", (project_id,))
     logger.info("DELETE projects rowcount: %d", cursor.rowcount)

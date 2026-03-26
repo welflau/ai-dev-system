@@ -57,8 +57,8 @@ async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     # 启动时
     logger.info("=" * 60)
-    logger.info("  AI 自动开发系统 v0.9.0")
-    logger.info("  工单管理 + Git 仓库集成 + AI 聊天面板")
+    logger.info("  AI 自动开发系统 v0.10.0")
+    logger.info("  工单管理 + Git 仓库集成 + AI 聊天面板 + 智能 Roadmap")
     logger.info("=" * 60)
 
     await db.connect()
@@ -101,8 +101,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="AI 自动开发系统",
-    version="0.9.0",
-    description="工单驱动的 AI 自动开发管理平台 + Git 仓库集成 + AI 聊天面板",
+    version="0.10.0",
+    description="工单驱动的 AI 自动开发管理平台 + Git 仓库集成 + AI 聊天面板 + 智能 Roadmap",
     lifespan=lifespan,
 )
 
@@ -123,6 +123,7 @@ from api.agents import router as agents_router
 from api.chat import router as chat_router
 from api.chat import global_chat_router
 from api.roadmap import router as roadmap_router
+from api.milestones import router as milestones_router
 
 app.include_router(projects_router)
 app.include_router(requirements_router)
@@ -131,6 +132,7 @@ app.include_router(agents_router)
 app.include_router(chat_router)
 app.include_router(global_chat_router)
 app.include_router(roadmap_router)
+app.include_router(milestones_router)
 
 
 # ==================== 系统端点 ====================
@@ -139,7 +141,7 @@ app.include_router(roadmap_router)
 @app.get("/api/health")
 async def health_check():
     """健康检查"""
-    return {"status": "ok", "version": "0.9.5"}
+    return {"status": "ok", "version": "0.10.0"}
 
 
 @app.get("/api/llm/status")

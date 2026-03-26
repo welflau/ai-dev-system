@@ -937,6 +937,11 @@ async def _execute_create_project(data: dict) -> Dict:
 
         logger.info("AI助手创建项目完成: %s (%s)", name, project_id)
 
+        # 异步生成初版 Roadmap
+        import asyncio
+        from api.milestones import generate_roadmap_for_project
+        asyncio.create_task(generate_roadmap_for_project(project_id, name, description))
+
         return {
             "type": "project_created",
             "project_id": project_id,

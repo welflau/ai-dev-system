@@ -15,6 +15,14 @@ class ProjectStatus(str, Enum):
     ARCHIVED = "archived"
 
 
+class MilestoneStatus(str, Enum):
+    PLANNED = "planned"              # 计划中
+    IN_PROGRESS = "in_progress"      # 进行中
+    COMPLETED = "completed"          # 已完成
+    DELAYED = "delayed"              # 已延期
+    CANCELLED = "cancelled"          # 已取消
+
+
 class RequirementStatus(str, Enum):
     SUBMITTED = "submitted"          # 已提交
     ANALYZING = "analyzing"          # 分析中（ProductAgent）
@@ -261,6 +269,23 @@ class TicketRejectRequest(BaseModel):
     reason: str = Field(..., min_length=1)
 
 
+class MilestoneCreate(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
+    description: Optional[str] = None
+    planned_start: Optional[str] = None
+    planned_end: Optional[str] = None
+    sort_order: int = 0
+
+
+class MilestoneUpdate(BaseModel):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    planned_start: Optional[str] = None
+    planned_end: Optional[str] = None
+    sort_order: Optional[int] = None
+    status: Optional[str] = None
+
+
 # ==================== 看板状态分组映射 ====================
 
 # 工单看板的 5 列对应的状态
@@ -304,4 +329,7 @@ STATUS_LABELS = {
     "in_progress": "进行中",
     "paused": "已暂停",
     "completed": "已完成",
+    # 里程碑状态
+    "planned": "计划中",
+    "delayed": "已延期",
 }

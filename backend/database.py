@@ -46,6 +46,8 @@ class Database:
             # (表名, 列名, 列定义)
             ("projects", "git_repo_path", "TEXT"),
             ("projects", "git_remote_url", "TEXT"),
+            ("requirements", "milestone_id", "TEXT"),
+            ("requirements", "estimated_days", "REAL"),
         ]
         for table, column, col_def in migrations:
             cursor = await self._db.execute(f"PRAGMA table_info({table})")
@@ -139,6 +141,8 @@ CREATE TABLE IF NOT EXISTS requirements (
     tags            TEXT,
     estimated_hours REAL,
     actual_hours    REAL,
+    milestone_id    TEXT REFERENCES milestones(id),
+    estimated_days  REAL,
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL,
     completed_at    TEXT
@@ -264,6 +268,26 @@ CREATE TABLE IF NOT EXISTS ticket_commands (
 );
 
 -- ============================================================
+-- 里程碑表（Roadmap Milestones）
+-- ============================================================
+CREATE TABLE IF NOT EXISTS milestones (
+    id              TEXT PRIMARY KEY,
+    project_id      TEXT NOT NULL REFERENCES projects(id),
+    title           TEXT NOT NULL,
+    description     TEXT,
+    sort_order      INTEGER NOT NULL DEFAULT 0,
+    status          TEXT NOT NULL DEFAULT 'planned',
+    planned_start   TEXT,
+    planned_end     TEXT,
+    actual_start    TEXT,
+    actual_end      TEXT,
+    source          TEXT NOT NULL DEFAULT 'ai_generated',
+    progress        INTEGER NOT NULL DEFAULT 0,
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL
+);
+
+-- ============================================================
 -- 聊天消息表（全局聊天历史）
 -- ============================================================
 CREATE TABLE IF NOT EXISTS chat_messages (
@@ -297,6 +321,9 @@ CREATE INDEX IF NOT EXISTS idx_llm_conversations_project ON llm_conversations(pr
 CREATE INDEX IF NOT EXISTS idx_ticket_commands_ticket ON ticket_commands(ticket_id);
 CREATE INDEX IF NOT EXISTS idx_ticket_commands_requirement ON ticket_commands(requirement_id);
 CREATE INDEX IF NOT EXISTS idx_chat_messages_project ON chat_messages(project_id);
+CREATE INDEX IF NOT EXISTS idx_milestones_project ON milestones(project_id);
+CREATE INDEX IF NOT EXISTS idx_milestones_status ON milestones(status);
+CREATE INDEX IF NOT EXISTS idx_requirements_milestone ON requirements(milestone_id);
 """
 
 

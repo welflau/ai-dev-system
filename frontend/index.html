@@ -249,6 +249,7 @@
                                     <button class="btn btn-sm roadmap-view-btn active" id="roadmapViewGantt" onclick="switchRoadmapView('gantt')">📊 甘特图</button>
                                     <button class="btn btn-sm roadmap-view-btn" id="roadmapViewList" onclick="switchRoadmapView('list')">📋 列表</button>
                                 </div>
+                                <button class="btn btn-sm" onclick="regenerateRoadmap()" title="AI 重新生成里程碑">🤖 重新规划</button>
                                 <button class="btn btn-sm" onclick="loadRoadmap()">🔄 刷新</button>
                             </div>
                         </div>
@@ -754,6 +755,6 @@
     <!-- ==================== Toast 通知 ==================== -->
     <div class="toast-container" id="toastContainer"></div>
 
-    <script src="/static/app.js?v=0.9.5"></script>
+    <script src="/static/app.js?v=0.10.0"></script>
 </body>
 </html>

@@ -322,6 +322,17 @@ class TicketOrchestrator:
                 "created_at": now_iso(),
             })
 
+            # === 自动关联里程碑 + 修正 Roadmap ===
+            try:
+                from api.milestones import auto_associate_requirement
+                await auto_associate_requirement(
+                    project_id, requirement_id,
+                    requirement["title"], requirement["description"],
+                    ticket_count=len(created_tickets),
+                )
+            except Exception as ms_err:
+                logger.warning("自动关联里程碑失败(非致命): %s", ms_err)
+
             # 自动启动所有工单的 Agent 流转
             # 更新需求状态为进行中
             await db.update("requirements", {
@@ -717,6 +728,13 @@ class TicketOrchestrator:
 
             # 检查需求下所有工单是否都已完成
             await self._check_requirement_completion(project_id, requirement_id)
+
+            # 刷新里程碑进度
+            try:
+                from api.milestones import refresh_all_milestones
+                await refresh_all_milestones(project_id)
+            except Exception as ms_err:
+                logger.warning("刷新里程碑进度失败(非致命): %s", ms_err)
 
             # 触发依赖此工单的后续工单
             await self._trigger_dependents(project_id, ticket_id)

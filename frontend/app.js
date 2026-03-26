@@ -4427,10 +4427,20 @@ async function loadRoadmap() {
     const summaryEl = document.getElementById('roadmapSummary');
 
     try {
-        _roadmapData = await api(`/projects/${currentProjectId}/roadmap`);
+        const raw = await api(`/projects/${currentProjectId}/roadmap`);
+
+        // 合并所有需求为扁平数组（甘特图/列表兼容）
+        const allReqs = [];
+        (raw.milestones || []).forEach(ms => {
+            (ms.requirements || []).forEach(r => allReqs.push(r));
+        });
+        (raw.unassigned_requirements || []).forEach(r => allReqs.push(r));
+        raw.requirements = allReqs;
+
+        _roadmapData = raw;
 
         // 渲染汇总卡片
-        renderRoadmapSummary(_roadmapData.summary, summaryEl);
+        renderRoadmapSummary(_roadmapData, summaryEl);
 
         // 渲染当前视图
         if (_roadmapView === 'gantt') renderRoadmapGantt(_roadmapData);
@@ -4443,36 +4453,65 @@ async function loadRoadmap() {
     }
 }
 
+/** AI 重新规划里程碑 */
+async function regenerateRoadmap() {
+    if (!currentProjectId) return;
+    if (!confirm('确认让 AI 重新生成里程碑规划？现有里程碑将被替换。')) return;
+
+    showToast('🤖 AI 正在规划里程碑...', 'info');
+    try {
+        await api(`/projects/${currentProjectId}/milestones/generate`, { method: 'POST' });
+        showToast('✅ 里程碑规划完成', 'success');
+        await loadRoadmap();
+    } catch (e) {
+        showToast('❌ 规划失败: ' + e.message, 'error');
+    }
+}
+
 /** 渲染汇总卡片 */
-function renderRoadmapSummary(summary, el) {
-    if (!el || !summary) return;
+function renderRoadmapSummary(data, el) {
+    if (!el || !data) return;
+    const summary = data.summary || {};
+    const milestones = data.milestones || [];
+    const msTotal = milestones.length;
+    const msDone = milestones.filter(m => m.status === 'completed').length;
+    const msDelayed = milestones.filter(m => m.status === 'delayed').length;
+
     el.innerHTML = `
         <div class="roadmap-summary-cards">
             <div class="roadmap-stat-card">
-                <div class="roadmap-stat-value">${summary.total_requirements}</div>
-                <div class="roadmap-stat-label">总需求</div>
+                <div class="roadmap-stat-value">${msTotal}</div>
+                <div class="roadmap-stat-label">里程碑</div>
             </div>
             <div class="roadmap-stat-card roadmap-stat-progress">
-                <div class="roadmap-stat-value">${summary.completed_requirements}</div>
+                <div class="roadmap-stat-value">${msDone}</div>
                 <div class="roadmap-stat-label">已完成</div>
             </div>
+            ${msDelayed > 0 ? `<div class="roadmap-stat-card" style="border-color:rgba(239,68,68,0.3);">
+                <div class="roadmap-stat-value" style="color:#ef4444;">${msDelayed}</div>
+                <div class="roadmap-stat-label">已延期</div>
+            </div>` : ''}
+            <div class="roadmap-stat-card">
+                <div class="roadmap-stat-value">${summary.total_requirements || 0}</div>
+                <div class="roadmap-stat-label">总需求</div>
+            </div>
             <div class="roadmap-stat-card roadmap-stat-active">
-                <div class="roadmap-stat-value">${summary.in_progress_requirements}</div>
+                <div class="roadmap-stat-value">${summary.in_progress_requirements || 0}</div>
                 <div class="roadmap-stat-label">进行中</div>
             </div>
             <div class="roadmap-stat-card">
-                <div class="roadmap-stat-value">${summary.total_tickets}</div>
+                <div class="roadmap-stat-value">${summary.total_tickets || 0}</div>
                 <div class="roadmap-stat-label">总工单</div>
             </div>
             <div class="roadmap-stat-card roadmap-stat-done">
-                <div class="roadmap-stat-value">${summary.done_tickets}</div>
-                <div class="roadmap-stat-label">已完成</div>
+                <div class="roadmap-stat-value">${summary.done_tickets || 0}</div>
+                <div class="roadmap-stat-label">已完成工单</div>
             </div>
             <div class="roadmap-stat-card roadmap-stat-overall">
-                <div class="roadmap-stat-value">${summary.overall_progress}%</div>
+                <div class="roadmap-stat-value">${summary.overall_progress || 0}%</div>
                 <div class="roadmap-stat-label">总体进度</div>
                 <div class="roadmap-progress-bar-mini">
-                    <div class="roadmap-progress-fill-mini" style="width:${summary.overall_progress}%"></div>
+                    <div class="roadmap-progress-fill-mini" style="width:${summary.overall_progress || 0}%"></div>
                 </div>
             </div>
         </div>
@@ -4480,15 +4519,21 @@ function renderRoadmapSummary(summary, el) {
 }
 
 
-// ==================== 甘特图渲染（SVG） ====================
+// ==================== 甘特图渲染（SVG + 里程碑） ====================
 
 function renderRoadmapGantt(data) {
     const container = document.getElementById('roadmapGanttContainer');
     if (!container || !data) return;
 
+    const milestones = data.milestones || [];
     const reqs = data.requirements || [];
-    if (reqs.length === 0) {
-        container.innerHTML = '<div class="empty-state"><div class="emoji">🗺️</div><p>暂无需求数据</p></div>';
+
+    if (milestones.length === 0 && reqs.length === 0) {
+        container.innerHTML = `<div class="roadmap-ai-hint">
+            <div class="emoji">🗺️</div>
+            <p>暂无里程碑数据</p>
+            <button class="btn btn-primary" onclick="regenerateRoadmap()">🤖 让 AI 生成 Roadmap</button>
+        </div>`;
         return;
     }
 
@@ -4497,77 +4542,107 @@ function renderRoadmapGantt(data) {
     let rangeStart = tr.start ? new Date(tr.start) : new Date();
     let rangeEnd = tr.end ? new Date(tr.end) : new Date();
 
+    // 里程碑时间也纳入范围
+    milestones.forEach(ms => {
+        if (ms.planned_start) {
+            const d = new Date(ms.planned_start);
+            if (d < rangeStart) rangeStart = d;
+        }
+        if (ms.planned_end) {
+            const d = new Date(ms.planned_end);
+            if (d > rangeEnd) rangeEnd = d;
+        }
+    });
+
     // 至少覆盖 7 天
     const minSpan = 7 * 24 * 3600 * 1000;
     if (rangeEnd - rangeStart < minSpan) {
         rangeEnd = new Date(rangeStart.getTime() + minSpan);
     }
 
-    // 向前后各扩展 1 天
-    rangeStart = new Date(rangeStart.getTime() - 86400000);
-    rangeEnd = new Date(rangeEnd.getTime() + 86400000);
+    // 向前后各扩展 2 天
+    rangeStart = new Date(rangeStart.getTime() - 2 * 86400000);
+    rangeEnd = new Date(rangeEnd.getTime() + 2 * 86400000);
 
-    // 计算天数
     const totalMs = rangeEnd - rangeStart;
     const totalDays = Math.ceil(totalMs / 86400000);
 
-    // 行布局参数
     const ROW_HEIGHT = 36;
-    const SUB_ROW_HEIGHT = 28;
-    const LABEL_WIDTH = 240;
-    const DAY_WIDTH = Math.max(40, Math.min(80, 800 / totalDays));
+    const LABEL_WIDTH = 260;
+    const DAY_WIDTH = Math.max(40, Math.min(80, 900 / totalDays));
     const CHART_WIDTH = totalDays * DAY_WIDTH;
     const HEADER_HEIGHT = 50;
     const PADDING_TOP = 10;
 
-    // 展开状态
     if (!window._roadmapExpanded) window._roadmapExpanded = {};
 
-    // 构建行数据
+    // 构建行数据：先里程碑分组，再未分组需求
     const rows = [];
+    const reqByMs = {};  // milestone_id -> [req]
+    const unassignedReqs = [];
+
     reqs.forEach(req => {
-        const expanded = !!window._roadmapExpanded[req.id];
-        rows.push({ type: 'req', data: req, expanded });
-        if (expanded && req.tickets && req.tickets.length > 0) {
-            req.tickets.forEach(t => {
-                rows.push({ type: 'ticket', data: t, parentReq: req });
+        const msId = req.milestone_id;
+        if (msId) {
+            if (!reqByMs[msId]) reqByMs[msId] = [];
+            reqByMs[msId].push(req);
+        } else {
+            unassignedReqs.push(req);
+        }
+    });
+
+    // 里程碑行
+    milestones.forEach(ms => {
+        const expanded = window._roadmapExpanded[`ms_${ms.id}`] !== false; // 默认展开
+        rows.push({ type: 'milestone', data: ms, expanded });
+        const msReqs = reqByMs[ms.id] || [];
+        if (expanded) {
+            msReqs.forEach(req => {
+                const reqExpanded = !!window._roadmapExpanded[req.id];
+                rows.push({ type: 'req', data: req, expanded: reqExpanded });
+                if (reqExpanded && req.tickets && req.tickets.length > 0) {
+                    req.tickets.forEach(t => rows.push({ type: 'ticket', data: t }));
+                }
             });
         }
     });
 
+    // 未分组需求
+    if (unassignedReqs.length > 0) {
+        rows.push({ type: 'separator', label: '📋 未关联里程碑' });
+        unassignedReqs.forEach(req => {
+            const reqExpanded = !!window._roadmapExpanded[req.id];
+            rows.push({ type: 'req', data: req, expanded: reqExpanded });
+            if (reqExpanded && req.tickets && req.tickets.length > 0) {
+                req.tickets.forEach(t => rows.push({ type: 'ticket', data: t }));
+            }
+        });
+    }
+
     const TOTAL_HEIGHT = HEADER_HEIGHT + PADDING_TOP + rows.length * ROW_HEIGHT + 20;
     const SVG_WIDTH = LABEL_WIDTH + CHART_WIDTH + 20;
 
-    // 日期格式化
     const fmtDate = (d) => `${d.getMonth() + 1}/${d.getDate()}`;
     const fmtMonth = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 
-    // 颜色映射
     const phaseColors = {
-        'planned': '#8b95a5',
-        'analyzing': '#f0a020',
-        'in_progress': '#3b82f6',
-        'paused': '#e67e22',
-        'completed': '#22c55e',
-        'cancelled': '#6b7280',
-        'architecture': '#8b5cf6',
-        'development': '#3b82f6',
-        'testing': '#f59e0b',
-        'deployment': '#10b981',
+        'planned': '#8b95a5', 'analyzing': '#f0a020', 'in_progress': '#3b82f6',
+        'paused': '#e67e22', 'completed': '#22c55e', 'cancelled': '#6b7280',
+        'architecture': '#8b5cf6', 'development': '#3b82f6',
+        'testing': '#f59e0b', 'deployment': '#10b981',
     };
 
-    // xPos 映射
+    const msColors = { 'planned': '#f59e0b', 'in_progress': '#3b82f6', 'completed': '#22c55e', 'delayed': '#ef4444', 'cancelled': '#6b7280' };
+
     const xPos = (dateStr) => {
-        if (!dateStr) return 0;
+        if (!dateStr) return LABEL_WIDTH;
         const d = new Date(dateStr);
         const ms = d - rangeStart;
         return LABEL_WIDTH + (ms / totalMs) * CHART_WIDTH;
     };
 
-    // --- 开始构建 SVG ---
     let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${SVG_WIDTH}" height="${TOTAL_HEIGHT}" class="roadmap-gantt-svg">`;
 
-    // 样式
     svg += `<style>
         .gantt-label { font-size: 12px; fill: var(--text-primary, #e0e0e0); cursor: pointer; }
         .gantt-label:hover { fill: var(--accent, #60a5fa); }
@@ -4577,23 +4652,22 @@ function renderRoadmapGantt(data) {
         .gantt-month-text { font-size: 10px; fill: var(--text-muted, #666); font-weight: 600; }
         .gantt-grid-line { stroke: var(--border-subtle, rgba(255,255,255,0.06)); stroke-width: 1; }
         .gantt-today-line { stroke: var(--accent, #60a5fa); stroke-width: 1.5; stroke-dasharray: 4 3; opacity: 0.7; }
-        .gantt-bar { rx: 4; ry: 4; cursor: pointer; opacity: 0.9; }
-        .gantt-bar:hover { opacity: 1; filter: brightness(1.2); }
-        .gantt-bar-ticket { rx: 3; ry: 3; cursor: pointer; opacity: 0.8; }
-        .gantt-bar-ticket:hover { opacity: 1; filter: brightness(1.2); }
         .gantt-progress-bg { rx: 4; ry: 4; fill: rgba(255,255,255,0.1); }
         .gantt-progress-fill { rx: 4; ry: 4; }
+        .gantt-bar-ticket { rx: 3; ry: 3; cursor: pointer; opacity: 0.8; }
+        .gantt-bar-ticket:hover { opacity: 1; filter: brightness(1.2); }
         .gantt-expand-icon { font-size: 11px; fill: var(--text-muted, #888); cursor: pointer; }
         .gantt-expand-icon:hover { fill: var(--text-primary, #fff); }
         .gantt-pct { font-size: 10px; fill: #fff; font-weight: 500; }
         .gantt-row-bg:hover { fill: rgba(255,255,255,0.03); }
+        .gantt-ms-row-bg { fill: rgba(245,158,11,0.03); }
+        .gantt-ms-row-bg:hover { fill: rgba(245,158,11,0.06); }
+        .gantt-separator-text { font-size: 11px; fill: var(--text-muted, #888); font-weight: 500; }
     </style>`;
 
-    // 背景
     svg += `<rect width="${SVG_WIDTH}" height="${TOTAL_HEIGHT}" fill="var(--bg-primary, #1a1a2e)" rx="8"/>`;
 
-    // --- 时间表头 ---
-    // 月份行
+    // 时间表头 - 月份
     let prevMonth = '';
     for (let i = 0; i < totalDays; i++) {
         const d = new Date(rangeStart.getTime() + i * 86400000);
@@ -4605,17 +4679,15 @@ function renderRoadmapGantt(data) {
         }
     }
 
-    // 日期行
+    // 时间表头 - 日期
     for (let i = 0; i < totalDays; i++) {
         const d = new Date(rangeStart.getTime() + i * 86400000);
         const x = LABEL_WIDTH + i * DAY_WIDTH;
         svg += `<text x="${x + DAY_WIDTH / 2}" y="36" text-anchor="middle" class="gantt-header-text">${fmtDate(d)}</text>`;
     }
 
-    // 表头分隔线
     svg += `<line x1="0" y1="${HEADER_HEIGHT}" x2="${SVG_WIDTH}" y2="${HEADER_HEIGHT}" class="gantt-grid-line" stroke-width="2"/>`;
 
-    // 垂直网格线
     for (let i = 0; i <= totalDays; i++) {
         const x = LABEL_WIDTH + i * DAY_WIDTH;
         svg += `<line x1="${x}" y1="${HEADER_HEIGHT}" x2="${x}" y2="${TOTAL_HEIGHT}" class="gantt-grid-line"/>`;
@@ -4629,31 +4701,88 @@ function renderRoadmapGantt(data) {
         svg += `<text x="${todayX}" y="${HEADER_HEIGHT - 4}" text-anchor="middle" style="font-size:9px;fill:var(--accent,#60a5fa);">Today</text>`;
     }
 
-    // --- 行渲染 ---
+    // 行渲染
     rows.forEach((row, idx) => {
         const y = HEADER_HEIGHT + PADDING_TOP + idx * ROW_HEIGHT;
         const barY = y + 6;
-        const barH = row.type === 'req' ? 22 : 18;
 
-        // 行背景（hover 区域）
-        svg += `<rect x="0" y="${y}" width="${SVG_WIDTH}" height="${ROW_HEIGHT}" fill="transparent" class="gantt-row-bg"/>`;
+        if (row.type === 'separator') {
+            svg += `<rect x="0" y="${y}" width="${SVG_WIDTH}" height="${ROW_HEIGHT}" fill="rgba(255,255,255,0.02)"/>`;
+            svg += `<text x="12" y="${y + 22}" class="gantt-separator-text">${row.label}</text>`;
+            svg += `<line x1="0" y1="${y + ROW_HEIGHT}" x2="${SVG_WIDTH}" y2="${y + ROW_HEIGHT}" class="gantt-grid-line" opacity="0.5"/>`;
+            return;
+        }
 
-        // 行分隔线
-        svg += `<line x1="0" y1="${y + ROW_HEIGHT}" x2="${SVG_WIDTH}" y2="${y + ROW_HEIGHT}" class="gantt-grid-line" opacity="0.3"/>`;
+        if (row.type === 'milestone') {
+            const ms = row.data;
+            const color = msColors[ms.status] || '#f59e0b';
+            const msClass = `ms-${ms.status}`;
 
-        if (row.type === 'req') {
+            svg += `<rect x="0" y="${y}" width="${SVG_WIDTH}" height="${ROW_HEIGHT}" class="gantt-ms-row-bg"/>`;
+            svg += `<line x1="0" y1="${y + ROW_HEIGHT}" x2="${SVG_WIDTH}" y2="${y + ROW_HEIGHT}" class="gantt-grid-line" opacity="0.5"/>`;
+
+            // 展开/收起图标
+            const expandIcon = row.expanded ? '▾' : '▸';
+            svg += `<text x="8" y="${y + 22}" class="gantt-expand-icon" onclick="toggleRoadmapMs('${ms.id}')">${expandIcon}</text>`;
+
+            // 里程碑名称 ◆
+            const truncTitle = ms.title.length > 22 ? ms.title.substring(0, 22) + '…' : ms.title;
+            svg += `<text x="24" y="${y + 22}" class="gantt-milestone-label ${msClass}">`;
+            svg += `<title>${ms.title} (${ms.progress}%)</title>◆ ${_svgEsc(truncTitle)}</text>`;
+
+            // 里程碑范围条
+            if (ms.planned_start && ms.planned_end) {
+                const x1 = xPos(ms.planned_start);
+                const x2 = xPos(ms.planned_end);
+                const barW = Math.max(10, x2 - x1);
+                const barH = 18;
+
+                // 预估范围（浅色底）
+                svg += `<rect x="${x1}" y="${barY + 2}" width="${barW}" height="${barH}" fill="${color}" class="gantt-ms-range-bar"/>`;
+
+                // 进度填充
+                const fillW = barW * (ms.progress || 0) / 100;
+                svg += `<rect x="${x1}" y="${barY + 2}" width="${fillW}" height="${barH}" fill="${color}" class="gantt-ms-range-fill"/>`;
+
+                // 进度文字
+                if (barW > 40) {
+                    svg += `<text x="${x1 + barW / 2}" y="${barY + barH / 2 + 5}" text-anchor="middle" class="gantt-pct">${ms.progress || 0}%</text>`;
+                }
+
+                // 尾部钻石标记（里程碑结束节点）
+                const diamondX = x2;
+                const diamondY = barY + barH / 2 + 2;
+                const ds = 6; // diamond size
+                svg += `<polygon points="${diamondX},${diamondY - ds} ${diamondX + ds},${diamondY} ${diamondX},${diamondY + ds} ${diamondX - ds},${diamondY}" class="gantt-milestone-diamond ${msClass}">`;
+                svg += `<title>🏁 ${ms.title} - ${ms.planned_end}</title></polygon>`;
+            }
+
+            // 关联需求数量标签
+            const reqCount = (reqByMs[ms.id] || []).length;
+            if (reqCount > 0) {
+                const endX = ms.planned_end ? xPos(ms.planned_end) + 14 : LABEL_WIDTH + 10;
+                svg += `<text x="${endX}" y="${barY + 16}" style="font-size:10px;fill:var(--text-muted,#888);">${reqCount} 需求</text>`;
+            }
+
+        } else if (row.type === 'req') {
             const req = row.data;
             const hasTickets = req.tickets && req.tickets.length > 0;
             const expandIcon = hasTickets ? (row.expanded ? '▾' : '▸') : '·';
+            const barH = 20;
+
+            svg += `<rect x="0" y="${y}" width="${SVG_WIDTH}" height="${ROW_HEIGHT}" fill="transparent" class="gantt-row-bg"/>`;
+            svg += `<line x1="0" y1="${y + ROW_HEIGHT}" x2="${SVG_WIDTH}" y2="${y + ROW_HEIGHT}" class="gantt-grid-line" opacity="0.3"/>`;
 
             // 展开图标
+            const indentX = req.milestone_id ? 24 : 8;
             if (hasTickets) {
-                svg += `<text x="8" y="${y + 22}" class="gantt-expand-icon" onclick="toggleRoadmapReq('${req.id}')">${expandIcon}</text>`;
+                svg += `<text x="${indentX}" y="${y + 22}" class="gantt-expand-icon" onclick="toggleRoadmapReq('${req.id}')">${expandIcon}</text>`;
             }
 
             // 需求名称
-            const labelX = hasTickets ? 22 : 12;
-            const truncTitle = req.title.length > 20 ? req.title.substring(0, 20) + '…' : req.title;
+            const labelX = indentX + (hasTickets ? 14 : 4);
+            const maxLen = req.milestone_id ? 18 : 22;
+            const truncTitle = req.title.length > maxLen ? req.title.substring(0, maxLen) + '…' : req.title;
             svg += `<text x="${labelX}" y="${y + 22}" class="gantt-label" onclick="showPipelineForReq('${req.id}')">`;
             svg += `<title>${req.title}</title>${_svgEsc(truncTitle)}</text>`;
 
@@ -4663,39 +4792,35 @@ function renderRoadmapGantt(data) {
             const barW = Math.max(8, x2 - x1);
             const color = phaseColors[req.phase] || '#3b82f6';
 
-            // 背景条
-            svg += `<rect x="${x1}" y="${barY}" width="${barW}" height="${barH}" class="gantt-progress-bg"/>`;
-            // 进度填充
+            svg += `<rect x="${x1}" y="${barY + 1}" width="${barW}" height="${barH}" class="gantt-progress-bg"/>`;
             const fillW = barW * req.progress / 100;
-            svg += `<rect x="${x1}" y="${barY}" width="${fillW}" height="${barH}" fill="${color}" class="gantt-progress-fill" onclick="showPipelineForReq('${req.id}')"><title>${req.title} (${req.progress}%)</title></rect>`;
-            // 进度文字
+            svg += `<rect x="${x1}" y="${barY + 1}" width="${fillW}" height="${barH}" fill="${color}" class="gantt-progress-fill" onclick="showPipelineForReq('${req.id}')"><title>${req.title} (${req.progress}%)</title></rect>`;
             if (barW > 40) {
                 svg += `<text x="${x1 + barW / 2}" y="${barY + barH / 2 + 4}" text-anchor="middle" class="gantt-pct">${req.progress}%</text>`;
             }
-
-            // 工单数量小标签
             if (req.ticket_count > 0) {
                 svg += `<text x="${x1 + barW + 6}" y="${barY + barH / 2 + 4}" style="font-size:10px;fill:var(--text-muted,#888);">${req.ticket_count} 工单</text>`;
             }
 
-        } else {
-            // 工单行
+        } else if (row.type === 'ticket') {
             const ticket = row.data;
-            const truncTitle = ticket.title.length > 18 ? ticket.title.substring(0, 18) + '…' : ticket.title;
+            const barH = 16;
 
-            svg += `<text x="30" y="${y + 20}" class="gantt-label-ticket" onclick="openTicketDrawer('${ticket.id}')">`;
+            svg += `<rect x="0" y="${y}" width="${SVG_WIDTH}" height="${ROW_HEIGHT}" fill="transparent" class="gantt-row-bg"/>`;
+            svg += `<line x1="0" y1="${y + ROW_HEIGHT}" x2="${SVG_WIDTH}" y2="${y + ROW_HEIGHT}" class="gantt-grid-line" opacity="0.2"/>`;
+
+            const truncTitle = ticket.title.length > 16 ? ticket.title.substring(0, 16) + '…' : ticket.title;
+            svg += `<text x="50" y="${y + 20}" class="gantt-label-ticket" onclick="openTicketDrawer('${ticket.id}')">`;
             svg += `<title>${ticket.title}</title>↳ ${_svgEsc(truncTitle)}</text>`;
 
-            // 工单甘特条
             const x1 = xPos(ticket.start);
             const x2 = xPos(ticket.end);
             const barW = Math.max(6, x2 - x1);
             const color = phaseColors[ticket.phase] || '#6b7280';
 
-            svg += `<rect x="${x1}" y="${barY + 2}" width="${barW}" height="${barH}" fill="${color}" class="gantt-bar-ticket" onclick="openTicketDrawer('${ticket.id}')">`;
+            svg += `<rect x="${x1}" y="${barY + 3}" width="${barW}" height="${barH}" fill="${color}" class="gantt-bar-ticket" onclick="openTicketDrawer('${ticket.id}')">`;
             svg += `<title>${ticket.title} [${ticket.status}]</title></rect>`;
 
-            // Agent 标签
             if (ticket.assigned_agent && barW > 50) {
                 svg += `<text x="${x1 + 4}" y="${barY + barH / 2 + 5}" style="font-size:9px;fill:#fff;opacity:0.8;">${ticket.assigned_agent.replace('Agent', '')}</text>`;
             }
@@ -4703,7 +4828,6 @@ function renderRoadmapGantt(data) {
     });
 
     svg += '</svg>';
-
     container.innerHTML = `<div class="roadmap-gantt-scroll">${svg}</div>`;
 }
 
@@ -4712,11 +4836,21 @@ function _svgEsc(s) {
     return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+/** 切换里程碑展开/收起 */
+function toggleRoadmapMs(msId) {
+    if (!window._roadmapExpanded) window._roadmapExpanded = {};
+    const key = `ms_${msId}`;
+    window._roadmapExpanded[key] = window._roadmapExpanded[key] === false ? true : false;
+    if (_roadmapData) renderRoadmapGantt(_roadmapData);
+}
+
 /** 切换需求展开/收起 */
 function toggleRoadmapReq(reqId) {
     if (!window._roadmapExpanded) window._roadmapExpanded = {};
     window._roadmapExpanded[reqId] = !window._roadmapExpanded[reqId];
-    if (_roadmapData) renderRoadmapGantt(_roadmapData);
+    if (_roadmapData) {
+        if (_roadmapView === 'gantt') renderRoadmapGantt(_roadmapData);
+    }
 }
 
 /** 从甘特图点击跳转到 Pipeline */
@@ -4730,15 +4864,21 @@ function showPipelineForReq(reqId) {
 }
 
 
-// ==================== Roadmap 列表视图 ====================
+// ==================== Roadmap 列表视图（里程碑分组） ====================
 
 function renderRoadmapList(data) {
     const container = document.getElementById('roadmapListContainer');
     if (!container || !data) return;
 
+    const milestones = data.milestones || [];
     const reqs = data.requirements || [];
-    if (reqs.length === 0) {
-        container.innerHTML = '<div class="empty-state"><div class="emoji">📋</div><p>暂无需求数据</p></div>';
+
+    if (milestones.length === 0 && reqs.length === 0) {
+        container.innerHTML = `<div class="roadmap-ai-hint">
+            <div class="emoji">📋</div>
+            <p>暂无里程碑数据</p>
+            <button class="btn btn-primary" onclick="regenerateRoadmap()">🤖 让 AI 生成 Roadmap</button>
+        </div>`;
         return;
     }
 
@@ -4747,48 +4887,113 @@ function renderRoadmapList(data) {
         planned: '📝 计划中', analyzing: '🔍 分析中', in_progress: '🚀 进行中',
         paused: '⏸️ 已暂停', completed: '✅ 已完成', cancelled: '❌ 已取消',
     };
+    const msStatusLabels = {
+        planned: '计划中', in_progress: '进行中', completed: '已完成', delayed: '已延期', cancelled: '已取消'
+    };
+    const msIcons = {
+        planned: '🏁', in_progress: '🚀', completed: '✅', delayed: '⚠️', cancelled: '❌'
+    };
 
-    let html = '<div class="roadmap-list">';
-
+    // 按里程碑分组
+    const reqByMs = {};
+    const unassignedReqs = [];
     reqs.forEach(req => {
-        const phaseClass = `roadmap-phase-${req.phase}`;
-        const priorityLabel = priorityLabels[req.priority] || req.priority;
-        const phaseLabel = phaseLabels[req.phase] || req.phase;
-
-        html += `
-        <div class="roadmap-list-item ${phaseClass}">
-            <div class="roadmap-list-header" onclick="toggleRoadmapListItem('${req.id}')">
-                <div class="roadmap-list-expand">${req.tickets.length > 0 ? '▸' : '·'}</div>
-                <div class="roadmap-list-info">
-                    <div class="roadmap-list-title">${_htmlEsc(req.title)}</div>
-                    <div class="roadmap-list-meta">
-                        <span class="roadmap-badge ${phaseClass}">${phaseLabel}</span>
-                        <span class="roadmap-meta-item">${priorityLabel}</span>
-                        <span class="roadmap-meta-item">🎫 ${req.ticket_count} 工单</span>
-                        ${req.module ? `<span class="roadmap-meta-item">📦 ${req.module}</span>` : ''}
-                    </div>
-                </div>
-                <div class="roadmap-list-progress">
-                    <div class="roadmap-progress-bar">
-                        <div class="roadmap-progress-fill" style="width:${req.progress}%"></div>
-                    </div>
-                    <span class="roadmap-progress-text">${req.progress}%</span>
-                </div>
-                <div class="roadmap-list-dates">
-                    <span class="roadmap-date">${formatShortDate(req.start)}</span>
-                    <span class="roadmap-date-sep">→</span>
-                    <span class="roadmap-date">${formatShortDate(req.end)}</span>
-                </div>
-                <button class="btn btn-sm roadmap-list-action" onclick="event.stopPropagation(); showPipelineForReq('${req.id}')">Pipeline ▸</button>
-            </div>
-            <div class="roadmap-list-tickets" id="roadmap-tickets-${req.id}" style="display:none;">
-                ${renderRoadmapTicketTable(req.tickets)}
-            </div>
-        </div>`;
+        if (req.milestone_id) {
+            if (!reqByMs[req.milestone_id]) reqByMs[req.milestone_id] = [];
+            reqByMs[req.milestone_id].push(req);
+        } else {
+            unassignedReqs.push(req);
+        }
     });
 
-    html += '</div>';
+    let html = '';
+
+    // 各里程碑分组
+    milestones.forEach(ms => {
+        const msClass = `ms-${ms.status}`;
+        const msReqs = reqByMs[ms.id] || [];
+        const icon = msIcons[ms.status] || '🏁';
+
+        html += `<div class="roadmap-milestone-group">
+            <div class="roadmap-milestone-header ${msClass}" onclick="toggleMsListGroup('${ms.id}')">
+                <div class="roadmap-ms-icon">${icon}</div>
+                <div class="roadmap-ms-info">
+                    <div class="roadmap-ms-title">◆ ${_htmlEsc(ms.title)}</div>
+                    <div class="roadmap-ms-desc">${_htmlEsc(ms.description || '')}</div>
+                </div>
+                <div class="roadmap-ms-meta">
+                    <span class="roadmap-ms-status-tag ${msClass}">${msStatusLabels[ms.status] || ms.status}</span>
+                    <div class="roadmap-ms-progress-wrap">
+                        <div class="roadmap-ms-progress-bar">
+                            <div class="roadmap-ms-progress-fill" style="width:${ms.progress || 0}%"></div>
+                        </div>
+                        <span class="roadmap-ms-progress-pct">${ms.progress || 0}%</span>
+                    </div>
+                    <span class="roadmap-ms-date">${formatShortDate(ms.planned_start)} → ${formatShortDate(ms.planned_end)}</span>
+                </div>
+            </div>
+            <div class="roadmap-ms-reqs" id="ms-reqs-${ms.id}">`;
+
+        if (msReqs.length === 0) {
+            html += `<div class="roadmap-no-tickets" style="margin:8px 0;">暂无关联需求</div>`;
+        } else {
+            html += '<div class="roadmap-list">';
+            msReqs.forEach(req => { html += _renderReqListItem(req, priorityLabels, phaseLabels); });
+            html += '</div>';
+        }
+
+        html += `</div></div>`;
+    });
+
+    // 未分组需求
+    if (unassignedReqs.length > 0) {
+        html += `<div class="roadmap-unassigned-group">
+            <div class="roadmap-unassigned-header">📋 未关联里程碑 (${unassignedReqs.length})</div>
+            <div class="roadmap-list">`;
+        unassignedReqs.forEach(req => { html += _renderReqListItem(req, priorityLabels, phaseLabels); });
+        html += '</div></div>';
+    }
+
     container.innerHTML = html;
+}
+
+/** 渲染单个需求列表项 */
+function _renderReqListItem(req, priorityLabels, phaseLabels) {
+    const phaseClass = `roadmap-phase-${req.phase}`;
+    const priorityLabel = priorityLabels[req.priority] || req.priority;
+    const phaseLabel = phaseLabels[req.phase] || req.phase;
+    const tickets = req.tickets || [];
+
+    return `
+    <div class="roadmap-list-item ${phaseClass}">
+        <div class="roadmap-list-header" onclick="toggleRoadmapListItem('${req.id}')">
+            <div class="roadmap-list-expand">${tickets.length > 0 ? '▸' : '·'}</div>
+            <div class="roadmap-list-info">
+                <div class="roadmap-list-title">${_htmlEsc(req.title)}</div>
+                <div class="roadmap-list-meta">
+                    <span class="roadmap-badge ${phaseClass}">${phaseLabel}</span>
+                    <span class="roadmap-meta-item">${priorityLabel}</span>
+                    <span class="roadmap-meta-item">🎫 ${req.ticket_count || 0} 工单</span>
+                    ${req.module ? `<span class="roadmap-meta-item">📦 ${req.module}</span>` : ''}
+                </div>
+            </div>
+            <div class="roadmap-list-progress">
+                <div class="roadmap-progress-bar">
+                    <div class="roadmap-progress-fill" style="width:${req.progress}%"></div>
+                </div>
+                <span class="roadmap-progress-text">${req.progress}%</span>
+            </div>
+            <div class="roadmap-list-dates">
+                <span class="roadmap-date">${formatShortDate(req.start)}</span>
+                <span class="roadmap-date-sep">→</span>
+                <span class="roadmap-date">${formatShortDate(req.end)}</span>
+            </div>
+            <button class="btn btn-sm roadmap-list-action" onclick="event.stopPropagation(); showPipelineForReq('${req.id}')">Pipeline ▸</button>
+        </div>
+        <div class="roadmap-list-tickets" id="roadmap-tickets-${req.id}" style="display:none;">
+            ${renderRoadmapTicketTable(tickets)}
+        </div>
+    </div>`;
 }
 
 function renderRoadmapTicketTable(tickets) {
@@ -4829,7 +5034,6 @@ function toggleRoadmapListItem(reqId) {
     const isHidden = el.style.display === 'none';
     el.style.display = isHidden ? '' : 'none';
 
-    // 切换箭头
     const item = el.closest('.roadmap-list-item');
     if (item) {
         const arrow = item.querySelector('.roadmap-list-expand');
@@ -4837,6 +5041,14 @@ function toggleRoadmapListItem(reqId) {
             arrow.textContent = isHidden ? '▾' : '▸';
         }
     }
+}
+
+/** 展开/收起里程碑下的需求 */
+function toggleMsListGroup(msId) {
+    const el = document.getElementById(`ms-reqs-${msId}`);
+    if (!el) return;
+    const isHidden = el.style.display === 'none';
+    el.style.display = isHidden ? '' : 'none';
 }
 
 /** 短日期格式 */

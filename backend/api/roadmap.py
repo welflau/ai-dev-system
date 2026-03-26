@@ -1,6 +1,6 @@
 """
 AI 自动开发系统 - Roadmap API
-提供甘特图 / 时间线所需的需求+工单聚合数据
+提供甘特图 / 时间线所需的里程碑+需求+工单聚合数据
 """
 from datetime import datetime, timedelta
 from fastapi import APIRouter, HTTPException
@@ -77,16 +77,23 @@ _TICKET_PHASE_MAP = {
 
 @router.get("")
 async def get_roadmap(project_id: str):
-    """获取 Roadmap 数据 — 需求+工单聚合时间轴
+    """获取 Roadmap 数据 — 里程碑+需求+工单聚合时间轴
 
     返回:
-    - requirements: 需求列表（含关联工单）
+    - milestones: 里程碑列表（含关联需求+工单）
+    - unassigned_requirements: 未关联里程碑的需求
     - summary: 汇总统计
     - time_range: 整体时间范围
     """
     project = await db.fetch_one("SELECT * FROM projects WHERE id = ?", (project_id,))
     if not project:
         raise HTTPException(404, "项目不存在")
+
+    # 查询里程碑
+    milestones = await db.fetch_all(
+        "SELECT * FROM milestones WHERE project_id = ? ORDER BY sort_order, created_at",
+        (project_id,),
+    )
 
     # 查询所有需求
     requirements = await db.fetch_all(
@@ -106,86 +113,91 @@ async def get_roadmap(project_id: str):
         rid = t["requirement_id"]
         ticket_map.setdefault(rid, []).append(t)
 
+    # 按里程碑 ID 分组需求
+    ms_req_map: dict[str, list[dict]] = {}
+    unassigned_reqs = []
+    for req in requirements:
+        ms_id = req.get("milestone_id")
+        if ms_id:
+            ms_req_map.setdefault(ms_id, []).append(req)
+        else:
+            unassigned_reqs.append(req)
+
     # 时间边界
     now = datetime.now()
     global_start = now
     global_end = now
 
-    # 构建需求条目
-    items = []
-    for req in requirements:
-        req_tickets = ticket_map.get(req["id"], [])
-
-        # 计算需求时间范围
-        start_dt = _parse_iso(req["created_at"]) or now
-        end_dt = _parse_iso(req.get("completed_at")) or None
-
-        # 如果未完成，根据工单状态推算结束时间
-        if not end_dt:
-            # 取工单中最晚的时间作为参考
-            latest = start_dt
-            for t in req_tickets:
-                t_end = _parse_iso(t.get("completed_at")) or _parse_iso(t.get("updated_at"))
-                if t_end and t_end > latest:
-                    latest = t_end
-            # 未完成需求：结束时间 = 最晚工单时间 + 预估余量
-            if req["status"] in ("completed", "cancelled"):
-                end_dt = latest
-            else:
-                # 进行中：延伸到未来
-                end_dt = max(latest, now) + timedelta(days=1)
-
-        if start_dt < global_start:
+    def update_bounds(start_dt, end_dt):
+        nonlocal global_start, global_end
+        if start_dt and start_dt < global_start:
             global_start = start_dt
-        if end_dt > global_end:
+        if end_dt and end_dt > global_end:
             global_end = end_dt
 
-        # 构建工单子项
-        ticket_items = []
-        for t in req_tickets:
-            t_start = _parse_iso(t.get("started_at")) or _parse_iso(t["created_at"]) or start_dt
-            t_end = _parse_iso(t.get("completed_at")) or None
-            if not t_end:
-                if t["status"] in ("deployed", "cancelled"):
-                    t_end = _parse_iso(t.get("updated_at")) or t_start
-                else:
-                    t_end = max(t_start, now)
+    # === 构建里程碑数据 ===
+    milestone_items = []
+    for ms in milestones:
+        ms_reqs = ms_req_map.get(ms["id"], [])
 
-            if t_start < global_start:
-                global_start = t_start
-            if t_end > global_end:
-                global_end = t_end
+        # 里程碑时间范围
+        ms_start = _parse_iso(ms.get("actual_start") or ms.get("planned_start")) or now
+        ms_end = _parse_iso(ms.get("actual_end") or ms.get("planned_end")) or (ms_start + timedelta(days=14))
 
-            ticket_items.append({
-                "id": t["id"],
-                "title": t["title"],
-                "status": t["status"],
-                "phase": _TICKET_PHASE_MAP.get(t["status"], "planned"),
-                "type": t.get("type", "feature"),
-                "module": t.get("module"),
-                "priority": t.get("priority", 3),
-                "assigned_agent": t.get("assigned_agent"),
-                "start": _iso(t_start),
-                "end": _iso(t_end),
-                "dependencies": t.get("dependencies"),
-            })
+        # 构建里程碑下的需求列表
+        req_items = []
+        for req in ms_reqs:
+            req_item = _build_req_item(req, ticket_map, now)
+            req_items.append(req_item)
+            update_bounds(
+                _parse_iso(req_item["start"]),
+                _parse_iso(req_item["end"]),
+            )
 
-        progress = _calc_progress(req_tickets)
+        # 里程碑进度
+        if ms_reqs:
+            all_ms_tickets = []
+            for req in ms_reqs:
+                all_ms_tickets.extend(ticket_map.get(req["id"], []))
+            ms_progress = _calc_progress(all_ms_tickets) if all_ms_tickets else ms.get("progress", 0)
+        else:
+            ms_progress = ms.get("progress", 0)
 
-        items.append({
-            "id": req["id"],
-            "title": req["title"],
-            "description": req.get("description", ""),
-            "status": req["status"],
-            "phase": _REQ_PHASE_MAP.get(req["status"], "planned"),
-            "priority": req.get("priority", "medium"),
-            "module": req.get("module"),
-            "progress": progress,
-            "start": _iso(start_dt),
-            "end": _iso(end_dt),
-            "ticket_count": len(req_tickets),
-            "tickets": ticket_items,
+        update_bounds(ms_start, ms_end)
+
+        # 延期检测
+        is_delayed = False
+        planned_end_dt = _parse_iso(ms.get("planned_end"))
+        if planned_end_dt and now > planned_end_dt and ms_progress < 100 and ms["status"] not in ("completed", "cancelled"):
+            is_delayed = True
+
+        milestone_items.append({
+            "id": ms["id"],
+            "title": ms["title"],
+            "description": ms.get("description", ""),
+            "status": ms["status"],
+            "source": ms.get("source", "ai_generated"),
+            "progress": ms_progress,
+            "is_delayed": is_delayed,
+            "planned_start": ms.get("planned_start"),
+            "planned_end": ms.get("planned_end"),
+            "actual_start": ms.get("actual_start"),
+            "actual_end": ms.get("actual_end"),
+            "start": _iso(ms_start),
+            "end": _iso(ms_end),
+            "requirement_count": len(ms_reqs),
+            "requirements": req_items,
         })
+
+    # === 构建未关联里程碑的需求列表 ===
+    unassigned_items = []
+    for req in unassigned_reqs:
+        req_item = _build_req_item(req, ticket_map, now)
+        unassigned_items.append(req_item)
+        update_bounds(
+            _parse_iso(req_item["start"]),
+            _parse_iso(req_item["end"]),
+        )
 
     # 汇总
     total_reqs = len(requirements)
@@ -194,9 +206,13 @@ async def get_roadmap(project_id: str):
     total_tickets = len(all_tickets)
     done_tickets = sum(1 for t in all_tickets if t["status"] in ("deployed", "testing_done"))
     active_tickets = sum(1 for t in all_tickets if t["status"] not in ("pending", "deployed", "cancelled", "testing_done"))
+    total_milestones = len(milestones)
+    completed_milestones = sum(1 for m in milestones if m["status"] == "completed")
+    delayed_milestones = sum(1 for m in milestone_items if m["is_delayed"])
 
     return {
-        "requirements": items,
+        "milestones": milestone_items,
+        "unassigned_requirements": unassigned_items,
         "summary": {
             "total_requirements": total_reqs,
             "completed_requirements": completed_reqs,
@@ -205,9 +221,75 @@ async def get_roadmap(project_id: str):
             "done_tickets": done_tickets,
             "active_tickets": active_tickets,
             "overall_progress": int(completed_reqs / total_reqs * 100) if total_reqs > 0 else 0,
+            "total_milestones": total_milestones,
+            "completed_milestones": completed_milestones,
+            "delayed_milestones": delayed_milestones,
         },
         "time_range": {
             "start": _iso(global_start),
             "end": _iso(global_end),
         },
+    }
+
+
+def _build_req_item(req: dict, ticket_map: dict, now: datetime) -> dict:
+    """构建单个需求的 Roadmap 数据"""
+    req_tickets = ticket_map.get(req["id"], [])
+
+    # 计算需求时间范围
+    start_dt = _parse_iso(req["created_at"]) or now
+    end_dt = _parse_iso(req.get("completed_at")) or None
+
+    if not end_dt:
+        latest = start_dt
+        for t in req_tickets:
+            t_end = _parse_iso(t.get("completed_at")) or _parse_iso(t.get("updated_at"))
+            if t_end and t_end > latest:
+                latest = t_end
+        if req["status"] in ("completed", "cancelled"):
+            end_dt = latest
+        else:
+            end_dt = max(latest, now) + timedelta(days=1)
+
+    # 构建工单子项
+    ticket_items = []
+    for t in req_tickets:
+        t_start = _parse_iso(t.get("started_at")) or _parse_iso(t["created_at"]) or start_dt
+        t_end = _parse_iso(t.get("completed_at")) or None
+        if not t_end:
+            if t["status"] in ("deployed", "cancelled"):
+                t_end = _parse_iso(t.get("updated_at")) or t_start
+            else:
+                t_end = max(t_start, now)
+
+        ticket_items.append({
+            "id": t["id"],
+            "title": t["title"],
+            "status": t["status"],
+            "phase": _TICKET_PHASE_MAP.get(t["status"], "planned"),
+            "type": t.get("type", "feature"),
+            "module": t.get("module"),
+            "priority": t.get("priority", 3),
+            "assigned_agent": t.get("assigned_agent"),
+            "start": _iso(t_start),
+            "end": _iso(t_end),
+            "dependencies": t.get("dependencies"),
+        })
+
+    progress = _calc_progress(req_tickets)
+
+    return {
+        "id": req["id"],
+        "title": req["title"],
+        "description": req.get("description", ""),
+        "status": req["status"],
+        "phase": _REQ_PHASE_MAP.get(req["status"], "planned"),
+        "priority": req.get("priority", "medium"),
+        "module": req.get("module"),
+        "milestone_id": req.get("milestone_id"),
+        "progress": progress,
+        "start": _iso(start_dt),
+        "end": _iso(end_dt),
+        "ticket_count": len(req_tickets),
+        "tickets": ticket_items,
     }

@@ -4108,3 +4108,232 @@ body.chat-open .chat-panel {
 .roadmap-list-item.roadmap-phase-paused { border-left: 3px solid #e67e22; }
 .roadmap-list-item.roadmap-phase-completed { border-left: 3px solid #22c55e; }
 .roadmap-list-item.roadmap-phase-cancelled { border-left: 3px solid #6b7280; }
+
+/* ==========================================
+   里程碑 Milestone 样式
+   ========================================== */
+
+/* --- 甘特图里程碑行 --- */
+.gantt-milestone-row {
+    cursor: pointer;
+}
+
+.gantt-milestone-diamond {
+    fill: #f59e0b;
+    stroke: #fbbf24;
+    stroke-width: 1.5;
+    cursor: pointer;
+    filter: drop-shadow(0 0 4px rgba(245,158,11,0.4));
+    transition: filter 0.2s;
+}
+
+.gantt-milestone-diamond:hover {
+    filter: drop-shadow(0 0 8px rgba(245,158,11,0.7));
+}
+
+.gantt-milestone-diamond.ms-completed {
+    fill: #22c55e;
+    stroke: #4ade80;
+    filter: drop-shadow(0 0 4px rgba(34,197,94,0.4));
+}
+
+.gantt-milestone-diamond.ms-delayed {
+    fill: #ef4444;
+    stroke: #f87171;
+    filter: drop-shadow(0 0 4px rgba(239,68,68,0.5));
+    animation: pulse-delayed 2s infinite;
+}
+
+@keyframes pulse-delayed {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+
+.gantt-milestone-label {
+    font-size: 12px;
+    font-weight: 600;
+    fill: #f59e0b;
+    cursor: pointer;
+}
+
+.gantt-milestone-label.ms-completed { fill: #22c55e; }
+.gantt-milestone-label.ms-delayed { fill: #ef4444; }
+
+.gantt-ms-progress-text {
+    font-size: 10px;
+    fill: var(--text-muted, #888);
+}
+
+.gantt-ms-range-bar {
+    rx: 3;
+    ry: 3;
+    opacity: 0.2;
+}
+
+.gantt-ms-range-fill {
+    rx: 3;
+    ry: 3;
+    opacity: 0.6;
+}
+
+/* --- 列表视图里程碑分组 --- */
+.roadmap-milestone-group {
+    margin-bottom: 20px;
+}
+
+.roadmap-milestone-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    background: linear-gradient(135deg, rgba(245,158,11,0.08), rgba(245,158,11,0.02));
+    border: 1px solid rgba(245,158,11,0.2);
+    border-radius: var(--radius);
+    margin-bottom: 8px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.roadmap-milestone-header:hover {
+    background: linear-gradient(135deg, rgba(245,158,11,0.12), rgba(245,158,11,0.04));
+    border-color: rgba(245,158,11,0.35);
+}
+
+.roadmap-milestone-header.ms-completed {
+    background: linear-gradient(135deg, rgba(34,197,94,0.08), rgba(34,197,94,0.02));
+    border-color: rgba(34,197,94,0.2);
+}
+
+.roadmap-milestone-header.ms-delayed {
+    background: linear-gradient(135deg, rgba(239,68,68,0.08), rgba(239,68,68,0.02));
+    border-color: rgba(239,68,68,0.2);
+}
+
+.roadmap-ms-icon {
+    font-size: 18px;
+    flex-shrink: 0;
+}
+
+.roadmap-ms-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.roadmap-ms-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: #f59e0b;
+}
+
+.roadmap-milestone-header.ms-completed .roadmap-ms-title { color: #22c55e; }
+.roadmap-milestone-header.ms-delayed .roadmap-ms-title { color: #ef4444; }
+
+.roadmap-ms-desc {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.roadmap-ms-meta {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-shrink: 0;
+}
+
+.roadmap-ms-date {
+    font-size: 11px;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+.roadmap-ms-progress-wrap {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 120px;
+}
+
+.roadmap-ms-progress-bar {
+    flex: 1;
+    height: 6px;
+    background: rgba(255,255,255,0.08);
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.roadmap-ms-progress-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.5s ease;
+    background: linear-gradient(90deg, #f59e0b, #fbbf24);
+}
+
+.roadmap-milestone-header.ms-completed .roadmap-ms-progress-fill {
+    background: linear-gradient(90deg, #22c55e, #4ade80);
+}
+
+.roadmap-milestone-header.ms-delayed .roadmap-ms-progress-fill {
+    background: linear-gradient(90deg, #ef4444, #f87171);
+}
+
+.roadmap-ms-progress-pct {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    min-width: 32px;
+    text-align: right;
+}
+
+.roadmap-ms-status-tag {
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.roadmap-ms-status-tag.ms-planned { background: rgba(139,149,165,0.15); color: #8b95a5; }
+.roadmap-ms-status-tag.ms-in_progress { background: rgba(59,130,246,0.15); color: #60a5fa; }
+.roadmap-ms-status-tag.ms-completed { background: rgba(34,197,94,0.15); color: #22c55e; }
+.roadmap-ms-status-tag.ms-delayed { background: rgba(239,68,68,0.15); color: #ef4444; }
+.roadmap-ms-status-tag.ms-cancelled { background: rgba(107,114,128,0.15); color: #6b7280; }
+
+/* 无里程碑的需求分组 */
+.roadmap-unassigned-group {
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px dashed var(--border-light);
+}
+
+.roadmap-unassigned-header {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+    padding-left: 8px;
+}
+
+/* --- 空状态 AI 生成提示 --- */
+.roadmap-ai-hint {
+    text-align: center;
+    padding: 40px 20px;
+}
+
+.roadmap-ai-hint .emoji {
+    font-size: 48px;
+    margin-bottom: 12px;
+}
+
+.roadmap-ai-hint p {
+    color: var(--text-muted);
+    font-size: 14px;
+    margin-bottom: 16px;
+}
+
+.roadmap-ai-hint .btn {
+    margin: 0 auto;
+}
