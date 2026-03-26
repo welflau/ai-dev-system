@@ -194,10 +194,11 @@ async def delete_project(project_id: str):
 
     logger.info("找到项目: %s, 开始级联删除...", project['name'])
 
-    # 级联删除关联数据
-    await db.execute("DELETE FROM ticket_commands WHERE ticket_id IN (SELECT id FROM tickets WHERE project_id = ?)", (project_id,))
-    await db.execute("DELETE FROM ticket_logs WHERE ticket_id IN (SELECT id FROM tickets WHERE project_id = ?)", (project_id,))
-    await db.execute("DELETE FROM artifacts WHERE ticket_id IN (SELECT id FROM tickets WHERE project_id = ?)", (project_id,))
+    # 级联删除关联数据（按外键依赖顺序，由子到父）
+    await db.execute("DELETE FROM chat_messages WHERE project_id = ?", (project_id,))
+    await db.execute("DELETE FROM ticket_commands WHERE project_id = ?", (project_id,))
+    await db.execute("DELETE FROM ticket_logs WHERE project_id = ?", (project_id,))
+    await db.execute("DELETE FROM artifacts WHERE project_id = ?", (project_id,))
     await db.execute("DELETE FROM subtasks WHERE ticket_id IN (SELECT id FROM tickets WHERE project_id = ?)", (project_id,))
     await db.execute("DELETE FROM llm_conversations WHERE project_id = ?", (project_id,))
     await db.execute("DELETE FROM tickets WHERE project_id = ?", (project_id,))
