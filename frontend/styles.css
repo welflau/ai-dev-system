@@ -2373,7 +2373,7 @@ input[type="text"]:focus, input[type="number"]:focus, input[type="password"]:foc
     align-items: center;
     gap: 6px;
     font-size: 13px;
-    padding: 8px 10px;
+    padding: 8px 10px 8px 12px;
     color: var(--text-muted);
     border-radius: var(--radius-sm);
     cursor: pointer;
@@ -3086,6 +3086,9 @@ input[type="text"]:focus, input[type="number"]:focus, input[type="password"]:foc
     max-height: 0;
     overflow: hidden;
     transition: max-height 0.2s ease;
+    margin-left: 20px;
+    border-left: 2px solid rgba(79, 70, 229, 0.25);
+    padding-left: 0;
 }
 .tickets-drawer.open {
     max-height: 200px;
