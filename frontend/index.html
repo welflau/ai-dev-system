@@ -275,15 +275,21 @@
                             </div>
                         </div>
                         <div class="repo-container">
-                            <div class="repo-tree" id="repoTree">
-                                <div class="empty-state"><div class="emoji">📂</div><p>加载中...</p></div>
-                            </div>
-                            <div class="repo-file-viewer" id="repoFileViewer" style="display:none;">
-                                <div class="file-viewer-header">
-                                    <span class="file-viewer-path" id="fileViewerPath"></span>
-                                    <button class="btn-icon" onclick="closeFileViewer()">&times;</button>
+                            <div class="repo-layout">
+                                <div class="repo-tree-panel">
+                                    <div class="tree-panel-header">
+                                        <span class="tree-panel-title">文件树</span>
+                                    </div>
+                                    <div class="repo-tree" id="repoTree">
+                                        <div class="empty-state"><div class="emoji">📂</div><p>加载中...</p></div>
+                                    </div>
                                 </div>
-                                <pre class="file-viewer-content" id="fileViewerContent"></pre>
+                                <div class="repo-file-preview" id="repoFilePreview">
+                                    <div class="file-preview-empty">
+                                        <div class="empty-icon">📄</div>
+                                        <p>选择文件查看内容</p>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                         <div class="git-log-panel" id="gitLogPanel" style="display:none;">

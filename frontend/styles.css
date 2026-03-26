@@ -2195,19 +2195,35 @@ input[type="text"]:focus, input[type="number"]:focus, input[type="password"]:foc
     line-height: 1.5;
 }
 
-.repo-container {
-    display: flex;
+.repo-layout {
+    display: grid;
+    grid-template-columns: 320px 1fr;
     gap: 16px;
-    min-height: 400px;
+    min-height: 500px;
+}
+
+.repo-tree-panel {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--card-bg);
+    overflow: hidden;
+}
+
+.tree-panel-header {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
 }
 
 .repo-tree {
     flex: 1;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
     overflow-y: auto;
     max-height: 600px;
-    background: var(--card-bg);
 }
 
 .tree-item {
@@ -2231,16 +2247,16 @@ input[type="text"]:focus, input[type="number"]:focus, input[type="password"]:foc
 
 .tree-dir .tree-name { font-weight: 600; }
 
-.repo-file-viewer {
-    flex: 1;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
+.repo-file-preview {
     display: flex;
     flex-direction: column;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
     background: var(--card-bg);
+    overflow: hidden;
 }
 
-.file-viewer-header {
+.file-preview-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -2249,25 +2265,71 @@ input[type="text"]:focus, input[type="number"]:focus, input[type="password"]:foc
     background: var(--bg);
 }
 
-.file-viewer-path {
+.file-preview-path {
     font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
     font-size: 12px;
     color: var(--primary);
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
-.file-viewer-content {
+.file-preview-content {
     flex: 1;
-    padding: 14px;
-    margin: 0;
-    font-size: 12px;
-    line-height: 1.6;
+    padding: 16px;
     overflow: auto;
-    max-height: 500px;
+    font-size: 13px;
+    line-height: 1.6;
     font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
     color: var(--text-secondary);
     white-space: pre-wrap;
     word-break: break-all;
 }
+
+.file-preview-empty {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+    padding: 40px;
+}
+
+.file-preview-empty .empty-icon {
+    font-size: 48px;
+    margin-bottom: 12px;
+    opacity: 0.5;
+}
+
+.file-preview-empty p {
+    font-size: 14px;
+    margin: 0;
+}
+
+/* GitHub风格的文件预览头部信息 */
+.file-info-bar {
+    display: flex;
+    gap: 16px;
+    padding: 8px 14px;
+    background: var(--bg-elevated);
+    border-bottom: 1px solid var(--border-light);
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.file-info-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.file-info-label {
+    font-weight: 500;
+}
+
+
 
 .repo-actions {
     display: flex;

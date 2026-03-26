@@ -3525,24 +3525,54 @@ function toggleTreeDir(el) {
 }
 
 async function viewRepoFile(path) {
-    const viewer = document.getElementById('repoFileViewer');
-    const pathEl = document.getElementById('fileViewerPath');
-    const contentEl = document.getElementById('fileViewerContent');
+    const previewPanel = document.getElementById('repoFilePreview');
 
-    viewer.style.display = 'block';
-    pathEl.textContent = path;
-    contentEl.textContent = '加载中...';
+    // 显示文件预览面板
+    previewPanel.innerHTML = `
+        <div class="file-preview-header">
+            <div class="file-preview-path" title="${escapeHtml(path)}">${escapeHtml(path)}</div>
+        </div>
+        <div class="file-info-bar" id="fileInfoBar">
+            <div class="file-info-item">
+                <span class="file-info-label">加载中...</span>
+            </div>
+        </div>
+        <div class="file-preview-content">
+            加载中...
+        </div>
+    `;
+
+    const contentEl = previewPanel.querySelector('.file-preview-content');
+    const infoBar = document.getElementById('fileInfoBar');
 
     try {
         const data = await api(`/projects/${currentProjectId}/git/file?path=${encodeURIComponent(path)}`);
-        contentEl.textContent = data.content || '(空文件)';
+        const content = data.content || '(空文件)';
+        const size = data.size ? formatFileSize(data.size) : '';
+        const ext = path.split('.').pop().toLowerCase();
+
+        // 更新文件内容
+        contentEl.textContent = content;
+
+        // 更新文件信息栏
+        infoBar.innerHTML = `
+            <div class="file-info-item">
+                <span class="file-info-label">类型:</span>
+                <span>${escapeHtml(ext || '文件')}</span>
+            </div>
+            ${size ? `<div class="file-info-item">
+                <span class="file-info-label">大小:</span>
+                <span>${size}</span>
+            </div>` : ''}
+            <div class="file-info-item">
+                <span class="file-info-label">行数:</span>
+                <span>${content.split('\n').length}</span>
+            </div>
+        `;
     } catch (err) {
         contentEl.textContent = `加载失败: ${err.message}`;
+        infoBar.innerHTML = `<div class="file-info-item"><span style="color: #ef4444;">错误: ${escapeHtml(err.message)}</span></div>`;
     }
-}
-
-function closeFileViewer() {
-    document.getElementById('repoFileViewer').style.display = 'none';
 }
 
 async function loadGitLog() {
