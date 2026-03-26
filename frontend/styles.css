@@ -195,9 +195,15 @@ body {
     height: calc(100vh - var(--topbar-height));
 }
 
-/* 聊天面板展开时的布局 */
+/* 聊天面板展开时的布局调整 */
 .project-layout.chat-open {
-    grid-template-columns: var(--sidebar-width) 1fr var(--chat-panel-width, 380px);
+    grid-template-columns: var(--sidebar-width) 1fr;
+}
+body.chat-open .project-layout {
+    margin-right: var(--chat-panel-width, 380px);
+}
+body.chat-open #projectListPage {
+    margin-right: var(--chat-panel-width, 380px);
 }
 
 /* 内容+日志 Docking 容器 */
@@ -3319,17 +3325,19 @@ input[type="text"]:focus, input[type="number"]:focus, input[type="password"]:foc
 }
 
 .chat-panel {
-    grid-row: 1;
-    grid-column: 3;
+    position: fixed;
+    right: 0;
+    top: var(--topbar-height);
+    width: var(--chat-panel-width, 380px);
+    height: calc(100vh - var(--topbar-height));
     display: none;
     flex-direction: column;
     background: var(--bg-card);
     border-left: 1px solid var(--border);
-    height: 100%;
-    min-height: 0;
-    position: relative;
     min-width: 300px;
     max-width: 700px;
+    z-index: 120;
+    box-shadow: -2px 0 12px rgba(0, 0, 0, 0.15);
 }
 
 /* 聊天面板左侧拖拽条 */
@@ -3360,7 +3368,7 @@ input[type="text"]:focus, input[type="number"]:focus, input[type="password"]:foc
     box-shadow: 0 0 8px rgba(79, 70, 229, 0.4);
 }
 
-.project-layout.chat-open .chat-panel {
+body.chat-open .chat-panel {
     display: flex;
 }
 
@@ -3737,16 +3745,13 @@ input[type="text"]:focus, input[type="number"]:focus, input[type="password"]:foc
 
 @media (max-width: 900px) {
     .chat-panel {
-        position: fixed;
-        right: 0;
-        top: var(--topbar-height);
         width: 100%;
         max-width: 400px;
-        height: calc(100vh - var(--topbar-height));
-        z-index: 150;
-        box-shadow: -4px 0 20px rgba(0, 0, 0, 0.3);
     }
-    .project-layout.chat-open {
-        grid-template-columns: var(--sidebar-width) 1fr;
+    body.chat-open .project-layout {
+        margin-right: 0;
+    }
+    body.chat-open #projectListPage {
+        margin-right: 0;
     }
 }

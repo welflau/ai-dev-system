@@ -498,55 +498,55 @@
 
                 </div> <!-- /.content-dock-wrapper -->
 
-                <!-- ==================== 右侧聊天面板 ==================== -->
-                <div class="chat-panel" id="chatPanel">
-                    <div class="chat-panel-resize" id="chatPanelResize"></div>
-                    <div class="chat-panel-header">
-                        <div class="chat-panel-title">
-                            <span class="chat-panel-icon" id="chatPanelIcon">💬</span>
-                            <span id="chatPanelTitle">AI 助手</span>
-                        </div>
-                        <div class="chat-panel-actions">
-                            <button class="btn-icon chat-panel-btn" id="chatModeBtn" onclick="toggleChatMode()" title="切换模式">
-                                🔄
-                            </button>
-                            <button class="btn-icon chat-panel-btn" onclick="clearChatPanel()" title="清空聊天">🗑️</button>
-                            <button class="btn-icon chat-panel-btn" onclick="toggleChatPanel()" title="收起面板">✕</button>
-                        </div>
-                    </div>
-                    <div class="chat-panel-mode-bar" id="chatModeBar">
-                        <button class="chat-mode-tab active" id="chatModeGlobal" onclick="setChatMode('global')">
-                            💬 全局对话
-                        </button>
-                        <button class="chat-mode-tab" id="chatModeJob" onclick="setChatMode('job')">
-                            🔧 工单对话
-                        </button>
-                    </div>
-                    <div class="chat-panel-body" id="chatPanelBody">
-                        <div class="chat-messages" id="chatMessages">
-                            <div class="chat-welcome">
-                                <div class="chat-welcome-icon">🤖</div>
-                                <div class="chat-welcome-title">AI 开发助手</div>
-                                <div class="chat-welcome-desc">
-                                    我可以帮你：查看项目状态、创建需求、回答技术问题<br>
-                                    <small>试试说 "帮我创建一个用户登录功能需求"</small>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="chat-panel-input" id="chatPanelInput">
-                        <div class="chat-input-wrap">
-                            <textarea id="chatInput" placeholder="输入消息... (Enter 发送, Shift+Enter 换行)" rows="1" onkeydown="handleChatKeydown(event)" oninput="autoResizeChatInput()"></textarea>
-                            <button class="chat-send-btn" id="chatSendBtn" onclick="sendChatMessage()" title="发送">
-                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13"/><path d="M22 2L15 22L11 13L2 9L22 2Z"/></svg>
-                            </button>
-                        </div>
-                    </div>
-                </div>
-
             </div>
         </section>
     </main>
+
+    <!-- ==================== 全局聊天面板（不依赖项目上下文） ==================== -->
+    <div class="chat-panel" id="chatPanel">
+        <div class="chat-panel-resize" id="chatPanelResize"></div>
+        <div class="chat-panel-header">
+            <div class="chat-panel-title">
+                <span class="chat-panel-icon" id="chatPanelIcon">💬</span>
+                <span id="chatPanelTitle">AI 助手</span>
+            </div>
+            <div class="chat-panel-actions">
+                <button class="btn-icon chat-panel-btn" id="chatModeBtn" onclick="toggleChatMode()" title="切换模式">
+                    🔄
+                </button>
+                <button class="btn-icon chat-panel-btn" onclick="clearChatPanel()" title="清空聊天">🗑️</button>
+                <button class="btn-icon chat-panel-btn" onclick="toggleChatPanel()" title="收起面板">✕</button>
+            </div>
+        </div>
+        <div class="chat-panel-mode-bar" id="chatModeBar">
+            <button class="chat-mode-tab active" id="chatModeGlobal" onclick="setChatMode('global')">
+                💬 全局对话
+            </button>
+            <button class="chat-mode-tab" id="chatModeJob" onclick="setChatMode('job')">
+                🔧 工单对话
+            </button>
+        </div>
+        <div class="chat-panel-body" id="chatPanelBody">
+            <div class="chat-messages" id="chatMessages">
+                <div class="chat-welcome">
+                    <div class="chat-welcome-icon">🤖</div>
+                    <div class="chat-welcome-title">AI 开发助手</div>
+                    <div class="chat-welcome-desc">
+                        我可以帮你：创建项目、查看项目状态、创建需求、回答技术问题<br>
+                        <small>试试说 "帮我创建一个新项目" 或 "帮我创建一个用户登录功能需求"</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="chat-panel-input" id="chatPanelInput">
+            <div class="chat-input-wrap">
+                <textarea id="chatInput" placeholder="输入消息... (Enter 发送, Shift+Enter 换行)" rows="1" onkeydown="handleChatKeydown(event)" oninput="autoResizeChatInput()"></textarea>
+                <button class="chat-send-btn" id="chatSendBtn" onclick="sendChatMessage()" title="发送">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13"/><path d="M22 2L15 22L11 13L2 9L22 2Z"/></svg>
+                </button>
+            </div>
+        </div>
+    </div>
 
     <!-- ==================== Job 日志抽屉 ==================== -->
     <div class="job-drawer-overlay" id="jobDrawerOverlay" onclick="closeJobLogPanel()"></div>

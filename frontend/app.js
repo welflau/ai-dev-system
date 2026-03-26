@@ -456,6 +456,8 @@ function showProjectList() {
     showPage('projectListPage');
     updateBreadcrumb([{ text: '项目列表', onClick: 'showProjectList()' }]);
     loadProjects();
+    // 聊天面板切换到全局模式
+    _updateChatPanelForContext();
 }
 
 function showProjectDetail(projectId) {
@@ -466,6 +468,32 @@ function showProjectDetail(projectId) {
     // 清空日志面板并加载该项目历史日志
     clearLogPanel();
     loadLogPanelHistory();
+    // 聊天面板切换到项目模式
+    _updateChatPanelForContext();
+}
+
+/**
+ * 根据当前是否在项目内，更新聊天面板的模式栏和欢迎消息
+ */
+function _updateChatPanelForContext() {
+    const modeBar = document.getElementById('chatModeBar');
+    const modeBtn = document.getElementById('chatModeBtn');
+    if (currentProjectId) {
+        if (modeBar) modeBar.style.display = '';
+        if (modeBtn) modeBtn.style.display = '';
+    } else {
+        if (modeBar) modeBar.style.display = 'none';
+        if (modeBtn) modeBtn.style.display = 'none';
+        if (chatMode !== 'global') setChatMode('global');
+    }
+    // 重置聊天历史和界面
+    chatHistory = [];
+    if (chatPanelOpen) {
+        showChatWelcome();
+        if (currentProjectId && chatMode === 'global') {
+            loadChatHistory();
+        }
+    }
 }
 
 function switchTab(tab) {
@@ -3750,19 +3778,32 @@ let chatSending = false;
  */
 function toggleChatPanel() {
     chatPanelOpen = !chatPanelOpen;
-    const layout = document.querySelector('.project-layout');
     const panel = document.getElementById('chatPanel');
     const toggleBtn = document.getElementById('chatToggleBtn');
 
     if (chatPanelOpen) {
-        layout?.classList.add('chat-open');
+        document.body.classList.add('chat-open');
         toggleBtn?.classList.add('active');
+
+        // 根据是否在项目内，决定显示/隐藏模式切换栏
+        const modeBar = document.getElementById('chatModeBar');
+        const modeBtn = document.getElementById('chatModeBtn');
+        if (currentProjectId) {
+            modeBar.style.display = '';
+            modeBtn.style.display = '';
+        } else {
+            modeBar.style.display = 'none';
+            modeBtn.style.display = 'none';
+            // 无项目时强制全局模式
+            if (chatMode !== 'global') setChatMode('global');
+        }
+
         // 加载聊天历史
         if (chatMode === 'global') {
             loadChatHistory();
         }
     } else {
-        layout?.classList.remove('chat-open');
+        document.body.classList.remove('chat-open');
         toggleBtn?.classList.remove('active');
     }
 }
@@ -3852,7 +3893,10 @@ function toggleChatMode() {
  * 加载全局聊天历史
  */
 async function loadChatHistory() {
-    if (!currentProjectId) return;
+    if (!currentProjectId) {
+        showChatWelcome();
+        return;
+    }
 
     const container = document.getElementById('chatMessages');
 
@@ -3957,10 +4001,6 @@ async function sendChatMessage() {
     const input = document.getElementById('chatInput');
     const message = input.value.trim();
     if (!message) return;
-    if (!currentProjectId) {
-        showToast('请先选择一个项目', 'warning');
-        return;
-    }
 
     chatSending = true;
     const sendBtn = document.getElementById('chatSendBtn');
@@ -3999,14 +4039,28 @@ async function sendChatMessage() {
         // 构建历史（只取最近 10 条）
         const historyToSend = chatHistory.slice(-10);
 
-        const resp = await originalApi(`/projects/${currentProjectId}/chat`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                message: message,
-                history: historyToSend,
-            }),
-        });
+        let resp;
+        if (currentProjectId) {
+            // 项目内聊天 — 走原有 API
+            resp = await originalApi(`/projects/${currentProjectId}/chat`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    message: message,
+                    history: historyToSend,
+                }),
+            });
+        } else {
+            // 全局聊天（无项目）— 走全局 API
+            resp = await originalApi(`/chat`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    message: message,
+                    history: historyToSend,
+                }),
+            });
+        }
 
         // 移除加载动画
         document.getElementById('chatTyping')?.remove();
@@ -4021,6 +4075,19 @@ async function sendChatMessage() {
         // 添加回复气泡
         appendChatBubble('assistant', reply, null, action);
         scrollChatToBottom();
+
+        // 项目创建成功（全局模式）
+        if (action && action.type === 'project_created') {
+            showToast(`项目「${action.name}」已创建`, 'success');
+            // 延迟刷新项目列表并跳转
+            setTimeout(() => {
+                if (action.project_id) {
+                    showProjectDetail(action.project_id);
+                } else {
+                    loadProjects();
+                }
+            }, 1000);
+        }
 
         // 如果创建了需求，刷新需求列表
         if (action && action.type === 'requirement_created') {
@@ -4087,6 +4154,18 @@ function appendChatBubble(role, content, timestamp = null, action = null) {
                     优先级: ${action.priority || 'medium'}
                 </div>
                 <span class="action-link" onclick="switchTab('requirements')">查看需求列表 →</span>
+            </div>
+        `;
+    } else if (action && action.type === 'project_created') {
+        actionHtml = `
+            <div class="chat-action-card" style="border-left-color: var(--success, #34d058);">
+                <div class="action-title">🎉 项目已创建</div>
+                <div class="action-detail">
+                    <strong>${escapeHtml(action.name || '')}</strong><br>
+                    ${action.tech_stack ? '技术栈: ' + escapeHtml(action.tech_stack) + '<br>' : ''}
+                    ${action.git_remote_url ? 'Git: ' + escapeHtml(action.git_remote_url) : ''}
+                </div>
+                ${action.project_id ? `<span class="action-link" onclick="showProjectDetail('${action.project_id}')">进入项目 →</span>` : ''}
             </div>
         `;
     } else if (action && action.type === 'requirement_paused') {
@@ -4165,18 +4244,33 @@ function formatChatContent(content) {
  */
 function showChatWelcome() {
     const container = document.getElementById('chatMessages');
-    container.innerHTML = `
-        <div class="chat-welcome">
-            <div class="chat-welcome-icon">🤖</div>
-            <div class="chat-welcome-title">AI 开发助手</div>
-            <div class="chat-welcome-desc">
-                我可以帮你：查看项目状态、创建需求、管理需求执行<br>
-                <small>💡 试试说：</small><br>
-                <small>"帮我创建一个用户登录功能需求"</small><br>
-                <small>"暂停 XX 需求" / "恢复 XX 需求" / "关闭 XX 需求"</small>
+    if (currentProjectId) {
+        container.innerHTML = `
+            <div class="chat-welcome">
+                <div class="chat-welcome-icon">🤖</div>
+                <div class="chat-welcome-title">AI 开发助手</div>
+                <div class="chat-welcome-desc">
+                    我可以帮你：查看项目状态、创建需求、管理需求执行<br>
+                    <small>💡 试试说：</small><br>
+                    <small>"帮我创建一个用户登录功能需求"</small><br>
+                    <small>"暂停 XX 需求" / "恢复 XX 需求" / "关闭 XX 需求"</small>
+                </div>
             </div>
-        </div>
-    `;
+        `;
+    } else {
+        container.innerHTML = `
+            <div class="chat-welcome">
+                <div class="chat-welcome-icon">🤖</div>
+                <div class="chat-welcome-title">AI 开发助手</div>
+                <div class="chat-welcome-desc">
+                    我可以帮你创建新项目、了解系统功能<br>
+                    <small>💡 试试说：</small><br>
+                    <small>"帮我创建一个新项目"</small><br>
+                    <small>"这个系统能做什么？"</small>
+                </div>
+            </div>
+        `;
+    }
 }
 
 /**

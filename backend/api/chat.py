@@ -1,8 +1,9 @@
 """
 AI 自动开发系统 - 聊天 API
-支持两种模式：
-1. 全局聊天：用户与 AI 自由对话，支持通过对话发起需求等操作
-2. Job 聊天历史：加载某个工单的 AI 对话记录
+支持三种模式：
+1. 全局聊天（项目内）：用户与 AI 自由对话，支持通过对话发起需求等操作
+2. 全局聊天（无项目）：项目列表页的 AI 对话，支持创建项目
+3. Job 聊天历史：加载某个工单的 AI 对话记录
 """
 import json
 import logging
@@ -16,6 +17,9 @@ from events import event_manager
 logger = logging.getLogger("chat")
 
 router = APIRouter(prefix="/api/projects/{project_id}/chat", tags=["chat"])
+
+# 全局聊天路由（不需要 project_id）
+global_chat_router = APIRouter(prefix="/api/chat", tags=["global-chat"])
 
 
 # ==================== 请求/响应模型 ====================
@@ -707,3 +711,243 @@ async def _save_chat_message(
         "action_data": json.dumps(action, ensure_ascii=False) if action else None,
         "created_at": now_iso(),
     })
+
+
+# ==================== 全局聊天 API（无需 project_id）====================
+
+
+class GlobalChatRequest(BaseModel):
+    message: str = Field(..., min_length=1, description="用户消息")
+    history: Optional[List[ChatMessage]] = Field(default=None, description="历史消息（可选）")
+
+
+class GlobalChatResponse(BaseModel):
+    reply: str = Field(..., description="AI 回复")
+    action: Optional[Dict[str, Any]] = Field(default=None, description="执行的操作信息")
+
+
+@global_chat_router.post("", response_model=GlobalChatResponse)
+async def global_chat_with_ai(req: GlobalChatRequest):
+    """全局聊天（项目列表页）— 无需 project_id，支持创建项目"""
+    from llm_client import llm_client, set_llm_context, clear_llm_context
+
+    # 获取所有项目列表作为上下文
+    projects = await db.fetch_all(
+        "SELECT id, name, status, tech_stack, description, created_at FROM projects ORDER BY created_at DESC LIMIT 20"
+    )
+
+    system_prompt = _build_global_system_prompt(projects)
+    messages = [{"role": "system", "content": system_prompt}]
+
+    if req.history:
+        for msg in req.history[-20:]:
+            messages.append({"role": msg.role, "content": msg.content})
+
+    messages.append({"role": "user", "content": req.message})
+
+    set_llm_context(agent_type="GlobalChatAssistant", action="global_chat_no_project")
+
+    try:
+        response = await llm_client.chat(messages, temperature=0.7, max_tokens=4096)
+
+        # 解析是否包含 CREATE_PROJECT 操作
+        action_result = await _parse_global_action(response)
+
+        clean_reply = _clean_action_tags(response)
+
+        return GlobalChatResponse(reply=clean_reply, action=action_result)
+    finally:
+        clear_llm_context()
+
+
+@global_chat_router.get("/projects-brief")
+async def get_projects_brief():
+    """获取项目简要列表（用于 AI 聊天上下文）"""
+    projects = await db.fetch_all(
+        "SELECT id, name, status, tech_stack, description, created_at FROM projects ORDER BY created_at DESC LIMIT 20"
+    )
+    return {"projects": projects, "total": len(projects)}
+
+
+def _build_global_system_prompt(projects: list) -> str:
+    """构建全局聊天系统提示词（无项目上下文）"""
+    if projects:
+        proj_lines = []
+        for p in projects[:10]:
+            proj_lines.append(f"  - [{p['status']}] {p['name']} (技术栈: {p.get('tech_stack') or '未指定'})")
+        proj_summary = "\n".join(proj_lines)
+    else:
+        proj_summary = "  暂无项目"
+
+    return f"""你是 AI 自动开发系统的智能助手。当前用户尚未进入任何项目，你正在项目列表页提供服务。
+
+## 当前项目列表
+{proj_summary}
+
+## 你的能力
+1. **回答问题**：关于系统功能、使用方法的任何问题
+2. **创建项目**：当用户想创建新项目时，收集必要信息后创建
+3. **推荐操作**：引导用户进入已有项目，或创建新项目
+
+## 创建项目的必填信息
+创建项目需要以下信息：
+- **项目名称**（必填）：项目的名称
+- **Git 远程仓库 URL**（必填）：如 https://github.com/username/repo.git
+- **项目描述**（可选）：项目的简要说明
+- **技术栈**（可选）：如 Python, FastAPI, React 等
+- **本地仓库路径**（可选）：留空则自动生成
+
+## 对话式创建项目流程
+当用户表达想创建项目的意图时：
+1. 先确认用户想创建项目
+2. 逐步收集缺少的必填信息（名称、Git URL），可以一次问多个
+3. 可选信息可以建议用户填写，但不强制
+4. 信息收集完毕后，向用户确认所有信息，等用户确认后再创建
+5. 用户确认后，输出创建指令
+
+## 操作指令格式
+当信息收集完毕且用户确认后，在回复末尾附加（必须是独立一行）：
+
+### 创建项目
+[ACTION:CREATE_PROJECT]
+{{"name": "项目名称", "description": "项目描述", "tech_stack": "技术栈", "git_remote_url": "Git远程仓库URL", "local_repo_path": ""}}
+[/ACTION]
+
+## 注意事项
+- 用中文回复
+- 回答简洁但有信息量
+- 创建项目前必须确认用户的意图和必填信息
+- 如果用户只说了项目名没说 Git URL，要追问 Git URL
+- 不要自己编造 Git URL
+- 用户说"确认"、"好的"、"创建吧"等表示同意时才执行创建
+"""
+
+
+async def _parse_global_action(response: str) -> Optional[Dict]:
+    """解析全局聊天中的操作指令"""
+    import re
+
+    pattern = r'\[ACTION:(\w+)\]\s*(\{.*?\})\s*\[/ACTION\]'
+    match = re.search(pattern, response, re.DOTALL)
+
+    if not match:
+        return None
+
+    action_type = match.group(1)
+    action_data_str = match.group(2)
+
+    try:
+        action_data = json.loads(action_data_str)
+    except json.JSONDecodeError:
+        logger.warning("无法解析全局操作数据: %s", action_data_str)
+        return None
+
+    if action_type == "CREATE_PROJECT":
+        return await _execute_create_project(action_data)
+
+    logger.warning("未知全局操作类型: %s", action_type)
+    return None
+
+
+async def _execute_create_project(data: dict) -> Dict:
+    """通过 AI 对话执行创建项目"""
+    import os
+    from git_manager import git_manager
+
+    name = data.get("name", "").strip()
+    description = data.get("description", "").strip()
+    tech_stack = data.get("tech_stack", "").strip()
+    git_remote_url = data.get("git_remote_url", "").strip()
+    local_repo_path = data.get("local_repo_path", "").strip()
+
+    if not name:
+        return {"type": "error", "message": "项目名称不能为空"}
+    if not git_remote_url:
+        return {"type": "error", "message": "Git 远程仓库 URL 不能为空"}
+
+    try:
+        project_id = generate_id("PRJ")
+        now = now_iso()
+
+        # 确定本地仓库路径
+        if local_repo_path:
+            repo_path = os.path.abspath(local_repo_path)
+            git_manager.set_project_path(project_id, repo_path)
+        else:
+            repo_path = str(git_manager._repo_path(project_id))
+
+        # 创建目录结构
+        logger.info("AI助手创建项目: %s, 仓库路径: %s", name, repo_path)
+        os.makedirs(repo_path, exist_ok=True)
+        for d in git_manager.REPO_DIRS:
+            os.makedirs(os.path.join(repo_path, d), exist_ok=True)
+
+        # 生成 README.md
+        readme = f"# {name}\n\n{description or '由 AI 自动开发系统创建的项目'}\n"
+        readme_path = os.path.join(repo_path, "README.md")
+        if not os.path.exists(readme_path):
+            with open(readme_path, "w", encoding="utf-8") as f:
+                f.write(readme)
+
+        # 生成 .gitignore
+        gitignore = "__pycache__/\n*.py[cod]\n.venv/\nvenv/\n.idea/\n.vscode/\n.DS_Store\nThumbs.db\n.env\n*.log\n"
+        gitignore_path = os.path.join(repo_path, ".gitignore")
+        if not os.path.exists(gitignore_path):
+            with open(gitignore_path, "w", encoding="utf-8") as f:
+                f.write(gitignore)
+
+        # git init
+        git_dir = os.path.join(repo_path, ".git")
+        if not os.path.isdir(git_dir):
+            await git_manager._run_git(repo_path, "init")
+
+        # 配置远程仓库
+        if git_remote_url:
+            await git_manager.set_remote(project_id, git_remote_url)
+
+        # 初始提交
+        await git_manager._run_git(repo_path, "add", ".")
+        await git_manager._run_git(
+            repo_path, "commit", "-m",
+            f"init: {name} - project initialized by AI Dev System",
+            "--author", "AI Dev System <ai@dev-system.local>",
+        )
+
+        # 尝试推送
+        push_success = False
+        try:
+            push_success = await git_manager.push(project_id)
+        except Exception as e:
+            logger.warning("AI助手创建项目首次推送失败: %s", e)
+
+        # 写入数据库
+        proj_data = {
+            "id": project_id,
+            "name": name,
+            "description": description,
+            "status": "active",
+            "tech_stack": tech_stack,
+            "config": "{}",
+            "git_repo_path": repo_path,
+            "git_remote_url": git_remote_url,
+            "created_at": now,
+            "updated_at": now,
+        }
+        await db.insert("projects", proj_data)
+
+        logger.info("AI助手创建项目完成: %s (%s)", name, project_id)
+
+        return {
+            "type": "project_created",
+            "project_id": project_id,
+            "name": name,
+            "description": description,
+            "tech_stack": tech_stack,
+            "git_remote_url": git_remote_url,
+            "push_success": push_success,
+            "message": f"项目「{name}」已创建成功" + ("，并已推送到远程仓库" if push_success else "（首次推送失败，请检查远程仓库权限）"),
+        }
+
+    except Exception as e:
+        logger.error("AI助手创建项目失败: %s", e)
+        return {"type": "error", "message": f"创建项目失败: {str(e)}"}
