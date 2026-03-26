@@ -3755,3 +3755,356 @@ body.chat-open .chat-panel {
         margin-right: 0;
     }
 }
+
+
+/* ==========================================
+   Roadmap 甘特图 + 列表视图
+   ========================================== */
+
+/* --- 汇总卡片 --- */
+.roadmap-summary {
+    margin-bottom: 16px;
+}
+
+.roadmap-summary-cards {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.roadmap-stat-card {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius);
+    padding: 14px 18px;
+    min-width: 110px;
+    flex: 1;
+    text-align: center;
+    transition: border-color 0.2s, transform 0.15s;
+}
+
+.roadmap-stat-card:hover {
+    border-color: var(--primary-light);
+    transform: translateY(-1px);
+}
+
+.roadmap-stat-value {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--text-primary);
+    line-height: 1.2;
+}
+
+.roadmap-stat-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 4px;
+}
+
+.roadmap-stat-progress .roadmap-stat-value { color: var(--success); }
+.roadmap-stat-active .roadmap-stat-value { color: var(--primary-light); }
+.roadmap-stat-done .roadmap-stat-value { color: var(--accent); }
+.roadmap-stat-overall .roadmap-stat-value { color: var(--warning, #f0a020); }
+
+.roadmap-progress-bar-mini {
+    width: 100%;
+    height: 4px;
+    background: rgba(255,255,255,0.1);
+    border-radius: 2px;
+    margin-top: 8px;
+    overflow: hidden;
+}
+
+.roadmap-progress-fill-mini {
+    height: 100%;
+    background: var(--success);
+    border-radius: 2px;
+    transition: width 0.5s ease;
+}
+
+/* --- 视图切换 --- */
+.roadmap-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.roadmap-view-toggle {
+    display: flex;
+    gap: 2px;
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-sm);
+    padding: 2px;
+}
+
+.roadmap-view-btn {
+    border-radius: var(--radius-sm) !important;
+    font-size: 12px !important;
+    transition: all 0.15s;
+}
+
+.roadmap-view-btn.active {
+    background: var(--primary) !important;
+    color: #fff !important;
+}
+
+/* --- 甘特图容器 --- */
+.roadmap-gantt-container {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius);
+    overflow: hidden;
+    min-height: 200px;
+}
+
+.roadmap-gantt-scroll {
+    overflow-x: auto;
+    overflow-y: auto;
+    max-height: calc(100vh - 300px);
+    padding: 0;
+}
+
+.roadmap-gantt-scroll::-webkit-scrollbar {
+    height: 8px;
+    width: 8px;
+}
+
+.roadmap-gantt-scroll::-webkit-scrollbar-track {
+    background: var(--bg-tertiary);
+}
+
+.roadmap-gantt-scroll::-webkit-scrollbar-thumb {
+    background: var(--border-light);
+    border-radius: 4px;
+}
+
+.roadmap-gantt-scroll::-webkit-scrollbar-thumb:hover {
+    background: var(--text-muted);
+}
+
+.roadmap-gantt-svg {
+    display: block;
+    min-width: 100%;
+}
+
+/* --- 列表视图 --- */
+.roadmap-list-container {
+    min-height: 200px;
+}
+
+.roadmap-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.roadmap-list-item {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius);
+    overflow: hidden;
+    transition: border-color 0.2s;
+}
+
+.roadmap-list-item:hover {
+    border-color: var(--primary-light);
+}
+
+.roadmap-list-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.roadmap-list-header:hover {
+    background: rgba(255,255,255,0.02);
+}
+
+.roadmap-list-expand {
+    font-size: 12px;
+    color: var(--text-muted);
+    width: 16px;
+    text-align: center;
+    flex-shrink: 0;
+}
+
+.roadmap-list-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.roadmap-list-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.roadmap-list-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 4px;
+    flex-wrap: wrap;
+}
+
+.roadmap-meta-item {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+.roadmap-badge {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-weight: 500;
+}
+
+.roadmap-badge.roadmap-phase-planned { background: rgba(139,149,165,0.15); color: #8b95a5; }
+.roadmap-badge.roadmap-phase-analyzing { background: rgba(240,160,32,0.15); color: #f0a020; }
+.roadmap-badge.roadmap-phase-in_progress { background: rgba(59,130,246,0.15); color: #60a5fa; }
+.roadmap-badge.roadmap-phase-paused { background: rgba(230,126,34,0.15); color: #e67e22; }
+.roadmap-badge.roadmap-phase-completed { background: rgba(34,197,94,0.15); color: #22c55e; }
+.roadmap-badge.roadmap-phase-cancelled { background: rgba(107,114,128,0.15); color: #6b7280; }
+
+/* 进度条 */
+.roadmap-list-progress {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+    width: 130px;
+}
+
+.roadmap-progress-bar {
+    flex: 1;
+    height: 6px;
+    background: rgba(255,255,255,0.08);
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.roadmap-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--primary), var(--success));
+    border-radius: 3px;
+    transition: width 0.5s ease;
+}
+
+.roadmap-progress-text {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    min-width: 36px;
+    text-align: right;
+}
+
+.roadmap-list-dates {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+.roadmap-date-sep {
+    color: var(--border-light);
+}
+
+.roadmap-list-action {
+    flex-shrink: 0;
+    font-size: 11px !important;
+    padding: 4px 10px !important;
+}
+
+/* 工单子表格 */
+.roadmap-list-tickets {
+    border-top: 1px solid var(--border-subtle);
+    background: var(--bg-tertiary);
+    padding: 8px 16px 12px;
+}
+
+.roadmap-no-tickets {
+    font-size: 12px;
+    color: var(--text-muted);
+    text-align: center;
+    padding: 12px;
+}
+
+.roadmap-ticket-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+
+.roadmap-ticket-table th {
+    text-align: left;
+    padding: 6px 10px;
+    font-weight: 600;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border-subtle);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.roadmap-ticket-table td {
+    padding: 8px 10px;
+    color: var(--text-secondary);
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+}
+
+.roadmap-ticket-row {
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.roadmap-ticket-row:hover {
+    background: rgba(255,255,255,0.03);
+}
+
+.roadmap-ticket-title {
+    font-weight: 500;
+    color: var(--text-primary);
+    max-width: 250px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.roadmap-ticket-date {
+    white-space: nowrap;
+    color: var(--text-muted);
+}
+
+/* 状态标签颜色 */
+.status-tag {
+    display: inline-block;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.status-tag.status-planned { background: rgba(139,149,165,0.15); color: #8b95a5; }
+.status-tag.status-architecture { background: rgba(139,92,246,0.15); color: #a78bfa; }
+.status-tag.status-development { background: rgba(59,130,246,0.15); color: #60a5fa; }
+.status-tag.status-testing { background: rgba(245,158,11,0.15); color: #fbbf24; }
+.status-tag.status-deployment { background: rgba(16,185,129,0.15); color: #34d399; }
+.status-tag.status-completed { background: rgba(34,197,94,0.15); color: #22c55e; }
+.status-tag.status-cancelled { background: rgba(107,114,128,0.15); color: #6b7280; }
+
+/* 左侧条颜色指示 */
+.roadmap-list-item.roadmap-phase-planned { border-left: 3px solid #8b95a5; }
+.roadmap-list-item.roadmap-phase-analyzing { border-left: 3px solid #f0a020; }
+.roadmap-list-item.roadmap-phase-in_progress { border-left: 3px solid #3b82f6; }
+.roadmap-list-item.roadmap-phase-paused { border-left: 3px solid #e67e22; }
+.roadmap-list-item.roadmap-phase-completed { border-left: 3px solid #22c55e; }
+.roadmap-list-item.roadmap-phase-cancelled { border-left: 3px solid #6b7280; }

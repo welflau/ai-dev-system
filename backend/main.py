@@ -122,6 +122,7 @@ from api.tickets import router as tickets_router
 from api.agents import router as agents_router
 from api.chat import router as chat_router
 from api.chat import global_chat_router
+from api.roadmap import router as roadmap_router
 
 app.include_router(projects_router)
 app.include_router(requirements_router)
@@ -129,6 +130,7 @@ app.include_router(tickets_router)
 app.include_router(agents_router)
 app.include_router(chat_router)
 app.include_router(global_chat_router)
+app.include_router(roadmap_router)
 
 
 # ==================== 系统端点 ====================
@@ -137,7 +139,7 @@ app.include_router(global_chat_router)
 @app.get("/api/health")
 async def health_check():
     """健康检查"""
-    return {"status": "ok", "version": "0.9.0"}
+    return {"status": "ok", "version": "0.9.5"}
 
 
 @app.get("/api/llm/status")
