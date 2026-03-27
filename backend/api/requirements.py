@@ -180,20 +180,20 @@ async def delete_requirement(project_id: str, req_id: str):
     )
     ticket_ids = [t["id"] for t in tickets]
 
-    # 删除关联数据（按依赖顺序）
+    # 删除关联数据（按依赖顺序：先删最底层子表）
     for tid in ticket_ids:
         await db.delete("subtasks", "ticket_id = ?", (tid,))
-        await db.delete("artifacts", "ticket_id = ?", (tid,))
+        await db.delete("ticket_commands", "ticket_id = ?", (tid,))
         await db.delete("llm_conversations", "ticket_id = ?", (tid,))
-
-    # 删除工单日志（按 requirement_id 和 ticket_id）
-    await db.delete("ticket_logs", "requirement_id = ?", (req_id,))
-    for tid in ticket_ids:
+        await db.delete("artifacts", "ticket_id = ?", (tid,))
         await db.delete("ticket_logs", "ticket_id = ?", (tid,))
 
-    # 删除需求级产物和 LLM 会话
-    await db.delete("artifacts", "requirement_id = ? AND ticket_id IS NULL", (req_id,))
-    await db.delete("llm_conversations", "requirement_id = ? AND ticket_id IS NULL", (req_id,))
+    # 删除需求级关联（不关联工单的）
+    await db.delete("ticket_logs", "requirement_id = ?", (req_id,))
+    await db.delete("ticket_commands", "requirement_id = ?", (req_id,))
+    await db.delete("llm_conversations", "requirement_id = ?", (req_id,))
+    await db.delete("artifacts", "requirement_id = ?", (req_id,))
+    await db.delete("chat_messages", "project_id = ?", (project_id,))  # 聊天记录按项目清理可能过度，这里只清需求相关的
 
     # 删除工单
     await db.delete("tickets", "requirement_id = ?", (req_id,))
@@ -277,7 +277,7 @@ async def get_requirement_pipeline(project_id: str, req_id: str):
         except Exception:
             return None
 
-    # Pipeline 5 阶段定义
+    # Pipeline 5 阶段定义（最后阶段为"合入Develop"，部署由项目级 CI/CD 管理）
     STAGE_DEFS = [
         ("requirement_analysis", "需求分析", "📋", []),
         ("architecture", "架构设计", "🏗️",
@@ -287,8 +287,7 @@ async def get_requirement_pipeline(project_id: str, req_id: str):
           "acceptance_passed", "acceptance_rejected"]),
         ("testing", "测试验证", "🧪",
          ["testing_in_progress", "testing_done", "testing_failed"]),
-        ("deployment", "部署上线", "🚀",
-         ["deploying", "deployed"]),
+        ("merge_develop", "合入Develop", "🔀", []),
     ]
 
     # 所有"已经过"阶段的状态集合（用于判定阶段已完成）
@@ -300,8 +299,7 @@ async def get_requirement_pipeline(project_id: str, req_id: str):
         "development": {"development_done", "acceptance_passed",
                         "acceptance_rejected", "testing_in_progress",
                         "testing_done", "testing_failed", "deploying", "deployed"},
-        "testing": {"testing_done", "testing_failed", "deploying", "deployed"},
-        "deployment": {"deployed"},
+        "testing": {"testing_done", "deploying", "deployed"},
     }
 
     PRE = {
@@ -310,10 +308,6 @@ async def get_requirement_pipeline(project_id: str, req_id: str):
         "testing": {"pending", "architecture_in_progress", "architecture_done",
                     "development_in_progress", "development_done",
                     "acceptance_passed", "acceptance_rejected"},
-        "deployment": {"pending", "architecture_in_progress", "architecture_done",
-                       "development_in_progress", "development_done",
-                       "acceptance_passed", "acceptance_rejected",
-                       "testing_in_progress", "testing_done", "testing_failed"},
     }
 
     # 构建总体时间线
@@ -403,10 +397,64 @@ async def get_requirement_pipeline(project_id: str, req_id: str):
         "architecture": "ArchitectAgent",
         "development": "DevAgent",
         "testing": "TestAgent",
-        "deployment": "DeployAgent",
     }
 
     for key, name, icon, stage_statuses_list in STAGE_DEFS[1:]:
+        # "合入Develop" 特殊处理：基于需求状态而非工单状态
+        if key == "merge_develop":
+            DONE_STATUSES = {"testing_done", "deployed"}
+            non_cancelled = [t for t in tickets if t["status"] != "cancelled"]
+            all_tested = non_cancelled and all(t["status"] in DONE_STATUSES for t in non_cancelled)
+
+            if req_status == "completed":
+                m_status = "done"
+            elif all_tested:
+                m_status = "running"  # 正在合并中
+            elif req_status in ("submitted", "analyzing", "decomposed"):
+                m_status = "pending"
+            else:
+                m_status = "pending"
+
+            branch_name = req.get("branch_name", "")
+            merge_jobs = []
+            if m_status in ("done", "running"):
+                merge_jobs.append({
+                    "id": f"job-merge-{req_id[-6:]}",
+                    "title": "Orchestrator",
+                    "status": "done" if m_status == "done" else "running",
+                    "agent": "Orchestrator",
+                    "duration": None,
+                    "started_at": req.get("completed_at"),
+                    "completed_at": req.get("completed_at") if m_status == "done" else None,
+                    "subtasks": [{
+                        "title": f"合并 {branch_name} → develop" if branch_name else "合并到 develop",
+                        "status": "completed" if m_status == "done" else "in_progress",
+                        "duration": None,
+                    }],
+                    "log_count": 0,
+                })
+            elif req_status not in ("submitted",):
+                merge_jobs.append({
+                    "id": f"expected-merge-{req_id[-6:]}",
+                    "title": "Orchestrator",
+                    "status": "pending",
+                    "agent": "Orchestrator",
+                    "duration": None,
+                    "started_at": None,
+                    "completed_at": None,
+                    "subtasks": [{"title": "等待所有工单测试通过后合入 develop", "status": "pending", "duration": None}],
+                    "log_count": 0,
+                })
+
+            stages.append({
+                "key": key,
+                "name": name,
+                "icon": icon,
+                "status": m_status,
+                "jobs": merge_jobs,
+            })
+            continue
+
         stage_statuses_set = set(stage_statuses_list)
         past_set = PAST.get(key, set())
         pre_set = PRE.get(key, set())

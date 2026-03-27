@@ -88,6 +88,16 @@ async def lifespan(app: FastAPI):
     if restored:
         logger.info("已恢复 %d 个项目的自定义仓库路径映射", restored)
 
+    # 启动工单轮询调度器
+    from orchestrator import orchestrator
+    poll_task = asyncio.create_task(orchestrator.poll_loop(interval=10))
+    logger.info("工单轮询调度器已启动 (10s 间隔)")
+
+    # 启动 CI/CD Pipeline 调度器
+    from ci_pipeline import ci_pipeline
+    ci_task = asyncio.create_task(ci_pipeline.start_scheduler())
+    logger.info("CI/CD Pipeline 调度器已启动")
+
     logger.info("Server: http://localhost:%s", settings.PORT)
     logger.info("App:    http://localhost:%s/app", settings.PORT)
     logger.info("=" * 60)
@@ -95,6 +105,8 @@ async def lifespan(app: FastAPI):
     yield
 
     # 关闭时
+    poll_task.cancel()
+    ci_task.cancel()
     await db.disconnect()
     logger.info("数据库连接已关闭")
 
@@ -124,6 +136,7 @@ from api.chat import router as chat_router
 from api.chat import global_chat_router
 from api.roadmap import router as roadmap_router
 from api.milestones import router as milestones_router
+from api.ci import router as ci_router
 
 app.include_router(projects_router)
 app.include_router(requirements_router)
@@ -133,6 +146,7 @@ app.include_router(chat_router)
 app.include_router(global_chat_router)
 app.include_router(roadmap_router)
 app.include_router(milestones_router)
+app.include_router(ci_router)
 
 
 # ==================== 系统端点 ====================
@@ -142,6 +156,17 @@ app.include_router(milestones_router)
 async def health_check():
     """健康检查"""
     return {"status": "ok", "version": "0.10.0"}
+
+
+@app.get("/api/projects/{project_id}/preview")
+async def get_preview_url(project_id: str):
+    """获取项目的本地预览 URL"""
+    from agents.deploy import DeployAgent
+    servers = DeployAgent._preview_servers
+    if project_id in servers:
+        info = servers[project_id]
+        return {"preview_url": f"http://localhost:{info['port']}", "port": info["port"]}
+    return {"preview_url": None}
 
 
 @app.get("/api/llm/status")

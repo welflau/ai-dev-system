@@ -201,6 +201,9 @@ def _build_system_prompt(project: dict, context: dict) -> str:
         req_summary = "  暂无需求"
 
     ticket_summary = context.get("ticket_summary", "暂无工单")
+    file_tree = context.get("file_tree", "")
+    key_files_content = context.get("key_files_content", "")
+    artifacts_summary = context.get("artifacts_summary", "暂无产物")
 
     return f"""你是 AI 自动开发系统的智能助手，当前正在为项目「{project['name']}」提供服务。
 
@@ -208,6 +211,7 @@ def _build_system_prompt(project: dict, context: dict) -> str:
 - 名称：{project['name']}
 - 描述：{project.get('description') or '无描述'}
 - 技术栈：{project.get('tech_stack') or '未指定'}
+- Git 仓库：{project.get('git_repo_path') or '未配置'}
 
 ## 当前需求状态
 {req_summary}
@@ -215,12 +219,22 @@ def _build_system_prompt(project: dict, context: dict) -> str:
 ## 工单概况
 {ticket_summary}
 
+## 项目文件树
+{file_tree}
+
+## 项目关键文档内容
+{key_files_content}
+
+## 产出物列表
+{artifacts_summary}
+
 ## 你的能力
-1. **回答问题**：关于项目状态、需求进展、技术方案的任何问题
+1. **回答项目问题**：你可以直接访问项目的文件树和文档内容，回答关于项目代码、架构、设计、测试报告等任何问题
 2. **创建需求**：当用户描述一个新功能需求时，你可以帮助创建
 3. **管理需求状态**：暂停、恢复、关闭需求的执行
 4. **查看状态**：汇报当前项目进展、工单状态
-5. **技术建议**：基于项目技术栈给出建议
+5. **技术建议**：基于项目技术栈和已有代码给出建议
+6. **生成文档**：可以基于项目内容生成设计文档、分析报告等（通过创建需求来生成）
 
 ## 操作指令格式
 当你判断用户想要执行操作时，在回复末尾附加以下格式的指令标记（必须是独立一行）：
@@ -249,11 +263,29 @@ def _build_system_prompt(project: dict, context: dict) -> str:
 {{"requirement_id": "需求ID", "reason": "关闭原因"}}
 [/ACTION]
 
+### 生成文档
+当用户要求生成设计报告、技术方案、API 文档、分析报告等文档时使用（不需要走开发流程，直接生成）：
+[ACTION:GENERATE_DOCUMENT]
+filename: english-filename.md
+title: 文档标题
+---
+完整的 Markdown 文档内容放在 --- 分隔线下面...
+（可以包含任何 Markdown 格式：标题、表格、代码块等）
+[/ACTION]
+
+注意：
+- filename 必须是英文，以 .md 结尾
+- --- 分隔线上面是元数据（filename 和 title），下面是文档正文
+- 文档会自动保存到项目仓库的 docs/ 目录并 commit + push
+- 适合：设计报告、技术方案、API 文档、项目总结、竞品分析等
+- 直接生成完整内容，不要省略
+
 priority 可选值：critical, high, medium, low
 
 ## 注意事项
 - 用中文回复
 - 回答简洁但有信息量
+- 当用户询问项目文件、代码、文档内容时，直接引用上面的文件树和文档内容来回答，不要说"无法访问"
 - 如果用户的描述不够清晰，先询问细节再执行操作
 - 如果不确定用户想操作哪个需求，列出当前需求让用户选择
 - 如果需求 ID 不明确，用标题关键词匹配当前需求列表中的需求
@@ -262,10 +294,10 @@ priority 可选值：critical, high, medium, low
 
 
 async def _build_project_context(project_id: str, project: dict) -> dict:
-    """构建项目上下文信息"""
+    """构建项目上下文信息（含文件树和关键文档内容）"""
     # 获取最近需求
     requirements = await db.fetch_all(
-        "SELECT id, title, status, priority, created_at FROM requirements WHERE project_id = ? ORDER BY created_at DESC LIMIT 10",
+        "SELECT id, title, status, priority, branch_name, created_at FROM requirements WHERE project_id = ? ORDER BY created_at DESC LIMIT 10",
         (project_id,),
     )
 
@@ -286,9 +318,68 @@ async def _build_project_context(project_id: str, project: dict) -> dict:
     else:
         ticket_summary = "暂无工单"
 
+    # === 读取项目仓库文件树 ===
+    file_tree = ""
+    key_files_content = ""
+    try:
+        from git_manager import git_manager
+        repo_dir = git_manager._repo_path(project_id)
+        if repo_dir.exists():
+            from pathlib import Path
+            # 文件树（最多 100 个文件）
+            all_files = []
+            for f in sorted(repo_dir.rglob("*")):
+                if f.is_file() and ".git" not in str(f):
+                    rel = f.relative_to(repo_dir)
+                    size = f.stat().st_size
+                    all_files.append(f"{rel} ({size}B)")
+                    if len(all_files) >= 100:
+                        break
+            file_tree = "\n".join(all_files) if all_files else "（空仓库）"
+
+            # 读取关键文档内容（README, docs/*.md, index.html 等，最多 8000 字符）
+            key_file_patterns = ["README.md", "docs/**/REPORT.md", "docs/**/PRD.md",
+                                 "docs/**/architecture.md", "docs/**/deploy.md",
+                                 "index.html", "docs/**/test-report.md"]
+            content_parts = []
+            total_chars = 0
+            max_chars = 8000
+
+            for pattern in key_file_patterns:
+                for fpath in repo_dir.glob(pattern):
+                    if fpath.is_file() and total_chars < max_chars:
+                        try:
+                            text = fpath.read_text(encoding="utf-8", errors="replace")
+                            remaining = max_chars - total_chars
+                            if len(text) > remaining:
+                                text = text[:remaining] + "\n...(truncated)"
+                            rel = fpath.relative_to(repo_dir)
+                            content_parts.append(f"### {rel}\n```\n{text}\n```")
+                            total_chars += len(text)
+                        except Exception:
+                            pass
+
+            key_files_content = "\n\n".join(content_parts) if content_parts else "（暂无文档）"
+    except Exception as e:
+        file_tree = f"（读取文件树失败: {e}）"
+        key_files_content = ""
+
+    # === 获取最近产物列表 ===
+    artifacts = await db.fetch_all(
+        "SELECT type, name, path, created_at FROM artifacts WHERE project_id = ? ORDER BY created_at DESC LIMIT 20",
+        (project_id,),
+    )
+    artifacts_summary = "\n".join(
+        f"- [{a['type']}] {a['name'] or a['path'] or '未命名'} ({a['created_at'][:16]})"
+        for a in artifacts
+    ) if artifacts else "暂无产物"
+
     return {
         "recent_requirements": requirements,
         "ticket_summary": ticket_summary,
+        "file_tree": file_tree,
+        "key_files_content": key_files_content,
+        "artifacts_summary": artifacts_summary,
     }
 
 
@@ -296,7 +387,37 @@ async def _parse_and_execute_action(project_id: str, project: dict, response: st
     """解析 AI 回复中的操作指令并执行"""
     import re
 
-    # 匹配 [ACTION:XXX] ... [/ACTION]
+    # 特殊处理 GENERATE_DOCUMENT（非 JSON 格式，用 --- 分隔）
+    doc_pattern = r'\[ACTION:GENERATE_DOCUMENT\]\s*(.*?)\s*\[/ACTION\]'
+    doc_match = re.search(doc_pattern, response, re.DOTALL)
+    if doc_match:
+        raw = doc_match.group(1)
+        # 解析 filename/title + --- + content
+        if '---' in raw:
+            header, content = raw.split('---', 1)
+            filename = ""
+            title = ""
+            for line in header.strip().split('\n'):
+                line = line.strip()
+                if line.lower().startswith('filename:'):
+                    filename = line.split(':', 1)[1].strip()
+                elif line.lower().startswith('title:'):
+                    title = line.split(':', 1)[1].strip()
+            content = content.strip()
+            if filename and content:
+                return await _execute_generate_document(project_id, {
+                    "filename": filename, "title": title, "content": content
+                })
+        else:
+            # 回退：尝试 JSON 解析
+            try:
+                data = json.loads(raw)
+                return await _execute_generate_document(project_id, data)
+            except json.JSONDecodeError:
+                logger.warning("GENERATE_DOCUMENT 解析失败")
+                return None
+
+    # 通用 JSON 指令匹配 [ACTION:XXX] {...} [/ACTION]
     pattern = r'\[ACTION:(\w+)\]\s*(\{.*?\})\s*\[/ACTION\]'
     match = re.search(pattern, response, re.DOTALL)
 
@@ -320,9 +441,83 @@ async def _parse_and_execute_action(project_id: str, project: dict, response: st
         return await _execute_resume_requirement(project_id, action_data)
     elif action_type == "CLOSE_REQUIREMENT":
         return await _execute_close_requirement(project_id, action_data)
+    elif action_type == "GENERATE_DOCUMENT":
+        return await _execute_generate_document(project_id, action_data)
 
     logger.warning("未知操作类型: %s", action_type)
     return None
+
+
+async def _execute_generate_document(project_id: str, data: dict) -> Dict:
+    """执行生成文档操作：直接写入 Git 仓库"""
+    filename = data.get("filename", "").strip()
+    title = data.get("title", "").strip()
+    content = data.get("content", "").strip()
+
+    if not filename or not content:
+        return {"type": "error", "message": "文档文件名和内容不能为空"}
+
+    # 确保文件名安全（英文，.md 结尾）
+    import re
+    filename = re.sub(r'[^\w\-.]', '', filename)
+    if not filename.endswith(".md"):
+        filename += ".md"
+
+    file_path = f"docs/{filename}"
+
+    try:
+        from git_manager import git_manager
+
+        # 确保仓库存在
+        if not git_manager.repo_exists(project_id):
+            project = await db.fetch_one("SELECT * FROM projects WHERE id = ?", (project_id,))
+            if project:
+                await git_manager.init_repo(project_id, project["name"])
+
+        # 写入文件
+        await git_manager.write_file(project_id, file_path, content)
+
+        # commit + push
+        commit_hash = await git_manager.commit(
+            project_id,
+            f"[Doc] {title or filename}",
+            author="ChatAssistant",
+        )
+        await git_manager.push(project_id)
+
+        # 保存到 artifacts 表
+        await db.insert("artifacts", {
+            "id": generate_id("ART"),
+            "project_id": project_id,
+            "requirement_id": None,
+            "ticket_id": None,
+            "type": "document",
+            "name": title or filename,
+            "path": file_path,
+            "content": content,
+            "metadata": json.dumps({"source": "chat_assistant", "commit": commit_hash}),
+            "created_at": now_iso(),
+        })
+
+        # 发 SSE 事件
+        await event_manager.publish_to_project(
+            project_id,
+            "document_generated",
+            {"filename": filename, "path": file_path, "title": title},
+        )
+
+        logger.info("📄 文档已生成: %s (commit: %s)", file_path, commit_hash)
+
+        return {
+            "type": "document_generated",
+            "title": title or filename,
+            "path": file_path,
+            "commit": commit_hash,
+            "message": f"文档「{title or filename}」已生成并保存到 {file_path}",
+        }
+    except Exception as e:
+        logger.error("生成文档失败: %s", e)
+        return {"type": "error", "message": f"生成文档失败: {str(e)}"}
 
 
 async def _execute_create_requirement(project_id: str, data: dict) -> Dict:

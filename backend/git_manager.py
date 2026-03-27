@@ -58,6 +58,8 @@ class GitManager:
                 cwd=cwd,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 check=False,
             )
             return (
@@ -145,6 +147,10 @@ Thumbs.db
             "--author", "AI Dev System <ai@dev-system.local>",
         )
 
+        # 创建 develop 分支（从 master/main 分出来）
+        await self._run_git(str(repo_dir), "branch", "develop")
+        logger.info("🌿 develop 分支已创建")
+
         return str(repo_dir)
 
     # ==================== 文件操作 ====================
@@ -196,7 +202,7 @@ Thumbs.db
         rc, hash_out, _ = await self._run_git(repo_dir, "rev-parse", "--short", "HEAD")
         return hash_out if rc == 0 else None
 
-    async def push(self, project_id: str, remote: str = "origin", branch: str = "main") -> bool:
+    async def push(self, project_id: str, remote: str = "origin", branch: str = None) -> bool:
         """git push（仅在配置了远程仓库时执行）"""
         repo_dir = str(self._repo_path(project_id))
 
@@ -205,8 +211,18 @@ Thumbs.db
         if rc != 0 or remote not in out:
             return False  # no remote configured
 
+        # 自动检测当前分支名
+        if not branch:
+            rc, branch_out, _ = await self._run_git(repo_dir, "rev-parse", "--abbrev-ref", "HEAD")
+            branch = branch_out if rc == 0 and branch_out else "main"
+
         rc, _, err = await self._run_git(repo_dir, "push", remote, branch)
         if rc != 0:
+            # 如果 main 失败，尝试 master
+            if "main" in (branch or ""):
+                rc2, _, err2 = await self._run_git(repo_dir, "push", remote, "master")
+                if rc2 == 0:
+                    return True
             logger.error("git push failed: %s", err)
             return False
         return True
@@ -222,6 +238,86 @@ Thumbs.db
         else:
             await self._run_git(repo_dir, "remote", "add", remote, url)
         return True
+
+    # ==================== 分支管理 ====================
+
+    async def create_branch(self, project_id: str, branch_name: str) -> bool:
+        """创建并切换到新分支"""
+        repo_dir = str(self._repo_path(project_id))
+        rc, _, err = await self._run_git(repo_dir, "checkout", "-b", branch_name)
+        if rc != 0:
+            logger.error("create branch '%s' failed: %s", branch_name, err)
+            return False
+        logger.info("分支已创建并切换: %s", branch_name)
+        return True
+
+    async def switch_branch(self, project_id: str, branch_name: str) -> bool:
+        """切换到指定分支"""
+        repo_dir = str(self._repo_path(project_id))
+        rc, _, err = await self._run_git(repo_dir, "checkout", branch_name)
+        if rc != 0:
+            logger.error("switch branch '%s' failed: %s", branch_name, err)
+            return False
+        return True
+
+    async def get_current_branch(self, project_id: str) -> str:
+        """获取当前分支名"""
+        repo_dir = str(self._repo_path(project_id))
+        rc, out, _ = await self._run_git(repo_dir, "rev-parse", "--abbrev-ref", "HEAD")
+        return out if rc == 0 else "main"
+
+    async def push_branch(self, project_id: str, branch_name: str, remote: str = "origin") -> bool:
+        """推送分支到远程"""
+        repo_dir = str(self._repo_path(project_id))
+        rc, _, err = await self._run_git(repo_dir, "push", "-u", remote, branch_name)
+        if rc != 0:
+            logger.error("push branch '%s' failed: %s", branch_name, err)
+            return False
+        return True
+
+    async def merge_branch(self, project_id: str, source: str, target: str,
+                           message: str = None) -> Dict:
+        """将 source 分支合并到 target 分支，返回结果"""
+        repo_dir = str(self._repo_path(project_id))
+
+        # 切到目标分支
+        rc, _, err = await self._run_git(repo_dir, "checkout", target)
+        if rc != 0:
+            return {"success": False, "error": f"切换到 {target} 失败: {err}"}
+
+        # 合并
+        merge_msg = message or f"merge: {source} → {target}"
+        rc, out, err = await self._run_git(repo_dir, "merge", source, "--no-ff", "-m", merge_msg)
+        if rc != 0:
+            # 合并冲突，abort 并回报
+            await self._run_git(repo_dir, "merge", "--abort")
+            return {"success": False, "error": f"合并冲突: {err}"}
+
+        # 获取合并后的 commit hash
+        rc, hash_out, _ = await self._run_git(repo_dir, "rev-parse", "--short", "HEAD")
+        commit_hash = hash_out if rc == 0 else None
+
+        # push
+        pushed = await self.push(project_id)
+
+        logger.info("🔀 分支合并: %s → %s (commit: %s, pushed: %s)", source, target, commit_hash, pushed)
+        return {"success": True, "commit": commit_hash, "pushed": pushed}
+
+    async def list_branches(self, project_id: str) -> List[str]:
+        """列出所有本地分支"""
+        repo_dir = str(self._repo_path(project_id))
+        rc, out, _ = await self._run_git(repo_dir, "branch", "--list")
+        if rc != 0 or not out:
+            return []
+        return [b.strip().lstrip("* ") for b in out.split("\n") if b.strip()]
+
+    async def ensure_branch(self, project_id: str, branch_name: str):
+        """确保分支存在，不存在则创建（从当前分支）"""
+        branches = await self.list_branches(project_id)
+        if branch_name not in branches:
+            repo_dir = str(self._repo_path(project_id))
+            await self._run_git(repo_dir, "branch", branch_name)
+            logger.info("🌿 分支 %s 已创建", branch_name)
 
     # ==================== 高级操作 ====================
 

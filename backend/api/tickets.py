@@ -158,6 +158,80 @@ async def cancel_ticket(project_id: str, ticket_id: str):
 # ==================== 工单操作 ====================
 
 
+@router.patch("/api/projects/{project_id}/tickets/{ticket_id}/status")
+async def update_ticket_status(project_id: str, ticket_id: str, body: dict):
+    """手动更新工单状态（前端下拉选择触发）"""
+    new_status = body.get("status")
+    if not new_status:
+        raise HTTPException(400, "缺少 status 字段")
+
+    try:
+        TicketStatus(new_status)
+    except ValueError:
+        raise HTTPException(400, f"无效的状态值: {new_status}")
+
+    existing = await db.fetch_one(
+        "SELECT * FROM tickets WHERE id = ? AND project_id = ?",
+        (ticket_id, project_id),
+    )
+    if not existing:
+        raise HTTPException(404, "工单不存在")
+
+    old_status = existing["status"]
+    if old_status == new_status:
+        return {"message": "状态未变", "status": old_status}
+
+    if not validate_ticket_transition(old_status, new_status):
+        old_label = STATUS_LABELS.get(old_status, old_status)
+        new_label = STATUS_LABELS.get(new_status, new_status)
+        raise HTTPException(400, f"不允许从「{old_label}」转换到「{new_label}」")
+
+    update_data = {"status": new_status, "updated_at": now_iso()}
+    if new_status == "deployed":
+        update_data["completed_at"] = now_iso()
+    if new_status in ("architecture_in_progress", "development_in_progress",
+                       "testing_in_progress", "deploying") and not existing.get("started_at"):
+        update_data["started_at"] = now_iso()
+
+    await db.update("tickets", update_data, "id = ?", (ticket_id,))
+
+    await _log_ticket(
+        project_id, existing["requirement_id"], ticket_id,
+        None, "update_status", old_status, new_status,
+        f"手动变更状态: {STATUS_LABELS.get(old_status, old_status)} → {STATUS_LABELS.get(new_status, new_status)}"
+    )
+
+    await event_manager.publish_to_project(
+        project_id,
+        "ticket_status_changed",
+        {"ticket_id": ticket_id, "from_status": old_status, "to_status": new_status,
+         "status_label": STATUS_LABELS.get(new_status, new_status)},
+    )
+
+    # 手动改为 testing_done 或 deployed 时，触发后续依赖工单流转 + 需求完成检查
+    if new_status in ("testing_done", "deployed"):
+        import asyncio
+        from orchestrator import orchestrator
+        asyncio.create_task(orchestrator._trigger_dependents(project_id, ticket_id))
+        asyncio.create_task(orchestrator._check_requirement_completion(
+            project_id, existing["requirement_id"]
+        ))
+
+    # 如果新状态在流转规则中（如 development_done → 验收），自动触发下一步 Agent
+    import asyncio
+    from orchestrator import orchestrator
+    if new_status in orchestrator.transition_rules:
+        asyncio.create_task(orchestrator.process_ticket(project_id, ticket_id))
+
+    return {
+        "message": "状态已更新",
+        "ticket_id": ticket_id,
+        "from_status": old_status,
+        "to_status": new_status,
+        "status_label": STATUS_LABELS.get(new_status, new_status),
+    }
+
+
 @router.post("/api/projects/{project_id}/tickets/{ticket_id}/start")
 async def start_ticket(project_id: str, ticket_id: str, background_tasks: BackgroundTasks):
     """启动工单（触发 Agent 流转）"""

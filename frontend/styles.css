@@ -426,6 +426,25 @@ body.chat-open #projectListPage {
     border-radius: 4px;
     background: var(--bg-hover);
 }
+.status-select {
+    font-size: 11px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--bg-hover);
+    color: var(--text-primary);
+    cursor: pointer;
+    outline: none;
+    max-width: 120px;
+    transition: border-color 0.2s;
+}
+.status-select:hover {
+    border-color: var(--accent);
+}
+.status-select:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+}
 
 /* ==================== 需求列表（TAPD 风格表格） ==================== */
 
@@ -523,6 +542,20 @@ body.chat-open #projectListPage {
     overflow: hidden;
     text-overflow: ellipsis;
 }
+.req-branch-tag {
+    display: inline-block;
+    font-size: 11px;
+    color: var(--success, #22c55e);
+    background: rgba(34, 197, 94, 0.1);
+    padding: 1px 8px;
+    border-radius: 4px;
+    margin-top: 3px;
+    font-family: 'Consolas', 'Monaco', monospace;
+    max-width: 300px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
 
 /* 状态列 */
 .col-status {
@@ -604,6 +637,61 @@ body.chat-open #projectListPage {
 .req-status.paused { background: rgba(245, 158, 11, 0.18); color: #e67e22; }
 .req-status.completed { background: rgba(34, 197, 94, 0.15); color: var(--success); }
 .req-status.cancelled { background: rgba(107, 114, 128, 0.15); color: var(--text-muted); }
+
+/* ==================== Agent 监控面板 ==================== */
+
+.agent-monitor-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 12px;
+}
+.agent-summary-card {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--bg-elevated); padding: 8px 16px; border-radius: var(--radius-sm);
+    font-size: 13px;
+}
+.agent-card {
+    background: var(--bg-elevated); border-radius: var(--radius-md);
+    padding: 16px; border: 1px solid var(--border);
+    transition: border-color 0.3s, box-shadow 0.3s;
+}
+.agent-card.agent-working {
+    border-color: var(--accent);
+    box-shadow: 0 0 12px rgba(59, 130, 246, 0.15);
+}
+.agent-card-header {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 10px;
+}
+.agent-icon { font-size: 24px; }
+.agent-name { font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.agent-role { font-size: 11px; color: var(--text-muted); }
+.agent-status-dot {
+    width: 10px; height: 10px; border-radius: 50%; margin-left: auto;
+}
+.agent-status-dot.agent-working {
+    background: var(--accent);
+    animation: agent-pulse 1.5s ease-in-out infinite;
+}
+.agent-status-dot.agent-idle { background: var(--text-muted); }
+@keyframes agent-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+.agent-status-text {
+    font-size: 12px; font-weight: 600; margin-bottom: 8px;
+    color: var(--text-muted);
+}
+.agent-card.agent-working .agent-status-text { color: var(--accent); }
+
+.agent-task-info {
+    background: var(--bg-hover); border-radius: var(--radius-sm);
+    padding: 8px 10px; margin-bottom: 8px;
+}
+.agent-task-title { font-size: 12px; color: var(--text-primary); font-weight: 500; }
+.agent-task-action { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+
+.agent-stats-row {
+    display: flex; justify-content: space-between;
+    font-size: 11px; color: var(--text-muted);
+}
 
 /* ==================== 统计面板 ==================== */
 
@@ -4474,4 +4562,163 @@ body.chat-open .chat-panel {
 
 .roadmap-ai-hint .btn {
     margin: 0 auto;
+}
+
+/* ==================== CI/CD Pipeline ==================== */
+
+.cicd-stages-row {
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    overflow-x: auto;
+    padding: 16px 0;
+}
+
+.cicd-stage {
+    flex: 1;
+    min-width: 220px;
+    max-width: 320px;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    transition: border-color 0.3s, box-shadow 0.3s;
+}
+
+.cicd-stage-success { border-color: #22c55e; }
+.cicd-stage-running { border-color: #3b82f6; box-shadow: 0 0 12px rgba(59, 130, 246, 0.2); }
+.cicd-stage-failed  { border-color: #ef4444; }
+
+.cicd-stage-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+    font-size: 15px;
+}
+
+.cicd-stage-icon { font-size: 20px; }
+
+.cicd-stage-status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.cicd-status-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+}
+
+.cicd-dot-pending   { background: #94a3b8; }
+.cicd-dot-running   { background: #3b82f6; animation: cicd-pulse 1.5s infinite; }
+.cicd-dot-success   { background: #22c55e; }
+.cicd-dot-failed    { background: #ef4444; }
+.cicd-dot-cancelled { background: #94a3b8; }
+
+@keyframes cicd-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%      { opacity: 0.5; transform: scale(1.3); }
+}
+
+.cicd-status-text {
+    font-size: 13px;
+    font-weight: 500;
+}
+
+.cicd-stage-details {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.cicd-detail-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+}
+
+.cicd-detail-label { color: var(--text-muted); }
+.cicd-detail-value { font-family: 'SF Mono', monospace; }
+
+.cicd-stage-error {
+    font-size: 12px;
+    color: #ef4444;
+    background: rgba(239, 68, 68, 0.08);
+    padding: 6px 8px;
+    border-radius: 4px;
+    word-break: break-all;
+}
+
+.cicd-stage-desc {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: auto;
+}
+
+.cicd-connector {
+    display: flex;
+    align-items: center;
+    padding: 0 8px;
+    font-size: 20px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+
+/* CI/CD 构建历史表格 */
+.cicd-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.cicd-table th {
+    text-align: left;
+    padding: 8px 10px;
+    border-bottom: 2px solid var(--border);
+    font-weight: 600;
+    font-size: 12px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+}
+
+.cicd-table td {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: middle;
+}
+
+.cicd-table tbody tr:hover {
+    background: var(--hover-bg, rgba(0,0,0,0.02));
+}
+
+.cicd-row-running { background: rgba(59, 130, 246, 0.04); }
+.cicd-row-failed  { background: rgba(239, 68, 68, 0.03); }
+
+.cicd-type-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+.cicd-type-develop_build { background: #dbeafe; color: #1d4ed8; }
+.cicd-type-master_build  { background: #fef3c7; color: #92400e; }
+.cicd-type-deploy        { background: #d1fae5; color: #065f46; }
+
+.cicd-error-row td {
+    padding: 4px 10px 8px;
+    border-bottom: 1px solid var(--border);
+}
+
+.cicd-error-cell {
+    font-size: 12px;
+    color: #ef4444;
+    padding-left: 28px !important;
 }

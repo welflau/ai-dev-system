@@ -48,6 +48,11 @@ class Database:
             ("projects", "git_remote_url", "TEXT"),
             ("requirements", "milestone_id", "TEXT"),
             ("requirements", "estimated_days", "REAL"),
+            ("requirements", "branch_name", "TEXT"),
+            ("tickets", "verification_status", "TEXT DEFAULT 'pending'"),
+            ("tickets", "verified_by", "TEXT"),
+            ("tickets", "verification_date", "TEXT"),
+            ("tickets", "verification_notes", "TEXT"),
         ]
         for table, column, col_def in migrations:
             cursor = await self._db.execute(f"PRAGMA table_info({table})")
@@ -301,6 +306,25 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 );
 
 -- ============================================================
+-- CI/CD 构建记录表
+-- ============================================================
+CREATE TABLE IF NOT EXISTS ci_builds (
+    id              TEXT PRIMARY KEY,
+    project_id      TEXT NOT NULL REFERENCES projects(id),
+    build_type      TEXT NOT NULL,
+    branch          TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'pending',
+    trigger         TEXT NOT NULL DEFAULT 'auto',
+    commit_hash     TEXT,
+    merge_commit    TEXT,
+    build_log       TEXT,
+    error_message   TEXT,
+    started_at      TEXT,
+    completed_at    TEXT,
+    created_at      TEXT NOT NULL
+);
+
+-- ============================================================
 -- 索引
 -- ============================================================
 CREATE INDEX IF NOT EXISTS idx_requirements_project ON requirements(project_id);
@@ -324,6 +348,9 @@ CREATE INDEX IF NOT EXISTS idx_chat_messages_project ON chat_messages(project_id
 CREATE INDEX IF NOT EXISTS idx_milestones_project ON milestones(project_id);
 CREATE INDEX IF NOT EXISTS idx_milestones_status ON milestones(status);
 CREATE INDEX IF NOT EXISTS idx_requirements_milestone ON requirements(milestone_id);
+CREATE INDEX IF NOT EXISTS idx_ci_builds_project ON ci_builds(project_id);
+CREATE INDEX IF NOT EXISTS idx_ci_builds_status ON ci_builds(status);
+CREATE INDEX IF NOT EXISTS idx_ci_builds_type ON ci_builds(build_type);
 """
 
 

@@ -119,6 +119,20 @@ class AgentType(str, Enum):
     DEPLOY = "DeployAgent"
 
 
+class CIBuildStatus(str, Enum):
+    PENDING = "pending"          # 排队中
+    RUNNING = "running"          # 构建中
+    SUCCESS = "success"          # 构建成功
+    FAILED = "failed"            # 构建失败
+    CANCELLED = "cancelled"      # 已取消
+
+
+class CIBuildType(str, Enum):
+    DEVELOP_BUILD = "develop_build"   # develop 分支构建+测试
+    MASTER_BUILD = "master_build"     # master 分支构建+测试
+    DEPLOY = "deploy"                 # 部署到生产环境
+
+
 # ==================== 状态机：合法转换规则 ====================
 
 # 工单状态转换表：{当前状态: [允许转到的状态列表]}
@@ -153,16 +167,32 @@ TICKET_TRANSITIONS = {
         TicketStatus.TESTING_FAILED,
     ],
     TicketStatus.TESTING_DONE: [
-        TicketStatus.DEPLOYING,
+        TicketStatus.PENDING,  # 允许重新开始（工单终态，部署由 CI/CD 管理）
     ],
     TicketStatus.TESTING_FAILED: [
         TicketStatus.DEVELOPMENT_IN_PROGRESS,  # 打回开发
     ],
     TicketStatus.DEPLOYING: [
         TicketStatus.DEPLOYED,
+        TicketStatus.CANCELLED,
     ],
-    TicketStatus.DEPLOYED: [],  # 终态
-    TicketStatus.CANCELLED: [],  # 终态
+    TicketStatus.DEPLOYED: [
+        TicketStatus.PENDING,  # 允许重新开始
+    ],
+    TicketStatus.CANCELLED: [
+        TicketStatus.PENDING,
+        TicketStatus.ARCHITECTURE_IN_PROGRESS,
+        TicketStatus.ARCHITECTURE_DONE,
+        TicketStatus.DEVELOPMENT_IN_PROGRESS,
+        TicketStatus.DEVELOPMENT_DONE,
+        TicketStatus.ACCEPTANCE_PASSED,
+        TicketStatus.ACCEPTANCE_REJECTED,
+        TicketStatus.TESTING_IN_PROGRESS,
+        TicketStatus.TESTING_DONE,
+        TicketStatus.TESTING_FAILED,
+        TicketStatus.DEPLOYING,
+        TicketStatus.DEPLOYED,
+    ],
 }
 
 # 需求状态转换表
@@ -241,6 +271,7 @@ class RequirementCreate(BaseModel):
     priority: Priority = Priority.MEDIUM
     module: Optional[str] = None
     tags: Optional[List[str]] = None
+    branch_name: Optional[str] = None  # Git 分支名称
 
 
 class RequirementUpdate(BaseModel):
@@ -303,7 +334,8 @@ BOARD_COLUMNS = {
         TicketStatus.TESTING_DONE,
         TicketStatus.TESTING_FAILED,
     ],
-    "deployed": [TicketStatus.DEPLOYING, TicketStatus.DEPLOYED],
+    "done": [TicketStatus.TESTING_DONE],
+    "deployed": [TicketStatus.DEPLOYING, TicketStatus.DEPLOYED],  # 兼容旧数据
 }
 
 # 状态 → 中文展示名
@@ -332,4 +364,15 @@ STATUS_LABELS = {
     # 里程碑状态
     "planned": "计划中",
     "delayed": "已延期",
+    # CI/CD 构建状态
+    "develop_build": "Develop 构建",
+    "master_build": "Master 构建",
+    "deploy": "部署上线",
+    "running": "构建中",
+    "success": "构建成功",
+    "failed": "构建失败",
 }
+
+
+class CIBuildTrigger(BaseModel):
+    build_type: str = Field(..., description="构建类型: develop_build / master_build / deploy")

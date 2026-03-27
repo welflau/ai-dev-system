@@ -26,6 +26,7 @@ class ArchitectAgent(BaseAgent):
         ticket_description = context.get("ticket_description", "")
         module = context.get("module", "other")
         requirement_description = context.get("requirement_description", "")
+        docs_prefix = context.get("docs_prefix", "docs/")
 
         prompt = f"""你是一位资深软件架构师。请为以下任务设计技术架构方案。
 
@@ -71,12 +72,12 @@ class ArchitectAgent(BaseAgent):
                 "architecture": result,
                 "estimated_hours": result.get("estimated_hours", 4),
                 "files": {
-                    "docs/architecture.md": arch_md,
+                    f"{docs_prefix}architecture.md": arch_md,
                 },
             }
 
         # 降级
-        return self._fallback_design(ticket_title, module)
+        return self._fallback_design(ticket_title, module, docs_prefix)
 
     def _generate_arch_doc(self, title: str, arch: dict) -> str:
         """根据架构数据生成 Markdown 文档"""
@@ -113,7 +114,7 @@ class ArchitectAgent(BaseAgent):
 
         return "\n".join(lines)
 
-    def _fallback_design(self, title: str, module: str) -> Dict:
+    def _fallback_design(self, title: str, module: str, docs_prefix: str = "docs/") -> Dict:
         """规则引擎降级架构设计"""
         arch_templates = {
             "frontend": {
@@ -151,6 +152,6 @@ class ArchitectAgent(BaseAgent):
             "architecture": arch_result,
             "estimated_hours": template["estimated_hours"],
             "files": {
-                "docs/architecture.md": self._generate_arch_doc(title, arch_result),
+                f"{docs_prefix}architecture.md": self._generate_arch_doc(title, arch_result),
             },
         }

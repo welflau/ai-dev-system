@@ -81,6 +81,12 @@
                         <a class="nav-item" data-tab="stats" onclick="switchTab('stats')">
                             📊 统计面板
                         </a>
+                        <a class="nav-item" data-tab="cicd" onclick="switchTab('cicd')">
+                            🔄 CI/CD
+                        </a>
+                        <a class="nav-item" data-tab="agents" onclick="switchTab('agents')">
+                            🤖 Agent 监控
+                        </a>
                         <a class="nav-item" data-tab="logs" onclick="switchTab('logs')">
                             📝 操作日志
                         </a>
@@ -168,7 +174,14 @@
                                 </div>
                                 <div class="column-body" id="col-testing"></div>
                             </div>
-                            <div class="board-column" data-status="deployed">
+                            <div class="board-column" data-status="done">
+                                <div class="column-header">
+                                    <span class="column-title">测试通过</span>
+                                    <span class="column-count" id="count-done">0</span>
+                                </div>
+                                <div class="column-body" id="col-done"></div>
+                            </div>
+                            <div class="board-column" data-status="deployed" style="display:none">
                                 <div class="column-header">
                                     <span class="column-title">已部署</span>
                                     <span class="column-count" id="count-deployed">0</span>
@@ -352,6 +365,38 @@
                         </div>
                     </div>
 
+                    <!-- Tab: CI/CD Pipeline -->
+                    <div id="tab-cicd" class="tab-content">
+                        <div class="cicd-page">
+                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+                                <h2 style="margin:0;">🔄 CI/CD Pipeline</h2>
+                                <div style="display:flex; gap:8px;">
+                                    <button class="btn btn-sm btn-secondary" onclick="triggerCIBuild('develop_build')">▶ 构建 Develop</button>
+                                    <button class="btn btn-sm btn-secondary" onclick="triggerCIBuild('master_build')">▶ 构建 Master</button>
+                                    <button class="btn btn-sm btn-accent" onclick="triggerCIBuild('deploy')">🚀 部署</button>
+                                    <button class="btn btn-sm" onclick="loadCICD()">🔄 刷新</button>
+                                </div>
+                            </div>
+                            <!-- 三阶段流水线 -->
+                            <div class="cicd-pipeline-flow" id="cicdPipelineFlow"></div>
+                            <!-- 构建历史 -->
+                            <h3 style="margin-top:24px;">构建历史</h3>
+                            <div class="cicd-build-history" id="cicdBuildHistory"></div>
+                        </div>
+                    </div>
+
+                    <!-- Tab: Agent 监控 -->
+                    <div id="tab-agents" class="tab-content">
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+                            <h2 style="margin:0;">🤖 Agent 监控</h2>
+                            <div style="display:flex; gap:8px; align-items:center;">
+                                <span id="agentPollIndicator" style="font-size:12px; color:var(--text-muted);">自动刷新中...</span>
+                                <button class="btn btn-sm" onclick="loadAgentMonitor()">🔄 刷新</button>
+                            </div>
+                        </div>
+                        <div id="agentMonitorGrid"></div>
+                    </div>
+
                     <!-- Tab: 统计面板 -->
                     <div id="tab-stats" class="tab-content">
                         <h2>项目统计</h2>
@@ -446,6 +491,12 @@
                                     </div>
                                 </div>
                                 <button class="btn btn-sm" onclick="refreshRepoStatus()" style="margin-top:12px;">🔄 刷新状态</button>
+                            </div>
+                            <div class="settings-card">
+                                <h3 class="settings-card-title">🌿 分支管理</h3>
+                                <div id="branchInfoContainer">
+                                    <span style="color:var(--text-muted); font-size:12px;">加载中...</span>
+                                </div>
                             </div>
                         </div>
                     </div>

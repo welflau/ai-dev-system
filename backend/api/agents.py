@@ -318,6 +318,13 @@ async def list_agents():
     return {"agents": AGENT_REGISTRY}
 
 
+@router.get("/status")
+async def get_agents_status():
+    """获取所有 Agent 实时运行状态"""
+    from orchestrator import orchestrator
+    return orchestrator.get_agent_status()
+
+
 @router.get("/{agent_name}")
 async def get_agent(agent_name: str):
     """获取单个 Agent 配置详情"""

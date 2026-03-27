@@ -230,6 +230,37 @@ async def delete_project(project_id: str):
 # ==================== Git 仓库 API ====================
 
 
+@router.get("/{project_id}/git/branches")
+async def get_git_branches(project_id: str):
+    """获取项目 Git 分支列表"""
+    from git_manager import git_manager
+    branches = await git_manager.list_branches(project_id)
+    current = await git_manager.get_current_branch(project_id)
+    return {"branches": branches, "current": current}
+
+
+@router.post("/{project_id}/git/merge")
+async def merge_git_branches(project_id: str, body: dict):
+    """手动合并分支（如 develop → master）"""
+    from git_manager import git_manager
+    source = body.get("source", "develop")
+    target = body.get("target", "master")
+    message = body.get("message", f"merge: {source} → {target}")
+
+    result = await git_manager.merge_branch(project_id, source, target, message)
+
+    if result["success"]:
+        # 记录日志
+        from events import event_manager
+        await event_manager.publish_to_project(
+            project_id,
+            "branch_merged",
+            {"source": source, "target": target, "commit": result.get("commit")},
+        )
+
+    return result
+
+
 @router.post("/{project_id}/git/remote")
 async def set_git_remote(project_id: str, body: dict):
     """设置项目 Git 远程仓库"""

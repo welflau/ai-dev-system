@@ -3,9 +3,12 @@ DevAgent — 开发 Agent
 职责：接单开发代码，更新开发时间和状态
 """
 import json
+import logging
 from typing import Any, Dict
 from agents.base import BaseAgent
 from llm_client import llm_client
+
+logger = logging.getLogger("dev_agent")
 
 
 class DevAgent(BaseAgent):
@@ -44,8 +47,8 @@ class DevAgent(BaseAgent):
 ## 请返回 JSON 格式（注意 files 字段包含真正的文件内容）：
 {{
   "files": {{
-    "src/services/example.py": "# 文件的完整代码内容\\nimport ...\\n...",
-    "src/models/example.py": "# 模型代码\\n..."
+    "index.html": "<!DOCTYPE html>\\n<html>\\n...",
+    "src/services/example.js": "// 模块代码..."
   }},
   "key_implementations": ["关键实现点"],
   "api_endpoints": [
@@ -58,22 +61,31 @@ class DevAgent(BaseAgent):
 
 关键要求：
 1. files 字典的 key 是相对于项目根目录的文件路径，value 是文件的完整代码内容
-2. 根据模块类型放到对应目录：src/api/、src/models/、src/services/、src/utils/
-3. 生成完整可运行的代码，不要用省略号或注释代替
+2. **必须生成 index.html 入口文件**，可以直接在浏览器中打开运行
+3. 如果是前端项目：index.html 应引入所有 JS/CSS 模块，用 <script src="src/..."> 引入
+4. 如果是后端项目：生成 main.py 入口文件，可以直接 python main.py 运行
+5. 生成完整可运行的代码，不要用省略号或注释代替实际逻辑
+6. 文件名和路径必须全部使用英文，禁止中文文件名（如用 block-system.js 而不是 方块系统.js）
+7. 代码要有完整的功能实现，不是空壳，用户打开就能看到效果
 """
 
         result = await llm_client.chat_json(
-            [{"role": "user", "content": prompt}]
+            [{"role": "user", "content": prompt}],
+            temperature=0.3,
         )
 
-        if result and isinstance(result, dict):
+        if result and isinstance(result, dict) and result.get("files"):
             files = result.get("files", {})
+            logger.info("✅ DevAgent LLM 返回 %d 个文件", len(files))
             return {
                 "status": "success",
                 "dev_result": result,
                 "estimated_hours": result.get("estimated_hours", 4),
                 "files": files if isinstance(files, dict) else {},
             }
+
+        # LLM 返回但无 files，或返回 None
+        logger.warning("⚠️ DevAgent LLM 返回无效（result=%s），使用降级模板", type(result).__name__)
 
         # 降级：生成模板代码
         return self._fallback_develop(ticket_title, ticket_description, module)

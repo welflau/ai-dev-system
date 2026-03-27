@@ -528,7 +528,8 @@ function switchTab(tab) {
     const tabEl = document.getElementById(`tab-${tab}`);
     if (tabEl) tabEl.classList.add('active');
 
-    // 按需加载数据
+    // 按需加载数据（切走时停止不需要的轮询）
+    if (tab !== 'agents') stopAgentMonitor();
     if (tab === 'board') refreshBoard();
     if (tab === 'requirements') loadRequirements();
     if (tab === 'ticket-list') loadTicketList();
@@ -537,6 +538,8 @@ function switchTab(tab) {
     if (tab === 'repo') loadRepoTree();
     if (tab === 'roadmap') loadRoadmap();
     if (tab === 'stats') loadStats();
+    if (tab === 'agents') startAgentMonitor();
+    if (tab === 'cicd') loadCICD();
     if (tab === 'logs') loadLogs();
     if (tab === 'settings-general') loadSettingsGeneral();
     if (tab === 'settings-repo') loadSettingsRepo();
@@ -605,6 +608,65 @@ async function loadSettingsRepo() {
 
     // 加载仓库状态
     await refreshRepoStatus();
+
+    // 加载分支信息
+    await loadBranchInfo();
+}
+
+/** 加载分支列表和合并操作 */
+async function loadBranchInfo() {
+    if (!currentProjectId) return;
+    const container = document.getElementById('branchInfoContainer');
+    if (!container) return;
+    try {
+        const data = await api(`/projects/${currentProjectId}/git/branches`);
+        const branches = data.branches || [];
+        const current = data.current || '?';
+
+        let html = `<div style="margin-bottom:12px;">
+            <span style="font-size:12px; color:var(--text-muted);">当前分支:</span>
+            <span class="req-branch-tag">🌿 ${escHtml(current)}</span>
+        </div>`;
+
+        if (branches.length > 0) {
+            html += `<div style="font-size:12px; color:var(--text-muted); margin-bottom:8px;">所有分支 (${branches.length}):</div>`;
+            html += branches.map(b => `<span class="tag tag-module" style="margin:2px 4px 2px 0; font-size:11px;">${escHtml(b)}</span>`).join('');
+        }
+
+        // 合并操作按钮
+        const hasDevelop = branches.includes('develop');
+        const hasMaster = branches.includes('master') || branches.includes('main');
+        if (hasDevelop && hasMaster) {
+            html += `<div style="margin-top:16px; display:flex; gap:8px;">
+                <button class="btn btn-primary btn-sm" onclick="mergeBranch('develop', 'master')">
+                    🔀 develop → master（发布上线）
+                </button>
+            </div>`;
+        }
+
+        container.innerHTML = html;
+    } catch (e) {
+        container.innerHTML = `<span style="color:var(--text-muted); font-size:12px;">分支信息加载失败</span>`;
+    }
+}
+
+/** 触发分支合并 */
+async function mergeBranch(source, target) {
+    if (!confirm(`确认合并 ${source} → ${target}？`)) return;
+    try {
+        const res = await api(`/projects/${currentProjectId}/git/merge`, {
+            method: 'POST',
+            body: { source, target },
+        });
+        if (res.success) {
+            showToast(`合并成功: ${source} → ${target} (${res.commit})`, 'success');
+            loadBranchInfo();
+        } else {
+            showToast(`合并失败: ${res.error}`, 'error');
+        }
+    } catch (e) {
+        showToast(`合并失败: ${e.message}`, 'error');
+    }
 }
 
 /** 刷新仓库状态 */
@@ -1079,7 +1141,7 @@ async function refreshBoard() {
         const data = await api(url);
         const board = data.board || {};
 
-        const columns = ['pending', 'architecture', 'development', 'testing', 'deployed'];
+        const columns = ['pending', 'architecture', 'development', 'testing', 'done', 'deployed'];
         columns.forEach(col => {
             const tickets = board[col] || [];
             const body = document.getElementById(`col-${col}`);
@@ -1108,9 +1170,29 @@ function renderTicketCard(t) {
     const priorityLabel = {1: 'P1', 2: 'P2', 3: 'P3', 4: 'P4', 5: 'P5'};
     const pLabel = priorityLabel[t.priority] || `P${t.priority}`;
 
+    // 所有工单状态选项
+    const allStatuses = [
+        { value: 'pending', label: '待启动' },
+        { value: 'architecture_in_progress', label: '架构中' },
+        { value: 'architecture_done', label: '架构完成' },
+        { value: 'development_in_progress', label: '开发中' },
+        { value: 'development_done', label: '开发完成' },
+        { value: 'acceptance_passed', label: '验收通过' },
+        { value: 'acceptance_rejected', label: '验收不通过' },
+        { value: 'testing_in_progress', label: '测试中' },
+        { value: 'testing_done', label: '测试通过' },
+        { value: 'testing_failed', label: '测试不通过' },
+        { value: 'deploying', label: '部署中' },
+        { value: 'deployed', label: '已部署' },
+        { value: 'cancelled', label: '已取消' },
+    ];
+    const statusOptions = allStatuses.map(s =>
+        `<option value="${s.value}" ${t.status === s.value ? 'selected' : ''}>${s.label}</option>`
+    ).join('');
+
     return `
-        <div class="${cardClass}" onclick="openTicketDrawer('${t.id}')">
-            <div class="ticket-title">${escHtml(t.title)}</div>
+        <div class="${cardClass}">
+            <div class="ticket-title" style="cursor:pointer;" onclick="openTicketDrawer('${t.id}')">${escHtml(t.title)}</div>
             <div class="ticket-meta">
                 ${t.module ? `<span class="tag tag-module">${escHtml(t.module)}</span>` : ''}
                 <span class="tag tag-type">${escHtml(t.type || 'feature')}</span>
@@ -1118,10 +1200,30 @@ function renderTicketCard(t) {
                 ${t.assigned_agent ? `<span class="tag tag-agent">${escHtml(t.assigned_agent)}</span>` : ''}
             </div>
             <div class="ticket-footer">
-                <span class="ticket-status-label">${escHtml(t.status_label || t.status)}</span>
+                <select class="status-select" onchange="updateTicketStatus('${t.id}', this.value, this)" onclick="event.stopPropagation()">
+                    ${statusOptions}
+                </select>
                 ${t.estimated_hours ? `<span>${t.estimated_hours}h</span>` : ''}
             </div>
         </div>`;
+}
+
+// ==================== 工单状态编辑 ====================
+
+async function updateTicketStatus(ticketId, newStatus, selectEl) {
+    if (!currentProjectId) return;
+    try {
+        const res = await api(`/projects/${currentProjectId}/tickets/${ticketId}/status`, {
+            method: 'PATCH',
+            body: { status: newStatus },
+        });
+        showToast(`状态已更新: ${res.status_label}`, 'success');
+        setTimeout(() => { refreshBoard(); loadTicketList(); }, 500);
+    } catch (e) {
+        showToast(`状态更新失败: ${e.message}`, 'error');
+        refreshBoard();
+        loadTicketList();
+    }
 }
 
 // ==================== 工单详情抽屉 ====================
@@ -1529,6 +1631,7 @@ async function loadRequirements() {
                     </td>
                     <td class="col-title" onclick="openPipeline('${r.id}')">
                         <span class="req-table-title">${escHtml(r.title)}</span>
+                        ${r.branch_name ? `<span class="req-branch-tag" title="${escHtml(r.branch_name)}">🌿 ${escHtml(r.branch_name)}</span>` : ''}
                         ${r.description ? `<span class="req-table-desc">${escHtml(r.description)}</span>` : ''}
                     </td>
                     <td class="col-status"><span class="req-status-tag ${r.status}">${getStatusLabel(r.status)}</span></td>
@@ -1965,16 +2068,35 @@ function _renderTicketRow(t, isChild) {
         titleHtml += `<span class="tl-title-desc">${escHtml(t.description)}</span>`;
     }
 
+    // 状态下拉选项
+    const allStatuses = [
+        { value: 'pending', label: '待启动' },
+        { value: 'architecture_in_progress', label: '架构中' },
+        { value: 'architecture_done', label: '架构完成' },
+        { value: 'development_in_progress', label: '开发中' },
+        { value: 'development_done', label: '开发完成' },
+        { value: 'acceptance_passed', label: '验收通过' },
+        { value: 'acceptance_rejected', label: '验收不通过' },
+        { value: 'testing_in_progress', label: '测试中' },
+        { value: 'testing_done', label: '测试通过' },
+        { value: 'testing_failed', label: '测试不通过' },
+        { value: 'deploying', label: '部署中' },
+        { value: 'deployed', label: '已部署' },
+        { value: 'cancelled', label: '已取消' },
+    ];
+    const statusOptions = allStatuses.map(s =>
+        `<option value="${s.value}" ${t.status === s.value ? 'selected' : ''}>${s.label}</option>`
+    ).join('');
+
     return `
         <tr class="tl-table-row${childClass}" ${parentAttr}
-            ${isChild ? `data-child-of="${t.parent_ticket_id}" style="display:none;"` : ''}
-            onclick="openTicketDrawer('${t.id}')">
+            ${isChild ? `data-child-of="${t.parent_ticket_id}" style="display:none;"` : ''}>
             <td class="tl-col-id"><span class="tl-id-badge">#${shortId}</span></td>
-            <td class="tl-col-title">${titleHtml}</td>
-            <td class="tl-col-status">
-                <span class="tl-status-badge" style="border-left:3px solid ${statusColor};">
-                    ${escHtml(t.status_label || getStatusLabel(t.status))}
-                </span>
+            <td class="tl-col-title" style="cursor:pointer;" onclick="openTicketDrawer('${t.id}')">${titleHtml}</td>
+            <td class="tl-col-status" onclick="event.stopPropagation()">
+                <select class="status-select" onchange="updateTicketStatus('${t.id}', this.value, this)">
+                    ${statusOptions}
+                </select>
             </td>
             <td class="tl-col-type"><span class="tag tag-type" style="font-size:11px;">${escHtml(t.type || 'feature')}</span></td>
             <td class="tl-col-module">${escHtml(t.module || '-')}</td>
@@ -2693,6 +2815,8 @@ async function showRequirementDetail(reqId) {
                 <span class="detail-value">${escHtml(data.priority)}</span>
                 <span class="detail-label">提交时间</span>
                 <span class="detail-value">${formatDateTime(data.created_at)}</span>
+                <span class="detail-label">开发分支</span>
+                <span class="detail-value">${data.branch_name ? `<span class="req-branch-tag">🌿 ${escHtml(data.branch_name)}</span>` : '<span style="color:var(--text-muted);">未创建</span>'}</span>
             </div>
         </div>
         <div class="drawer-section">
@@ -2707,6 +2831,17 @@ async function showRequirementDetail(reqId) {
                 <h4>PRD 摘要</h4>
                 <p style="font-size:13px; color:var(--text-secondary); line-height:1.7; background:var(--bg-elevated); padding:12px; border-radius:var(--radius-sm);">${escHtml(data.prd_content)}</p>
             </div>`;
+        }
+
+        // 完成报告
+        if (data.status === 'completed') {
+            html += `
+            <div class="drawer-section">
+                <h4>📊 完成报告</h4>
+                <div id="reqReportContent-${data.id}" style="font-size:12px; color:var(--text-muted); padding:8px;">加载中...</div>
+            </div>`;
+            // 异步加载报告
+            setTimeout(() => loadRequirementReport(data.id), 100);
         }
 
         // 操作按钮
@@ -2742,6 +2877,31 @@ async function showRequirementDetail(reqId) {
         document.getElementById('ticketDrawer').classList.add('active');
     } catch (e) {
         showToast(`加载需求详情失败: ${e.message}`, 'error');
+    }
+}
+
+async function loadRequirementReport(reqId) {
+    const container = document.getElementById(`reqReportContent-${reqId}`);
+    if (!container) return;
+    try {
+        const data = await api(`/projects/${currentProjectId}/requirements/${reqId}/artifacts`);
+        const report = (data.artifacts || []).find(a => a.type === 'report');
+        if (report && report.content) {
+            // 简单的 Markdown 渲染（表格、标题、列表）
+            let html = report.content
+                .replace(/^### (.*$)/gm, '<h5 style="margin:8px 0 4px;">$1</h5>')
+                .replace(/^## (.*$)/gm, '<h4 style="margin:12px 0 6px; color:var(--text-primary);">$1</h4>')
+                .replace(/^# (.*$)/gm, '<h3 style="margin:16px 0 8px; color:var(--text-primary);">$1</h3>')
+                .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+                .replace(/`(.*?)`/g, '<code style="background:var(--bg-hover); padding:1px 4px; border-radius:3px; font-size:11px;">$1</code>')
+                .replace(/^- (.*$)/gm, '<div style="padding-left:12px;">• $1</div>')
+                .replace(/\n/g, '<br>');
+            container.innerHTML = `<div style="max-height:400px; overflow-y:auto; font-size:12px; line-height:1.7; color:var(--text-secondary);">${html}</div>`;
+        } else {
+            container.innerHTML = '<span style="color:var(--text-muted);">暂无报告（需求完成后自动生成）</span>';
+        }
+    } catch (e) {
+        container.innerHTML = `<span style="color:var(--error);">加载失败: ${escHtml(e.message)}</span>`;
     }
 }
 
@@ -2784,6 +2944,100 @@ async function deleteReq(reqId, title) {
         refreshBoard();
     } catch (e) {
         showToast(`删除失败: ${e.message}`, 'error');
+    }
+}
+
+// ==================== Agent 监控面板 ====================
+
+let agentMonitorTimer = null;
+
+function startAgentMonitor() {
+    loadAgentMonitor();
+    if (agentMonitorTimer) clearInterval(agentMonitorTimer);
+    agentMonitorTimer = setInterval(loadAgentMonitor, 5000);
+}
+
+function stopAgentMonitor() {
+    if (agentMonitorTimer) { clearInterval(agentMonitorTimer); agentMonitorTimer = null; }
+}
+
+async function loadAgentMonitor() {
+    const grid = document.getElementById('agentMonitorGrid');
+    if (!grid) return;
+
+    try {
+        const data = await fetch(`${API}/agents/status`).then(r => r.json());
+        const agents = data.agents || {};
+        const processingCount = data.processing_count || 0;
+
+        const agentIcons = {
+            'ProductAgent': '📋',
+            'ArchitectAgent': '🏗️',
+            'DevAgent': '💻',
+            'TestAgent': '🧪',
+            'ReviewAgent': '🔍',
+            'DeployAgent': '🚀',
+        };
+
+        const agentRoles = {
+            'ProductAgent': '产品验收',
+            'ArchitectAgent': '架构设计',
+            'DevAgent': '代码开发',
+            'TestAgent': '测试执行',
+            'ReviewAgent': '代码审查',
+            'DeployAgent': '部署发布',
+        };
+
+        let html = `<div style="display:flex; gap:8px; margin-bottom:16px; flex-wrap:wrap;">
+            <div class="agent-summary-card">
+                <span style="font-size:20px;">⚡</span>
+                <span>处理中: <strong>${processingCount}</strong></span>
+            </div>
+        </div>`;
+
+        html += '<div class="agent-monitor-grid">';
+        for (const [name, info] of Object.entries(agents)) {
+            const icon = agentIcons[name] || '🤖';
+            const role = agentRoles[name] || name;
+            const isWorking = info.status === 'working';
+            const statusClass = isWorking ? 'agent-working' : 'agent-idle';
+            const statusText = isWorking ? '工作中' : '空闲';
+            const completed = info.completed_count || 0;
+            const errors = info.error_count || 0;
+
+            let taskInfo = '';
+            if (isWorking && info.ticket_title) {
+                const elapsed = info.started_at ? Math.round((Date.now() - new Date(info.started_at).getTime()) / 1000) : 0;
+                taskInfo = `
+                    <div class="agent-task-info">
+                        <div class="agent-task-title">${escHtml(info.ticket_title)}</div>
+                        <div class="agent-task-action">${escHtml(info.action || '')} · ${elapsed}s</div>
+                    </div>`;
+            }
+
+            html += `
+                <div class="agent-card ${statusClass}">
+                    <div class="agent-card-header">
+                        <span class="agent-icon">${icon}</span>
+                        <div>
+                            <div class="agent-name">${name}</div>
+                            <div class="agent-role">${role}</div>
+                        </div>
+                        <span class="agent-status-dot ${statusClass}"></span>
+                    </div>
+                    <div class="agent-status-text">${statusText}</div>
+                    ${taskInfo}
+                    <div class="agent-stats-row">
+                        <span>✅ 完成 ${completed}</span>
+                        <span>❌ 异常 ${errors}</span>
+                    </div>
+                </div>`;
+        }
+        html += '</div>';
+
+        grid.innerHTML = html;
+    } catch (e) {
+        grid.innerHTML = `<div class="empty-state"><p>加载失败: ${escHtml(e.message)}</p></div>`;
     }
 }
 
@@ -2918,6 +3172,17 @@ function renderLogItem(log) {
 
 // ==================== SSE 实时推送 ====================
 
+let _sseRefreshTimer = null;
+function _debouncedSSERefresh() {
+    if (_sseRefreshTimer) clearTimeout(_sseRefreshTimer);
+    _sseRefreshTimer = setTimeout(() => {
+        refreshBoard();
+        loadTicketList();
+        loadTicketGraph();
+        if (currentPipelineReqId) loadPipeline(currentPipelineReqId);
+    }, 800);
+}
+
 function connectSSE(projectId) {
     disconnectSSE();
     try {
@@ -2926,9 +3191,7 @@ function connectSSE(projectId) {
         eventSource.addEventListener('ticket_status_changed', (e) => {
             const data = JSON.parse(e.data);
             console.log('[SSE] ticket_status_changed:', data);
-            refreshBoard();
-            // 同步刷新 Pipeline
-            if (currentPipelineReqId) loadPipeline(currentPipelineReqId);
+            _debouncedSSERefresh();
         });
 
         eventSource.addEventListener('requirement_decomposed', (e) => {
@@ -3015,6 +3278,38 @@ function connectSSE(projectId) {
             const data = JSON.parse(e.data);
             console.log('[SSE] log_added:', data);
             appendLogEntry(data);
+        });
+
+        // SSE: CI/CD 构建事件
+        eventSource.addEventListener('ci_build_started', (e) => {
+            const data = JSON.parse(e.data);
+            console.log('[SSE] ci_build_started:', data);
+            const labels = {develop_build: 'Develop 构建', master_build: 'Master 构建', deploy: '部署'};
+            showToast(`${labels[data.build_type] || data.build_type} 已开始`, 'info');
+            if (document.getElementById('tab-cicd')?.classList.contains('active')) loadCICD();
+        });
+
+        eventSource.addEventListener('ci_build_completed', (e) => {
+            const data = JSON.parse(e.data);
+            console.log('[SSE] ci_build_completed:', data);
+            const labels = {develop_build: 'Develop 构建', master_build: 'Master 构建', deploy: '部署'};
+            const emoji = data.status === 'success' ? '✅' : '❌';
+            showToast(`${emoji} ${labels[data.build_type] || data.build_type} ${data.status === 'success' ? '成功' : '失败'}`, data.status === 'success' ? 'success' : 'error');
+            if (document.getElementById('tab-cicd')?.classList.contains('active')) loadCICD();
+        });
+
+        eventSource.addEventListener('ci_build_failed', (e) => {
+            const data = JSON.parse(e.data);
+            console.log('[SSE] ci_build_failed:', data);
+            const labels = {develop_build: 'Develop 构建', master_build: 'Master 构建', deploy: '部署'};
+            showToast(`❌ ${labels[data.build_type] || data.build_type} 失败: ${data.error_message || ''}`, 'error');
+            if (document.getElementById('tab-cicd')?.classList.contains('active')) loadCICD();
+        });
+
+        eventSource.addEventListener('ci_branch_merged', (e) => {
+            const data = JSON.parse(e.data);
+            console.log('[SSE] ci_branch_merged:', data);
+            showToast(`🔀 ${data.source} → ${data.target} 合并成功`, 'success');
         });
 
         eventSource.onerror = () => {
@@ -4335,6 +4630,9 @@ async function sendChatMessage() {
                 if (typeof refreshBoard === 'function') refreshBoard();
             }, 500);
         }
+        if (action && action.type === 'document_generated') {
+            showToast(`文档「${action.title || action.path}」已生成`, 'success');
+        }
 
     } catch (e) {
         document.getElementById('chatTyping')?.remove();
@@ -4414,6 +4712,18 @@ function appendChatBubble(role, content, timestamp = null, action = null) {
                     ${action.cancelled_tickets > 0 ? '<br>同时取消了 ' + action.cancelled_tickets + ' 个关联工单' : ''}
                 </div>
                 <span class="action-link" onclick="switchTab('requirements')">查看需求列表 →</span>
+            </div>
+        `;
+    } else if (action && action.type === 'document_generated') {
+        actionHtml = `
+            <div class="chat-action-card" style="border-left-color: var(--info, #58a6ff);">
+                <div class="action-title">📄 文档已生成</div>
+                <div class="action-detail">
+                    <strong>${escapeHtml(action.title || action.path || '')}</strong><br>
+                    路径: <code>${escapeHtml(action.path || '')}</code>
+                    ${action.commit ? '<br>Commit: ' + escapeHtml(action.commit) : ''}
+                </div>
+                <span class="action-link" onclick="switchTab('repo')">查看仓库文件 →</span>
             </div>
         `;
     } else if (action && action.type === 'error') {
@@ -5276,4 +5586,187 @@ function _htmlEsc(s) {
     const el = document.createElement('div');
     el.textContent = s || '';
     return el.innerHTML;
+}
+
+
+// ==================== CI/CD Pipeline ====================
+
+const CI_STAGE_META = {
+    develop_build: { name: 'Develop 构建测试', icon: '🔨', desc: '构建 develop 分支，测试通过后合入 master' },
+    master_build:  { name: 'Master 构建测试',  icon: '🧪', desc: '构建 master 分支，集成测试通过后触发部署' },
+    deploy:        { name: '部署上线',         icon: '🚀', desc: 'master 构建通过后自动部署到生产环境' },
+};
+
+async function loadCICD() {
+    if (!currentProjectId) return;
+    try {
+        const [statusRes, buildsRes] = await Promise.all([
+            fetch(`${API}/projects/${currentProjectId}/ci/status`),
+            fetch(`${API}/projects/${currentProjectId}/ci/builds?limit=30`),
+        ]);
+        const status = await statusRes.json();
+        const buildsData = await buildsRes.json();
+        renderCICDPipeline(status);
+        renderCICDBuildHistory(buildsData.builds || []);
+    } catch (e) {
+        console.error('loadCICD error:', e);
+        document.getElementById('cicdPipelineFlow').innerHTML = '<div class="empty-state"><p>加载 CI/CD 数据失败</p></div>';
+    }
+}
+
+function renderCICDPipeline(status) {
+    const container = document.getElementById('cicdPipelineFlow');
+    if (!container) return;
+
+    const stages = status.stages || {};
+    let html = '<div class="cicd-stages-row">';
+
+    const stageOrder = ['develop_build', 'master_build', 'deploy'];
+    stageOrder.forEach((type, idx) => {
+        const meta = CI_STAGE_META[type];
+        const stage = stages[type] || {};
+        const latest = stage.latest;
+
+        let stageStatus = 'pending';
+        let statusText = '未构建';
+        let statusClass = 'pending';
+        let commitText = '-';
+        let timeText = '-';
+        let durationText = '-';
+
+        if (latest) {
+            stageStatus = latest.status;
+            const statusLabels = { pending: '排队中', running: '构建中', success: '成功', failed: '失败', cancelled: '已取消' };
+            statusText = statusLabels[latest.status] || latest.status;
+            statusClass = latest.status;
+            commitText = latest.commit_hash ? latest.commit_hash.substring(0, 8) : '-';
+            if (latest.created_at) {
+                try { timeText = new Date(latest.created_at).toLocaleString('zh-CN', {month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}); } catch {}
+            }
+            if (latest.started_at && latest.completed_at) {
+                try {
+                    const dur = Math.round((new Date(latest.completed_at) - new Date(latest.started_at)) / 1000);
+                    durationText = dur >= 60 ? `${Math.floor(dur/60)}m ${dur%60}s` : `${dur}s`;
+                } catch {}
+            }
+        }
+
+        html += `
+        <div class="cicd-stage cicd-stage-${statusClass}">
+            <div class="cicd-stage-header">
+                <span class="cicd-stage-icon">${meta.icon}</span>
+                <span class="cicd-stage-name">${meta.name}</span>
+            </div>
+            <div class="cicd-stage-status">
+                <span class="cicd-status-dot cicd-dot-${statusClass}"></span>
+                <span class="cicd-status-text">${statusText}</span>
+            </div>
+            <div class="cicd-stage-details">
+                <div class="cicd-detail-row"><span class="cicd-detail-label">Commit</span><span class="cicd-detail-value">${commitText}</span></div>
+                <div class="cicd-detail-row"><span class="cicd-detail-label">时间</span><span class="cicd-detail-value">${timeText}</span></div>
+                <div class="cicd-detail-row"><span class="cicd-detail-label">耗时</span><span class="cicd-detail-value">${durationText}</span></div>
+            </div>
+            ${latest && latest.error_message ? `<div class="cicd-stage-error">${_htmlEsc(latest.error_message)}</div>` : ''}
+            <div class="cicd-stage-desc">${meta.desc}</div>
+        </div>
+        ${idx < stageOrder.length - 1 ? '<div class="cicd-connector"><span>→</span></div>' : ''}`;
+    });
+
+    html += '</div>';
+    container.innerHTML = html;
+}
+
+function renderCICDBuildHistory(builds) {
+    const container = document.getElementById('cicdBuildHistory');
+    if (!container) return;
+
+    if (!builds.length) {
+        container.innerHTML = '<div class="empty-state" style="padding:24px;"><p>暂无构建记录</p><p style="font-size:12px;color:var(--text-muted);">点击上方按钮手动触发构建，或等待系统自动调度</p></div>';
+        return;
+    }
+
+    const typeLabels = { develop_build: 'Develop', master_build: 'Master', deploy: '部署' };
+    const statusIcons = { pending: '⏳', running: '🔄', success: '✅', failed: '❌', cancelled: '⚪' };
+
+    let html = '<table class="cicd-table"><thead><tr>';
+    html += '<th>状态</th><th>类型</th><th>分支</th><th>Commit</th><th>触发</th><th>时间</th><th>耗时</th><th>操作</th>';
+    html += '</tr></thead><tbody>';
+
+    builds.forEach(b => {
+        const statusIcon = statusIcons[b.status] || '❓';
+        const typeLabel = typeLabels[b.build_type] || b.build_type;
+        const triggerLabel = b.trigger === 'auto' ? '自动' : '手动';
+        let timeStr = '-';
+        let durStr = '-';
+
+        if (b.created_at) {
+            try { timeStr = new Date(b.created_at).toLocaleString('zh-CN', {month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit'}); } catch {}
+        }
+        if (b.started_at && b.completed_at) {
+            try {
+                const dur = Math.round((new Date(b.completed_at) - new Date(b.started_at)) / 1000);
+                durStr = dur >= 60 ? `${Math.floor(dur/60)}m ${dur%60}s` : `${dur}s`;
+            } catch {}
+        }
+
+        const cancelBtn = (b.status === 'pending' || b.status === 'running')
+            ? `<button class="btn btn-sm" onclick="cancelCIBuild('${b.id}')">取消</button>`
+            : '';
+
+        html += `<tr class="cicd-row-${b.status}">`;
+        html += `<td>${statusIcon} ${b.status}</td>`;
+        html += `<td><span class="cicd-type-badge cicd-type-${b.build_type}">${typeLabel}</span></td>`;
+        html += `<td>${b.branch}</td>`;
+        html += `<td><code>${b.commit_hash ? b.commit_hash.substring(0, 8) : '-'}</code></td>`;
+        html += `<td>${triggerLabel}</td>`;
+        html += `<td>${timeStr}</td>`;
+        html += `<td>${durStr}</td>`;
+        html += `<td>${cancelBtn}</td>`;
+        html += '</tr>';
+
+        if (b.error_message) {
+            html += `<tr class="cicd-error-row"><td colspan="8" class="cicd-error-cell">${_htmlEsc(b.error_message)}</td></tr>`;
+        }
+    });
+
+    html += '</tbody></table>';
+    container.innerHTML = html;
+}
+
+async function triggerCIBuild(buildType) {
+    if (!currentProjectId) return;
+    const labels = { develop_build: 'Develop 构建', master_build: 'Master 构建', deploy: '部署' };
+    if (!confirm(`确定要手动触发 ${labels[buildType] || buildType} 吗？`)) return;
+
+    try {
+        const res = await fetch(`${API}/projects/${currentProjectId}/ci/builds/trigger`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ build_type: buildType }),
+        });
+        if (res.ok) {
+            showToast(`${labels[buildType]} 已触发`, 'success');
+            setTimeout(() => loadCICD(), 1000);
+        } else {
+            const err = await res.json();
+            showToast(`触发失败: ${err.detail || '未知错误'}`, 'error');
+        }
+    } catch (e) {
+        showToast(`触发失败: ${e.message}`, 'error');
+    }
+}
+
+async function cancelCIBuild(buildId) {
+    if (!currentProjectId) return;
+    try {
+        const res = await fetch(`${API}/projects/${currentProjectId}/ci/builds/${buildId}/cancel`, { method: 'POST' });
+        if (res.ok) {
+            showToast('构建已取消', 'info');
+            loadCICD();
+        } else {
+            showToast('取消失败', 'error');
+        }
+    } catch (e) {
+        showToast(`取消失败: ${e.message}`, 'error');
+    }
 }

@@ -39,6 +39,7 @@ class ReviewAgent(BaseAgent):
         """代码审查"""
         dev_result = context.get("dev_result", {})
         files = dev_result.get("files_created", [])
+        docs_prefix = context.get("docs_prefix", "docs/")
 
         # 静态规则检查
         rule_results = self._static_check(files)
@@ -71,7 +72,7 @@ class ReviewAgent(BaseAgent):
                 "issues": issues,
             },
             "files": {
-                "docs/code-review.md": review_md,
+                f"{docs_prefix}code-review.md": review_md,
             },
         }
 

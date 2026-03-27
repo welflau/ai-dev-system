@@ -47,6 +47,16 @@ class TicketOrchestrator:
             "DeployAgent": DeployAgent(),
         }
 
+        # 正在处理的工单（防止重复处理）
+        self._processing: set = set()
+
+        # Agent 实时状态追踪
+        self._agent_status: Dict[str, Dict] = {
+            name: {"status": "idle", "ticket_id": None, "ticket_title": None,
+                   "action": None, "started_at": None, "completed_count": 0, "error_count": 0}
+            for name in self.agents.keys()
+        }
+
         # 状态转换规则表：当前状态 → 下一步由哪个 Agent 处理
         self.transition_rules = {
             TicketStatus.PENDING.value: {
@@ -62,7 +72,7 @@ class TicketOrchestrator:
             TicketStatus.DEVELOPMENT_DONE.value: {
                 "agent": "ProductAgent",
                 "action": "acceptance_review",
-                "next_status": None,  # 根据验收结果决定
+                "next_status": None,
             },
             TicketStatus.ACCEPTANCE_PASSED.value: {
                 "agent": "TestAgent",
@@ -74,17 +84,165 @@ class TicketOrchestrator:
                 "action": "rework",
                 "next_status": TicketStatus.DEVELOPMENT_IN_PROGRESS.value,
             },
-            TicketStatus.TESTING_DONE.value: {
-                "agent": "DeployAgent",
-                "action": "deploy",
-                "next_status": TicketStatus.DEPLOYING.value,
-            },
+            # TESTING_DONE 是工单终态，部署由项目级 CI/CD Pipeline 管理
             TicketStatus.TESTING_FAILED.value: {
                 "agent": "DevAgent",
                 "action": "fix_issues",
                 "next_status": TicketStatus.DEVELOPMENT_IN_PROGRESS.value,
             },
         }
+
+    def get_agent_status(self) -> Dict:
+        """获取所有 Agent 的实时状态"""
+        return {
+            "agents": self._agent_status,
+            "processing_tickets": list(self._processing),
+            "processing_count": len(self._processing),
+        }
+
+    def _set_agent_busy(self, agent_name: str, ticket_id: str, ticket_title: str, action: str):
+        """标记 Agent 为忙碌"""
+        self._agent_status[agent_name] = {
+            **self._agent_status.get(agent_name, {}),
+            "status": "working",
+            "ticket_id": ticket_id,
+            "ticket_title": ticket_title,
+            "action": action,
+            "started_at": now_iso(),
+        }
+
+    def _set_agent_idle(self, agent_name: str, success: bool = True):
+        """标记 Agent 为空闲"""
+        prev = self._agent_status.get(agent_name, {})
+        key = "completed_count" if success else "error_count"
+        self._agent_status[agent_name] = {
+            **prev,
+            "status": "idle",
+            "ticket_id": None,
+            "ticket_title": None,
+            "action": None,
+            "started_at": None,
+            key: prev.get(key, 0) + 1,
+        }
+
+    # ==================== 轮询调度 ====================
+
+    async def poll_loop(self, interval: int = 10):
+        """后台轮询：每隔 interval 秒扫描一次可流转的工单"""
+        logger.info("🔄 工单轮询调度器已启动 (间隔 %ds)", interval)
+        while True:
+            try:
+                await self._poll_once()
+            except Exception as e:
+                logger.error("轮询异常: %s", e, exc_info=True)
+            await asyncio.sleep(interval)
+
+    async def _poll_once(self):
+        """单次轮询：扫描所有可流转状态的工单并处理"""
+        # 1. 找出所有状态在 transition_rules 中的工单（即有下一步可走的）
+        actionable_statuses = list(self.transition_rules.keys())
+
+        # 2. 也扫描"进行中"但可能是僵尸的工单（被打回后卡住的）
+        in_progress_statuses = [
+            TicketStatus.ARCHITECTURE_IN_PROGRESS.value,
+            TicketStatus.DEVELOPMENT_IN_PROGRESS.value,
+            TicketStatus.TESTING_IN_PROGRESS.value,
+            TicketStatus.DEPLOYING.value,
+        ]
+
+        all_statuses = list(set(actionable_statuses + in_progress_statuses))
+        if not all_statuses:
+            return
+
+        placeholders = ",".join(["?"] * len(all_statuses))
+        sql = f"""
+            SELECT t.*, r.status as req_status
+            FROM tickets t
+            LEFT JOIN requirements r ON t.requirement_id = r.id
+            WHERE t.status IN ({placeholders})
+            ORDER BY t.priority ASC, t.sort_order ASC
+        """
+        tickets = await db.fetch_all(sql, tuple(all_statuses))
+
+        for t in tickets:
+            ticket_id = t["id"]
+            project_id = t["project_id"]
+
+            # 跳过正在处理的
+            if ticket_id in self._processing:
+                continue
+
+            # 跳过需求已暂停/取消的
+            if t.get("req_status") in ("paused", "cancelled"):
+                continue
+
+            status = t["status"]
+
+            # 对于"进行中"状态：检查是否僵尸（updated_at 超过 60 秒没更新）
+            if status in in_progress_statuses:
+                from datetime import datetime
+                try:
+                    updated_str = t["updated_at"]
+                    # 去掉时区信息统一比较
+                    if "+" in updated_str:
+                        updated_str = updated_str.split("+")[0]
+                    if "Z" in updated_str:
+                        updated_str = updated_str.replace("Z", "")
+                    updated = datetime.fromisoformat(updated_str)
+                    now_dt = datetime.now()
+                    age = (now_dt - updated).total_seconds()
+                    if age < 60:
+                        continue  # 还在正常处理中，跳过
+                except Exception as e:
+                    logger.warning("僵尸检测时间解析失败: %s (%s)", t["updated_at"], e)
+                    continue
+                logger.info("🧟 检测到僵尸工单: %s「%s」状态=%s (%.0fs 未更新)",
+                            ticket_id[:12], t["title"][:20], status, age)
+                # 僵尸工单：重置到对应的"完成"状态，让轮询器正常拾取
+                reset_map = {
+                    TicketStatus.ARCHITECTURE_IN_PROGRESS.value: TicketStatus.ARCHITECTURE_DONE.value,
+                    TicketStatus.DEVELOPMENT_IN_PROGRESS.value: TicketStatus.DEVELOPMENT_DONE.value,
+                    TicketStatus.TESTING_IN_PROGRESS.value: TicketStatus.TESTING_DONE.value,
+                    TicketStatus.DEPLOYING.value: TicketStatus.DEPLOYED.value,
+                }
+                reset_to = reset_map.get(status)
+                if reset_to:
+                    await db.update("tickets", {
+                        "status": reset_to, "updated_at": now_iso()
+                    }, "id = ?", (ticket_id,))
+                    logger.info("🔧 僵尸工单已重置: %s → %s", status, reset_to)
+                    status = reset_to  # 用新状态继续判断
+
+            # 检查依赖（仅对 pending 和有依赖的状态检查）
+            if status in actionable_statuses:
+                deps_json = t.get("dependencies", "[]")
+                try:
+                    dep_ids = json.loads(deps_json) if deps_json else []
+                except (json.JSONDecodeError, TypeError):
+                    dep_ids = []
+
+                if dep_ids:
+                    DONE_STATUSES = {TicketStatus.TESTING_DONE.value, TicketStatus.DEPLOYED.value}
+                    all_deps_done = True
+                    for dep_id in dep_ids:
+                        dep = await db.fetch_one("SELECT status FROM tickets WHERE id = ?", (dep_id,))
+                        if not dep or dep["status"] not in DONE_STATUSES:
+                            all_deps_done = False
+                            break
+                    if not all_deps_done:
+                        continue
+
+            # 标记为处理中，异步执行
+            self._processing.add(ticket_id)
+            logger.info("🔄 轮询拾取工单: %s「%s」状态=%s", ticket_id[:12], t["title"][:20], status)
+            asyncio.create_task(self._poll_process(project_id, ticket_id))
+
+    async def _poll_process(self, project_id: str, ticket_id: str):
+        """轮询触发的工单处理（带锁保护）"""
+        try:
+            await self.process_ticket(project_id, ticket_id)
+        finally:
+            self._processing.discard(ticket_id)
 
     # ==================== 需求处理 ====================
 
@@ -333,6 +491,45 @@ class TicketOrchestrator:
             except Exception as ms_err:
                 logger.warning("自动关联里程碑失败(非致命): %s", ms_err)
 
+            # === 自动创建 Git 分支 ===
+            branch_name = None
+            try:
+                import re
+                from datetime import datetime
+                date_str = datetime.now().strftime("%Y%m%d")
+                # 分支名只用英文数字：feat/{日期}-req-{需求短码}
+                req_short = requirement_id[-6:]
+                branch_name = f"feat/{date_str}-req-{req_short}"
+
+                # 先切回 main/master 再创建分支
+                current = await git_manager.get_current_branch(project_id)
+                if current != "main" and current != "master":
+                    # 尝试切回 main，失败就用 master
+                    ok = await git_manager.switch_branch(project_id, "main")
+                    if not ok:
+                        await git_manager.switch_branch(project_id, "master")
+
+                ok = await git_manager.create_branch(project_id, branch_name)
+                if ok:
+                    # 保存分支名到需求
+                    await db.update("requirements", {
+                        "branch_name": branch_name,
+                        "updated_at": now_iso(),
+                    }, "id = ?", (requirement_id,))
+
+                    await self._log(
+                        project_id, requirement_id, None, "Orchestrator",
+                        "info", "decomposed", "decomposed",
+                        f"已创建开发分支: {branch_name}"
+                    )
+                    logger.info("🌿 开发分支已创建: %s", branch_name)
+                else:
+                    branch_name = None
+                    logger.warning("创建分支失败，将在默认分支上开发")
+            except Exception as br_err:
+                branch_name = None
+                logger.warning("创建分支失败(非致命): %s", br_err)
+
             # 自动启动所有工单的 Agent 流转
             # 更新需求状态为进行中
             await db.update("requirements", {
@@ -398,13 +595,14 @@ class TicketOrchestrator:
                 dep_ids = []
 
             if dep_ids and ticket["status"] == TicketStatus.PENDING.value:
-                # 查询所有依赖工单的状态
+                # 查询所有依赖工单的状态（testing_done 或 deployed 都算完成）
+                DONE_STATUSES = {TicketStatus.TESTING_DONE.value, TicketStatus.DEPLOYED.value}
                 pending_deps = []
                 for dep_id in dep_ids:
                     dep_ticket = await db.fetch_one(
                         "SELECT id, title, status FROM tickets WHERE id = ?", (dep_id,)
                     )
-                    if dep_ticket and dep_ticket["status"] != TicketStatus.DEPLOYED.value:
+                    if dep_ticket and dep_ticket["status"] not in DONE_STATUSES:
                         pending_deps.append(dep_ticket)
 
                 if pending_deps:
@@ -447,6 +645,9 @@ class TicketOrchestrator:
                 ticket_id[:12], ticket["title"][:30],
                 current_status, agent_name, action,
             )
+
+            # 标记 Agent 忙碌
+            self._set_agent_busy(agent_name, ticket_id, ticket["title"][:50], action)
 
             # 更新到进行中状态
             if next_status:
@@ -505,11 +706,17 @@ class TicketOrchestrator:
 
             clear_llm_context()
 
+            # 标记 Agent 空闲
+            self._set_agent_idle(agent_name, success=True)
+
             # 处理结果
             await self._handle_agent_result(project_id, ticket_id, ticket, agent_name, action, result)
 
         except Exception as e:
             logger.error("❌ 工单处理异常 [%s]: %s", ticket_id[:12] if ticket_id else "?", e, exc_info=True)
+            # 标记 Agent 空闲（失败）
+            if 'agent_name' in dir():
+                self._set_agent_idle(agent_name, success=False)
             try:
                 await self._log(
                     project_id, ticket.get("requirement_id") if ticket else None,
@@ -684,6 +891,19 @@ class TicketOrchestrator:
                     "metadata": json.dumps({"git": git_result}) if git_result else None,
                     "created_at": now_iso(),
                 })
+
+                # 测试通过 → 触发后续依赖工单
+                await self._trigger_dependents(project_id, ticket_id)
+
+                # 检查需求下所有工单是否都测试通过（用于需求级统一部署）
+                await self._check_requirement_completion(project_id, requirement_id)
+
+                # 刷新里程碑进度
+                try:
+                    from api.milestones import refresh_all_milestones
+                    await refresh_all_milestones(project_id)
+                except Exception as ms_err:
+                    logger.warning("刷新里程碑进度失败(非致命): %s", ms_err)
             else:
                 await self._log(
                     project_id, requirement_id, ticket_id, agent_name,
@@ -702,13 +922,19 @@ class TicketOrchestrator:
                 "updated_at": now_iso(),
             }, "id = ?", (ticket_id,))
 
+            preview_url = result.get("deploy_result", {}).get("preview_url")
+            deploy_msg = "部署完成"
+            if preview_url:
+                deploy_msg = f"部署完成，预览地址: {preview_url}"
+
             await self._log(
                 project_id, requirement_id, ticket_id, agent_name,
                 "complete", current_status, new_status,
-                "部署完成",
+                deploy_msg,
                 detail_data={
                     "git_commit": git_result.get("commit_hash") if git_result else None,
                     "git_files": git_result.get("files", []) if git_result else [],
+                    "preview_url": preview_url,
                 },
             )
 
@@ -770,6 +996,29 @@ class TicketOrchestrator:
         files = result.get("files", {})
         if not files or not isinstance(files, dict):
             return None
+
+        # === 强制将中文文件名转为英文 ===
+        import re
+        sanitized_files = {}
+        for path, content in files.items():
+            # 检测路径中是否有非 ASCII 字符
+            if any(ord(c) > 127 for c in path):
+                # 提取目录和扩展名
+                parts = path.rsplit("/", 1)
+                dir_part = parts[0] + "/" if len(parts) > 1 else ""
+                filename = parts[-1]
+                name, ext = (filename.rsplit(".", 1) if "." in filename else (filename, ""))
+                # 去掉非 ASCII，保留英文数字下划线横线
+                safe_name = re.sub(r'[^\x00-\x7f]', '', name).strip("_- ")
+                if not safe_name:
+                    # 全是中文，用哈希替代
+                    safe_name = f"module_{abs(hash(name)) % 100000}"
+                sanitized_files[f"{dir_part}{safe_name}.{ext}" if ext else f"{dir_part}{safe_name}"] = content
+                logger.info("📝 文件名修正: %s → %s", path, list(sanitized_files.keys())[-1])
+            else:
+                sanitized_files[path] = content
+        files = sanitized_files
+        result["files"] = files  # 回写，确保后续产物记录也用修正后的路径
 
         start_time = time.time()
 
@@ -855,15 +1104,16 @@ class TicketOrchestrator:
         })
 
     async def _check_requirement_completion(self, project_id: str, requirement_id: str):
-        """检查需求下所有工单是否都已完成"""
+        """检查需求下所有工单是否都已测试通过或部署完成"""
         tickets = await db.fetch_all(
             "SELECT status FROM tickets WHERE requirement_id = ? AND status != 'cancelled'",
             (requirement_id,),
         )
 
-        all_deployed = all(t["status"] == TicketStatus.DEPLOYED.value for t in tickets)
+        DONE_STATUSES = {TicketStatus.TESTING_DONE.value, TicketStatus.DEPLOYED.value}
+        all_done = all(t["status"] in DONE_STATUSES for t in tickets)
 
-        if all_deployed and tickets:
+        if all_done and tickets:
             await db.update("requirements", {
                 "status": RequirementStatus.COMPLETED.value,
                 "completed_at": now_iso(),
@@ -873,7 +1123,7 @@ class TicketOrchestrator:
             await self._log(
                 project_id, requirement_id, None, "Orchestrator",
                 "complete", "in_progress", "completed",
-                f"需求已完成！所有 {len(tickets)} 个工单均已部署"
+                f"需求已完成！所有 {len(tickets)} 个工单均已测试通过，可进行统一部署"
             )
 
             await event_manager.publish_to_project(
@@ -881,6 +1131,214 @@ class TicketOrchestrator:
                 "requirement_completed",
                 {"requirement_id": requirement_id},
             )
+
+            # 生成需求完成报告
+            try:
+                await self._generate_requirement_report(project_id, requirement_id)
+            except Exception as rpt_err:
+                logger.warning("生成需求报告失败(非致命): %s", rpt_err)
+
+            # === 自动合并 feat 分支到 develop ===
+            try:
+                req_data = await db.fetch_one("SELECT branch_name FROM requirements WHERE id = ?", (requirement_id,))
+                branch_name = req_data.get("branch_name") if req_data else None
+                if branch_name:
+                    # 确保 develop 分支存在
+                    await git_manager.ensure_branch(project_id, "develop")
+
+                    # 合并 feat → develop
+                    merge_result = await git_manager.merge_branch(
+                        project_id, branch_name, "develop",
+                        message=f"merge: {branch_name} → develop (需求完成)"
+                    )
+                    if merge_result["success"]:
+                        await self._log(
+                            project_id, requirement_id, None, "Orchestrator",
+                            "complete", "completed", "completed",
+                            f"分支 {branch_name} 已合并到 develop (commit: {merge_result.get('commit', '?')})"
+                        )
+                        await event_manager.publish_to_project(
+                            project_id,
+                            "branch_merged",
+                            {"source": branch_name, "target": "develop",
+                             "commit": merge_result.get("commit"),
+                             "requirement_id": requirement_id},
+                        )
+                        logger.info("🔀 分支合并完成: %s → develop", branch_name)
+                    else:
+                        await self._log(
+                            project_id, requirement_id, None, "Orchestrator",
+                            "error", "completed", "completed",
+                            f"分支合并失败: {merge_result.get('error', '未知错误')}", "warn"
+                        )
+                        logger.warning("分支合并失败: %s", merge_result.get("error"))
+            except Exception as merge_err:
+                logger.warning("分支合并失败(非致命): %s", merge_err)
+
+    async def _generate_requirement_report(self, project_id: str, requirement_id: str):
+        """需求完成后生成汇总报告 Markdown，保存到 Git 仓库 + artifacts 表"""
+        req = await db.fetch_one("SELECT * FROM requirements WHERE id = ?", (requirement_id,))
+        if not req:
+            return
+
+        project = await db.fetch_one("SELECT * FROM projects WHERE id = ?", (project_id,))
+        req_short = requirement_id[-6:]
+
+        # 获取所有工单
+        tickets = await db.fetch_all(
+            "SELECT * FROM tickets WHERE requirement_id = ? ORDER BY sort_order, created_at",
+            (requirement_id,),
+        )
+
+        # 获取所有产物
+        artifacts = await db.fetch_all(
+            "SELECT * FROM artifacts WHERE requirement_id = ? ORDER BY created_at",
+            (requirement_id,),
+        )
+
+        # 获取 LLM 会话统计
+        llm_stats = await db.fetch_one(
+            "SELECT COUNT(*) as count, SUM(input_tokens) as input_tokens, SUM(output_tokens) as output_tokens, SUM(duration_ms) as total_ms FROM llm_conversations WHERE requirement_id = ?",
+            (requirement_id,),
+        )
+
+        # 获取日志
+        logs = await db.fetch_all(
+            "SELECT * FROM ticket_logs WHERE requirement_id = ? ORDER BY created_at",
+            (requirement_id,),
+        )
+
+        # 获取 Git 提交记录
+        git_commits = []
+        try:
+            git_commits = await git_manager.get_log(project_id, limit=50)
+        except Exception:
+            pass
+
+        # === 构建报告 Markdown ===
+        from datetime import datetime
+
+        duration_str = ""
+        if req.get("created_at") and req.get("completed_at"):
+            try:
+                t1 = datetime.fromisoformat(req["created_at"])
+                t2 = datetime.fromisoformat(req["completed_at"])
+                delta = t2 - t1
+                hours = delta.total_seconds() / 3600
+                duration_str = f"{hours:.1f} 小时"
+            except Exception:
+                pass
+
+        md = f"# 📋 需求完成报告\n\n"
+        md += f"## 基本信息\n\n"
+        md += f"| 项目 | 内容 |\n|------|------|\n"
+        md += f"| **需求ID** | {requirement_id} |\n"
+        md += f"| **标题** | {req['title']} |\n"
+        md += f"| **项目** | {project['name'] if project else '-'} |\n"
+        md += f"| **优先级** | {req.get('priority', '-')} |\n"
+        md += f"| **开发分支** | `{req.get('branch_name', '-')}` |\n"
+        md += f"| **创建时间** | {req.get('created_at', '-')} |\n"
+        md += f"| **完成时间** | {req.get('completed_at', '-')} |\n"
+        md += f"| **总耗时** | {duration_str or '-'} |\n"
+        md += f"| **工单数** | {len(tickets)} |\n\n"
+
+        # 需求描述
+        md += f"## 需求描述\n\n{req.get('description', '-')}\n\n"
+
+        # PRD
+        if req.get("prd_content"):
+            md += f"## PRD 摘要\n\n{req['prd_content']}\n\n"
+
+        # 工单清单
+        md += f"## 工单清单 ({len(tickets)})\n\n"
+        md += f"| # | 标题 | 状态 | 类型 | 模块 | Agent | 预估工时 |\n"
+        md += f"|---|------|------|------|------|-------|----------|\n"
+        for i, t in enumerate(tickets, 1):
+            status_label = t.get("status", "")
+            md += f"| {i} | {t['title']} | {status_label} | {t.get('type', '-')} | {t.get('module', '-')} | {t.get('assigned_agent', '-')} | {t.get('estimated_hours', '-')}h |\n"
+        md += "\n"
+
+        # 产出文件
+        if artifacts:
+            md += f"## 产出文件 ({len(artifacts)})\n\n"
+            for a in artifacts:
+                ticket_short = (a.get("ticket_id") or "")[-6:]
+                md += f"- **{a.get('name', a['type'])}** ({a['type']}) — 工单 #{ticket_short} — {a.get('created_at', '')[:16]}\n"
+            md += "\n"
+
+        # AI 会话统计
+        if llm_stats and llm_stats.get("count"):
+            input_t = llm_stats.get("input_tokens") or 0
+            output_t = llm_stats.get("output_tokens") or 0
+            total_ms = llm_stats.get("total_ms") or 0
+            md += f"## AI 会话统计\n\n"
+            md += f"| 指标 | 数值 |\n|------|------|\n"
+            md += f"| 会话次数 | {llm_stats['count']} |\n"
+            md += f"| 输入 tokens | {input_t:,} |\n"
+            md += f"| 输出 tokens | {output_t:,} |\n"
+            md += f"| 总计 tokens | {input_t + output_t:,} |\n"
+            md += f"| 总耗时 | {total_ms / 1000:.1f}s |\n\n"
+
+        # 时间线（关键日志）
+        key_actions = ["create", "decompose", "assign", "complete", "accept", "reject", "error"]
+        key_logs = [l for l in logs if l.get("action") in key_actions][:30]
+        if key_logs:
+            md += f"## 关键时间线\n\n"
+            md += f"| 时间 | Agent | 动作 | 说明 |\n|------|-------|------|------|\n"
+            for l in key_logs:
+                detail = ""
+                try:
+                    d = json.loads(l.get("detail", "{}"))
+                    detail = d.get("message", "")[:60]
+                except Exception:
+                    detail = str(l.get("detail", ""))[:60]
+                md += f"| {l.get('created_at', '')[:16]} | {l.get('agent_type', '-')} | {l.get('action', '-')} | {detail} |\n"
+            md += "\n"
+
+        # Git 提交记录
+        if git_commits:
+            md += f"## Git 提交记录 (最近 {len(git_commits)} 条)\n\n"
+            for c in git_commits[:20]:
+                md += f"- `{c.get('short_hash', '?')}` {c.get('message', '')} — {c.get('author', '')} {c.get('date', '')[:16]}\n"
+            md += "\n"
+
+        md += f"\n---\n*报告由 AI Dev System 自动生成 — {now_iso()[:16]}*\n"
+
+        # === 保存报告 ===
+        report_path = f"docs/{req_short}/REPORT.md"
+
+        # 写入 Git 仓库
+        try:
+            await git_manager.write_file(project_id, report_path, md)
+            commit_hash = await git_manager.commit(
+                project_id,
+                f"[Report] 需求完成报告: {req['title'][:30]}",
+                author="AI Dev System",
+            )
+            await git_manager.push(project_id)
+            logger.info("📊 需求报告已生成: %s (commit: %s)", report_path, commit_hash)
+        except Exception as git_err:
+            logger.warning("报告写入 Git 失败: %s", git_err)
+
+        # 保存到 artifacts 表
+        await db.insert("artifacts", {
+            "id": generate_id("ART"),
+            "project_id": project_id,
+            "requirement_id": requirement_id,
+            "ticket_id": None,
+            "type": "report",
+            "name": f"需求完成报告 - {req['title']}",
+            "path": report_path,
+            "content": md,
+            "metadata": json.dumps({"ticket_count": len(tickets), "artifact_count": len(artifacts)}),
+            "created_at": now_iso(),
+        })
+
+        await self._log(
+            project_id, requirement_id, None, "Orchestrator",
+            "complete", "completed", "completed",
+            f"需求完成报告已生成: {report_path}"
+        )
 
     async def _trigger_dependents(self, project_id: str, completed_ticket_id: str):
         """工单完成后，触发依赖它的后续工单流转"""
@@ -899,13 +1357,14 @@ class TicketOrchestrator:
             if completed_ticket_id not in deps:
                 continue
 
-            # 检查该工单的所有依赖是否都已完成
+            # 检查该工单的所有依赖是否都已完成（testing_done 或 deployed）
+            DONE_STATUSES = {TicketStatus.TESTING_DONE.value, TicketStatus.DEPLOYED.value}
             all_deps_done = True
             for dep_id in deps:
                 dep_ticket = await db.fetch_one(
                     "SELECT status FROM tickets WHERE id = ?", (dep_id,)
                 )
-                if not dep_ticket or dep_ticket["status"] != TicketStatus.DEPLOYED.value:
+                if not dep_ticket or dep_ticket["status"] not in DONE_STATUSES:
                     all_deps_done = False
                     break
 
@@ -940,8 +1399,13 @@ class TicketOrchestrator:
             "ticket_title": ticket["title"],
             "ticket_description": ticket.get("description", ""),
             "module": ticket.get("module", "other"),
+            "project_id": ticket.get("project_id", ""),
             "requirement_description": requirement["description"] if requirement else "",
             "requirement_title": requirement["title"] if requirement else "",
+            # 文件路径前缀：docs/{需求短码}/{工单短码}/ — 避免不同需求/工单互相覆盖
+            "docs_prefix": f"docs/{ticket['requirement_id'][-6:]}/{ticket['id'][-6:]}/",
+            "src_prefix": f"src/{ticket.get('module', 'other')}/",
+            "tests_prefix": f"tests/{ticket['requirement_id'][-6:]}/",
         }
 
         # 添加之前阶段的产物
