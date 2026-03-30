@@ -635,11 +635,11 @@ async function loadBranchInfo() {
 
         // 合并操作按钮
         const hasDevelop = branches.includes('develop');
-        const hasMaster = branches.includes('master') || branches.includes('main');
-        if (hasDevelop && hasMaster) {
+        const mainBranch = branches.includes('main') ? 'main' : (branches.includes('master') ? 'master' : null);
+        if (hasDevelop && mainBranch) {
             html += `<div style="margin-top:16px; display:flex; gap:8px;">
-                <button class="btn btn-primary btn-sm" onclick="mergeBranch('develop', 'master')">
-                    🔀 develop → master（发布上线）
+                <button class="btn btn-primary btn-sm" onclick="mergeBranch('develop', '${mainBranch}')">
+                    🔀 develop → ${mainBranch}（发布上线）
                 </button>
             </div>`;
         }
@@ -1356,30 +1356,54 @@ async function openTicketDrawer(ticketId) {
 
         // 产物
         const artifacts = data.artifacts || [];
+        const ticketBranch = data.branch_name || '';
         if (artifacts.length > 0) {
             html += `
             <div class="drawer-section">
-                <h4>产出文件 (${artifacts.length})</h4>
+                <h4>产出文件 (${artifacts.length})${ticketBranch ? ` <span class="req-branch-tag" style="font-size:11px;font-weight:normal;">🌿 ${escHtml(ticketBranch)}</span>` : ''}</h4>
                 ${artifacts.map(a => {
-                    let filesHtml = '';
+                    // 从 metadata.git.files 或 content.files 提取文件列表
+                    let fileList = [];
                     try {
-                        const parsed = JSON.parse(a.content || '{}');
-                        if (parsed.files && Array.isArray(parsed.files)) {
-                            filesHtml = '<div style="margin-top:6px;">';
-                            parsed.files.forEach(f => {
-                                const fileName = typeof f === 'string' ? f : (f.path || f.name || f.filename || JSON.stringify(f));
-                                filesHtml += `<div style="font-size:12px; color:var(--text-secondary); padding:2px 0;">📄 ${escHtml(fileName)}</div>`;
-                            });
-                            filesHtml += '</div>';
+                        const meta = a.metadata ? (typeof a.metadata === 'string' ? JSON.parse(a.metadata) : a.metadata) : {};
+                        if (meta.git && meta.git.files) {
+                            fileList = meta.git.files;
                         }
                     } catch {}
+                    if (fileList.length === 0) {
+                        try {
+                            const parsed = JSON.parse(a.content || '{}');
+                            if (parsed.files) {
+                                fileList = Array.isArray(parsed.files) ? parsed.files : Object.keys(parsed.files);
+                            } else if (parsed.dev_result && parsed.dev_result.files) {
+                                fileList = Object.keys(parsed.dev_result.files);
+                            }
+                        } catch {}
+                    }
+                    const commitHash = (() => { try { const m = a.metadata ? (typeof a.metadata === 'string' ? JSON.parse(a.metadata) : a.metadata) : {}; return m.git?.commit_hash || ''; } catch { return ''; } })();
+
+                    let filesHtml = '';
+                    if (fileList.length > 0) {
+                        filesHtml = '<div class="artifact-file-list">';
+                        fileList.forEach(f => {
+                            const filePath = typeof f === 'string' ? f : (f.path || f.name || '');
+                            const fileName = filePath.split('/').pop();
+                            const dirPath = filePath.includes('/') ? filePath.substring(0, filePath.lastIndexOf('/') + 1) : '';
+                            filesHtml += `<a class="artifact-file-link" onclick="event.stopPropagation(); openArtifactFile('${escHtml(filePath)}', '${escHtml(ticketBranch)}')" title="${escHtml(filePath)}${ticketBranch ? ' (' + escHtml(ticketBranch) + ')' : ''}">
+                                <span class="file-icon">📄</span>
+                                <span class="file-dir">${escHtml(dirPath)}</span><span class="file-name">${escHtml(fileName)}</span>
+                            </a>`;
+                        });
+                        filesHtml += '</div>';
+                    }
 
                     return `
-                    <div style="background:var(--bg-elevated); padding:10px; border-radius:var(--radius-sm); margin-bottom:8px; cursor:pointer;" onclick="toggleArtifactContent(this)">
+                    <div class="artifact-card" onclick="toggleArtifactContent(this)">
                         <div style="display:flex; align-items:center; gap:8px; font-size:13px;">
                             <span>${getArtifactIcon(a.type)}</span>
                             <span style="font-weight:500;">${escHtml(a.name || a.type)}</span>
                             <span class="tag tag-module" style="font-size:11px;">${escHtml(a.type)}</span>
+                            ${commitHash ? `<span style="font-size:10px;color:var(--text-muted);font-family:monospace;">${escHtml(commitHash)}</span>` : ''}
                             <span style="font-size:11px; color:var(--text-muted); margin-left:auto;">${formatDate(a.created_at)}</span>
                         </div>
                         ${filesHtml}
@@ -3192,12 +3216,14 @@ function connectSSE(projectId) {
             const data = JSON.parse(e.data);
             console.log('[SSE] ticket_status_changed:', data);
             _debouncedSSERefresh();
+            appendLogEntry({id: 'ts-' + Date.now(), agent_type: data.agent || 'Orchestrator', action: 'status_change', from_status: data.from, to_status: data.to, detail: JSON.stringify({message: `工单状态: ${data.from} → ${data.to}`}), level: 'info', created_at: new Date().toISOString(), ticket_id: data.ticket_id});
         });
 
         eventSource.addEventListener('requirement_decomposed', (e) => {
             const data = JSON.parse(e.data);
             console.log('[SSE] requirement_decomposed:', data);
             showToast(`需求已拆分为 ${data.ticket_count} 个工单`, 'success');
+            appendLogEntry({id: 'rd-' + Date.now(), agent_type: 'ProductAgent', action: 'decompose', detail: JSON.stringify({message: `需求已拆分为 ${data.ticket_count} 个工单`}), level: 'info', created_at: new Date().toISOString()});
             refreshBoard();
             loadRequirements();
             loadRequirementFilter();
@@ -3278,6 +3304,10 @@ function connectSSE(projectId) {
             const data = JSON.parse(e.data);
             console.log('[SSE] log_added:', data);
             appendLogEntry(data);
+            // 实时追加到工单对话 Feed
+            if (chatMode === 'job' && data.ticket_id) {
+                appendToTicketFeed(data);
+            }
         });
 
         // SSE: CI/CD 构建事件
@@ -3285,7 +3315,9 @@ function connectSSE(projectId) {
             const data = JSON.parse(e.data);
             console.log('[SSE] ci_build_started:', data);
             const labels = {develop_build: 'Develop 构建', master_build: 'Master 构建', deploy: '部署'};
-            showToast(`${labels[data.build_type] || data.build_type} 已开始`, 'info');
+            const msg = `${labels[data.build_type] || data.build_type} 已开始`;
+            showToast(msg, 'info');
+            appendLogEntry({id: 'ci-' + Date.now(), agent_type: 'CI/CD', action: data.build_type, detail: JSON.stringify({message: msg}), level: 'info', created_at: new Date().toISOString()});
             if (document.getElementById('tab-cicd')?.classList.contains('active')) loadCICD();
         });
 
@@ -3293,8 +3325,10 @@ function connectSSE(projectId) {
             const data = JSON.parse(e.data);
             console.log('[SSE] ci_build_completed:', data);
             const labels = {develop_build: 'Develop 构建', master_build: 'Master 构建', deploy: '部署'};
-            const emoji = data.status === 'success' ? '✅' : '❌';
-            showToast(`${emoji} ${labels[data.build_type] || data.build_type} ${data.status === 'success' ? '成功' : '失败'}`, data.status === 'success' ? 'success' : 'error');
+            const ok = data.status === 'success';
+            const msg = `${ok ? '✅' : '❌'} ${labels[data.build_type] || data.build_type} ${ok ? '成功' : '失败'}`;
+            showToast(msg, ok ? 'success' : 'error');
+            appendLogEntry({id: 'ci-' + Date.now(), agent_type: 'CI/CD', action: data.build_type, detail: JSON.stringify({message: msg}), level: ok ? 'info' : 'error', created_at: new Date().toISOString()});
             if (document.getElementById('tab-cicd')?.classList.contains('active')) loadCICD();
         });
 
@@ -3302,7 +3336,9 @@ function connectSSE(projectId) {
             const data = JSON.parse(e.data);
             console.log('[SSE] ci_build_failed:', data);
             const labels = {develop_build: 'Develop 构建', master_build: 'Master 构建', deploy: '部署'};
-            showToast(`❌ ${labels[data.build_type] || data.build_type} 失败: ${data.error_message || ''}`, 'error');
+            const msg = `❌ ${labels[data.build_type] || data.build_type} 失败: ${data.error_message || ''}`;
+            showToast(msg, 'error');
+            appendLogEntry({id: 'ci-' + Date.now(), agent_type: 'CI/CD', action: data.build_type, detail: JSON.stringify({message: msg}), level: 'error', created_at: new Date().toISOString()});
             if (document.getElementById('tab-cicd')?.classList.contains('active')) loadCICD();
         });
 
@@ -3954,6 +3990,16 @@ async function loadRepoTree() {
 
     try {
         const tree = await api(`/projects/${currentProjectId}/git/tree`);
+
+        // 显示当前分支
+        const branchTag = document.getElementById('repoBranchTag');
+        if (branchTag && tree.current_branch) {
+            branchTag.textContent = '🌿 ' + tree.current_branch;
+        }
+
+        // 更新分支选择器
+        loadRepoBranchSelector(tree.current_branch);
+
         if (!tree.children || tree.children.length === 0) {
             container.innerHTML = '<div class="empty-state"><div class="emoji">📂</div><p>仓库为空或尚未初始化</p></div>';
             return;
@@ -3961,6 +4007,31 @@ async function loadRepoTree() {
         container.innerHTML = renderFileTree(tree.children, 0);
     } catch (err) {
         container.innerHTML = `<div class="empty-state"><div class="emoji">❌</div><p>加载失败: ${err.message}</p></div>`;
+    }
+}
+
+async function loadRepoBranchSelector(currentBranch) {
+    const select = document.getElementById('repoBranchSelect');
+    if (!select || !currentProjectId) return;
+    try {
+        const data = await api(`/projects/${currentProjectId}/git/branches`);
+        const branches = data.branches || [];
+        select.innerHTML = branches.map(b =>
+            `<option value="${escapeHtml(b)}" ${b === currentBranch ? 'selected' : ''}>🌿 ${escapeHtml(b)}</option>`
+        ).join('');
+    } catch {}
+}
+
+async function switchRepoBranch(branch) {
+    if (!branch || !currentProjectId) return;
+    try {
+        await api(`/projects/${currentProjectId}/git/switch-branch`, {
+            method: 'POST', body: { branch }
+        });
+        showToast(`已切换到分支: ${branch}`, 'success');
+        loadRepoTree();
+    } catch (e) {
+        showToast(`切换分支失败: ${e.message}`, 'error');
     }
 }
 
@@ -4049,6 +4120,30 @@ async function viewRepoFile(path) {
         contentEl.textContent = `加载失败: ${err.message}`;
         infoBar.innerHTML = `<div class="file-info-item"><span style="color: #ef4444;">错误: ${escapeHtml(err.message)}</span></div>`;
     }
+}
+
+/**
+ * 从产出文件点击文件链接 → 切换分支 → 跳转到仓库文件页并打开预览
+ */
+async function openArtifactFile(filePath, branch) {
+    // 关闭工单详情抽屉
+    document.getElementById('ticketDrawer')?.classList.remove('open');
+
+    // 如果有分支名，先切换分支
+    if (branch && currentProjectId) {
+        try {
+            await api(`/projects/${currentProjectId}/git/switch-branch`, {
+                method: 'POST', body: { branch }
+            });
+        } catch (e) {
+            console.warn('切换分支失败:', e.message);
+        }
+    }
+
+    // 切换到仓库文件 tab（会重新加载文件树和分支选择器）
+    switchTab('repo');
+    // 等待 tab 渲染后打开文件预览
+    setTimeout(() => viewRepoFile(filePath), 400);
 }
 
 async function loadGitLog() {
@@ -4381,13 +4476,8 @@ function setChatMode(mode) {
     } else {
         titleEl.textContent = '工单对话';
         iconEl.textContent = '🔧';
-        if (chatCurrentTicketId) {
-            loadTicketConversations(chatCurrentTicketId);
-            inputArea.style.display = 'none'; // Job 模式只读
-        } else {
-            showJobHint();
-            inputArea.style.display = 'none';
-        }
+        inputArea.style.display = 'none';
+        loadAllTicketConversations();
     }
 }
 
@@ -4498,6 +4588,145 @@ async function loadTicketConversations(ticketId) {
                 <div class="hint-text">加载失败: ${escapeHtml(e.message)}</div>
             </div>
         `;
+    }
+}
+
+/**
+ * 加载项目下所有工单对话（统一 Feed）
+ */
+async function loadAllTicketConversations() {
+    if (!currentProjectId) return;
+
+    const container = document.getElementById('chatMessages');
+    // 移除旧的 job header
+    document.querySelectorAll('.chat-job-header').forEach(el => el.remove());
+    container.innerHTML = '<div class="chat-typing"><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div></div>';
+
+    try {
+        const resp = await originalApi(`/projects/${currentProjectId}/chat/tickets/conversations`);
+        const tickets = resp.tickets || [];
+        container.innerHTML = '';
+
+        if (tickets.length === 0) {
+            container.innerHTML = `
+                <div class="chat-job-hint">
+                    <div class="hint-icon">📭</div>
+                    <div class="hint-text">暂无工单对话记录</div>
+                </div>`;
+            return;
+        }
+
+        for (const t of tickets) {
+            // 工单 section 容器
+            const section = document.createElement('div');
+            section.className = 'ticket-conversation-section';
+            section.id = `ticket-section-${t.id}`;
+
+            // section header
+            const header = document.createElement('div');
+            header.className = 'ticket-section-header';
+            header.innerHTML = `
+                <span class="job-status-dot" style="background:${getStatusColor(t.status)}"></span>
+                <span class="ticket-section-title">${escapeHtml(t.title)}</span>
+                <span class="ticket-section-status">${getStatusLabel(t.status)}</span>
+            `;
+            header.onclick = () => selectTicketForChat(t.id, t.title);
+            section.appendChild(header);
+
+            // messages
+            const msgArea = document.createElement('div');
+            msgArea.className = 'ticket-section-messages';
+
+            if (t.messages.length === 0) {
+                msgArea.innerHTML = '<div style="color:var(--text-muted);font-size:11px;padding:4px 12px;">暂无记录</div>';
+            } else {
+                for (const msg of t.messages) {
+                    if (msg.type === 'log') {
+                        // 状态变更日志条目
+                        const logEl = document.createElement('div');
+                        logEl.className = 'ticket-feed-log-entry';
+                        const actionLabel = {assign:'接单', complete:'完成', accept:'验收通过', reject:'验收不通过', error:'异常', start:'开始'}[msg.action] || msg.action;
+                        logEl.innerHTML = `<span class="log-agent">${escapeHtml(msg.agent_type)}</span> <span class="log-action">${escapeHtml(actionLabel)}</span> ${msg.message ? '<span class="log-msg">'+escapeHtml(msg.message.substring(0,80))+'</span>' : ''} <span class="log-time">${formatTime(msg.created_at)}</span>`;
+                        msgArea.appendChild(logEl);
+                    } else {
+                        // Agent 对话消息
+                        const agentBadge = msg.agent_type ? `<div class="chat-agent-badge">${msg.agent_type} / ${msg.action || ''}</div>` : '';
+                        const metaInfo = msg.model ? `<span style="font-size:10px;color:var(--text-muted)">${msg.model} · ${msg.duration_ms || 0}ms · ${(msg.input_tokens || 0)}→${(msg.output_tokens || 0)} tokens</span>` : '';
+                        const msgEl = document.createElement('div');
+                        msgEl.className = `chat-msg ${msg.role}`;
+                        msgEl.innerHTML = `
+                            <div class="chat-msg-avatar">${msg.role === 'user' ? '📝' : '🤖'}</div>
+                            <div class="chat-msg-content">
+                                ${agentBadge}
+                                <div class="chat-msg-bubble">${formatChatContent(msg.content)}</div>
+                                <div class="chat-msg-time">${formatTime(msg.created_at)} ${metaInfo}</div>
+                            </div>`;
+                        msgArea.appendChild(msgEl);
+                    }
+                }
+            }
+            section.appendChild(msgArea);
+            container.appendChild(section);
+        }
+
+        // 如果有选中的工单，滚动定位
+        if (chatCurrentTicketId) {
+            setTimeout(() => scrollToTicketSection(chatCurrentTicketId), 100);
+        } else {
+            scrollChatToBottom();
+        }
+    } catch (e) {
+        container.innerHTML = `
+            <div class="chat-job-hint">
+                <div class="hint-icon">❌</div>
+                <div class="hint-text">加载失败: ${escapeHtml(e.message)}</div>
+            </div>`;
+    }
+}
+
+/**
+ * 滚动到指定工单 section 并高亮
+ */
+function scrollToTicketSection(ticketId) {
+    const section = document.getElementById(`ticket-section-${ticketId}`);
+    if (section) {
+        section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        section.classList.add('ticket-section-highlight');
+        setTimeout(() => section.classList.remove('ticket-section-highlight'), 2000);
+    }
+}
+
+/**
+ * SSE 实时追加到工单 Feed
+ */
+function appendToTicketFeed(logData) {
+    if (!logData.ticket_id) return;
+    const section = document.getElementById(`ticket-section-${logData.ticket_id}`);
+    if (!section) return;
+
+    let msgArea = section.querySelector('.ticket-section-messages');
+    if (!msgArea) return;
+
+    const actionLabel = {assign:'接单', complete:'完成', accept:'验收通过', reject:'验收不通过', error:'异常', start:'开始'}[logData.action] || logData.action;
+    let detail = '';
+    if (logData.detail) {
+        try {
+            const d = typeof logData.detail === 'string' ? JSON.parse(logData.detail) : logData.detail;
+            detail = d.message || '';
+        } catch { detail = ''; }
+    }
+
+    const logEl = document.createElement('div');
+    logEl.className = 'ticket-feed-log-entry';
+    logEl.innerHTML = `<span class="log-agent">${escapeHtml(logData.agent_type || 'System')}</span> <span class="log-action">${escapeHtml(actionLabel)}</span> ${detail ? '<span class="log-msg">'+escapeHtml(detail.substring(0,80))+'</span>' : ''} <span class="log-time">${formatTime(logData.created_at)}</span>`;
+    msgArea.appendChild(logEl);
+
+    // 更新 section header 的状态
+    if (logData.to_status) {
+        const statusEl = section.querySelector('.ticket-section-status');
+        if (statusEl) statusEl.textContent = getStatusLabel(logData.to_status);
+        const dotEl = section.querySelector('.job-status-dot');
+        if (dotEl) dotEl.style.background = getStatusColor(logData.to_status);
     }
 }
 
@@ -4726,6 +4955,15 @@ function appendChatBubble(role, content, timestamp = null, action = null) {
                 <span class="action-link" onclick="switchTab('repo')">查看仓库文件 →</span>
             </div>
         `;
+    } else if (action && action.type === 'git_result') {
+        const gitIcons = {switch_branch: '🌿', list_branches: '🌿', log: '📜', read_file: '📄', merge: '🔀'};
+        actionHtml = `
+            <div class="chat-action-card" style="border-left-color: var(--info, #58a6ff);">
+                <div class="action-title">${gitIcons[action.action] || '🔧'} Git: ${escapeHtml(action.action || '')}</div>
+                <div class="action-detail">${formatChatContent(action.message || '')}</div>
+                ${action.action === 'switch_branch' || action.action === 'read_file' ? '<span class="action-link" onclick="switchTab(\'repo\'); loadRepoTree();">查看仓库文件 →</span>' : ''}
+            </div>
+        `;
     } else if (action && action.type === 'error') {
         actionHtml = `
             <div class="chat-action-card" style="border-left-color: var(--danger, #ea4a5a);">
@@ -4829,8 +5067,13 @@ function selectTicketForChat(ticketId, ticketTitle) {
         toggleChatPanel();
     }
 
-    // 切换到 Job 模式
-    setChatMode('job');
+    if (chatMode === 'job') {
+        // 已在工单模式，直接滚动定位
+        scrollToTicketSection(ticketId);
+    } else {
+        // 切换到工单模式（会自动加载全部并定位）
+        setChatMode('job');
+    }
 }
 
 /**
@@ -4839,8 +5082,8 @@ function selectTicketForChat(ticketId, ticketTitle) {
 function clearJobSelection() {
     chatCurrentTicketId = null;
     chatCurrentTicketTitle = '';
-    document.querySelector('.chat-job-header')?.remove();
-    showJobHint();
+    // 移除高亮，Feed 保持显示
+    document.querySelectorAll('.ticket-section-highlight').forEach(el => el.classList.remove('ticket-section-highlight'));
 }
 
 /**

@@ -671,6 +671,24 @@ class TicketOrchestrator:
                     {"ticket_id": ticket_id, "from": current_status, "to": next_status, "agent": agent_name},
                 )
 
+            # 切换到需求对应的 feat 分支（确保文件提交到正确分支）
+            try:
+                req = await db.fetch_one(
+                    "SELECT branch_name FROM requirements WHERE id = ?",
+                    (ticket["requirement_id"],),
+                )
+                feat_branch = req.get("branch_name") if req else None
+                if feat_branch and git_manager.repo_exists(project_id):
+                    current_br = await git_manager.get_current_branch(project_id)
+                    if current_br != feat_branch:
+                        ok = await git_manager.switch_branch(project_id, feat_branch)
+                        if ok:
+                            logger.info("🌿 已切换到分支: %s", feat_branch)
+                        else:
+                            logger.warning("切换分支失败: %s, 当前: %s", feat_branch, current_br)
+            except Exception as br_err:
+                logger.warning("切换分支异常(非致命): %s", br_err)
+
             # 构建上下文
             context = await self._build_context(ticket)
 
@@ -1051,6 +1069,13 @@ class TicketOrchestrator:
         git_result = await git_manager.write_and_commit(
             project_id, files, commit_msg, agent=agent_name
         )
+        # 记录当前分支名到 git_result
+        if git_result:
+            try:
+                current_branch = await git_manager.get_current_branch(project_id)
+                git_result["branch"] = current_branch
+            except Exception:
+                pass
 
         elapsed = int((time.time() - start_time) * 1000)
 
@@ -1394,12 +1419,13 @@ class TicketOrchestrator:
             (ticket["id"],),
         )
 
+        project_id = ticket.get("project_id", "")
         context = {
             "ticket_id": ticket["id"],
             "ticket_title": ticket["title"],
             "ticket_description": ticket.get("description", ""),
             "module": ticket.get("module", "other"),
-            "project_id": ticket.get("project_id", ""),
+            "project_id": project_id,
             "requirement_description": requirement["description"] if requirement else "",
             "requirement_title": requirement["title"] if requirement else "",
             # 文件路径前缀：docs/{需求短码}/{工单短码}/ — 避免不同需求/工单互相覆盖
@@ -1426,7 +1452,83 @@ class TicketOrchestrator:
                 except json.JSONDecodeError:
                     context["test_result"] = {}
 
+        # === 增量开发上下文：读取仓库中已有文件 ===
+        try:
+            existing_files = await self._collect_existing_code(project_id)
+            context["existing_files"] = existing_files.get("file_list", [])
+            context["existing_code"] = existing_files.get("code", {})
+        except Exception as e:
+            logger.warning("读取已有代码失败: %s", e)
+            context["existing_files"] = []
+            context["existing_code"] = {}
+
+        # 获取同需求下已完成工单的摘要（让后续工单知道前面做了什么）
+        try:
+            sibling_tickets = await db.fetch_all(
+                """SELECT t.id, t.title, t.status, t.module
+                   FROM tickets t
+                   WHERE t.requirement_id = ? AND t.id != ?
+                     AND t.status NOT IN ('pending', 'cancelled')
+                   ORDER BY t.created_at""",
+                (ticket["requirement_id"], ticket["id"]),
+            )
+            context["sibling_tickets"] = [
+                {"id": st["id"], "title": st["title"], "status": st["status"], "module": st.get("module", "")}
+                for st in sibling_tickets
+            ]
+        except Exception:
+            context["sibling_tickets"] = []
+
         return context
+
+    async def _collect_existing_code(self, project_id: str) -> Dict:
+        """收集仓库中已有的代码文件（用于增量开发上下文）"""
+        if not git_manager.repo_exists(project_id):
+            return {"file_list": [], "code": {}}
+
+        tree = await git_manager.get_file_tree(project_id)
+        children = tree.get("children", [])
+
+        # 扁平化文件列表
+        file_list = []
+        def _flatten(nodes, prefix=""):
+            for n in nodes:
+                path = f"{prefix}{n['name']}" if not prefix else f"{prefix}/{n['name']}"
+                if n["type"] == "file":
+                    file_list.append(path)
+                elif n.get("children"):
+                    _flatten(n["children"], path)
+        _flatten(children)
+
+        # 读取关键文件内容（入口文件 + src/ 下的代码文件）
+        code = {}
+        ENTRY_FILES = {"index.html", "main.py", "app.py", "package.json"}
+        CODE_EXTS = {".html", ".js", ".jsx", ".ts", ".tsx", ".py", ".css", ".json"}
+        total_chars = 0
+        MAX_TOTAL = 15000
+        MAX_PER_FILE = 3000
+
+        for fp in file_list:
+            if total_chars >= MAX_TOTAL:
+                break
+            fname = fp.split("/")[-1]
+            _, ext = (fname.rsplit(".", 1) if "." in fname else (fname, ""))
+            ext = f".{ext}" if ext else ""
+
+            # 优先读入口文件，其次 src/ 下的代码文件
+            should_read = fname in ENTRY_FILES or (fp.startswith("src/") and ext in CODE_EXTS)
+            if not should_read:
+                continue
+
+            content = await git_manager.get_file_content(project_id, fp)
+            if content:
+                truncated = content[:MAX_PER_FILE]
+                if len(content) > MAX_PER_FILE:
+                    truncated += f"\n... (truncated, total {len(content)} chars)"
+                code[fp] = truncated
+                total_chars += len(truncated)
+
+        return {"file_list": file_list, "code": code}
 
     def _agent_to_owner(self, agent_name: str) -> str:
         """Agent 名称转持有者角色"""

@@ -99,8 +99,19 @@ async def get_ticket(project_id: str, ticket_id: str):
 
     ticket["status_label"] = STATUS_LABELS.get(ticket["status"], ticket["status"])
 
+    # 获取需求的分支名
+    branch_name = None
+    if ticket.get("requirement_id"):
+        req = await db.fetch_one(
+            "SELECT branch_name FROM requirements WHERE id = ?",
+            (ticket["requirement_id"],),
+        )
+        if req:
+            branch_name = req.get("branch_name")
+
     return {
         **ticket,
+        "branch_name": branch_name,
         "subtasks": subtasks,
         "logs": logs,
         "artifacts": artifacts,

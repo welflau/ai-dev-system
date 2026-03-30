@@ -14,14 +14,40 @@ logger = logging.getLogger("llm")
 
 
 # ==================== LLM 会话记录上下文 ====================
+import contextvars
 
 class _LLMContext:
-    """线程局部变量：记录当前 LLM 调用的关联信息"""
-    ticket_id: Optional[str] = None
-    requirement_id: Optional[str] = None
-    project_id: Optional[str] = None
-    agent_type: Optional[str] = None
-    action: Optional[str] = None
+    """协程安全的 LLM 调用上下文（使用 contextvars）"""
+    _ticket_id: contextvars.ContextVar = contextvars.ContextVar('llm_ticket_id', default=None)
+    _requirement_id: contextvars.ContextVar = contextvars.ContextVar('llm_requirement_id', default=None)
+    _project_id: contextvars.ContextVar = contextvars.ContextVar('llm_project_id', default=None)
+    _agent_type: contextvars.ContextVar = contextvars.ContextVar('llm_agent_type', default=None)
+    _action: contextvars.ContextVar = contextvars.ContextVar('llm_action', default=None)
+
+    @property
+    def ticket_id(self): return self._ticket_id.get()
+    @ticket_id.setter
+    def ticket_id(self, v): self._ticket_id.set(v)
+
+    @property
+    def requirement_id(self): return self._requirement_id.get()
+    @requirement_id.setter
+    def requirement_id(self, v): self._requirement_id.set(v)
+
+    @property
+    def project_id(self): return self._project_id.get()
+    @project_id.setter
+    def project_id(self, v): self._project_id.set(v)
+
+    @property
+    def agent_type(self): return self._agent_type.get()
+    @agent_type.setter
+    def agent_type(self, v): self._agent_type.set(v)
+
+    @property
+    def action(self): return self._action.get()
+    @action.setter
+    def action(self, v): self._action.set(v)
 
 _llm_ctx = _LLMContext()
 
@@ -33,7 +59,7 @@ def set_llm_context(
     agent_type: str = None,
     action: str = None,
 ):
-    """设置 LLM 调用上下文（在 Agent 执行前调用）"""
+    """设置 LLM 调用上下文（在 Agent 执行前调用，协程安全）"""
     _llm_ctx.ticket_id = ticket_id
     _llm_ctx.requirement_id = requirement_id
     _llm_ctx.project_id = project_id
@@ -372,6 +398,7 @@ class LLMClient:
         self,
         messages: List[Dict[str, str]],
         temperature: float = 0.3,
+        max_tokens: int = 8192,
     ) -> Any:
         """聊天并解析 JSON 响应"""
         ctx = _ctx_label()
@@ -383,7 +410,7 @@ class LLMClient:
         }
         all_messages = [system_msg] + messages
 
-        response = await self.chat(all_messages, temperature=temperature)
+        response = await self.chat(all_messages, temperature=temperature, max_tokens=max_tokens)
 
         # 清洗并解析 JSON
         cleaned = response.strip()

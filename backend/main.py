@@ -127,6 +127,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 全局异常处理
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    logging.getLogger("main").error("Unhandled exception: %s %s -> %s", request.method, request.url.path, exc, exc_info=True)
+    return JSONResponse(status_code=500, content={"detail": str(exc)})
+
 # 注册 API 路由
 from api.projects import router as projects_router
 from api.requirements import router as requirements_router
@@ -296,7 +302,7 @@ async def serve_frontend(path: str = ""):
     """提供前端页面"""
     index_file = frontend_dir / "index.html"
     if index_file.exists():
-        return FileResponse(str(index_file))
+        return FileResponse(str(index_file), headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
     return JSONResponse(
         {"message": "前端文件未找到，请确保 frontend/ 目录存在"},
         status_code=404,

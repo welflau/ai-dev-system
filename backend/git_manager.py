@@ -139,7 +139,7 @@ Thumbs.db
         (repo_dir / ".gitignore").write_text(gitignore, encoding="utf-8")
 
         # git init + 初始提交
-        await self._run_git(str(repo_dir), "init")
+        await self._run_git(str(repo_dir), "init", "-b", "main")
         await self._run_git(str(repo_dir), "add", ".")
         await self._run_git(
             str(repo_dir), "commit", "-m",
@@ -227,6 +227,38 @@ Thumbs.db
             return False
         return True
 
+    async def clone(self, url: str, dest_path: str) -> bool:
+        """git clone 远程仓库到指定路径"""
+        import subprocess
+        cmd = ["git", "clone", url, dest_path]
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True,
+                encoding="utf-8", errors="replace", check=False,
+            )
+            if result.returncode == 0:
+                logger.info("git clone 成功: %s -> %s", url, dest_path)
+                return True
+            else:
+                logger.error("git clone 失败: %s", result.stderr.strip())
+                return False
+        except Exception as e:
+            logger.error("git clone 异常: %s", e)
+            return False
+
+    async def pull(self, project_id: str, remote: str = "origin", branch: str = None) -> bool:
+        """git pull 拉取远程更新"""
+        repo_dir = str(self._repo_path(project_id))
+        if branch:
+            rc, out, err = await self._run_git(repo_dir, "pull", remote, branch)
+        else:
+            rc, out, err = await self._run_git(repo_dir, "pull", remote)
+        if rc != 0:
+            logger.warning("git pull 失败: %s", err)
+            return False
+        logger.info("git pull 成功: %s", out[:200] if out else "up to date")
+        return True
+
     async def set_remote(self, project_id: str, url: str, remote: str = "origin") -> bool:
         """设置远程仓库地址"""
         repo_dir = str(self._repo_path(project_id))
@@ -254,6 +286,9 @@ Thumbs.db
     async def switch_branch(self, project_id: str, branch_name: str) -> bool:
         """切换到指定分支"""
         repo_dir = str(self._repo_path(project_id))
+        # 先清理可能冲突的未跟踪文件（如 .pyc 缓存）
+        await self._run_git(repo_dir, "clean", "-fd", "--exclude=.env")
+        await self._run_git(repo_dir, "checkout", ".")
         rc, _, err = await self._run_git(repo_dir, "checkout", branch_name)
         if rc != 0:
             logger.error("switch branch '%s' failed: %s", branch_name, err)

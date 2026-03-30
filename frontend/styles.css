@@ -2057,6 +2057,7 @@ input[readonly]:focus {
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     margin-bottom: 8px;
+    padding: 10px;
     cursor: pointer;
     transition: border-color 0.2s;
 }
@@ -2134,6 +2135,42 @@ input[readonly]:focus {
     font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
 }
 
+
+/* 产出文件链接 */
+.artifact-file-list {
+    margin-top: 6px;
+    padding: 4px 0;
+}
+.artifact-file-link {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    font-size: 12px;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: background 0.15s;
+    text-decoration: none;
+    font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+}
+.artifact-file-link:hover {
+    background: var(--bg-hover, rgba(255,255,255,0.06));
+}
+.artifact-file-link .file-icon {
+    font-size: 12px;
+    flex-shrink: 0;
+}
+.artifact-file-link .file-dir {
+    color: var(--text-muted);
+    font-size: 11px;
+}
+.artifact-file-link .file-name {
+    color: var(--primary);
+    font-weight: 500;
+}
+.artifact-file-link:hover .file-name {
+    text-decoration: underline;
+}
 
 /* ==================== 配置 Tab: 执行命令 ==================== */
 
@@ -2381,6 +2418,9 @@ input[readonly]:focus {
     background: var(--bg);
     font-size: 13px;
     font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
     color: var(--text);
 }
 
@@ -2497,7 +2537,30 @@ input[readonly]:focus {
 
 .repo-actions {
     display: flex;
+    align-items: center;
     gap: 8px;
+}
+.branch-select {
+    padding: 4px 8px;
+    font-size: 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-elevated);
+    color: var(--text);
+    cursor: pointer;
+    max-width: 220px;
+}
+.branch-select:focus {
+    border-color: var(--primary);
+    outline: none;
+}
+.repo-branch-tag {
+    font-size: 11px;
+    font-weight: normal;
+    color: var(--primary);
+    background: rgba(59,130,246,0.1);
+    padding: 2px 6px;
+    border-radius: 8px;
 }
 
 /* Git Log */
@@ -3897,6 +3960,82 @@ body.chat-open .chat-panel {
 }
 .chat-job-header .job-close-btn:hover {
     color: var(--text);
+}
+
+/* 工单对话统一 Feed */
+.ticket-conversation-section {
+    margin-bottom: 4px;
+    border-bottom: 1px solid var(--border);
+}
+.ticket-section-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px;
+    background: var(--bg-elevated);
+    cursor: pointer;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    font-size: 12px;
+    border-bottom: 1px solid var(--border);
+}
+.ticket-section-header:hover {
+    background: var(--bg-hover);
+}
+.ticket-section-header .job-status-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+.ticket-section-title {
+    flex: 1;
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text);
+}
+.ticket-section-status {
+    font-size: 10px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+.ticket-section-messages {
+    padding: 4px 0;
+}
+.ticket-section-highlight {
+    animation: ticket-highlight 2s ease-out;
+}
+@keyframes ticket-highlight {
+    0% { background: rgba(59, 130, 246, 0.15); }
+    100% { background: transparent; }
+}
+.ticket-feed-log-entry {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 12px;
+    font-size: 11px;
+    color: var(--text-muted);
+}
+.ticket-feed-log-entry .log-agent {
+    color: var(--primary);
+    font-weight: 500;
+}
+.ticket-feed-log-entry .log-action {
+    color: var(--text-secondary, #94a3b8);
+}
+.ticket-feed-log-entry .log-msg {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.ticket-feed-log-entry .log-time {
+    flex-shrink: 0;
+    font-size: 10px;
 }
 
 /* 输入区 */

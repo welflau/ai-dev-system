@@ -44,52 +44,93 @@ async def create_project(req: ProjectCreate):
         else:
             repo_path = str(git_manager._repo_path(project_id))
 
-        # 创建目录结构
         logger.info("创建项目: %s, 仓库路径: %s", req.name, repo_path)
-        os.makedirs(repo_path, exist_ok=True)
-        for d in git_manager.REPO_DIRS:
-            os.makedirs(os.path.join(repo_path, d), exist_ok=True)
 
-        # 生成 README.md
-        readme = f"# {req.name}\n\n{req.description or '由 AI 自动开发系统创建的项目'}\n"
-        readme_path = os.path.join(repo_path, "README.md")
-        if not os.path.exists(readme_path):
-            with open(readme_path, "w", encoding="utf-8") as f:
-                f.write(readme)
-
-        # 生成 .gitignore
-        gitignore = "__pycache__/\n*.py[cod]\n.venv/\nvenv/\n.idea/\n.vscode/\n.DS_Store\nThumbs.db\n.env\n*.log\n"
-        gitignore_path = os.path.join(repo_path, ".gitignore")
-        if not os.path.exists(gitignore_path):
-            with open(gitignore_path, "w", encoding="utf-8") as f:
-                f.write(gitignore)
-
-        # git init（如果还没有 .git 目录）
+        # 判断本地目录是否已有 .git（已有仓库 vs 全新创建）
         git_dir = os.path.join(repo_path, ".git")
-        if not os.path.isdir(git_dir):
-            rc, out, err = await git_manager._run_git(repo_path, "init")
-            logger.info("git init: rc=%d", rc)
-
-        # 配置远程仓库
-        if req.git_remote_url:
-            await git_manager.set_remote(project_id, req.git_remote_url)
-            logger.info("远程仓库已设置: %s", req.git_remote_url)
-
-        # 初始提交
-        await git_manager._run_git(repo_path, "add", ".")
-        rc, out, err = await git_manager._run_git(
-            repo_path, "commit", "-m",
-            f"init: {req.name} - project initialized by AI Dev System",
-            "--author", "AI Dev System <ai@dev-system.local>",
-        )
-        logger.info("git commit: rc=%d", rc)
-
-        # 尝试首次推送（允许失败）
+        cloned = False
         push_success = False
-        try:
-            push_success = await git_manager.push(project_id)
-        except Exception as e:
-            logger.warning("首次推送失败（忽略）: %s", e)
+
+        if req.git_remote_url and not os.path.isdir(git_dir):
+            # 远程仓库 + 本地无 .git：尝试 clone
+            # 如果目录非空则不能 clone，先检查
+            if os.path.isdir(repo_path) and os.listdir(repo_path):
+                # 目录非空但无 .git，init + fetch + reset
+                logger.info("目录非空但无 .git，执行 init + fetch + reset")
+                await git_manager._run_git(repo_path, "init", "-b", "main")
+                git_manager.set_project_path(project_id, repo_path)
+                await git_manager.set_remote(project_id, req.git_remote_url)
+                await git_manager._run_git(repo_path, "fetch", "origin")
+                # 检测远程默认分支
+                rc, refs, _ = await git_manager._run_git(repo_path, "ls-remote", "--symref", "origin", "HEAD")
+                remote_branch = "main"
+                if "refs/heads/" in refs:
+                    for line in refs.splitlines():
+                        if "ref:" in line and "refs/heads/" in line:
+                            remote_branch = line.split("refs/heads/")[-1].split()[0]
+                            break
+                await git_manager._run_git(repo_path, "reset", "--mixed", f"origin/{remote_branch}")
+                await git_manager._run_git(repo_path, "checkout", ".")
+                cloned = True
+            else:
+                # 目录为空或不存在：直接 clone
+                if os.path.isdir(repo_path):
+                    try:
+                        os.rmdir(repo_path)
+                    except OSError:
+                        pass
+                cloned = await git_manager.clone(req.git_remote_url, repo_path)
+                if cloned:
+                    logger.info("clone 成功，使用远程仓库内容")
+                    git_manager.set_project_path(project_id, repo_path)
+                else:
+                    logger.warning("clone 失败，回退到本地初始化")
+                    os.makedirs(repo_path, exist_ok=True)
+
+        if not cloned:
+            # 本地初始化流程（无远程 URL 或 clone 失败）
+            os.makedirs(repo_path, exist_ok=True)
+            for d in git_manager.REPO_DIRS:
+                os.makedirs(os.path.join(repo_path, d), exist_ok=True)
+
+            # 生成 README.md
+            readme = f"# {req.name}\n\n{req.description or '由 AI 自动开发系统创建的项目'}\n"
+            readme_path = os.path.join(repo_path, "README.md")
+            if not os.path.exists(readme_path):
+                with open(readme_path, "w", encoding="utf-8") as f:
+                    f.write(readme)
+
+            # 生成 .gitignore
+            gitignore = "__pycache__/\n*.py[cod]\n.venv/\nvenv/\n.idea/\n.vscode/\n.DS_Store\nThumbs.db\n.env\n*.log\n"
+            gitignore_path = os.path.join(repo_path, ".gitignore")
+            if not os.path.exists(gitignore_path):
+                with open(gitignore_path, "w", encoding="utf-8") as f:
+                    f.write(gitignore)
+
+            # git init
+            if not os.path.isdir(git_dir):
+                rc, out, err = await git_manager._run_git(repo_path, "init", "-b", "main")
+                logger.info("git init: rc=%d", rc)
+
+            # 配置远程仓库
+            if req.git_remote_url:
+                await git_manager.set_remote(project_id, req.git_remote_url)
+                logger.info("远程仓库已设置: %s", req.git_remote_url)
+
+            # 初始提交
+            await git_manager._run_git(repo_path, "add", ".")
+            rc, out, err = await git_manager._run_git(
+                repo_path, "commit", "-m",
+                f"init: {req.name} - project initialized by AI Dev System",
+                "--author", "AI Dev System <ai@dev-system.local>",
+            )
+            logger.info("git commit: rc=%d", rc)
+
+            # 尝试首次推送（允许失败）
+            try:
+                push_success = await git_manager.push(project_id)
+            except Exception as e:
+                logger.warning("首次推送失败（忽略）: %s", e)
 
         data = {
             "id": project_id,
@@ -202,27 +243,28 @@ async def delete_project(project_id: str):
 
     logger.info("找到项目: %s, 开始级联删除...", project['name'])
 
-    # 级联删除关联数据（按外键依赖顺序，由子到父）
-    await db.execute("DELETE FROM chat_messages WHERE project_id = ?", (project_id,))
-    await db.execute("DELETE FROM ticket_commands WHERE project_id = ?", (project_id,))
-    await db.execute("DELETE FROM ticket_logs WHERE project_id = ?", (project_id,))
-    await db.execute("DELETE FROM artifacts WHERE project_id = ?", (project_id,))
-    await db.execute("DELETE FROM subtasks WHERE ticket_id IN (SELECT id FROM tickets WHERE project_id = ?)", (project_id,))
-    await db.execute("DELETE FROM llm_conversations WHERE project_id = ?", (project_id,))
-    await db.execute("DELETE FROM tickets WHERE project_id = ?", (project_id,))
-    await db.execute("DELETE FROM requirements WHERE project_id = ?", (project_id,))
-    await db.execute("DELETE FROM milestones WHERE project_id = ?", (project_id,))
-
-    cursor = await db.execute("DELETE FROM projects WHERE id = ?", (project_id,))
-    logger.info("DELETE projects rowcount: %d", cursor.rowcount)
-
-    # 验证删除结果
-    check = await db.fetch_one("SELECT id FROM projects WHERE id = ?", (project_id,))
-    if check:
-        logger.error("验证失败！项目仍然存在: %s", project_id)
-        raise HTTPException(500, "删除失败：数据库未能成功删除项目")
-    else:
-        logger.info("验证通过，项目已从数据库移除")
+    try:
+        # 级联删除关联数据（单事务，按外键依赖顺序，由子到父）
+        delete_sqls = [
+            "DELETE FROM chat_messages WHERE project_id = ?",
+            "DELETE FROM ticket_commands WHERE project_id = ?",
+            "DELETE FROM ticket_logs WHERE project_id = ?",
+            "DELETE FROM artifacts WHERE project_id = ?",
+            "DELETE FROM subtasks WHERE ticket_id IN (SELECT id FROM tickets WHERE project_id = ?)",
+            "DELETE FROM llm_conversations WHERE project_id = ?",
+            "DELETE FROM tickets WHERE project_id = ?",
+            "DELETE FROM requirements WHERE project_id = ?",
+            "DELETE FROM milestones WHERE project_id = ?",
+            "DELETE FROM ci_builds WHERE project_id = ?",
+            "DELETE FROM projects WHERE id = ?",
+        ]
+        for sql in delete_sqls:
+            await db._db.execute(sql, (project_id,))
+        await db._db.commit()
+        logger.info("项目 %s 级联删除完成", project_id)
+    except Exception as e:
+        logger.error("级联删除失败: %s", e, exc_info=True)
+        raise HTTPException(500, f"级联删除失败: {e}")
 
     return {"message": "项目已删除"}
 
@@ -237,6 +279,19 @@ async def get_git_branches(project_id: str):
     branches = await git_manager.list_branches(project_id)
     current = await git_manager.get_current_branch(project_id)
     return {"branches": branches, "current": current}
+
+
+@router.post("/{project_id}/git/switch-branch")
+async def switch_git_branch(project_id: str, body: dict):
+    """切换 Git 分支"""
+    from git_manager import git_manager
+    branch = body.get("branch", "").strip()
+    if not branch:
+        raise HTTPException(400, "分支名不能为空")
+    ok = await git_manager.switch_branch(project_id, branch)
+    if not ok:
+        raise HTTPException(400, f"切换分支失败: {branch}")
+    return {"current": branch}
 
 
 @router.post("/{project_id}/git/merge")
@@ -296,6 +351,8 @@ async def get_git_tree(project_id: str):
 
     _ensure_git_path(project)
     tree = await git_manager.get_file_tree(project_id)
+    current_branch = await git_manager.get_current_branch(project_id)
+    tree["current_branch"] = current_branch
     return tree
 
 

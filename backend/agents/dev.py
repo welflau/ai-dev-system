@@ -33,8 +33,26 @@ class DevAgent(BaseAgent):
         ticket_description = context.get("ticket_description", "")
         architecture = context.get("architecture", {})
         module = context.get("module", "other")
+        existing_files = context.get("existing_files", [])
+        existing_code = context.get("existing_code", {})
+        sibling_tickets = context.get("sibling_tickets", [])
 
-        prompt = f"""你是一位资深软件开发工程师。请根据架构设计实现以下功能。
+        # 构建已有代码上下文
+        existing_section = ""
+        if existing_files:
+            file_list_str = "\n".join(f"  - {f}" for f in existing_files if not f.startswith(("docs/", "tests/", ".git")))
+            existing_section += f"\n## 项目已有文件\n{file_list_str}\n"
+
+        if existing_code:
+            existing_section += "\n## 现有代码（重要：在此基础上修改，不要从零重写）\n"
+            for fp, code in existing_code.items():
+                existing_section += f"\n### {fp}\n```\n{code}\n```\n"
+
+        if sibling_tickets:
+            siblings_str = "\n".join(f"  - [{t['status']}] {t['title']}" for t in sibling_tickets)
+            existing_section += f"\n## 同需求其他工单\n{siblings_str}\n"
+
+        prompt = f"""你是一位资深软件开发工程师。请根据架构设计，在现有代码基础上实现以下功能。
 
 ## 任务
 标题: {ticket_title}
@@ -43,35 +61,33 @@ class DevAgent(BaseAgent):
 
 ## 架构设计
 {json.dumps(architecture, ensure_ascii=False, indent=2)}
-
-## 请返回 JSON 格式（注意 files 字段包含真正的文件内容）：
+{existing_section}
+## 请返回 JSON 格式：
 {{
   "files": {{
-    "index.html": "<!DOCTYPE html>\\n<html>\\n...",
-    "src/services/example.js": "// 模块代码..."
+    "index.html": "完整的文件内容...",
+    "src/example.js": "完整的文件内容..."
   }},
   "key_implementations": ["关键实现点"],
-  "api_endpoints": [
-    {{"method": "GET/POST/PUT/DELETE", "path": "/api/xxx", "description": "接口描述"}}
-  ],
-  "dependencies_added": ["新增依赖"],
   "estimated_hours": 实际用时估算,
   "notes": "开发备注"
 }}
 
 关键要求：
-1. files 字典的 key 是相对于项目根目录的文件路径，value 是文件的完整代码内容
-2. **必须生成 index.html 入口文件**，可以直接在浏览器中打开运行
-3. 如果是前端项目：index.html 应引入所有 JS/CSS 模块，用 <script src="src/..."> 引入
-4. 如果是后端项目：生成 main.py 入口文件，可以直接 python main.py 运行
-5. 生成完整可运行的代码，不要用省略号或注释代替实际逻辑
-6. 文件名和路径必须全部使用英文，禁止中文文件名（如用 block-system.js 而不是 方块系统.js）
-7. 代码要有完整的功能实现，不是空壳，用户打开就能看到效果
+1. files 字典的 key 是文件路径，value 是该文件的**完整内容**
+2. **增量开发**：如果 index.html 或其他文件已存在，在现有代码基础上添加/修改功能，保留已有功能
+3. **不要创建孤立文件**：所有新文件必须被入口文件引用或导入
+4. 前端项目：代码尽量内联到 index.html（CSS 用 <style>，JS 用 <script>），保持可直接浏览器打开
+5. 后端项目：在 main.py 基础上扩展
+6. 只输出**需要新建或修改**的文件，未改动的文件不要输出
+7. 文件名和路径必须全部使用英文
+8. 生成完整可运行的代码，不要用省略号或注释代替实际逻辑
 """
 
         result = await llm_client.chat_json(
             [{"role": "user", "content": prompt}],
             temperature=0.3,
+            max_tokens=8192,
         )
 
         if result and isinstance(result, dict) and result.get("files"):

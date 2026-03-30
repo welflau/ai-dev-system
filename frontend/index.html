@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI 自动开发系统</title>
-    <link rel="stylesheet" href="/static/styles.css">
+    <link rel="stylesheet" href="/static/styles.css?v=0.11.6">
 </head>
 <body>
     <!-- ==================== 顶栏 ==================== -->
@@ -286,6 +286,9 @@
                         <div class="page-header">
                             <h2>📂 仓库文件</h2>
                             <div class="repo-actions">
+                                <select id="repoBranchSelect" class="branch-select" onchange="switchRepoBranch(this.value)">
+                                    <option value="">加载中...</option>
+                                </select>
                                 <button class="btn btn-sm" onclick="loadRepoTree()">🔄 刷新</button>
                                 <button class="btn btn-sm" onclick="loadGitLog()">📜 提交记录</button>
                             </div>
@@ -295,6 +298,7 @@
                                 <div class="repo-tree-panel">
                                     <div class="tree-panel-header">
                                         <span class="tree-panel-title">文件树</span>
+                                        <span class="repo-branch-tag" id="repoBranchTag" title="当前分支"></span>
                                     </div>
                                     <div class="repo-tree" id="repoTree">
                                         <div class="empty-state"><div class="emoji">📂</div><p>加载中...</p></div>
@@ -571,6 +575,7 @@
                                 <option value="ReviewAgent">ReviewAgent</option>
                                 <option value="DeployAgent">DeployAgent</option>
                                 <option value="Orchestrator">Orchestrator</option>
+                                <option value="CI/CD">CI/CD</option>
                             </select>
                             <button class="btn-icon log-panel-btn" onclick="clearLogPanel()" title="清空日志">🗑️</button>
                             <button class="btn-icon log-panel-btn" onclick="toggleAutoScroll()" id="autoScrollBtn" title="自动滚动">⬇️</button>
@@ -897,6 +902,6 @@
     <!-- ==================== Toast 通知 ==================== -->
     <div class="toast-container" id="toastContainer"></div>
 
-    <script src="/static/app.js?v=0.10.0"></script>
+    <script src="/static/app.js?v=0.11.6"></script>
 </body>
 </html>

@@ -113,6 +113,130 @@ async def get_chat_history(project_id: str, limit: int = 50):
     return {"messages": rows, "total": len(rows)}
 
 
+@router.get("/tickets/conversations")
+async def get_all_ticket_conversations(project_id: str):
+    """获取项目下所有工单的 AI 对话记录（统一 Feed）"""
+    # 校验项目存在
+    project = await db.fetch_one("SELECT id FROM projects WHERE id = ?", (project_id,))
+    if not project:
+        raise HTTPException(404, "项目不存在")
+
+    # 获取所有工单
+    tickets = await db.fetch_all(
+        "SELECT id, title, status, requirement_id FROM tickets WHERE project_id = ? ORDER BY created_at ASC",
+        (project_id,),
+    )
+    if not tickets:
+        return {"tickets": [], "total_tickets": 0, "total_messages": 0}
+
+    # 批量查 LLM 会话记录
+    conversations = await db.fetch_all(
+        """SELECT id, ticket_id, agent_type, action, model, input_tokens, output_tokens,
+                  duration_ms, status, created_at, messages, response
+           FROM llm_conversations
+           WHERE project_id = ? AND ticket_id IS NOT NULL
+           ORDER BY created_at ASC""",
+        (project_id,),
+    )
+
+    # 批量查重要 ticket_logs（状态变更、分派、完成等）
+    logs = await db.fetch_all(
+        """SELECT id, ticket_id, agent_type, action, from_status, to_status, detail, level, created_at
+           FROM ticket_logs
+           WHERE project_id = ? AND ticket_id IS NOT NULL
+             AND action IN ('assign', 'complete', 'accept', 'reject', 'error', 'start', 'llm_call')
+           ORDER BY created_at ASC""",
+        (project_id,),
+    )
+
+    # 按 ticket_id 分组
+    conv_by_ticket = {}
+    for conv in conversations:
+        tid = conv["ticket_id"]
+        if tid not in conv_by_ticket:
+            conv_by_ticket[tid] = []
+
+        # 提取 user prompt
+        try:
+            msgs = json.loads(conv["messages"]) if conv["messages"] else []
+        except (json.JSONDecodeError, TypeError):
+            msgs = []
+        user_msg = ""
+        for m in msgs:
+            if m.get("role") == "user":
+                user_msg = m.get("content", "")
+
+        conv_by_ticket[tid].append({
+            "type": "conversation",
+            "id": conv["id"],
+            "role": "user",
+            "content": user_msg[:500] if user_msg else f"[{conv['agent_type']} / {conv['action']}]",
+            "agent_type": conv["agent_type"],
+            "action": conv["action"],
+            "created_at": conv["created_at"],
+            "is_agent": True,
+        })
+        conv_by_ticket[tid].append({
+            "type": "conversation",
+            "id": conv["id"] + "_resp",
+            "role": "assistant",
+            "content": conv["response"] or "",
+            "agent_type": conv["agent_type"],
+            "action": conv["action"],
+            "model": conv["model"],
+            "input_tokens": conv["input_tokens"],
+            "output_tokens": conv["output_tokens"],
+            "duration_ms": conv["duration_ms"],
+            "status": conv["status"],
+            "created_at": conv["created_at"],
+            "is_agent": True,
+        })
+
+    # 合并 logs
+    for log in logs:
+        tid = log["ticket_id"]
+        if tid not in conv_by_ticket:
+            conv_by_ticket[tid] = []
+        detail_msg = ""
+        if log["detail"]:
+            try:
+                detail_obj = json.loads(log["detail"])
+                detail_msg = detail_obj.get("message", "")
+            except (json.JSONDecodeError, TypeError):
+                detail_msg = log["detail"]
+        conv_by_ticket[tid].append({
+            "type": "log",
+            "id": log["id"],
+            "agent_type": log["agent_type"] or "System",
+            "action": log["action"],
+            "from_status": log["from_status"],
+            "to_status": log["to_status"],
+            "message": detail_msg,
+            "level": log["level"],
+            "created_at": log["created_at"],
+        })
+
+    # 每个 ticket 内按时间排序
+    result_tickets = []
+    total_messages = 0
+    for t in tickets:
+        messages = conv_by_ticket.get(t["id"], [])
+        messages.sort(key=lambda m: m.get("created_at", ""))
+        total_messages += len(messages)
+        result_tickets.append({
+            "id": t["id"],
+            "title": t["title"],
+            "status": t["status"],
+            "messages": messages,
+        })
+
+    return {
+        "tickets": result_tickets,
+        "total_tickets": len(tickets),
+        "total_messages": total_messages,
+    }
+
+
 @router.get("/ticket/{ticket_id}/conversations")
 async def get_ticket_conversations(project_id: str, ticket_id: str):
     """获取工单的 AI 对话记录"""
@@ -234,7 +358,8 @@ def _build_system_prompt(project: dict, context: dict) -> str:
 3. **管理需求状态**：暂停、恢复、关闭需求的执行
 4. **查看状态**：汇报当前项目进展、工单状态
 5. **技术建议**：基于项目技术栈和已有代码给出建议
-6. **生成文档**：可以基于项目内容生成设计文档、分析报告等（通过创建需求来生成）
+6. **生成文档**：可以基于项目内容生成设计文档、分析报告等
+7. **Git 操作**：切换分支、查看分支列表、查看提交日志、查看文件内容、合并分支
 
 ## 操作指令格式
 当你判断用户想要执行操作时，在回复末尾附加以下格式的指令标记（必须是独立一行）：
@@ -279,6 +404,33 @@ title: 文档标题
 - 文档会自动保存到项目仓库的 docs/ 目录并 commit + push
 - 适合：设计报告、技术方案、API 文档、项目总结、竞品分析等
 - 直接生成完整内容，不要省略
+
+### Git 操作
+
+切换分支：
+[ACTION:GIT_SWITCH_BRANCH]
+{{"branch": "分支名"}}
+[/ACTION]
+
+查看分支列表（用户问"有哪些分支"、"当前在哪个分支"时使用）：
+[ACTION:GIT_LIST_BRANCHES]
+{{}}
+[/ACTION]
+
+查看提交日志（用户问"最近提交了什么"、"git log"时使用）：
+[ACTION:GIT_LOG]
+{{"limit": 10}}
+[/ACTION]
+
+查看文件内容（用户问"看一下 xxx 文件的内容"时使用）：
+[ACTION:GIT_READ_FILE]
+{{"path": "文件相对路径"}}
+[/ACTION]
+
+合并分支（用户说"合并 develop 到 main"时使用）：
+[ACTION:GIT_MERGE]
+{{"source": "源分支", "target": "目标分支"}}
+[/ACTION]
 
 priority 可选值：critical, high, medium, low
 
@@ -443,6 +595,8 @@ async def _parse_and_execute_action(project_id: str, project: dict, response: st
         return await _execute_close_requirement(project_id, action_data)
     elif action_type == "GENERATE_DOCUMENT":
         return await _execute_generate_document(project_id, action_data)
+    elif action_type.startswith("GIT_"):
+        return await _execute_git_action(project_id, action_type, action_data)
 
     logger.warning("未知操作类型: %s", action_type)
     return None
@@ -518,6 +672,92 @@ async def _execute_generate_document(project_id: str, data: dict) -> Dict:
     except Exception as e:
         logger.error("生成文档失败: %s", e)
         return {"type": "error", "message": f"生成文档失败: {str(e)}"}
+
+
+async def _execute_git_action(project_id: str, action_type: str, data: dict) -> Dict:
+    """执行 Git 操作"""
+    from git_manager import git_manager
+
+    project = await db.fetch_one("SELECT * FROM projects WHERE id = ?", (project_id,))
+    if not project:
+        return {"type": "error", "message": "项目不存在"}
+
+    # 恢复自定义仓库路径
+    repo_path = project.get("git_repo_path")
+    if repo_path and project_id not in git_manager._custom_paths:
+        from git_manager import PROJECTS_DIR
+        if repo_path != str(PROJECTS_DIR / project_id):
+            git_manager.set_project_path(project_id, repo_path)
+
+    if not git_manager.repo_exists(project_id):
+        return {"type": "error", "message": "仓库不存在"}
+
+    try:
+        if action_type == "GIT_SWITCH_BRANCH":
+            branch = data.get("branch", "").strip()
+            if not branch:
+                return {"type": "error", "message": "分支名不能为空"}
+            ok = await git_manager.switch_branch(project_id, branch)
+            if ok:
+                return {"type": "git_result", "action": "switch_branch", "message": f"已切换到分支: {branch}"}
+            return {"type": "error", "message": f"切换分支失败: {branch}"}
+
+        elif action_type == "GIT_LIST_BRANCHES":
+            branches = await git_manager.list_branches(project_id)
+            current = await git_manager.get_current_branch(project_id)
+            branch_list = "\n".join(f"  {'* ' if b == current else '  '}{b}" for b in branches)
+            return {
+                "type": "git_result", "action": "list_branches",
+                "message": f"当前分支: **{current}**\n\n所有分支:\n{branch_list}",
+                "data": {"current": current, "branches": branches},
+            }
+
+        elif action_type == "GIT_LOG":
+            limit = min(data.get("limit", 10), 20)
+            logs = await git_manager.get_log(project_id, limit)
+            if not logs:
+                return {"type": "git_result", "action": "log", "message": "暂无提交记录"}
+            log_lines = []
+            for c in logs:
+                log_lines.append(f"- `{c.get('short_hash', '?')}` {c.get('message', '')} — {c.get('author', '')} ({c.get('date', '')})")
+            return {
+                "type": "git_result", "action": "log",
+                "message": f"最近 {len(logs)} 条提交:\n\n" + "\n".join(log_lines),
+            }
+
+        elif action_type == "GIT_READ_FILE":
+            path = data.get("path", "").strip()
+            if not path:
+                return {"type": "error", "message": "文件路径不能为空"}
+            content = await git_manager.get_file_content(project_id, path)
+            if content is None:
+                return {"type": "error", "message": f"文件不存在: {path}"}
+            # 截断超长内容
+            if len(content) > 5000:
+                content = content[:5000] + f"\n\n... (文件过长，已截断，共 {len(content)} 字符)"
+            return {
+                "type": "git_result", "action": "read_file",
+                "message": f"**{path}** 内容:\n\n```\n{content}\n```",
+            }
+
+        elif action_type == "GIT_MERGE":
+            source = data.get("source", "").strip()
+            target = data.get("target", "").strip()
+            if not source or not target:
+                return {"type": "error", "message": "源分支和目标分支不能为空"}
+            result = await git_manager.merge_branch(project_id, source, target)
+            if result.get("success"):
+                return {
+                    "type": "git_result", "action": "merge",
+                    "message": f"合并成功: {source} → {target} (commit: {result.get('commit', '?')})",
+                }
+            return {"type": "error", "message": f"合并失败: {result.get('error', '未知错误')}"}
+
+        return {"type": "error", "message": f"未知 Git 操作: {action_type}"}
+
+    except Exception as e:
+        logger.error("Git 操作失败: %s", e)
+        return {"type": "error", "message": f"Git 操作失败: {str(e)}"}
 
 
 async def _execute_create_requirement(project_id: str, data: dict) -> Dict:
@@ -1071,49 +1311,82 @@ async def _execute_create_project(data: dict) -> Dict:
         else:
             repo_path = str(git_manager._repo_path(project_id))
 
-        # 创建目录结构
         logger.info("AI助手创建项目: %s, 仓库路径: %s", name, repo_path)
-        os.makedirs(repo_path, exist_ok=True)
-        for d in git_manager.REPO_DIRS:
-            os.makedirs(os.path.join(repo_path, d), exist_ok=True)
 
-        # 生成 README.md
-        readme = f"# {name}\n\n{description or '由 AI 自动开发系统创建的项目'}\n"
-        readme_path = os.path.join(repo_path, "README.md")
-        if not os.path.exists(readme_path):
-            with open(readme_path, "w", encoding="utf-8") as f:
-                f.write(readme)
-
-        # 生成 .gitignore
-        gitignore = "__pycache__/\n*.py[cod]\n.venv/\nvenv/\n.idea/\n.vscode/\n.DS_Store\nThumbs.db\n.env\n*.log\n"
-        gitignore_path = os.path.join(repo_path, ".gitignore")
-        if not os.path.exists(gitignore_path):
-            with open(gitignore_path, "w", encoding="utf-8") as f:
-                f.write(gitignore)
-
-        # git init
         git_dir = os.path.join(repo_path, ".git")
-        if not os.path.isdir(git_dir):
-            await git_manager._run_git(repo_path, "init")
-
-        # 配置远程仓库
-        if git_remote_url:
-            await git_manager.set_remote(project_id, git_remote_url)
-
-        # 初始提交
-        await git_manager._run_git(repo_path, "add", ".")
-        await git_manager._run_git(
-            repo_path, "commit", "-m",
-            f"init: {name} - project initialized by AI Dev System",
-            "--author", "AI Dev System <ai@dev-system.local>",
-        )
-
-        # 尝试推送
+        cloned = False
         push_success = False
-        try:
-            push_success = await git_manager.push(project_id)
-        except Exception as e:
-            logger.warning("AI助手创建项目首次推送失败: %s", e)
+
+        if git_remote_url and not os.path.isdir(git_dir):
+            # 远程仓库 + 本地无 .git：尝试 clone
+            if os.path.isdir(repo_path) and os.listdir(repo_path):
+                # 目录非空但无 .git，init + fetch + reset
+                logger.info("目录非空但无 .git，执行 init + fetch + reset")
+                await git_manager._run_git(repo_path, "init", "-b", "main")
+                git_manager.set_project_path(project_id, repo_path)
+                await git_manager.set_remote(project_id, git_remote_url)
+                await git_manager._run_git(repo_path, "fetch", "origin")
+                # 检测远程默认分支
+                rc, refs, _ = await git_manager._run_git(repo_path, "ls-remote", "--symref", "origin", "HEAD")
+                remote_branch = "main"
+                if "refs/heads/" in refs:
+                    for line in refs.splitlines():
+                        if "ref:" in line and "refs/heads/" in line:
+                            remote_branch = line.split("refs/heads/")[-1].split()[0]
+                            break
+                await git_manager._run_git(repo_path, "reset", "--mixed", f"origin/{remote_branch}")
+                await git_manager._run_git(repo_path, "checkout", ".")
+                cloned = True
+            else:
+                # 目录为空或不存在：直接 clone
+                if os.path.isdir(repo_path):
+                    try:
+                        os.rmdir(repo_path)
+                    except OSError:
+                        pass
+                cloned = await git_manager.clone(git_remote_url, repo_path)
+                if cloned:
+                    logger.info("clone 成功，使用远程仓库内容")
+                    git_manager.set_project_path(project_id, repo_path)
+                else:
+                    logger.warning("clone 失败，回退到本地初始化")
+                    os.makedirs(repo_path, exist_ok=True)
+
+        if not cloned:
+            # 本地初始化流程
+            os.makedirs(repo_path, exist_ok=True)
+            for d in git_manager.REPO_DIRS:
+                os.makedirs(os.path.join(repo_path, d), exist_ok=True)
+
+            readme = f"# {name}\n\n{description or '由 AI 自动开发系统创建的项目'}\n"
+            readme_path = os.path.join(repo_path, "README.md")
+            if not os.path.exists(readme_path):
+                with open(readme_path, "w", encoding="utf-8") as f:
+                    f.write(readme)
+
+            gitignore = "__pycache__/\n*.py[cod]\n.venv/\nvenv/\n.idea/\n.vscode/\n.DS_Store\nThumbs.db\n.env\n*.log\n"
+            gitignore_path = os.path.join(repo_path, ".gitignore")
+            if not os.path.exists(gitignore_path):
+                with open(gitignore_path, "w", encoding="utf-8") as f:
+                    f.write(gitignore)
+
+            if not os.path.isdir(git_dir):
+                await git_manager._run_git(repo_path, "init", "-b", "main")
+
+            if git_remote_url:
+                await git_manager.set_remote(project_id, git_remote_url)
+
+            await git_manager._run_git(repo_path, "add", ".")
+            await git_manager._run_git(
+                repo_path, "commit", "-m",
+                f"init: {name} - project initialized by AI Dev System",
+                "--author", "AI Dev System <ai@dev-system.local>",
+            )
+
+            try:
+                push_success = await git_manager.push(project_id)
+            except Exception as e:
+                logger.warning("AI助手创建项目首次推送失败: %s", e)
 
         # 写入数据库
         proj_data = {
