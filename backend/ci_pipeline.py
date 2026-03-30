@@ -254,6 +254,15 @@ class CIPipelineRunner:
             })
 
             logger.info("Develop 构建成功: %s → master (commit: %s)", build_id[:8], merge_commit)
+
+            # 自动部署 test 环境
+            try:
+                from agents.deploy import DeployAgent
+                url = await DeployAgent.deploy_env(project_id, "test", branch="develop")
+                if url:
+                    logger.info("Test 环境已自动部署: %s", url)
+            except Exception as te:
+                logger.warning("Test 环境自动部署失败: %s", te)
         else:
             error = merge_result.get("error", "合并冲突")
             logs.append({"step": "merge", "msg": f"合并失败: {error}", "passed": False})
@@ -312,6 +321,15 @@ class CIPipelineRunner:
 
         # 自动触发部署
         await self.trigger_build(project_id, CIBuildType.DEPLOY.value, trigger="auto")
+
+        # 自动部署 prod 环境
+        try:
+            from agents.deploy import DeployAgent
+            url = await DeployAgent.deploy_env(project_id, "prod", branch="main")
+            if url:
+                logger.info("Prod 环境已自动部署: %s", url)
+        except Exception as pe:
+            logger.warning("Prod 环境自动部署失败: %s", pe)
 
     async def _run_deploy(self, build_id: str, project_id: str):
         """部署: 生成部署配置 + 模拟部署"""

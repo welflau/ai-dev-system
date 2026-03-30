@@ -543,6 +543,7 @@ function switchTab(tab) {
     if (tab === 'logs') loadLogs();
     if (tab === 'settings-general') loadSettingsGeneral();
     if (tab === 'settings-repo') loadSettingsRepo();
+    if (tab === 'settings-envs') loadEnvironments();
     if (tab === 'settings-agents') loadAgentList();
 }
 
@@ -666,6 +667,79 @@ async function mergeBranch(source, target) {
         }
     } catch (e) {
         showToast(`合并失败: ${e.message}`, 'error');
+    }
+}
+
+// ==================== 环境管理 ====================
+
+async function loadEnvironments() {
+    if (!currentProjectId) return;
+    const container = document.getElementById('envCards');
+    if (!container) return;
+
+    try {
+        const data = await api(`/projects/${currentProjectId}/environments`);
+        const envs = data.environments || [];
+
+        const envMeta = {
+            dev:  { icon: '🔧', label: '开发环境', color: 'var(--info)', desc: 'feat/* 分支，Agent 开发后自动部署' },
+            test: { icon: '🧪', label: '测试环境', color: 'var(--warning, #f59e0b)', desc: 'develop 分支，构建通过后自动部署' },
+            prod: { icon: '🚀', label: '生产环境', color: 'var(--success)', desc: 'main 分支，Master 构建通过后部署' },
+        };
+
+        container.innerHTML = envs.map(env => {
+            const meta = envMeta[env.env_type] || {};
+            const running = env.status === 'running';
+            return `
+            <div class="env-card ${running ? 'env-running' : ''}">
+                <div class="env-card-header">
+                    <span class="env-icon">${meta.icon || '🌍'}</span>
+                    <span class="env-label">${meta.label || env.env_type}</span>
+                    <span class="env-status-dot" style="background:${running ? meta.color : 'var(--text-muted)'}"></span>
+                    <span class="env-status-text">${running ? '运行中' : '未启动'}</span>
+                </div>
+                <div class="env-card-body">
+                    <div class="env-info-row"><span class="env-info-label">分支</span><span class="env-info-value">${env.branch ? '🌿 ' + escapeHtml(env.branch) : '-'}</span></div>
+                    <div class="env-info-row"><span class="env-info-label">端口</span><span class="env-info-value">${env.port || '-'}</span></div>
+                    <div class="env-info-row"><span class="env-info-label">Commit</span><span class="env-info-value" style="font-family:monospace;">${env.last_commit || '-'}</span></div>
+                    <div class="env-info-row"><span class="env-info-label">部署时间</span><span class="env-info-value">${env.last_deployed_at ? formatTime(env.last_deployed_at) : '-'}</span></div>
+                    ${running && env.url ? `<div class="env-info-row"><span class="env-info-label">预览</span><a class="env-preview-link" href="${env.url}" target="_blank">${env.url}</a></div>` : ''}
+                </div>
+                <div class="env-card-actions">
+                    ${running
+                        ? `<button class="btn btn-sm btn-danger" onclick="stopEnv('${env.env_type}')">停止</button>
+                           <a class="btn btn-sm btn-primary" href="${env.url}" target="_blank">打开预览</a>`
+                        : `<button class="btn btn-sm btn-primary" onclick="deployEnv('${env.env_type}')">部署</button>`
+                    }
+                </div>
+                <div class="env-desc">${meta.desc || ''}</div>
+            </div>`;
+        }).join('');
+    } catch (e) {
+        container.innerHTML = `<div class="env-card">加载失败: ${escapeHtml(e.message)}</div>`;
+    }
+}
+
+async function deployEnv(envType) {
+    if (!currentProjectId) return;
+    showToast(`正在部署 ${envType} 环境...`, 'info');
+    try {
+        const res = await api(`/projects/${currentProjectId}/environments/${envType}/deploy`, { method: 'POST' });
+        showToast(`${envType} 环境已部署: ${res.url}`, 'success');
+        loadEnvironments();
+    } catch (e) {
+        showToast(`${envType} 部署失败: ${e.message}`, 'error');
+    }
+}
+
+async function stopEnv(envType) {
+    if (!currentProjectId) return;
+    try {
+        await api(`/projects/${currentProjectId}/environments/${envType}/stop`, { method: 'POST' });
+        showToast(`${envType} 环境已停止`, 'info');
+        loadEnvironments();
+    } catch (e) {
+        showToast(`停止失败: ${e.message}`, 'error');
     }
 }
 

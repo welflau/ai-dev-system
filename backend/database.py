@@ -326,6 +326,23 @@ CREATE TABLE IF NOT EXISTS ci_builds (
 );
 
 -- ============================================================
+-- 项目环境表（dev / test / prod）
+-- ============================================================
+CREATE TABLE IF NOT EXISTS project_environments (
+    id              TEXT PRIMARY KEY,
+    project_id      TEXT NOT NULL REFERENCES projects(id),
+    env_type        TEXT NOT NULL,
+    branch          TEXT,
+    deploy_path     TEXT,
+    port            INTEGER,
+    status          TEXT NOT NULL DEFAULT 'inactive',
+    url             TEXT,
+    last_commit     TEXT,
+    last_deployed_at TEXT,
+    created_at      TEXT NOT NULL
+);
+
+-- ============================================================
 -- 索引
 -- ============================================================
 CREATE INDEX IF NOT EXISTS idx_requirements_project ON requirements(project_id);
@@ -352,6 +369,7 @@ CREATE INDEX IF NOT EXISTS idx_requirements_milestone ON requirements(milestone_
 CREATE INDEX IF NOT EXISTS idx_ci_builds_project ON ci_builds(project_id);
 CREATE INDEX IF NOT EXISTS idx_ci_builds_status ON ci_builds(status);
 CREATE INDEX IF NOT EXISTS idx_ci_builds_type ON ci_builds(build_type);
+CREATE INDEX IF NOT EXISTS idx_project_environments_project ON project_environments(project_id);
 """
 
 

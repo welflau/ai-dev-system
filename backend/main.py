@@ -166,12 +166,11 @@ async def health_check():
 
 @app.get("/api/projects/{project_id}/preview")
 async def get_preview_url(project_id: str):
-    """获取项目的本地预览 URL"""
+    """获取项目的本地预览 URL（兼容旧接口，优先返回 dev 环境）"""
     from agents.deploy import DeployAgent
-    servers = DeployAgent._preview_servers
-    if project_id in servers:
-        info = servers[project_id]
-        return {"preview_url": f"http://localhost:{info['port']}", "port": info["port"]}
+    info = DeployAgent.get_preview(project_id)
+    if info:
+        return {"preview_url": f"http://localhost:{info['port']}", "port": info["port"], "env": info.get("env")}
     return {"preview_url": None}
 
 

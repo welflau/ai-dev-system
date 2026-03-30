@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI 自动开发系统</title>
-    <link rel="stylesheet" href="/static/styles.css?v=0.11.6">
+    <link rel="stylesheet" href="/static/styles.css?v=0.12.0">
 </head>
 <body>
     <!-- ==================== 顶栏 ==================== -->
@@ -104,6 +104,9 @@
                             </a>
                             <a class="nav-item nav-sub-item" data-tab="settings-repo" onclick="switchTab('settings-repo')">
                                 <span class="nav-item-icon">📂</span> 仓库配置
+                            </a>
+                            <a class="nav-item nav-sub-item" data-tab="settings-envs" onclick="switchTab('settings-envs')">
+                                <span class="nav-item-icon">🌍</span> 环境管理
                             </a>
                             <a class="nav-item nav-sub-item" data-tab="settings-agents" onclick="switchTab('settings-agents')">
                                 <span class="nav-item-icon">🤖</span> Agent 配置
@@ -505,6 +508,22 @@
                         </div>
                     </div>
 
+                    <!-- Tab: 设置 - 环境管理 -->
+                    <div id="tab-settings-envs" class="tab-content">
+                        <div class="settings-page">
+                            <div class="settings-page-header">
+                                <h2>🌍 环境管理</h2>
+                                <button class="btn btn-sm" onclick="loadEnvironments()">🔄 刷新</button>
+                            </div>
+                            <p style="color:var(--text-muted);font-size:13px;margin-bottom:16px;">
+                                分支与环境对应：feat/* → 开发(dev) | develop → 测试(test) | main → 生产(prod)
+                            </p>
+                            <div class="env-cards" id="envCards">
+                                <div class="env-card">加载中...</div>
+                            </div>
+                        </div>
+                    </div>
+
                     <!-- Tab: 设置 - Agent 配置 -->
                     <div id="tab-settings-agents" class="tab-content">
                         <div class="settings-page">
@@ -902,6 +921,6 @@
     <!-- ==================== Toast 通知 ==================== -->
     <div class="toast-container" id="toastContainer"></div>
 
-    <script src="/static/app.js?v=0.11.6"></script>
+    <script src="/static/app.js?v=0.12.0"></script>
 </body>
 </html>

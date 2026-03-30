@@ -256,6 +256,7 @@ async def delete_project(project_id: str):
             "DELETE FROM requirements WHERE project_id = ?",
             "DELETE FROM milestones WHERE project_id = ?",
             "DELETE FROM ci_builds WHERE project_id = ?",
+            "DELETE FROM project_environments WHERE project_id = ?",
             "DELETE FROM projects WHERE id = ?",
         ]
         for sql in delete_sqls:
@@ -393,6 +394,82 @@ async def get_git_diff(project_id: str, commit: str = None):
     _ensure_git_path(project)
     diff = await git_manager.get_diff(project_id, commit)
     return {"diff": diff}
+
+
+# ==================== 环境管理 API ====================
+
+
+@router.get("/{project_id}/environments")
+async def get_project_environments(project_id: str):
+    """获取项目三个环境的状态"""
+    from agents.deploy import DeployAgent
+
+    project = await db.fetch_one("SELECT id FROM projects WHERE id = ?", (project_id,))
+    if not project:
+        raise HTTPException(404, "项目不存在")
+
+    envs = await db.fetch_all(
+        "SELECT * FROM project_environments WHERE project_id = ? ORDER BY env_type",
+        (project_id,),
+    )
+    env_map = {e["env_type"]: dict(e) for e in envs}
+
+    result = []
+    for env_type in ("dev", "test", "prod"):
+        env = env_map.get(env_type, {})
+        # 检查进程是否真的还在运行
+        key = (project_id, env_type)
+        actually_running = key in DeployAgent._preview_servers
+        status = "running" if actually_running else "inactive"
+        if env.get("status") == "running" and not actually_running:
+            # 数据库说 running 但进程已死，修正
+            await db.execute(
+                "UPDATE project_environments SET status = 'inactive' WHERE project_id = ? AND env_type = ?",
+                (project_id, env_type),
+            )
+        result.append({
+            "env_type": env_type,
+            "branch": env.get("branch", ""),
+            "deploy_path": env.get("deploy_path", ""),
+            "port": env.get("port"),
+            "status": status,
+            "url": env.get("url", ""),
+            "last_commit": env.get("last_commit", ""),
+            "last_deployed_at": env.get("last_deployed_at", ""),
+        })
+
+    return {"environments": result}
+
+
+@router.post("/{project_id}/environments/{env_type}/deploy")
+async def deploy_environment(project_id: str, env_type: str):
+    """手动触发环境部署"""
+    from agents.deploy import DeployAgent
+
+    if env_type not in ("dev", "test", "prod"):
+        raise HTTPException(400, "环境类型无效，可选: dev, test, prod")
+
+    project = await db.fetch_one("SELECT id FROM projects WHERE id = ?", (project_id,))
+    if not project:
+        raise HTTPException(404, "项目不存在")
+
+    _ensure_git_path(project)
+    url = await DeployAgent.deploy_env(project_id, env_type)
+    if url:
+        return {"status": "ok", "url": url, "env_type": env_type}
+    raise HTTPException(500, f"{env_type} 环境部署失败")
+
+
+@router.post("/{project_id}/environments/{env_type}/stop")
+async def stop_environment(project_id: str, env_type: str):
+    """停止环境"""
+    from agents.deploy import DeployAgent
+
+    if env_type not in ("dev", "test", "prod"):
+        raise HTTPException(400, "环境类型无效")
+
+    await DeployAgent.stop_env(project_id, env_type)
+    return {"status": "ok", "env_type": env_type}
 
 
 @router.post("/detect-local")

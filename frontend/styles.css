@@ -2136,6 +2136,73 @@ input[readonly]:focus {
 }
 
 
+/* 环境管理卡片 */
+.env-cards {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+}
+.env-card {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    transition: border-color 0.2s;
+}
+.env-card.env-running {
+    border-color: var(--primary);
+}
+.env-card-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+.env-icon { font-size: 20px; }
+.env-label { font-weight: 600; font-size: 14px; flex: 1; }
+.env-status-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+}
+.env-status-text {
+    font-size: 11px; color: var(--text-muted);
+}
+.env-card-body { margin-bottom: 12px; }
+.env-info-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 3px 0;
+    font-size: 12px;
+}
+.env-info-label {
+    color: var(--text-muted);
+    min-width: 60px;
+}
+.env-info-value {
+    color: var(--text);
+    text-align: right;
+}
+.env-preview-link {
+    color: var(--primary);
+    text-decoration: none;
+    font-size: 12px;
+}
+.env-preview-link:hover { text-decoration: underline; }
+.env-card-actions {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+.env-desc {
+    font-size: 11px;
+    color: var(--text-muted);
+    border-top: 1px solid var(--border);
+    padding-top: 8px;
+    margin-top: 4px;
+}
+@media (max-width: 900px) {
+    .env-cards { grid-template-columns: 1fr; }
+}
+
 /* 产出文件链接 */
 .artifact-file-list {
     margin-top: 6px;

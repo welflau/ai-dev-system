@@ -1096,6 +1096,14 @@ class TicketOrchestrator:
                     step, "git_push", "git push origin main", "success"
                 )
 
+            # 自动部署 dev 环境（Agent 完成文件提交后）
+            if agent_name in ("DevAgent", "ArchitectAgent"):
+                try:
+                    from agents.deploy import DeployAgent
+                    await DeployAgent.deploy_env(project_id, "dev")
+                except Exception as de:
+                    logger.warning("Dev 环境自动部署失败: %s", de)
+
         return git_result
 
     async def _record_command(
