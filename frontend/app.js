@@ -4633,6 +4633,56 @@ let chatHistory = [];               // 全局聊天历史 [{role, content}]
 let chatCurrentTicketId = null;     // Job 模式选中的工单 ID
 let chatCurrentTicketTitle = '';    // Job 模式选中的工单标题
 let chatSending = false;
+let chatPendingImages = [];         // 待发送的图片 base64 data URL 列表
+
+// ---- 图片粘贴支持 ----
+document.addEventListener('DOMContentLoaded', () => {
+    const textarea = document.getElementById('chatInput');
+    if (!textarea) return;
+    textarea.addEventListener('paste', handleChatImagePaste);
+});
+
+function handleChatImagePaste(e) {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    let hasImage = false;
+    for (const item of items) {
+        if (item.type.startsWith('image/')) {
+            hasImage = true;
+            const file = item.getAsFile();
+            if (!file) continue;
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                chatPendingImages.push(ev.target.result);
+                renderChatImagePreviews();
+            };
+            reader.readAsDataURL(file);
+        }
+    }
+    if (hasImage) e.preventDefault(); // 阻止默认粘贴（防止文件名出现在文本框）
+}
+
+function renderChatImagePreviews() {
+    const container = document.getElementById('chatImagePreviews');
+    if (!container) return;
+    if (chatPendingImages.length === 0) {
+        container.innerHTML = '';
+        container.style.display = 'none';
+        return;
+    }
+    container.style.display = 'flex';
+    container.innerHTML = chatPendingImages.map((src, i) => `
+        <div class="chat-img-thumb" title="点击移除">
+            <img src="${src}" alt="图片${i+1}">
+            <button class="chat-img-remove" onclick="removeChatImage(${i})">✕</button>
+        </div>
+    `).join('');
+}
+
+function removeChatImage(index) {
+    chatPendingImages.splice(index, 1);
+    renderChatImagePreviews();
+}
 
 /**
  * 切换聊天面板显示/隐藏
@@ -4995,7 +5045,8 @@ async function sendChatMessage() {
 
     const input = document.getElementById('chatInput');
     const message = input.value.trim();
-    if (!message) return;
+    const images = [...chatPendingImages]; // 拷贝一份，防止发送中被修改
+    if (!message && images.length === 0) return;
 
     chatSending = true;
     const sendBtn = document.getElementById('chatSendBtn');
@@ -5003,12 +5054,16 @@ async function sendChatMessage() {
     input.value = '';
     autoResizeChatInput();
 
+    // 清空图片预览区
+    chatPendingImages = [];
+    renderChatImagePreviews();
+
     // 移除欢迎消息
     const welcome = document.querySelector('.chat-welcome');
     if (welcome) welcome.remove();
 
-    // 添加用户消息气泡
-    appendChatBubble('user', message);
+    // 添加用户消息气泡（含图片）
+    appendChatBubble('user', message, null, null, images);
     scrollChatToBottom();
 
     // 添加加载动画
@@ -5043,6 +5098,7 @@ async function sendChatMessage() {
                 body: JSON.stringify({
                     message: message,
                     history: historyToSend,
+                    images: images.length > 0 ? images : undefined,
                 }),
             });
         } else {
@@ -5053,6 +5109,7 @@ async function sendChatMessage() {
                 body: JSON.stringify({
                     message: message,
                     history: historyToSend,
+                    images: images.length > 0 ? images : undefined,
                 }),
             });
         }
@@ -5134,7 +5191,7 @@ async function sendChatMessage() {
 /**
  * 追加聊天气泡
  */
-function appendChatBubble(role, content, timestamp = null, action = null) {
+function appendChatBubble(role, content, timestamp = null, action = null, images = []) {
     const container = document.getElementById('chatMessages');
     const msgEl = document.createElement('div');
     msgEl.className = `chat-msg ${role}`;
@@ -5237,15 +5294,37 @@ function appendChatBubble(role, content, timestamp = null, action = null) {
         `;
     }
 
+    // 图片展示（用户发送的图片）
+    const imagesHtml = (images && images.length > 0)
+        ? `<div class="chat-bubble-images">${images.map(src =>
+            `<img class="chat-bubble-img" src="${src}" alt="图片" onclick="openChatImageViewer(this.src)">`
+          ).join('')}</div>`
+        : '';
+
     msgEl.innerHTML = `
         <div class="chat-msg-avatar">${avatar}</div>
         <div class="chat-msg-content">
+            ${imagesHtml}
             <div class="chat-msg-bubble">${formatChatContent(content)}</div>
             ${actionHtml}
             <div class="chat-msg-time">${timeStr}</div>
         </div>
     `;
     container.appendChild(msgEl);
+}
+
+/** 简易图片查看器（点图片全屏预览） */
+function openChatImageViewer(src) {
+    let overlay = document.getElementById('chatImgViewerOverlay');
+    if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.id = 'chatImgViewerOverlay';
+        overlay.style.cssText = `position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:9999;display:flex;align-items:center;justify-content:center;cursor:zoom-out;`;
+        overlay.onclick = () => overlay.remove();
+        document.body.appendChild(overlay);
+    }
+    overlay.innerHTML = `<img src="${src}" style="max-width:90vw;max-height:90vh;border-radius:8px;box-shadow:0 8px 40px rgba(0,0,0,0.6);">`;
+    overlay.style.display = 'flex';
 }
 
 /**

@@ -4730,6 +4730,80 @@ body.chat-open .chat-panel {
     background: var(--bg-card);
 }
 
+/* 图片预览区 */
+.chat-image-previews {
+    display: none;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 2px;
+}
+
+.chat-img-thumb {
+    position: relative;
+    width: 64px;
+    height: 64px;
+    border-radius: 8px;
+    overflow: visible;
+    flex-shrink: 0;
+}
+
+.chat-img-thumb img {
+    width: 64px;
+    height: 64px;
+    object-fit: cover;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    display: block;
+}
+
+.chat-img-remove {
+    position: absolute;
+    top: -6px;
+    right: -6px;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #ef4444;
+    color: #fff;
+    border: none;
+    cursor: pointer;
+    font-size: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    padding: 0;
+    transition: transform 0.15s;
+}
+
+.chat-img-remove:hover {
+    transform: scale(1.2);
+}
+
+/* 气泡内图片 */
+.chat-bubble-images {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 6px;
+    max-width: 240px;
+}
+
+.chat-bubble-img {
+    max-width: 160px;
+    max-height: 160px;
+    border-radius: 8px;
+    object-fit: cover;
+    cursor: zoom-in;
+    border: 1px solid rgba(255,255,255,0.1);
+    transition: opacity 0.15s;
+    display: block;
+}
+
+.chat-bubble-img:hover {
+    opacity: 0.88;
+}
+
 .chat-input-wrap {
     display: flex;
     align-items: flex-end;

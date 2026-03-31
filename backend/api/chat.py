@@ -32,6 +32,7 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, description="用户消息")
     history: Optional[List[ChatMessage]] = Field(default=None, description="历史消息（可选）")
+    images: Optional[List[str]] = Field(default=None, description="图片列表，base64 data URL，如 data:image/png;base64,...")
 
 
 class ChatResponse(BaseModel):
@@ -63,8 +64,8 @@ async def chat_with_ai(project_id: str, req: ChatRequest):
         for msg in req.history[-20:]:  # 最多保留最近 20 条
             messages.append({"role": msg.role, "content": msg.content})
 
-    # 添加用户当前消息
-    messages.append({"role": "user", "content": req.message})
+    # 添加用户当前消息（含图片时构建 vision content）
+    messages.append({"role": "user", "content": _build_user_content(req.message, req.images)})
 
     # 设置 LLM 上下文
     set_llm_context(
@@ -1154,6 +1155,7 @@ async def _save_chat_message(
 class GlobalChatRequest(BaseModel):
     message: str = Field(..., min_length=1, description="用户消息")
     history: Optional[List[ChatMessage]] = Field(default=None, description="历史消息（可选）")
+    images: Optional[List[str]] = Field(default=None, description="图片列表，base64 data URL")
 
 
 class GlobalChatResponse(BaseModel):
@@ -1178,7 +1180,7 @@ async def global_chat_with_ai(req: GlobalChatRequest):
         for msg in req.history[-20:]:
             messages.append({"role": msg.role, "content": msg.content})
 
-    messages.append({"role": "user", "content": req.message})
+    messages.append({"role": "user", "content": _build_user_content(req.message, req.images)})
 
     set_llm_context(agent_type="GlobalChatAssistant", action="global_chat_no_project")
 
@@ -1424,3 +1426,38 @@ async def _execute_create_project(data: dict) -> Dict:
     except Exception as e:
         logger.error("AI助手创建项目失败: %s", e)
         return {"type": "error", "message": f"创建项目失败: {str(e)}"}
+
+
+# ==================== 图片消息构建 ====================
+
+def _build_user_content(text: str, images: Optional[List[str]] = None):
+    """
+    构建用户消息 content。
+    无图片时返回字符串；有图片时返回 Anthropic vision content blocks 列表。
+    data URL 格式：data:image/png;base64,<base64data>
+    """
+    if not images:
+        return text
+
+    content = []
+    for data_url in images:
+        # 解析 data URL
+        try:
+            header, b64data = data_url.split(",", 1)
+            media_type = header.split(";")[0].split(":")[1]  # e.g. image/png
+            # Anthropic 支持 image/jpeg image/png image/gif image/webp
+            if media_type not in ("image/jpeg", "image/png", "image/gif", "image/webp"):
+                media_type = "image/jpeg"
+            content.append({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": media_type,
+                    "data": b64data,
+                }
+            })
+        except Exception:
+            pass  # 解析失败则跳过
+
+    content.append({"type": "text", "text": text})
+    return content

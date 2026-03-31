@@ -133,8 +133,11 @@ class LLMClient:
         user_messages = []
         for msg in messages:
             if msg["role"] == "system":
-                system_text += msg["content"] + "\n"
+                # system content 只支持字符串
+                content = msg["content"]
+                system_text += (content if isinstance(content, str) else str(content)) + "\n"
             else:
+                # content 可能是字符串（普通消息）或 list（vision blocks）—— 直接透传
                 user_messages.append(msg)
         # Anthropic 要求至少有一条 user 消息
         if not user_messages:
