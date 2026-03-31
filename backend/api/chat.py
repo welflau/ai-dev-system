@@ -79,7 +79,7 @@ async def chat_with_ai(project_id: str, req: ChatRequest):
 
     try:
         # 调用 LLM
-        response = await llm_client.chat(messages, temperature=0.7, max_tokens=8192)
+        response = await llm_client.chat(messages, temperature=0.7, max_tokens=16000)
 
         # 解析是否包含操作指令
         action_result = await _parse_and_execute_action(project_id, project, response)
@@ -1328,7 +1328,7 @@ async def global_chat_with_ai(req: GlobalChatRequest):
     set_llm_context(agent_type="GlobalChatAssistant", action="global_chat_no_project")
 
     try:
-        response = await llm_client.chat(messages, temperature=0.7, max_tokens=4096)
+        response = await llm_client.chat(messages, temperature=0.7, max_tokens=16000)
 
         # 解析是否包含 CREATE_PROJECT 操作
         action_result = await _parse_global_action(response)
