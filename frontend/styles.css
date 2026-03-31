@@ -4859,6 +4859,86 @@ body.chat-open .chat-panel {
     transform: none;
 }
 
+/* 附件按钮 */
+.chat-attach-btn {
+    width: 30px;
+    height: 30px;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--text-muted);
+    border: 1px solid transparent;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: all 0.2s;
+    padding: 0;
+}
+.chat-attach-btn:hover {
+    color: var(--primary);
+    background: rgba(79, 70, 229, 0.08);
+    border-color: rgba(79, 70, 229, 0.25);
+}
+
+/* 文档附件预览区 */
+.chat-doc-previews {
+    display: none;
+    flex-direction: column;
+    gap: 6px;
+    padding: 6px 2px;
+}
+.chat-doc-card {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 7px 10px;
+    font-size: 12px;
+    position: relative;
+    max-width: 100%;
+    overflow: hidden;
+}
+.chat-doc-icon {
+    font-size: 20px;
+    flex-shrink: 0;
+    line-height: 1;
+}
+.chat-doc-info {
+    flex: 1;
+    min-width: 0;
+}
+.chat-doc-name {
+    color: var(--text);
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.chat-doc-meta {
+    color: var(--text-muted);
+    margin-top: 1px;
+}
+.chat-doc-remove {
+    position: absolute;
+    top: 4px;
+    right: 6px;
+    background: var(--bg-card);
+    border: none;
+    cursor: pointer;
+    color: var(--text-muted);
+    font-size: 14px;
+    line-height: 1;
+    padding: 1px 4px;
+    border-radius: 4px;
+}
+.chat-doc-remove:hover {
+    color: var(--danger);
+    background: rgba(239, 68, 68, 0.1);
+}
+
 /* 响应式 */
 @media (max-width: 1200px) {
     :root {

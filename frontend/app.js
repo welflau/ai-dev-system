@@ -4634,6 +4634,7 @@ let chatCurrentTicketId = null;     // Job 模式选中的工单 ID
 let chatCurrentTicketTitle = '';    // Job 模式选中的工单标题
 let chatSending = false;
 let chatPendingImages = [];         // 待发送的图片 base64 data URL 列表
+let chatPendingDocs = [];           // 待发送的文档 [{filename, text, chars}]
 
 // ---- 图片粘贴支持（用事件委托，避免 SPA 动态渲染导致绑定失败）----
 document.addEventListener('paste', (e) => {
@@ -4684,6 +4685,90 @@ function renderChatImagePreviews() {
 function removeChatImage(index) {
     chatPendingImages.splice(index, 1);
     renderChatImagePreviews();
+}
+
+// ---- 附件上传 ----
+
+function openFileAttachment() {
+    const input = document.getElementById('chatFileInput');
+    if (input) input.click();
+}
+
+function handleFileInputChange(e) {
+    const files = e.target.files;
+    if (files && files.length > 0) {
+        handleFileAttachment(files);
+    }
+    // 清空 value，允许重复选同一文件
+    e.target.value = '';
+}
+
+async function handleFileAttachment(files) {
+    if (!currentProjectId) {
+        showNotification('请先选择一个项目', 'warning');
+        return;
+    }
+    for (const file of files) {
+        const formData = new FormData();
+        formData.append('file', file);
+        try {
+            const resp = await fetch(`${API}/projects/${currentProjectId}/chat/upload-attachment`, {
+                method: 'POST',
+                body: formData,
+            });
+            if (!resp.ok) {
+                const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+                showNotification(`上传失败: ${err.detail || resp.statusText}`, 'error');
+                continue;
+            }
+            const result = await resp.json();
+            if (result.type === 'image') {
+                chatPendingImages.push(result.data_url);
+                renderChatImagePreviews();
+            } else if (result.type === 'document') {
+                chatPendingDocs.push({
+                    filename: result.filename,
+                    text: result.text,
+                    chars: result.text.length,
+                });
+                renderChatDocPreviews();
+            }
+        } catch (err) {
+            showNotification(`上传出错: ${err.message}`, 'error');
+        }
+    }
+}
+
+function renderChatDocPreviews() {
+    const container = document.getElementById('chatDocPreviews');
+    if (!container) return;
+    if (chatPendingDocs.length === 0) {
+        container.innerHTML = '';
+        container.style.display = 'none';
+        return;
+    }
+    container.style.display = 'flex';
+    container.innerHTML = chatPendingDocs.map((doc, i) => {
+        const ext = doc.filename.split('.').pop().toLowerCase();
+        const icon = ext === 'pdf' ? '📄' : ext === 'docx' ? '📝' : '📃';
+        const charsText = doc.chars >= 1000
+            ? `${(doc.chars / 1000).toFixed(1)}k 字符`
+            : `${doc.chars} 字符`;
+        return `
+        <div class="chat-doc-card">
+            <span class="chat-doc-icon">${icon}</span>
+            <div class="chat-doc-info">
+                <div class="chat-doc-name" title="${escapeHtml(doc.filename)}">${escapeHtml(doc.filename)}</div>
+                <div class="chat-doc-meta">${charsText}</div>
+            </div>
+            <button class="chat-doc-remove" onclick="removeChatDoc(${i})" title="移除">✕</button>
+        </div>`;
+    }).join('');
+}
+
+function removeChatDoc(index) {
+    chatPendingDocs.splice(index, 1);
+    renderChatDocPreviews();
 }
 
 /**
@@ -5054,7 +5139,15 @@ async function sendChatMessage() {
     const input = document.getElementById('chatInput');
     const message = input.value.trim();
     const images = [...chatPendingImages]; // 拷贝一份，防止发送中被修改
-    if (!message && images.length === 0) return;
+    const docs = [...chatPendingDocs];     // 拷贝文档列表
+
+    // 将文档内容追加到消息末尾
+    let fullMessage = message;
+    for (const doc of docs) {
+        fullMessage += `\n\n【附件：${doc.filename}】\n${doc.text}`;
+    }
+
+    if (!fullMessage.trim() && images.length === 0) return;
 
     chatSending = true;
     const sendBtn = document.getElementById('chatSendBtn');
@@ -5062,16 +5155,19 @@ async function sendChatMessage() {
     input.value = '';
     autoResizeChatInput();
 
-    // 清空图片预览区
+    // 清空图片和文档预览区
     chatPendingImages = [];
+    chatPendingDocs = [];
     renderChatImagePreviews();
+    renderChatDocPreviews();
 
     // 移除欢迎消息
     const welcome = document.querySelector('.chat-welcome');
     if (welcome) welcome.remove();
 
-    // 添加用户消息气泡（含图片）
-    appendChatBubble('user', message, null, null, images);
+    // 添加用户消息气泡（含图片）— 气泡显示原始消息（不含文档全文），文档名用标签代替
+    const bubbleMessage = message + (docs.length > 0 ? '\n' + docs.map(d => `📎 ${d.filename}`).join(' ') : '');
+    appendChatBubble('user', bubbleMessage, null, null, images);
     scrollChatToBottom();
 
     // 添加加载动画
@@ -5104,7 +5200,7 @@ async function sendChatMessage() {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    message: message,
+                    message: fullMessage,
                     history: historyToSend,
                     images: images.length > 0 ? images : undefined,
                 }),
@@ -5115,7 +5211,7 @@ async function sendChatMessage() {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    message: message,
+                    message: fullMessage,
                     history: historyToSend,
                     images: images.length > 0 ? images : undefined,
                 }),
@@ -5129,7 +5225,7 @@ async function sendChatMessage() {
         const action = resp.action || null;
 
         // 更新历史
-        chatHistory.push({ role: 'user', content: message });
+        chatHistory.push({ role: 'user', content: fullMessage });
         chatHistory.push({ role: 'assistant', content: reply });
 
         // 添加回复气泡

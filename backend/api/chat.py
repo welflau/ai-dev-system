@@ -10,7 +10,7 @@ import json
 import logging
 import uuid
 from pathlib import Path
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, UploadFile, File
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 from database import db
@@ -121,6 +121,99 @@ async def get_chat_history(project_id: str, limit: int = 50):
         msg["images"] = json.loads(msg.pop("images_json", None) or "[]")
         messages.append(msg)
     return {"messages": messages, "total": len(messages)}
+
+
+# ==================== 附件上传 ====================
+
+# 支持的文件类型配置
+_TEXT_EXTS = {
+    ".txt", ".md", ".markdown", ".py", ".js", ".ts", ".jsx", ".tsx",
+    ".html", ".css", ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg",
+    ".sh", ".bash", ".sql", ".xml", ".csv", ".log", ".rs", ".go",
+    ".java", ".cpp", ".c", ".h", ".rb", ".php", ".swift", ".kt",
+}
+_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
+_PDF_EXT = ".pdf"
+_DOCX_EXT = ".docx"
+_MAX_FILE_SIZE = 10 * 1024 * 1024   # 10MB
+_MAX_TEXT_CHARS = 20000              # 最多提取前 20000 字符
+
+
+@router.post("/upload-attachment")
+async def upload_chat_attachment(
+    project_id: str,
+    file: UploadFile = File(...),
+):
+    """
+    上传聊天附件。
+    - 图片 → 返回 base64 data URL（前端直接用于 vision）
+    - 文本/代码 → 提取文本内容返回
+    - PDF → 提取文本内容返回
+    - Word → 提取文本内容返回
+    """
+    filename = file.filename or "unknown"
+    ext = Path(filename).suffix.lower()
+
+    raw = await file.read()
+    if len(raw) > _MAX_FILE_SIZE:
+        raise HTTPException(413, f"文件过大（最大 {_MAX_FILE_SIZE // 1024 // 1024}MB）")
+
+    # ---- 图片 ----
+    if ext in _IMAGE_EXTS:
+        mime = {
+            ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+            ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/jpeg",
+        }.get(ext, "image/jpeg")
+        data_url = f"data:{mime};base64," + base64.b64encode(raw).decode()
+        return {"type": "image", "filename": filename, "data_url": data_url}
+
+    # ---- PDF ----
+    if ext == _PDF_EXT:
+        text = _extract_pdf(raw, filename)
+        return {"type": "document", "filename": filename, "text": text[:_MAX_TEXT_CHARS]}
+
+    # ---- Word ----
+    if ext == _DOCX_EXT:
+        text = _extract_docx(raw, filename)
+        return {"type": "document", "filename": filename, "text": text[:_MAX_TEXT_CHARS]}
+
+    # ---- 纯文本 / 代码 ----
+    if ext in _TEXT_EXTS or ext == "":
+        try:
+            text = raw.decode("utf-8", errors="replace")
+        except Exception:
+            text = raw.decode("latin-1", errors="replace")
+        return {"type": "document", "filename": filename, "text": text[:_MAX_TEXT_CHARS]}
+
+    raise HTTPException(415, f"不支持的文件类型: {ext or '(无扩展名)'}，支持：图片、PDF、Word、文本/代码文件")
+
+
+def _extract_pdf(raw: bytes, filename: str) -> str:
+    try:
+        import io
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(raw))
+        pages = []
+        for i, page in enumerate(reader.pages):
+            text = page.extract_text() or ""
+            if text.strip():
+                pages.append(f"[第{i+1}页]\n{text}")
+        return "\n\n".join(pages) if pages else "(PDF 无可提取文本)"
+    except Exception as e:
+        logger.warning("PDF 解析失败 %s: %s", filename, e)
+        return f"(PDF 解析失败: {e})"
+
+
+def _extract_docx(raw: bytes, filename: str) -> str:
+    try:
+        import io
+        from docx import Document
+        doc = Document(io.BytesIO(raw))
+        paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+        return "\n".join(paragraphs) if paragraphs else "(Word 文档无可提取文本)"
+    except Exception as e:
+        logger.warning("Word 解析失败 %s: %s", filename, e)
+        return f"(Word 解析失败: {e})"
 
 
 @router.get("/tickets/conversations")
