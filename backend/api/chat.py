@@ -122,11 +122,20 @@ async def get_chat_history(project_id: str, limit: int = 50):
     )
     # 倒序返回（最新在底部）
     rows.reverse()
-    # 解析 images_json 为列表
+    # 解析 images_json 为列表；修复旧记录中 content 为空的问题
     messages = []
     for row in rows:
         msg = dict(row)
         msg["images"] = json.loads(msg.pop("images_json", None) or "[]")
+        # 旧记录 assistant content 可能为空（历史 bug），用 action_data 的 message 填充
+        if msg["role"] == "assistant" and not (msg.get("content") or "").strip():
+            action_data = json.loads(msg.get("action_data") or "{}")
+            if action_data.get("type") == "document_generated":
+                msg["content"] = f"文档「{action_data.get('title', action_data.get('path', '文档'))}」已生成。"
+            elif action_data.get("message"):
+                msg["content"] = action_data["message"]
+            else:
+                msg["content"] = "操作已完成。"
         messages.append(msg)
     return {"messages": messages, "total": len(messages)}
 
