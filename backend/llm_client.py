@@ -151,6 +151,10 @@ class LLMClient:
             payload["temperature"] = temperature
         if system_text.strip():
             payload["system"] = system_text.strip()
+        # 调试：记录是否有 vision content
+        for m in user_messages:
+            if isinstance(m.get("content"), list):
+                logger.info("🖼️ payload 含 vision content, blocks=%d", len(m["content"]))
         return payload
 
     async def _call_anthropic(

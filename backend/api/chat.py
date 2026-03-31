@@ -1436,6 +1436,7 @@ def _build_user_content(text: str, images: Optional[List[str]] = None):
     无图片时返回字符串；有图片时返回 Anthropic vision content blocks 列表。
     data URL 格式：data:image/png;base64,<base64data>
     """
+    logger.info("🖼️ _build_user_content: text=%r, images_count=%d", text[:50] if text else '', len(images) if images else 0)
     if not images:
         return text
 
@@ -1445,6 +1446,7 @@ def _build_user_content(text: str, images: Optional[List[str]] = None):
         try:
             header, b64data = data_url.split(",", 1)
             media_type = header.split(";")[0].split(":")[1]  # e.g. image/png
+            logger.info("🖼️ 图片解析成功: media_type=%s, data_len=%d", media_type, len(b64data))
             # Anthropic 支持 image/jpeg image/png image/gif image/webp
             if media_type not in ("image/jpeg", "image/png", "image/gif", "image/webp"):
                 media_type = "image/jpeg"
@@ -1456,8 +1458,9 @@ def _build_user_content(text: str, images: Optional[List[str]] = None):
                     "data": b64data,
                 }
             })
-        except Exception:
-            pass  # 解析失败则跳过
+        except Exception as ex:
+            logger.error("🖼️ 图片解析失败: %s", ex)
 
     content.append({"type": "text", "text": text})
+    logger.info("🖼️ vision content blocks: %d blocks", len(content))
     return content

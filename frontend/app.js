@@ -5048,6 +5048,7 @@ async function sendChatMessage() {
     const input = document.getElementById('chatInput');
     const message = input.value.trim();
     const images = [...chatPendingImages]; // 拷贝一份，防止发送中被修改
+    console.log('[Chat] images count:', images.length, images.map(s => s.slice(0, 30)));
     if (!message && images.length === 0) return;
 
     chatSending = true;
