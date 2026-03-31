@@ -5,6 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI 自动开发系统</title>
     <link rel="stylesheet" href="/static/styles.css?v=0.12.1">
+    <!-- highlight.js 语法高亮 -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <!-- marked.js Markdown 渲染 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
 </head>
 <body>
     <!-- ==================== 顶栏 ==================== -->
@@ -293,31 +298,38 @@
                                     <option value="">加载中...</option>
                                 </select>
                                 <button class="btn btn-sm" onclick="loadRepoTree()">🔄 刷新</button>
-                                <button class="btn btn-sm" onclick="loadGitLog()">📜 提交记录</button>
+                                <button class="btn btn-sm" id="gitLogToggleBtn" onclick="toggleGitLogPanel()">📜 提交记录</button>
                             </div>
                         </div>
-                        <div class="repo-container">
-                            <div class="repo-layout">
-                                <div class="repo-tree-panel">
-                                    <div class="tree-panel-header">
-                                        <span class="tree-panel-title">文件树</span>
-                                        <span class="repo-branch-tag" id="repoBranchTag" title="当前分支"></span>
-                                    </div>
-                                    <div class="repo-tree" id="repoTree">
-                                        <div class="empty-state"><div class="emoji">📂</div><p>加载中...</p></div>
-                                    </div>
+                        <div class="repo-workspace">
+                            <!-- 左侧：文件树 -->
+                            <div class="repo-tree-panel">
+                                <div class="tree-panel-header">
+                                    <span class="tree-panel-title">📁 文件树</span>
+                                    <span class="repo-branch-tag" id="repoBranchTag" title="当前分支"></span>
                                 </div>
-                                <div class="repo-file-preview" id="repoFilePreview">
-                                    <div class="file-preview-empty">
-                                        <div class="empty-icon">📄</div>
-                                        <p>选择文件查看内容</p>
-                                    </div>
+                                <div class="repo-tree" id="repoTree">
+                                    <div class="empty-state"><div class="emoji">📂</div><p>加载中...</p></div>
                                 </div>
                             </div>
-                        </div>
-                        <div class="git-log-panel" id="gitLogPanel" style="display:none;">
-                            <h3>📜 提交记录</h3>
-                            <div class="git-log-list" id="gitLogList"></div>
+                            <!-- 中间/右侧：文件预览 -->
+                            <div class="repo-file-preview" id="repoFilePreview">
+                                <div class="file-preview-empty">
+                                    <div class="empty-icon">📄</div>
+                                    <p>选择左侧文件查看内容</p>
+                                    <span class="empty-hint">支持语法高亮</span>
+                                </div>
+                            </div>
+                            <!-- 最右侧：Git Log 侧边栏（可收起） -->
+                            <div class="git-log-sidebar" id="gitLogPanel" style="display:none;">
+                                <div class="git-log-sidebar-header">
+                                    <span>📜 提交记录</span>
+                                    <button class="icon-btn" onclick="toggleGitLogPanel()" title="关闭">✕</button>
+                                </div>
+                                <div class="git-log-list" id="gitLogList">
+                                    <div class="log-panel-empty">加载中...</div>
+                                </div>
+                            </div>
                         </div>
                     </div>
 

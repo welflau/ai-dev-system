@@ -4069,6 +4069,9 @@ async function loadJobCommands() {
 
 // ==================== 仓库文件浏览 ====================
 
+// 记录当前激活的文件树节点
+let _activeTreeItem = null;
+
 async function loadRepoTree() {
     const container = document.getElementById('repoTree');
     if (!currentProjectId) {
@@ -4077,6 +4080,7 @@ async function loadRepoTree() {
     }
 
     container.innerHTML = '<div class="empty-state"><div class="emoji">⏳</div><p>加载中...</p></div>';
+    _activeTreeItem = null;
 
     try {
         const tree = await api(`/projects/${currentProjectId}/git/tree`);
@@ -4127,13 +4131,21 @@ async function switchRepoBranch(branch) {
 
 function renderFileTree(nodes, depth) {
     let html = '';
-    for (const node of nodes) {
-        const indent = depth * 20;
+    // 目录在前，文件在后
+    const dirs = nodes.filter(n => n.type === 'directory');
+    const files = nodes.filter(n => n.type !== 'directory');
+    const sorted = [...dirs, ...files];
+
+    for (const node of sorted) {
+        const indentStyle = depth > 0 ? `style="--depth:${depth}"` : '';
         if (node.type === 'directory') {
             const hasChildren = node.children && node.children.length > 0;
-            html += `<div class="tree-item tree-dir" style="padding-left:${indent}px" onclick="toggleTreeDir(this)">
-                <span class="tree-icon">${hasChildren ? '📂' : '📁'}</span>
+            const childCount = hasChildren ? node.children.length : 0;
+            html += `<div class="tree-item tree-dir" ${indentStyle} onclick="toggleTreeDir(this)" data-depth="${depth}">
+                <span class="tree-arrow">${hasChildren ? '▾' : '▸'}</span>
+                <span class="tree-icon">📁</span>
                 <span class="tree-name">${escapeHtml(node.name)}</span>
+                ${childCount > 0 ? `<span class="tree-count">${childCount}</span>` : ''}
             </div>`;
             if (hasChildren) {
                 html += `<div class="tree-children">${renderFileTree(node.children, depth + 1)}</div>`;
@@ -4142,7 +4154,8 @@ function renderFileTree(nodes, depth) {
             const ext = node.name.split('.').pop().toLowerCase();
             const icon = getFileIcon(ext);
             const size = node.size ? formatFileSize(node.size) : '';
-            html += `<div class="tree-item tree-file" style="padding-left:${indent}px" onclick="viewRepoFile('${escapeHtml(node.path)}')">
+            html += `<div class="tree-item tree-file" ${indentStyle} data-path="${escapeHtml(node.path)}" data-depth="${depth}" onclick="viewRepoFile('${escapeHtml(node.path)}', this)">
+                <span class="tree-arrow"> </span>
                 <span class="tree-icon">${icon}</span>
                 <span class="tree-name">${escapeHtml(node.name)}</span>
                 <span class="tree-size">${size}</span>
@@ -4155,61 +4168,201 @@ function renderFileTree(nodes, depth) {
 function toggleTreeDir(el) {
     const children = el.nextElementSibling;
     if (children && children.classList.contains('tree-children')) {
-        children.classList.toggle('collapsed');
+        const collapsed = children.classList.toggle('collapsed');
+        const arrow = el.querySelector('.tree-arrow');
         const icon = el.querySelector('.tree-icon');
-        icon.textContent = children.classList.contains('collapsed') ? '📁' : '📂';
+        if (arrow) arrow.textContent = collapsed ? '▸' : '▾';
+        if (icon) icon.textContent = collapsed ? '📁' : '📂';
     }
 }
 
-async function viewRepoFile(path) {
-    const previewPanel = document.getElementById('repoFilePreview');
+async function viewRepoFile(path, itemEl) {
+    // 激活选中态
+    if (_activeTreeItem) _activeTreeItem.classList.remove('active');
+    if (itemEl) { itemEl.classList.add('active'); _activeTreeItem = itemEl; }
 
-    // 显示文件预览面板
+    const previewPanel = document.getElementById('repoFilePreview');
+    const fileName = path.split('/').pop();
+    const ext = fileName.includes('.') ? fileName.split('.').pop().toLowerCase() : '';
+
     previewPanel.innerHTML = `
         <div class="file-preview-header">
-            <div class="file-preview-path" title="${escapeHtml(path)}">${escapeHtml(path)}</div>
-        </div>
-        <div class="file-info-bar" id="fileInfoBar">
-            <div class="file-info-item">
-                <span class="file-info-label">加载中...</span>
+            <div class="file-preview-path">
+                <span class="file-preview-icon">${getFileIcon(ext)}</span>
+                <span title="${escapeHtml(path)}">${escapeHtml(path)}</span>
+            </div>
+            <div class="file-preview-actions">
+                <button class="icon-btn" onclick="copyFileContent()" title="复制内容">⎘ 复制</button>
             </div>
         </div>
-        <div class="file-preview-content">
-            加载中...
+        <div class="file-info-bar" id="fileInfoBar">
+            <span class="file-info-loading">⏳ 加载中...</span>
+        </div>
+        <div class="file-code-wrap" id="fileCodeWrap">
+            <div class="file-loading">加载中...</div>
         </div>
     `;
 
-    const contentEl = previewPanel.querySelector('.file-preview-content');
+    const codeWrap = document.getElementById('fileCodeWrap');
     const infoBar = document.getElementById('fileInfoBar');
 
     try {
         const data = await api(`/projects/${currentProjectId}/git/file?path=${encodeURIComponent(path)}`);
-        const content = data.content || '(空文件)';
+        const content = data.content || '';
         const size = data.size ? formatFileSize(data.size) : '';
-        const ext = path.split('.').pop().toLowerCase();
+        const lines = content.split('\n');
+        const lineCount = lines.length;
 
-        // 更新文件内容
-        contentEl.textContent = content;
-
-        // 更新文件信息栏
+        // 更新信息栏
         infoBar.innerHTML = `
-            <div class="file-info-item">
-                <span class="file-info-label">类型:</span>
-                <span>${escapeHtml(ext || '文件')}</span>
-            </div>
-            ${size ? `<div class="file-info-item">
-                <span class="file-info-label">大小:</span>
-                <span>${size}</span>
-            </div>` : ''}
-            <div class="file-info-item">
-                <span class="file-info-label">行数:</span>
-                <span>${content.split('\n').length}</span>
-            </div>
+            <span class="file-info-badge">${escapeHtml(ext || 'txt')}</span>
+            ${size ? `<span class="file-info-item"><span class="file-info-label">大小</span>${size}</span>` : ''}
+            <span class="file-info-item"><span class="file-info-label">行数</span>${lineCount}</span>
+            <span class="file-info-item"><span class="file-info-label">编码</span>UTF-8</span>
         `;
+
+        // 判断是否为图片
+        const imgExts = ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'ico', 'bmp'];
+        if (imgExts.includes(ext)) {
+            codeWrap.innerHTML = `<div class="file-preview-img"><img src="/projects/${currentProjectId}/git/file-raw?path=${encodeURIComponent(path)}" alt="${escapeHtml(fileName)}" style="max-width:100%;max-height:500px;border-radius:6px;"></div>`;
+            return;
+        }
+
+        // Markdown 渲染预览
+        if (ext === 'md' || ext === 'markdown') {
+            renderMarkdown(codeWrap, content, infoBar);
+            // 预览/源码切换按钮
+            const actions = document.querySelector('.file-preview-actions');
+            if (actions && !actions.querySelector('.md-toggle')) {
+                const toggleBtn = document.createElement('button');
+                toggleBtn.className = 'icon-btn md-toggle';
+                toggleBtn.title = '切换源码/预览';
+                toggleBtn.textContent = '< > 源码';
+                toggleBtn.onclick = () => toggleMarkdownView(codeWrap, content, ext, toggleBtn);
+                actions.prepend(toggleBtn);
+            }
+            return;
+        }
+
+        // 超大文件提示
+        if (lineCount > 2000) {
+            codeWrap.innerHTML = `<div class="file-too-large">⚠️ 文件过大（${lineCount} 行），仅显示前 500 行</div>`;
+            renderCodeWithLineNumbers(codeWrap, lines.slice(0, 500).join('\n'), ext, path);
+            return;
+        }
+
+        renderCodeWithLineNumbers(codeWrap, content, ext, path);
     } catch (err) {
-        contentEl.textContent = `加载失败: ${err.message}`;
-        infoBar.innerHTML = `<div class="file-info-item"><span style="color: #ef4444;">错误: ${escapeHtml(err.message)}</span></div>`;
+        codeWrap.innerHTML = `<div class="file-error">❌ 加载失败: ${escapeHtml(err.message)}</div>`;
+        infoBar.innerHTML = `<span class="file-info-error">错误: ${escapeHtml(err.message)}</span>`;
     }
+}
+
+function renderMarkdown(container, content, infoBar) {
+    if (!window.marked) {
+        // fallback: 当 CDN 未加载时退化为代码展示
+        renderCodeWithLineNumbers(container, content, 'md');
+        return;
+    }
+
+    // 配置 marked：代码块自动用 hljs 高亮
+    marked.setOptions({
+        highlight: function(code, lang) {
+            if (lang && window.hljs) {
+                try {
+                    return hljs.highlight(code, { language: lang, ignoreIllegals: true }).value;
+                } catch {}
+            }
+            return window.hljs ? hljs.highlightAuto(code).value : code;
+        },
+        breaks: true,
+        gfm: true,
+    });
+
+    let html = '';
+    try {
+        html = marked.parse(content);
+    } catch (e) {
+        html = `<p style="color:#f87171">Markdown 渲染失败: ${escapeHtml(e.message)}</p>`;
+    }
+
+    container.innerHTML = `<div class="md-preview">${html}</div>`;
+    container.dataset.mode = 'preview';
+
+    // 给渲染后的代码块补上 hljs 样式类
+    container.querySelectorAll('pre code').forEach(block => {
+        if (window.hljs) hljs.highlightElement(block);
+    });
+}
+
+function toggleMarkdownView(container, content, ext, btn) {
+    const mode = container.dataset.mode || 'preview';
+    if (mode === 'preview') {
+        // 切换到源码模式
+        renderCodeWithLineNumbers(container, content, ext);
+        container.dataset.mode = 'source';
+        btn.textContent = '👁 预览';
+        btn.classList.add('active');
+    } else {
+        // 切换回预览模式
+        renderMarkdown(container, content);
+        container.dataset.mode = 'preview';
+        btn.textContent = '< > 源码';
+        btn.classList.remove('active');
+    }
+}
+
+function renderCodeWithLineNumbers(container, content, ext, path) {
+    // 尝试语法高亮
+    let highlighted = '';
+    const langMap = {
+        py: 'python', js: 'javascript', ts: 'typescript', html: 'html', css: 'css',
+        md: 'markdown', json: 'json', yml: 'yaml', yaml: 'yaml', toml: 'ini',
+        sh: 'bash', bash: 'bash', sql: 'sql', dockerfile: 'dockerfile',
+        go: 'go', rs: 'rust', java: 'java', cpp: 'cpp', c: 'c', rb: 'ruby',
+        php: 'php', swift: 'swift', kt: 'kotlin', xml: 'xml', ini: 'ini',
+    };
+    const lang = langMap[ext] || '';
+
+    try {
+        if (lang && window.hljs) {
+            highlighted = hljs.highlight(content, { language: lang, ignoreIllegals: true }).value;
+        } else if (window.hljs) {
+            highlighted = hljs.highlightAuto(content, Object.values(langMap)).value;
+        }
+    } catch (e) {
+        highlighted = '';
+    }
+
+    const lines = content.split('\n');
+    const highlightedLines = highlighted ? highlighted.split('\n') : null;
+
+    // 生成行号 + 代码
+    const gutterHtml = lines.map((_, i) =>
+        `<span class="line-num">${i + 1}</span>`
+    ).join('\n');
+
+    const codeHtml = highlightedLines
+        ? highlightedLines.map(l => `<span class="code-line">${l}</span>`).join('\n')
+        : lines.map(l => `<span class="code-line">${escapeHtml(l)}</span>`).join('\n');
+
+    container.innerHTML = `
+        <div class="code-block" data-raw="${escapeHtml(content)}">
+            <div class="code-gutter">${gutterHtml}</div>
+            <pre class="code-content hljs"><code>${codeHtml}</code></pre>
+        </div>
+    `;
+}
+
+function copyFileContent() {
+    const block = document.querySelector('.code-block');
+    if (!block) return;
+    const raw = block.getAttribute('data-raw') || '';
+    navigator.clipboard.writeText(raw).then(() => {
+        showToast('已复制到剪贴板', 'success');
+    }).catch(() => {
+        showToast('复制失败，请手动选择', 'warning');
+    });
 }
 
 /**
@@ -4233,19 +4386,26 @@ async function openArtifactFile(filePath, branch) {
     // 切换到仓库文件 tab（会重新加载文件树和分支选择器）
     switchTab('repo');
     // 等待 tab 渲染后打开文件预览
-    setTimeout(() => viewRepoFile(filePath), 400);
+    setTimeout(() => viewRepoFile(filePath, null), 400);
+}
+
+async function toggleGitLogPanel() {
+    const panel = document.getElementById('gitLogPanel');
+    const btn = document.getElementById('gitLogToggleBtn');
+    const workspace = panel.closest('.repo-workspace');
+    const isHidden = panel.style.display === 'none';
+    panel.style.display = isHidden ? 'flex' : 'none';
+    if (workspace) workspace.classList.toggle('with-log', isHidden);
+    if (btn) btn.classList.toggle('active', isHidden);
+    if (isHidden) loadGitLog();
 }
 
 async function loadGitLog() {
-    const panel = document.getElementById('gitLogPanel');
     const list = document.getElementById('gitLogList');
-    panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
-    if (panel.style.display === 'none') return;
-
-    list.innerHTML = '<div class="log-panel-empty">加载中...</div>';
+    list.innerHTML = '<div class="log-panel-empty">⏳ 加载中...</div>';
 
     try {
-        const data = await api(`/projects/${currentProjectId}/git/log?limit=30`);
+        const data = await api(`/projects/${currentProjectId}/git/log?limit=50`);
         const commits = data.commits || [];
         if (commits.length === 0) {
             list.innerHTML = '<div class="log-panel-empty">暂无提交记录</div>';
@@ -4254,12 +4414,12 @@ async function loadGitLog() {
 
         list.innerHTML = commits.map(c => `
             <div class="git-commit-item">
-                <div class="git-commit-hash">${escapeHtml(c.short_hash)}</div>
-                <div class="git-commit-msg">${escapeHtml(c.message)}</div>
-                <div class="git-commit-meta">
-                    <span>${escapeHtml(c.author)}</span>
-                    <span>${formatTime(c.date)}</span>
+                <div class="git-commit-top">
+                    <span class="git-commit-hash">${escapeHtml(c.short_hash)}</span>
+                    <span class="git-commit-time">${formatTime(c.date)}</span>
                 </div>
+                <div class="git-commit-msg">${escapeHtml(c.message)}</div>
+                <div class="git-commit-author">👤 ${escapeHtml(c.author)}</div>
             </div>
         `).join('');
     } catch (err) {
@@ -4269,18 +4429,25 @@ async function loadGitLog() {
 
 function getFileIcon(ext) {
     const icons = {
-        py: '🐍', js: '📜', ts: '📘', html: '🌐', css: '🎨',
-        md: '📝', json: '📋', yml: '⚙️', yaml: '⚙️', toml: '⚙️',
-        txt: '📄', sh: '💻', dockerfile: '🐳', sql: '🗃️',
-        png: '🖼️', jpg: '🖼️', svg: '🖼️', gif: '🖼️',
+        py: '🐍', js: '📜', ts: '📘', jsx: '⚛️', tsx: '⚛️',
+        html: '🌐', css: '🎨', scss: '🎨', sass: '🎨',
+        md: '📝', json: '📋', yml: '⚙️', yaml: '⚙️', toml: '⚙️', ini: '⚙️',
+        txt: '📄', sh: '💻', bash: '💻', zsh: '💻',
+        go: '🐹', rs: '🦀', java: '☕', cpp: '⚡', c: '⚡', rb: '💎',
+        php: '🐘', swift: '🍎', kt: '🎯',
+        dockerfile: '🐳', sql: '🗃️', xml: '📰',
+        png: '🖼️', jpg: '🖼️', jpeg: '🖼️', svg: '🖼️', gif: '🖼️', webp: '🖼️',
+        zip: '📦', tar: '📦', gz: '📦',
+        pdf: '📕', doc: '📘', docx: '📘',
+        env: '🔑', gitignore: '🚫', lock: '🔒',
     };
     return icons[ext] || '📄';
 }
 
 function formatFileSize(bytes) {
-    if (bytes < 1024) return `${bytes}B`;
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
-    return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function formatTime(dateStr) {
@@ -5042,16 +5209,23 @@ function appendChatBubble(role, content, timestamp = null, action = null) {
                     路径: <code>${escapeHtml(action.path || '')}</code>
                     ${action.commit ? '<br>Commit: ' + escapeHtml(action.commit) : ''}
                 </div>
-                <span class="action-link" onclick="switchTab('repo')">查看仓库文件 →</span>
+                ${action.path ? `<span class="action-link" onclick="openRepoFileFromChat('${escapeHtml(action.path)}')">查看仓库文件 →</span>` : `<span class="action-link" onclick="switchTab('repo')">查看仓库文件 →</span>`}
             </div>
         `;
     } else if (action && action.type === 'git_result') {
         const gitIcons = {switch_branch: '🌿', list_branches: '🌿', log: '📜', read_file: '📄', merge: '🔀'};
+        // read_file 时尝试从 action.path 或 action.message 中提取路径
+        const gitFilePath = action.path || (action.action === 'read_file' ? extractPathFromGitMsg(action.message || '') : '');
+        const gitLinkHtml = action.action === 'switch_branch'
+            ? `<span class="action-link" onclick="switchTab('repo'); loadRepoTree();">查看仓库文件 →</span>`
+            : action.action === 'read_file' && gitFilePath
+                ? `<span class="action-link" onclick="openRepoFileFromChat('${escapeHtml(gitFilePath)}')">查看文件 →</span>`
+                : '';
         actionHtml = `
             <div class="chat-action-card" style="border-left-color: var(--info, #58a6ff);">
                 <div class="action-title">${gitIcons[action.action] || '🔧'} Git: ${escapeHtml(action.action || '')}</div>
                 <div class="action-detail">${formatChatContent(action.message || '')}</div>
-                ${action.action === 'switch_branch' || action.action === 'read_file' ? '<span class="action-link" onclick="switchTab(\'repo\'); loadRepoTree();">查看仓库文件 →</span>' : ''}
+                ${gitLinkHtml}
             </div>
         `;
     } else if (action && action.type === 'error') {
@@ -5079,16 +5253,158 @@ function appendChatBubble(role, content, timestamp = null, action = null) {
  */
 function formatChatContent(content) {
     if (!content) return '';
-    let text = escapeHtml(content);
-    // 代码块
-    text = text.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre style="background:var(--bg);padding:8px;border-radius:6px;font-size:12px;overflow-x:auto;margin:4px 0;"><code>$2</code></pre>');
-    // 行内代码
-    text = text.replace(/`([^`]+)`/g, '<code style="background:var(--bg);padding:1px 4px;border-radius:3px;font-size:12px;">$1</code>');
-    // 加粗
-    text = text.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-    // 换行
-    text = text.replace(/\n/g, '<br>');
-    return text;
+
+    let result = '';
+    // 按代码块分割，逐段处理
+    const parts = content.split(/(```[\w]*\n[\s\S]*?```)/g);
+
+    for (const part of parts) {
+        const codeBlockMatch = part.match(/^```([\w]*)\n([\s\S]*?)```$/);
+        if (codeBlockMatch) {
+            const lang = codeBlockMatch[1] || '';
+            const code = codeBlockMatch[2];
+            result += buildCodeFileCard(lang, code);
+        } else {
+            // 普通文本：转义后做简单 Markdown 处理
+            let text = escapeHtml(part);
+            // 行内代码
+            text = text.replace(/`([^`\n]+)`/g, '<code class="chat-inline-code">$1</code>');
+            // 加粗
+            text = text.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+            // 换行
+            text = text.replace(/\n/g, '<br>');
+            result += text;
+        }
+    }
+    return result;
+}
+
+/** 生成可折叠的代码文件卡片 */
+function buildCodeFileCard(lang, code) {
+    const lines = code.split('\n');
+    const lineCount = lines.length;
+    const cardId = 'cfc_' + Math.random().toString(36).slice(2, 9);
+
+    // 尝试从代码第一行注释或内容推断文件名
+    const guessedFile = guessFileName(code, lang);
+
+    // 语言标签
+    const langLabel = lang ? lang.toUpperCase() : 'CODE';
+    const langIcon = getFileIcon(lang);
+
+    // 预览：前 3 行
+    const previewLines = lines.slice(0, 3).join('\n');
+    const previewEscaped = escapeHtml(previewLines);
+
+    // 完整代码（转义）
+    const fullEscaped = escapeHtml(code);
+
+    // 是否有对应的仓库文件链接
+    const repoLinkHtml = guessedFile
+        ? `<button class="code-card-repo-btn" onclick="openRepoFileFromChat('${escapeHtml(guessedFile)}')" title="在仓库中打开">📂 仓库</button>`
+        : '';
+
+    return `
+<div class="code-file-card" id="${cardId}">
+    <div class="code-card-header" onclick="toggleCodeCard('${cardId}')">
+        <div class="code-card-left">
+            <span class="code-card-arrow" id="${cardId}_arrow">▶</span>
+            <span class="code-card-icon">${langIcon}</span>
+            <span class="code-card-filename">${escapeHtml(guessedFile || '代码片段')}</span>
+            <span class="code-card-badge">${langLabel}</span>
+            <span class="code-card-lines">${lineCount} 行</span>
+        </div>
+        <div class="code-card-right" onclick="event.stopPropagation()">
+            ${repoLinkHtml}
+            <button class="code-card-copy-btn" onclick="copyCodeCard('${cardId}')" title="复制代码">⎘</button>
+        </div>
+    </div>
+    <div class="code-card-preview" id="${cardId}_preview">
+        <pre class="code-card-pre">${previewEscaped}</pre>
+        ${lineCount > 3 ? `<div class="code-card-more">…还有 ${lineCount - 3} 行，点击展开</div>` : ''}
+    </div>
+    <div class="code-card-full" id="${cardId}_full" style="display:none;">
+        <pre class="code-card-pre" data-raw="${fullEscaped}">${fullEscaped}</pre>
+    </div>
+</div>`;
+}
+
+/** 根据代码内容猜测文件名 */
+function guessFileName(code, lang) {
+    // 匹配常见注释模式：# filename.py  /  // filename.js  / /* filename */
+    const patterns = [
+        /^#\s*([\w\-./]+\.\w+)/m,
+        /^\/\/\s*([\w\-./]+\.\w+)/m,
+        /^\/\*\s*([\w\-./]+\.\w+)/m,
+        /filename[:\s]+([\w\-./]+\.\w+)/i,
+        /文件[名：:]\s*([\w\-./]+\.\w+)/,
+    ];
+    for (const pat of patterns) {
+        const m = code.match(pat);
+        if (m) return m[1];
+    }
+    // 从语言推断默认扩展名
+    const extMap = {
+        python: 'py', py: 'py', javascript: 'js', js: 'js',
+        typescript: 'ts', ts: 'ts', html: 'html', css: 'css',
+        bash: 'sh', sh: 'sh', sql: 'sql', json: 'json',
+        yaml: 'yml', yml: 'yml', go: 'go', rust: 'rs',
+        java: 'java', cpp: 'cpp', c: 'c',
+    };
+    return extMap[lang] ? `snippet.${extMap[lang]}` : null;
+}
+
+/** 展开/收起代码卡片 */
+function toggleCodeCard(cardId) {
+    const preview = document.getElementById(cardId + '_preview');
+    const full = document.getElementById(cardId + '_full');
+    const arrow = document.getElementById(cardId + '_arrow');
+    const card = document.getElementById(cardId);
+    if (!preview || !full) return;
+
+    const isExpanded = full.style.display !== 'none';
+    if (isExpanded) {
+        full.style.display = 'none';
+        preview.style.display = 'block';
+        arrow.textContent = '▶';
+        card.classList.remove('expanded');
+    } else {
+        preview.style.display = 'none';
+        full.style.display = 'block';
+        arrow.textContent = '▼';
+        card.classList.add('expanded');
+        // 展开时对代码块做语法高亮
+        const codeEl = full.querySelector('pre');
+        if (codeEl && window.hljs && !codeEl.dataset.highlighted) {
+            codeEl.dataset.highlighted = '1';
+            hljs.highlightElement(codeEl);
+        }
+    }
+}
+
+/** 复制代码卡片内容 */
+function copyCodeCard(cardId) {
+    const full = document.getElementById(cardId + '_full');
+    const preview = document.getElementById(cardId + '_preview');
+    const raw = full?.querySelector('pre')?.dataset?.raw
+        || preview?.querySelector('pre')?.textContent
+        || '';
+    navigator.clipboard.writeText(raw).then(() => showToast('已复制', 'success'))
+        .catch(() => showToast('复制失败', 'warning'));
+}
+
+/** 从聊天跳转到仓库文件页 */
+function openRepoFileFromChat(filePath) {
+    if (!currentProjectId) { showToast('请先选择项目', 'warning'); return; }
+    switchTab('repo');
+    setTimeout(() => viewRepoFile(filePath, null), 450);
+}
+
+/** 从 git read_file 的消息文本中尝试提取文件路径 */
+function extractPathFromGitMsg(msg) {
+    // 匹配常见格式：路径/文件名.ext 或 `path/to/file.ext`
+    const m = msg.match(/`([\w\-./]+\.\w+)`/) || msg.match(/([\w\-./]+\.\w+)/);
+    return m ? m[1] : '';
 }
 
 /**
