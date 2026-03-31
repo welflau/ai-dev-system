@@ -1,10 +1,13 @@
 """
 DevAgent — 开发 Agent
-职责：接单开发代码，更新开发时间和状态
+职责：接单开发代码 → 自测 → 输出开发笔记和测试结果
 """
 import json
 import logging
-from typing import Any, Dict
+import subprocess
+from pathlib import Path
+from typing import Any, Dict, List
+from datetime import datetime
 from agents.base import BaseAgent
 from llm_client import llm_client
 
@@ -33,173 +36,295 @@ class DevAgent(BaseAgent):
         ticket_description = context.get("ticket_description", "")
         architecture = context.get("architecture", {})
         module = context.get("module", "other")
-        existing_files = context.get("existing_files", [])
         existing_code = context.get("existing_code", {})
-        sibling_tickets = context.get("sibling_tickets", [])
 
-        # 构建已有代码上下文
-        existing_section = ""
-        if existing_files:
-            file_list_str = "\n".join(f"  - {f}" for f in existing_files if not f.startswith(("docs/", "tests/", ".git")))
-            existing_section += f"\n## 项目已有文件\n{file_list_str}\n"
+        # 精简架构信息（只保留关键字段，避免 token 爆炸）
+        arch_summary = ""
+        if architecture:
+            arch = architecture.get("architecture", architecture)
+            # 只保留模块设计和技术栈
+            compact = {}
+            for key in ("architecture_type", "tech_stack", "module_design", "key_components"):
+                if key in arch:
+                    compact[key] = arch[key]
+            arch_summary = json.dumps(compact, ensure_ascii=False, indent=1) if compact else json.dumps(arch, ensure_ascii=False)[:1500]
 
+        # 精简已有代码（只保留入口文件，限制总长度）
+        code_section = ""
         if existing_code:
-            existing_section += "\n## 现有代码（重要：在此基础上修改，不要从零重写）\n"
-            for fp, code in existing_code.items():
-                existing_section += f"\n### {fp}\n```\n{code}\n```\n"
+            # 优先 index.html，其次 main.py
+            for fp in ["index.html", "main.py", "app.py"]:
+                if fp in existing_code:
+                    content = existing_code[fp][:2000]
+                    code_section = f"\n## 现有入口文件 {fp}（在此基础上修改）\n```\n{content}\n```\n"
+                    break
 
-        if sibling_tickets:
-            siblings_str = "\n".join(f"  - [{t['status']}] {t['title']}" for t in sibling_tickets)
-            existing_section += f"\n## 同需求其他工单\n{siblings_str}\n"
+        prompt = f"""根据架构设计实现功能。返回纯 JSON。
 
-        prompt = f"""你是一位资深软件开发工程师。请根据架构设计，在现有代码基础上实现以下功能。
+## 任务: {ticket_title}
+{ticket_description}
 
-## 任务
-标题: {ticket_title}
-描述: {ticket_description}
-模块: {module}
+## 架构
+{arch_summary}
+{code_section}
+## 返回 JSON 格式:
+{{"files": {{"文件路径": "完整文件内容"}}, "notes": "备注"}}
 
-## 架构设计
-{json.dumps(architecture, ensure_ascii=False, indent=2)}
-{existing_section}
-## 请返回 JSON 格式：
-{{
-  "files": {{
-    "index.html": "完整的文件内容...",
-    "src/example.js": "完整的文件内容..."
-  }},
-  "key_implementations": ["关键实现点"],
-  "estimated_hours": 实际用时估算,
-  "notes": "开发备注"
-}}
-
-关键要求：
-1. files 字典的 key 是文件路径，value 是该文件的**完整内容**
-2. **增量开发**：如果 index.html 或其他文件已存在，在现有代码基础上添加/修改功能，保留已有功能
-3. **不要创建孤立文件**：所有新文件必须被入口文件引用或导入
-4. 前端项目：代码尽量内联到 index.html（CSS 用 <style>，JS 用 <script>），保持可直接浏览器打开
-5. 后端项目：在 main.py 基础上扩展
-6. 只输出**需要新建或修改**的文件，未改动的文件不要输出
-7. 文件名和路径必须全部使用英文
-8. 生成完整可运行的代码，不要用省略号或注释代替实际逻辑
+要求:
+1. files 的 key 是英文文件路径，value 是完整代码
+2. 前端项目：所有代码内联到 index.html（CSS 用 <style>，JS 用 <script>），可直接浏览器打开
+3. 如果 index.html 已存在，在其基础上添加功能，不要从零重写
+4. 只输出需要新建或修改的文件
+5. 生成完整可运行代码，不要省略
 """
 
         result = await llm_client.chat_json(
             [{"role": "user", "content": prompt}],
             temperature=0.3,
-            max_tokens=8192,
+            max_tokens=16000,
         )
 
         if result and isinstance(result, dict) and result.get("files"):
             files = result.get("files", {})
             logger.info("✅ DevAgent LLM 返回 %d 个文件", len(files))
-            return {
+            dev_output = {
                 "status": "success",
                 "dev_result": result,
                 "estimated_hours": result.get("estimated_hours", 4),
                 "files": files if isinstance(files, dict) else {},
             }
+        else:
+            # LLM 返回但无 files，或返回 None
+            logger.warning("⚠️ DevAgent LLM 返回无效（result=%s），使用降级模板", type(result).__name__)
+            dev_output = self._fallback_develop(context)
 
-        # LLM 返回但无 files，或返回 None
-        logger.warning("⚠️ DevAgent LLM 返回无效（result=%s），使用降级模板", type(result).__name__)
+        # === 自测：开发完成后运行基础测试 ===
+        self_test = await self._self_test(context.get("project_id", ""), dev_output.get("files", {}))
 
-        # 降级：生成模板代码
-        return self._fallback_develop(ticket_title, ticket_description, module)
+        # 生成开发笔记（含自测结果）
+        dev_notes = self._generate_dev_notes(context, dev_output, self_test)
+        docs_prefix = context.get("docs_prefix", "docs/")
+        dev_output["files"][f"{docs_prefix}dev-notes.md"] = dev_notes
+        dev_output["self_test"] = self_test
 
-    def _fallback_develop(self, title: str, description: str, module: str) -> Dict:
-        """规则引擎降级：生成模板代码文件"""
-        safe_name = title.lower().replace(" ", "_").replace("-", "_")[:30]
+        return dev_output
+
+    async def _self_test(self, project_id: str, files: Dict[str, str]) -> Dict:
+        """开发完成后自测：检查文件完整性 + 语法 + 入口文件"""
+        checks = []
+        passed = 0
+        total = 0
+
+        if not files:
+            return {"passed": False, "total": 0, "passed_count": 0, "checks": [], "summary": "无文件产出"}
+
+        # 检查 1: 文件数量
+        total += 1
+        file_names = list(files.keys())
+        checks.append({"name": "文件产出", "passed": True, "detail": f"生成 {len(file_names)} 个文件: {', '.join(file_names)}"})
+        passed += 1
+
+        # 检查 2: 入口文件存在
+        total += 1
+        has_entry = any(f in files for f in ("index.html", "main.py", "app.py"))
+        # 也检查仓库中是否已有入口文件
+        if not has_entry and project_id:
+            try:
+                from git_manager import git_manager
+                repo_dir = git_manager._repo_path(project_id)
+                has_entry = any((repo_dir / f).exists() for f in ("index.html", "main.py", "app.py"))
+            except Exception:
+                pass
+        checks.append({"name": "入口文件", "passed": has_entry, "detail": "index.html 或 main.py 存在" if has_entry else "缺少入口文件"})
+        if has_entry:
+            passed += 1
+
+        # 检查 3: 代码非空
+        total += 1
+        non_empty = all(len(content.strip()) > 10 for content in files.values() if not content.strip().startswith("#"))
+        checks.append({"name": "代码非空", "passed": non_empty, "detail": "所有文件均包含实际代码" if non_empty else "存在空文件或仅有注释的文件"})
+        if non_empty:
+            passed += 1
+
+        # 检查 4: JS 语法（内存检查，不需要仓库）
+        total += 1
+        syntax_ok = True
+        syntax_errors = []
+        for fp, content in files.items():
+            if fp.endswith(".js") or fp.endswith(".jsx"):
+                # 简单检查：括号匹配
+                if content.count("{") != content.count("}") or content.count("(") != content.count(")"):
+                    syntax_errors.append(f"{fp}: 括号不匹配")
+                    syntax_ok = False
+            elif fp.endswith(".py"):
+                try:
+                    compile(content, fp, "exec")
+                except SyntaxError as e:
+                    syntax_errors.append(f"{fp}: {e.msg} (line {e.lineno})")
+                    syntax_ok = False
+            elif fp.endswith(".html"):
+                if "<html" not in content.lower() and "<!doctype" not in content.lower():
+                    if not fp.endswith(".md"):
+                        syntax_errors.append(f"{fp}: 缺少 HTML 基础结构")
+                        syntax_ok = False
+        checks.append({"name": "语法检查", "passed": syntax_ok, "detail": "通过" if syntax_ok else "; ".join(syntax_errors[:3])})
+        if syntax_ok:
+            passed += 1
+
+        # 检查 5: 无中文文件名
+        total += 1
+        has_chinese_name = any(any('\u4e00' <= c <= '\u9fff' for c in fp) for fp in file_names)
+        checks.append({"name": "文件名规范", "passed": not has_chinese_name, "detail": "全部英文命名" if not has_chinese_name else "存在中文文件名"})
+        if not has_chinese_name:
+            passed += 1
+
+        all_passed = passed == total
+        summary = f"自测 {passed}/{total} 通过" + (" ✅" if all_passed else " ⚠️")
+        logger.info("🔍 DevAgent 自测: %s", summary)
+
+        return {
+            "passed": all_passed,
+            "total": total,
+            "passed_count": passed,
+            "checks": checks,
+            "summary": summary,
+        }
+
+    def _generate_dev_notes(self, context: Dict, dev_output: Dict, self_test: Dict) -> str:
+        """生成开发笔记（含自测结果）"""
+        title = context.get("ticket_title", "")
+        desc = context.get("ticket_description", "")
+        files = dev_output.get("files", {})
+        notes = dev_output.get("dev_result", {}).get("notes", "")
+        is_fallback = "[降级]" in str(dev_output.get("dev_result", {}).get("key_implementations", ""))
+
+        # 自测结果表格
+        checks = self_test.get("checks", [])
+        test_table = "| 检查项 | 结果 | 说明 |\n|--------|------|------|\n"
+        for c in checks:
+            icon = "✅" if c["passed"] else "❌"
+            test_table += f"| {c['name']} | {icon} | {c['detail']} |\n"
+
+        # 文件清单
+        file_list = "\n".join(f"- `{fp}` ({len(content)} chars)" for fp, content in files.items() if not fp.endswith("dev-notes.md"))
+
+        md = f"""# 开发笔记 — {title}
+
+> 生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}
+> 模式: {'LLM 生成' if not is_fallback else '规则引擎降级'}
+
+## 任务描述
+{desc[:300]}
+
+## 产出文件
+{file_list}
+
+## 自测结果
+{self_test.get('summary', '-')}
+
+{test_table}
+
+## 开发备注
+{notes or '无'}
+"""
+        return md
+
+    def _fallback_develop(self, context: Dict) -> Dict:
+        """规则引擎降级：生成可运行的代码"""
+        import re
+        title = context.get("ticket_title", "feature")
+        description = context.get("ticket_description", "")
+        module = context.get("module", "other")
+        existing_code = context.get("existing_code", {})
+
+        # 英文安全文件名
+        safe = re.sub(r'[^a-zA-Z0-9_]', '', re.sub(r'[\u4e00-\u9fff]+', '', title.replace(" ", "_").replace("-", "_")))
+        if not safe:
+            safe = f"feature_{abs(hash(title)) % 10000}"
+        safe = safe[:30].lower()
+
         files = {}
 
-        if module in ("backend", "api", "other"):
-            files[f"src/services/{safe_name}.py"] = f'''"""
-{title} - 业务逻辑
-由 AI 自动开发系统生成
+        if module in ("frontend", "design", "other"):
+            # 如果 index.html 已存在，不覆盖，只生成说明
+            if "index.html" in existing_code:
+                files[f"src/{safe}.js"] = f"""// {title} - 功能模块
+// TODO: 实现 {description[:80]}
+console.log('{safe} module loaded');
 """
+            else:
+                # 生成完整可运行的 index.html
+                files["index.html"] = f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{title}</title>
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f0f2f5; min-height: 100vh; display: flex; justify-content: center; align-items: center; }}
+        .container {{ background: white; border-radius: 12px; padding: 40px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); max-width: 600px; width: 90%; text-align: center; }}
+        h1 {{ color: #1a1a2e; margin-bottom: 16px; font-size: 2rem; }}
+        p {{ color: #666; line-height: 1.6; margin-bottom: 20px; }}
+        .badge {{ display: inline-block; background: #e8f5e9; color: #2e7d32; padding: 4px 12px; border-radius: 20px; font-size: 14px; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>{title}</h1>
+        <p>{description[:200] if description else 'AI 自动开发系统生成的页面'}</p>
+        <span class="badge">✅ 运行中</span>
+    </div>
+</body>
+</html>"""
 
+        elif module in ("backend", "api"):
+            files["main.py"] = f"""\"\"\"
+{title} - 后端服务
+\"\"\"
+from http.server import HTTPServer, SimpleHTTPRequestHandler
+import json
 
-class {safe_name.title().replace("_", "")}Service:
-    """{title} 服务类"""
+class APIHandler(SimpleHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == '/api/health':
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({{"status": "ok", "service": "{safe}"}}).encode())
+        else:
+            super().do_GET()
 
-    async def execute(self, params: dict) -> dict:
-        """执行核心逻辑"""
-        # TODO: 实现 {description[:100]}
-        return {{"status": "success", "message": "{title} 完成"}}
-'''
-            files[f"src/api/{safe_name}_router.py"] = f'''"""
-{title} - API 路由
+if __name__ == '__main__':
+    server = HTTPServer(('0.0.0.0', 8080), APIHandler)
+    print('Server running on http://localhost:8080')
+    server.serve_forever()
 """
-from fastapi import APIRouter
-
-router = APIRouter(prefix="/api/{safe_name}", tags=["{safe_name}"])
-
-
-@router.get("")
-async def list_{safe_name}():
-    """获取列表"""
-    return {{"items": [], "total": 0}}
-
-
-@router.post("")
-async def create_{safe_name}(body: dict):
-    """创建"""
-    return {{"status": "success"}}
-'''
-
-        elif module == "frontend":
-            files[f"src/frontend/{safe_name}.js"] = f'''/**
- * {title} - 前端模块
- * 由 AI 自动开发系统生成
- */
-
-class {safe_name.title().replace("_", "")} {{
-    constructor() {{
-        this.container = null;
-    }}
-
-    render(container) {{
-        this.container = container;
-        container.innerHTML = `
-            <div class="{safe_name}">
-                <h2>{title}</h2>
-                <p>{description[:100]}</p>
-            </div>
-        `;
-    }}
-}}
-'''
 
         elif module == "database":
-            files[f"src/models/{safe_name}.py"] = f'''"""
+            files[f"src/models/{safe}.py"] = f"""\"\"\"
 {title} - 数据模型
+\"\"\"
+
+{safe.upper()}_SCHEMA = {{
+    "table": "{safe}",
+    "columns": [
+        {{"name": "id", "type": "TEXT PRIMARY KEY"}},
+        {{"name": "name", "type": "TEXT NOT NULL"}},
+        {{"name": "created_at", "type": "TEXT NOT NULL"}},
+    ]
+}}
 """
-from pydantic import BaseModel
-from typing import Optional
-
-
-class {safe_name.title().replace("_", "")}(BaseModel):
-    """数据模型"""
-    id: str
-    name: str
-    description: Optional[str] = None
-    created_at: str
-    updated_at: str
-'''
-
-        # 通用：生成 requirements.txt
-        files["requirements.txt"] = "fastapi>=0.100.0\nuvicorn>=0.22.0\naiosqlite>=0.19.0\npydantic>=2.0.0\n"
 
         return {
             "status": "success",
             "dev_result": {
                 "files": files,
-                "key_implementations": [f"实现了 {title} 的核心功能"],
-                "api_endpoints": [],
-                "dependencies_added": [],
-                "estimated_hours": 4,
-                "notes": "[规则引擎] 代码开发完成",
+                "key_implementations": [f"[降级] {title}"],
+                "estimated_hours": 2,
+                "notes": "[规则引擎降级] LLM 不可用，生成基础可运行代码",
             },
-            "estimated_hours": 4,
+            "estimated_hours": 2,
             "files": files,
         }
 

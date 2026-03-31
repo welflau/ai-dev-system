@@ -21,14 +21,32 @@ class ArchitectAgent(BaseAgent):
             return {"status": "error", "message": f"未知任务: {task_name}"}
 
     async def design_architecture(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """设计架构方案"""
+        """设计架构方案（基于已有代码的增量设计）"""
         ticket_title = context.get("ticket_title", "")
         ticket_description = context.get("ticket_description", "")
         module = context.get("module", "other")
         requirement_description = context.get("requirement_description", "")
         docs_prefix = context.get("docs_prefix", "docs/")
+        existing_files = context.get("existing_files", [])
+        existing_code = context.get("existing_code", {})
+        sibling_tickets = context.get("sibling_tickets", [])
 
-        prompt = f"""你是一位资深软件架构师。请为以下任务设计技术架构方案。
+        # 构建已有代码上下文
+        existing_section = ""
+        if existing_files:
+            code_files = [f for f in existing_files if not f.startswith(("docs/", "tests/", ".git", "build/"))]
+            if code_files:
+                existing_section += f"\n## 项目已有文件\n" + "\n".join(f"  - {f}" for f in code_files[:20]) + "\n"
+
+        if existing_code:
+            existing_section += "\n## 现有代码（重要：在此基础上扩展，不要重新设计）\n"
+            for fp, code in list(existing_code.items())[:2]:
+                existing_section += f"\n### {fp}\n```\n{code[:1500]}\n```\n"
+
+        if sibling_tickets:
+            existing_section += "\n## 同需求其他工单\n" + "\n".join(f"  - [{t['status']}] {t['title']}" for t in sibling_tickets) + "\n"
+
+        prompt = f"""你是一位资深软件架构师。请为以下任务设计**增量架构方案**。
 
 ## 需求背景
 {requirement_description}
@@ -37,32 +55,27 @@ class ArchitectAgent(BaseAgent):
 标题: {ticket_title}
 描述: {ticket_description}
 模块: {module}
-
+{existing_section}
 ## 请返回 JSON 格式：
 {{
-  "architecture_type": "架构模式（如 MVC、微服务、分层等）",
-  "tech_stack": {{
-    "language": "编程语言",
-    "framework": "框架",
-    "database": "数据库",
-    "others": ["其他技术"]
-  }},
-  "module_design": [
-    {{
-      "name": "模块名",
-      "responsibility": "职责描述",
-      "interfaces": ["接口描述"]
-    }}
-  ],
+  "architecture_type": "架构模式",
+  "tech_stack": {{"language": "语言", "framework": "框架"}},
+  "module_design": [{{"name": "模块", "responsibility": "职责", "interfaces": ["接口"]}}],
   "data_flow": "数据流描述",
-  "estimated_hours": 预估开发工时（小时）,
-  "risks": ["风险点"],
-  "decisions": ["关键技术决策"]
+  "estimated_hours": 工时,
+  "decisions": ["关键决策"]
 }}
+
+关键要求：
+1. **增量设计**：如果项目已有代码（index.html/main.py），在现有架构上扩展，不要推翻重来
+2. 前端项目如果已有 index.html，新功能应在其中添加，不要设计全新页面结构
+3. 技术栈必须与已有代码一致（已用原生 JS 就不要改成 React）
+4. module_design 只描述本工单需要新增/修改的部分
 """
 
         result = await llm_client.chat_json(
-            [{"role": "user", "content": prompt}]
+            [{"role": "user", "content": prompt}],
+            max_tokens=2000,
         )
 
         if result and isinstance(result, dict):

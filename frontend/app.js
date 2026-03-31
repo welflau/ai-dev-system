@@ -2948,6 +2948,9 @@ async function showRequirementDetail(reqId) {
             reqActions += `<button class="btn btn-primary btn-sm" onclick="decomposeReq('${data.id}')">🤖 AI 拆单</button>`;
             reqActions += `<button class="btn btn-sm" style="color:var(--error); margin-left:8px;" onclick="cancelReq('${data.id}')">✗ 取消</button>`;
         }
+        if (data.status === 'completed' || data.status === 'decomposed' || data.status === 'in_progress') {
+            reqActions += `<button class="btn btn-sm btn-primary" onclick="rerunReq('${data.id}')">🔄 重新执行</button>`;
+        }
         reqActions += `<button class="btn btn-sm" style="color:var(--error); margin-left:8px;" onclick="deleteReq('${data.id}', '${escHtml(data.title).replace(/'/g, "\\'")}')">🗑️ 删除</button>`;
         html += `
             <div class="drawer-section">
@@ -3028,6 +3031,19 @@ async function cancelReq(reqId) {
         loadRequirements();
     } catch (e) {
         showToast(`取消失败: ${e.message}`, 'error');
+    }
+}
+
+async function rerunReq(reqId) {
+    if (!confirm('确定重新执行此需求？\n\n所有关联工单将重置为待启动状态，重新走开发流程。')) return;
+    try {
+        await api(`/projects/${currentProjectId}/requirements/${reqId}/rerun`, { method: 'POST' });
+        showToast('需求已重置，工单将重新执行', 'success');
+        closeDrawer();
+        loadRequirements();
+        refreshBoard();
+    } catch (e) {
+        showToast(`重新执行失败: ${e.message}`, 'error');
     }
 }
 

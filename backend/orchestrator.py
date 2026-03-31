@@ -817,6 +817,10 @@ class TicketOrchestrator:
             # 开发完成
             new_status = TicketStatus.DEVELOPMENT_DONE.value
 
+            # 自测结果
+            self_test = result.get("self_test", {})
+            test_summary = self_test.get("summary", "未自测")
+
             await db.update("tickets", {
                 "status": new_status,
                 "result": result_json,
@@ -826,10 +830,11 @@ class TicketOrchestrator:
             await self._log(
                 project_id, requirement_id, ticket_id, agent_name,
                 "complete", current_status, new_status,
-                "开发完成，等待产品验收",
+                f"开发完成 | 自测: {test_summary}",
                 detail_data={
                     "files_count": len(result.get("files", {})),
                     "result_summary": str(result.get("dev_result", {}).get("notes", ""))[:500],
+                    "self_test": self_test,
                     "git_commit": git_result.get("commit_hash") if git_result else None,
                     "git_files": git_result.get("files", []) if git_result else [],
                 },
@@ -923,10 +928,33 @@ class TicketOrchestrator:
                 except Exception as ms_err:
                     logger.warning("刷新里程碑进度失败(非致命): %s", ms_err)
             else:
+                # 测试不通过 → 保存测试产物 + 打回开发
+                test_summary = result.get("test_result", {}).get("summary", {})
+                pass_rate = test_summary.get("pass_rate", 0) if isinstance(test_summary, dict) else 0
+                issues = test_summary.get("issues", []) if isinstance(test_summary, dict) else []
+
+                await db.insert("artifacts", {
+                    "id": generate_id("ART"),
+                    "project_id": project_id,
+                    "requirement_id": requirement_id,
+                    "ticket_id": ticket_id,
+                    "type": "test",
+                    "name": f"测试报告(未通过) - {ticket['title']}",
+                    "path": None,
+                    "content": result_json,
+                    "metadata": json.dumps({"git": git_result}) if git_result else None,
+                    "created_at": now_iso(),
+                })
+
                 await self._log(
                     project_id, requirement_id, ticket_id, agent_name,
                     "reject", current_status, new_status,
-                    f"测试不通过，打回开发"
+                    f"测试未通过 (通过率 {pass_rate}%)，打回开发: {'; '.join(issues[:3]) if issues else '详见测试报告'}",
+                    detail_data={
+                        "pass_rate": pass_rate,
+                        "issues": issues[:5],
+                        "git_commit": git_result.get("commit_hash") if git_result else None,
+                    },
                 )
 
         elif agent_name == "DeployAgent":
@@ -1064,8 +1092,22 @@ class TicketOrchestrator:
             )
             step += 1
 
-        # 写入文件 + 提交
-        commit_msg = f"[{agent_name}] {action}: {len(files)} files"
+        # 构建有意义的 commit message
+        ticket = await db.fetch_one("SELECT title FROM tickets WHERE id = ?", (ticket_id,))
+        ticket_title = ticket["title"] if ticket else ticket_id
+        file_names = ", ".join(f.split("/")[-1] for f in list(files.keys())[:3])
+        if len(files) > 3:
+            file_names += f" +{len(files)-3}"
+        action_labels = {
+            "design_architecture": "架构设计",
+            "develop": "开发",
+            "rework": "返工",
+            "fix_issues": "修复",
+            "acceptance_review": "验收",
+            "run_tests": "测试",
+        }
+        action_label = action_labels.get(action, action)
+        commit_msg = f"[{agent_name}] {action_label}: {ticket_title} ({file_names})"
         git_result = await git_manager.write_and_commit(
             project_id, files, commit_msg, agent=agent_name
         )
@@ -1465,6 +1507,8 @@ class TicketOrchestrator:
             existing_files = await self._collect_existing_code(project_id)
             context["existing_files"] = existing_files.get("file_list", [])
             context["existing_code"] = existing_files.get("code", {})
+            logger.info("📂 已有代码上下文: %d 文件, %d 个代码片段",
+                        len(context["existing_files"]), len(context["existing_code"]))
         except Exception as e:
             logger.warning("读取已有代码失败: %s", e)
             context["existing_files"] = []

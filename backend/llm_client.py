@@ -398,7 +398,7 @@ class LLMClient:
         self,
         messages: List[Dict[str, str]],
         temperature: float = 0.3,
-        max_tokens: int = 8192,
+        max_tokens: int = 16000,
     ) -> Any:
         """聊天并解析 JSON 响应"""
         ctx = _ctx_label()

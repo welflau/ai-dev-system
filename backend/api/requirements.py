@@ -2,8 +2,11 @@
 AI 自动开发系统 - 需求 API
 """
 import json
+import logging
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from database import db
+
+logger = logging.getLogger("api.requirements")
 from models import (
     RequirementCreate,
     RequirementUpdate,
@@ -654,6 +657,52 @@ async def decompose_requirement(project_id: str, req_id: str, background_tasks: 
     background_tasks.add_task(orchestrator.handle_requirement, project_id, req_id)
 
     return {"message": "需求分析已启动", "status": "analyzing"}
+
+
+@router.post("/{req_id}/rerun")
+async def rerun_requirement(project_id: str, req_id: str, background_tasks: BackgroundTasks):
+    """重新执行已完成的需求 — 重置工单状态，重新走开发流程"""
+    existing = await db.fetch_one(
+        "SELECT * FROM requirements WHERE id = ? AND project_id = ?",
+        (req_id, project_id),
+    )
+    if not existing:
+        raise HTTPException(404, "需求不存在")
+
+    # 获取关联工单
+    tickets = await db.fetch_all(
+        "SELECT id, status FROM tickets WHERE requirement_id = ?", (req_id,),
+    )
+
+    # 重置所有工单为 pending
+    for t in tickets:
+        await db.update("tickets", {
+            "status": "pending",
+            "assigned_agent": None,
+            "result": None,
+            "updated_at": now_iso(),
+        }, "id = ?", (t["id"],))
+
+    # 重置需求状态为 decomposed（已拆单，等待工单执行）
+    await db.update("requirements", {
+        "status": "decomposed",
+        "completed_at": None,
+        "updated_at": now_iso(),
+    }, "id = ?", (req_id,))
+
+    await _log_requirement(
+        project_id, req_id, "Orchestrator", "rerun",
+        existing["status"], "decomposed", "需求重新执行：所有工单已重置"
+    )
+
+    await event_manager.publish_to_project(
+        project_id, "requirement_status_changed",
+        {"requirement_id": req_id, "title": existing["title"], "from": existing["status"], "to": "decomposed"},
+    )
+
+    logger.info("🔄 需求重新执行: %s (%s)", existing["title"], req_id)
+
+    return {"message": "需求已重置，工单将重新执行", "status": "decomposed", "tickets_reset": len(tickets)}
 
 
 # ==================== 内部方法 ====================
