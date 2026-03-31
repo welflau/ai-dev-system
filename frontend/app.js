@@ -292,7 +292,13 @@ async function api(path, options = {}) {
         const resp = await fetch(url, config);
         if (!resp.ok) {
             const err = await resp.json().catch(() => ({ detail: resp.statusText }));
-            throw new Error(err.detail || err.message || `请求失败 (${resp.status})`);
+            const detail = err.detail;
+            let msg;
+            if (typeof detail === 'string') msg = detail;
+            else if (Array.isArray(detail)) msg = detail.map(d => d.msg || JSON.stringify(d)).join('; ');
+            else if (detail) msg = JSON.stringify(detail);
+            else msg = err.message || `请求失败 (${resp.status})`;
+            throw new Error(msg);
         }
         return await resp.json();
     } catch (e) {
@@ -5298,7 +5304,16 @@ async function sendChatMessage() {
 
     } catch (e) {
         document.getElementById('chatTyping')?.remove();
-        appendChatBubble('assistant', `⚠️ 请求失败: ${e.message}\n\n请检查 LLM 是否已配置。`);
+        // e 可能是 Error 对象或普通对象，统一转成字符串
+        let errMsg = '';
+        if (e instanceof Error) {
+            errMsg = e.message;
+        } else if (typeof e === 'string') {
+            errMsg = e;
+        } else {
+            errMsg = JSON.stringify(e);
+        }
+        appendChatBubble('assistant', `⚠️ 请求失败: ${errMsg}\n\n请检查 LLM 是否已配置。`);
         scrollChatToBottom();
     } finally {
         chatSending = false;
