@@ -5456,7 +5456,7 @@ function formatChatContent(content) {
     // 同时处理 token 截断导致未闭合的 [ACTION:...] 块
     content = content.replace(/\[ACTION:\w+\][\s\S]*?\[\/ACTION\]/g, '');
     content = content.replace(/\[ACTION:\w+\][\s\S]*$/g, '').trim();
-    if (!content) return '';
+    if (!content) return '<span style="color:var(--text-muted);font-style:italic">（内容为空）</span>';
 
     let result = '';
     // 按代码块分割，逐段处理

@@ -86,6 +86,14 @@ async def chat_with_ai(project_id: str, req: ChatRequest):
 
         # 清理回复中的指令标记（存库和返回都用 clean 版本）
         clean_reply = _clean_action_tags(response)
+        # 若清理后为空（整个回复都是 ACTION 块），给一条兜底提示
+        if not clean_reply:
+            if action_result and action_result.get("type") == "document_generated":
+                clean_reply = f"文档「{action_result.get('title', action_result.get('path', '文档'))}」已生成。"
+            elif action_result and action_result.get("message"):
+                clean_reply = action_result["message"]
+            else:
+                clean_reply = "操作已完成。"
 
         # 保存聊天记录到数据库
         await _save_chat_message(project_id, "user", req.message, images=req.images)
