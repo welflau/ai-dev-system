@@ -84,12 +84,12 @@ async def chat_with_ai(project_id: str, req: ChatRequest):
         # 解析是否包含操作指令
         action_result = await _parse_and_execute_action(project_id, project, response)
 
+        # 清理回复中的指令标记（存库和返回都用 clean 版本）
+        clean_reply = _clean_action_tags(response)
+
         # 保存聊天记录到数据库
         await _save_chat_message(project_id, "user", req.message, images=req.images)
-        await _save_chat_message(project_id, "assistant", response, action=action_result)
-
-        # 清理回复中的指令标记
-        clean_reply = _clean_action_tags(response)
+        await _save_chat_message(project_id, "assistant", clean_reply, action=action_result)
 
         return ChatResponse(reply=clean_reply, action=action_result)
 

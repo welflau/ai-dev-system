@@ -4704,11 +4704,26 @@ function handleFileInputChange(e) {
 }
 
 async function handleFileAttachment(files) {
-    if (!currentProjectId) {
-        showNotification('请先选择一个项目', 'warning');
-        return;
-    }
     for (const file of files) {
+        const ext = file.name.split('.').pop().toLowerCase();
+        const isImage = /^(png|jpg|jpeg|gif|webp|bmp)$/.test(ext);
+
+        // 图片：直接本地读取 base64，无需上传（和粘贴图片逻辑相同）
+        if (isImage) {
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                chatPendingImages.push(ev.target.result);
+                renderChatImagePreviews();
+            };
+            reader.readAsDataURL(file);
+            continue;
+        }
+
+        // 文档/代码：需要上传到后端提取文本
+        if (!currentProjectId) {
+            showToast('上传文档附件需要先选择一个项目', 'warning');
+            continue;
+        }
         const formData = new FormData();
         formData.append('file', file);
         try {
@@ -4718,7 +4733,7 @@ async function handleFileAttachment(files) {
             });
             if (!resp.ok) {
                 const err = await resp.json().catch(() => ({ detail: resp.statusText }));
-                showNotification(`上传失败: ${err.detail || resp.statusText}`, 'error');
+                showToast(`上传失败: ${err.detail || resp.statusText}`, 'error');
                 continue;
             }
             const result = await resp.json();
@@ -4734,7 +4749,7 @@ async function handleFileAttachment(files) {
                 renderChatDocPreviews();
             }
         } catch (err) {
-            showNotification(`上传出错: ${err.message}`, 'error');
+            showToast(`上传出错: ${err.message}`, 'error');
         }
     }
 }
@@ -5435,6 +5450,10 @@ function openChatImageViewer(src) {
  * 格式化聊天内容（简单 Markdown 支持）
  */
 function formatChatContent(content) {
+    if (!content) return '';
+
+    // 过滤掉残留的 [ACTION:...] ... [/ACTION] 块（后端已 clean，此为兜底）
+    content = content.replace(/\[ACTION:\w+\][\s\S]*?\[\/ACTION\]/g, '').trim();
     if (!content) return '';
 
     let result = '';
