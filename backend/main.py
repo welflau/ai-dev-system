@@ -307,6 +307,12 @@ app.add_middleware(NoCacheStaticMiddleware)
 if frontend_dir.exists():
     app.mount("/static", StaticFiles(directory=str(frontend_dir)), name="static")
 
+# 挂载聊天图片目录（用于历史消息图片回显）
+from config import BASE_DIR as _BASE_DIR
+_chat_images_dir = _BASE_DIR / "chat_images"
+_chat_images_dir.mkdir(exist_ok=True)
+app.mount("/chat-images", StaticFiles(directory=str(_chat_images_dir)), name="chat-images")
+
 
 @app.get("/app")
 @app.get("/app/{path:path}")

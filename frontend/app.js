@@ -4820,7 +4820,13 @@ async function loadChatHistory() {
 
         container.innerHTML = '';
         for (const msg of messages) {
-            appendChatBubble(msg.role, msg.content, msg.created_at, msg.action_data ? JSON.parse(msg.action_data) : null);
+            appendChatBubble(
+                msg.role,
+                msg.content,
+                msg.created_at,
+                msg.action_data ? JSON.parse(msg.action_data) : null,
+                msg.images || []
+            );
         }
         scrollChatToBottom();
     } catch (e) {

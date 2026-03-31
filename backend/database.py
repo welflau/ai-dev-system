@@ -54,6 +54,7 @@ class Database:
             ("tickets", "verified_by", "TEXT"),
             ("tickets", "verification_date", "TEXT"),
             ("tickets", "verification_notes", "TEXT"),
+            ("chat_messages", "images_json", "TEXT"),  # 聊天图片文件路径列表 JSON
         ]
         for table, column, col_def in migrations:
             cursor = await self._db.execute(f"PRAGMA table_info({table})")

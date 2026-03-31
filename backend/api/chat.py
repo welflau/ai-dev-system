@@ -5,8 +5,11 @@ AI 自动开发系统 - 聊天 API
 2. 全局聊天（无项目）：项目列表页的 AI 对话，支持创建项目
 3. Job 聊天历史：加载某个工单的 AI 对话记录
 """
+import base64
 import json
 import logging
+import uuid
+from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
@@ -82,7 +85,7 @@ async def chat_with_ai(project_id: str, req: ChatRequest):
         action_result = await _parse_and_execute_action(project_id, project, response)
 
         # 保存聊天记录到数据库
-        await _save_chat_message(project_id, "user", req.message)
+        await _save_chat_message(project_id, "user", req.message, images=req.images)
         await _save_chat_message(project_id, "assistant", response, action=action_result)
 
         # 清理回复中的指令标记
@@ -103,15 +106,21 @@ async def get_chat_history(project_id: str, limit: int = 50):
         raise HTTPException(404, "项目不存在")
 
     rows = await db.fetch_all(
-        """SELECT * FROM chat_messages 
-           WHERE project_id = ? 
-           ORDER BY created_at DESC 
+        """SELECT * FROM chat_messages
+           WHERE project_id = ?
+           ORDER BY created_at DESC
            LIMIT ?""",
         (project_id, limit),
     )
     # 倒序返回（最新在底部）
     rows.reverse()
-    return {"messages": rows, "total": len(rows)}
+    # 解析 images_json 为列表
+    messages = []
+    for row in rows:
+        msg = dict(row)
+        msg["images"] = json.loads(msg.pop("images_json", None) or "[]")
+        messages.append(msg)
+    return {"messages": messages, "total": len(messages)}
 
 
 @router.get("/tickets/conversations")
@@ -1135,9 +1144,29 @@ async def _save_chat_message(
     role: str,
     content: str,
     action: dict = None,
+    images: list = None,       # base64 data URL 列表
 ):
-    """保存聊天消息到数据库"""
+    """保存聊天消息到数据库，图片保存为文件"""
+    from config import BASE_DIR
     msg_id = generate_id("MSG")
+
+    # 保存图片文件，记录相对 URL 路径
+    image_urls = []
+    if images:
+        chat_images_dir = BASE_DIR / "chat_images" / project_id
+        chat_images_dir.mkdir(parents=True, exist_ok=True)
+        for data_url in images:
+            try:
+                header, b64data = data_url.split(",", 1)
+                ext = header.split(";")[0].split("/")[-1]  # png / jpeg / gif / webp
+                ext = ext if ext in ("png", "jpeg", "gif", "webp") else "png"
+                filename = f"{uuid.uuid4().hex}.{ext}"
+                file_path = chat_images_dir / filename
+                file_path.write_bytes(base64.b64decode(b64data))
+                image_urls.append(f"/chat-images/{project_id}/{filename}")
+            except Exception as e:
+                logger.warning("聊天图片保存失败，已跳过: %s", e)
+
     await db.insert("chat_messages", {
         "id": msg_id,
         "project_id": project_id,
@@ -1145,6 +1174,7 @@ async def _save_chat_message(
         "content": content,
         "action_type": action.get("type") if action else None,
         "action_data": json.dumps(action, ensure_ascii=False) if action else None,
+        "images_json": json.dumps(image_urls, ensure_ascii=False) if image_urls else None,
         "created_at": now_iso(),
     })
 
