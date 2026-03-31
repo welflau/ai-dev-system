@@ -79,7 +79,7 @@ async def chat_with_ai(project_id: str, req: ChatRequest):
 
     try:
         # 调用 LLM
-        response = await llm_client.chat(messages, temperature=0.7, max_tokens=4096)
+        response = await llm_client.chat(messages, temperature=0.7, max_tokens=8192)
 
         # 解析是否包含操作指令
         action_result = await _parse_and_execute_action(project_id, project, response)
@@ -1226,9 +1226,12 @@ async def _execute_close_requirement(project_id: str, data: dict) -> Dict:
 
 
 def _clean_action_tags(response: str) -> str:
-    """清除回复中的操作指令标记"""
+    """清除回复中的操作指令标记（包括未闭合的块）"""
     import re
+    # 先清除完整的 [ACTION:...]...[/ACTION]
     cleaned = re.sub(r'\[ACTION:\w+\].*?\[/ACTION\]', '', response, flags=re.DOTALL)
+    # 再清除未闭合的 [ACTION:...] 到字符串结尾（token 截断导致）
+    cleaned = re.sub(r'\[ACTION:\w+\].*$', '', cleaned, flags=re.DOTALL)
     return cleaned.strip()
 
 

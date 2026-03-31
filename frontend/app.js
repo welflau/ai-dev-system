@@ -5453,7 +5453,9 @@ function formatChatContent(content) {
     if (!content) return '';
 
     // 过滤掉残留的 [ACTION:...] ... [/ACTION] 块（后端已 clean，此为兜底）
-    content = content.replace(/\[ACTION:\w+\][\s\S]*?\[\/ACTION\]/g, '').trim();
+    // 同时处理 token 截断导致未闭合的 [ACTION:...] 块
+    content = content.replace(/\[ACTION:\w+\][\s\S]*?\[\/ACTION\]/g, '');
+    content = content.replace(/\[ACTION:\w+\][\s\S]*$/g, '').trim();
     if (!content) return '';
 
     let result = '';
