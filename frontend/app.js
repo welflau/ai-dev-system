@@ -4635,11 +4635,13 @@ let chatCurrentTicketTitle = '';    // Job 模式选中的工单标题
 let chatSending = false;
 let chatPendingImages = [];         // 待发送的图片 base64 data URL 列表
 
-// ---- 图片粘贴支持 ----
-document.addEventListener('DOMContentLoaded', () => {
-    const textarea = document.getElementById('chatInput');
-    if (!textarea) return;
-    textarea.addEventListener('paste', handleChatImagePaste);
+// ---- 图片粘贴支持（用事件委托，避免 SPA 动态渲染导致绑定失败）----
+document.addEventListener('paste', (e) => {
+    // 只在焦点在聊天输入框时处理
+    const active = document.activeElement;
+    const chatInput = document.getElementById('chatInput');
+    if (!chatInput || active !== chatInput) return;
+    handleChatImagePaste(e);
 });
 
 function handleChatImagePaste(e) {
@@ -4649,6 +4651,7 @@ function handleChatImagePaste(e) {
     for (const item of items) {
         if (item.type.startsWith('image/')) {
             hasImage = true;
+            e.preventDefault(); // 尽早阻止，防止文件名出现在文本框
             const file = item.getAsFile();
             if (!file) continue;
             const reader = new FileReader();
@@ -4659,7 +4662,6 @@ function handleChatImagePaste(e) {
             reader.readAsDataURL(file);
         }
     }
-    if (hasImage) e.preventDefault(); // 阻止默认粘贴（防止文件名出现在文本框）
 }
 
 function renderChatImagePreviews() {
