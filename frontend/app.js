@@ -478,6 +478,10 @@ function showProjectDetail(projectId) {
     loadLogPanelHistory();
     // 聊天面板切换到项目模式
     _updateChatPanelForContext();
+    // 切换项目时重置仓库文件预览区，避免显示上一个项目的文件
+    const repoPreview = document.getElementById('repoFilePreview');
+    if (repoPreview) repoPreview.innerHTML = '<div class="file-preview-empty"><div class="emoji">📄</div><p>选择文件查看内容</p></div>';
+    _activeTreeItem = null;
 }
 
 /**
