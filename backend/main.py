@@ -336,4 +336,5 @@ if __name__ == "__main__":
         host=settings.HOST,
         port=settings.PORT,
         reload=settings.DEBUG,
+        reload_dirs=[str(Path(__file__).parent)],
     )
