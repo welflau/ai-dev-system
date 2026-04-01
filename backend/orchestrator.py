@@ -1111,6 +1111,26 @@ class TicketOrchestrator:
         git_result = await git_manager.write_and_commit(
             project_id, files, commit_msg, agent=agent_name
         )
+
+        # 写入二进制媒体文件（截图等），并追加 commit
+        media_files: dict = result.pop("_media_files", {}) or {}
+        if media_files:
+            try:
+                repo_dir = git_manager._repo_path(project_id)
+                for media_path, img_bytes in media_files.items():
+                    dest = repo_dir / media_path
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    dest.write_bytes(img_bytes)
+                    logger.info("🖼️ 媒体文件写入: %s (%d bytes)", media_path, len(img_bytes))
+                media_commit = await git_manager.commit(
+                    project_id,
+                    f"[{agent_name}] 测试截图: {ticket_title}",
+                    author=agent_name,
+                )
+                await git_manager.push(project_id)
+                logger.info("📸 测试截图已提交: %s", media_commit)
+            except Exception as me:
+                logger.warning("媒体文件提交失败（不影响主流程）: %s", me)
         # 记录当前分支名到 git_result
         if git_result:
             try:
@@ -1340,6 +1360,26 @@ class TicketOrchestrator:
                 ticket_short = (a.get("ticket_id") or "")[-6:]
                 md += f"- **{a.get('name', a['type'])}** ({a['type']}) — 工单 #{ticket_short} — {a.get('created_at', '')[:16]}\n"
             md += "\n"
+
+        # 截图预览（收集各工单 Medias 目录下的图片）
+        try:
+            from git_manager import git_manager as _gm
+            repo_dir = _gm._repo_path(project_id)
+            req_short_path = req_short  # 需求短码
+            screenshot_entries = []
+            # 扫描 docs/<req_short>/<ticket_short>/Medias/ 目录
+            docs_root = repo_dir / "docs" / req_short_path
+            if docs_root.exists():
+                for medias_dir in docs_root.glob("*/Medias"):
+                    for img in sorted(medias_dir.glob("*.png")):
+                        rel = img.relative_to(repo_dir / "docs" / req_short_path)
+                        screenshot_entries.append(str(rel).replace("\\", "/"))
+            if screenshot_entries:
+                md += f"## 测试截图\n\n"
+                for s in screenshot_entries:
+                    md += f"![{s}](./{s})\n\n"
+        except Exception:
+            pass
 
         # AI 会话统计
         if llm_stats and llm_stats.get("count"):

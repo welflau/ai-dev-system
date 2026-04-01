@@ -99,18 +99,22 @@ class DevAgent(BaseAgent):
             dev_output = self._fallback_develop(context)
 
         # === 自测：开发完成后运行基础测试 ===
-        self_test = await self._self_test(context.get("project_id", ""), dev_output.get("files", {}))
+        project_id = context.get("project_id", "")
+        docs_prefix = context.get("docs_prefix", "docs/")
+        self_test = await self._self_test(project_id, dev_output.get("files", {}), docs_prefix)
 
         # 生成开发笔记（含自测结果）
         dev_notes = self._generate_dev_notes(context, dev_output, self_test)
-        docs_prefix = context.get("docs_prefix", "docs/")
         dev_output["files"][f"{docs_prefix}dev-notes.md"] = dev_notes
+        # 把截图二进制数据单独放到 _media_files，orchestrator 负责写入
+        if self_test.get("media_files"):
+            dev_output["_media_files"] = self_test.pop("media_files")
         dev_output["self_test"] = self_test
 
         return dev_output
 
-    async def _self_test(self, project_id: str, files: Dict[str, str]) -> Dict:
-        """开发完成后自测：检查文件完整性 + 语法 + 入口文件"""
+    async def _self_test(self, project_id: str, files: Dict[str, str], docs_prefix: str = "docs/") -> Dict:
+        """开发完成后自测：检查文件完整性 + 语法 + 入口文件 + HTML 截图"""
         checks = []
         passed = 0
         total = 0
@@ -182,13 +186,70 @@ class DevAgent(BaseAgent):
         summary = f"自测 {passed}/{total} 通过" + (" ✅" if all_passed else " ⚠️")
         logger.info("🔍 DevAgent 自测: %s", summary)
 
+        # === 截图：对 HTML 入口文件用 Playwright 截图 ===
+        media_files: Dict[str, bytes] = {}
+        screenshot_refs: List[str] = []   # 在 dev-notes.md 里引用的相对路径
+        try:
+            html_files = [fp for fp in files if fp.endswith(".html")]
+            if html_files and project_id:
+                from git_manager import git_manager
+                repo_dir = git_manager._repo_path(project_id)
+                medias_rel = f"{docs_prefix}Medias/"   # 相对仓库根
+                screenshots = await self._take_html_screenshots(repo_dir, html_files, files)
+                for name, img_bytes in screenshots.items():
+                    media_files[f"{medias_rel}{name}"] = img_bytes
+                    screenshot_refs.append(f"./Medias/{name}")
+                    logger.info("📸 截图完成: %s (%d bytes)", name, len(img_bytes))
+        except Exception as e:
+            logger.warning("截图失败（不影响主流程）: %s", e)
+
         return {
             "passed": all_passed,
             "total": total,
             "passed_count": passed,
             "checks": checks,
             "summary": summary,
+            "screenshot_refs": screenshot_refs,
+            "media_files": media_files,   # {仓库相对路径: bytes}
         }
+
+    async def _take_html_screenshots(
+        self, repo_dir: Path, html_files: List[str], files: Dict[str, str]
+    ) -> Dict[str, bytes]:
+        """用 Playwright 对 HTML 文件截图，返回 {文件名: png字节}"""
+        import tempfile, os
+        from playwright.async_api import async_playwright
+
+        results: Dict[str, bytes] = {}
+        # 先把文件写到临时目录
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            # 把所有产出文件写进去（保持相对路径）
+            for fp, content in files.items():
+                dest = tmp / fp
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_text(content, encoding="utf-8")
+
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=True)
+                page = await browser.new_page(viewport={"width": 1280, "height": 800})
+                for fp in html_files[:3]:   # 最多截 3 个页面
+                    html_path = tmp / fp
+                    if not html_path.exists():
+                        continue
+                    try:
+                        await page.goto(f"file:///{html_path.as_posix()}", wait_until="networkidle", timeout=10000)
+                        await page.wait_for_timeout(800)   # 等渲染
+                        img = await page.screenshot(full_page=False, type="png")
+                        # 文件名：用路径末段
+                        safe_name = fp.replace("/", "_").replace("\\", "_")
+                        if not safe_name.endswith(".png"):
+                            safe_name = safe_name.rsplit(".", 1)[0] + ".png"
+                        results[f"screenshot_{safe_name}"] = img
+                    except Exception as e:
+                        logger.warning("截图 %s 失败: %s", fp, e)
+                await browser.close()
+        return results
 
     def _generate_dev_notes(self, context: Dict, dev_output: Dict, self_test: Dict) -> str:
         """生成开发笔记（含自测结果）"""
@@ -223,10 +284,15 @@ class DevAgent(BaseAgent):
 {self_test.get('summary', '-')}
 
 {test_table}
-
-## 开发备注
-{notes or '无'}
 """
+        # 截图
+        screenshot_refs = self_test.get("screenshot_refs", [])
+        if screenshot_refs:
+            md += "\n## 运行截图\n\n"
+            for ref in screenshot_refs:
+                md += f"![截图]({ref})\n\n"
+
+        md += f"\n## 开发备注\n{notes or '无'}\n"
         return md
 
     def _fallback_develop(self, context: Dict) -> Dict:

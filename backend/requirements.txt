@@ -17,6 +17,7 @@ python-dotenv>=1.0.0
 python-multipart>=0.0.9
 pypdf>=4.0.0          # PDF 文本提取
 python-docx>=1.1.0    # Word 文档提取
+playwright>=1.40.0    # 自动化截图（DevAgent 自测）
 
 # Testing
 pytest>=8.0.0
