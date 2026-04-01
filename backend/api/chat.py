@@ -105,6 +105,42 @@ async def chat_with_ai(project_id: str, req: ChatRequest):
         clear_llm_context()
 
 
+class SaveToRepoRequest(BaseModel):
+    filename: str = Field(..., description="文件路径，如 docs/note.md")
+    content: str = Field(..., description="文件内容")
+
+
+@router.post("/save-to-repo")
+async def save_chat_to_repo(project_id: str, req: SaveToRepoRequest):
+    """将聊天内容保存为文件到项目 Git 仓库"""
+    project = await db.fetch_one("SELECT * FROM projects WHERE id = ?", (project_id,))
+    if not project:
+        raise HTTPException(404, "项目不存在")
+
+    import re
+    # 安全过滤文件名（允许 docs/ 前缀 + 英文文件名）
+    safe_path = re.sub(r'[^\w\-./]', '', req.filename).lstrip('/')
+    if not safe_path.endswith('.md'):
+        safe_path += '.md'
+
+    from git_manager import git_manager
+    try:
+        if not git_manager.repo_exists(project_id):
+            await git_manager.init_repo(project_id, project["name"])
+        await git_manager.write_file(project_id, safe_path, req.content)
+        commit_hash = await git_manager.commit(
+            project_id,
+            f"[Doc] 保存聊天导出: {safe_path}",
+            author="ChatAssistant",
+        )
+        await git_manager.push(project_id)
+        logger.info("💾 聊天内容已保存到仓库: %s (commit: %s)", safe_path, commit_hash)
+        return {"status": "ok", "path": safe_path, "commit": commit_hash}
+    except Exception as e:
+        logger.error("保存到仓库失败: %s", e)
+        raise HTTPException(500, f"保存失败: {str(e)}")
+
+
 @router.get("/history")
 async def get_chat_history(project_id: str, limit: int = 50):
     """获取项目全局聊天历史"""
