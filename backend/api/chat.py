@@ -110,6 +110,28 @@ class SaveToRepoRequest(BaseModel):
     content: str = Field(..., description="文件内容")
 
 
+class ConfirmRequirementRequest(BaseModel):
+    title: str
+    description: str
+    priority: str = "medium"
+
+
+@router.post("/confirm-create-requirement")
+async def confirm_create_requirement(project_id: str, req: ConfirmRequirementRequest):
+    """用户确认后真正创建需求"""
+    project = await db.fetch_one("SELECT * FROM projects WHERE id = ?", (project_id,))
+    if not project:
+        raise HTTPException(404, "项目不存在")
+    result = await _execute_create_requirement(project_id, {
+        "title": req.title,
+        "description": req.description,
+        "priority": req.priority,
+    })
+    if result.get("type") == "error":
+        raise HTTPException(400, result["message"])
+    return result
+
+
 @router.post("/save-to-repo")
 async def save_chat_to_repo(project_id: str, req: SaveToRepoRequest):
     """将聊天内容保存为文件到项目 Git 仓库"""
@@ -521,10 +543,12 @@ def _build_system_prompt(project: dict, context: dict) -> str:
 当你判断用户想要执行操作时，在回复末尾附加以下格式的指令标记（必须是独立一行）：
 
 ### 创建需求
-当用户想要创建新需求时使用：
-[ACTION:CREATE_REQUIREMENT]
+当用户描述了一个新功能或需求，且你判断应该创建需求时，**先提出需求草稿让用户确认**，不要直接创建：
+[ACTION:CONFIRM_REQUIREMENT]
 {{"title": "需求标题", "description": "详细描述", "priority": "medium"}}
 [/ACTION]
+
+注意：只有用户在界面上点击「确认创建」后才会真正创建需求，不要使用 CREATE_REQUIREMENT。
 
 ### 暂停需求
 当用户想暂停某个需求的执行时使用（需求必须处于 analyzing/decomposed/in_progress 状态）：
@@ -741,7 +765,20 @@ async def _parse_and_execute_action(project_id: str, project: dict, response: st
         logger.warning("无法解析操作数据: %s", action_data_str)
         return None
 
-    if action_type == "CREATE_REQUIREMENT":
+    if action_type == "CONFIRM_REQUIREMENT":
+        # 不直接创建，返回待确认数据让前端展示确认卡片
+        title = action_data.get("title", "").strip()
+        description = action_data.get("description", "").strip()
+        priority = action_data.get("priority", "medium")
+        if priority not in ("critical", "high", "medium", "low"):
+            priority = "medium"
+        return {
+            "type": "confirm_requirement",
+            "title": title,
+            "description": description,
+            "priority": priority,
+        }
+    elif action_type == "CREATE_REQUIREMENT":
         return await _execute_create_requirement(project_id, action_data)
     elif action_type == "PAUSE_REQUIREMENT":
         return await _execute_pause_requirement(project_id, action_data)

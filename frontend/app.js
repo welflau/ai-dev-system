@@ -5430,6 +5430,23 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
                 <div class="action-detail">${escapeHtml(action.message || '未知错误')}</div>
             </div>
         `;
+    } else if (action && action.type === 'confirm_requirement') {
+        const priorityLabel = {'critical':'🔴 紧急','high':'🟠 高','medium':'🟡 中','low':'🟢 低'}[action.priority] || action.priority;
+        const safeId = 'req_confirm_' + Date.now();
+        actionHtml = `
+            <div class="chat-action-card chat-confirm-card" id="${safeId}" style="border-left-color: var(--primary);">
+                <div class="action-title">📋 识别到新需求，是否创建？</div>
+                <div class="action-detail">
+                    <div class="confirm-req-title">${escapeHtml(action.title)}</div>
+                    <div class="confirm-req-desc">${escapeHtml(action.description)}</div>
+                    <div class="confirm-req-meta">优先级：${priorityLabel}</div>
+                </div>
+                <div class="confirm-req-btns">
+                    <button class="btn btn-sm btn-primary" onclick="doConfirmRequirement('${safeId}', ${JSON.stringify(escapeHtml(action.title))}, ${JSON.stringify(escapeHtml(action.description))}, '${action.priority}')">✅ 确认创建</button>
+                    <button class="btn btn-sm" onclick="doCancelRequirement('${safeId}')">✗ 取消</button>
+                </div>
+            </div>
+        `;
     }
 
     // 图片展示（用户发送的图片）
@@ -5464,6 +5481,42 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
         </div>
     `;
     container.appendChild(msgEl);
+}
+
+/** 用户确认创建需求 */
+async function doConfirmRequirement(cardId, title, description, priority) {
+    const card = document.getElementById(cardId);
+    if (!card || !currentProjectId) return;
+    const btns = card.querySelector('.confirm-req-btns');
+    if (btns) btns.innerHTML = '<span style="color:var(--text-muted);font-size:12px">⏳ 创建中...</span>';
+    try {
+        const result = await api(`/projects/${currentProjectId}/chat/confirm-create-requirement`, {
+            method: 'POST',
+            body: { title, description, priority },
+        });
+        card.style.borderLeftColor = 'var(--success, #34d058)';
+        card.querySelector('.action-title').textContent = '✅ 需求已创建';
+        if (btns) btns.innerHTML = `<span class="action-link" onclick="switchTab('requirements')">查看需求列表 →</span>`;
+        showToast(`需求「${title}」已创建`, 'success');
+        setTimeout(() => {
+            if (typeof loadRequirements === 'function') loadRequirements();
+            if (typeof refreshBoard === 'function') refreshBoard();
+        }, 500);
+    } catch (e) {
+        card.style.borderLeftColor = 'var(--danger, #ea4a5a)';
+        card.querySelector('.action-title').textContent = '⚠️ 创建失败';
+        if (btns) btns.innerHTML = `<span style="color:var(--danger);font-size:12px">${escapeHtml(e.message)}</span>`;
+    }
+}
+
+/** 用户取消创建需求 */
+function doCancelRequirement(cardId) {
+    const card = document.getElementById(cardId);
+    if (!card) return;
+    card.style.opacity = '0.5';
+    card.querySelector('.action-title').textContent = '✗ 已取消';
+    const btns = card.querySelector('.confirm-req-btns');
+    if (btns) btns.remove();
 }
 
 /** 复制气泡内容到剪贴板 */

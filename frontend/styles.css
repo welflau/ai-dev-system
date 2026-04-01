@@ -4859,6 +4859,32 @@ body.chat-open .chat-panel {
     transform: none;
 }
 
+/* 需求确认卡片 */
+.chat-confirm-card .confirm-req-title {
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 4px;
+    font-size: 13px;
+}
+.chat-confirm-card .confirm-req-desc {
+    color: var(--text-muted);
+    font-size: 12px;
+    line-height: 1.5;
+    margin-bottom: 6px;
+    max-height: 80px;
+    overflow-y: auto;
+}
+.chat-confirm-card .confirm-req-meta {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-bottom: 10px;
+}
+.confirm-req-btns {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
 /* 气泡工具栏（复制 / 保存到仓库） */
 .chat-bubble-toolbar {
     display: flex;
