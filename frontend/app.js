@@ -5746,17 +5746,23 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
     } else if (action && action.type === 'confirm_requirement') {
         const priorityLabel = {'critical':'🔴 紧急','high':'🟠 高','medium':'🟡 中','low':'🟢 低'}[action.priority] || action.priority;
         const safeId = 'req_confirm_' + Date.now();
+        const imagesJson = action.images && action.images.length ? escapeHtml(JSON.stringify(action.images)) : '';
+        const imagesPreview = action.images && action.images.length
+            ? `<div class="confirm-card-images">${action.images.map(u => `<img src="${escapeHtml(u)}" class="confirm-card-img" onclick="event.stopPropagation();window.open(this.src,'_blank')" title="点击查看大图">`).join('')}</div>`
+            : '';
         actionHtml = `
             <div class="chat-action-card chat-confirm-card" id="${safeId}"
                  data-title="${escapeHtml(action.title)}"
                  data-description="${escapeHtml(action.description)}"
                  data-priority="${escapeHtml(action.priority)}"
+                 data-images="${imagesJson}"
                  style="border-left-color: var(--primary);">
                 <div class="action-title">📋 识别到新需求，是否创建？</div>
                 <div class="action-detail">
                     <div class="confirm-req-title">${escapeHtml(action.title)}</div>
                     <div class="confirm-req-desc">${escapeHtml(action.description)}</div>
                     <div class="confirm-req-meta">优先级：${priorityLabel}</div>
+                    ${imagesPreview}
                 </div>
                 <div class="confirm-req-btns">
                     <button class="btn btn-sm btn-primary" onclick="doConfirmRequirement('${safeId}')">✅ 确认创建</button>
@@ -5767,18 +5773,24 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
     } else if (action && action.type === 'confirm_bug') {
         const priorityLabel = {'critical':'🔴 紧急','high':'🟠 高','medium':'🟡 中','low':'🟢 低'}[action.priority] || action.priority;
         const safeId = 'bug_confirm_' + Date.now();
+        const imagesJson = action.images && action.images.length ? escapeHtml(JSON.stringify(action.images)) : '';
+        const imagesPreview = action.images && action.images.length
+            ? `<div class="confirm-card-images">${action.images.map(u => `<img src="${escapeHtml(u)}" class="confirm-card-img" onclick="event.stopPropagation();window.open(this.src,'_blank')" title="点击查看大图">`).join('')}</div>`
+            : '';
         actionHtml = `
             <div class="chat-action-card chat-confirm-card chat-confirm-bug-card" id="${safeId}"
                  data-title="${escapeHtml(action.title)}"
                  data-description="${escapeHtml(action.description)}"
                  data-priority="${escapeHtml(action.priority)}"
                  data-requirement-id="${escapeHtml(action.requirement_id || '')}"
+                 data-images="${imagesJson}"
                  style="border-left-color: var(--danger, #ea4a5a);">
                 <div class="action-title">🐛 识别到 BUG，是否上报？</div>
                 <div class="action-detail">
                     <div class="confirm-req-title">${escapeHtml(action.title)}</div>
                     <div class="confirm-req-desc">${escapeHtml(action.description)}</div>
                     <div class="confirm-req-meta">优先级：${priorityLabel}</div>
+                    ${imagesPreview}
                 </div>
                 <div class="confirm-req-btns">
                     <button class="btn btn-sm btn-danger" onclick="doConfirmBug('${safeId}')">🐛 确认上报</button>
@@ -5829,12 +5841,13 @@ async function doConfirmRequirement(cardId) {
     const title = card.dataset.title || '';
     const description = card.dataset.description || '';
     const priority = card.dataset.priority || 'medium';
+    const images = card.dataset.images ? JSON.parse(card.dataset.images) : [];
     const btns = card.querySelector('.confirm-req-btns');
     if (btns) btns.innerHTML = '<span style="color:var(--text-muted);font-size:12px">⏳ 创建中...</span>';
     try {
         const result = await api(`/projects/${currentProjectId}/chat/confirm-create-requirement`, {
             method: 'POST',
-            body: { title, description, priority },
+            body: { title, description, priority, images },
         });
         card.style.borderLeftColor = 'var(--success, #34d058)';
         card.querySelector('.action-title').textContent = '✅ 需求已创建';
@@ -7231,12 +7244,13 @@ async function doConfirmBug(cardId) {
     const description = card.dataset.description || '';
     const priority = card.dataset.priority || 'high';
     const requirementId = card.dataset.requirementId || null;
+    const images = card.dataset.images ? JSON.parse(card.dataset.images) : [];
     const btns = card.querySelector('.confirm-req-btns');
     if (btns) btns.innerHTML = '<span style="color:var(--text-muted);font-size:12px">⏳ 上报中...</span>';
     try {
         await api(`/projects/${currentProjectId}/chat/confirm-create-bug`, {
             method: 'POST',
-            body: { title, description, priority, requirement_id: requirementId || null },
+            body: { title, description, priority, requirement_id: requirementId || null, images },
         });
         card.style.borderLeftColor = 'var(--success, #34d058)';
         card.querySelector('.action-title').textContent = '✅ BUG 已上报';

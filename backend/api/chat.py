@@ -84,6 +84,13 @@ async def chat_with_ai(project_id: str, req: ChatRequest):
         # 解析是否包含操作指令
         action_result = await _parse_and_execute_action(project_id, project, response)
 
+        # 若生成了需求/BUG 确认卡片，且本次消息含图片，则将图片 URL 提前保存并附加到 action
+        saved_image_urls = None
+        if action_result and action_result.get("type") in ("confirm_requirement", "confirm_bug") and req.images:
+            saved_image_urls = await _save_images(project_id, req.images)
+            if saved_image_urls:
+                action_result["images"] = saved_image_urls
+
         # 清理回复中的指令标记（存库和返回都用 clean 版本）
         clean_reply = _clean_action_tags(response)
         # 若清理后为空（整个回复都是 ACTION 块），给一条兜底提示
@@ -96,7 +103,11 @@ async def chat_with_ai(project_id: str, req: ChatRequest):
                 clean_reply = "操作已完成。"
 
         # 保存聊天记录到数据库
-        await _save_chat_message(project_id, "user", req.message, images=req.images)
+        # 若图片已提前保存（confirm 分支），直接用已保存的 URL，避免重复写文件
+        if saved_image_urls is not None:
+            await _save_chat_message(project_id, "user", req.message, saved_urls=saved_image_urls)
+        else:
+            await _save_chat_message(project_id, "user", req.message, images=req.images)
         await _save_chat_message(project_id, "assistant", clean_reply, action=action_result)
 
         return ChatResponse(reply=clean_reply, action=action_result)
@@ -114,6 +125,7 @@ class ConfirmRequirementRequest(BaseModel):
     title: str
     description: str = ""
     priority: str = "medium"
+    images: Optional[List[str]] = None  # 已保存的图片 URL 列表，如 ["/chat-images/..."]
 
 
 class ConfirmBugRequest(BaseModel):
@@ -121,6 +133,7 @@ class ConfirmBugRequest(BaseModel):
     description: str = ""
     priority: str = "high"
     requirement_id: Optional[str] = None
+    images: Optional[List[str]] = None  # 已保存的图片 URL 列表
 
 
 @router.post("/confirm-create-bug")
@@ -132,6 +145,14 @@ async def confirm_create_bug(project_id: str, req: ConfirmBugRequest):
     if req.priority not in ("critical", "high", "medium", "low"):
         raise HTTPException(400, "priority 无效")
 
+    # 将图片 URL 以 Markdown 形式追加到描述末尾
+    description = req.description
+    if req.images:
+        img_md = "\n\n" + "\n\n".join(
+            f"![截图 {i+1}]({url})" for i, url in enumerate(req.images)
+        )
+        description = description + img_md
+
     from utils import generate_id, now_iso
     bug_id = generate_id("bug")
     now = now_iso()
@@ -140,7 +161,7 @@ async def confirm_create_bug(project_id: str, req: ConfirmBugRequest):
         "project_id": project_id,
         "requirement_id": req.requirement_id,
         "title": req.title,
-        "description": req.description,
+        "description": description,
         "priority": req.priority,
         "status": "open",
         "version_id": None,
@@ -165,9 +186,18 @@ async def confirm_create_requirement(project_id: str, req: ConfirmRequirementReq
     project = await db.fetch_one("SELECT * FROM projects WHERE id = ?", (project_id,))
     if not project:
         raise HTTPException(404, "项目不存在")
+
+    # 将图片 URL 以 Markdown 形式追加到描述末尾
+    description = req.description
+    if req.images:
+        img_md = "\n\n" + "\n\n".join(
+            f"![截图 {i+1}]({url})" for i, url in enumerate(req.images)
+        )
+        description = description + img_md
+
     result = await _execute_create_requirement(project_id, {
         "title": req.title,
-        "description": req.description,
+        "description": description,
         "priority": req.priority,
     })
     if result.get("type") == "error":
@@ -1433,33 +1463,42 @@ def _clean_action_tags(response: str) -> str:
     return cleaned.strip()
 
 
+async def _save_images(project_id: str, images: list) -> list:
+    """将 base64 data URL 图片列表保存为文件，返回可访问的 URL 列表"""
+    from config import BASE_DIR
+    image_urls = []
+    chat_images_dir = BASE_DIR / "chat_images" / project_id
+    chat_images_dir.mkdir(parents=True, exist_ok=True)
+    for data_url in images:
+        try:
+            header, b64data = data_url.split(",", 1)
+            ext = header.split(";")[0].split("/")[-1]
+            ext = ext if ext in ("png", "jpeg", "gif", "webp") else "png"
+            filename = f"{uuid.uuid4().hex}.{ext}"
+            file_path = chat_images_dir / filename
+            file_path.write_bytes(base64.b64decode(b64data))
+            image_urls.append(f"/chat-images/{project_id}/{filename}")
+        except Exception as e:
+            logger.warning("图片保存失败，已跳过: %s", e)
+    return image_urls
+
+
 async def _save_chat_message(
     project_id: str,
     role: str,
     content: str,
     action: dict = None,
-    images: list = None,       # base64 data URL 列表
+    images: list = None,       # base64 data URL 列表（原始图片）
+    saved_urls: list = None,   # 已保存的图片 URL 列表（优先使用，避免重复保存）
 ):
     """保存聊天消息到数据库，图片保存为文件"""
-    from config import BASE_DIR
     msg_id = generate_id("MSG")
 
-    # 保存图片文件，记录相对 URL 路径
-    image_urls = []
-    if images:
-        chat_images_dir = BASE_DIR / "chat_images" / project_id
-        chat_images_dir.mkdir(parents=True, exist_ok=True)
-        for data_url in images:
-            try:
-                header, b64data = data_url.split(",", 1)
-                ext = header.split(";")[0].split("/")[-1]  # png / jpeg / gif / webp
-                ext = ext if ext in ("png", "jpeg", "gif", "webp") else "png"
-                filename = f"{uuid.uuid4().hex}.{ext}"
-                file_path = chat_images_dir / filename
-                file_path.write_bytes(base64.b64decode(b64data))
-                image_urls.append(f"/chat-images/{project_id}/{filename}")
-            except Exception as e:
-                logger.warning("聊天图片保存失败，已跳过: %s", e)
+    # 优先使用已保存的 URL，否则从 base64 保存
+    if saved_urls is not None:
+        image_urls = saved_urls
+    else:
+        image_urls = await _save_images(project_id, images) if images else []
 
     await db.insert("chat_messages", {
         "id": msg_id,

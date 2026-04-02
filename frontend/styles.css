@@ -5203,6 +5203,26 @@ body.chat-open .chat-panel {
     color: var(--text-muted);
     margin-bottom: 10px;
 }
+/* confirm 卡片内图片预览 */
+.confirm-card-images {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 8px 0;
+}
+.confirm-card-img {
+    width: 80px;
+    height: 60px;
+    object-fit: cover;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    cursor: pointer;
+    transition: transform 0.15s, box-shadow 0.15s;
+}
+.confirm-card-img:hover {
+    transform: scale(1.05);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+}
 .confirm-req-btns {
     display: flex;
     gap: 8px;
