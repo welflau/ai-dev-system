@@ -112,8 +112,51 @@ class SaveToRepoRequest(BaseModel):
 
 class ConfirmRequirementRequest(BaseModel):
     title: str
-    description: str
+    description: str = ""
     priority: str = "medium"
+
+
+class ConfirmBugRequest(BaseModel):
+    title: str
+    description: str = ""
+    priority: str = "high"
+    requirement_id: Optional[str] = None
+
+
+@router.post("/confirm-create-bug")
+async def confirm_create_bug(project_id: str, req: ConfirmBugRequest):
+    """用户确认后真正创建 BUG 并触发修复工作流"""
+    project = await db.fetch_one("SELECT * FROM projects WHERE id = ?", (project_id,))
+    if not project:
+        raise HTTPException(404, "项目不存在")
+    if req.priority not in ("critical", "high", "medium", "low"):
+        raise HTTPException(400, "priority 无效")
+
+    from utils import generate_id, now_iso
+    bug_id = generate_id("bug")
+    now = now_iso()
+    await db.insert("bugs", {
+        "id": bug_id,
+        "project_id": project_id,
+        "requirement_id": req.requirement_id,
+        "title": req.title,
+        "description": req.description,
+        "priority": req.priority,
+        "status": "open",
+        "version_id": None,
+        "fix_notes": None,
+        "created_at": now,
+        "updated_at": now,
+        "fixed_at": None,
+    })
+    logger.info("🐛 BUG 已创建（来自聊天）: %s [%s]", req.title, bug_id)
+    bug = await db.fetch_one("SELECT * FROM bugs WHERE id = ?", (bug_id,))
+    return {
+        "type": "bug_created",
+        "bug_id": bug_id,
+        "message": f"BUG「{req.title}」已创建",
+        "bug": bug,
+    }
 
 
 @router.post("/confirm-create-requirement")
@@ -506,6 +549,7 @@ def _build_system_prompt(project: dict, context: dict) -> str:
     file_tree = context.get("file_tree", "")
     key_files_content = context.get("key_files_content", "")
     artifacts_summary = context.get("artifacts_summary", "暂无产物")
+    knowledge_content = context.get("knowledge_content", "")
 
     return f"""你是 AI 自动开发系统的智能助手，当前正在为项目「{project['name']}」提供服务。
 
@@ -514,7 +558,7 @@ def _build_system_prompt(project: dict, context: dict) -> str:
 - 描述：{project.get('description') or '无描述'}
 - 技术栈：{project.get('tech_stack') or '未指定'}
 - Git 仓库：{project.get('git_repo_path') or '未配置'}
-
+{(chr(10) + '## 项目知识库' + chr(10) + knowledge_content) if knowledge_content else ''}
 ## 当前需求状态
 {req_summary}
 
@@ -538,6 +582,7 @@ def _build_system_prompt(project: dict, context: dict) -> str:
 5. **技术建议**：基于项目技术栈和已有代码给出建议
 6. **生成文档**：可以基于项目内容生成设计文档、分析报告等
 7. **Git 操作**：切换分支、查看分支列表、查看提交日志、查看文件内容、合并分支
+8. **上报 BUG**：当用户描述已有功能出现缺陷、错误、崩溃、白屏、接口异常等问题时，帮助上报 BUG（注意：BUG 是「已有功能出了问题」，而非新功能需求）
 
 ## 操作指令格式
 当你判断用户想要执行操作时，在回复末尾附加以下格式的指令标记（必须是独立一行）：
@@ -549,6 +594,18 @@ def _build_system_prompt(project: dict, context: dict) -> str:
 [/ACTION]
 
 注意：只有用户在界面上点击「确认创建」后才会真正创建需求，不要使用 CREATE_REQUIREMENT。
+**重要：如果用户描述的是 BUG / 报错 / 崩溃 / 异常，不要用此指令，应使用下面的 CONFIRM_BUG。**
+
+### 上报 BUG
+**当用户描述的是已有功能出现的问题**（缺陷、报错、崩溃、白屏、接口报错、功能不正常等），**必须使用此指令**，不要创建需求：
+[ACTION:CONFIRM_BUG]
+{{"title": "BUG 标题", "description": "复现步骤/现象描述", "priority": "high", "requirement_id": null}}
+[/ACTION]
+
+注意：
+- BUG 与需求的区别：BUG 是「已有功能出了问题」，需求是「希望新增或改变某个功能」
+- requirement_id 若能从上下文判断 BUG 属于哪个需求则填写，否则填 null
+- 只有用户点击「确认上报」后才会真正创建 BUG
 
 ### 暂停需求
 当用户想暂停某个需求的执行时使用（需求必须处于 analyzing/decomposed/in_progress 状态）：
@@ -623,6 +680,40 @@ priority 可选值：critical, high, medium, low
 - 如果需求 ID 不明确，用标题关键词匹配当前需求列表中的需求
 - 暂停/恢复/关闭操作必须确认需求存在且状态允许该操作
 """
+
+
+def _load_knowledge_content(project_id: str, global_limit: int = 2000, project_limit: int = 3000) -> str:
+    """读取全局知识库 + 项目知识库，返回拼接文本（带 token 预算控制）"""
+    from config import BASE_DIR as _BASE_DIR
+    from pathlib import Path as _Path
+
+    parts = []
+
+    def _read_docs(docs_dir: _Path, label: str, char_limit: int):
+        if not docs_dir.exists():
+            return
+        files = sorted(docs_dir.glob("*.md"), key=lambda f: f.name)
+        total = 0
+        section_parts = []
+        for f in files:
+            if total >= char_limit:
+                break
+            try:
+                text = f.read_text(encoding="utf-8", errors="replace")
+                remaining = char_limit - total
+                if len(text) > remaining:
+                    text = text[:remaining] + "\n...(truncated)"
+                section_parts.append(f"#### {f.name}\n{text}")
+                total += len(text)
+            except Exception:
+                pass
+        if section_parts:
+            parts.append(f"### {label}\n" + "\n\n".join(section_parts))
+
+    _read_docs(_BASE_DIR / "docs", "全局规范", global_limit)
+    _read_docs(_BASE_DIR / "projects" / project_id / "docs", "项目文档", project_limit)
+
+    return "\n\n".join(parts)
 
 
 async def _build_project_context(project_id: str, project: dict) -> dict:
@@ -712,6 +803,7 @@ async def _build_project_context(project_id: str, project: dict) -> dict:
         "file_tree": file_tree,
         "key_files_content": key_files_content,
         "artifacts_summary": artifacts_summary,
+        "knowledge_content": _load_knowledge_content(project_id),
     }
 
 
@@ -750,7 +842,8 @@ async def _parse_and_execute_action(project_id: str, project: dict, response: st
                 return None
 
     # 通用 JSON 指令匹配 [ACTION:XXX] {...} [/ACTION]
-    pattern = r'\[ACTION:(\w+)\]\s*(\{.*?\})\s*\[/ACTION\]'
+    # 用贪婪匹配 \{.*\} 确保捕获完整 JSON（包含嵌套结构）
+    pattern = r'\[ACTION:(\w+)\]\s*(\{.*\})\s*\[/ACTION\]'
     match = re.search(pattern, response, re.DOTALL)
 
     if not match:
@@ -777,6 +870,21 @@ async def _parse_and_execute_action(project_id: str, project: dict, response: st
             "title": title,
             "description": description,
             "priority": priority,
+        }
+    elif action_type == "CONFIRM_BUG":
+        # 不直接创建，返回待确认数据让前端展示 BUG 确认卡片
+        title = action_data.get("title", "").strip()
+        description = action_data.get("description", "").strip()
+        priority = action_data.get("priority", "high")
+        if priority not in ("critical", "high", "medium", "low"):
+            priority = "high"
+        requirement_id = action_data.get("requirement_id") or None
+        return {
+            "type": "confirm_bug",
+            "title": title,
+            "description": description,
+            "priority": priority,
+            "requirement_id": requirement_id,
         }
     elif action_type == "CREATE_REQUIREMENT":
         return await _execute_create_requirement(project_id, action_data)

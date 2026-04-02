@@ -58,6 +58,27 @@ async def list_tickets(
         t["child_ticket_count"] = child_count["count"] if child_count else 0
         t["status_label"] = STATUS_LABELS.get(t["status"], t["status"])
 
+        # 计算警告 / 错误标记（用于前端标题图标提示）
+        has_error = t["status"] in ("testing_failed", "acceptance_rejected", "cancelled")
+        has_warning = False
+        if not has_error:
+            # 从 result JSON 中检测测试警告（pass_rate < 100 但仍 passed）
+            result_raw = t.get("result")
+            if result_raw:
+                try:
+                    result_obj = json.loads(result_raw) if isinstance(result_raw, str) else result_raw
+                    test_result = result_obj.get("test_result", {})
+                    summary = test_result.get("summary", {}) if isinstance(test_result, dict) else {}
+                    if isinstance(summary, dict):
+                        pass_rate = summary.get("pass_rate", 100)
+                        issues = summary.get("issues", [])
+                        if pass_rate < 100 or issues:
+                            has_warning = True
+                except Exception:
+                    pass
+        t["has_warning"] = has_warning
+        t["has_error"] = has_error
+
     return {"tickets": tickets, "total": len(tickets)}
 
 

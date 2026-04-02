@@ -147,7 +147,7 @@ Thumbs.db
             "--author", "AI Dev System <ai@dev-system.local>",
         )
 
-        # 创建 develop 分支（从 master/main 分出来）
+        # 创建 develop 分支（从 main 分出来）
         await self._run_git(str(repo_dir), "branch", "develop")
         logger.info("🌿 develop 分支已创建")
 
@@ -218,11 +218,6 @@ Thumbs.db
 
         rc, _, err = await self._run_git(repo_dir, "push", remote, branch)
         if rc != 0:
-            # 如果 main 失败，尝试 master
-            if "main" in (branch or ""):
-                rc2, _, err2 = await self._run_git(repo_dir, "push", remote, "master")
-                if rc2 == 0:
-                    return True
             logger.error("git push failed: %s", err)
             return False
         return True
@@ -301,6 +296,30 @@ Thumbs.db
         rc, out, _ = await self._run_git(repo_dir, "rev-parse", "--abbrev-ref", "HEAD")
         return out if rc == 0 else "main"
 
+    async def get_primary_branch(self, project_id: str) -> str:
+        """检测仓库主分支名（main 或 master）
+
+        优先级：
+        1. 远程 HEAD 指向（origin/HEAD → origin/main 或 origin/master）
+        2. 本地是否存在 main / master 分支
+        3. 默认返回 main
+        """
+        branches = await self.list_branches(project_id)
+        # 检查远程 HEAD 指向
+        repo_dir = str(self._repo_path(project_id))
+        rc, out, _ = await self._run_git(repo_dir, "symbolic-ref", "refs/remotes/origin/HEAD")
+        if rc == 0 and out:
+            # out 形如 refs/remotes/origin/main
+            remote_primary = out.split("/")[-1]
+            if remote_primary in ("main", "master"):
+                return remote_primary
+        # 本地分支检测
+        if "main" in branches:
+            return "main"
+        if "master" in branches:
+            return "master"
+        return "main"
+
     async def push_branch(self, project_id: str, branch_name: str, remote: str = "origin") -> bool:
         """推送分支到远程"""
         repo_dir = str(self._repo_path(project_id))
@@ -346,12 +365,16 @@ Thumbs.db
             return []
         return [b.strip().lstrip("* ") for b in out.split("\n") if b.strip()]
 
-    async def ensure_branch(self, project_id: str, branch_name: str):
-        """确保分支存在，不存在则创建（从当前分支）"""
+    async def ensure_branch(self, project_id: str, branch_name: str, from_branch: str = None):
+        """确保分支存在，不存在则创建（从 from_branch 或当前分支）"""
         branches = await self.list_branches(project_id)
         if branch_name not in branches:
             repo_dir = str(self._repo_path(project_id))
-            await self._run_git(repo_dir, "branch", branch_name)
+            if from_branch and from_branch in branches:
+                # 从指定分支创建
+                await self._run_git(repo_dir, "branch", branch_name, from_branch)
+            else:
+                await self._run_git(repo_dir, "branch", branch_name)
             logger.info("🌿 分支 %s 已创建", branch_name)
 
     # ==================== 高级操作 ====================

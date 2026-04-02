@@ -3,6 +3,7 @@ AI 自动开发系统 - 数据库管理
 SQLite + aiosqlite 异步数据库操作
 """
 import aiosqlite
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
@@ -18,14 +19,17 @@ class Database:
     def __init__(self, db_path: str = None):
         self.db_path = db_path or settings.DB_PATH
         self._db: Optional[aiosqlite.Connection] = None
+        self._write_lock = asyncio.Lock()  # 防止并发写冲突
 
     async def connect(self):
         """连接数据库"""
-        self._db = await aiosqlite.connect(self.db_path)
+        # timeout=30 让 sqlite3 在锁冲突时最多等待 30 秒，彻底解决 database is locked
+        self._db = await aiosqlite.connect(self.db_path, timeout=30)
         self._db.row_factory = aiosqlite.Row
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.execute("PRAGMA foreign_keys=ON")
-        await self._db.execute("PRAGMA busy_timeout=5000")
+        await self._db.execute("PRAGMA busy_timeout=30000")  # 30s 等待
+        await self._db.execute("PRAGMA synchronous=NORMAL")  # WAL 模式下安全且更快
         await self._db.commit()
 
     async def disconnect(self):
@@ -36,8 +40,9 @@ class Database:
 
     async def init_tables(self):
         """初始化所有数据表"""
-        await self._db.executescript(SCHEMA_SQL)
-        await self._db.commit()
+        async with self._write_lock:
+            await self._db.executescript(SCHEMA_SQL)
+            await self._db.commit()
         # 自动迁移：检测并添加缺失的列
         await self._auto_migrate()
 
@@ -55,27 +60,32 @@ class Database:
             ("tickets", "verification_date", "TEXT"),
             ("tickets", "verification_notes", "TEXT"),
             ("chat_messages", "images_json", "TEXT"),  # 聊天图片文件路径列表 JSON
+            ("bugs", "fix_notes", "TEXT"),
+            ("bugs", "version_id", "TEXT"),
+            ("bugs", "ticket_id", "TEXT"),
         ]
-        for table, column, col_def in migrations:
-            cursor = await self._db.execute(f"PRAGMA table_info({table})")
-            columns = [row[1] for row in await cursor.fetchall()]
-            if column not in columns:
-                await self._db.execute(
-                    f"ALTER TABLE {table} ADD COLUMN {column} {col_def}"
-                )
-                logger.info("数据库迁移: 已添加列 %s.%s (%s)", table, column, col_def)
-        await self._db.commit()
+        async with self._write_lock:
+            for table, column, col_def in migrations:
+                cursor = await self._db.execute(f"PRAGMA table_info({table})")
+                columns = [row[1] for row in await cursor.fetchall()]
+                if column not in columns:
+                    await self._db.execute(
+                        f"ALTER TABLE {table} ADD COLUMN {column} {col_def}"
+                    )
+                    logger.info("数据库迁移: 已添加列 %s.%s (%s)", table, column, col_def)
+            await self._db.commit()
 
     # ==================== 通用 CRUD ====================
 
     async def execute(self, sql: str, params: tuple = ()) -> aiosqlite.Cursor:
-        """执行 SQL"""
-        cursor = await self._db.execute(sql, params)
-        await self._db.commit()
-        return cursor
+        """执行 SQL（写操作加锁）"""
+        async with self._write_lock:
+            cursor = await self._db.execute(sql, params)
+            await self._db.commit()
+            return cursor
 
     async def fetch_one(self, sql: str, params: tuple = ()) -> Optional[Dict]:
-        """查询单条"""
+        """查询单条（读操作不加锁）"""
         cursor = await self._db.execute(sql, params)
         row = await cursor.fetchone()
         if row:
@@ -83,7 +93,7 @@ class Database:
         return None
 
     async def fetch_all(self, sql: str, params: tuple = ()) -> List[Dict]:
-        """查询多条"""
+        """查询多条（读操作不加锁）"""
         cursor = await self._db.execute(sql, params)
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
@@ -93,23 +103,26 @@ class Database:
         columns = ", ".join(data.keys())
         placeholders = ", ".join(["?"] * len(data))
         sql = f"INSERT INTO {table} ({columns}) VALUES ({placeholders})"
-        await self._db.execute(sql, tuple(data.values()))
-        await self._db.commit()
+        async with self._write_lock:
+            await self._db.execute(sql, tuple(data.values()))
+            await self._db.commit()
         return data.get("id", "")
 
     async def update(self, table: str, data: Dict[str, Any], where: str, params: tuple = ()) -> int:
         """更新数据"""
         set_clause = ", ".join([f"{k} = ?" for k in data.keys()])
         sql = f"UPDATE {table} SET {set_clause} WHERE {where}"
-        cursor = await self._db.execute(sql, tuple(data.values()) + params)
-        await self._db.commit()
+        async with self._write_lock:
+            cursor = await self._db.execute(sql, tuple(data.values()) + params)
+            await self._db.commit()
         return cursor.rowcount
 
     async def delete(self, table: str, where: str, params: tuple = ()) -> int:
         """删除数据"""
         sql = f"DELETE FROM {table} WHERE {where}"
-        cursor = await self._db.execute(sql, tuple(params))
-        await self._db.commit()
+        async with self._write_lock:
+            cursor = await self._db.execute(sql, tuple(params))
+            await self._db.commit()
         return cursor.rowcount
 
 
@@ -308,6 +321,24 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 );
 
 -- ============================================================
+-- BUG 表
+-- ============================================================
+CREATE TABLE IF NOT EXISTS bugs (
+    id              TEXT PRIMARY KEY,
+    project_id      TEXT NOT NULL REFERENCES projects(id),
+    requirement_id  TEXT REFERENCES requirements(id),
+    title           TEXT NOT NULL,
+    description     TEXT NOT NULL,
+    priority        TEXT NOT NULL DEFAULT 'medium',
+    status          TEXT NOT NULL DEFAULT 'open',
+    version_id      TEXT,
+    fix_notes       TEXT,
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL,
+    fixed_at        TEXT
+);
+
+-- ============================================================
 -- CI/CD 构建记录表
 -- ============================================================
 CREATE TABLE IF NOT EXISTS ci_builds (
@@ -371,6 +402,9 @@ CREATE INDEX IF NOT EXISTS idx_ci_builds_project ON ci_builds(project_id);
 CREATE INDEX IF NOT EXISTS idx_ci_builds_status ON ci_builds(status);
 CREATE INDEX IF NOT EXISTS idx_ci_builds_type ON ci_builds(build_type);
 CREATE INDEX IF NOT EXISTS idx_project_environments_project ON project_environments(project_id);
+CREATE INDEX IF NOT EXISTS idx_bugs_project ON bugs(project_id);
+CREATE INDEX IF NOT EXISTS idx_bugs_status ON bugs(status);
+CREATE INDEX IF NOT EXISTS idx_bugs_requirement ON bugs(requirement_id);
 """
 
 

@@ -390,6 +390,8 @@ async def get_requirement_pipeline(project_id: str, req_id: str):
         "icon": "📋",
         "status": a_status,
         "jobs": analysis_jobs,
+        "has_warning": False,
+        "has_error": False,
     })
 
     # 阶段 2-5: 每个阶段一个 Agent Job，子任务为各工单
@@ -455,6 +457,8 @@ async def get_requirement_pipeline(project_id: str, req_id: str):
                 "icon": icon,
                 "status": m_status,
                 "jobs": merge_jobs,
+                "has_warning": False,
+                "has_error": False,
             })
             continue
 
@@ -536,11 +540,29 @@ async def get_requirement_pipeline(project_id: str, req_id: str):
                 if ts in ("done", "running", "failed"):
                     t_duration = calc_duration(t.get("started_at"), t.get("completed_at"))
 
+                # 检测该工单在此阶段是否有警告 / 错误
+                sub_has_error = t["status"] in ("testing_failed", "acceptance_rejected", "cancelled")
+                sub_has_warning = False
+                if not sub_has_error:
+                    result_raw = t.get("result")
+                    if result_raw:
+                        try:
+                            result_obj = json.loads(result_raw) if isinstance(result_raw, str) else result_raw
+                            test_res = result_obj.get("test_result", {})
+                            summ = test_res.get("summary", {}) if isinstance(test_res, dict) else {}
+                            if isinstance(summ, dict):
+                                if summ.get("pass_rate", 100) < 100 or summ.get("issues"):
+                                    sub_has_warning = True
+                        except Exception:
+                            pass
+
                 job_subtasks.append({
                     "title": t["title"],
                     "status": st_status,
                     "duration": t_duration,
                     "ticket_id": t["id"],
+                    "has_warning": sub_has_warning,
+                    "has_error": sub_has_error,
                 })
 
             jobs = [{
@@ -556,6 +578,8 @@ async def get_requirement_pipeline(project_id: str, req_id: str):
                 "ticket_id": active_tickets[0]["id"] if len(active_tickets) == 1 else None,
                 "ticket_title": active_tickets[0]["title"] if len(active_tickets) == 1 else f"{len(active_tickets)} 个工单",
                 "ticket_status": active_tickets[0]["status"] if len(active_tickets) == 1 else None,
+                "has_warning": any(s.get("has_warning") for s in job_subtasks),
+                "has_error": any(s.get("has_error") for s in job_subtasks),
             }]
         elif req_status not in ("submitted",):
             # 没有工单但需求已进入分析，生成占位 Job
@@ -582,6 +606,8 @@ async def get_requirement_pipeline(project_id: str, req_id: str):
             "icon": icon,
             "status": s_status,
             "jobs": jobs,
+            "has_warning": any(j.get("has_warning") for j in jobs),
+            "has_error": any(j.get("has_error") for j in jobs),
         })
 
     # 获取该需求的日志

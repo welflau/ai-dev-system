@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI 自动开发系统</title>
-    <link rel="stylesheet" href="/static/styles.css?v=0.12.2">
+    <link rel="stylesheet" href="/static/styles.css?v=0.13.0">
     <!-- highlight.js 语法高亮 -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
@@ -39,6 +39,7 @@
             <div class="page-header">
                 <h1>我的项目</h1>
                 <div class="page-header-actions">
+                    <button class="btn btn-ghost" onclick="showGlobalKnowledgeModal()">📚 全局知识库</button>
                     <button class="btn btn-secondary" onclick="showImportProjectModal()">📥 导入现有工程</button>
                     <button class="btn btn-primary" onclick="showCreateProjectModal()">+ 新建项目</button>
                 </div>
@@ -80,6 +81,9 @@
                         <a class="nav-item" data-tab="roadmap" onclick="switchTab('roadmap')">
                             🗺️ Roadmap
                         </a>
+                        <a class="nav-item" data-tab="bugs" onclick="switchTab('bugs')">
+                            🐛 BUG 列表
+                        </a>
                         <a class="nav-item" data-tab="repo" onclick="switchTab('repo')">
                             📂 仓库文件
                         </a>
@@ -116,6 +120,9 @@
                             <a class="nav-item nav-sub-item" data-tab="settings-agents" onclick="switchTab('settings-agents')">
                                 <span class="nav-item-icon">🤖</span> Agent 配置
                             </a>
+                            <a class="nav-item nav-sub-item" data-tab="settings-knowledge" onclick="switchTab('settings-knowledge')">
+                                <span class="nav-item-icon">📚</span> 知识库
+                            </a>
                             <a class="nav-item nav-sub-item" data-tab="settings-danger" onclick="switchTab('settings-danger')">
                                 <span class="nav-item-icon">⚠️</span> 高级设置
                             </a>
@@ -124,6 +131,9 @@
                     <div class="sidebar-footer">
                         <button class="btn btn-accent btn-block" onclick="showCreateRequirementModal()">
                             + 提交需求
+                        </button>
+                        <button class="btn btn-danger btn-block" style="margin-top:6px;" onclick="showCreateBugModal()">
+                            🐛 上报 BUG
                         </button>
                     </div>
                 </aside>
@@ -286,6 +296,26 @@
                         <!-- 列表视图 -->
                         <div class="roadmap-list-container" id="roadmapListContainer" style="display:none;">
                             <div class="empty-state"><div class="emoji">📋</div><p>加载中...</p></div>
+                        </div>
+                    </div>
+
+                    <!-- Tab: BUG 列表 -->
+                    <div id="tab-bugs" class="tab-content">
+                        <div class="page-header">
+                            <h2>🐛 BUG 列表</h2>
+                            <div class="header-actions">
+                                <select id="bugStatusFilter" class="form-select" onchange="loadBugs()" style="width:120px;">
+                                    <option value="">全部状态</option>
+                                    <option value="open">待处理</option>
+                                    <option value="in_dev">修复中</option>
+                                    <option value="in_test">测试中</option>
+                                    <option value="fixed">已修复</option>
+                                </select>
+                                <button class="btn btn-primary" onclick="showCreateBugModal()">+ 上报 BUG</button>
+                            </div>
+                        </div>
+                        <div id="bugList" class="bug-list">
+                            <div class="empty-state"><div class="emoji">🐛</div><p>暂无 BUG</p></div>
                         </div>
                     </div>
 
@@ -548,6 +578,62 @@
                                     <div style="text-align:center; padding:20px; color:var(--text-muted); font-size:13px;">加载中...</div>
                                 </div>
                             </div>
+
+                            <!-- Tool Use 开关 -->
+                            <div class="settings-card" style="margin-top:16px;">
+                                <h3 class="settings-card-title">🔧 Agent 技能系统（Tool Use）</h3>
+                                <p class="settings-description" style="margin:8px 0 14px;">
+                                    开启后，DevAgent 将进入 Agentic 模式：LLM 通过调用
+                                    <code>read_file</code>、<code>write_file</code>、<code>list_files</code>、<code>run_command</code>
+                                    等工具迭代完成开发任务，代码质量更高但耗时更长。
+                                </p>
+                                <div style="display:flex; align-items:center; gap:12px;">
+                                    <label class="toggle-switch" title="需要 LLM 支持 function calling">
+                                        <input type="checkbox" id="agentToolsToggle" onchange="toggleAgentTools(this.checked)">
+                                        <span class="toggle-slider"></span>
+                                    </label>
+                                    <span id="agentToolsLabel" style="font-size:13px; color:var(--text-muted);">已关闭（One-shot 模式）</span>
+                                </div>
+                                <p style="margin-top:10px; font-size:12px; color:var(--text-muted);">
+                                    ⚠️ 需要后端设置环境变量 <code>ENABLE_AGENT_TOOLS=true</code> 方可生效，此开关仅作状态展示。
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tab: 设置 - 知识库 -->
+                    <div id="tab-settings-knowledge" class="tab-content">
+                        <div class="settings-page">
+                            <div class="settings-page-header">
+                                <h2>📚 知识库</h2>
+                                <p class="settings-description" style="margin-top:4px;">
+                                    知识库文档会自动注入到每次 AI 开发的上下文中，帮助 Agent 遵守编码规范、了解业务规则。
+                                </p>
+                            </div>
+
+                            <!-- 全局知识库 -->
+                            <div class="settings-card">
+                                <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
+                                    <div>
+                                        <h3 class="settings-card-title">🌐 全局知识库</h3>
+                                        <p class="settings-description" style="margin-top:2px;">所有项目共享，适合放编码规范、技术栈说明、安全规则等。（上限 2000 字符/次注入）</p>
+                                    </div>
+                                    <button class="btn btn-sm btn-primary" onclick="showKnowledgeEditor('global', null)">+ 新建文档</button>
+                                </div>
+                                <div id="globalDocsList"><div class="empty-state-sm">加载中...</div></div>
+                            </div>
+
+                            <!-- 项目知识库 -->
+                            <div class="settings-card" style="margin-top:16px;">
+                                <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
+                                    <div>
+                                        <h3 class="settings-card-title">📁 项目知识库</h3>
+                                        <p class="settings-description" style="margin-top:2px;">仅当前项目使用，适合放接口文档、业务规则、数据库设计等。（上限 3000 字符/次注入）</p>
+                                    </div>
+                                    <button class="btn btn-sm btn-primary" onclick="showKnowledgeEditor('project', currentProjectId)">+ 新建文档</button>
+                                </div>
+                                <div id="projectDocsList"><div class="empty-state-sm">加载中...</div></div>
+                            </div>
                         </div>
                     </div>
 
@@ -718,12 +804,38 @@
 
     <!-- ==================== 模态框：新建项目 ==================== -->
     <div class="modal-overlay" id="createProjectModal">
-        <div class="modal">
+        <div class="modal modal-lg">
             <div class="modal-header">
                 <h3>新建项目</h3>
                 <button class="btn-icon" onclick="closeModal('createProjectModal')">&times;</button>
             </div>
             <div class="modal-body">
+
+                <!-- 文档导入区域 -->
+                <div class="doc-import-section">
+                    <div class="doc-import-header">
+                        <span class="doc-import-title">📄 导入文档（可选）</span>
+                        <span class="doc-import-hint">上传需求文档，AI 自动填写项目信息</span>
+                    </div>
+                    <div class="doc-drop-zone" id="docDropZone"
+                         onclick="document.getElementById('docFileInput').click()"
+                         ondragover="handleDocDragOver(event)"
+                         ondragleave="handleDocDragLeave(event)"
+                         ondrop="handleDocDrop(event)">
+                        <div class="doc-drop-icon">📂</div>
+                        <div class="doc-drop-text">点击或拖拽文档到此处</div>
+                        <div class="doc-drop-sub">支持 .md .txt .json .yaml .html 等文本格式，可多选</div>
+                    </div>
+                    <input type="file" id="docFileInput" multiple accept=".txt,.md,.markdown,.rst,.json,.yaml,.yml,.toml,.xml,.html,.htm,.csv,.log,.conf,.ini" style="display:none" onchange="handleDocFileSelect(event)">
+                    <div class="doc-file-list" id="docFileList" style="display:none"></div>
+                    <div class="doc-analyze-bar" id="docAnalyzeBar" style="display:none">
+                        <button class="btn btn-sm btn-accent" id="docAnalyzeBtn" onclick="analyzeProjectDocs()">
+                            <span id="docAnalyzeBtnText">✨ AI 分析文档并填写信息</span>
+                        </button>
+                        <button class="btn btn-sm" onclick="clearProjectDocs()">清除文档</button>
+                    </div>
+                </div>
+
                 <div class="form-group">
                     <label>项目名称 <span class="required">*</span></label>
                     <input type="text" id="projectName" placeholder="输入项目名称">
@@ -874,6 +986,47 @@
             <div class="modal-footer">
                 <button class="btn" onclick="closeModal('createRequirementModal')">取消</button>
                 <button class="btn btn-primary" onclick="submitRequirement()">提交并拆单</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== 模态框：上报 BUG ==================== -->
+    <div class="modal-overlay" id="createBugModal">
+        <div class="modal modal-lg">
+            <div class="modal-header">
+                <h3>🐛 上报 BUG</h3>
+                <button class="btn-icon" onclick="closeModal('createBugModal')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>BUG 标题 <span class="required">*</span></label>
+                    <input type="text" id="bugTitle" placeholder="简洁描述 BUG 现象，如：登录页点击提交后白屏">
+                </div>
+                <div class="form-group">
+                    <label>复现步骤 / 现象描述 <span class="required">*</span></label>
+                    <textarea id="bugDescription" placeholder="1. 操作步骤&#10;2. 预期结果&#10;3. 实际结果&#10;4. 错误截图/日志（可选）" rows="6"></textarea>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>优先级</label>
+                        <select id="bugPriority">
+                            <option value="low">🟢 低</option>
+                            <option value="medium">🟡 中</option>
+                            <option value="high" selected>🟠 高</option>
+                            <option value="critical">🔴 紧急</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>关联需求（可选）</label>
+                        <select id="bugRequirementId">
+                            <option value="">不关联</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" onclick="closeModal('createBugModal')">取消</button>
+                <button class="btn btn-primary" onclick="submitBug()">上报 BUG</button>
             </div>
         </div>
     </div>

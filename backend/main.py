@@ -143,6 +143,8 @@ from api.chat import global_chat_router
 from api.roadmap import router as roadmap_router
 from api.milestones import router as milestones_router
 from api.ci import router as ci_router
+from api.bugs import router as bugs_router
+from api.knowledge import router as knowledge_router
 
 app.include_router(projects_router)
 app.include_router(requirements_router)
@@ -153,6 +155,8 @@ app.include_router(global_chat_router)
 app.include_router(roadmap_router)
 app.include_router(milestones_router)
 app.include_router(ci_router)
+app.include_router(bugs_router)
+app.include_router(knowledge_router)
 
 
 # ==================== 系统端点 ====================
@@ -248,6 +252,47 @@ async def llm_test():
     return result
 
 
+# ==================== Agent 技能系统开关 ====================
+
+@app.get("/api/settings/agent-tools")
+async def get_agent_tools_status():
+    """获取 Agent Tool Use 开关状态"""
+    import os
+    enabled = os.getenv("ENABLE_AGENT_TOOLS", "false").lower() in ("1", "true", "yes")
+    return {"enabled": enabled}
+
+
+@app.post("/api/settings/agent-tools")
+async def set_agent_tools_status(body: dict):
+    """运行时切换 Agent Tool Use 开关（写入 .env 持久化）"""
+    import os
+    from config import BASE_DIR
+    enabled = bool(body.get("enabled", False))
+    os.environ["ENABLE_AGENT_TOOLS"] = "true" if enabled else "false"
+
+    # 持久化到 .env
+    env_path = BASE_DIR / ".env"
+    key = "ENABLE_AGENT_TOOLS"
+    value = "true" if enabled else "false"
+    if env_path.exists():
+        lines = env_path.read_text(encoding="utf-8").splitlines()
+        found = False
+        new_lines = []
+        for line in lines:
+            if line.startswith(f"{key}=") or line.startswith(f"{key} ="):
+                new_lines.append(f"{key}={value}")
+                found = True
+            else:
+                new_lines.append(line)
+        if not found:
+            new_lines.append(f"{key}={value}")
+        env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+    else:
+        env_path.write_text(f"{key}={value}\n", encoding="utf-8")
+
+    return {"enabled": enabled, "message": f"Agent Tool Use {'已开启' if enabled else '已关闭'}"}
+
+
 @app.get("/api/filesystem/available-paths")
 async def get_available_paths():
     """获取常用的本地路径列表"""
@@ -312,6 +357,11 @@ from config import BASE_DIR as _BASE_DIR
 _chat_images_dir = _BASE_DIR / "chat_images"
 _chat_images_dir.mkdir(exist_ok=True)
 app.mount("/chat-images", StaticFiles(directory=str(_chat_images_dir)), name="chat-images")
+
+# 挂载截图目录（测试报告截图访问）
+_screenshots_dir = _BASE_DIR / "screenshots"
+_screenshots_dir.mkdir(exist_ok=True)
+app.mount("/screenshots", StaticFiles(directory=str(_screenshots_dir)), name="screenshots")
 
 
 @app.get("/app")

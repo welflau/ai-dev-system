@@ -237,12 +237,221 @@ class TicketOrchestrator:
             logger.info("🔄 轮询拾取工单: %s「%s」状态=%s", ticket_id[:12], t["title"][:20], status)
             asyncio.create_task(self._poll_process(project_id, ticket_id))
 
+        # ── 自动拾取 open BUG ──
+        # 扫描所有项目中 status=open 且未关联 ticket 的 BUG，自动触发修复工作流
+        await self._poll_open_bugs()
+
+    async def _poll_open_bugs(self):
+        """扫描所有 status=open 的 BUG，自动触发修复（无需手动点击）"""
+        open_bugs = await db.fetch_all(
+            """SELECT b.*, p.id as proj_id
+               FROM bugs b
+               JOIN projects p ON b.project_id = p.id
+               WHERE b.status = 'open'
+               ORDER BY
+                 CASE b.priority WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END,
+                 b.created_at ASC""",
+        )
+        for bug in open_bugs:
+            bug_id = bug["id"]
+            project_id = bug["project_id"]
+
+            # 如果已关联 ticket 且 ticket 在处理中，跳过
+            if bug.get("ticket_id") and bug["ticket_id"] in self._processing:
+                continue
+
+            # 检查是否已有 in_dev/in_test 状态（避免重复触发）
+            # （理论上 status=open 就是未触发，但做双重保险）
+            if bug.get("ticket_id"):
+                ticket = await db.fetch_one(
+                    "SELECT status FROM tickets WHERE id = ?", (bug["ticket_id"],)
+                )
+                if ticket and ticket["status"] not in (
+                    TicketStatus.TESTING_DONE.value, TicketStatus.DEPLOYED.value
+                ):
+                    # ticket 还在流转中，不重复触发
+                    continue
+
+            logger.info("🐛 轮询自动拾取 BUG: %s「%s」[%s]",
+                        bug_id[:12], bug["title"][:30], bug.get("priority", "medium"))
+
+            # 先更新 bugs 表状态为 in_dev，防止下次轮询重复触发
+            await db.update("bugs", {
+                "status": "in_dev",
+                "updated_at": now_iso(),
+            }, "id = ?", (bug_id,))
+
+            # 异步触发修复工作流
+            asyncio.create_task(self.run_bug_fix(project_id, bug_id))
+
     async def _poll_process(self, project_id: str, ticket_id: str):
         """轮询触发的工单处理（带锁保护）"""
         try:
             await self.process_ticket(project_id, ticket_id)
         finally:
             self._processing.discard(ticket_id)
+
+    # ==================== BUG 修复工作流 ====================
+
+    async def run_bug_fix(self, project_id: str, bug_id: str):
+        """BUG 修复工作流：创建真实 ticket（type=bug）直接从 DevAgent 开始，
+        跳过 PM / 架构设计，复用 process_ticket() 正常流转到 TestAgent。
+        """
+        bug = await db.fetch_one("SELECT * FROM bugs WHERE id = ?", (bug_id,))
+        if not bug:
+            logger.error("BUG 不存在: %s", bug_id)
+            return
+
+        logger.info("━" * 60)
+        logger.info("🐛 开始修复 BUG: %s「%s」", bug_id[:12], bug["title"])
+        logger.info("━" * 60)
+
+        # ── 如果已有关联 ticket，不重复创建 ──
+        existing_ticket = await db.fetch_one(
+            "SELECT id FROM tickets WHERE id = (SELECT ticket_id FROM bugs WHERE id = ?)",
+            (bug_id,),
+        ) if bug.get("ticket_id") else None
+
+        if existing_ticket:
+            ticket_id = existing_ticket["id"]
+            logger.info("BUG 已关联 ticket: %s，直接触发流转", ticket_id)
+        else:
+            # ── 创建真实 ticket（type=bug，从 architecture_done 开始） ──
+            ticket_id = generate_id("TK")
+            now = now_iso()
+            # BUG 需要一个 requirement_id；若无关联需求则创建一个"BUG 修复"虚拟需求
+            req_id = bug.get("requirement_id")
+            if not req_id:
+                req_id = generate_id("REQ")
+                await db.insert("requirements", {
+                    "id": req_id,
+                    "project_id": project_id,
+                    "title": f"[BUG修复] {bug['title']}",
+                    "description": bug["description"],
+                    "priority": bug.get("priority", "medium"),
+                    "status": "in_progress",
+                    "submitter": "system",
+                    "prd_content": None,
+                    "module": "other",
+                    "tags": "bug",
+                    "estimated_hours": None,
+                    "actual_hours": None,
+                    "milestone_id": None,
+                    "estimated_days": None,
+                    "created_at": now,
+                    "updated_at": now,
+                    "completed_at": None,
+                })
+                await db.update("bugs", {"requirement_id": req_id, "updated_at": now}, "id = ?", (bug_id,))
+
+            docs_prefix = f"docs/bugs/{bug_id[-6:]}/"
+            await db.insert("tickets", {
+                "id": ticket_id,
+                "requirement_id": req_id,
+                "project_id": project_id,
+                "parent_ticket_id": None,
+                "title": f"[BUG] {bug['title']}",
+                "description": bug["description"],
+                "type": "bug",
+                "module": "other",
+                "priority": 1 if bug.get("priority") == "critical" else 2 if bug.get("priority") == "high" else 3,
+                "sort_order": 0,
+                # 直接跳到 architecture_done，让轮询器从 DevAgent 开始
+                "status": TicketStatus.ARCHITECTURE_DONE.value,
+                "assigned_agent": None,
+                "current_owner": "dev",
+                "estimated_hours": 2,
+                "actual_hours": None,
+                "estimated_completion": None,
+                "dependencies": "[]",
+                "result": None,
+                "created_at": now,
+                "updated_at": now,
+                "started_at": now,
+                "completed_at": None,
+            })
+
+            # 把 ticket_id 写回 bugs 表（需要先做迁移列）
+            try:
+                await db.update("bugs", {"ticket_id": ticket_id, "updated_at": now}, "id = ?", (bug_id,))
+            except Exception:
+                pass  # 列可能还没迁移，不影响主流程
+
+            logger.info("🎫 BUG ticket 已创建: %s → 从 architecture_done 开始流转", ticket_id)
+            await event_manager.publish_to_project(
+                project_id, "ticket_created",
+                {"ticket_id": ticket_id, "title": f"[BUG] {bug['title']}", "type": "bug"},
+            )
+
+        # ── 轮询器会自动拾取 architecture_done 状态的 ticket 并交给 DevAgent ──
+        # 这里只需触发一次立即处理（不用等下一个轮询周期）
+        self._processing.add(ticket_id)
+        asyncio.create_task(self._run_bug_ticket(project_id, ticket_id, bug_id))
+
+    async def _run_bug_ticket(self, project_id: str, ticket_id: str, bug_id: str):
+        """执行 BUG ticket 流转，并在测试完成后同步更新 bugs 表状态"""
+        try:
+            await self.process_ticket(project_id, ticket_id)
+            # process_ticket 完成后读取 ticket 最终状态
+            ticket = await db.fetch_one("SELECT status FROM tickets WHERE id = ?", (ticket_id,))
+            final_status = ticket["status"] if ticket else ""
+            if final_status == TicketStatus.TESTING_DONE.value:
+                version_id = await self._find_current_version(project_id)
+                fixed_at = now_iso()
+                await db.update("bugs", {
+                    "status": "fixed",
+                    "fixed_at": fixed_at,
+                    "version_id": version_id,
+                    "updated_at": fixed_at,
+                }, "id = ?", (bug_id,))
+                bug = await db.fetch_one("SELECT title FROM bugs WHERE id = ?", (bug_id,))
+                await event_manager.publish_to_project(
+                    project_id, "bug_fixed",
+                    {"bug_id": bug_id, "title": bug["title"] if bug else "", "version_id": version_id},
+                )
+                await event_manager.publish_to_project(
+                    project_id, "bug_status_changed",
+                    {"bug_id": bug_id, "status": "fixed"},
+                )
+            elif final_status in (TicketStatus.TESTING_FAILED.value, ""):
+                await db.update("bugs", {
+                    "status": "open", "updated_at": now_iso(),
+                }, "id = ?", (bug_id,))
+                await event_manager.publish_to_project(
+                    project_id, "bug_status_changed",
+                    {"bug_id": bug_id, "status": "open", "reason": "测试未通过"},
+                )
+            else:
+                # 开发完成，等待测试
+                await db.update("bugs", {
+                    "status": "in_test", "updated_at": now_iso(),
+                }, "id = ?", (bug_id,))
+                await event_manager.publish_to_project(
+                    project_id, "bug_status_changed",
+                    {"bug_id": bug_id, "status": "in_test"},
+                )
+        finally:
+            self._processing.discard(ticket_id)
+
+    async def _find_current_version(self, project_id: str) -> Optional[str]:
+        """查找当前进行中的版本（milestone），用于 BUG 并入版本"""
+        # 优先找 in_progress 里程碑
+        milestone = await db.fetch_one(
+            """SELECT id, title FROM milestones
+               WHERE project_id = ? AND status = 'in_progress'
+               ORDER BY planned_start ASC LIMIT 1""",
+            (project_id,),
+        )
+        if milestone:
+            return milestone["id"]
+        # 没有进行中的，用最近的 planned 里程碑
+        milestone = await db.fetch_one(
+            """SELECT id, title FROM milestones
+               WHERE project_id = ? AND status = 'planned'
+               ORDER BY planned_start ASC LIMIT 1""",
+            (project_id,),
+        )
+        return milestone["id"] if milestone else None
 
     # ==================== 需求处理 ====================
 
@@ -501,13 +710,12 @@ class TicketOrchestrator:
                 req_short = requirement_id[-6:]
                 branch_name = f"feat/{date_str}-req-{req_short}"
 
-                # 先切回 main/master 再创建分支
-                current = await git_manager.get_current_branch(project_id)
-                if current != "main" and current != "master":
-                    # 尝试切回 main，失败就用 master
-                    ok = await git_manager.switch_branch(project_id, "main")
-                    if not ok:
-                        await git_manager.switch_branch(project_id, "master")
+                # 确保 develop 存在，从主分支（main 或 master）拉取新分支
+                primary_branch = await git_manager.get_primary_branch(project_id)
+                await git_manager.ensure_branch(project_id, "develop", from_branch=primary_branch)
+                ok = await git_manager.switch_branch(project_id, "develop")
+                if not ok:
+                    logger.warning("切换到 develop 失败，将在默认分支上开发")
 
                 ok = await git_manager.create_branch(project_id, branch_name)
                 if ok:
@@ -764,8 +972,11 @@ class TicketOrchestrator:
         current_ticket = await db.fetch_one("SELECT * FROM tickets WHERE id = ?", (ticket_id,))
         current_status = current_ticket["status"] if current_ticket else ticket["status"]
 
-        # 保存执行结果
+        # 保存执行结果（先 pop 二进制媒体文件，避免 JSON 序列化失败）
+        media_files_temp = result.pop("_media_files", None)  # 暂存，稍后写入 Git
         result_json = json.dumps(result, ensure_ascii=False)
+        if media_files_temp:
+            result["_media_files"] = media_files_temp  # 写完 JSON 后放回，供 _handle_git_files 使用
 
         # === 通用：处理 Agent 返回的 files，写入 Git 仓库 ===
         git_result = await self._handle_git_files(
@@ -914,6 +1125,21 @@ class TicketOrchestrator:
                     "metadata": json.dumps({"git": git_result}) if git_result else None,
                     "created_at": now_iso(),
                 })
+
+                # 保存截图 artifact
+                for ss in result.get("test_result", {}).get("screenshots", []):
+                    await db.insert("artifacts", {
+                        "id": generate_id("ART"),
+                        "project_id": project_id,
+                        "requirement_id": requirement_id,
+                        "ticket_id": ticket_id,
+                        "type": "screenshot",
+                        "name": ss["label"],
+                        "path": ss["url"],
+                        "content": None,
+                        "metadata": json.dumps({"url": ss["url"]}),
+                        "created_at": now_iso(),
+                    })
 
                 # 测试通过 → 触发后续依赖工单
                 await self._trigger_dependents(project_id, ticket_id)
@@ -1238,8 +1464,9 @@ class TicketOrchestrator:
                 req_data = await db.fetch_one("SELECT branch_name FROM requirements WHERE id = ?", (requirement_id,))
                 branch_name = req_data.get("branch_name") if req_data else None
                 if branch_name:
-                    # 确保 develop 分支存在
-                    await git_manager.ensure_branch(project_id, "develop")
+                    # 确保 develop 分支存在（从主分支创建）
+                    primary_branch = await git_manager.get_primary_branch(project_id)
+                    await git_manager.ensure_branch(project_id, "develop", from_branch=primary_branch)
 
                     # 合并 feat → develop
                     merge_result = await git_manager.merge_branch(
@@ -1260,6 +1487,41 @@ class TicketOrchestrator:
                              "requirement_id": requirement_id},
                         )
                         logger.info("🔀 分支合并完成: %s → develop", branch_name)
+
+                        # === develop → 主分支：检查该项目所有需求是否都已完成，若是则合入主分支 ===
+                        try:
+                            all_reqs = await db.fetch_all(
+                                "SELECT status FROM requirements WHERE project_id = ? AND status != 'cancelled'",
+                                (project_id,),
+                            )
+                            all_reqs_done = all_reqs and all(
+                                r["status"] == RequirementStatus.COMPLETED.value for r in all_reqs
+                            )
+                            if all_reqs_done:
+                                primary_branch = await git_manager.get_primary_branch(project_id)
+                                main_merge = await git_manager.merge_branch(
+                                    project_id, "develop", primary_branch,
+                                    message=f"merge: develop → {primary_branch} (所有需求已完成，发布版本)"
+                                )
+                                if main_merge["success"]:
+                                    await self._log(
+                                        project_id, requirement_id, None, "Orchestrator",
+                                        "complete", "completed", "completed",
+                                        f"develop 已合并到 {primary_branch} (commit: {main_merge.get('commit', '?')})"
+                                    )
+                                    await event_manager.publish_to_project(
+                                        project_id,
+                                        "branch_merged",
+                                        {"source": "develop", "target": primary_branch,
+                                         "commit": main_merge.get("commit"),
+                                         "requirement_id": requirement_id},
+                                    )
+                                    logger.info("🚀 develop → %s 合并完成，项目版本已更新", primary_branch)
+                                else:
+                                    logger.warning("develop → %s 合并失败: %s", primary_branch, main_merge.get("error"))
+                        except Exception as main_merge_err:
+                            logger.warning("develop → 主分支合并失败(非致命): %s", main_merge_err)
+
                     else:
                         await self._log(
                             project_id, requirement_id, None, "Orchestrator",
@@ -1514,6 +1776,7 @@ class TicketOrchestrator:
             "ticket_id": ticket["id"],
             "ticket_title": ticket["title"],
             "ticket_description": ticket.get("description", ""),
+            "ticket_type": ticket.get("type", "feature"),  # 'bug' or 'feature'
             "module": ticket.get("module", "other"),
             "project_id": project_id,
             "requirement_description": requirement["description"] if requirement else "",
@@ -1523,6 +1786,17 @@ class TicketOrchestrator:
             "src_prefix": f"src/{ticket.get('module', 'other')}/",
             "tests_prefix": f"tests/{ticket['requirement_id'][-6:]}/",
         }
+
+        # 若为 BUG ticket，附加 BUG 原始信息
+        if ticket.get("type") == "bug":
+            bug = await db.fetch_one(
+                "SELECT * FROM bugs WHERE ticket_id = ?", (ticket["id"],)
+            )
+            if bug:
+                context["bug_id"] = bug["id"]
+                context["bug_priority"] = bug.get("priority", "medium")
+                context["bug_description"] = bug.get("description", "")
+                context["bug_fix_notes"] = bug.get("fix_notes") or ""
 
         # 添加之前阶段的产物
         for art in prev_results:
@@ -1571,7 +1845,45 @@ class TicketOrchestrator:
         except Exception:
             context["sibling_tickets"] = []
 
+        # === 知识库上下文（全局 + 项目级）===
+        try:
+            context["knowledge_docs"] = self._load_knowledge_docs(project_id)
+        except Exception as e:
+            logger.warning("读取知识库失败: %s", e)
+            context["knowledge_docs"] = ""
+
         return context
+
+    def _load_knowledge_docs(self, project_id: str, global_limit: int = 2000, project_limit: int = 3000) -> str:
+        """读取全局知识库 + 项目知识库文档，返回拼接文本"""
+        from config import BASE_DIR
+        parts = []
+
+        def _read_docs(docs_dir: Path, label: str, char_limit: int):
+            if not docs_dir.exists():
+                return
+            files = sorted(docs_dir.glob("*.md"), key=lambda f: f.name)
+            total = 0
+            section_parts = []
+            for f in files:
+                if total >= char_limit:
+                    break
+                try:
+                    text = f.read_text(encoding="utf-8", errors="replace")
+                    remaining = char_limit - total
+                    if len(text) > remaining:
+                        text = text[:remaining] + "\n...(truncated)"
+                    section_parts.append(f"### {f.name}\n{text}")
+                    total += len(text)
+                except Exception:
+                    pass
+            if section_parts:
+                parts.append(f"## {label}\n" + "\n\n".join(section_parts))
+
+        _read_docs(BASE_DIR / "docs", "全局规范", global_limit)
+        _read_docs(BASE_DIR / "projects" / project_id / "docs", "项目文档", project_limit)
+
+        return "\n\n".join(parts)
 
     async def _collect_existing_code(self, project_id: str) -> Dict:
         """收集仓库中已有的代码文件（用于增量开发上下文）"""

@@ -20,11 +20,11 @@ logger = logging.getLogger("ci_pipeline")
 
 # 调度间隔
 DEVELOP_CHECK_INTERVAL = 60       # 每 60 秒检查 develop 是否有新提交
-MASTER_BUILD_INTERVAL = 86400     # master 构建间隔 24 小时
+MASTER_BUILD_INTERVAL = 86400     # main 构建间隔 24 小时
 
 
 class CIPipelineRunner:
-    """CI/CD Pipeline 运行器 — 管理 develop/master 构建和部署"""
+    """CI/CD Pipeline 运行器 — 管理 develop/main 构建和部署"""
 
     def __init__(self):
         # 项目级锁：防止同一项目并发构建导致 git 冲突
@@ -96,11 +96,11 @@ class CIPipelineRunner:
         await self.trigger_build(project_id, CIBuildType.DEVELOP_BUILD.value, trigger="auto")
 
     async def _check_master_build(self, project_id: str):
-        """检查 master 是否需要每日构建"""
+        """检查 main 是否需要每日构建"""
         if not git_manager.repo_exists(project_id):
             return
 
-        # 查询最近的 master 构建（不论成功失败）
+        # 查询最近的 main 构建（不论成功失败）
         last_build = await db.fetch_one(
             "SELECT created_at FROM ci_builds "
             "WHERE project_id = ? AND build_type = 'master_build' "
@@ -116,10 +116,8 @@ class CIPipelineRunner:
             except Exception:
                 pass
 
-        # 检查 master 是否有内容（是否有过 develop→master 合并）
-        head = await self._get_branch_head(project_id, "master")
-        if not head:
-            head = await self._get_branch_head(project_id, "main")
+        # 检查 main 是否有内容（是否有过 develop→main 合并）
+        head = await self._get_branch_head(project_id, "main")
         if not head:
             return
 
@@ -132,14 +130,17 @@ class CIPipelineRunner:
         if running:
             return
 
-        logger.info("Master 每日构建触发 (项目: %s)", project_id[:8])
+        logger.info("Main 每日构建触发 (项目: %s)", project_id[:8])
         await self.trigger_build(project_id, CIBuildType.MASTER_BUILD.value, trigger="auto")
 
     # ==================== 构建触发 ====================
 
     async def trigger_build(self, project_id: str, build_type: str, trigger: str = "manual") -> Dict:
         """触发一次构建，返回 build 记录"""
-        branch = "master" if build_type in (CIBuildType.MASTER_BUILD.value, CIBuildType.DEPLOY.value) else "develop"
+        if build_type in (CIBuildType.MASTER_BUILD.value, CIBuildType.DEPLOY.value):
+            branch = await git_manager.get_primary_branch(project_id)
+        else:
+            branch = "develop"
 
         build_id = generate_id("ci-")
         await db.insert("ci_builds", {
@@ -187,8 +188,11 @@ class CIPipelineRunner:
                 await self._fail_build(build_id, project_id, str(e))
 
     async def _run_develop_build(self, build_id: str, project_id: str):
-        """Develop 构建: 语法检查 + 冒烟测试 → 通过则合入 master"""
+        """Develop 构建: 语法检查 + 冒烟测试 → 通过则合入主分支（main 或 master）"""
         logs = []
+
+        # 检测主分支名（main 或 master）
+        primary = await git_manager.get_primary_branch(project_id)
 
         # 切到 develop 分支
         await git_manager.switch_branch(project_id, "develop")
@@ -216,15 +220,15 @@ class CIPipelineRunner:
                                    "Develop 构建失败: 语法检查或冒烟测试未通过", logs)
             return
 
-        # 构建通过 → 合入 master
-        logs.append({"step": "merge", "msg": "构建通过，开始合并 develop → master"})
+        # 构建通过 → 合入主分支
+        logs.append({"step": "merge", "msg": f"构建通过，开始合并 develop → {primary}"})
 
-        # 确保 master 分支存在
-        await git_manager.ensure_branch(project_id, "master")
+        # 确保主分支存在
+        await git_manager.ensure_branch(project_id, primary)
 
         merge_result = await git_manager.merge_branch(
-            project_id, "develop", "master",
-            message=f"ci: develop → master (build {build_id[:12]})"
+            project_id, "develop", primary,
+            message=f"ci: develop → {primary} (build {build_id[:12]})"
         )
 
         if merge_result["success"]:
@@ -249,11 +253,11 @@ class CIPipelineRunner:
             await event_manager.publish_to_project(project_id, "ci_branch_merged", {
                 "build_id": build_id,
                 "source": "develop",
-                "target": "master",
+                "target": primary,
                 "commit": merge_commit,
             })
 
-            logger.info("Develop 构建成功: %s → master (commit: %s)", build_id[:8], merge_commit)
+            logger.info("Develop 构建成功: %s → %s (commit: %s)", build_id[:8], primary, merge_commit)
 
             # 自动部署 test 环境
             try:
@@ -266,21 +270,20 @@ class CIPipelineRunner:
         else:
             error = merge_result.get("error", "合并冲突")
             logs.append({"step": "merge", "msg": f"合并失败: {error}", "passed": False})
-            await self._fail_build(build_id, project_id, f"合并到 master 失败: {error}", logs)
+            await self._fail_build(build_id, project_id, f"合并到 {primary} 失败: {error}", logs)
 
     async def _run_master_build(self, build_id: str, project_id: str):
-        """Master 构建: 集成测试 → 通过则自动触发部署"""
+        """主分支构建: 集成测试 → 通过则自动触发部署"""
         logs = []
 
-        # 切到 master
-        ok = await git_manager.switch_branch(project_id, "master")
-        if not ok:
-            ok = await git_manager.switch_branch(project_id, "main")
-        head = await self._get_branch_head(project_id, "master")
-        if not head:
-            head = await self._get_branch_head(project_id, "main")
+        # 检测主分支名（main 或 master）
+        primary = await git_manager.get_primary_branch(project_id)
+
+        # 切到主分支
+        ok = await git_manager.switch_branch(project_id, primary)
+        head = await self._get_branch_head(project_id, primary)
         await db.update("ci_builds", {"commit_hash": head}, "id = ?", (build_id,))
-        logs.append({"step": "checkout", "msg": f"切换到 master 分支 (HEAD: {head})"})
+        logs.append({"step": "checkout", "msg": f"切换到 {primary} 分支 (HEAD: {head})"})
 
         # 模拟集成测试
         repo_path = str(git_manager._repo_path(project_id))
@@ -298,11 +301,11 @@ class CIPipelineRunner:
 
         if not all_passed:
             await self._fail_build(build_id, project_id,
-                                   "Master 构建失败: 集成测试未通过", logs)
+                                   f"{primary} 构建失败: 集成测试未通过", logs)
             return
 
         # 构建通过
-        logs.append({"step": "complete", "msg": "Master 构建 + 测试全部通过", "passed": True})
+        logs.append({"step": "complete", "msg": f"{primary} 构建 + 测试全部通过", "passed": True})
 
         await db.update("ci_builds", {
             "status": CIBuildStatus.SUCCESS.value,
@@ -314,10 +317,10 @@ class CIPipelineRunner:
             "build_id": build_id,
             "build_type": "master_build",
             "status": "success",
-            "branch": "master",
+            "branch": primary,
         })
 
-        logger.info("Master 构建成功: %s, 自动触发部署", build_id[:8])
+        logger.info("%s 构建成功: %s, 自动触发部署", primary, build_id[:8])
 
         # 自动触发部署
         await self.trigger_build(project_id, CIBuildType.DEPLOY.value, trigger="auto")
@@ -335,10 +338,11 @@ class CIPipelineRunner:
         """部署: 生成部署配置 + 模拟部署"""
         logs = []
 
+        # 检测主分支名
+        primary = await git_manager.get_primary_branch(project_id)
+
         repo_path = str(git_manager._repo_path(project_id))
-        head = await self._get_branch_head(project_id, "master")
-        if not head:
-            head = await self._get_branch_head(project_id, "main")
+        head = await self._get_branch_head(project_id, primary)
         await db.update("ci_builds", {"commit_hash": head}, "id = ?", (build_id,))
 
         logs.append({"step": "prepare", "msg": f"准备部署 (commit: {head})"})
@@ -398,7 +402,7 @@ class CIPipelineRunner:
             "build_id": build_id,
             "build_type": "deploy",
             "status": "success",
-            "branch": "master",
+            "branch": primary,
         })
 
         logger.info("部署成功: %s (项目: %s)", build_id[:8], project_name)

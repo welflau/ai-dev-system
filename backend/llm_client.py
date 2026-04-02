@@ -442,6 +442,247 @@ class LLMClient:
             logger.error("   ❌ [%s] JSON 解析失败! 原始响应: %s", ctx, _truncate(cleaned, 300))
             return None
 
+    # ==================== Tool Use / Agentic Loop ====================
+
+    async def chat_with_tools(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: List[Dict[str, Any]],
+        tool_executor,          # SkillExecutor 实例，需实现 async execute(name, input) -> str
+        max_rounds: int = 10,
+        temperature: float = 0.3,
+        max_tokens: int = 16000,
+        system: str = "",
+    ) -> Dict[str, Any]:
+        """
+        带工具的 ReAct 循环。
+        - tools: Anthropic 格式的 tool schema 列表
+        - tool_executor: 实现 execute(tool_name, tool_input) -> str 的对象
+        - 返回 {"messages": [...], "rounds": n, "finished": bool}
+        """
+        ctx = _ctx_label()
+
+        if not self.is_configured:
+            logger.warning("[%s] LLM 未配置，跳过 tool use", ctx)
+            return {"messages": messages, "rounds": 0, "finished": False}
+
+        history = list(messages)  # 不修改原始列表
+
+        for round_no in range(max_rounds):
+            logger.info("🔄 [%s] Tool-use 第 %d 轮", ctx, round_no + 1)
+
+            if self.api_format == "anthropic":
+                response = await self._call_anthropic_tools(
+                    history, tools, system, temperature, max_tokens
+                )
+            else:
+                response = await self._call_openai_tools(
+                    history, tools, system, temperature, max_tokens
+                )
+
+            if response is None:
+                logger.error("[%s] Tool-use 第 %d 轮 LLM 调用失败", ctx, round_no + 1)
+                break
+
+            stop_reason = response.get("stop_reason") or response.get("finish_reason", "")
+            content = response.get("content", [])
+
+            # 把本轮 assistant 回复加入历史
+            history.append({"role": "assistant", "content": content})
+
+            # 检查是否需要调用工具
+            tool_calls = [b for b in content if isinstance(b, dict) and b.get("type") == "tool_use"]
+            if not tool_calls:
+                # 没有 tool_use block —— 模型直接给出最终回复
+                logger.info("✅ [%s] Tool-use 完成（无工具调用），%d 轮", ctx, round_no + 1)
+                return {"messages": history, "rounds": round_no + 1, "finished": True}
+
+            # 执行所有工具调用，收集结果
+            tool_results = []
+            should_finish = False
+            for block in tool_calls:
+                tool_name = block.get("name", "")
+                tool_input = block.get("input", {})
+                tool_use_id = block.get("id", f"tu_{round_no}")
+
+                logger.info("🔧 [%s] 调用工具: %s, 参数: %s", ctx, tool_name,
+                            str(tool_input)[:200])
+
+                result_text = await tool_executor.execute(tool_name, tool_input)
+                logger.info("   └─ 结果: %s", result_text[:200])
+
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tool_use_id,
+                    "content": result_text,
+                })
+
+                if tool_name == "finish":
+                    should_finish = True
+
+            # 工具结果作为 user 消息追加
+            history.append({"role": "user", "content": tool_results})
+
+            if should_finish:
+                logger.info("✅ [%s] finish 工具调用，结束循环", ctx)
+                return {"messages": history, "rounds": round_no + 1, "finished": True}
+
+        logger.warning("[%s] Tool-use 达到最大轮数 %d，强制结束", ctx, max_rounds)
+        return {"messages": history, "rounds": max_rounds, "finished": False}
+
+    async def _call_anthropic_tools(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: List[Dict[str, Any]],
+        system: str,
+        temperature: float,
+        max_tokens: int,
+    ) -> Optional[Dict[str, Any]]:
+        """Anthropic tool use 调用，返回原始 API response dict"""
+        url = f"{self.base_url}/v1/messages"
+
+        # 过滤 system 消息到 system 字段
+        sys_parts = [system] if system else []
+        user_messages = []
+        for msg in messages:
+            if msg["role"] == "system":
+                c = msg["content"]
+                sys_parts.append(c if isinstance(c, str) else str(c))
+            else:
+                user_messages.append(msg)
+
+        if not user_messages:
+            user_messages = [{"role": "user", "content": "请开始工作。"}]
+
+        payload: Dict[str, Any] = {
+            "model": self.model,
+            "messages": user_messages,
+            "max_tokens": max_tokens,
+            "tools": tools,
+        }
+        if temperature is not None:
+            payload["temperature"] = temperature
+        if sys_parts:
+            payload["system"] = "\n".join(sys_parts).strip()
+
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                resp = await client.post(
+                    url, headers=self._anthropic_headers(), json=payload
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                return {
+                    "stop_reason": data.get("stop_reason", ""),
+                    "content": data.get("content", []),
+                }
+        except Exception as e:
+            logger.error("Anthropic tool-use 调用失败: %s", e)
+            return None
+
+    async def _call_openai_tools(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: List[Dict[str, Any]],
+        system: str,
+        temperature: float,
+        max_tokens: int,
+    ) -> Optional[Dict[str, Any]]:
+        """OpenAI function calling，将结果转换为 Anthropic 格式的 content blocks"""
+        from agents.skills import schemas_to_openai_tools
+
+        url = f"{self.base_url}/chat/completions"
+
+        oai_messages = []
+        if system:
+            oai_messages.append({"role": "system", "content": system})
+
+        # 将 Anthropic-style history 转回 OpenAI-style
+        for msg in messages:
+            role = msg["role"]
+            content = msg["content"]
+            if role == "system":
+                oai_messages.append({"role": "system", "content": content if isinstance(content, str) else str(content)})
+            elif role == "assistant":
+                if isinstance(content, list):
+                    # content blocks → tool_calls / text
+                    text_parts = []
+                    tool_calls_oai = []
+                    for block in content:
+                        if block.get("type") == "text":
+                            text_parts.append(block.get("text", ""))
+                        elif block.get("type") == "tool_use":
+                            tool_calls_oai.append({
+                                "id": block.get("id", ""),
+                                "type": "function",
+                                "function": {
+                                    "name": block.get("name", ""),
+                                    "arguments": json.dumps(block.get("input", {})),
+                                },
+                            })
+                    oai_msg: Dict[str, Any] = {"role": "assistant", "content": " ".join(text_parts) or None}
+                    if tool_calls_oai:
+                        oai_msg["tool_calls"] = tool_calls_oai
+                    oai_messages.append(oai_msg)
+                else:
+                    oai_messages.append({"role": "assistant", "content": content})
+            elif role == "user":
+                if isinstance(content, list):
+                    # tool_result blocks
+                    for block in content:
+                        if block.get("type") == "tool_result":
+                            oai_messages.append({
+                                "role": "tool",
+                                "tool_call_id": block.get("tool_use_id", ""),
+                                "content": block.get("content", ""),
+                            })
+                else:
+                    oai_messages.append({"role": "user", "content": content})
+
+        payload: Dict[str, Any] = {
+            "model": self.model,
+            "messages": oai_messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "tools": schemas_to_openai_tools(tools),
+            "tool_choice": "auto",
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                resp = await client.post(
+                    url, headers=self._openai_headers(), json=payload
+                )
+                resp.raise_for_status()
+                data = resp.json()
+
+            choice = data["choices"][0]
+            oai_msg = choice["message"]
+            finish_reason = choice.get("finish_reason", "")
+
+            # 转换为 Anthropic content blocks 格式（统一内部表示）
+            content_blocks: List[Dict[str, Any]] = []
+            if oai_msg.get("content"):
+                content_blocks.append({"type": "text", "text": oai_msg["content"]})
+            for tc in (oai_msg.get("tool_calls") or []):
+                fn = tc.get("function", {})
+                try:
+                    inp = json.loads(fn.get("arguments", "{}"))
+                except Exception:
+                    inp = {}
+                content_blocks.append({
+                    "type": "tool_use",
+                    "id": tc.get("id", ""),
+                    "name": fn.get("name", ""),
+                    "input": inp,
+                })
+
+            stop_reason = "tool_use" if oai_msg.get("tool_calls") else "end_turn"
+            return {"stop_reason": stop_reason, "content": content_blocks}
+        except Exception as e:
+            logger.error("OpenAI tool-use 调用失败: %s", e)
+            return None
+
     async def test_connection(self) -> Dict[str, Any]:
         """测试 LLM 连接"""
         if not self.is_configured:

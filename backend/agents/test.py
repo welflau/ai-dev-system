@@ -74,6 +74,7 @@ class TestAgent(BaseAgent):
 
         # === Phase 3: 功能测试（按类型分发）===
         func_test = await self._functional_test(project_id, module, dev_result)
+        screenshots = func_test.pop("screenshots", [])  # 取出截图列表，不进入 phases
         results["phases"].append({"name": "功能测试", **func_test})
         total_checks += func_test["total"]
         total_passed += func_test["passed_count"]
@@ -102,6 +103,7 @@ class TestAgent(BaseAgent):
             "all_passed": all_passed,
             "issues": all_issues,
         }
+        results["screenshots"] = screenshots
 
         # === 生成测试报告 + 测试文件 ===
         report = self._generate_report(title, module, strategy, results)
@@ -246,6 +248,31 @@ class TestAgent(BaseAgent):
         else:
             return await self._test_generic(project_id)
 
+    async def _take_screenshots(self, project_id: str, port: int) -> list:
+        """用 Playwright 无头浏览器截图，返回 [{"filename": "...", "label": "...", "url": "..."}]"""
+        from config import BASE_DIR
+        screenshots_dir = BASE_DIR / "screenshots"
+        screenshots_dir.mkdir(exist_ok=True)
+
+        results = []
+        try:
+            from playwright.async_api import async_playwright
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=True)
+                page = await browser.new_page(viewport={"width": 1280, "height": 800})
+
+                # 截图 1：首页
+                await page.goto(f"http://localhost:{port}/", wait_until="networkidle", timeout=15000)
+                fname = f"{project_id}_{int(time.time())}_home.png"
+                await page.screenshot(path=str(screenshots_dir / fname), full_page=True)
+                results.append({"filename": fname, "label": "首页截图", "url": f"/screenshots/{fname}"})
+
+                await browser.close()
+        except Exception as e:
+            logger.warning("Playwright 截图失败（跳过）: %s", e)
+
+        return results
+
     async def _test_frontend(self, project_id: str) -> Dict:
         """前端功能测试：启动 HTTP server → 请求 → 检查内容"""
         from git_manager import git_manager
@@ -265,6 +292,7 @@ class TestAgent(BaseAgent):
         # 启动临时 HTTP server
         port = 19000 + (abs(hash(project_id)) % 500)
         proc = None
+        screenshots = []
         try:
             proc = subprocess.Popen(
                 ["python", "-m", "http.server", str(port)],
@@ -341,6 +369,9 @@ class TestAgent(BaseAgent):
                 checks.append({"name": "HTTP 可访问", "passed": False, "detail": f"请求失败: {str(e)[:80]}"})
                 issues.append(f"HTTP 请求失败: {str(e)[:80]}")
 
+            # 截图（在 HTTP server 仍运行时执行）
+            screenshots = await self._take_screenshots(project_id, port)
+
         finally:
             if proc:
                 proc.terminate()
@@ -349,7 +380,7 @@ class TestAgent(BaseAgent):
                 except Exception:
                     proc.kill()
 
-        return {"total": total, "passed_count": passed, "checks": checks, "issues": issues}
+        return {"total": total, "passed_count": passed, "checks": checks, "issues": issues, "screenshots": screenshots}
 
     async def _test_backend(self, project_id: str) -> Dict:
         """后端功能测试：Python import + 语法"""
@@ -624,6 +655,13 @@ def test_no_syntax_errors():
             # pytest 输出
             if phase.get("output"):
                 md += f"<details><summary>执行日志</summary>\n\n```\n{phase['output'][:1500]}\n```\n</details>\n\n"
+
+        # 页面截图
+        screenshots = results.get("screenshots", [])
+        if screenshots:
+            md += "\n---\n\n## 页面截图\n\n"
+            for s in screenshots:
+                md += f"### {s['label']}\n\n![{s['label']}]({s['url']})\n\n"
 
         # 问题清单
         all_issues = summary.get("issues", [])

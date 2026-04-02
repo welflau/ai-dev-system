@@ -30,6 +30,7 @@ class ArchitectAgent(BaseAgent):
         existing_files = context.get("existing_files", [])
         existing_code = context.get("existing_code", {})
         sibling_tickets = context.get("sibling_tickets", [])
+        knowledge_docs = context.get("knowledge_docs", "")
 
         # 构建已有代码上下文
         existing_section = ""
@@ -46,8 +47,11 @@ class ArchitectAgent(BaseAgent):
         if sibling_tickets:
             existing_section += "\n## 同需求其他工单\n" + "\n".join(f"  - [{t['status']}] {t['title']}" for t in sibling_tickets) + "\n"
 
-        prompt = f"""你是一位资深软件架构师。请为以下任务设计**增量架构方案**。
+        # 知识库章节
+        knowledge_section = f"\n## 项目知识库（请严格遵守以下规范）\n{knowledge_docs}\n" if knowledge_docs else ""
 
+        prompt = f"""你是一位资深软件架构师。请为以下任务设计**增量架构方案**。
+{knowledge_section}
 ## 需求背景
 {requirement_description}
 

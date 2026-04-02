@@ -3,7 +3,8 @@ AI 自动开发系统 - 项目 API
 """
 import json
 import logging
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, UploadFile, File
+from typing import List
 from database import db
 from models import ProjectCreate, ProjectUpdate
 from utils import generate_id, now_iso
@@ -163,6 +164,137 @@ async def create_project(req: ProjectCreate):
         error_detail = traceback.format_exc()
         logger.error("创建项目失败:\n%s", error_detail)
         raise HTTPException(500, detail=f"创建项目失败: {str(e)}")
+
+
+@router.post("/analyze-docs")
+async def analyze_docs(files: List[UploadFile] = File(...)):
+    """读取上传的文档，用 LLM 提取项目信息"""
+    import chardet
+
+    MAX_TOTAL_CHARS = 60000   # 送给 LLM 的最大字符数
+    SUPPORTED_EXT = {".txt", ".md", ".markdown", ".rst", ".csv",
+                     ".json", ".yaml", ".yml", ".toml", ".xml",
+                     ".html", ".htm", ".log", ".conf", ".ini"}
+
+    texts = []
+    for f in files:
+        raw = await f.read()
+        if not raw:
+            continue
+        # 只处理文本文件
+        ext = ("." + f.filename.rsplit(".", 1)[-1].lower()) if "." in f.filename else ""
+        # 如果不在白名单则跳过（防止二进制文件乱码）
+        # 但也允许无扩展名或未知扩展名的纯文本，用 chardet 探测
+        detected = chardet.detect(raw[:4096]) if ext not in SUPPORTED_EXT else None
+        if detected and (detected.get("encoding") is None or detected.get("confidence", 0) < 0.5):
+            continue
+        encoding = detected["encoding"] if detected and detected.get("encoding") else "utf-8"
+        try:
+            text = raw.decode(encoding, errors="replace")
+        except Exception:
+            try:
+                text = raw.decode("utf-8", errors="replace")
+            except Exception:
+                continue
+        texts.append(f"=== {f.filename} ===\n{text[:20000]}")
+
+    if not texts:
+        raise HTTPException(400, "未能读取任何有效文档，请上传文本格式文件（.md/.txt/.json 等）")
+
+    combined = "\n\n".join(texts)[:MAX_TOTAL_CHARS]
+
+    from llm_client import llm_client
+
+    prompt = f"""请根据以下文档内容，提取并生成一个软件项目的基础信息。
+
+文档内容：
+{combined}
+
+请以纯 JSON 格式返回，包含以下字段（如文档未提及则留空字符串）：
+{{
+  "name": "项目名称（简短有力，建议英文或中文均可）",
+  "description": "项目描述（100-300字，说明项目目标、核心功能、应用场景）",
+  "tech_stack": "技术栈（逗号分隔，如 Python, FastAPI, React, PostgreSQL）",
+  "core_features": ["核心功能点1", "核心功能点2", "核心功能点3"],
+  "target_users": "目标用户群体",
+  "project_type": "项目类型（如 Web应用/移动端/API服务/桌面应用/数据分析/其他）"
+}}"""
+
+    try:
+        result = await llm_client.chat_json(
+            [{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=2048,
+        )
+    except Exception as e:
+        logger.error("LLM 分析文档失败: %s", e)
+        raise HTTPException(500, f"AI 分析失败: {str(e)}")
+
+    if not isinstance(result, dict):
+        raise HTTPException(500, "AI 返回格式异常，请重试")
+
+    return {
+        "name": result.get("name", ""),
+        "description": result.get("description", ""),
+        "tech_stack": result.get("tech_stack", ""),
+        "core_features": result.get("core_features", []),
+        "target_users": result.get("target_users", ""),
+        "project_type": result.get("project_type", ""),
+        "doc_count": len(files),
+    }
+
+
+
+@router.post("/{project_id}/upload-docs")
+async def upload_docs_to_project(project_id: str, files: List[UploadFile] = File(...)):
+    """将文档写入项目仓库 docs/Design/ 目录并提交"""
+    project = await db.fetch_one("SELECT * FROM projects WHERE id = ?", (project_id,))
+    if not project:
+        raise HTTPException(404, "项目不存在")
+
+    _ensure_git_path(project)
+
+    saved = {}
+    for f in files:
+        raw = await f.read()
+        if not raw:
+            continue
+        # 以 UTF-8 解码（文本文件），失败则 latin-1 兜底
+        try:
+            content = raw.decode("utf-8", errors="replace")
+        except Exception:
+            content = raw.decode("latin-1", errors="replace")
+        # 写入 docs/Design/{原始文件名}
+        dest_path = f"docs/Design/{f.filename}"
+        saved[dest_path] = content
+
+    if not saved:
+        raise HTTPException(400, "没有可写入的文件")
+
+    # 写入 Git 仓库
+    await git_manager.write_files(project_id, saved)
+
+    # Git commit
+    file_names = ", ".join(f.filename for f in files if f.filename)
+    commit_hash = await git_manager.commit(
+        project_id,
+        message=f"docs: 导入设计文档到 docs/Design/ ({file_names})",
+        author="AI Dev System",
+    )
+
+    # 尝试推送（失败不影响主流程）
+    push_ok = False
+    try:
+        push_ok = await git_manager.push(project_id)
+    except Exception as e:
+        logger.warning("上传文档后推送失败: %s", e)
+
+    return {
+        "saved": list(saved.keys()),
+        "commit": commit_hash,
+        "push_success": push_ok,
+        "count": len(saved),
+    }
 
 
 @router.get("")

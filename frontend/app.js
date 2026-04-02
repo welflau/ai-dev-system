@@ -551,10 +551,12 @@ function switchTab(tab) {
     if (tab === 'agents') startAgentMonitor();
     if (tab === 'cicd') loadCICD();
     if (tab === 'logs') loadLogs();
+    if (tab === 'bugs') loadBugs();
     if (tab === 'settings-general') loadSettingsGeneral();
     if (tab === 'settings-repo') loadSettingsRepo();
     if (tab === 'settings-envs') loadEnvironments();
-    if (tab === 'settings-agents') loadAgentList();
+    if (tab === 'settings-agents') { loadAgentList(); loadAgentToolsStatus(); }
+    if (tab === 'settings-knowledge') loadKnowledgeDocs();
 }
 
 // ==================== 工单子菜单 ====================
@@ -951,7 +953,141 @@ function showCreateProjectModal() {
     document.getElementById('projectTechStack').value = '';
     document.getElementById('projectGitRemote').value = '';
     document.getElementById('projectLocalPath').value = '';
+    clearProjectDocs();
     openModal('createProjectModal');
+}
+
+// ==================== 新建项目 - 文档导入 ====================
+
+/** 当前待分析的文件列表 */
+let _projectDocFiles = [];
+
+function handleDocDragOver(e) {
+    e.preventDefault();
+    document.getElementById('docDropZone').classList.add('drag-over');
+}
+
+function handleDocDragLeave(e) {
+    document.getElementById('docDropZone').classList.remove('drag-over');
+}
+
+function handleDocDrop(e) {
+    e.preventDefault();
+    document.getElementById('docDropZone').classList.remove('drag-over');
+    const files = Array.from(e.dataTransfer.files);
+    addProjectDocFiles(files);
+}
+
+function handleDocFileSelect(e) {
+    const files = Array.from(e.target.files);
+    addProjectDocFiles(files);
+    // 重置 input，允许重复选同一文件
+    e.target.value = '';
+}
+
+function addProjectDocFiles(files) {
+    const TEXT_EXTS = new Set(['.txt','.md','.markdown','.rst','.json','.yaml','.yml',
+                                '.toml','.xml','.html','.htm','.csv','.log','.conf','.ini']);
+    for (const f of files) {
+        const ext = f.name.includes('.') ? '.' + f.name.split('.').pop().toLowerCase() : '';
+        if (!TEXT_EXTS.has(ext) && ext !== '') {
+            showToast(`${f.name} 格式不支持，请上传文本文档`, 'warning');
+            continue;
+        }
+        if (_projectDocFiles.find(x => x.name === f.name && x.size === f.size)) continue; // 去重
+        _projectDocFiles.push(f);
+    }
+    renderProjectDocList();
+}
+
+function renderProjectDocList() {
+    const listEl = document.getElementById('docFileList');
+    const barEl  = document.getElementById('docAnalyzeBar');
+    const btnEl  = document.getElementById('docAnalyzeBtnText');
+
+    if (_projectDocFiles.length === 0) {
+        listEl.style.display = 'none';
+        barEl.style.display  = 'none';
+        return;
+    }
+
+    listEl.style.display = 'flex';
+    barEl.style.display  = 'flex';
+    btnEl.textContent    = `✨ AI 分析 ${_projectDocFiles.length} 个文档并填写信息`;
+
+    listEl.innerHTML = _projectDocFiles.map((f, i) => `
+        <div class="doc-file-tag" title="${escHtml(f.name)}">
+            <span>📄 ${escHtml(f.name)}</span>
+            <span class="doc-file-tag-remove" onclick="removeProjectDoc(${i})">×</span>
+        </div>
+    `).join('');
+}
+
+function removeProjectDoc(idx) {
+    _projectDocFiles.splice(idx, 1);
+    renderProjectDocList();
+}
+
+function clearProjectDocs() {
+    _projectDocFiles = [];
+    renderProjectDocList();
+    // 移除已填充徽章
+    const badge = document.getElementById('docFilledBadge');
+    if (badge) badge.remove();
+}
+
+async function analyzeProjectDocs() {
+    if (_projectDocFiles.length === 0) return;
+
+    const btn     = document.getElementById('docAnalyzeBtn');
+    const btnText = document.getElementById('docAnalyzeBtnText');
+    btn.disabled  = true;
+    btnText.innerHTML = '<span class="doc-analyzing"><span class="loading-spinner"></span> AI 正在分析文档…</span>';
+
+    try {
+        const formData = new FormData();
+        for (const f of _projectDocFiles) {
+            formData.append('files', f);
+        }
+
+        const resp = await fetch('/api/projects/analyze-docs', {
+            method: 'POST',
+            body: formData,
+        });
+
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+            throw new Error(err.detail || resp.statusText);
+        }
+
+        const data = await resp.json();
+
+        // 填充到表单（仅覆盖空字段，避免覆盖用户已填写的内容）
+        const nameEl  = document.getElementById('projectName');
+        const descEl  = document.getElementById('projectDescription');
+        const techEl  = document.getElementById('projectTechStack');
+
+        if (!nameEl.value.trim()  && data.name)        nameEl.value  = data.name;
+        if (!descEl.value.trim()  && data.description) descEl.value  = data.description;
+        if (!techEl.value.trim()  && data.tech_stack)  techEl.value  = data.tech_stack;
+
+        // 显示已填充徽章
+        let badge = document.getElementById('docFilledBadge');
+        if (!badge) {
+            badge = document.createElement('span');
+            badge.id = 'docFilledBadge';
+            badge.className = 'doc-filled-badge';
+            document.getElementById('docAnalyzeBar').appendChild(badge);
+        }
+        badge.innerHTML = `✅ 已填充项目信息`;
+
+        showToast(`AI 已从 ${data.doc_count} 个文档提取项目信息`, 'success');
+    } catch (e) {
+        showToast(`分析失败: ${e.message}`, 'error');
+    } finally {
+        btn.disabled  = false;
+        btnText.textContent = `✨ AI 重新分析文档`;
+    }
 }
 
 async function createProject() {
@@ -984,13 +1120,40 @@ async function createProject() {
 
         closeModal('createProjectModal');
 
-        let message = `项目「${name}」创建成功`;
-        if (data.push_success) {
-            message += '，并已推送到远程仓库';
+        // 项目创建成功后，若有导入文档则上传到 docs/Design/
+        const docsToUpload = [..._projectDocFiles];
+        clearProjectDocs();
+
+        if (docsToUpload.length > 0) {
+            showToast(`项目「${name}」创建成功，正在保存文档到仓库…`, 'info');
+            try {
+                const formData = new FormData();
+                for (const f of docsToUpload) {
+                    formData.append('files', f);
+                }
+                const uploadResp = await fetch(`/api/projects/${data.id}/upload-docs`, {
+                    method: 'POST',
+                    body: formData,
+                });
+                if (uploadResp.ok) {
+                    const uploadData = await uploadResp.json();
+                    const pushNote = uploadData.push_success ? '，已推送到远程仓库' : '';
+                    showToast(`${uploadData.count} 个文档已保存到 docs/Design/${pushNote}`, 'success');
+                } else {
+                    showToast('文档保存失败，项目已创建成功', 'warning');
+                }
+            } catch (e) {
+                showToast('文档保存失败，项目已创建成功', 'warning');
+            }
         } else {
-            message += '（首次推送失败，请检查远程仓库权限）';
+            let message = `项目「${name}」创建成功`;
+            if (data.push_success) {
+                message += '，并已推送到远程仓库';
+            } else {
+                message += '（首次推送失败，请检查远程仓库权限）';
+            }
+            showToast(message, data.push_success ? 'success' : 'warning');
         }
-        showToast(message, data.push_success ? 'success' : 'warning');
 
         showProjectDetail(data.id);
     } catch (e) {
@@ -1275,11 +1438,11 @@ function renderTicketCard(t) {
     ).join('');
 
     return `
-        <div class="${cardClass}">
-            <div class="ticket-title" style="cursor:pointer;" onclick="openTicketDrawer('${t.id}')">${escHtml(t.title)}</div>
+        <div class="${cardClass}${t.type === 'bug' ? ' bug-ticket' : ''}">
+            <div class="ticket-title" style="cursor:pointer;" onclick="openTicketDrawer('${t.id}')">${t.type === 'bug' ? '<span class="bug-label">BUG</span>' : ''}${escHtml(t.title)}${t.has_error ? ' <span class="ticket-status-badge error" title="测试失败或被拒绝">✗</span>' : t.has_warning ? ' <span class="ticket-status-badge warning" title="测试有警告">⚠</span>' : ''}</div>
             <div class="ticket-meta">
                 ${t.module ? `<span class="tag tag-module">${escHtml(t.module)}</span>` : ''}
-                <span class="tag tag-type">${escHtml(t.type || 'feature')}</span>
+                <span class="tag tag-type${t.type === 'bug' ? ' tag-bug' : ''}">${escHtml(t.type || 'feature')}</span>
                 <span class="tag tag-priority-${t.priority}">${pLabel}</span>
                 ${t.assigned_agent ? `<span class="tag tag-agent">${escHtml(t.assigned_agent)}</span>` : ''}
             </div>
@@ -1481,8 +1644,34 @@ async function openTicketDrawer(ticketId) {
                         filesHtml += '</div>';
                     }
 
+                    const isScreenshot = a.type === 'screenshot';
+                    const imgHtml = isScreenshot && a.path
+                        ? `<div class="artifact-screenshot"><img src="${escHtml(a.path)}" alt="${escHtml(a.name)}" style="max-width:100%;border-radius:4px;margin-top:8px;cursor:pointer;" onclick="event.stopPropagation();window.open(this.src,'_blank')"></div>`
+                        : '';
+
+                    // 文件路径徽章（报告或有明确路径的产物）
+                    const pathBadge = (!isScreenshot && a.path)
+                        ? `<div style="margin-top:6px;" onclick="event.stopPropagation();">
+                               <span class="artifact-path-badge" title="${escHtml(a.path)}" onclick="event.stopPropagation();">
+                                   <span class="path-icon">📁</span>${escHtml(a.path)}
+                               </span>
+                           </div>`
+                        : '';
+
+                    // 可折叠内容块
+                    const rawContent = tryFormatJson(a.content);
+                    const contentBlockId = 'acb-' + a.id;
+                    const contentBlock = (!isScreenshot && rawContent)
+                        ? `<div class="collapsible-block" onclick="event.stopPropagation();" id="${contentBlockId}">
+                               <div class="collapsible-preview" onclick="toggleCollapsible('${contentBlockId}')">${escHtml(rawContent)}</div>
+                               <div class="collapsible-toggle" onclick="toggleCollapsible('${contentBlockId}')">
+                                   <span>展开查看</span><span class="toggle-arrow">▼</span>
+                               </div>
+                           </div>`
+                        : '';
+
                     return `
-                    <div class="artifact-card" onclick="toggleArtifactContent(this)">
+                    <div class="artifact-card" onclick="">
                         <div style="display:flex; align-items:center; gap:8px; font-size:13px;">
                             <span>${getArtifactIcon(a.type)}</span>
                             <span style="font-weight:500;">${escHtml(a.name || a.type)}</span>
@@ -1490,8 +1679,10 @@ async function openTicketDrawer(ticketId) {
                             ${commitHash ? `<span style="font-size:10px;color:var(--text-muted);font-family:monospace;">${escHtml(commitHash)}</span>` : ''}
                             <span style="font-size:11px; color:var(--text-muted); margin-left:auto;">${formatDate(a.created_at)}</span>
                         </div>
+                        ${pathBadge}
                         ${filesHtml}
-                        <div class="artifact-content" style="display:none; margin-top:8px; padding:8px; background:var(--bg); border-radius:4px; font-size:12px; color:var(--text-secondary); max-height:300px; overflow-y:auto; white-space:pre-wrap; word-break:break-all;">${escHtml(tryFormatJson(a.content))}</div>
+                        ${imgHtml}
+                        ${contentBlock}
                     </div>`;
                 }).join('')}
             </div>`;
@@ -1559,6 +1750,24 @@ function toggleArtifactContent(el) {
     const content = el.querySelector('.artifact-content');
     if (content) {
         content.style.display = content.style.display === 'none' ? 'block' : 'none';
+    }
+}
+
+function toggleCollapsible(blockId) {
+    const block = document.getElementById(blockId);
+    if (!block) return;
+    const preview = block.querySelector('.collapsible-preview');
+    const toggle = block.querySelector('.collapsible-toggle');
+    if (!preview || !toggle) return;
+    const isExpanded = preview.classList.contains('expanded');
+    if (isExpanded) {
+        preview.classList.remove('expanded');
+        toggle.classList.remove('expanded');
+        toggle.innerHTML = '<span>展开查看</span><span class="toggle-arrow">▼</span>';
+    } else {
+        preview.classList.add('expanded');
+        toggle.classList.add('expanded');
+        toggle.innerHTML = '<span>收起</span><span class="toggle-arrow">▼</span>';
     }
 }
 
@@ -2159,18 +2368,22 @@ function _renderTicketRow(t, isChild) {
     const parentAttr = isChild ? '' : (hasChildren ? ` data-parent-id="${t.id}"` : '');
 
     // 标题列：父工单有子工单时显示展开箭头
+    const bugLabel = t.type === 'bug' ? '<span class="bug-label">BUG</span>' : '';
+    const warnIcon = t.has_error ? '<span class="ticket-status-badge error" title="测试失败或被拒绝">✗</span>'
+                   : t.has_warning ? '<span class="ticket-status-badge warning" title="测试有警告">⚠</span>'
+                   : '';
     let titleHtml = '';
     if (!isChild && hasChildren) {
         titleHtml = `
             <span class="tl-expand-arrow" onclick="event.stopPropagation(); toggleTicketChildren('${t.id}', this)">▶</span>
-            <span class="tl-title-text">${escHtml(t.title)}</span>
+            ${bugLabel}<span class="tl-title-text">${escHtml(t.title)}</span>${warnIcon}
             <span class="tl-child-count-badge">${childCount}</span>`;
     } else if (isChild) {
         titleHtml = `
             <span class="tl-child-indent">└</span>
-            <span class="tl-title-text">${escHtml(t.title)}</span>`;
+            ${bugLabel}<span class="tl-title-text">${escHtml(t.title)}</span>${warnIcon}`;
     } else {
-        titleHtml = `<span class="tl-title-text">${escHtml(t.title)}</span>`;
+        titleHtml = `${bugLabel}<span class="tl-title-text">${escHtml(t.title)}</span>${warnIcon}`;
     }
     if (t.description && !isChild) {
         titleHtml += `<span class="tl-title-desc">${escHtml(t.description)}</span>`;
@@ -2206,7 +2419,7 @@ function _renderTicketRow(t, isChild) {
                     ${statusOptions}
                 </select>
             </td>
-            <td class="tl-col-type"><span class="tag tag-type" style="font-size:11px;">${escHtml(t.type || 'feature')}</span></td>
+            <td class="tl-col-type"><span class="tag tag-type${t.type === 'bug' ? ' tag-bug' : ''}" style="font-size:11px;">${escHtml(t.type || 'feature')}</span></td>
             <td class="tl-col-module">${escHtml(t.module || '-')}</td>
             <td class="tl-col-agent">${t.assigned_agent ? `<span class="tag tag-agent" style="font-size:11px;">${escHtml(t.assigned_agent)}</span>` : '<span style="color:var(--text-muted);">未分配</span>'}</td>
             <td class="tl-col-priority"><span class="tag tag-priority-${t.priority}" style="font-size:11px;">${pLabel}</span></td>
@@ -2322,8 +2535,8 @@ function renderTicketListBoard(container, tickets) {
             group.tickets.forEach(t => {
                 const pLabel = {1:'P1',2:'P2',3:'P3',4:'P4',5:'P5'}[t.priority] || `P${t.priority}`;
                 html += `
-                <div class="tl-board-card" onclick="openTicketDrawer('${t.id}')">
-                    <div class="tl-board-card-title">${escHtml(t.title)}</div>
+                <div class="tl-board-card${t.type === 'bug' ? ' bug-ticket' : ''}" onclick="openTicketDrawer('${t.id}')">
+                    <div class="tl-board-card-title">${t.type === 'bug' ? '<span class="bug-label">BUG</span>' : ''}${escHtml(t.title)}${t.has_error ? ' <span class="ticket-status-badge error" title="测试失败或被拒绝">✗</span>' : t.has_warning ? ' <span class="ticket-status-badge warning" title="测试有警告">⚠</span>' : ''}</div>
                     <div class="tl-board-card-meta">
                         <span class="tag tag-priority-${t.priority}" style="font-size:10px;">${pLabel}</span>
                         ${t.module ? `<span class="tag tag-module" style="font-size:10px;">${escHtml(t.module)}</span>` : ''}
@@ -2430,9 +2643,16 @@ function renderPipelineStages(container, stages) {
         if (cls === 'done') dotContent = '✓';
         if (cls === 'failed') dotContent = '✗';
 
+        // 警告/错误徽章（叠加在圆点右上角）
+        const stageBadge = stage.has_error ? '<span class="pl-stage-badge error" title="存在失败/被拒绝的工单">✗</span>'
+                         : stage.has_warning ? '<span class="pl-stage-badge warning" title="存在测试警告">⚠</span>'
+                         : '';
+
         html += `<div class="pl-stage ${cls}">
             <div class="pl-stage-header">
-                <div class="pl-stage-dot">${dotContent}</div>
+                <div class="pl-stage-dot-wrap">
+                    <div class="pl-stage-dot">${dotContent}</div>${stageBadge}
+                </div>
                 <div class="pl-stage-label">
                     <div class="pl-stage-name">${escHtml(stage.name)}</div>
                     <div class="pl-stage-status-text">${statusText}</div>
@@ -2451,10 +2671,14 @@ function renderPipelineStages(container, stages) {
             const jobIcon = jobCls === 'done' ? '✓' : (jobCls === 'running' ? '●' : (jobCls === 'failed' ? '✗' : '○'));
             const isActive = activeJobId === job.id;
             const dur = formatDuration(job.duration);
+            // 警告/错误徽章
+            const jobBadge = job.has_error ? '<span class="pl-job-badge error" title="存在失败/被拒绝的工单">✗</span>'
+                           : job.has_warning ? '<span class="pl-job-badge warning" title="存在测试警告">⚠</span>'
+                           : '';
 
             html += `<div class="pl-job-card ${isActive ? 'active' : ''} ${jobCls === 'pending' ? 'job-pending' : ''}" data-job-id="${job.id}" onclick="selectJob('${job.id}', '${stage.key}')">
                 <div class="pl-job-header">
-                    <span class="pl-job-status-icon ${jobCls}">${jobIcon}</span>
+                    <span class="pl-job-status-wrap"><span class="pl-job-status-icon ${jobCls}">${jobIcon}</span>${jobBadge}</span>
                     <span class="pl-job-name">${escHtml(job.title)}</span>
                     <span class="pl-job-duration">${dur}</span>
                     <span class="pl-job-expand ${expandJobs ? 'open' : ''}" onclick="event.stopPropagation(); toggleJobExpand(this)">▾</span>
@@ -2466,9 +2690,12 @@ function renderPipelineStages(container, stages) {
             subtasks.forEach(st => {
                 const stIcon = st.status === 'completed' ? '✓' : (st.status === 'in_progress' ? '●' : '○');
                 const stDur = formatDuration(st.duration);
+                const stBadge = st.has_error ? ' <span class="pl-st-badge error" title="失败/被拒绝">✗</span>'
+                              : st.has_warning ? ' <span class="pl-st-badge warning" title="测试有警告">⚠</span>'
+                              : '';
                 html += `<div class="pl-subtask-item">
                     <span class="pl-subtask-icon ${st.status}">${stIcon}</span>
-                    <span class="pl-subtask-name">${escHtml(st.title)}</span>
+                    <span class="pl-subtask-name">${escHtml(st.title)}${stBadge}</span>
                     <span class="pl-subtask-duration">${stDur}</span>
                 </div>`;
             });
@@ -3279,6 +3506,20 @@ function renderLogItem(log) {
         detail = log.detail || '';
     }
 
+    const PREVIEW_LIMIT = 160;
+    const isLong = detail.length > PREVIEW_LIMIT;
+    const logId = 'log-' + (log.id || Math.random().toString(36).slice(2));
+
+    let messageHtml;
+    if (isLong) {
+        messageHtml = `<div class="log-message log-message-collapsible" id="${logId}">
+            <div class="log-message-preview">${escHtml(detail)}</div>
+            <span class="log-expand-link" onclick="toggleLogMessage('${logId}')">展开 ▼</span>
+        </div>`;
+    } else {
+        messageHtml = `<div class="log-message">${escHtml(detail)}</div>`;
+    }
+
     return `
         <div class="log-item ${log.level || 'info'}">
             <div class="log-header">
@@ -3290,8 +3531,24 @@ function renderLogItem(log) {
                     </span>` : ''}
                 <span class="log-time">${formatTime(log.created_at)}</span>
             </div>
-            <div class="log-message">${escHtml(detail)}</div>
+            ${messageHtml}
         </div>`;
+}
+
+function toggleLogMessage(logId) {
+    const el = document.getElementById(logId);
+    if (!el) return;
+    const preview = el.querySelector('.log-message-preview');
+    const link = el.querySelector('.log-expand-link');
+    if (!preview || !link) return;
+    const isExpanded = preview.classList.contains('expanded');
+    if (isExpanded) {
+        preview.classList.remove('expanded');
+        link.textContent = '展开 ▼';
+    } else {
+        preview.classList.add('expanded');
+        link.textContent = '收起 ▲';
+    }
 }
 
 // ==================== SSE 实时推送 ====================
@@ -3446,6 +3703,62 @@ function connectSSE(projectId) {
             const data = JSON.parse(e.data);
             console.log('[SSE] ci_branch_merged:', data);
             showToast(`🔀 ${data.source} → ${data.target} 合并成功`, 'success');
+        });
+
+        // BUG 相关 SSE 事件
+        eventSource.addEventListener('bug_created', (e) => {
+            const data = JSON.parse(e.data);
+            if (document.getElementById('tab-bugs')?.classList.contains('active')) loadBugs();
+        });
+
+        eventSource.addEventListener('bug_status_changed', (e) => {
+            const data = JSON.parse(e.data);
+            const statusLabels = { open:'待处理', in_dev:'修复中', in_test:'测试中', fixed:'已修复' };
+            const label = statusLabels[data.status] || data.status;
+            // 更新卡片状态（不重新渲染整个列表，避免闪烁）
+            const card = document.querySelector(`.bug-card[data-bug-id="${data.bug_id}"]`);
+            if (card) {
+                const badge = card.querySelector('.bug-status-badge');
+                const statusColors = { open:'var(--danger,#ea4a5a)', in_dev:'var(--warning,#f0a500)', in_test:'var(--primary)', fixed:'var(--success,#34d058)' };
+                const color = statusColors[data.status] || 'var(--text-muted)';
+                if (badge) {
+                    badge.textContent = label;
+                    badge.style.cssText = `background:${color}20;color:${color};border:1px solid ${color}40;`;
+                }
+            } else if (document.getElementById('tab-bugs')?.classList.contains('active')) {
+                loadBugs();
+            }
+            appendLogEntry({
+                agent_type: 'System',
+                action: 'bug_status',
+                detail: JSON.stringify({ message: `BUG 状态变更 → ${label}${data.reason ? '：' + data.reason : ''}` }),
+                level: 'info',
+                created_at: new Date().toISOString(),
+            });
+        });
+
+        eventSource.addEventListener('bug_fixed', (e) => {
+            const data = JSON.parse(e.data);
+            showToast(`✅ BUG「${data.title || data.bug_id}」修复完成${data.version_id ? '，已并入版本' : ''}`, 'success');
+            if (document.getElementById('tab-bugs')?.classList.contains('active')) loadBugs();
+        });
+
+        // agent_working 时若是 BUG 修复，在 BUG 卡片上显示进度
+        eventSource.addEventListener('agent_working', (e) => {
+            const data = JSON.parse(e.data);
+            if (data.bug_id) {
+                const agentLabels = { DevAgent:'🔧 DevAgent 修复中', TestAgent:'🧪 TestAgent 测试中' };
+                const card = document.querySelector(`.bug-card[data-bug-id="${data.bug_id}"]`);
+                if (card) {
+                    let progressEl = card.querySelector('.bug-progress');
+                    if (!progressEl) {
+                        progressEl = document.createElement('div');
+                        progressEl.className = 'bug-progress';
+                        card.querySelector('.bug-card-actions')?.before(progressEl);
+                    }
+                    progressEl.innerHTML = `<span class="bug-progress-text">⏳ ${agentLabels[data.agent] || data.agent + ' 处理中'}</span>`;
+                }
+            }
         });
 
         eventSource.onerror = () => {
@@ -3959,7 +4272,7 @@ function getStatusColor(status) {
 
 function getArtifactIcon(type) {
     const icons = {
-        prd: '📄', architecture: '🏗️', code: '💻', test: '🧪', deploy_config: '🚀',
+        prd: '📄', architecture: '🏗️', code: '💻', test: '🧪', deploy_config: '🚀', screenshot: '🖼️',
     };
     return icons[type] || '📦';
 }
@@ -5434,7 +5747,11 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
         const priorityLabel = {'critical':'🔴 紧急','high':'🟠 高','medium':'🟡 中','low':'🟢 低'}[action.priority] || action.priority;
         const safeId = 'req_confirm_' + Date.now();
         actionHtml = `
-            <div class="chat-action-card chat-confirm-card" id="${safeId}" style="border-left-color: var(--primary);">
+            <div class="chat-action-card chat-confirm-card" id="${safeId}"
+                 data-title="${escapeHtml(action.title)}"
+                 data-description="${escapeHtml(action.description)}"
+                 data-priority="${escapeHtml(action.priority)}"
+                 style="border-left-color: var(--primary);">
                 <div class="action-title">📋 识别到新需求，是否创建？</div>
                 <div class="action-detail">
                     <div class="confirm-req-title">${escapeHtml(action.title)}</div>
@@ -5442,7 +5759,29 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
                     <div class="confirm-req-meta">优先级：${priorityLabel}</div>
                 </div>
                 <div class="confirm-req-btns">
-                    <button class="btn btn-sm btn-primary" onclick="doConfirmRequirement('${safeId}', ${JSON.stringify(escapeHtml(action.title))}, ${JSON.stringify(escapeHtml(action.description))}, '${action.priority}')">✅ 确认创建</button>
+                    <button class="btn btn-sm btn-primary" onclick="doConfirmRequirement('${safeId}')">✅ 确认创建</button>
+                    <button class="btn btn-sm" onclick="doCancelRequirement('${safeId}')">✗ 取消</button>
+                </div>
+            </div>
+        `;
+    } else if (action && action.type === 'confirm_bug') {
+        const priorityLabel = {'critical':'🔴 紧急','high':'🟠 高','medium':'🟡 中','low':'🟢 低'}[action.priority] || action.priority;
+        const safeId = 'bug_confirm_' + Date.now();
+        actionHtml = `
+            <div class="chat-action-card chat-confirm-card chat-confirm-bug-card" id="${safeId}"
+                 data-title="${escapeHtml(action.title)}"
+                 data-description="${escapeHtml(action.description)}"
+                 data-priority="${escapeHtml(action.priority)}"
+                 data-requirement-id="${escapeHtml(action.requirement_id || '')}"
+                 style="border-left-color: var(--danger, #ea4a5a);">
+                <div class="action-title">🐛 识别到 BUG，是否上报？</div>
+                <div class="action-detail">
+                    <div class="confirm-req-title">${escapeHtml(action.title)}</div>
+                    <div class="confirm-req-desc">${escapeHtml(action.description)}</div>
+                    <div class="confirm-req-meta">优先级：${priorityLabel}</div>
+                </div>
+                <div class="confirm-req-btns">
+                    <button class="btn btn-sm btn-danger" onclick="doConfirmBug('${safeId}')">🐛 确认上报</button>
                     <button class="btn btn-sm" onclick="doCancelRequirement('${safeId}')">✗ 取消</button>
                 </div>
             </div>
@@ -5484,9 +5823,12 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
 }
 
 /** 用户确认创建需求 */
-async function doConfirmRequirement(cardId, title, description, priority) {
+async function doConfirmRequirement(cardId) {
     const card = document.getElementById(cardId);
     if (!card || !currentProjectId) return;
+    const title = card.dataset.title || '';
+    const description = card.dataset.description || '';
+    const priority = card.dataset.priority || 'medium';
     const btns = card.querySelector('.confirm-req-btns');
     if (btns) btns.innerHTML = '<span style="color:var(--text-muted);font-size:12px">⏳ 创建中...</span>';
     try {
@@ -6758,5 +7100,429 @@ async function cancelCIBuild(buildId) {
         }
     } catch (e) {
         showToast(`取消失败: ${e.message}`, 'error');
+    }
+}
+
+// ==================== BUG 管理 ====================
+
+const BUG_STATUS_LABELS = { open:'待处理', in_dev:'修复中', in_test:'测试中', fixed:'已修复' };
+const BUG_PRIORITY_LABELS = { critical:'🔴 紧急', high:'🟠 高', medium:'🟡 中', low:'🟢 低' };
+const BUG_STATUS_COLORS  = { open:'var(--danger,#ea4a5a)', in_dev:'var(--warning,#f0a500)', in_test:'var(--primary)', fixed:'var(--success,#34d058)' };
+
+/** 加载 BUG 列表 */
+async function loadBugs() {
+    if (!currentProjectId) return;
+    const filter = document.getElementById('bugStatusFilter')?.value || '';
+    const url = `/projects/${currentProjectId}/bugs` + (filter ? `?status=${filter}` : '');
+    try {
+        const data = await api(url);
+        renderBugList(data.bugs || []);
+    } catch (e) {
+        showToast('加载 BUG 列表失败: ' + e.message, 'error');
+    }
+}
+
+/** 渲染 BUG 列表 */
+function renderBugList(bugs) {
+    const el = document.getElementById('bugList');
+    if (!el) return;
+    if (!bugs.length) {
+        el.innerHTML = '<div class="empty-state"><div class="emoji">🐛</div><p>暂无 BUG，项目很健康！</p></div>';
+        return;
+    }
+    el.innerHTML = bugs.map(b => {
+        const statusColor = BUG_STATUS_COLORS[b.status] || 'var(--text-muted)';
+        const statusLabel = BUG_STATUS_LABELS[b.status] || b.status;
+        const priorityLabel = BUG_PRIORITY_LABELS[b.priority] || b.priority;
+        const fixedInfo = b.fixed_at ? `<span class="bug-meta-item">✅ 修复于 ${b.fixed_at.slice(0,10)}</span>` : '';
+        const versionInfo = b.version_id ? `<span class="bug-meta-item">📦 已并入版本</span>` : '';
+        const canFix = b.status === 'open';
+        return `
+        <div class="bug-card" data-bug-id="${b.id}">
+            <div class="bug-card-header">
+                <span class="bug-status-badge" style="background:${statusColor}20;color:${statusColor};border:1px solid ${statusColor}40;">${statusLabel}</span>
+                <span class="bug-priority">${priorityLabel}</span>
+                <span class="bug-id">#${b.id.slice(-6)}</span>
+            </div>
+            <div class="bug-card-title">${escapeHtml(b.title)}</div>
+            <div class="bug-card-desc">${escapeHtml((b.description || '').slice(0, 120))}${(b.description || '').length > 120 ? '...' : ''}</div>
+            <div class="bug-card-meta">
+                <span class="bug-meta-item">🕐 ${b.created_at.slice(0,10)}</span>
+                ${fixedInfo}
+                ${versionInfo}
+            </div>
+            <div class="bug-card-actions">
+                ${canFix ? `<button class="btn btn-sm btn-primary" onclick="startBugFix('${b.id}')">🔧 开始修复</button>` : ''}
+                <button class="btn btn-sm" onclick="deleteBug('${b.id}')">🗑 删除</button>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+/** 显示上报 BUG 模态框 */
+async function showCreateBugModal() {
+    if (!currentProjectId) return;
+    try {
+        const data = await api(`/projects/${currentProjectId}/requirements`);
+        const sel = document.getElementById('bugRequirementId');
+        if (sel) {
+            sel.innerHTML = '<option value="">不关联</option>' +
+                (data.requirements || []).map(r =>
+                    `<option value="${r.id}">${escapeHtml(r.title)}</option>`
+                ).join('');
+        }
+    } catch (_) {}
+    document.getElementById('bugTitle').value = '';
+    document.getElementById('bugDescription').value = '';
+    document.getElementById('bugPriority').value = 'high';
+    openModal('createBugModal');
+}
+
+/** 提交 BUG */
+async function submitBug() {
+    const title = document.getElementById('bugTitle').value.trim();
+    const description = document.getElementById('bugDescription').value.trim();
+    const priority = document.getElementById('bugPriority').value;
+    const requirementId = document.getElementById('bugRequirementId').value || null;
+    if (!title) { showToast('请填写 BUG 标题', 'warning'); return; }
+    if (!description) { showToast('请填写复现步骤/现象描述', 'warning'); return; }
+    try {
+        await api(`/projects/${currentProjectId}/bugs`, {
+            method: 'POST',
+            body: { title, description, priority, requirement_id: requirementId },
+        });
+        closeModal('createBugModal');
+        showToast(`BUG「${title}」已上报`, 'success');
+        loadBugs();
+    } catch (e) {
+        showToast('上报失败: ' + e.message, 'error');
+    }
+}
+
+/** 触发 BUG 修复工作流 */
+async function startBugFix(bugId) {
+    if (!currentProjectId) return;
+    try {
+        await api(`/projects/${currentProjectId}/bugs/${bugId}/start-fix`, { method: 'POST' });
+        showToast('修复工作流已启动，DevAgent 开始处理...', 'success');
+        loadBugs();
+    } catch (e) {
+        showToast('启动失败: ' + e.message, 'error');
+    }
+}
+
+/** 删除 BUG */
+async function deleteBug(bugId) {
+    if (!confirm('确认删除该 BUG？')) return;
+    try {
+        await api(`/projects/${currentProjectId}/bugs/${bugId}`, { method: 'DELETE' });
+        showToast('BUG 已删除', 'success');
+        loadBugs();
+    } catch (e) {
+        showToast('删除失败: ' + e.message, 'error');
+    }
+}
+
+/** 聊天中确认上报 BUG */
+async function doConfirmBug(cardId) {
+    const card = document.getElementById(cardId);
+    if (!card || !currentProjectId) return;
+    const title = card.dataset.title || '';
+    const description = card.dataset.description || '';
+    const priority = card.dataset.priority || 'high';
+    const requirementId = card.dataset.requirementId || null;
+    const btns = card.querySelector('.confirm-req-btns');
+    if (btns) btns.innerHTML = '<span style="color:var(--text-muted);font-size:12px">⏳ 上报中...</span>';
+    try {
+        await api(`/projects/${currentProjectId}/chat/confirm-create-bug`, {
+            method: 'POST',
+            body: { title, description, priority, requirement_id: requirementId || null },
+        });
+        card.style.borderLeftColor = 'var(--success, #34d058)';
+        card.querySelector('.action-title').textContent = '✅ BUG 已上报';
+        if (btns) btns.innerHTML = `<span class="action-link" onclick="switchTab('bugs')">查看 BUG 列表 →</span>`;
+        showToast(`BUG「${title}」已上报`, 'success');
+        setTimeout(() => { if (typeof loadBugs === 'function') loadBugs(); }, 500);
+    } catch (e) {
+        card.style.borderLeftColor = 'var(--danger, #ea4a5a)';
+        card.querySelector('.action-title').textContent = '⚠️ 上报失败';
+        if (btns) btns.innerHTML = `<span style="color:var(--danger);font-size:12px">${escapeHtml(e.message)}</span>`;
+    }
+}
+
+// ==================== 知识库管理 ====================
+
+/** 当前知识库编辑器状态 */
+let _knowledgeEditorScope = null;   // 'global' | 'project'
+let _knowledgeEditorFilename = null; // null = 新建
+
+/** 在项目列表页打开全局知识库 modal（不需要打开项目） */
+async function showGlobalKnowledgeModal() {
+    const modalId = 'globalKnowledgeModal';
+    let modal = document.getElementById(modalId);
+    if (modal) modal.remove();
+
+    modal = document.createElement('div');
+    modal.id = modalId;
+    modal.className = 'modal-overlay active';
+    modal.innerHTML = `
+        <div class="modal modal-lg">
+            <div class="modal-header">
+                <h3>📚 全局知识库</h3>
+                <button class="btn-icon" onclick="document.getElementById('${modalId}').remove()">&times;</button>
+            </div>
+            <div class="modal-body" style="padding-bottom:0;">
+                <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">
+                    所有项目共享，适合放编码规范、技术栈说明、安全规则等。（上限 2000 字符/次注入）
+                </p>
+                <div style="display:flex;justify-content:flex-end;margin-bottom:8px;">
+                    <button class="btn btn-primary" onclick="showKnowledgeEditor('global', null)">+ 新建文档</button>
+                </div>
+                <div id="globalKnowledgeModalList"><div class="loading-sm">加载中...</div></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="document.getElementById('${modalId}').remove()">关闭</button>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(modal);
+    _loadGlobalKnowledgeIntoModal();
+}
+
+async function _loadGlobalKnowledgeIntoModal() {
+    const container = document.getElementById('globalKnowledgeModalList');
+    if (!container) return;
+    try {
+        const res = await api('/knowledge/global');
+        renderKnowledgeDocList(container, res.docs || [], 'global', null);
+    } catch (e) {
+        container.innerHTML = `<div class="empty-state-sm">加载失败: ${escHtml(e.message)}</div>`;
+    }
+}
+
+/** 加载全局 + 项目知识库文档列表 */
+async function loadKnowledgeDocs() {
+    // 全局知识库
+    const globalList = document.getElementById('globalDocsList');
+    if (globalList) {
+        globalList.innerHTML = '<div class="loading-sm">加载中...</div>';
+        try {
+            const res = await api('/knowledge/global');
+            renderKnowledgeDocList(globalList, res.docs || [], 'global', null);
+        } catch (e) {
+            globalList.innerHTML = `<div class="empty-state-sm">加载失败: ${escHtml(e.message)}</div>`;
+        }
+    }
+
+    // 项目知识库
+    const projectList = document.getElementById('projectDocsList');
+    if (projectList) {
+        if (!currentProjectId) {
+            projectList.innerHTML = '<div class="empty-state-sm">请先选择一个项目</div>';
+            return;
+        }
+        projectList.innerHTML = '<div class="loading-sm">加载中...</div>';
+        try {
+            const res = await api(`/knowledge/projects/${currentProjectId}`);
+            renderKnowledgeDocList(projectList, res.docs || [], 'project', currentProjectId);
+        } catch (e) {
+            projectList.innerHTML = `<div class="empty-state-sm">加载失败: ${escHtml(e.message)}</div>`;
+        }
+    }
+}
+
+/** 渲染文档卡片列表 */
+function renderKnowledgeDocList(container, docs, scope, projectId) {
+    if (!docs || docs.length === 0) {
+        container.innerHTML = '<div class="empty-state-sm">暂无文档，点击「+ 新建文档」添加</div>';
+        return;
+    }
+    container.innerHTML = docs.map(doc => `
+        <div class="knowledge-doc-item">
+            <div class="knowledge-doc-info">
+                <span class="knowledge-doc-icon">📄</span>
+                <span class="knowledge-doc-name">${escHtml(doc.filename)}</span>
+                <span class="knowledge-doc-size">${_formatDocSize(doc.size || 0)}</span>
+            </div>
+            <div class="knowledge-doc-actions">
+                <button class="btn-sm btn-ghost" onclick="showKnowledgeEditor('${scope}', ${projectId ? `'${projectId}'` : 'null'}, '${escHtml(doc.filename)}')">编辑</button>
+                <button class="btn-sm btn-danger-ghost" onclick="deleteKnowledgeDoc('${scope}', ${projectId ? `'${projectId}'` : 'null'}, '${escHtml(doc.filename)}')">删除</button>
+            </div>
+        </div>
+    `).join('');
+}
+
+function _formatDocSize(bytes) {
+    if (bytes < 1024) return bytes + 'B';
+    return (bytes / 1024).toFixed(1) + 'KB';
+}
+
+/** 打开知识库编辑器（新建或编辑） */
+async function showKnowledgeEditor(scope, projectId, filename) {
+    _knowledgeEditorScope = scope;
+    _knowledgeEditorFilename = filename || null;
+
+    // 构建 modal
+    const isNew = !filename;
+    const title = isNew
+        ? (scope === 'global' ? '新建全局文档' : '新建项目文档')
+        : `编辑：${filename}`;
+
+    let initialContent = '';
+    if (!isNew) {
+        try {
+            const url = scope === 'global'
+                ? `/knowledge/global/${encodeURIComponent(filename)}`
+                : `/knowledge/projects/${projectId}/${encodeURIComponent(filename)}`;
+            const data = await api(url);
+            initialContent = data.content || '';
+        } catch (e) {
+            showToast('加载文档失败: ' + e.message, 'error');
+            return;
+        }
+    }
+
+    const modalId = 'knowledgeEditorModal';
+    let modal = document.getElementById(modalId);
+    if (modal) modal.remove();
+
+    modal = document.createElement('div');
+    modal.id = modalId;
+    modal.className = 'modal-overlay active';
+    modal.innerHTML = `
+        <div class="modal modal-lg">
+            <div class="modal-header">
+                <h3 class="modal-title">${escHtml(title)}</h3>
+                <button class="btn-icon" onclick="closeKnowledgeEditor()">&times;</button>
+            </div>
+            <div class="modal-body">
+                ${isNew ? `
+                <div class="form-group" style="margin-bottom:12px;">
+                    <label>文件名（.md）</label>
+                    <input id="knowledgeDocFilename" type="text"
+                        placeholder="例如: coding-standards.md" />
+                </div>` : ''}
+                <div class="form-group">
+                    <label>内容（Markdown）</label>
+                    <textarea id="knowledgeDocContent" class="knowledge-editor-textarea"
+                        placeholder="# 文档标题&#10;&#10;在此填写知识库内容..."
+                        rows="18">${escHtml(initialContent)}</textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeKnowledgeEditor()">取消</button>
+                <button class="btn btn-primary" onclick="saveKnowledgeDoc('${scope}', ${projectId ? `'${projectId}'` : 'null'})">保存</button>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(modal);
+
+    // 聚焦到内容或文件名输入框
+    setTimeout(() => {
+        const filenameInput = document.getElementById('knowledgeDocFilename');
+        const contentInput = document.getElementById('knowledgeDocContent');
+        if (filenameInput) filenameInput.focus();
+        else if (contentInput) contentInput.focus();
+    }, 50);
+}
+
+/** 关闭知识库编辑器 */
+function closeKnowledgeEditor() {
+    const modal = document.getElementById('knowledgeEditorModal');
+    if (modal) modal.remove();
+    _knowledgeEditorScope = null;
+    _knowledgeEditorFilename = null;
+}
+
+/** 保存知识库文档（新建或更新） */
+async function saveKnowledgeDoc(scope, projectId) {
+    const isNew = !_knowledgeEditorFilename;
+    let filename = _knowledgeEditorFilename;
+
+    if (isNew) {
+        const filenameInput = document.getElementById('knowledgeDocFilename');
+        if (!filenameInput || !filenameInput.value.trim()) {
+            showToast('请输入文件名', 'error');
+            return;
+        }
+        filename = filenameInput.value.trim();
+    }
+
+    const contentEl = document.getElementById('knowledgeDocContent');
+    const content = contentEl ? contentEl.value : '';
+
+    const url = scope === 'global'
+        ? '/knowledge/global'
+        : `/knowledge/projects/${projectId}`;
+
+    const saveBtn = document.querySelector('#knowledgeEditorModal .btn-primary');
+    if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = '保存中...'; }
+
+    try {
+        await api(url, { method: 'PUT', body: { filename, content } });
+        showToast('文档已保存', 'success');
+        closeKnowledgeEditor();
+        // 刷新设置页列表 + 全局知识库 modal（如果打开着）
+        if (document.getElementById('globalDocsList')) loadKnowledgeDocs();
+        if (document.getElementById('globalKnowledgeModalList')) _loadGlobalKnowledgeIntoModal();
+    } catch (e) {
+        showToast('保存失败: ' + e.message, 'error');
+        if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = '保存'; }
+    }
+}
+
+/** 删除知识库文档 */
+async function deleteKnowledgeDoc(scope, projectId, filename) {
+    if (!confirm(`确认删除文档「${filename}」？此操作不可撤销。`)) return;
+
+    const url = scope === 'global'
+        ? `/knowledge/global/${encodeURIComponent(filename)}`
+        : `/knowledge/projects/${projectId}/${encodeURIComponent(filename)}`;
+
+    try {
+        await api(url, { method: 'DELETE' });
+        showToast(`「${filename}」已删除`, 'success');
+        if (document.getElementById('globalDocsList')) loadKnowledgeDocs();
+        if (document.getElementById('globalKnowledgeModalList')) _loadGlobalKnowledgeIntoModal();
+    } catch (e) {
+        showToast('删除失败: ' + e.message, 'error');
+    }
+}
+
+// ==================== Agent 技能系统（Tool Use）====================
+
+/** 读取后端 agent-tools 状态并同步 UI 开关 */
+async function loadAgentToolsStatus() {
+    const toggle = document.getElementById('agentToolsToggle');
+    const label  = document.getElementById('agentToolsLabel');
+    if (!toggle) return;
+    try {
+        const res = await api('/settings/agent-tools');
+        const enabled = res && res.enabled;
+        toggle.checked = !!enabled;
+        label.textContent = enabled ? '已开启（Agentic 模式）' : '已关闭（One-shot 模式）';
+        label.style.color = enabled ? 'var(--accent)' : 'var(--text-muted)';
+    } catch (e) {
+        // 后端未实现此接口时静默
+        label.textContent = '（需后端 ENABLE_AGENT_TOOLS=true）';
+    }
+}
+
+/** 切换 Agent Tool Use 开关（同步设置到后端） */
+async function toggleAgentTools(enabled) {
+    const label = document.getElementById('agentToolsLabel');
+    try {
+        await api('/settings/agent-tools', {
+            method: 'POST',
+            body: JSON.stringify({ enabled }),
+        });
+        label.textContent = enabled ? '已开启（Agentic 模式）' : '已关闭（One-shot 模式）';
+        label.style.color = enabled ? 'var(--accent)' : 'var(--text-muted)';
+        showToast(enabled ? 'Agentic 模式已开启' : 'One-shot 模式已开启', 'success');
+    } catch (e) {
+        showToast('切换失败：' + e.message + '（请在后端设置 ENABLE_AGENT_TOOLS 环境变量）', 'warning');
+        // 回滚 UI
+        const toggle = document.getElementById('agentToolsToggle');
+        if (toggle) toggle.checked = !enabled;
     }
 }

@@ -32,6 +32,9 @@ class Settings:
     LLM_MAX_RETRIES: int = int(os.getenv("LLM_MAX_RETRIES", "3"))
     LLM_API_FORMAT: str = os.getenv("LLM_API_FORMAT", "anthropic")  # anthropic / openai
 
+    # Agent 技能系统（Tool Use）
+    ENABLE_AGENT_TOOLS: bool = os.getenv("ENABLE_AGENT_TOOLS", "false").lower() in ("1", "true", "yes")
+
     # Frontend
     FRONTEND_DIR: str = str(BASE_DIR.parent / "frontend")
 
