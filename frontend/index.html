@@ -740,6 +740,7 @@
             </button>
         </div>
         <div class="chat-panel-body" id="chatPanelBody">
+            <!-- AI助手 / 工单 Tab 共用容器 -->
             <div class="chat-messages" id="chatMessages">
                 <div class="chat-welcome">
                     <div class="chat-welcome-icon">🤖</div>
@@ -750,6 +751,8 @@
                     </div>
                 </div>
             </div>
+            <!-- 群聊 Tab 独立容器，不被 loadChatHistory 覆盖 -->
+            <div class="chat-messages" id="groupChatMessages" style="display:none;"></div>
         </div>
         <div class="chat-panel-input" id="chatPanelInput">
                         <!-- 图片 / 文档 预览区（有附件时出现） -->

@@ -5282,6 +5282,17 @@ function setChatMode(mode) {
     document.getElementById('chatModeJob')?.classList.toggle('active', mode === 'job');
     document.getElementById('chatModeGroup')?.classList.toggle('active', mode === 'group');
 
+    // 切换容器显隐
+    const mainContainer = document.getElementById('chatMessages');
+    const groupContainer = document.getElementById('groupChatMessages');
+    if (mode === 'group') {
+        mainContainer.style.display = 'none';
+        groupContainer.style.display = '';
+    } else {
+        mainContainer.style.display = '';
+        groupContainer.style.display = 'none';
+    }
+
     // 更新标题
     const titleEl = document.getElementById('chatPanelTitle');
     const iconEl = document.getElementById('chatPanelIcon');
@@ -5301,7 +5312,10 @@ function setChatMode(mode) {
         titleEl.textContent = 'Agent 群聊';
         iconEl.textContent = '👥';
         inputArea.style.display = '';
-        loadGroupChat();
+        // 只在首次切入时加载历史，保留后续追加的气泡
+        if (groupContainer.children.length === 0) {
+            loadGroupChat();
+        }
     }
 }
 
@@ -5531,13 +5545,13 @@ function scrollToTicketSection(ticketId) {
  * 加载 Agent 群聊（所有 Agent 跨工单时序流）
  */
 async function loadGroupChat() {
+    const container = document.getElementById('groupChatMessages');
+    if (!container) return;
     if (!currentProjectId) {
-        const container = document.getElementById('chatMessages');
         container.innerHTML = `<div class="chat-job-hint"><div class="hint-icon">📭</div><div class="hint-text">请先选择项目</div></div>`;
         return;
     }
 
-    const container = document.getElementById('chatMessages');
     container.innerHTML = '<div class="chat-typing"><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div></div>';
 
     try {
@@ -5653,11 +5667,6 @@ function appendToTicketFeed(logData) {
  */
 async function sendChatMessage() {
     if (chatSending || (chatMode !== 'global' && chatMode !== 'group')) return;
-
-    // 群聊模式下发消息：切换到 AI助手 Tab 展示对话
-    if (chatMode === 'group') {
-        setChatMode('global');
-    }
 
     const input = document.getElementById('chatInput');
     const message = input.value.trim();
@@ -5828,7 +5837,9 @@ async function sendChatMessage() {
  * 追加聊天气泡
  */
 function appendChatBubble(role, content, timestamp = null, action = null, images = []) {
-    const container = document.getElementById('chatMessages');
+    const container = chatMode === 'group'
+        ? (document.getElementById('groupChatMessages') || document.getElementById('chatMessages'))
+        : document.getElementById('chatMessages');
     const msgEl = document.createElement('div');
     msgEl.className = `chat-msg ${role}`;
 
