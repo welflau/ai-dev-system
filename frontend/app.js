@@ -5300,7 +5300,7 @@ function setChatMode(mode) {
     } else if (mode === 'group') {
         titleEl.textContent = 'Agent 群聊';
         iconEl.textContent = '👥';
-        inputArea.style.display = 'none';
+        inputArea.style.display = '';
         loadGroupChat();
     }
 }
@@ -5652,7 +5652,11 @@ function appendToTicketFeed(logData) {
  * 发送聊天消息
  */
 async function sendChatMessage() {
-    if (chatSending || chatMode !== 'global') return;
+    if (chatSending || (chatMode !== 'global' && chatMode !== 'group')) return;
+
+    // 群聊模式下借用全局 AI 发送，发完后刷新群聊
+    const _prevMode = chatMode;
+    if (chatMode === 'group') chatMode = 'global';
 
     const input = document.getElementById('chatInput');
     const message = input.value.trim();
@@ -5816,6 +5820,15 @@ async function sendChatMessage() {
         chatSending = false;
         sendBtn.disabled = false;
         input.focus();
+        // 若原来在群聊模式，切回并刷新
+        if (_prevMode === 'group') {
+            chatMode = 'group';
+            document.getElementById('chatModeGlobal')?.classList.remove('active');
+            document.getElementById('chatModeGroup')?.classList.add('active');
+            document.getElementById('chatPanelTitle').textContent = 'Agent 群聊';
+            document.getElementById('chatPanelIcon').textContent = '👥';
+            setTimeout(() => loadGroupChat(), 800);
+        }
     }
 }
 
