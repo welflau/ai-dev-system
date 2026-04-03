@@ -5654,9 +5654,10 @@ function appendToTicketFeed(logData) {
 async function sendChatMessage() {
     if (chatSending || (chatMode !== 'global' && chatMode !== 'group')) return;
 
-    // 群聊模式下借用全局 AI 发送，发完后刷新群聊
-    const _prevMode = chatMode;
-    if (chatMode === 'group') chatMode = 'global';
+    // 群聊模式下发消息：切换到 AI助手 Tab 展示对话
+    if (chatMode === 'group') {
+        setChatMode('global');
+    }
 
     const input = document.getElementById('chatInput');
     const message = input.value.trim();
@@ -5820,15 +5821,6 @@ async function sendChatMessage() {
         chatSending = false;
         sendBtn.disabled = false;
         input.focus();
-        // 若原来在群聊模式，切回并刷新
-        if (_prevMode === 'group') {
-            chatMode = 'group';
-            document.getElementById('chatModeGlobal')?.classList.remove('active');
-            document.getElementById('chatModeGroup')?.classList.add('active');
-            document.getElementById('chatPanelTitle').textContent = 'Agent 群聊';
-            document.getElementById('chatPanelIcon').textContent = '👥';
-            setTimeout(() => loadGroupChat(), 800);
-        }
     }
 }
 
