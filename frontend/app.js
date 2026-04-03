@@ -1512,12 +1512,23 @@ async function openTicketDrawer(ticketId) {
             </div>
         </div>`;
 
-        // 描述
+        // 描述（支持 Markdown 图片语法渲染）
         if (data.description) {
+            let descHtml;
+            if (window.marked) {
+                try {
+                    // 只渲染图片和基础格式，其余文字仍转义
+                    descHtml = marked.parse(data.description);
+                } catch (e) {
+                    descHtml = `<p>${escHtml(data.description)}</p>`;
+                }
+            } else {
+                descHtml = `<p>${escHtml(data.description)}</p>`;
+            }
             html += `
             <div class="drawer-section">
                 <h4>描述</h4>
-                <p style="font-size:13px; color:var(--text-secondary); line-height:1.7;">${escHtml(data.description)}</p>
+                <div class="ticket-description" style="font-size:13px; color:var(--text-secondary); line-height:1.7;">${descHtml}</div>
             </div>`;
         }
 
@@ -1701,6 +1712,11 @@ async function openTicketDrawer(ticketId) {
         }
 
         drawerBody.innerHTML = html;
+        // 描述区图片点击放大
+        drawerBody.querySelectorAll('.ticket-description img').forEach(img => {
+            img.onclick = () => window.open(img.src, '_blank');
+            img.title = '点击查看大图';
+        });
         // 打开抽屉
         document.getElementById('drawerOverlay').classList.add('active');
         document.getElementById('ticketDrawer').classList.add('active');

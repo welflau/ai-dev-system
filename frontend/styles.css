@@ -5223,6 +5223,20 @@ body.chat-open .chat-panel {
     transform: scale(1.05);
     box-shadow: 0 2px 8px rgba(0,0,0,0.3);
 }
+/* 工单详情描述区 Markdown 渲染 */
+.ticket-description img {
+    max-width: 100%;
+    border-radius: 6px;
+    margin: 6px 0;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    display: block;
+}
+.ticket-description img:hover {
+    box-shadow: 0 2px 10px rgba(0,0,0,0.35);
+}
+.ticket-description p { margin: 0 0 6px 0; }
+.ticket-description ul, .ticket-description ol { padding-left: 18px; margin: 4px 0; }
 .confirm-req-btns {
     display: flex;
     gap: 8px;
