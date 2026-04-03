@@ -6187,7 +6187,18 @@ body.chat-open .chat-panel {
 
 .bug-meta-item { font-size: 11px; color: var(--text-muted); }
 
-.bug-card-actions { display: flex; gap: 8px; }
+.bug-card-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* BUG 卡片 — 查看工单按钮 */
+.btn-ticket-link {
+    color: var(--primary, #6366f1);
+    border-color: var(--primary, #6366f1);
+    background: transparent;
+}
+.btn-ticket-link:hover {
+    background: var(--primary, #6366f1);
+    color: #fff;
+}
 
 /* BUG 确认卡片（聊天中） */
 .chat-confirm-bug-card .action-title { color: var(--danger, #ea4a5a); }

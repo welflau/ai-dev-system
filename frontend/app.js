@@ -7166,6 +7166,9 @@ function renderBugList(bugs) {
         const fixedInfo = b.fixed_at ? `<span class="bug-meta-item">✅ 修复于 ${b.fixed_at.slice(0,10)}</span>` : '';
         const versionInfo = b.version_id ? `<span class="bug-meta-item">📦 已并入版本</span>` : '';
         const canFix = b.status === 'open';
+        const ticketLink = b.ticket_id
+            ? `<button class="btn btn-sm btn-ticket-link" onclick="event.stopPropagation();openTicketDrawer('${b.ticket_id}')" title="查看关联工单">🎫 查看工单</button>`
+            : '';
         return `
         <div class="bug-card" data-bug-id="${b.id}">
             <div class="bug-card-header">
@@ -7182,6 +7185,7 @@ function renderBugList(bugs) {
             </div>
             <div class="bug-card-actions">
                 ${canFix ? `<button class="btn btn-sm btn-primary" onclick="startBugFix('${b.id}')">🔧 开始修复</button>` : ''}
+                ${ticketLink}
                 <button class="btn btn-sm" onclick="deleteBug('${b.id}')">🗑 删除</button>
             </div>
         </div>`;
