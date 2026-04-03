@@ -205,10 +205,10 @@ body {
     grid-template-columns: var(--sidebar-width) 1fr;
 }
 body.chat-open .project-layout {
-    margin-right: var(--chat-panel-width, 480px);
+    margin-right: var(--chat-panel-width, 600px);
 }
 body.chat-open #projectListPage {
-    margin-right: var(--chat-panel-width, 480px);
+    margin-right: var(--chat-panel-width, 600px);
 }
 
 /* 内容+日志 Docking 容器 */
@@ -4435,7 +4435,7 @@ pre.hljs, .hljs pre { background: transparent !important; }
 /* ==================== 聊天面板 ==================== */
 
 :root {
-    --chat-panel-width: 480px;
+    --chat-panel-width: 600px;
 }
 
 .chat-toggle-btn {
@@ -4464,7 +4464,7 @@ pre.hljs, .hljs pre { background: transparent !important; }
     position: fixed;
     right: 0;
     top: var(--topbar-height);
-    width: var(--chat-panel-width, 480px);
+    width: var(--chat-panel-width, 600px);
     height: calc(100vh - var(--topbar-height));
     display: none;
     flex-direction: column;
