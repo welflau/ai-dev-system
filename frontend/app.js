@@ -1711,6 +1711,19 @@ async function openTicketDrawer(ticketId) {
             </div>`;
         }
 
+        // Agent 讨论区（异步加载）
+        html += `
+        <div class="drawer-section drawer-agent-discuss" id="drawerAgentDiscuss">
+            <div class="agent-discuss-header" onclick="toggleAgentDiscuss('${data.id}')">
+                <span class="agent-discuss-icon">🤖</span>
+                <h4 style="margin:0;flex:1;">Agent 讨论</h4>
+                <span class="agent-discuss-toggle" id="agentDiscussToggle">▶</span>
+            </div>
+            <div class="agent-discuss-body" id="agentDiscussBody" style="display:none;">
+                <div class="agent-discuss-loading">加载中…</div>
+            </div>
+        </div>`;
+
         drawerBody.innerHTML = html;
         // 描述区图片点击放大
         drawerBody.querySelectorAll('.ticket-description img').forEach(img => {
@@ -1722,6 +1735,63 @@ async function openTicketDrawer(ticketId) {
         document.getElementById('ticketDrawer').classList.add('active');
     } catch (e) {
         showToast(`加载工单失败: ${e.message}`, 'error');
+    }
+}
+
+/**
+ * 切换 Agent 讨论区展开/收起
+ */
+async function toggleAgentDiscuss(ticketId) {
+    const body = document.getElementById('agentDiscussBody');
+    const toggle = document.getElementById('agentDiscussToggle');
+    if (!body) return;
+
+    const isOpen = body.style.display !== 'none';
+    body.style.display = isOpen ? 'none' : '';
+    if (toggle) toggle.textContent = isOpen ? '▶' : '▼';
+
+    if (!isOpen && body.querySelector('.agent-discuss-loading')) {
+        await _loadAgentDiscuss(ticketId, body);
+    }
+}
+
+/**
+ * 加载工单 Agent 对话记录并渲染到讨论区
+ */
+async function _loadAgentDiscuss(ticketId, container) {
+    if (!currentProjectId || !ticketId) return;
+    try {
+        const resp = await originalApi(`/projects/${currentProjectId}/chat/ticket/${ticketId}/conversations`);
+        const messages = resp.messages || [];
+
+        if (messages.length === 0) {
+            container.innerHTML = `<div class="agent-discuss-empty">暂无 Agent 对话记录</div>`;
+            return;
+        }
+
+        container.innerHTML = '';
+        for (const msg of messages) {
+            if (!msg.content) continue;
+            const isUser = msg.role === 'user';
+            const agentBadge = msg.agent_type
+                ? `<div class="agent-discuss-badge">${escHtml(msg.agent_type)}${msg.action ? ' · ' + escHtml(msg.action) : ''}</div>`
+                : '';
+            const metaInfo = msg.model
+                ? `<span class="agent-discuss-meta">${escHtml(msg.model)} · ${msg.duration_ms || 0}ms · ${msg.input_tokens || 0}→${msg.output_tokens || 0}tok</span>`
+                : '';
+            const el = document.createElement('div');
+            el.className = `agent-discuss-msg ${isUser ? 'user' : 'agent'}`;
+            el.innerHTML = `
+                <div class="agent-discuss-avatar">${isUser ? '📝' : '🤖'}</div>
+                <div class="agent-discuss-bubble">
+                    ${agentBadge}
+                    <div class="agent-discuss-content">${formatChatContent(msg.content.length > 800 ? msg.content.slice(0, 800) + '…' : msg.content)}</div>
+                    <div class="agent-discuss-time">${formatTime(msg.created_at)} ${metaInfo}</div>
+                </div>`;
+            container.appendChild(el);
+        }
+    } catch (e) {
+        container.innerHTML = `<div class="agent-discuss-empty" style="color:var(--error);">加载失败: ${escHtml(e.message)}</div>`;
     }
 }
 
@@ -5210,6 +5280,7 @@ function setChatMode(mode) {
     // 更新 Tab 样式
     document.getElementById('chatModeGlobal')?.classList.toggle('active', mode === 'global');
     document.getElementById('chatModeJob')?.classList.toggle('active', mode === 'job');
+    document.getElementById('chatModeGroup')?.classList.toggle('active', mode === 'group');
 
     // 更新标题
     const titleEl = document.getElementById('chatPanelTitle');
@@ -5221,19 +5292,25 @@ function setChatMode(mode) {
         iconEl.textContent = '💬';
         inputArea.style.display = '';
         loadChatHistory();
-    } else {
+    } else if (mode === 'job') {
         titleEl.textContent = '工单对话';
         iconEl.textContent = '🔧';
         inputArea.style.display = 'none';
         loadAllTicketConversations();
+    } else if (mode === 'group') {
+        titleEl.textContent = 'Agent 群聊';
+        iconEl.textContent = '👥';
+        inputArea.style.display = 'none';
+        loadGroupChat();
     }
 }
 
 /**
- * 切换聊天模式
+ * 切换聊天模式（循环：global → job → group → global）
  */
 function toggleChatMode() {
-    setChatMode(chatMode === 'global' ? 'job' : 'global');
+    const next = { global: 'job', job: 'group', group: 'global' };
+    setChatMode(next[chatMode] || 'global');
 }
 
 /**
@@ -5448,6 +5525,93 @@ function scrollToTicketSection(ticketId) {
         section.classList.add('ticket-section-highlight');
         setTimeout(() => section.classList.remove('ticket-section-highlight'), 2000);
     }
+}
+
+/**
+ * 加载 Agent 群聊（所有 Agent 跨工单时序流）
+ */
+async function loadGroupChat() {
+    if (!currentProjectId) {
+        const container = document.getElementById('chatMessages');
+        container.innerHTML = `<div class="chat-job-hint"><div class="hint-icon">📭</div><div class="hint-text">请先选择项目</div></div>`;
+        return;
+    }
+
+    const container = document.getElementById('chatMessages');
+    container.innerHTML = '<div class="chat-typing"><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div></div>';
+
+    try {
+        const resp = await originalApi(`/projects/${currentProjectId}/chat/tickets/conversations`);
+        const tickets = resp.tickets || [];
+        container.innerHTML = '';
+
+        if (tickets.length === 0) {
+            container.innerHTML = `<div class="chat-job-hint"><div class="hint-icon">📭</div><div class="hint-text">暂无 Agent 协作记录</div></div>`;
+            return;
+        }
+
+        // 将所有票务消息展平成时序流
+        const allEvents = [];
+        for (const t of tickets) {
+            for (const msg of (t.messages || [])) {
+                allEvents.push({ ...msg, _ticket: t });
+            }
+        }
+        // 按时间排序
+        allEvents.sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''));
+
+        // 渲染群聊气泡
+        let lastTicketId = null;
+        for (const ev of allEvents) {
+            // 若换了工单，插入工单分割线
+            if (ev._ticket && ev._ticket.id !== lastTicketId) {
+                lastTicketId = ev._ticket.id;
+                const sep = document.createElement('div');
+                sep.className = 'group-chat-ticket-sep';
+                sep.innerHTML = `
+                    <span class="job-status-dot" style="background:${getStatusColor(ev._ticket.status)}"></span>
+                    <span class="group-chat-sep-title" onclick="openTicketDrawer('${ev._ticket.id}')" title="查看工单详情">${escapeHtml(ev._ticket.title)}</span>
+                    <span class="group-chat-sep-status">${getStatusLabel(ev._ticket.status)}</span>`;
+                container.appendChild(sep);
+            }
+
+            if (ev.type === 'log') {
+                const actionLabel = {assign:'接单', complete:'完成', accept:'验收通过', reject:'验收不通过', error:'异常', start:'开始'}[ev.action] || ev.action;
+                const logEl = document.createElement('div');
+                logEl.className = 'group-chat-log-entry';
+                logEl.innerHTML = `<span class="log-agent">${escapeHtml(ev.agent_type || 'System')}</span> <span class="log-action">${escapeHtml(actionLabel)}</span>${ev.message ? ` <span class="log-msg">${escapeHtml(ev.message.substring(0, 80))}</span>` : ''} <span class="log-time">${formatTime(ev.created_at)}</span>`;
+                container.appendChild(logEl);
+            } else {
+                const isUser = ev.role === 'user';
+                const agentLabel = ev.agent_type ? `${ev.agent_type}${ev.action ? ' / ' + ev.action : ''}` : (isUser ? '任务输入' : 'AI');
+                const agentColor = _agentColor(ev.agent_type);
+                const el = document.createElement('div');
+                el.className = `group-chat-msg ${isUser ? 'input' : 'agent'}`;
+                el.innerHTML = `
+                    <div class="group-chat-avatar" style="background:${agentColor};">${_agentInitial(ev.agent_type, isUser)}</div>
+                    <div class="group-chat-bubble">
+                        <div class="group-chat-name" style="color:${agentColor};">${escapeHtml(agentLabel)}</div>
+                        <div class="group-chat-content">${formatChatContent(ev.content && ev.content.length > 600 ? ev.content.slice(0, 600) + '…' : (ev.content || ''))}</div>
+                        <div class="group-chat-time">${formatTime(ev.created_at)}</div>
+                    </div>`;
+                container.appendChild(el);
+            }
+        }
+        scrollChatToBottom();
+    } catch (e) {
+        container.innerHTML = `<div class="chat-job-hint"><div class="hint-icon">❌</div><div class="hint-text">加载失败: ${escapeHtml(e.message)}</div></div>`;
+    }
+}
+
+function _agentColor(agentType) {
+    const colors = { DevAgent: '#6366f1', TestAgent: '#10b981', OrchestratorAgent: '#f59e0b', ReviewAgent: '#ec4899' };
+    return colors[agentType] || '#64748b';
+}
+
+function _agentInitial(agentType, isUser) {
+    if (isUser) return '📝';
+    const initials = { DevAgent: 'Dev', TestAgent: 'Test', OrchestratorAgent: 'Orch', ReviewAgent: 'Rev' };
+    return initials[agentType] || (agentType || 'AI').slice(0, 3);
 }
 
 /**

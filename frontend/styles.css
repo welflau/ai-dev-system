@@ -6374,3 +6374,214 @@ body.chat-open .chat-panel {
     margin-left: auto;
 }
 
+/* ==================== Agent 讨论区（工单抽屉底部） ==================== */
+
+.drawer-agent-discuss {
+    border-top: 1px solid var(--border);
+    padding-top: 0 !important;
+}
+
+.agent-discuss-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 0 10px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.agent-discuss-header:hover h4 {
+    color: var(--primary, #6366f1);
+}
+
+.agent-discuss-icon { font-size: 15px; }
+
+.agent-discuss-toggle {
+    font-size: 11px;
+    color: var(--text-muted);
+    transition: transform 0.2s;
+}
+
+.agent-discuss-body {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-bottom: 12px;
+    max-height: 420px;
+    overflow-y: auto;
+}
+
+.agent-discuss-loading,
+.agent-discuss-empty {
+    font-size: 12px;
+    color: var(--text-muted);
+    padding: 8px 0;
+    text-align: center;
+}
+
+.agent-discuss-msg {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+}
+
+.agent-discuss-msg.user { flex-direction: row-reverse; }
+
+.agent-discuss-avatar {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 700;
+    color: #fff;
+    flex-shrink: 0;
+    background: var(--primary, #6366f1);
+}
+
+.agent-discuss-msg.user .agent-discuss-avatar {
+    background: transparent;
+    font-size: 16px;
+}
+
+.agent-discuss-bubble {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 7px 10px;
+    max-width: 88%;
+}
+
+.agent-discuss-msg.user .agent-discuss-bubble {
+    background: rgba(99, 102, 241, 0.08);
+    border-color: rgba(99, 102, 241, 0.2);
+}
+
+.agent-discuss-badge {
+    font-size: 10px;
+    color: var(--text-muted);
+    margin-bottom: 3px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+
+.agent-discuss-content {
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text-secondary);
+    word-break: break-word;
+}
+
+.agent-discuss-meta {
+    font-size: 10px;
+    color: var(--text-muted);
+    margin-left: 6px;
+}
+
+.agent-discuss-time {
+    font-size: 10px;
+    color: var(--text-muted);
+    margin-top: 4px;
+}
+
+/* ==================== 群聊面板（右侧 Chat Panel Tab） ==================== */
+
+.group-chat-ticket-sep {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 0 4px;
+    margin: 8px 0 4px;
+    border-bottom: 1px solid var(--border);
+    font-size: 11px;
+}
+
+.group-chat-sep-title {
+    font-weight: 600;
+    color: var(--text-secondary);
+    flex: 1;
+    cursor: pointer;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.group-chat-sep-title:hover { color: var(--primary, #6366f1); text-decoration: underline; }
+
+.group-chat-sep-status {
+    color: var(--text-muted);
+    font-size: 10px;
+    flex-shrink: 0;
+}
+
+.group-chat-log-entry {
+    font-size: 11px;
+    color: var(--text-muted);
+    padding: 2px 8px;
+    border-left: 2px solid var(--border);
+    margin: 2px 0;
+}
+
+.group-chat-msg {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+    margin: 4px 0;
+}
+
+.group-chat-msg.input { flex-direction: row-reverse; }
+
+.group-chat-avatar {
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    font-weight: 700;
+    color: #fff;
+    flex-shrink: 0;
+}
+
+.group-chat-msg.input .group-chat-avatar {
+    background: transparent !important;
+    font-size: 18px;
+}
+
+.group-chat-bubble {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 7px 10px;
+    max-width: 86%;
+}
+
+.group-chat-msg.input .group-chat-bubble {
+    background: rgba(99, 102, 241, 0.07);
+    border-color: rgba(99, 102, 241, 0.18);
+}
+
+.group-chat-name {
+    font-size: 10px;
+    font-weight: 700;
+    margin-bottom: 3px;
+    letter-spacing: 0.3px;
+}
+
+.group-chat-content {
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text-secondary);
+    word-break: break-word;
+}
+
+.group-chat-time {
+    font-size: 10px;
+    color: var(--text-muted);
+    margin-top: 4px;
+}
+
