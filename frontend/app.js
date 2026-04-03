@@ -5542,90 +5542,25 @@ function scrollToTicketSection(ticketId) {
 }
 
 /**
- * 加载 Agent 群聊（所有 Agent 跨工单时序流）
+ * 初始化群聊界面（首次进入时显示欢迎，不加载工单历史）
  */
-async function loadGroupChat() {
+function loadGroupChat() {
     const container = document.getElementById('groupChatMessages');
     if (!container) return;
-    if (!currentProjectId) {
-        container.innerHTML = `<div class="chat-job-hint"><div class="hint-icon">📭</div><div class="hint-text">请先选择项目</div></div>`;
+    // 已有内容则不重置（保留对话记录）
+    if (container.children.length > 0) {
+        scrollChatToBottom();
         return;
     }
-
-    container.innerHTML = '<div class="chat-typing"><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div></div>';
-
-    try {
-        const resp = await originalApi(`/projects/${currentProjectId}/chat/tickets/conversations`);
-        const tickets = resp.tickets || [];
-        container.innerHTML = '';
-
-        if (tickets.length === 0) {
-            container.innerHTML = `<div class="chat-job-hint"><div class="hint-icon">📭</div><div class="hint-text">暂无 Agent 协作记录</div></div>`;
-            return;
-        }
-
-        // 将所有票务消息展平成时序流
-        const allEvents = [];
-        for (const t of tickets) {
-            for (const msg of (t.messages || [])) {
-                allEvents.push({ ...msg, _ticket: t });
-            }
-        }
-        // 按时间排序
-        allEvents.sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''));
-
-        // 渲染群聊气泡
-        let lastTicketId = null;
-        for (const ev of allEvents) {
-            // 若换了工单，插入工单分割线
-            if (ev._ticket && ev._ticket.id !== lastTicketId) {
-                lastTicketId = ev._ticket.id;
-                const sep = document.createElement('div');
-                sep.className = 'group-chat-ticket-sep';
-                sep.innerHTML = `
-                    <span class="job-status-dot" style="background:${getStatusColor(ev._ticket.status)}"></span>
-                    <span class="group-chat-sep-title" onclick="openTicketDrawer('${ev._ticket.id}')" title="查看工单详情">${escapeHtml(ev._ticket.title)}</span>
-                    <span class="group-chat-sep-status">${getStatusLabel(ev._ticket.status)}</span>`;
-                container.appendChild(sep);
-            }
-
-            if (ev.type === 'log') {
-                const actionLabel = {assign:'接单', complete:'完成', accept:'验收通过', reject:'验收不通过', error:'异常', start:'开始'}[ev.action] || ev.action;
-                const logEl = document.createElement('div');
-                logEl.className = 'group-chat-log-entry';
-                logEl.innerHTML = `<span class="log-agent">${escapeHtml(ev.agent_type || 'System')}</span> <span class="log-action">${escapeHtml(actionLabel)}</span>${ev.message ? ` <span class="log-msg">${escapeHtml(ev.message.substring(0, 80))}</span>` : ''} <span class="log-time">${formatTime(ev.created_at)}</span>`;
-                container.appendChild(logEl);
-            } else {
-                const isUser = ev.role === 'user';
-                const agentLabel = ev.agent_type ? `${ev.agent_type}${ev.action ? ' / ' + ev.action : ''}` : (isUser ? '任务输入' : 'AI');
-                const agentColor = _agentColor(ev.agent_type);
-                const el = document.createElement('div');
-                el.className = `group-chat-msg ${isUser ? 'input' : 'agent'}`;
-                el.innerHTML = `
-                    <div class="group-chat-avatar" style="background:${agentColor};">${_agentInitial(ev.agent_type, isUser)}</div>
-                    <div class="group-chat-bubble">
-                        <div class="group-chat-name" style="color:${agentColor};">${escapeHtml(agentLabel)}</div>
-                        <div class="group-chat-content">${formatChatContent(ev.content && ev.content.length > 600 ? ev.content.slice(0, 600) + '…' : (ev.content || ''))}</div>
-                        <div class="group-chat-time">${formatTime(ev.created_at)}</div>
-                    </div>`;
-                container.appendChild(el);
-            }
-        }
-        scrollChatToBottom();
-    } catch (e) {
-        container.innerHTML = `<div class="chat-job-hint"><div class="hint-icon">❌</div><div class="hint-text">加载失败: ${escapeHtml(e.message)}</div></div>`;
-    }
-}
-
-function _agentColor(agentType) {
-    const colors = { DevAgent: '#6366f1', TestAgent: '#10b981', OrchestratorAgent: '#f59e0b', ReviewAgent: '#ec4899' };
-    return colors[agentType] || '#64748b';
-}
-
-function _agentInitial(agentType, isUser) {
-    if (isUser) return '📝';
-    const initials = { DevAgent: 'Dev', TestAgent: 'Test', OrchestratorAgent: 'Orch', ReviewAgent: 'Rev' };
-    return initials[agentType] || (agentType || 'AI').slice(0, 3);
+    container.innerHTML = `
+        <div class="chat-welcome">
+            <div class="chat-welcome-icon">👥</div>
+            <div class="chat-welcome-title">Agent 群聊</div>
+            <div class="chat-welcome-desc">
+                在这里你可以和所有 Agent 一起讨论<br>
+                <small>DevAgent、TestAgent、OrchestratorAgent 都在线</small>
+            </div>
+        </div>`;
 }
 
 /**
