@@ -24,28 +24,16 @@ from git_manager import git_manager
 
 logger = logging.getLogger("orchestrator")
 
-# Agent 导入
-from agents.product import ProductAgent
-from agents.architect import ArchitectAgent
-from agents.dev import DevAgent
-from agents.test import TestAgent
-from agents.review import ReviewAgent
-from agents.deploy import DeployAgent
+# Agent 注册中心（自动发现 + 自定义 Agent）
+from agent_registry import instantiate_agents
 
 
 class TicketOrchestrator:
     """工单编排器 — 管理需求拆单和工单在 Agent 之间的流转"""
 
     def __init__(self):
-        # Agent 池
-        self.agents = {
-            "ProductAgent": ProductAgent(),
-            "ArchitectAgent": ArchitectAgent(),
-            "DevAgent": DevAgent(),
-            "TestAgent": TestAgent(),
-            "ReviewAgent": ReviewAgent(),
-            "DeployAgent": DeployAgent(),
-        }
+        # Agent 池（通过注册中心自动发现和实例化）
+        self.agents = instantiate_agents()
 
         # 正在处理的工单（防止重复处理）
         self._processing: set = set()
@@ -1872,9 +1860,11 @@ class TicketOrchestrator:
 
         # === 增量开发上下文：读取仓库中已有文件 ===
         try:
-            existing_files = await self._collect_existing_code(project_id)
-            context["existing_files"] = existing_files.get("file_list", [])
-            context["existing_code"] = existing_files.get("code", {})
+            from memory import AgentMemory
+            mem = AgentMemory(project_id)
+            code_ctx = await mem.get_code_context()
+            context["existing_files"] = code_ctx.get("file_list", [])
+            context["existing_code"] = code_ctx.get("code", {})
             logger.info("📂 已有代码上下文: %d 文件, %d 个代码片段",
                         len(context["existing_files"]), len(context["existing_code"]))
         except Exception as e:
@@ -1882,20 +1872,11 @@ class TicketOrchestrator:
             context["existing_files"] = []
             context["existing_code"] = {}
 
-        # 获取同需求下已完成工单的摘要（让后续工单知道前面做了什么）
+        # 获取同需求下已完成工单的摘要
         try:
-            sibling_tickets = await db.fetch_all(
-                """SELECT t.id, t.title, t.status, t.module
-                   FROM tickets t
-                   WHERE t.requirement_id = ? AND t.id != ?
-                     AND t.status NOT IN ('pending', 'cancelled')
-                   ORDER BY t.created_at""",
-                (ticket["requirement_id"], ticket["id"]),
+            context["sibling_tickets"] = await mem.get_sibling_tickets(
+                ticket["requirement_id"], exclude_ticket_id=ticket["id"]
             )
-            context["sibling_tickets"] = [
-                {"id": st["id"], "title": st["title"], "status": st["status"], "module": st.get("module", "")}
-                for st in sibling_tickets
-            ]
         except Exception:
             context["sibling_tickets"] = []
 
