@@ -57,8 +57,26 @@ class TicketOrchestrator:
             for name in self.agents.keys()
         }
 
-        # 状态转换规则表：当前状态 → 下一步由哪个 Agent 处理
-        self.transition_rules = {
+        # === 从 SOP 配置加载状态转换规则 ===
+        self._sop_config = None
+        self.transition_rules = self._load_transition_rules()
+
+    def _load_transition_rules(self) -> Dict:
+        """从 SOP YAML 加载状态转换规则"""
+        try:
+            from sop.loader import load_sop, sop_to_transition_rules
+            self._sop_config = load_sop("default_sop")
+            rules = sop_to_transition_rules(self._sop_config)
+            if rules:
+                logger.info("📋 SOP 配置已加载: %s (%d 条规则)",
+                            self._sop_config.get("name", "?"), len(rules))
+                return rules
+        except Exception as e:
+            logger.warning("SOP 配置加载失败，使用内置规则: %s", e)
+
+        # 兜底：内置硬编码规则
+        logger.info("📋 使用内置状态转换规则")
+        return {
             TicketStatus.PENDING.value: {
                 "agent": "ArchitectAgent",
                 "action": "design_architecture",
@@ -84,13 +102,17 @@ class TicketOrchestrator:
                 "action": "rework",
                 "next_status": TicketStatus.DEVELOPMENT_IN_PROGRESS.value,
             },
-            # TESTING_DONE 是工单终态，部署由项目级 CI/CD Pipeline 管理
             TicketStatus.TESTING_FAILED.value: {
                 "agent": "DevAgent",
                 "action": "fix_issues",
                 "next_status": TicketStatus.DEVELOPMENT_IN_PROGRESS.value,
             },
         }
+
+    def reload_sop(self):
+        """热重载 SOP 配置（供 API 调用）"""
+        self.transition_rules = self._load_transition_rules()
+        return self._sop_config
 
     def get_agent_status(self) -> Dict:
         """获取所有 Agent 的实时状态"""
@@ -127,9 +149,36 @@ class TicketOrchestrator:
 
     # ==================== 轮询调度 ====================
 
-    async def poll_loop(self, interval: int = 10):
-        """后台轮询：每隔 interval 秒扫描一次可流转的工单"""
-        logger.info("🔄 工单轮询调度器已启动 (间隔 %ds)", interval)
+    async def start_event_bus(self):
+        """启动内部事件总线"""
+        from event_bus import internal_bus
+
+        async def _on_event(event_type: str, data: dict):
+            """事件处理：工单状态变更时直接触发处理"""
+            if event_type == "ticket_ready":
+                project_id = data.get("project_id")
+                ticket_id = data.get("ticket_id")
+                if project_id and ticket_id:
+                    logger.info("⚡ 事件驱动: 立即处理工单 %s", ticket_id[:12])
+                    asyncio.create_task(self._poll_process(project_id, ticket_id))
+
+        internal_bus.set_handler(_on_event)
+        await internal_bus.start()
+
+    async def _publish_ticket_ready(self, project_id: str, ticket_id: str):
+        """发布工单就绪事件（触发下一个 Agent 立即接手）"""
+        try:
+            from event_bus import internal_bus
+            await internal_bus.publish("ticket_ready", {
+                "project_id": project_id,
+                "ticket_id": ticket_id,
+            })
+        except Exception as e:
+            logger.debug("事件发布失败(非致命): %s", e)
+
+    async def poll_loop(self, interval: int = 30):
+        """后台轮询：兜底机制，扫描遗漏的工单（间隔已放宽到 30s）"""
+        logger.info("🔄 工单轮询调度器已启动 (间隔 %ds, 事件总线为主)", interval)
         while True:
             try:
                 await self._poll_once()
@@ -937,6 +986,11 @@ class TicketOrchestrator:
 
             # 处理结果
             await self._handle_agent_result(project_id, ticket_id, ticket, agent_name, action, result)
+
+            # === 事件驱动：触发后续工单立即处理 ===
+            updated = await db.fetch_one("SELECT status FROM tickets WHERE id = ?", (ticket_id,))
+            if updated and updated["status"] in self.transition_rules:
+                await self._publish_ticket_ready(project_id, ticket_id)
 
         except Exception as e:
             logger.error("❌ 工单处理异常 [%s]: %s", ticket_id[:12] if ticket_id else "?", e, exc_info=True)

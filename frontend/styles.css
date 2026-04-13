@@ -2487,6 +2487,39 @@ input[readonly]:focus {
 }
 
 
+/* SOP 流程配置 */
+.sop-flow-container {
+    overflow-x: auto;
+    padding: 16px 0;
+}
+.sop-flow-container svg {
+    display: block;
+    margin: 0 auto;
+}
+.sop-table {
+    width: 100%;
+    margin-top: 20px;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+.sop-table th {
+    background: var(--bg-elevated);
+    padding: 8px 12px;
+    text-align: left;
+    font-weight: 600;
+    border-bottom: 2px solid var(--border);
+}
+.sop-table td {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+}
+.sop-table code {
+    font-size: 11px;
+    background: var(--bg);
+    padding: 2px 5px;
+    border-radius: 3px;
+}
+
 /* 环境管理卡片 */
 .env-cards {
     display: grid;

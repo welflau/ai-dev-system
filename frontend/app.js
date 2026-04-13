@@ -554,6 +554,7 @@ function switchTab(tab) {
     if (tab === 'bugs') loadBugs();
     if (tab === 'settings-general') loadSettingsGeneral();
     if (tab === 'settings-repo') loadSettingsRepo();
+    if (tab === 'settings-sop') loadSOPFlow();
     if (tab === 'settings-envs') loadEnvironments();
     if (tab === 'settings-agents') { loadAgentList(); loadAgentToolsStatus(); }
     if (tab === 'settings-knowledge') loadKnowledgeDocs();
@@ -679,6 +680,128 @@ async function mergeBranch(source, target) {
         }
     } catch (e) {
         showToast(`合并失败: ${e.message}`, 'error');
+    }
+}
+
+// ==================== SOP 流程配置 ====================
+
+async function loadSOPFlow() {
+    const container = document.getElementById('sopFlowChart');
+    const infoEl = document.getElementById('sopInfo');
+    if (!container) return;
+
+    try {
+        const data = await api('/sop');
+        const meta = data.metadata || {};
+        const stages = data.stages || [];
+
+        // 元信息
+        infoEl.innerHTML = `
+            <div style="display:flex;gap:16px;font-size:13px;color:var(--text-muted);">
+                <span><strong>流程名称:</strong> ${escapeHtml(meta.name || '-')}</span>
+                <span><strong>版本:</strong> ${meta.version || '-'}</span>
+                <span><strong>阶段数:</strong> ${meta.stage_count || stages.length}</span>
+            </div>
+            <p style="font-size:12px;color:var(--text-muted);margin-top:4px;">${escapeHtml(meta.description || '')}</p>
+        `;
+
+        if (stages.length === 0) {
+            container.innerHTML = '<div class="empty-state"><p>无流程定义</p></div>';
+            return;
+        }
+
+        // 分离主流程和打回流程
+        const mainStages = stages.filter(s => !['rework', 'fix_issues'].includes(s.id));
+        const rejectStages = stages.filter(s => ['rework', 'fix_issues'].includes(s.id));
+
+        // SVG 流程图
+        const nodeW = 160, nodeH = 70, gapX = 40, gapY = 30;
+        const totalW = mainStages.length * (nodeW + gapX) + 40;
+        const totalH = nodeH * 2 + gapY * 3 + 60;
+
+        const agentColors = {
+            ArchitectAgent: '#3b82f6', DevAgent: '#10b981', ProductAgent: '#f59e0b',
+            TestAgent: '#8b5cf6', ReviewAgent: '#ec4899', DeployAgent: '#ef4444',
+        };
+
+        let svg = `<svg width="${totalW}" height="${totalH}" viewBox="0 0 ${totalW} ${totalH}" style="max-width:100%;overflow:auto;">`;
+        svg += `<defs><marker id="arrowhead" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="var(--text-muted)"/></marker>`;
+        svg += `<marker id="arrowred" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#ef4444"/></marker></defs>`;
+
+        // 画主流程节点
+        mainStages.forEach((s, i) => {
+            const x = 20 + i * (nodeW + gapX);
+            const y = 30;
+            const color = agentColors[s.agent] || '#64748b';
+
+            // 节点框
+            svg += `<rect x="${x}" y="${y}" width="${nodeW}" height="${nodeH}" rx="8" fill="var(--bg-elevated)" stroke="${color}" stroke-width="2"/>`;
+            // 阶段名
+            svg += `<text x="${x + nodeW/2}" y="${y + 22}" text-anchor="middle" font-size="13" font-weight="600" fill="var(--text)">${escapeHtml(s.name)}</text>`;
+            // Agent 名
+            svg += `<text x="${x + nodeW/2}" y="${y + 40}" text-anchor="middle" font-size="11" fill="${color}">${escapeHtml(s.agent)}</text>`;
+            // 触发状态
+            svg += `<text x="${x + nodeW/2}" y="${y + 55}" text-anchor="middle" font-size="9" fill="var(--text-muted)">${escapeHtml(s.trigger_on)}</text>`;
+
+            // 箭头到下一个
+            if (i < mainStages.length - 1) {
+                const x2 = x + nodeW;
+                const x3 = x2 + gapX;
+                svg += `<line x1="${x2}" y1="${y + nodeH/2}" x2="${x3}" y2="${y + nodeH/2}" stroke="var(--text-muted)" stroke-width="1.5" marker-end="url(#arrowhead)"/>`;
+            }
+        });
+
+        // 画打回箭头
+        rejectStages.forEach(rs => {
+            const fromStage = mainStages.find(s => s.success_status === rs.trigger_on || s.reject_status === rs.trigger_on);
+            const toStage = mainStages.find(s => s.id === 'development' || s.trigger_on === rs.success_status);
+
+            if (fromStage && toStage) {
+                const fromIdx = mainStages.indexOf(fromStage);
+                const toIdx = mainStages.indexOf(toStage);
+                if (fromIdx >= 0 && toIdx >= 0) {
+                    const fx = 20 + fromIdx * (nodeW + gapX) + nodeW / 2;
+                    const fy = 30 + nodeH;
+                    const tx = 20 + toIdx * (nodeW + gapX) + nodeW / 2;
+                    const ty = 30 + nodeH;
+                    const curveY = fy + 40 + Math.abs(fromIdx - toIdx) * 15;
+
+                    svg += `<path d="M${fx},${fy} C${fx},${curveY} ${tx},${curveY} ${tx},${ty}" fill="none" stroke="#ef4444" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrowred)"/>`;
+                    svg += `<text x="${(fx+tx)/2}" y="${curveY - 5}" text-anchor="middle" font-size="10" fill="#ef4444">${escapeHtml(rs.name)}</text>`;
+                }
+            }
+        });
+
+        svg += '</svg>';
+
+        // 阶段详情表格
+        let table = '<table class="sop-table"><thead><tr><th>阶段</th><th>Agent</th><th>触发状态</th><th>成功状态</th><th>打回</th><th>说明</th></tr></thead><tbody>';
+        stages.forEach(s => {
+            const color = agentColors[s.agent] || '#64748b';
+            table += `<tr>
+                <td><strong>${escapeHtml(s.name || s.id)}</strong></td>
+                <td><span style="color:${color};font-weight:500;">${escapeHtml(s.agent)}</span></td>
+                <td><code>${escapeHtml(s.trigger_on)}</code></td>
+                <td><code>${escapeHtml(s.success_status || '-')}</code></td>
+                <td>${s.reject_goto ? `<span style="color:#ef4444;">→ ${escapeHtml(s.reject_goto)}</span>` : '-'}</td>
+                <td style="color:var(--text-muted);font-size:12px;">${escapeHtml(s.description || '')}</td>
+            </tr>`;
+        });
+        table += '</tbody></table>';
+
+        container.innerHTML = svg + table;
+    } catch (e) {
+        container.innerHTML = `<div class="empty-state"><p>加载失败: ${escapeHtml(e.message)}</p></div>`;
+    }
+}
+
+async function reloadSOP() {
+    try {
+        const res = await api('/sop/reload', { method: 'POST' });
+        showToast(`SOP 已重载: ${res.name}`, 'success');
+        loadSOPFlow();
+    } catch (e) {
+        showToast(`重载失败: ${e.message}`, 'error');
     }
 }
 

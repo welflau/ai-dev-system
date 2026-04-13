@@ -1,0 +1,73 @@
+# AI Dev System — 标准开发流程 SOP
+# 修改此文件即可调整工单流转逻辑，无需改代码
+# 重启后端后生效
+
+name: "标准软件开发流程"
+version: "1.0"
+description: "需求拆单 → 架构设计 → 开发自测 → 产品验收 → 测试 → 部署"
+
+# 工单状态流转阶段定义
+# trigger_on: 触发条件（工单处于什么状态时执行）
+# agent: 执行的 Agent 名称
+# action: Agent 执行的动作
+# success_status: 成功后工单状态
+# reject_status: 失败/打回后的状态（可选）
+# reject_goto: 打回后跳转到哪个阶段 ID（可选）
+# pass_threshold: 通过率阈值（百分比，仅 TestAgent 使用）
+# optional: 是否可跳过（默认 false）
+
+stages:
+  - id: architecture
+    name: "架构设计"
+    agent: ArchitectAgent
+    action: design_architecture
+    trigger_on: pending
+    success_status: architecture_done
+    description: "分析需求，设计技术架构方案"
+
+  - id: development
+    name: "代码开发"
+    agent: DevAgent
+    action: develop
+    trigger_on: architecture_done
+    success_status: development_done
+    description: "根据架构设计编写代码，含自测"
+
+  - id: acceptance
+    name: "产品验收"
+    agent: ProductAgent
+    action: acceptance_review
+    trigger_on: development_done
+    success_status: acceptance_passed
+    reject_status: acceptance_rejected
+    reject_goto: rework
+    description: "产品经理验收代码是否符合需求"
+
+  - id: testing
+    name: "质量测试"
+    agent: TestAgent
+    action: run_tests
+    trigger_on: acceptance_passed
+    success_status: testing_done
+    reject_status: testing_failed
+    reject_goto: fix_issues
+    pass_threshold: 60
+    description: "5层测试：静态分析+代码审查+功能测试+用例生成+执行"
+
+  # --- 打回处理阶段 ---
+
+  - id: rework
+    name: "返工修复"
+    agent: DevAgent
+    action: rework
+    trigger_on: acceptance_rejected
+    success_status: development_done
+    description: "验收不通过，根据反馈返工修改"
+
+  - id: fix_issues
+    name: "问题修复"
+    agent: DevAgent
+    action: fix_issues
+    trigger_on: testing_failed
+    success_status: development_done
+    description: "测试不通过，根据测试报告修复问题"

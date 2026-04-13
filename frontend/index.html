@@ -114,6 +114,9 @@
                             <a class="nav-item nav-sub-item" data-tab="settings-repo" onclick="switchTab('settings-repo')">
                                 <span class="nav-item-icon">📂</span> 仓库配置
                             </a>
+                            <a class="nav-item nav-sub-item" data-tab="settings-sop" onclick="switchTab('settings-sop')">
+                                <span class="nav-item-icon">🔄</span> 流程配置
+                            </a>
                             <a class="nav-item nav-sub-item" data-tab="settings-envs" onclick="switchTab('settings-envs')">
                                 <span class="nav-item-icon">🌍</span> 环境管理
                             </a>
@@ -551,6 +554,18 @@
                     </div>
 
                     <!-- Tab: 设置 - 环境管理 -->
+                    <!-- Tab: 设置 - 流程配置 -->
+                    <div id="tab-settings-sop" class="tab-content">
+                        <div class="settings-page">
+                            <div class="settings-page-header">
+                                <h2>🔄 流程配置 (SOP)</h2>
+                                <button class="btn btn-sm" onclick="reloadSOP()">🔄 重载配置</button>
+                            </div>
+                            <div id="sopInfo" style="margin-bottom:16px;"></div>
+                            <div class="sop-flow-container" id="sopFlowChart"></div>
+                        </div>
+                    </div>
+
                     <div id="tab-settings-envs" class="tab-content">
                         <div class="settings-page">
                             <div class="settings-page-header">
@@ -1103,6 +1118,6 @@
     <!-- ==================== Toast 通知 ==================== -->
     <div class="toast-container" id="toastContainer"></div>
 
-    <script src="/static/app.js?v=0.12.1"></script>
+    <script src="/static/app.js?v=0.13.0"></script>
 </body>
 </html>

@@ -90,8 +90,13 @@ async def lifespan(app: FastAPI):
 
     # 启动工单轮询调度器
     from orchestrator import orchestrator
-    poll_task = asyncio.create_task(orchestrator.poll_loop(interval=10))
-    logger.info("工单轮询调度器已启动 (10s 间隔)")
+    # 启动内部事件总线（事件驱动，主调度方式）
+    bus_task = asyncio.create_task(orchestrator.start_event_bus())
+    logger.info("内部事件总线已启动")
+
+    # 轮询调度器降为兜底（30s 间隔）
+    poll_task = asyncio.create_task(orchestrator.poll_loop(interval=30))
+    logger.info("工单轮询调度器已启动 (30s 兜底)")
 
     # 启动 CI/CD Pipeline 调度器
     from ci_pipeline import ci_pipeline
@@ -105,6 +110,7 @@ async def lifespan(app: FastAPI):
     yield
 
     # 关闭时
+    bus_task.cancel()
     poll_task.cancel()
     ci_task.cancel()
     await db.disconnect()
@@ -165,7 +171,30 @@ app.include_router(knowledge_router)
 @app.get("/api/health")
 async def health_check():
     """健康检查"""
-    return {"status": "ok", "version": "0.10.0"}
+    return {"status": "ok", "version": "0.13.0"}
+
+
+@app.get("/api/sop")
+async def get_sop():
+    """获取当前 SOP 配置（流程定义）"""
+    from sop.loader import get_sop_stages, get_sop_metadata
+    from orchestrator import orchestrator
+    config = orchestrator._sop_config
+    if not config:
+        return {"metadata": {"name": "内置默认", "version": "1.0"}, "stages": [], "rules": orchestrator.transition_rules}
+    return {
+        "metadata": get_sop_metadata(config),
+        "stages": get_sop_stages(config),
+        "rules": orchestrator.transition_rules,
+    }
+
+
+@app.post("/api/sop/reload")
+async def reload_sop():
+    """热重载 SOP 配置"""
+    from orchestrator import orchestrator
+    config = orchestrator.reload_sop()
+    return {"status": "ok", "message": "SOP 已重载", "name": config.get("name", "?") if config else "内置默认"}
 
 
 @app.get("/api/projects/{project_id}/preview")
