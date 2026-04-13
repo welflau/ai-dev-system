@@ -4621,7 +4621,32 @@ body.chat-open .chat-panel {
     font-style: italic;
 }
 
-/* 消息气泡 */
+/* 群聊 Agent 快捷标签 */
+.group-agent-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: opacity 0.15s;
+    user-select: none;
+}
+.group-agent-tag:hover {
+    opacity: 0.75;
+}
+/* 群聊 Agent 回复气泡名称 */
+.group-agent-name {
+    font-size: 11px;
+    font-weight: 600;
+    margin-bottom: 3px;
+    margin-left: 2px;
+    letter-spacing: 0.02em;
+}
+
+
 .chat-msg {
     display: flex;
     gap: 8px;

@@ -5558,9 +5558,26 @@ function loadGroupChat() {
             <div class="chat-welcome-title">Agent 群聊</div>
             <div class="chat-welcome-desc">
                 在这里你可以和所有 Agent 一起讨论<br>
-                <small>DevAgent、TestAgent、OrchestratorAgent 都在线</small>
+                <small>输入 @DevAgent、@TestAgent、@OrchestratorAgent 可直接呼叫指定 Agent</small>
+            </div>
+            <div class="group-chat-agent-tags" style="display:flex;gap:8px;justify-content:center;margin-top:12px;flex-wrap:wrap;">
+                <span class="group-agent-tag" onclick="insertMention('@DevAgent ')" style="background:#58a6ff20;color:#58a6ff;border:1px solid #58a6ff40;">👨‍💻 @DevAgent</span>
+                <span class="group-agent-tag" onclick="insertMention('@TestAgent ')" style="background:#3fb95020;color:#3fb950;border:1px solid #3fb95040;">🧪 @TestAgent</span>
+                <span class="group-agent-tag" onclick="insertMention('@OrchestratorAgent ')" style="background:#d2a8ff20;color:#d2a8ff;border:1px solid #d2a8ff40;">🎯 @OrchestratorAgent</span>
             </div>
         </div>`;
+}
+
+/**
+ * 在聊天输入框插入 @mention
+ */
+function insertMention(text) {
+    const input = document.getElementById('chatInput');
+    if (!input) return;
+    const cur = input.value;
+    input.value = cur ? cur + ' ' + text : text;
+    input.focus();
+    autoResizeChatInput();
 }
 
 /**
@@ -5637,7 +5654,7 @@ async function sendChatMessage() {
     appendChatBubble('user', bubbleMessage, null, null, images);
     scrollChatToBottom();
 
-    // 添加加载动画
+    // 添加加载动画（根据模式放入正确容器）
     const typingEl = document.createElement('div');
     typingEl.className = 'chat-msg assistant';
     typingEl.id = 'chatTyping';
@@ -5653,7 +5670,10 @@ async function sendChatMessage() {
             </div>
         </div>
     `;
-    document.getElementById('chatMessages').appendChild(typingEl);
+    const typingContainer = chatMode === 'group'
+        ? (document.getElementById('groupChatMessages') || document.getElementById('chatMessages'))
+        : document.getElementById('chatMessages');
+    typingContainer.appendChild(typingEl);
     scrollChatToBottom();
 
     try {
@@ -5661,7 +5681,59 @@ async function sendChatMessage() {
         const historyToSend = chatHistory.slice(-10);
 
         let resp;
-        if (currentProjectId) {
+        if (chatMode === 'group' && currentProjectId) {
+            // 群聊模式 — 解析 @mention 决定目标 Agent
+            const mentionMatch = fullMessage.match(/@(DevAgent|TestAgent|OrchestratorAgent|ChatAssistant)/i);
+            const targetAgent = mentionMatch
+                ? mentionMatch[1].charAt(0).toUpperCase() + mentionMatch[1].slice(1)
+                : null;
+            // 规范化大小写
+            const agentMap = {'devagent':'DevAgent','testagent':'TestAgent','orchestratoragent':'OrchestratorAgent','chatassistant':'ChatAssistant'};
+            const resolvedAgent = targetAgent ? (agentMap[targetAgent.toLowerCase()] || targetAgent) : null;
+
+            if (resolvedAgent) {
+                // 有 @mention — 只叫指定 Agent
+                resp = await originalApi(`/projects/${currentProjectId}/chat/group`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        message: fullMessage,
+                        agent: resolvedAgent,
+                        history: historyToSend,
+                        images: images.length > 0 ? images : undefined,
+                    }),
+                });
+                document.getElementById('chatTyping')?.remove();
+                chatHistory.push({ role: 'user', content: fullMessage });
+                chatHistory.push({ role: 'assistant', content: resp.reply });
+                appendGroupAgentBubble(resp.agent, resp.emoji, resp.color, resp.reply);
+                scrollChatToBottom();
+            } else {
+                // 无 @mention — 所有 Agent 都参与讨论
+                resp = await originalApi(`/projects/${currentProjectId}/chat/group/all`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        message: fullMessage,
+                        history: historyToSend,
+                        images: images.length > 0 ? images : undefined,
+                    }),
+                });
+                document.getElementById('chatTyping')?.remove();
+                chatHistory.push({ role: 'user', content: fullMessage });
+                // 逐个显示每个 Agent 的回复，带小延迟营造依次发言感
+                if (resp.replies && resp.replies.length > 0) {
+                    const lastReply = resp.replies[resp.replies.length - 1];
+                    chatHistory.push({ role: 'assistant', content: lastReply.reply });
+                    resp.replies.forEach((r, idx) => {
+                        setTimeout(() => {
+                            appendGroupAgentBubble(r.agent, r.emoji, r.color, r.reply);
+                            scrollChatToBottom();
+                        }, idx * 400);
+                    });
+                }
+            }
+        } else if (currentProjectId) {
             // 项目内聊天 — 走原有 API
             resp = await originalApi(`/projects/${currentProjectId}/chat`, {
                 method: 'POST',
@@ -5685,6 +5757,7 @@ async function sendChatMessage() {
             });
         }
 
+        if (chatMode !== 'group') {
         // 移除加载动画
         document.getElementById('chatTyping')?.remove();
 
@@ -5747,6 +5820,7 @@ async function sendChatMessage() {
         if (action && action.type === 'document_generated') {
             showToast(`文档「${action.title || action.path}」已生成`, 'success');
         }
+        } // end if (chatMode !== 'group')
 
     } catch (e) {
         document.getElementById('chatTyping')?.remove();
@@ -5959,6 +6033,31 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
             <div class="chat-msg-bubble">${formatChatContent(content)}</div>
             ${actionHtml}
             ${toolbarHtml}
+            <div class="chat-msg-time">${timeStr}</div>
+        </div>
+    `;
+    container.appendChild(msgEl);
+}
+
+/**
+ * 追加群聊 Agent 专属气泡
+ */
+function appendGroupAgentBubble(agentName, emoji, color, content) {
+    const container = document.getElementById('groupChatMessages') || document.getElementById('chatMessages');
+    const msgEl = document.createElement('div');
+    msgEl.className = 'chat-msg assistant group-agent-msg';
+    const timeStr = formatTime(new Date().toISOString());
+    msgEl.innerHTML = `
+        <div class="chat-msg-avatar group-agent-avatar" style="background:${escapeHtml(color)}20;border:1.5px solid ${escapeHtml(color)}40;color:${escapeHtml(color)};font-size:16px;">${escapeHtml(emoji)}</div>
+        <div class="chat-msg-content">
+            <div class="group-agent-name" style="color:${escapeHtml(color)};font-size:11px;font-weight:600;margin-bottom:3px;margin-left:2px;">${escapeHtml(agentName)}</div>
+            <div class="chat-msg-bubble" style="border-left:3px solid ${escapeHtml(color)}40;">${formatChatContent(content)}</div>
+            <div class="chat-bubble-toolbar">
+                <button class="chat-bubble-tool-btn" onclick="copyChatBubble(this)" title="复制内容">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+                    复制
+                </button>
+            </div>
             <div class="chat-msg-time">${timeStr}</div>
         </div>
     `;

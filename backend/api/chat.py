@@ -43,7 +43,222 @@ class ChatResponse(BaseModel):
     action: Optional[Dict[str, Any]] = Field(default=None, description="执行的操作信息")
 
 
+class GroupChatRequest(BaseModel):
+    message: str = Field(..., min_length=1, description="用户消息")
+    agent: Optional[str] = Field(default=None, description="目标 Agent: DevAgent / TestAgent / OrchestratorAgent / ChatAssistant")
+    history: Optional[List[ChatMessage]] = Field(default=None, description="历史消息（可选）")
+    images: Optional[List[str]] = Field(default=None, description="图片 base64 列表")
+
+
+class GroupChatResponse(BaseModel):
+    agent: str = Field(..., description="响应的 Agent 名称")
+    reply: str = Field(..., description="AI 回复")
+    emoji: str = Field(..., description="Agent 头像 emoji")
+    color: str = Field(..., description="Agent 主题色")
+
+
+class GroupChatAllResponse(BaseModel):
+    replies: List[GroupChatResponse] = Field(..., description="所有 Agent 的回复列表")
+
+
+# Agent 配置
+_AGENT_CONFIG = {
+    "DevAgent": {
+        "emoji": "👨‍💻",
+        "color": "#58a6ff",
+        "persona": """你是 DevAgent（开发 Agent），AI 自动开发系统中负责编写代码、实现功能的 Agent。
+你的专长是代码设计、架构分析、技术方案、具体实现细节。
+回复风格：专业、简洁，偏向技术角度，给出具体可行的建议或代码片段。
+你在群聊中与用户和其他 Agent 协作，你清楚地知道自己是 DevAgent，不是普通助手。""",
+    },
+    "TestAgent": {
+        "emoji": "🧪",
+        "color": "#3fb950",
+        "persona": """你是 TestAgent（测试 Agent），AI 自动开发系统中负责质量保障、测试用例设计、Bug 发现的 Agent。
+你的专长是测试策略、边界条件分析、回归测试、自动化测试。
+回复风格：严谨、细致，关注质量和可靠性，善于发现潜在问题。
+你在群聊中与用户和其他 Agent 协作，你清楚地知道自己是 TestAgent，不是普通助手。""",
+    },
+    "OrchestratorAgent": {
+        "emoji": "🎯",
+        "color": "#d2a8ff",
+        "persona": """你是 OrchestratorAgent（编排 Agent），AI 自动开发系统的核心调度 Agent，负责需求分析、工单拆分、任务协调。
+你的专长是项目管理、需求拆解、任务优先级、跨 Agent 协调。
+回复风格：宏观视角、条理清晰，善于把复杂需求分解为可执行步骤。
+你在群聊中与用户和其他 Agent 协作，你清楚地知道自己是 OrchestratorAgent，不是普通助手。""",
+    },
+    "ChatAssistant": {
+        "emoji": "🤖",
+        "color": "#e6a817",
+        "persona": """你是 AI 自动开发系统的智能助手，在群聊中帮助用户与各 Agent 协作。
+你负责解答通用问题、协调讨论、提供综合建议。""",
+    },
+}
+
+_DEFAULT_AGENT = "ChatAssistant"
+
+# 关键词 -> Agent 映射（无 @ 时的自动路由）
+_KEYWORD_ROUTES = {
+    "代码": "DevAgent", "实现": "DevAgent", "开发": "DevAgent", "编写": "DevAgent",
+    "架构": "DevAgent", "设计": "DevAgent", "函数": "DevAgent", "接口": "DevAgent",
+    "bug": "TestAgent", "BUG": "TestAgent", "测试": "TestAgent", "用例": "TestAgent",
+    "质量": "TestAgent", "验证": "TestAgent", "自动化": "TestAgent",
+    "需求": "OrchestratorAgent", "工单": "OrchestratorAgent", "拆分": "OrchestratorAgent",
+    "任务": "OrchestratorAgent", "计划": "OrchestratorAgent", "流程": "OrchestratorAgent",
+}
+
+
 # ==================== 聊天端点 ====================
+
+
+@router.post("/group", response_model=GroupChatResponse)
+async def group_chat(project_id: str, req: GroupChatRequest):
+    """群聊 — 消息路由到对应 Agent 人格回复"""
+    from llm_client import llm_client, set_llm_context, clear_llm_context
+
+    project = await db.fetch_one("SELECT * FROM projects WHERE id = ?", (project_id,))
+    if not project:
+        raise HTTPException(404, "项目不存在")
+
+    # 确定响应 Agent
+    agent_name = req.agent
+    if not agent_name or agent_name not in _AGENT_CONFIG:
+        # 无指定 Agent，根据关键词自动路由
+        agent_name = _DEFAULT_AGENT
+        msg_lower = req.message.lower()
+        for kw, target in _KEYWORD_ROUTES.items():
+            if kw.lower() in msg_lower:
+                agent_name = target
+                break
+
+    agent_cfg = _AGENT_CONFIG[agent_name]
+
+    # 获取项目上下文
+    project_context = await _build_project_context(project_id, project)
+    req_list = project_context.get("recent_requirements", [])
+    req_summary = "\n".join(
+        f"  - [{r['status']}] {r['title']} (ID: {r['id']})" for r in req_list[:5]
+    ) or "  暂无需求"
+    ticket_summary = project_context.get("ticket_summary", "暂无工单")
+
+    system_prompt = f"""{agent_cfg['persona']}
+
+## 当前项目：{project['name']}
+- 描述：{project.get('description') or '无'}
+- 技术栈：{project.get('tech_stack') or '未指定'}
+
+## 需求概况
+{req_summary}
+
+## 工单概况
+{ticket_summary}
+
+请以 {agent_name} 的身份简洁地回复用户，不超过 300 字。"""
+
+    messages = [{"role": "system", "content": system_prompt}]
+
+    # 历史消息（过滤掉同 Agent 的连续上下文）
+    if req.history:
+        for msg in req.history[-10:]:
+            messages.append({"role": msg.role, "content": msg.content})
+
+    messages.append({"role": "user", "content": _build_user_content(req.message, req.images)})
+
+    set_llm_context(project_id=project_id, agent_type=agent_name, action="group_chat")
+    try:
+        reply = await llm_client.chat(messages, temperature=0.75, max_tokens=1000)
+        return GroupChatResponse(
+            agent=agent_name,
+            reply=reply.strip(),
+            emoji=agent_cfg["emoji"],
+            color=agent_cfg["color"],
+        )
+    finally:
+        clear_llm_context()
+
+
+@router.post("/group/all", response_model=GroupChatAllResponse)
+async def group_chat_all(project_id: str, req: GroupChatRequest):
+    """群聊 — 所有 Agent 并发回复，每人从自己视角发言"""
+    import asyncio
+    from llm_client import llm_client, set_llm_context, clear_llm_context
+
+    project = await db.fetch_one("SELECT * FROM projects WHERE id = ?", (project_id,))
+    if not project:
+        raise HTTPException(404, "项目不存在")
+
+    # 获取项目上下文（只查一次）
+    project_context = await _build_project_context(project_id, project)
+    req_list = project_context.get("recent_requirements", [])
+    req_summary = "\n".join(
+        f"  - [{r['status']}] {r['title']} (ID: {r['id']})" for r in req_list[:5]
+    ) or "  暂无需求"
+    ticket_summary = project_context.get("ticket_summary", "暂无工单")
+
+    history_msgs = []
+    if req.history:
+        for msg in req.history[-8:]:
+            history_msgs.append({"role": msg.role, "content": msg.content})
+
+    user_content = _build_user_content(req.message, req.images)
+
+    # 三个主要 Agent 的顺序：先 Orchestrator 总览，再 Dev 出方案，最后 Test 把关
+    participating_agents = ["OrchestratorAgent", "DevAgent", "TestAgent"]
+
+    async def _call_agent(agent_name: str) -> GroupChatResponse:
+        cfg = _AGENT_CONFIG[agent_name]
+        system_prompt = f"""{cfg['persona']}
+
+## 当前项目：{project['name']}
+- 描述：{project.get('description') or '无'}
+- 技术栈：{project.get('tech_stack') or '未指定'}
+
+## 需求概况
+{req_summary}
+
+## 工单概况
+{ticket_summary}
+
+## 群聊规则
+- 你正在参加一个多 Agent 群聊，其他 Agent（DevAgent、TestAgent、OrchestratorAgent）也会同时发言
+- 请只从 **你自己的专业视角** 简短地回应用户，不要重复其他 Agent 会说的内容
+- 回复控制在 150 字以内，简洁有力
+- 不要说"我来补充一下"或"如 DevAgent 所说"之类的话，直接说你的观点"""
+
+        messages = [{"role": "system", "content": system_prompt}]
+        messages.extend(history_msgs)
+        messages.append({"role": "user", "content": user_content})
+
+        set_llm_context(project_id=project_id, agent_type=agent_name, action="group_chat_all")
+        try:
+            reply = await llm_client.chat(messages, temperature=0.8, max_tokens=600)
+            return GroupChatResponse(
+                agent=agent_name,
+                reply=reply.strip(),
+                emoji=cfg["emoji"],
+                color=cfg["color"],
+            )
+        finally:
+            clear_llm_context()
+
+    # 并发调用所有 Agent
+    results = await asyncio.gather(*[_call_agent(a) for a in participating_agents], return_exceptions=True)
+
+    replies = []
+    for agent_name, result in zip(participating_agents, results):
+        if isinstance(result, Exception):
+            cfg = _AGENT_CONFIG[agent_name]
+            replies.append(GroupChatResponse(
+                agent=agent_name,
+                reply="（暂时无法回复）",
+                emoji=cfg["emoji"],
+                color=cfg["color"],
+            ))
+        else:
+            replies.append(result)
+
+    return GroupChatAllResponse(replies=replies)
+
 
 @router.post("", response_model=ChatResponse)
 async def chat_with_ai(project_id: str, req: ChatRequest):
