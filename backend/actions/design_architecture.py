@@ -1,8 +1,13 @@
-"""Action: 架构设计（从 ArchitectAgent 抽离）"""
+"""Action: 架构设计（使用 ActionNode 结构化输出）"""
 import json
+import logging
 from typing import Any, Dict
 from actions.base import ActionBase, ActionResult
+from actions.action_node import ActionNode
+from actions.schemas import ArchitectureOutput
 from llm_client import llm_client
+
+logger = logging.getLogger("action.architecture")
 
 
 class DesignArchitectureAction(ActionBase):
@@ -25,44 +30,38 @@ class DesignArchitectureAction(ActionBase):
         existing_code = context.get("existing_code", {})
         sibling_tickets = context.get("sibling_tickets", [])
 
-        # 构建已有代码上下文
-        existing_section = ""
+        # 构建上下文
+        ctx_parts = [f"## 需求: {requirement_description[:300]}", f"## 任务: {ticket_title}", ticket_description, f"模块: {module}"]
         if existing_files:
             code_files = [f for f in existing_files if not f.startswith(("docs/", "tests/", ".git", "build/"))]
             if code_files:
-                existing_section += f"\n## 项目已有文件\n" + "\n".join(f"  - {f}" for f in code_files[:20]) + "\n"
+                ctx_parts.append("## 已有文件\n" + "\n".join(f"  - {f}" for f in code_files[:20]))
         if existing_code:
-            existing_section += "\n## 现有代码（在此基础上扩展）\n"
+            ctx_parts.append("## 现有代码（在此基础上扩展）")
             for fp, code in list(existing_code.items())[:2]:
-                existing_section += f"\n### {fp}\n```\n{code[:1500]}\n```\n"
+                ctx_parts.append(f"### {fp}\n```\n{code[:1500]}\n```")
         if sibling_tickets:
-            existing_section += "\n## 同需求其他工单\n" + "\n".join(f"  - [{t['status']}] {t['title']}" for t in sibling_tickets) + "\n"
+            ctx_parts.append("## 同需求其他工单\n" + "\n".join(f"  - [{t['status']}] {t['title']}" for t in sibling_tickets))
 
-        prompt = f"""为以下任务设计增量架构方案，返回 JSON。
+        req_context = "\n\n".join(ctx_parts)
 
-## 需求: {requirement_description[:300]}
-## 任务: {ticket_title}
-{ticket_description}
-模块: {module}
-{existing_section}
-返回: {{"architecture_type":"架构模式","tech_stack":{{"language":"","framework":""}},"module_design":[{{"name":"","responsibility":"","interfaces":[]}}],"data_flow":"","estimated_hours":0,"decisions":[]}}
-
-要求：增量设计，已有代码不推翻，技术栈与已有一致。"""
-
-        result = await llm_client.chat_json(
-            [{"role": "user", "content": prompt}], max_tokens=2000,
+        # 使用 ActionNode 结构化输出
+        node = ActionNode(
+            key="design_architecture",
+            expected_type=ArchitectureOutput,
+            instruction="为以下任务设计增量架构方案。增量设计，已有代码不推翻，技术栈与已有一致。",
         )
+        await node.fill(req=req_context, llm=llm_client, max_tokens=2000)
 
-        if result and isinstance(result, dict):
-            arch_md = _generate_arch_doc(ticket_title, result)
-            return ActionResult(
-                success=True,
-                data={"architecture": result, "estimated_hours": result.get("estimated_hours", 4)},
-                files={f"{docs_prefix}architecture.md": arch_md},
-            )
+        arch = node.instruct_content
+        arch_dict = arch.model_dump() if arch else {}
+        arch_md = _generate_arch_doc(ticket_title, arch_dict)
 
-        # 降级
-        return _fallback_design(ticket_title, module, docs_prefix)
+        return ActionResult(
+            success=True,
+            data={"architecture": arch_dict, "estimated_hours": arch.estimated_hours if arch else 4},
+            files={f"{docs_prefix}architecture.md": arch_md},
+        )
 
 
 def _generate_arch_doc(title: str, arch: dict) -> str:
@@ -78,23 +77,13 @@ def _generate_arch_doc(title: str, arch: dict) -> str:
     if modules:
         lines.append("## 模块设计\n")
         for m in modules:
-            lines.append(f"### {m.get('name', '')}")
-            lines.append(f"职责: {m.get('responsibility', '')}")
-            for iface in m.get("interfaces", []):
-                lines.append(f"- {iface}")
-            lines.append("")
+            if isinstance(m, dict):
+                lines.append(f"### {m.get('name', '')}")
+                lines.append(f"职责: {m.get('responsibility', '')}")
+                for iface in m.get("interfaces", []):
+                    lines.append(f"- {iface}")
+                lines.append("")
+    decisions = arch.get("decisions", [])
+    if decisions:
+        lines.append("## 关键决策\n" + "\n".join(f"- {d}" for d in decisions) + "\n")
     return "\n".join(lines)
-
-
-def _fallback_design(title: str, module: str, docs_prefix: str) -> ActionResult:
-    templates = {
-        "frontend": {"architecture_type": "组件化架构", "tech_stack": {"language": "JavaScript", "framework": "原生 HTML/CSS/JS"}, "estimated_hours": 3},
-        "backend": {"architecture_type": "分层架构", "tech_stack": {"language": "Python", "framework": "FastAPI"}, "estimated_hours": 4},
-    }
-    template = templates.get(module, templates["backend"])
-    arch = {**template, "module_design": [{"name": title, "responsibility": f"实现 {title}", "interfaces": []}]}
-    return ActionResult(
-        success=True,
-        data={"architecture": arch, "estimated_hours": template["estimated_hours"]},
-        files={f"{docs_prefix}architecture.md": _generate_arch_doc(title, arch)},
-    )

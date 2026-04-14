@@ -16,15 +16,17 @@ class MemoryItem:
     """一条记忆"""
     source: str          # "artifact" | "log" | "conversation" | "code"
     content: str         # 内容摘要
+    cause_by: str = ""   # 由哪个 Action 产生（索引键，移植自 MetaGPT）
     metadata: Dict = field(default_factory=dict)
     created_at: str = ""
 
 
 class AgentMemory:
-    """Agent 记忆管理器"""
+    """Agent 记忆管理器（带 cause_by 索引，移植自 MetaGPT Memory）"""
 
     def __init__(self, project_id: str):
         self.project_id = project_id
+        self._index: Dict[str, List[MemoryItem]] = {}  # cause_by → items
 
     async def get_recent(self, k: int = 5, ticket_id: str = None) -> List[MemoryItem]:
         """获取最近 k 条记忆（跨 artifacts + logs + conversations）"""
@@ -167,3 +169,60 @@ class AgentMemory:
 
         items.sort(key=lambda x: x.created_at, reverse=True)
         return items[:limit]
+
+    # ==================== cause_by 索引（移植自 MetaGPT）====================
+
+    def add(self, item: MemoryItem):
+        """添加记忆并建立 cause_by 索引"""
+        if item.cause_by:
+            self._index.setdefault(item.cause_by, []).append(item)
+
+    def get_by_action(self, action: str) -> List[MemoryItem]:
+        """按 Action 名称检索记忆"""
+        return self._index.get(action, [])
+
+    def get_by_actions(self, actions) -> List[MemoryItem]:
+        """按多个 Action 名称检索"""
+        result = []
+        for a in actions:
+            result.extend(self._index.get(a, []))
+        result.sort(key=lambda x: x.created_at, reverse=True)
+        return result
+
+    async def load_index_from_db(self, ticket_id: str = None):
+        """从数据库加载历史记忆并建立索引"""
+        from database import db
+
+        where = "project_id = ?"
+        params = [self.project_id]
+        if ticket_id:
+            where += " AND ticket_id = ?"
+            params.append(ticket_id)
+
+        # 从 artifacts 加载
+        artifacts = await db.fetch_all(
+            f"SELECT type, name, created_at FROM artifacts WHERE {where} ORDER BY created_at",
+            tuple(params),
+        )
+        for a in artifacts:
+            item = MemoryItem(source="artifact", content=a["name"], cause_by=a["type"], created_at=a["created_at"])
+            self.add(item)
+
+        # 从 ticket_logs 加载
+        logs = await db.fetch_all(
+            f"SELECT agent_type, action, detail, created_at FROM ticket_logs WHERE {where} ORDER BY created_at",
+            tuple(params),
+        )
+        for l in logs:
+            detail = ""
+            try:
+                d = json.loads(l["detail"]) if l["detail"] else {}
+                detail = d.get("message", "")
+            except Exception:
+                pass
+            item = MemoryItem(
+                source="log", content=detail[:100],
+                cause_by=l["action"] or "", created_at=l["created_at"],
+                metadata={"agent": l["agent_type"]},
+            )
+            self.add(item)

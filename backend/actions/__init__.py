@@ -1,8 +1,11 @@
 """
 Actions — Agent 能力单元注册表
 每个 Action 是一个独立的能力，可被多个 Agent 复用
+使用 ActionNode 实现结构化输出（移植自 MetaGPT）
 """
 from actions.base import ActionBase, ActionResult
+from actions.action_node import ActionNode
+from actions.schemas import ArchitectureOutput, DevOutput, ReviewOutput, TestReviewOutput, DecomposeOutput
 from actions.design_architecture import DesignArchitectureAction
 from actions.write_code import WriteCodeAction
 from actions.self_test import SelfTestAction
@@ -18,7 +21,6 @@ ACTION_REGISTRY = {
 
 
 def get_action(name: str) -> ActionBase:
-    """按名称获取 Action 实例"""
     cls = ACTION_REGISTRY.get(name)
     if cls:
         return cls()
@@ -26,8 +28,4 @@ def get_action(name: str) -> ActionBase:
 
 
 def list_actions():
-    """列出所有可用 Action"""
-    return [
-        {"name": name, "description": cls().description}
-        for name, cls in ACTION_REGISTRY.items()
-    ]
+    return [{"name": name, "description": cls().description} for name, cls in ACTION_REGISTRY.items()]

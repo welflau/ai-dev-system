@@ -1,9 +1,11 @@
-"""Action: 代码开发（从 DevAgent 抽离核心 oneshot 逻辑）"""
+"""Action: 代码开发（使用 ActionNode 结构化输出）"""
 import json
 import re
 import logging
 from typing import Any, Dict
 from actions.base import ActionBase, ActionResult
+from actions.action_node import ActionNode
+from actions.schemas import DevOutput
 from llm_client import llm_client
 
 logger = logging.getLogger("action.write_code")
@@ -30,46 +32,45 @@ class WriteCodeAction(ActionBase):
         arch_summary = ""
         if architecture:
             arch = architecture.get("architecture", architecture)
-            compact = {k: arch[k] for k in ("architecture_type", "tech_stack", "module_design", "key_components") if k in arch}
-            arch_summary = json.dumps(compact, ensure_ascii=False, indent=1)[:1500] if compact else json.dumps(arch, ensure_ascii=False)[:1500]
+            compact = {k: arch[k] for k in ("architecture_type", "tech_stack", "module_design") if k in arch}
+            arch_summary = json.dumps(compact, ensure_ascii=False, indent=1)[:1500] if compact else ""
 
         # 已有入口文件
         code_section = ""
         if existing_code:
             for fp in ["index.html", "main.py", "app.py"]:
                 if fp in existing_code:
-                    code_section = f"\n## 现有入口文件 {fp}\n```\n{existing_code[fp][:2000]}\n```\n"
+                    code_section = f"\n## 现有入口文件 {fp}\n```\n{existing_code[fp][:2000]}\n```"
                     break
 
-        prompt = f"""根据架构实现功能，返回纯 JSON。
-
-## 任务: {ticket_title}
+        req_context = f"""## 任务: {ticket_title}
 {ticket_description}
 
 ## 架构
 {arch_summary}
 {code_section}
-## 返回: {{"files": {{"文件路径": "完整内容"}}, "notes": "备注"}}
 
-要求: 英文文件名 | 前端内联到 index.html | 增量修改不重写 | 只输出改动文件 | 完整可运行代码"""
+要求: 英文文件名 | 前端内联到 index.html | 增量修改不重写 | 只输出改动文件 | 完整可运行"""
 
-        result = await llm_client.chat_json(
-            [{"role": "user", "content": prompt}],
-            temperature=0.3, max_tokens=16000,
+        # 使用 ActionNode 结构化输出
+        node = ActionNode(
+            key="write_code",
+            expected_type=DevOutput,
+            instruction="根据架构实现功能，返回 files 字段包含完整文件内容。",
         )
+        await node.fill(req=req_context, llm=llm_client, max_tokens=16000)
 
-        if result and isinstance(result, dict) and result.get("files"):
-            files = result["files"]
-            if isinstance(files, dict):
-                logger.info("✅ WriteCodeAction LLM 返回 %d 个文件", len(files))
-                return ActionResult(
-                    success=True,
-                    data={"dev_result": result, "estimated_hours": result.get("estimated_hours", 4)},
-                    files=files,
-                )
+        output = node.instruct_content
+        if output and output.files:
+            logger.info("✅ WriteCodeAction 产出 %d 个文件", len(output.files))
+            return ActionResult(
+                success=True,
+                data={"dev_result": output.model_dump(), "estimated_hours": output.estimated_hours},
+                files=output.files,
+            )
 
         # 降级
-        logger.warning("⚠️ WriteCodeAction LLM 失败，使用降级模板")
+        logger.warning("⚠️ WriteCodeAction 输出无文件，使用降级模板")
         return self._fallback(context)
 
     def _fallback(self, context: Dict) -> ActionResult:
@@ -93,10 +94,10 @@ class WriteCodeAction(ActionBase):
 <style>*{{margin:0;padding:0;box-sizing:border-box}}body{{font-family:sans-serif;background:#f0f2f5;min-height:100vh;display:flex;justify-content:center;align-items:center}}.container{{background:#fff;border-radius:12px;padding:40px;box-shadow:0 4px 20px rgba(0,0,0,.1);max-width:600px;width:90%;text-align:center}}h1{{color:#1a1a2e;margin-bottom:16px}}</style>
 </head><body><div class="container"><h1>{title}</h1><p>{description[:200] or 'AI 自动开发系统生成'}</p></div></body></html>"""
         elif module in ("backend", "api"):
-            files["main.py"] = f'"""\\n{title}\\n"""\nfrom http.server import HTTPServer, SimpleHTTPRequestHandler\nimport json\n\nclass Handler(SimpleHTTPRequestHandler):\n    def do_GET(self):\n        if self.path == "/api/health":\n            self.send_response(200)\n            self.send_header("Content-Type","application/json")\n            self.end_headers()\n            self.wfile.write(json.dumps({{"status":"ok"}}).encode())\n        else:\n            super().do_GET()\n\nif __name__=="__main__":\n    HTTPServer(("0.0.0.0",8080),Handler).serve_forever()\n'
+            files["main.py"] = f'from http.server import HTTPServer, SimpleHTTPRequestHandler\nimport json\nclass H(SimpleHTTPRequestHandler):\n  def do_GET(self):\n    if self.path=="/api/health":self.send_response(200);self.send_header("Content-Type","application/json");self.end_headers();self.wfile.write(json.dumps({{"status":"ok"}}).encode())\n    else:super().do_GET()\nif __name__=="__main__":HTTPServer(("0.0.0.0",8080),H).serve_forever()\n'
 
         return ActionResult(
             success=True,
-            data={"dev_result": {"files": files, "notes": "[降级] 规则引擎生成"}, "estimated_hours": 2},
+            data={"dev_result": {"files": files, "notes": "[降级] 规则引擎"}, "estimated_hours": 2},
             files=files,
         )
