@@ -614,11 +614,18 @@ class TicketOrchestrator:
                 # 创建子任务
                 for st_idx, st in enumerate(tk.get("subtasks", [])):
                     st_id = generate_id("ST")
+                    # 兼容字符串和 dict 两种格式
+                    if isinstance(st, str):
+                        st_title = st
+                        st_desc = ""
+                    else:
+                        st_title = st.get("title", str(st))
+                        st_desc = st.get("description", "")
                     await db.insert("subtasks", {
                         "id": st_id,
                         "ticket_id": ticket_id,
-                        "title": st["title"],
-                        "description": st.get("description", ""),
+                        "title": st_title,
+                        "description": st_desc,
                         "status": "pending",
                         "assigned_agent": None,
                         "sort_order": st_idx,
