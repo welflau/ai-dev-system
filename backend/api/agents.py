@@ -320,9 +320,20 @@ async def list_agents():
 
 @router.get("/status")
 async def get_agents_status():
-    """获取所有 Agent 实时运行状态"""
+    """获取所有 Agent 实时运行状态 + Action/Mode/Watch 信息"""
     from orchestrator import orchestrator
-    return orchestrator.get_agent_status()
+    status = orchestrator.get_agent_status()
+    agents_dict = status.get("agents", status)
+
+    # 注入 Action/Mode/Watch 信息
+    for name, agent in orchestrator.agents.items():
+        if name in agents_dict:
+            agents_dict[name]["actions"] = agent.list_actions()
+            agents_dict[name]["react_mode"] = agent.react_mode.value if hasattr(agent.react_mode, 'value') else str(agent.react_mode)
+            agents_dict[name]["watch_actions"] = list(agent.watch_actions) if agent.watch_actions else []
+            agents_dict[name]["is_action_mode"] = len(agent.list_actions()) > 0
+
+    return status
 
 
 @router.get("/{agent_name}")

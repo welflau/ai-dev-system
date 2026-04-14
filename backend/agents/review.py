@@ -11,6 +11,8 @@ from llm_client import llm_client
 
 class ReviewAgent(BaseAgent):
 
+    watch_actions = {"write_code"}  # 关心代码产出
+
     @property
     def agent_type(self) -> str:
         return "ReviewAgent"

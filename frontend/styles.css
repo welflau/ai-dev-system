@@ -719,6 +719,31 @@ body.chat-open #projectListPage {
     display: flex; justify-content: space-between;
     font-size: 11px; color: var(--text-muted);
 }
+.agent-capability-section {
+    margin: 8px 0;
+    padding: 6px 0;
+    border-top: 1px solid var(--border);
+    font-size: 11px;
+}
+.agent-capability-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 0;
+}
+.agent-capability-row .cap-label {
+    color: var(--text-muted);
+    min-width: 50px;
+    font-size: 10px;
+    text-transform: uppercase;
+}
+.agent-capability-row code {
+    font-size: 10px;
+    background: var(--bg);
+    padding: 1px 4px;
+    border-radius: 3px;
+    color: var(--primary);
+}
 
 /* ==================== 统计面板 ==================== */
 

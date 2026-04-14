@@ -28,6 +28,8 @@ TEST_STRATEGIES = {
 
 class TestAgent(BaseAgent):
 
+    watch_actions = {"write_code", "acceptance_review"}  # 关心代码和验收
+
     @property
     def agent_type(self) -> str:
         return "TestAgent"

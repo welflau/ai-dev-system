@@ -3575,6 +3575,24 @@ async function loadAgentMonitor() {
                     </div>`;
             }
 
+            // Action/Mode/Watch 信息
+            const actions = info.actions || [];
+            const reactMode = info.react_mode || 'single';
+            const watchActions = info.watch_actions || [];
+            const isActionMode = info.is_action_mode || false;
+
+            const modeLabels = {single: '单步', by_order: '顺序', react: '自主'};
+            const modeColors = {single: 'var(--text-muted)', by_order: 'var(--primary)', react: 'var(--success)'};
+
+            let capabilityHtml = '';
+            if (actions.length > 0) {
+                capabilityHtml += `<div class="agent-capability-row"><span class="cap-label">Actions</span><span>${actions.map(a => '<code>' + escHtml(a) + '</code>').join(' ')}</span></div>`;
+            }
+            capabilityHtml += `<div class="agent-capability-row"><span class="cap-label">Mode</span><span style="color:${modeColors[reactMode] || 'inherit'};font-weight:500;">${modeLabels[reactMode] || reactMode}</span></div>`;
+            if (watchActions.length > 0) {
+                capabilityHtml += `<div class="agent-capability-row"><span class="cap-label">Watch</span><span>${watchActions.map(w => '<code>' + escHtml(w) + '</code>').join(' ')}</span></div>`;
+            }
+
             html += `
                 <div class="agent-card ${statusClass}">
                     <div class="agent-card-header">
@@ -3585,8 +3603,9 @@ async function loadAgentMonitor() {
                         </div>
                         <span class="agent-status-dot ${statusClass}"></span>
                     </div>
-                    <div class="agent-status-text">${statusText}</div>
+                    <div class="agent-status-text">${statusText}${isActionMode ? ' <span style="font-size:10px;color:var(--primary);">● ActionNode</span>' : ''}</div>
                     ${taskInfo}
+                    <div class="agent-capability-section">${capabilityHtml}</div>
                     <div class="agent-stats-row">
                         <span>✅ 完成 ${completed}</span>
                         <span>❌ 异常 ${errors}</span>
