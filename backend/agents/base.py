@@ -87,10 +87,16 @@ class BaseAgent(ABC):
             action_result = await action.run(context)
             step_dict = action_result.to_dict()
 
-            # 合并结果
+            # 合并文件（累积，不覆盖）
             if action_result.files:
                 result.setdefault("files", {}).update(action_result.files)
+
+            # 合并其他字段（排除 files，防止覆盖已累积的文件）
+            step_files = step_dict.pop("files", None)
             result.update(step_dict)
+            # 把累积的 files 放回
+            if "files" not in result and step_files:
+                result["files"] = step_files
 
             # 前一步输出注入后一步上下文
             context.update(action_result.data)
