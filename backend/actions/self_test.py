@@ -90,6 +90,8 @@ class SelfTestAction(ActionBase):
         # === 6. 截图预览（前端项目 + 有入口文件时）===
         screenshots = []
         if has_entry and module in ("frontend", "design", "other") and project_id:
+            # 截图前先把代码文件写入仓库（orchestrator 还没写盘）
+            await self._flush_files_to_repo(project_id, files)
             screenshots = await self._take_screenshot(project_id, title, docs_prefix)
             if screenshots:
                 total += 1
@@ -127,6 +129,18 @@ class SelfTestAction(ActionBase):
             data={"self_test": {"passed": passed == total, "total": total, "passed_count": passed, "checks": checks, "summary": summary, "screenshots": screenshots}},
             files=result_files,
         )
+
+    async def _flush_files_to_repo(self, project_id: str, files: Dict[str, str]):
+        """截图前先把代码文件写入仓库磁盘（orchestrator 还没写盘）"""
+        try:
+            from git_manager import git_manager
+            for fp, content in files.items():
+                if fp.endswith((".md", ".txt")):
+                    continue  # 只写代码文件
+                await git_manager.write_file(project_id, fp, content)
+            logger.debug("预写入 %d 个代码文件到仓库", len([f for f in files if not f.endswith((".md", ".txt"))]))
+        except Exception as e:
+            logger.warning("预写入文件失败: %s", e)
 
     async def _take_screenshot(self, project_id: str, title: str, docs_prefix: str = "docs/") -> List[Dict]:
         """启动 HTTP server → Playwright 截图 → 保存到工单文档目录"""
