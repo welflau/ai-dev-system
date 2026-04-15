@@ -89,7 +89,7 @@ class SelfTestAction(ActionBase):
 > {datetime.now().strftime('%Y-%m-%d %H:%M')} | {'LLM' if not is_fallback else '降级'}
 
 ## 产出文件
-{chr(10).join(f'- `{fp}` ({len(c)} chars)' for fp, c in files.items() if not fp.endswith('dev-notes.md'))}
+{chr(10).join(f'- [{fp}](/app#repo?file={fp}) ({len(c)} chars)' for fp, c in files.items() if not fp.endswith('dev-notes.md'))}
 
 ## 自测: {summary}
 
