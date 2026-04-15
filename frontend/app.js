@@ -4781,6 +4781,7 @@ async function viewRepoFile(path, itemEl) {
 
         // Markdown 渲染预览
         if (ext === 'md' || ext === 'markdown') {
+            codeWrap._mdFilePath = path;  // 传递 md 文件路径，用于解析相对图片
             renderMarkdown(codeWrap, content, infoBar);
             // 预览/源码切换按钮
             const actions = document.querySelector('.file-preview-actions');
@@ -4835,6 +4836,15 @@ function renderMarkdown(container, content, infoBar) {
         html = marked.parse(content);
     } catch (e) {
         html = `<p style="color:#f87171">Markdown 渲染失败: ${escapeHtml(e.message)}</p>`;
+    }
+
+    // 修复 md 中的相对图片路径 → 仓库文件 API
+    if (currentProjectId && container._mdFilePath) {
+        const mdDir = container._mdFilePath.substring(0, container._mdFilePath.lastIndexOf('/') + 1);
+        html = html.replace(/<img\s+src="(?!https?:\/\/|\/)(.*?)"/g, (match, src) => {
+            const fullPath = mdDir + src;
+            return `<img src="/api/projects/${currentProjectId}/git/file-raw?path=${encodeURIComponent(fullPath)}"`;
+        });
     }
 
     container.innerHTML = `<div class="md-preview">${html}</div>`;

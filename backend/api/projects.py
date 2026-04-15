@@ -516,6 +516,21 @@ async def get_git_file(project_id: str, path: str):
     return {"path": path, "content": content}
 
 
+@router.get("/{project_id}/git/file-raw")
+async def get_git_file_raw(project_id: str, path: str):
+    """读取仓库中的二进制文件（图片等）"""
+    from fastapi.responses import FileResponse as FR
+    project = await db.fetch_one("SELECT * FROM projects WHERE id = ?", (project_id,))
+    if not project:
+        raise HTTPException(404, "项目不存在")
+    _ensure_git_path(project)
+    from pathlib import Path as P
+    file_path = git_manager._repo_path(project_id) / path
+    if not file_path.exists():
+        raise HTTPException(404, "文件不存在")
+    return FR(str(file_path))
+
+
 @router.get("/{project_id}/git/diff")
 async def get_git_diff(project_id: str, commit: str = None):
     """获取 Git diff"""
