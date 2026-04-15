@@ -297,7 +297,9 @@ async def chat_with_ai(project_id: str, req: ChatRequest):
         response = await llm_client.chat(messages, temperature=0.7, max_tokens=16000)
 
         # 解析是否包含操作指令
+        has_action_tag = "[ACTION:" in response
         action_result = await _parse_and_execute_action(project_id, project, response)
+        logger.info("聊天指令解析: has_tag=%s, result_type=%s", has_action_tag, action_result.get("type") if action_result else "None")
 
         # 若生成了需求/BUG 确认卡片，且本次消息含图片，则将图片 URL 提前保存并附加到 action
         saved_image_urls = None
@@ -1104,8 +1106,15 @@ async def _parse_and_execute_action(project_id: str, project: dict, response: st
     try:
         action_data = json.loads(action_data_str)
     except json.JSONDecodeError:
-        logger.warning("无法解析操作数据: %s", action_data_str)
-        return None
+        # 尝试修复常见问题：中文引号、转义等
+        cleaned = action_data_str.replace('\u201c', '\\"').replace('\u201d', '\\"')  # ""→\"
+        cleaned = cleaned.replace('\u2018', "\\'").replace('\u2019', "\\'")  # ''→\'
+        try:
+            action_data = json.loads(cleaned)
+            logger.info("JSON 二次解析成功（清洗中文引号）")
+        except json.JSONDecodeError:
+            logger.warning("无法解析操作数据: %s", action_data_str[:200])
+            return None
 
     if action_type == "CONFIRM_REQUIREMENT":
         # 不直接创建，返回待确认数据让前端展示确认卡片
