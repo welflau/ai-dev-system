@@ -698,7 +698,8 @@ def test_no_syntax_errors():
         if screenshots:
             md += "\n---\n\n## 页面截图\n\n"
             for s in screenshots:
-                md += f"### {s['label']}\n\n![{s['label']}]({s['url']})\n\n"
+                rel_url = f"screenshots/{s['filename']}"
+                md += f"### {s['label']}\n\n![{s['label']}]({rel_url})\n\n"
 
         # 问题清单
         all_issues = summary.get("issues", [])

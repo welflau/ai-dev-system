@@ -106,7 +106,9 @@ class SelfTestAction(ActionBase):
         if screenshots:
             screenshot_md = "\n## 页面预览截图\n\n"
             for s in screenshots:
-                screenshot_md += f"![{s['label']}]({s['url']})\n\n"
+                # 用相对路径（dev-notes.md 和 screenshots/ 在同一个目录下）
+                rel_url = f"screenshots/{s['filename']}"
+                screenshot_md += f"![{s['label']}]({rel_url})\n\n"
 
         notes_md = f"""# 开发笔记 — {title}
 
