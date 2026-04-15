@@ -90,7 +90,7 @@ class SelfTestAction(ActionBase):
         # === 6. 截图预览（前端项目 + 有入口文件时）===
         screenshots = []
         if has_entry and module in ("frontend", "design", "other") and project_id:
-            screenshots = await self._take_screenshot(project_id, title)
+            screenshots = await self._take_screenshot(project_id, title, docs_prefix)
             if screenshots:
                 total += 1
                 passed += 1
@@ -128,8 +128,8 @@ class SelfTestAction(ActionBase):
             files=result_files,
         )
 
-    async def _take_screenshot(self, project_id: str, title: str) -> List[Dict]:
-        """启动 HTTP server → Playwright 截图 → 保存到项目 Git 仓库"""
+    async def _take_screenshot(self, project_id: str, title: str, docs_prefix: str = "docs/") -> List[Dict]:
+        """启动 HTTP server → Playwright 截图 → 保存到工单文档目录"""
         from git_manager import git_manager
 
         repo_dir = git_manager._repo_path(project_id)
@@ -137,8 +137,8 @@ class SelfTestAction(ActionBase):
         if not index_path.exists():
             return []
 
-        # 截图保存到项目仓库的 docs/screenshots/ 目录
-        screenshots_dir = repo_dir / "docs" / "screenshots"
+        # 截图保存到工单文档路径下（如 docs/{req_id}/{ticket_id}/screenshots/）
+        screenshots_dir = repo_dir / docs_prefix.rstrip("/") / "screenshots"
         screenshots_dir.mkdir(parents=True, exist_ok=True)
 
         port = 19500 + (abs(hash(project_id)) % 500)
@@ -168,8 +168,8 @@ class SelfTestAction(ActionBase):
                     fpath = screenshots_dir / fname
                     await page.screenshot(path=str(fpath), full_page=True)
 
-                    # 路径相对于仓库根目录（Git 可追踪）
-                    rel_path = f"docs/screenshots/{fname}"
+                    # 路径跟着工单文档走
+                    rel_path = f"{docs_prefix}screenshots/{fname}"
                     results.append({
                         "filename": fname,
                         "label": f"开发自测 — {title[:30]}",
