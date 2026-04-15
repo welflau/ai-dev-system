@@ -1058,6 +1058,50 @@ async def _build_project_context(project_id: str, project: dict) -> dict:
     }
 
 
+def _try_fix_json(raw: str) -> Optional[dict]:
+    """尝试多种策略修复 LLM 产出的坏 JSON"""
+    import re as _re
+
+    # 策略 1: 替换中文引号
+    cleaned = raw.replace('\u201c', '\\"').replace('\u201d', '\\"')
+    cleaned = cleaned.replace('\u2018', "\\'").replace('\u2019', "\\'")
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        pass
+
+    # 策略 2: 提取 key-value 对（正则匹配 "key": "value" 模式）
+    try:
+        pairs = {}
+        for m in _re.finditer(r'"(\w+)"\s*:\s*"((?:[^"\\]|\\.)*)(?:"|$)', raw):
+            pairs[m.group(1)] = m.group(2)
+        if not pairs:
+            # 尝试更宽松的匹配
+            for m in _re.finditer(r'"(\w+)"\s*:\s*"([^}]*?)"\s*[,}]', raw):
+                pairs[m.group(1)] = m.group(2)
+        if pairs and ("title" in pairs or "name" in pairs):
+            return pairs
+    except Exception:
+        pass
+
+    # 策略 3: 把内部未转义的双引号替换掉
+    try:
+        # 找到所有 "key": "value" 的 value 部分，修复内部双引号
+        def fix_value(m):
+            val = m.group(1)
+            # 保留首尾引号，内部双引号转义
+            fixed = val.replace('"', '\\"')
+            return f'"{fixed}"'
+
+        # 匹配 : "..." 模式（贪婪到下一个 ", " 或 "} 为止）
+        fixed = _re.sub(r':\s*"(.*?)"\s*([,}])', lambda m: f': "{m.group(1).replace(chr(34), "")}" {m.group(2)}', raw)
+        return json.loads(fixed)
+    except Exception:
+        pass
+
+    return None
+
+
 async def _parse_and_execute_action(project_id: str, project: dict, response: str) -> Optional[Dict]:
     """解析 AI 回复中的操作指令并执行"""
     import re
@@ -1106,15 +1150,12 @@ async def _parse_and_execute_action(project_id: str, project: dict, response: st
     try:
         action_data = json.loads(action_data_str)
     except json.JSONDecodeError:
-        # 尝试修复常见问题：中文引号、转义等
-        cleaned = action_data_str.replace('\u201c', '\\"').replace('\u201d', '\\"')  # ""→\"
-        cleaned = cleaned.replace('\u2018', "\\'").replace('\u2019', "\\'")  # ''→\'
-        try:
-            action_data = json.loads(cleaned)
-            logger.info("JSON 二次解析成功（清洗中文引号）")
-        except json.JSONDecodeError:
+        # 尝试多种修复策略
+        action_data = _try_fix_json(action_data_str)
+        if not action_data:
             logger.warning("无法解析操作数据: %s", action_data_str[:200])
             return None
+        logger.info("JSON 修复解析成功")
 
     if action_type == "CONFIRM_REQUIREMENT":
         # 不直接创建，返回待确认数据让前端展示确认卡片
