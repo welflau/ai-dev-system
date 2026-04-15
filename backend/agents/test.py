@@ -75,7 +75,7 @@ class TestAgent(BaseAgent):
             total_passed += 1
 
         # === Phase 3: 功能测试（按类型分发）===
-        func_test = await self._functional_test(project_id, module, dev_result)
+        func_test = await self._functional_test(project_id, module, dev_result, docs_prefix)
         screenshots = func_test.pop("screenshots", [])  # 取出截图列表，不进入 phases
         results["phases"].append({"name": "功能测试", **func_test})
         total_checks += func_test["total"]
@@ -241,20 +241,22 @@ class TestAgent(BaseAgent):
 
     # ==================== Phase 3: 功能测试 ====================
 
-    async def _functional_test(self, project_id: str, module: str, dev_result: Dict) -> Dict:
+    async def _functional_test(self, project_id: str, module: str, dev_result: Dict, docs_prefix: str = "docs/") -> Dict:
         """按类型分发功能测试"""
         if module in ("frontend", "design"):
-            return await self._test_frontend(project_id)
+            return await self._test_frontend(project_id, docs_prefix)
         elif module in ("backend", "api"):
             return await self._test_backend(project_id)
         else:
             return await self._test_generic(project_id)
 
-    async def _take_screenshots(self, project_id: str, port: int) -> list:
-        """用 Playwright 无头浏览器截图，返回 [{"filename": "...", "label": "...", "url": "..."}]"""
-        from config import BASE_DIR
-        screenshots_dir = BASE_DIR / "screenshots"
-        screenshots_dir.mkdir(exist_ok=True)
+    async def _take_screenshots(self, project_id: str, port: int, docs_prefix: str = "docs/") -> list:
+        """Playwright 截图 → 保存到工单文档目录"""
+        from git_manager import git_manager
+
+        repo_dir = git_manager._repo_path(project_id)
+        screenshots_dir = repo_dir / docs_prefix.rstrip("/") / "screenshots"
+        screenshots_dir.mkdir(parents=True, exist_ok=True)
 
         results = []
         try:
@@ -263,19 +265,25 @@ class TestAgent(BaseAgent):
                 browser = await p.chromium.launch(headless=True)
                 page = await browser.new_page(viewport={"width": 1280, "height": 800})
 
-                # 截图 1：首页
                 await page.goto(f"http://localhost:{port}/", wait_until="networkidle", timeout=15000)
-                fname = f"{project_id}_{int(time.time())}_home.png"
-                await page.screenshot(path=str(screenshots_dir / fname), full_page=True)
-                results.append({"filename": fname, "label": "首页截图", "url": f"/screenshots/{fname}"})
+                await _async_sleep(1)
 
+                fname = f"test_{int(time.time())}.png"
+                await page.screenshot(path=str(screenshots_dir / fname), full_page=True)
+
+                rel_path = f"{docs_prefix}screenshots/{fname}"
+                results.append({"filename": fname, "label": "测试截图", "url": rel_path})
+
+                logger.info("📸 测试截图已保存到项目仓库: %s", rel_path)
                 await browser.close()
+        except ImportError:
+            logger.debug("Playwright 未安装，跳过截图")
         except Exception as e:
             logger.warning("Playwright 截图失败（跳过）: %s", e)
 
         return results
 
-    async def _test_frontend(self, project_id: str) -> Dict:
+    async def _test_frontend(self, project_id: str, docs_prefix: str = "docs/") -> Dict:
         """前端功能测试：启动 HTTP server → 请求 → 检查内容"""
         from git_manager import git_manager
         import httpx
@@ -372,7 +380,7 @@ class TestAgent(BaseAgent):
                 issues.append(f"HTTP 请求失败: {str(e)[:80]}")
 
             # 截图（在 HTTP server 仍运行时执行）
-            screenshots = await self._take_screenshots(project_id, port)
+            screenshots = await self._take_screenshots(project_id, port, docs_prefix)
 
         finally:
             if proc:
