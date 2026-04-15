@@ -1116,8 +1116,10 @@ class TicketOrchestrator:
             })
 
         elif agent_name == "ProductAgent" and action == "acceptance_review":
-            # 验收结果
+            # 验收结果（只接受合法状态，防止 Agent 返回 "success" 等非标值）
             review_status = result.get("status", "acceptance_passed")
+            if review_status not in (TicketStatus.ACCEPTANCE_PASSED.value, TicketStatus.ACCEPTANCE_REJECTED.value):
+                review_status = TicketStatus.ACCEPTANCE_PASSED.value
             new_status = review_status
 
             await db.update("tickets", {
@@ -1141,8 +1143,10 @@ class TicketOrchestrator:
                 )
 
         elif agent_name == "TestAgent":
-            # 测试结果
+            # 测试结果（只接受合法状态）
             test_status = result.get("status", "testing_done")
+            if test_status not in (TicketStatus.TESTING_DONE.value, TicketStatus.TESTING_FAILED.value):
+                test_status = TicketStatus.TESTING_DONE.value
             new_status = test_status
 
             await db.update("tickets", {
