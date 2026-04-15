@@ -54,6 +54,8 @@ def sop_to_transition_rules(config: Dict[str, Any]) -> Dict[str, Dict]:
             rule["pass_threshold"] = stage["pass_threshold"]
         if stage.get("optional"):
             rule["optional"] = True
+        if stage.get("config"):
+            rule["config"] = stage["config"]
 
         rules[trigger] = rule
 
@@ -78,6 +80,7 @@ def get_sop_stages(config: Dict[str, Any]) -> List[Dict]:
             "description": s.get("description", ""),
             "optional": s.get("optional", False),
             "pass_threshold": s.get("pass_threshold"),
+            "config": s.get("config", {}),
         })
     return result
 

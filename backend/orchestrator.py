@@ -965,6 +965,11 @@ class TicketOrchestrator:
             # 构建上下文
             context = await self._build_context(ticket)
 
+            # 注入 SOP 阶段配置到 context
+            sop_config = rule.get("config", {})
+            if sop_config:
+                context["sop_config"] = sop_config
+
             # Agent 执行
             await event_manager.publish_to_project(
                 project_id,
