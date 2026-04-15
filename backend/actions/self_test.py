@@ -155,35 +155,18 @@ class SelfTestAction(ActionBase):
             if proc.poll() is not None:
                 return []
 
-            try:
-                from playwright.async_api import async_playwright
-                async with async_playwright() as p:
-                    browser = await p.chromium.launch(headless=True)
-                    page = await browser.new_page(viewport={"width": 1280, "height": 800})
-
-                    await page.goto(f"http://localhost:{port}/", wait_until="networkidle", timeout=15000)
-                    await asyncio.sleep(1)
-
-                    fname = f"dev_{int(time.time())}.png"
-                    fpath = screenshots_dir / fname
-                    await page.screenshot(path=str(fpath), full_page=True)
-
-                    # 路径跟着工单文档走
-                    rel_path = f"{docs_prefix}screenshots/{fname}"
-                    results.append({
-                        "filename": fname,
-                        "label": f"开发自测 — {title[:30]}",
-                        "url": rel_path,
-                        "path": str(fpath),
-                    })
-
-                    logger.info("📸 截图已保存到项目仓库: %s", rel_path)
-                    await browser.close()
-
-            except ImportError:
-                logger.debug("Playwright 未安装，跳过截图")
-            except Exception as e:
-                logger.warning("截图失败（跳过）: %s", e)
+            fname = f"dev_{int(time.time())}.png"
+            fpath = screenshots_dir / fname
+            ok = await self._capture(port, str(fpath))
+            if ok:
+                rel_path = f"{docs_prefix}screenshots/{fname}"
+                results.append({
+                    "filename": fname,
+                    "label": f"开发自测 — {title[:30]}",
+                    "url": rel_path,
+                    "path": str(fpath),
+                })
+                logger.info("📸 截图已保存: %s", rel_path)
 
         finally:
             if proc:
@@ -194,3 +177,51 @@ class SelfTestAction(ActionBase):
                     proc.kill()
 
         return results
+
+    async def _capture(self, port: int, output_path: str) -> bool:
+        """截图：依次尝试 Playwright → Chrome headless → 跳过"""
+        url = f"http://localhost:{port}/"
+
+        # 方法 1: Playwright
+        try:
+            from playwright.async_api import async_playwright
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=True)
+                page = await browser.new_page(viewport={"width": 1280, "height": 800})
+                await page.goto(url, wait_until="networkidle", timeout=15000)
+                await asyncio.sleep(1)
+                await page.screenshot(path=output_path, full_page=True)
+                await browser.close()
+                logger.info("📸 Playwright 截图成功")
+                return True
+        except Exception as e:
+            logger.debug("Playwright 截图失败: %s", e)
+
+        # 方法 2: Chrome headless (系统已安装的 Chrome)
+        try:
+            import shutil
+            chrome = shutil.which("chrome") or shutil.which("google-chrome")
+            if not chrome:
+                for p in [
+                    "C:/Program Files/Google/Chrome/Application/chrome.exe",
+                    "C:/Program Files (x86)/Google/Chrome/Application/chrome.exe",
+                ]:
+                    if Path(p).exists():
+                        chrome = p
+                        break
+
+            if chrome:
+                result = subprocess.run([
+                    chrome, "--headless", "--disable-gpu", "--no-sandbox",
+                    f"--screenshot={output_path}",
+                    f"--window-size=1280,800",
+                    url,
+                ], capture_output=True, timeout=15)
+                if Path(output_path).exists() and Path(output_path).stat().st_size > 0:
+                    logger.info("📸 Chrome headless 截图成功")
+                    return True
+        except Exception as e:
+            logger.debug("Chrome 截图失败: %s", e)
+
+        logger.warning("截图全部失败，跳过")
+        return False

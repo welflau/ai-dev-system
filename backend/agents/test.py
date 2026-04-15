@@ -251,37 +251,64 @@ class TestAgent(BaseAgent):
             return await self._test_generic(project_id)
 
     async def _take_screenshots(self, project_id: str, port: int, docs_prefix: str = "docs/") -> list:
-        """Playwright 截图 → 保存到工单文档目录"""
+        """截图 → 保存到工单文档目录（Playwright → Chrome headless → 跳过）"""
         from git_manager import git_manager
+        from pathlib import Path
 
         repo_dir = git_manager._repo_path(project_id)
         screenshots_dir = repo_dir / docs_prefix.rstrip("/") / "screenshots"
         screenshots_dir.mkdir(parents=True, exist_ok=True)
 
-        results = []
+        fname = f"test_{int(time.time())}.png"
+        fpath = screenshots_dir / fname
+        url = f"http://localhost:{port}/"
+
+        ok = await self._capture_screenshot(url, str(fpath))
+        if ok:
+            rel_path = f"{docs_prefix}screenshots/{fname}"
+            logger.info("📸 测试截图: %s", rel_path)
+            return [{"filename": fname, "label": "测试截图", "url": rel_path}]
+        return []
+
+    async def _capture_screenshot(self, url: str, output_path: str) -> bool:
+        """截图：Playwright → Chrome headless → 跳过"""
+        from pathlib import Path
+
+        # 方法 1: Playwright
         try:
             from playwright.async_api import async_playwright
             async with async_playwright() as p:
                 browser = await p.chromium.launch(headless=True)
                 page = await browser.new_page(viewport={"width": 1280, "height": 800})
-
-                await page.goto(f"http://localhost:{port}/", wait_until="networkidle", timeout=15000)
+                await page.goto(url, wait_until="networkidle", timeout=15000)
                 await _async_sleep(1)
-
-                fname = f"test_{int(time.time())}.png"
-                await page.screenshot(path=str(screenshots_dir / fname), full_page=True)
-
-                rel_path = f"{docs_prefix}screenshots/{fname}"
-                results.append({"filename": fname, "label": "测试截图", "url": rel_path})
-
-                logger.info("📸 测试截图已保存到项目仓库: %s", rel_path)
+                await page.screenshot(path=output_path, full_page=True)
                 await browser.close()
-        except ImportError:
-            logger.debug("Playwright 未安装，跳过截图")
-        except Exception as e:
-            logger.warning("Playwright 截图失败（跳过）: %s", e)
+                return True
+        except Exception:
+            pass
 
-        return results
+        # 方法 2: Chrome headless
+        try:
+            import shutil
+            chrome = shutil.which("chrome") or shutil.which("google-chrome")
+            if not chrome:
+                for p in ["C:/Program Files/Google/Chrome/Application/chrome.exe",
+                           "C:/Program Files (x86)/Google/Chrome/Application/chrome.exe"]:
+                    if Path(p).exists():
+                        chrome = p
+                        break
+            if chrome:
+                subprocess.run([chrome, "--headless", "--disable-gpu", "--no-sandbox",
+                                f"--screenshot={output_path}", "--window-size=1280,800", url],
+                               capture_output=True, timeout=15)
+                if Path(output_path).exists() and Path(output_path).stat().st_size > 0:
+                    return True
+        except Exception:
+            pass
+
+        logger.warning("截图失败（Playwright/Chrome 均不可用），跳过")
+        return False
 
     async def _test_frontend(self, project_id: str, docs_prefix: str = "docs/") -> Dict:
         """前端功能测试：启动 HTTP server → 请求 → 检查内容"""
