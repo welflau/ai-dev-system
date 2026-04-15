@@ -21,7 +21,9 @@ class ActionResult:
         result = {**self.data}
         if self.files:
             result["files"] = self.files
-        result["status"] = "success" if self.success else "error"
+        # 不覆盖 data 中已有的 status（如 acceptance_rejected/testing_failed）
+        if "status" not in result:
+            result["status"] = "success" if self.success else "error"
         if self.message:
             result["message"] = self.message
         if self.error:
