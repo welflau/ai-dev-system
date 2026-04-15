@@ -840,6 +840,26 @@ class TicketOrchestrator:
                 )
                 return
 
+            # === 检查重试次数（防止无限循环打回）===
+            MAX_RETRIES = 5
+            retry_count = await db.fetch_one(
+                "SELECT COUNT(*) as cnt FROM ticket_logs WHERE ticket_id = ? AND action = 'reject'",
+                (ticket_id,),
+            )
+            if retry_count and retry_count["cnt"] >= MAX_RETRIES:
+                logger.warning("🛑 工单 %s 已被打回 %d 次，强制通过", ticket_id[:12], retry_count["cnt"])
+                await db.update("tickets", {
+                    "status": TicketStatus.TESTING_DONE.value,
+                    "updated_at": now_iso(),
+                }, "id = ?", (ticket_id,))
+                await self._log(
+                    project_id, ticket.get("requirement_id"), ticket_id, "Orchestrator",
+                    "force_pass", ticket["status"], TicketStatus.TESTING_DONE.value,
+                    f"工单已被打回 {retry_count['cnt']} 次，超过上限 {MAX_RETRIES} 次，强制标记完成",
+                    "warning",
+                )
+                return
+
             # 检查前置依赖是否完成
             deps_json = ticket.get("dependencies", "[]")
             try:
