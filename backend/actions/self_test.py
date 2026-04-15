@@ -129,19 +129,18 @@ class SelfTestAction(ActionBase):
         )
 
     async def _take_screenshot(self, project_id: str, title: str) -> List[Dict]:
-        """启动 HTTP server → Playwright 截图 → 返回截图信息"""
+        """启动 HTTP server → Playwright 截图 → 保存到项目 Git 仓库"""
         from git_manager import git_manager
-        from config import BASE_DIR
 
         repo_dir = git_manager._repo_path(project_id)
         index_path = repo_dir / "index.html"
         if not index_path.exists():
             return []
 
-        screenshots_dir = BASE_DIR / "screenshots"
-        screenshots_dir.mkdir(exist_ok=True)
+        # 截图保存到项目仓库的 docs/screenshots/ 目录
+        screenshots_dir = repo_dir / "docs" / "screenshots"
+        screenshots_dir.mkdir(parents=True, exist_ok=True)
 
-        # 启动临时 HTTP server
         port = 19500 + (abs(hash(project_id)) % 500)
         proc = None
         results = []
@@ -156,7 +155,6 @@ class SelfTestAction(ActionBase):
             if proc.poll() is not None:
                 return []
 
-            # Playwright 截图
             try:
                 from playwright.async_api import async_playwright
                 async with async_playwright() as p:
@@ -164,22 +162,22 @@ class SelfTestAction(ActionBase):
                     page = await browser.new_page(viewport={"width": 1280, "height": 800})
 
                     await page.goto(f"http://localhost:{port}/", wait_until="networkidle", timeout=15000)
-
-                    # 等页面渲染完（JS 动态内容）
                     await asyncio.sleep(1)
 
-                    fname = f"dev_{project_id[-6:]}_{int(time.time())}.png"
+                    fname = f"dev_{int(time.time())}.png"
                     fpath = screenshots_dir / fname
                     await page.screenshot(path=str(fpath), full_page=True)
 
+                    # 路径相对于仓库根目录（Git 可追踪）
+                    rel_path = f"docs/screenshots/{fname}"
                     results.append({
                         "filename": fname,
                         "label": f"开发自测 — {title[:30]}",
-                        "url": f"/screenshots/{fname}",
+                        "url": rel_path,
                         "path": str(fpath),
                     })
 
-                    logger.info("📸 开发截图已保存: %s", fname)
+                    logger.info("📸 截图已保存到项目仓库: %s", rel_path)
                     await browser.close()
 
             except ImportError:
