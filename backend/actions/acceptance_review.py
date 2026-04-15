@@ -24,17 +24,26 @@ class AcceptanceReviewAction(ActionBase):
         ticket_description = context.get("ticket_description", "")
         dev_result = context.get("dev_result", {})
         docs_prefix = context.get("docs_prefix", "docs/")
+        existing_files = context.get("existing_files", [])
 
+        # 汇总文件信息：dev_result 产出 + 仓库已有文件
         files_info = ""
         if isinstance(dev_result, dict):
             fd = dev_result.get("files", {})
             if isinstance(fd, dict):
                 files_info = ", ".join(list(fd.keys())[:5])
 
+        # 仓库实际文件列表（补充 dev_result 可能遗漏的）
+        repo_files = [f for f in existing_files if not f.startswith(("docs/", "tests/", ".git", "build/"))]
+        repo_info = ", ".join(repo_files[:10]) if repo_files else "无"
+
         req_context = f"""任务: {ticket_title}
 需求: {ticket_description[:300]}
-产出文件: {files_info}
-开发备注: {str(dev_result.get('notes', ''))[:200]}"""
+本次产出文件: {files_info or '无'}
+仓库已有代码文件: {repo_info}
+开发备注: {str(dev_result.get('notes', ''))[:200]}
+
+注意: 仓库中已有的文件视为已完成，不要因为本次 dev_result 没列出就判定缺失。"""
 
         node = ActionNode(
             key="acceptance_review",
