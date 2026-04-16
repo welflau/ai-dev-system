@@ -1543,16 +1543,33 @@ class TicketOrchestrator:
             except Exception as rpt_err:
                 logger.warning("生成需求报告失败(非致命): %s", rpt_err)
 
-            # === 自动合并 feat 分支到 develop ===
+            # === 规范合并：先拉 develop 最新到 feat → 确认无冲突 → 再合入 develop ===
             try:
                 req_data = await db.fetch_one("SELECT branch_name FROM requirements WHERE id = ?", (requirement_id,))
                 branch_name = req_data.get("branch_name") if req_data else None
                 if branch_name:
-                    # 确保 develop 分支存在（从主分支创建）
+                    # 确保 develop 分支存在
                     primary_branch = await git_manager.get_primary_branch(project_id)
                     await git_manager.ensure_branch(project_id, "develop", from_branch=primary_branch)
 
-                    # 合并 feat → develop
+                    # Step 1: 先把 develop 最新代码合入 feat（解决冲突在 feat 上）
+                    logger.info("🔀 Step 1: merge develop → %s（拉最新）", branch_name)
+                    pre_merge = await git_manager.merge_branch(
+                        project_id, "develop", branch_name,
+                        message=f"merge: develop → {branch_name} (合入最新代码)"
+                    )
+                    if not pre_merge["success"]:
+                        logger.error("❌ develop → %s 合并冲突: %s", branch_name, pre_merge.get("error"))
+                        await self._log(
+                            project_id, requirement_id, None, "Orchestrator",
+                            "error", "completed", "completed",
+                            f"合并冲突: develop → {branch_name} 失败，需手动解决: {pre_merge.get('error', '')}"
+                        )
+                        # 不继续合入 develop，等手动解决
+                        return
+
+                    # Step 2: feat 合入 develop
+                    logger.info("🔀 Step 2: merge %s → develop（合入功能）", branch_name)
                     merge_result = await git_manager.merge_branch(
                         project_id, branch_name, "develop",
                         message=f"merge: {branch_name} → develop (需求完成)"
