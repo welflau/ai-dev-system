@@ -99,6 +99,10 @@ class SelfTestAction(ActionBase):
                 checks.append({"name": "页面截图", "passed": True, "detail": f"{len(screenshots)} 张截图"})
                 summary = f"自测 {passed}/{total} 通过" + (" ✅" if passed == total else " ⚠️")
 
+        # 生成 diff（对比已有代码和新产出）
+        existing_code = context.get("existing_code", {})
+        diff_md = self._generate_diff(files, existing_code)
+
         # 生成开发笔记
         is_fallback = "[降级]" in str(context.get("dev_result", {}).get("notes", ""))
 
@@ -106,7 +110,6 @@ class SelfTestAction(ActionBase):
         if screenshots:
             screenshot_md = "\n## 页面预览截图\n\n"
             for s in screenshots:
-                # 用相对路径（dev-notes.md 和 screenshots/ 在同一个目录下）
                 rel_url = f"screenshots/{s['filename']}"
                 screenshot_md += f"![{s['label']}]({rel_url})\n\n"
 
@@ -122,7 +125,7 @@ class SelfTestAction(ActionBase):
 | 检查项 | 结果 | 说明 |
 |--------|------|------|
 {chr(10).join(f'| {c["name"]} | {"✅" if c["passed"] else "❌"} | {c["detail"]} |' for c in checks)}
-{screenshot_md}"""
+{diff_md}{screenshot_md}"""
 
         result_files = {f"{docs_prefix}dev-notes.md": notes_md}
 
@@ -131,6 +134,44 @@ class SelfTestAction(ActionBase):
             data={"self_test": {"passed": passed == total, "total": total, "passed_count": passed, "checks": checks, "summary": summary, "screenshots": screenshots}},
             files=result_files,
         )
+
+    def _generate_diff(self, new_files: Dict[str, str], existing_code: Dict[str, str]) -> str:
+        """生成新旧代码 diff（unified diff 格式）"""
+        import difflib
+
+        if not new_files:
+            return ""
+
+        diff_sections = []
+        for fp, new_content in new_files.items():
+            if fp.endswith((".md", ".txt")):
+                continue
+
+            old_content = existing_code.get(fp, "")
+            if not old_content:
+                # 新建文件
+                lines = new_content.split("\n")
+                preview = lines[:20]
+                diff_sections.append(f"### {fp} (新建, {len(new_content)} chars)\n```\n" + "\n".join(f"+ {l}" for l in preview) + ("\n+ ... (更多)" if len(lines) > 20 else "") + "\n```")
+            else:
+                # 修改文件 — 生成 unified diff
+                old_lines = old_content.splitlines(keepends=True)
+                new_lines = new_content.splitlines(keepends=True)
+                diff = list(difflib.unified_diff(old_lines, new_lines, fromfile=f"a/{fp}", tofile=f"b/{fp}", lineterm=""))
+
+                if diff:
+                    # 只保留前 50 行 diff
+                    diff_text = "\n".join(diff[:50])
+                    if len(diff) > 50:
+                        diff_text += f"\n... (共 {len(diff)} 行变更)"
+                    diff_sections.append(f"### {fp} (修改)\n```diff\n{diff_text}\n```")
+                else:
+                    diff_sections.append(f"### {fp} (无变化)")
+
+        if not diff_sections:
+            return ""
+
+        return "\n## 代码变更 (Diff)\n\n" + "\n\n".join(diff_sections) + "\n"
 
     async def _flush_files_to_repo(self, project_id: str, files: Dict[str, str]):
         """截图前先把代码文件写入仓库磁盘（orchestrator 还没写盘）"""
