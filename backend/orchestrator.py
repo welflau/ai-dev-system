@@ -958,7 +958,12 @@ class TicketOrchestrator:
                         if ok:
                             logger.info("🌿 已切换到分支: %s", feat_branch)
                         else:
-                            logger.warning("切换分支失败: %s, 当前: %s", feat_branch, current_br)
+                            # 切换失败 → 验证当前分支，如果在 main/master 上则阻止执行
+                            current_br2 = await git_manager.get_current_branch(project_id)
+                            if current_br2 in ("main", "master"):
+                                logger.error("🛑 切换分支失败且当前在 %s，阻止 Agent 执行（防止直接提交到主分支）", current_br2)
+                                return
+                            logger.warning("切换分支失败: %s, 当前: %s（非主分支，继续执行）", feat_branch, current_br2)
             except Exception as br_err:
                 logger.warning("切换分支异常(非致命): %s", br_err)
 

@@ -203,7 +203,7 @@ Thumbs.db
         return hash_out if rc == 0 else None
 
     async def push(self, project_id: str, remote: str = "origin", branch: str = None) -> bool:
-        """git push（仅在配置了远程仓库时执行）"""
+        """git push（仅在配置了远程仓库时执行，禁止 Agent 直接 push 到 main/master）"""
         repo_dir = str(self._repo_path(project_id))
 
         # check if remote exists
@@ -215,6 +215,16 @@ Thumbs.db
         if not branch:
             rc, branch_out, _ = await self._run_git(repo_dir, "rev-parse", "--abbrev-ref", "HEAD")
             branch = branch_out if rc == 0 and branch_out else "main"
+
+        # 保护：Agent 不能直接 push 到 main/master（只能通过 CI/CD merge）
+        if branch in ("main", "master"):
+            # 检查调用来源：如果是从 write_and_commit 调的（Agent 提交），阻止
+            import traceback
+            stack = traceback.format_stack()
+            is_agent_push = any("write_and_commit" in frame or "_handle_git_files" in frame for frame in stack)
+            if is_agent_push:
+                logger.warning("🛑 阻止 Agent 直接 push 到 %s（应在 feat 分支上）", branch)
+                return False
 
         rc, _, err = await self._run_git(repo_dir, "push", remote, branch)
         if rc != 0:
