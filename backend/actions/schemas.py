@@ -42,5 +42,6 @@ class TestReviewOutput(BaseModel):
 
 class DecomposeOutput(BaseModel):
     """需求拆单输出"""
+    complexity: str = "medium"  # simple / medium / complex
     prd_summary: str = ""
     tickets: List[Dict] = []

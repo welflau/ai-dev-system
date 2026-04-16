@@ -12,6 +12,7 @@ from actions.acceptance_review import AcceptanceReviewAction
 from actions.code_review import CodeReviewAction
 from actions.decompose import DecomposeAction
 from actions.plan_code_change import PlanCodeChangeAction
+from actions.summarize_code import SummarizeCodeAction
 
 ACTION_REGISTRY = {
     "design_architecture": DesignArchitectureAction,
@@ -21,6 +22,7 @@ ACTION_REGISTRY = {
     "code_review": CodeReviewAction,
     "decompose": DecomposeAction,
     "plan_code_change": PlanCodeChangeAction,
+    "summarize_code": SummarizeCodeAction,
 }
 
 

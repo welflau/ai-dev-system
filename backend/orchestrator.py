@@ -584,6 +584,12 @@ class TicketOrchestrator:
                 now = now_iso()
                 idx_to_id[idx] = ticket_id
 
+                # 简单需求跳过架构设计，直接进开发
+                complexity = result.get("complexity", "medium")
+                initial_status = TicketStatus.PENDING.value
+                if complexity == "simple":
+                    initial_status = TicketStatus.ARCHITECTURE_DONE.value
+
                 ticket = {
                     "id": ticket_id,
                     "requirement_id": requirement_id,
@@ -595,7 +601,7 @@ class TicketOrchestrator:
                     "module": tk.get("module", "other"),
                     "priority": tk.get("priority", 3),
                     "sort_order": idx,
-                    "status": TicketStatus.PENDING.value,
+                    "status": initial_status,
                     "assigned_agent": None,
                     "current_owner": "product",
                     "estimated_hours": tk.get("estimated_hours"),
