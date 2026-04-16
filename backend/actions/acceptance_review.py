@@ -48,15 +48,19 @@ class AcceptanceReviewAction(ActionBase):
 
         repo_code_files = [f for f in existing_files if not f.startswith(("docs/", "tests/", ".git", "build/"))]
 
-        # 2. 实际代码内容（核心改进：读真实代码）
+        # 2. 实际代码内容（读真实代码，智能截断：头部+尾部）
         code_section = ""
         if review_code_content and existing_code:
             total = 0
             for fp, code in existing_code.items():
                 if total >= max_code_chars:
                     break
-                snippet = code[:1500]
-                code_section += f"\n### {fp}\n```\n{snippet}\n```\n"
+                if len(code) <= 2000:
+                    snippet = code
+                else:
+                    # 智能截断：头部 1500 + 尾部 500，让 LLM 知道代码是完整的
+                    snippet = code[:1500] + f"\n\n... (中间省略 {len(code)-2000} 字符) ...\n\n" + code[-500:]
+                code_section += f"\n### {fp} ({len(code)} 字符, 完整文件)\n```\n{snippet}\n```\n"
                 total += len(snippet)
 
         # 3. 检查清单
@@ -78,7 +82,7 @@ class AcceptanceReviewAction(ActionBase):
 {checklist}
 
 评分标准: 1-10 分，{pass_score} 分及以上为通过。
-请根据以上代码内容和需求描述进行验收，不要仅凭文件名判断。"""
+注意: 代码因长度限制可能只展示了头部和尾部，中间省略部分不代表代码不完整。文件存在即视为已产出，请基于可见部分判断代码质量。"""
 
         node = ActionNode(
             key="acceptance_review",

@@ -49,7 +49,7 @@ stages:
     description: "产品经理验收代码是否符合需求"
     config:
       review_code_content: true     # 读取实际代码内容（不只看文件名）
-      max_code_chars: 3000          # 传给 LLM 审查的代码量
+      max_code_chars: 5000          # 传给 LLM 审查的代码量
       check_http: false             # 是否启动 HTTP 验证可访问性
       pass_score: 6                 # 评分 >= 此值才通过
       check_items:                  # 验收检查清单
