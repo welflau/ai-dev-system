@@ -60,8 +60,11 @@ class PlanCodeChangeAction(ActionBase):
 
         # 新建文件
         for f in plan.files_to_create:
-            path = f.get("path", "")
-            purpose = f.get("purpose", "")
+            if isinstance(f, str):
+                path, purpose = f, ""
+            else:
+                path = f.get("path", "") if isinstance(f, dict) else str(f)
+                purpose = f.get("purpose", "") if isinstance(f, dict) else ""
             if path:
                 content = await self._generate_file(path, purpose, ticket_title, ticket_description, existing_code)
                 if content:
@@ -69,8 +72,11 @@ class PlanCodeChangeAction(ActionBase):
 
         # 修改已有文件
         for f in plan.files_to_modify:
-            path = f.get("path", "")
-            changes = f.get("changes", "")
+            if isinstance(f, str):
+                path, changes = f, ""
+            else:
+                path = f.get("path", "") if isinstance(f, dict) else str(f)
+                changes = f.get("changes", "") if isinstance(f, dict) else ""
             if path and path in existing_code:
                 modified = await self._modify_file(path, existing_code[path], changes, ticket_title)
                 if modified:
