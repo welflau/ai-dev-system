@@ -1,6 +1,37 @@
 # AI Dev System — 待办清单
 
-> 最后更新: 2026-04-15 22:30
+> 最后更新: 2026-04-15 23:30
+
+---
+
+## Action 池扩充（参考 MetaGPT 42 个 Action，当前 4 个）
+
+### 短期 P0（配合盲审修复）
+
+| Action | 说明 | 对标 MetaGPT | 状态 |
+|--------|------|-------------|------|
+| `CodeReviewAction` | 独立代码审查，读取实际代码内容 | `WriteCodeReview` | 待开发 |
+| `DecomposeAction` | 需求拆单迁移到 ActionNode | `WriteTasks` | 待开发 |
+
+### 中期 P1（配合 Phase 3）
+
+| Action | 说明 | 对标 MetaGPT | 状态 |
+|--------|------|-------------|------|
+| `PlanCodeChangeAction` | 先规划改哪些文件再逐个修改（解决全文件重写） | `WriteCodePlanAndChange` | 待开发 |
+| `DebugErrorAction` | 分析错误日志，定位根因，生成修复方案 | `DebugError` | 待开发 |
+| `ResearchAction` | 联网搜索 + 竞品调研 | `CollectLinks` + `ConductResearch` | 待开发 |
+| `SummarizeCodeAction` | 代码摘要（给下游 Agent 传精简上下文） | `SummarizeCode` | 待开发 |
+
+### 长期 P2（配合 Phase 4）
+
+| Action | 说明 | 对标 MetaGPT | 状态 |
+|--------|------|-------------|------|
+| `WritePRDAction` | 正式 PRD 文档生成 | `WritePRD` | 待开发 |
+| `RebuildClassViewAction` | 从代码生成类图（导入项目用） | `RebuildClassView` | 待开发 |
+| `WritePlanAction` | 数据分析计划 | `WritePlan` (DI) | 待开发 |
+| `ExecuteCodeAction` | 执行代码并获取输出 | `RunCode` + `ExecuteNbCode` | 待开发 |
+| `WriteTestAction` | 独立测试用例生成（从 TestAgent 抽离） | `WriteTest` | 待开发 |
+| `DesignReviewAction` | 架构设计审查 | `DesignReview` | 待开发 |
 
 ---
 
