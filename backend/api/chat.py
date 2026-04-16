@@ -419,6 +419,16 @@ async def confirm_create_requirement(project_id: str, req: ConfirmRequirementReq
     })
     if result.get("type") == "error":
         raise HTTPException(400, result["message"])
+
+    # 更新 chat_messages 中的 action_data（confirm → created），刷新后不再显示按钮
+    import json as _json
+    await db.execute(
+        """UPDATE chat_messages SET action_type = 'requirement_created',
+           action_data = ? WHERE project_id = ? AND action_type = 'confirm_requirement'
+           AND action_data LIKE ?""",
+        (_json.dumps(result, ensure_ascii=False), project_id, f'%{req.title[:30]}%'),
+    )
+
     return result
 
 
