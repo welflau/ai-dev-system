@@ -4945,7 +4945,8 @@ function copyFileContent() {
  */
 async function openArtifactFile(filePath, branch) {
     // 关闭工单详情抽屉
-    document.getElementById('ticketDrawer')?.classList.remove('open');
+    document.getElementById('ticketDrawer')?.classList.remove('active');
+    document.getElementById('drawerOverlay')?.classList.remove('active');
 
     // 如果有分支名，先切换分支
     if (branch && currentProjectId) {
