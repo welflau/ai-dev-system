@@ -197,18 +197,6 @@ async def reload_sop():
     return {"status": "ok", "message": "SOP 已重载", "name": config.get("name", "?") if config else "内置默认"}
 
 
-@app.get("/api/actions")
-async def list_all_actions():
-    """列出所有可用 Action"""
-    from actions import list_actions
-    from orchestrator import orchestrator
-    # 同时列出每个 Agent 持有的 Actions
-    agent_actions = {}
-    for name, agent in orchestrator.agents.items():
-        agent_actions[name] = agent.list_actions()
-    return {"actions": list_actions(), "agent_actions": agent_actions}
-
-
 @app.get("/api/projects/{project_id}/preview")
 async def get_preview_url(project_id: str):
     """获取项目的本地预览 URL（兼容旧接口，优先返回 dev 环境）"""

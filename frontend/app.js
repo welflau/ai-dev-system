@@ -4043,28 +4043,39 @@ async function loadAgentList() {
     if (!container) return;
 
     try {
-        if (!agentRegistryCache) {
-            const data = await api('/agents');
-            agentRegistryCache = data.agents || [];
-        }
+        const data = await api('/agents');
+        agentRegistryCache = data.agents || [];
 
         if (agentRegistryCache.length === 0) {
-            container.innerHTML = '<div style="text-align:center; padding:20px; color:var(--text-muted); font-size:13px;">暂无 Agent 配置</div>';
+            container.innerHTML = '<div style="text-align:center; padding:20px; color:var(--text-muted);">暂无 Agent</div>';
             return;
         }
 
-        container.innerHTML = agentRegistryCache.map(agent => `
-            <div class="agent-item" onclick="showAgentDetail('${escHtml(agent.name)}')">
+        const modeLabels = {single: '单步', by_order: '顺序', react: '自主'};
+        const modeColors = {single: 'var(--text-muted)', by_order: 'var(--primary)', react: 'var(--success)'};
+
+        container.innerHTML = agentRegistryCache.map(agent => {
+            const mode = agent.react_mode || 'single';
+            const actionsHtml = (agent.actions || []).map(a =>
+                `<code style="font-size:10px;background:var(--bg);padding:1px 4px;border-radius:3px;color:var(--primary);">${escHtml(a.name)}</code>`
+            ).join(' ') || '<span style="color:var(--text-muted);font-size:11px;">legacy</span>';
+
+            return `
+            <div class="agent-item" onclick="showAgentDetail('${escHtml(agent.name)}')" style="cursor:pointer;">
                 <div class="agent-icon">${agent.icon || '🤖'}</div>
-                <div class="agent-info">
+                <div class="agent-info" style="flex:1;">
                     <div class="agent-name">${escHtml(agent.name)}</div>
-                    <div class="agent-desc">${escHtml(agent.description)}</div>
+                    <div class="agent-desc" style="font-size:12px;color:var(--text-muted);">${escHtml(agent.role || '')}</div>
+                    <div style="margin-top:4px;">${actionsHtml}</div>
                 </div>
-                <span class="tag tag-success">${agent.enabled ? '启用' : '停用'}</span>
-            </div>
-        `).join('');
+                <div style="text-align:right;font-size:11px;">
+                    <span style="color:${modeColors[mode]};font-weight:500;">${modeLabels[mode] || mode}</span><br>
+                    <span style="color:var(--text-muted);">✅${agent.completed_count || 0} ❌${agent.error_count || 0}</span>
+                </div>
+            </div>`;
+        }).join('');
     } catch (e) {
-        container.innerHTML = '<div style="text-align:center; padding:20px; color:var(--error); font-size:13px;">加载 Agent 列表失败</div>';
+        container.innerHTML = '<div style="text-align:center; padding:20px; color:var(--error);">加载失败</div>';
     }
 }
 
@@ -4084,61 +4095,64 @@ function showAgentDetail(agentName) {
 
     titleEl.textContent = `${agent.icon || '🤖'} ${agent.name}`;
 
-    let html = '';
+    const modeLabels = {single: '单步执行', by_order: '顺序执行', react: '自主决策(REACT)'};
+    const modeColors = {single: 'var(--text-muted)', by_order: 'var(--primary)', react: 'var(--success)'};
+    const mode = agent.react_mode || 'single';
 
-    // 头部信息
-    html += `
-    <div class="agent-detail-header">
-        <div class="agent-detail-icon">${agent.icon || '🤖'}</div>
-        <div class="agent-detail-meta">
-            <h3>${escHtml(agent.name)}</h3>
-            <p>角色: ${escHtml(agent.role || '')} · ${escHtml(agent.description)}</p>
+    let html = `
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
+        <span style="font-size:36px;">${agent.icon || '🤖'}</span>
+        <div>
+            <h3 style="margin:0;">${escHtml(agent.name)}</h3>
+            <p style="margin:2px 0;color:var(--text-muted);font-size:13px;">${escHtml(agent.role || '')}</p>
         </div>
-    </div>`;
+    </div>
 
-    // 参数标签
-    html += `
-    <div class="agent-params">
+    <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;">
         <div class="agent-param-chip">
-            <span class="param-label">Temperature</span>
-            <span class="param-value">${agent.temperature ?? '-'}</span>
-        </div>
-        <div class="agent-param-chip">
-            <span class="param-label">Max Tokens</span>
-            <span class="param-value">${agent.max_tokens ?? '-'}</span>
+            <span class="param-label">执行模式</span>
+            <span class="param-value" style="color:${modeColors[mode]};font-weight:600;">${modeLabels[mode] || mode}</span>
         </div>
         <div class="agent-param-chip">
             <span class="param-label">状态</span>
-            <span class="param-value">${agent.enabled ? '✅ 启用' : '⏸ 停用'}</span>
+            <span class="param-value">${agent.status === 'working' ? '🔄 工作中' : '💤 空闲'}</span>
+        </div>
+        <div class="agent-param-chip">
+            <span class="param-label">完成/异常</span>
+            <span class="param-value">✅${agent.completed_count || 0} / ❌${agent.error_count || 0}</span>
         </div>
     </div>`;
 
-    // 提示词列表
-    if (agent.prompts && agent.prompts.length > 0) {
-        agent.prompts.forEach((prompt, idx) => {
-            const expanded = idx === 0 ? 'expanded' : '';
-            const displayStyle = idx === 0 ? '' : 'style="display:none;"';
-            html += `
-            <div class="agent-prompt-section">
-                <div class="agent-prompt-label" onclick="togglePromptSection(this)">
-                    <span class="prompt-arrow ${expanded}">▶</span>
-                    <span class="prompt-action-tag">${escHtml(prompt.action || '')}</span>
-                    ${escHtml(prompt.label || '提示词')}
-                </div>
-                <div class="agent-prompt-code" ${displayStyle}>${highlightPromptVars(prompt.template || '（无模板）')}</div>
-            </div>`;
-        });
-    }
-
-    // 静态规则（ReviewAgent 专属）
-    if (agent.static_rules && agent.static_rules.length > 0) {
-        html += `
-        <div class="agent-static-rules">
-            <h4>📏 静态审查规则</h4>
-            <div class="agent-rules-grid">
-                ${agent.static_rules.map(rule => `<div class="agent-rule-chip">${escHtml(rule)}</div>`).join('')}
+    // Watch
+    if (agent.watch_actions && agent.watch_actions.length > 0) {
+        html += `<div style="margin-bottom:16px;">
+            <h4 style="font-size:13px;color:var(--text-muted);margin-bottom:6px;">👁 Watch（关注的上游 Action）</h4>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                ${agent.watch_actions.map(w => `<code style="font-size:11px;background:var(--bg);padding:2px 6px;border-radius:4px;">${escHtml(w)}</code>`).join('')}
             </div>
         </div>`;
+    }
+
+    // Actions
+    const actions = agent.actions || [];
+    if (actions.length > 0) {
+        html += `<h4 style="font-size:13px;color:var(--text-muted);margin-bottom:8px;">⚡ Actions（能力池）</h4>`;
+        actions.forEach(a => {
+            const schemaMode = a.schema?.mode || 'unknown';
+            const schemaType = a.schema?.type || '-';
+            const isActionNode = schemaMode === 'ActionNode';
+            html += `
+            <div style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:8px;">
+                <div style="display:flex;align-items:center;gap:8px;">
+                    <code style="font-size:13px;font-weight:600;color:var(--primary);">${escHtml(a.name)}</code>
+                    ${isActionNode ? '<span style="font-size:10px;background:var(--primary);color:white;padding:1px 5px;border-radius:8px;">ActionNode</span>' : '<span style="font-size:10px;background:var(--text-muted);color:white;padding:1px 5px;border-radius:8px;">legacy</span>'}
+                </div>
+                <p style="font-size:12px;color:var(--text-muted);margin:4px 0 0;">${escHtml(a.description)}</p>
+                ${isActionNode ? `<p style="font-size:11px;color:var(--text-muted);margin:2px 0 0;">Schema: <code>${escHtml(schemaType)}</code></p>` : ''}
+            </div>`;
+        });
+    } else {
+        html += `<div style="color:var(--text-muted);font-size:12px;padding:8px;">Legacy 模式（无独立 Action）</div>`;
     }
 
     bodyEl.innerHTML = html;
