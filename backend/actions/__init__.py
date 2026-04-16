@@ -1,6 +1,5 @@
 """
-Actions — Agent 能力单元注册表
-每个 Action 是一个独立的能力，可被多个 Agent 复用
+Actions — Agent 能力池（可复用）
 使用 ActionNode 实现结构化输出（移植自 MetaGPT）
 """
 from actions.base import ActionBase, ActionResult
@@ -10,13 +9,18 @@ from actions.design_architecture import DesignArchitectureAction
 from actions.write_code import WriteCodeAction
 from actions.self_test import SelfTestAction
 from actions.acceptance_review import AcceptanceReviewAction
+from actions.code_review import CodeReviewAction
+from actions.decompose import DecomposeAction
+from actions.plan_code_change import PlanCodeChangeAction
 
-# 所有可用 Action 注册表
 ACTION_REGISTRY = {
     "design_architecture": DesignArchitectureAction,
     "write_code": WriteCodeAction,
     "self_test": SelfTestAction,
     "acceptance_review": AcceptanceReviewAction,
+    "code_review": CodeReviewAction,
+    "decompose": DecomposeAction,
+    "plan_code_change": PlanCodeChangeAction,
 }
 
 

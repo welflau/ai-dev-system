@@ -24,6 +24,8 @@ ENV_CONFIG = {
 
 class DeployAgent(BaseAgent):
 
+    watch_actions = {"write_code", "acceptance_review"}
+
     @property
     def agent_type(self) -> str:
         return "DeployAgent"

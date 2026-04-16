@@ -107,9 +107,74 @@ class BaseAgent(ABC):
         return result
 
     async def _react_with_think(self, task_name: str, context: Dict[str, Any]) -> Dict[str, Any]:
-        """REACT 模式：LLM 动态选择下一步 Action（预留接口）"""
-        # 简化版：先按顺序执行，后续可接入 LLM 决策
-        return await self._react_by_order(task_name, context)
+        """REACT 模式：LLM 动态选择下一步 Action"""
+        from llm_client import llm_client
+
+        result = {}
+        action_names = list(self._actions.keys())
+
+        for i in range(self.max_react_loop):
+            # Think: LLM 决定下一步
+            next_action = await self._think(context, action_names, result)
+            if not next_action or next_action == "done":
+                logger.info("🧠 %s REACT: 第 %d 轮结束 (action=%s)", self.agent_type, i + 1, next_action)
+                break
+
+            if next_action not in self._actions:
+                logger.warning("🧠 %s REACT: 无效 Action '%s'，跳过", self.agent_type, next_action)
+                continue
+
+            # Act: 执行选中的 Action
+            logger.info("🧠 %s REACT [%d/%d]: %s", self.agent_type, i + 1, self.max_react_loop, next_action)
+            action_result = await self._actions[next_action].run(context)
+            step_dict = action_result.to_dict()
+
+            # 合并
+            if action_result.files:
+                result.setdefault("files", {}).update(action_result.files)
+            step_files = step_dict.pop("files", None)
+            result.update(step_dict)
+            if "files" not in result and step_files:
+                result["files"] = step_files
+
+            context.update(action_result.data)
+            if action_result.files:
+                context["_files"] = {**context.get("_files", {}), **action_result.files}
+
+        result["status"] = result.get("status", "success")
+        return result
+
+    async def _think(self, context: Dict, action_names: list, current_result: Dict) -> str:
+        """LLM 决定下一步执行哪个 Action"""
+        from llm_client import llm_client
+
+        actions_desc = "\n".join(f"  {i}. {name} — {self._actions[name].description}" for i, name in enumerate(action_names))
+        done_actions = [k for k in current_result.keys() if k in action_names]
+
+        prompt = f"""你是 {self.agent_type}，当前任务: {context.get('ticket_title', '')}
+
+可用 Actions:
+{actions_desc}
+  {len(action_names)}. done — 任务完成，不再执行
+
+已完成的步骤: {done_actions or '无'}
+当前产出: {list(current_result.get('files', {}).keys()) or '无文件'}
+
+请选择下一步要执行的 Action（只输出名称，如 "write_code" 或 "done"）:"""
+
+        try:
+            resp = await llm_client.chat(
+                [{"role": "user", "content": prompt}],
+                temperature=0.1, max_tokens=50,
+            )
+            choice = resp.strip().lower().strip('"').strip("'")
+            # 清理 LLM 输出
+            for name in action_names + ["done"]:
+                if name in choice:
+                    return name
+            return "done"
+        except Exception:
+            return "done"
 
     # ==================== 查询接口 ====================
 

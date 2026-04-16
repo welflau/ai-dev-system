@@ -28,7 +28,9 @@ TEST_STRATEGIES = {
 
 class TestAgent(BaseAgent):
 
-    watch_actions = {"write_code", "acceptance_review"}  # 关心代码和验收
+    from actions.code_review import CodeReviewAction as _CR
+    action_classes = [_CR]  # 代码审查用 ActionNode
+    watch_actions = {"write_code", "acceptance_review"}
 
     @property
     def agent_type(self) -> str:
@@ -199,45 +201,17 @@ class TestAgent(BaseAgent):
 
         return {"total": total, "passed_count": passed, "checks": checks, "issues": issues}
 
-    # ==================== Phase 2: 代码审查 ====================
+    # ==================== Phase 2: 代码审查（委托 CodeReviewAction）====================
 
     async def _code_review(self, context: Dict) -> Dict:
-        """LLM 代码审查"""
-        dev_result = context.get("dev_result", {})
-        title = context.get("ticket_title", "")
-
-        # 提取文件名列表和关键代码片段
-        files_info = ""
-        if isinstance(dev_result, dict) and dev_result.get("files"):
-            file_dict = dev_result["files"] if isinstance(dev_result["files"], dict) else {}
-            for fp, content in list(file_dict.items())[:3]:
-                snippet = content[:500] if isinstance(content, str) else ""
-                files_info += f"\n### {fp}\n```\n{snippet}\n```\n"
-
-        if not files_info:
-            return {"score": 5, "issues": [], "suggestions": [], "detail": "无代码可审查"}
-
-        prompt = f"""审查以下代码，返回 JSON: {{"score": 1-10, "issues": ["问题"], "suggestions": ["建议"]}}
-
-## {title}
-{files_info}"""
-
-        try:
-            result = await llm_client.chat_json(
-                [{"role": "user", "content": prompt}],
-                temperature=0.3, max_tokens=1000,
-            )
-            if result and isinstance(result, dict):
-                return {
-                    "score": result.get("score", 5),
-                    "issues": result.get("issues", [])[:5],
-                    "suggestions": result.get("suggestions", [])[:5],
-                    "detail": f"评分 {result.get('score', '?')}/10",
-                }
-        except Exception as e:
-            logger.warning("代码审查 LLM 失败: %s", e)
-
-        return {"score": 6, "issues": [], "suggestions": [], "detail": "LLM 不可用，默认通过"}
+        """代码审查：委托给 CodeReviewAction（ActionNode，读取实际代码）"""
+        result = await self.run_action("code_review", context)
+        return {
+            "score": result.get("score", 6),
+            "issues": result.get("issues", [])[:5],
+            "suggestions": result.get("suggestions", [])[:5],
+            "detail": f"评分 {result.get('score', '?')}/10",
+        }
 
     # ==================== Phase 3: 功能测试 ====================
 
