@@ -28,6 +28,9 @@ from actions.chat.git_list_branches import GitListBranchesAction
 from actions.chat.git_switch_branch import GitSwitchBranchAction
 from actions.chat.git_read_file import GitReadFileAction
 from actions.chat.git_merge import GitMergeAction
+from actions.chat.get_requirement_pipeline import GetRequirementPipelineAction
+from actions.chat.get_ticket_status import GetTicketStatusAction
+from actions.chat.get_requirement_logs import GetRequirementLogsAction
 
 logger = logging.getLogger("agent.chat_assistant")
 
@@ -90,6 +93,9 @@ class ChatAssistantAgent(BaseAgent):
         GitSwitchBranchAction,
         GitReadFileAction,
         GitMergeAction,
+        GetRequirementPipelineAction,
+        GetTicketStatusAction,
+        GetRequirementLogsAction,
     ]
     react_mode = ReactMode.REACT
     max_react_loop = 3   # 聊天场景不需要太多轮
@@ -284,6 +290,8 @@ class ChatAssistantAgent(BaseAgent):
 - 查看项目 → git_log / git_list_branches / git_read_file
 - 切换/合并分支 → git_switch_branch / git_merge
 - 生成文档 → generate_document（直接写入 docs/ 并 commit+push）
+- **诊断需求进度** → get_requirement_pipeline（"XX 卡在哪"）/
+  get_ticket_status（工单详细状态）/ get_requirement_logs（最近活动 + 错误）
 
 ## 判断准则
 - 用户**明确要求**新增/开发某功能（"帮我加…""做一个…""实现…功能"）→ 调 confirm_requirement

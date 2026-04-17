@@ -33,7 +33,7 @@ async def main():
     print(f"action 数量: {len(agent._actions)}")
     print(f"action 名称: {list(agent._actions.keys())}")
     assert agent.agent_type == "ChatAssistant"
-    assert len(agent._actions) == 12
+    assert len(agent._actions) == 15
     print("✅ 通过\n")
 
     # --- 3. 暴露给 LLM 的 tool schema 排掉了 create_requirement ---
@@ -44,8 +44,8 @@ async def main():
     assert "create_requirement" not in names, "create_requirement 不应暴露给 LLM！"
     assert "confirm_requirement" in names
     assert "git_log" in names
-    print(f"共 {len(schemas)} 个工具（11 个，排除 create_requirement）")
-    assert len(schemas) == 11
+    print(f"共 {len(schemas)} 个工具（14 个，排除 create_requirement）")
+    assert len(schemas) == 14
     print("✅ 通过\n")
 
     # --- 4. tool schema 结构符合 Anthropic 格式 ---
