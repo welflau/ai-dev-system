@@ -487,6 +487,18 @@ class LLMClient:
             stop_reason = response.get("stop_reason") or response.get("finish_reason", "")
             content = response.get("content", [])
 
+            # Sanitize：LLM 偶尔在 tool_use block 里给出 input=[] 而非 {}，
+            # 原样塞回 history 会让下一轮 Anthropic 返回 400（schema 要求 object）。
+            # 在追加历史前兜底修正。
+            for b in content:
+                if isinstance(b, dict) and b.get("type") == "tool_use":
+                    if not isinstance(b.get("input"), dict):
+                        logger.warning(
+                            "[%s] tool_use.input 非 dict（%s），归一化为 {}",
+                            ctx, type(b.get("input")).__name__,
+                        )
+                        b["input"] = {}
+
             # 把本轮 assistant 回复加入历史
             history.append({"role": "assistant", "content": content})
 

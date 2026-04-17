@@ -67,6 +67,7 @@
 | P2 | Memory 持久化索引 | cause_by 索引目前在内存，重启丢失 |
 | P2 | 前端 Agent 配置页 | 可切换 ReactMode、启用/禁用 Action |
 | P2 | **ChatAssistantAgent 默认化** | P2 已引入（`CHAT_USE_AGENT` flag 双轨），P3/P4 阶段将其切为默认并清理旧 `[ACTION:XXX]` 文本协议（详见 `docs/20260417_01_ChatAssistant_Agent化迁移方案.md`） |
+| P1 | **ChatAssistant 加需求/工单观测能力** | 当前 AI 助手看不到需求 pipeline 阶段进度、工单个体状态、活动日志，问"阻塞点在哪"时只能说"我无法直接查看"。需新增 3 个 Action（复用现有后端数据）：<br>• `GetRequirementPipelineAction` — 返回指定需求的 pipeline 视图（每阶段状态 + 卡住工单 + 最近变更），对接 `GET /api/projects/{pid}/requirements/{req_id}/pipeline`<br>• `GetTicketStatusAction` — 返回单工单详细状态（当前 Agent、上次错误、打回次数）<br>• `GetRequirementLogsAction` — 返回指定需求最近 N 条 `ticket_logs`<br>按 P1 模式（独立文件 + tool_schema）实现并加入 `ChatAssistantAgent.action_classes` |
 
 ## Phase 3: v0.15 — 智能增强
 

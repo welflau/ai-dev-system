@@ -9,7 +9,8 @@ import sys
 import httpx
 
 
-BASE = "http://localhost:8001"
+import os
+BASE = os.getenv("CHAT_TEST_BASE", "http://localhost:8000")
 
 
 async def pick_project():

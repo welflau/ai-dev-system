@@ -49,12 +49,20 @@ class _ChatToolExecutor:
         self.project_id = project_id
         self.first_action_result: Optional[Dict[str, Any]] = None
 
-    async def execute(self, tool_name: str, tool_input: Dict[str, Any]) -> str:
+    async def execute(self, tool_name: str, tool_input: Any) -> str:
         action = self.agent._actions.get(tool_name)
         if not action:
             return f"未知工具: {tool_name}"
         if tool_name in _INTERNAL_ONLY_ACTIONS:
             return f"工具 {tool_name} 不允许直接调用"
+
+        # Anthropic 对 required=[] 的无参工具偶尔返回 tool_input=[] 而非 {}，兼容一下
+        if not isinstance(tool_input, dict):
+            logger.warning(
+                "tool_input 非 dict（LLM 返回 %s），自动转为 {}。tool=%s",
+                type(tool_input).__name__, tool_name,
+            )
+            tool_input = {}
 
         ctx = {"project_id": self.project_id, **tool_input}
         result = await action.run(ctx)

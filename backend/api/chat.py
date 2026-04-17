@@ -262,8 +262,13 @@ async def group_chat_all(project_id: str, req: GroupChatRequest):
 
 @router.post("", response_model=ChatResponse)
 async def chat_with_ai(project_id: str, req: ChatRequest):
-    """全局聊天 — 用户与 AI 自由对话 + 指令操作"""
-    from llm_client import llm_client, set_llm_context, clear_llm_context
+    """全局聊天 — 用户与 AI 自由对话 + 指令操作
+
+    双轨：
+    - CHAT_USE_AGENT=true（P3 起默认）→ 走 ChatAssistantAgent + tool_use；
+      任何异常自动降级到旧 [ACTION:XXX] 文本协议路径，保证 SLA
+    - CHAT_USE_AGENT=false → 直接走旧路径
+    """
     from config import settings
 
     # 校验项目存在
@@ -274,25 +279,63 @@ async def chat_with_ai(project_id: str, req: ChatRequest):
     # 获取项目上下文
     project_context = await _build_project_context(project_id, project)
 
-    # === 双轨：feature flag 开 → 走 ChatAssistantAgent + tool_use ===
     if settings.CHAT_USE_AGENT:
-        return await _chat_via_agent(project_id, project, project_context, req)
+        try:
+            return await _chat_via_agent(project_id, project, project_context, req)
+        except HTTPException:
+            # 业务级错误（404 等）不降级，直接抛
+            raise
+        except Exception as e:
+            logger.warning(
+                "新路径失败，降级到旧 [ACTION:XXX] 文本协议路径: %s: %s",
+                type(e).__name__, e,
+            )
+            # 落地一条 fallback 事件，方便统计 new-path 失败率
+            try:
+                await db.insert("ticket_logs", {
+                    "id": generate_id("LOG"),
+                    "ticket_id": None,
+                    "subtask_id": None,
+                    "requirement_id": None,
+                    "project_id": project_id,
+                    "agent_type": "ChatAssistant",
+                    "action": "chat_fallback",
+                    "from_status": None,
+                    "to_status": None,
+                    "detail": json.dumps(
+                        {"reason": f"{type(e).__name__}: {e}"[:500]},
+                        ensure_ascii=False,
+                    ),
+                    "level": "warning",
+                    "created_at": now_iso(),
+                })
+            except Exception:
+                pass  # 日志写失败不阻断主流程
 
-    # === 旧路径（默认）：LLM + [ACTION:XXX] 文本协议 ===
+    return await _chat_via_legacy(project_id, project, project_context, req)
+
+
+async def _chat_via_legacy(
+    project_id: str,
+    project: dict,
+    project_context: dict,
+    req: ChatRequest,
+) -> ChatResponse:
+    """旧路径：LLM + [ACTION:XXX] 文本协议 + _parse_and_execute_action 分发
+    保留为新路径的降级兜底；P4 会随 _execute_* 一起清理
+    """
+    from llm_client import llm_client, set_llm_context, clear_llm_context
 
     # 构建消息
     system_prompt = _build_system_prompt(project, project_context)
     messages = [{"role": "system", "content": system_prompt}]
 
-    # 添加历史消息
     if req.history:
-        for msg in req.history[-20:]:  # 最多保留最近 20 条
+        for msg in req.history[-20:]:
             messages.append({"role": msg.role, "content": msg.content})
 
-    # 添加用户当前消息（含图片时构建 vision content）
     messages.append({"role": "user", "content": _build_user_content(req.message, req.images)})
 
-    # 设置 LLM 上下文
     set_llm_context(
         project_id=project_id,
         agent_type="ChatAssistant",
@@ -300,24 +343,19 @@ async def chat_with_ai(project_id: str, req: ChatRequest):
     )
 
     try:
-        # 调用 LLM
         response = await llm_client.chat(messages, temperature=0.7, max_tokens=16000)
 
-        # 解析是否包含操作指令
         has_action_tag = "[ACTION:" in response
         action_result = await _parse_and_execute_action(project_id, project, response)
         logger.info("聊天指令解析: has_tag=%s, result_type=%s", has_action_tag, action_result.get("type") if action_result else "None")
 
-        # 若生成了需求/BUG 确认卡片，且本次消息含图片，则将图片 URL 提前保存并附加到 action
         saved_image_urls = None
         if action_result and action_result.get("type") in ("confirm_requirement", "confirm_bug") and req.images:
             saved_image_urls = await _save_images(project_id, req.images)
             if saved_image_urls:
                 action_result["images"] = saved_image_urls
 
-        # 清理回复中的指令标记（存库和返回都用 clean 版本）
         clean_reply = _clean_action_tags(response)
-        # 若清理后为空（整个回复都是 ACTION 块），给一条兜底提示
         if not clean_reply:
             if action_result and action_result.get("type") == "document_generated":
                 clean_reply = f"文档「{action_result.get('title', action_result.get('path', '文档'))}」已生成。"
@@ -326,8 +364,6 @@ async def chat_with_ai(project_id: str, req: ChatRequest):
             else:
                 clean_reply = "操作已完成。"
 
-        # 保存聊天记录到数据库
-        # 若图片已提前保存（confirm 分支），直接用已保存的 URL，避免重复写文件
         if saved_image_urls is not None:
             await _save_chat_message(project_id, "user", req.message, saved_urls=saved_image_urls)
         else:
@@ -346,7 +382,7 @@ async def _chat_via_agent(
     project_context: dict,
     req: ChatRequest,
 ) -> ChatResponse:
-    """新路径：走 ChatAssistantAgent + tool_use（由 CHAT_USE_AGENT flag 激活）"""
+    """新路径：走 ChatAssistantAgent + tool_use（默认路径）"""
     import agent_registry as _ar
 
     # 懒初始化（首次调用时触发 discover_agents）
@@ -357,11 +393,10 @@ async def _chat_via_agent(
 
     agent_cls = registry.get("ChatAssistant")
     if not agent_cls:
-        logger.error("ChatAssistant agent 未注册，降级到旧路径")
-        raise HTTPException(500, "ChatAssistant agent 未注册")
+        # 注册失败属于可自愈范围，抛一般异常让外层降级接手
+        raise RuntimeError("ChatAssistant agent 未注册")
     agent = agent_cls()
 
-    # history 统一成 list[dict]（chat() 内部会自适应）
     history_list = [{"role": m.role, "content": m.content} for m in (req.history or [])]
 
     agent_result = await agent.chat(
@@ -380,14 +415,12 @@ async def _chat_via_agent(
         (action_result or {}).get("type") if action_result else "None",
     )
 
-    # 图片处理：confirm_requirement / confirm_bug 卡片附加图片 URL
     saved_image_urls = None
     if action_result and action_result.get("type") in ("confirm_requirement", "confirm_bug") and req.images:
         saved_image_urls = await _save_images(project_id, req.images)
         if saved_image_urls:
             action_result["images"] = saved_image_urls
 
-    # 持久化聊天记录
     if saved_image_urls is not None:
         await _save_chat_message(project_id, "user", req.message, saved_urls=saved_image_urls)
     else:
@@ -1290,526 +1323,6 @@ async def _parse_and_execute_action(project_id: str, project: dict, response: st
     ctx = {"project_id": project_id, **action_data}
     action_result = await action_cls().run(ctx)
     return action_result.data
-
-
-async def _execute_generate_document(project_id: str, data: dict) -> Dict:
-    """执行生成文档操作：直接写入 Git 仓库"""
-    filename = data.get("filename", "").strip()
-    title = data.get("title", "").strip()
-    content = data.get("content", "").strip()
-
-    if not filename or not content:
-        return {"type": "error", "message": "文档文件名和内容不能为空"}
-
-    # 确保文件名安全（英文，.md 结尾）
-    import re
-    filename = re.sub(r'[^\w\-.]', '', filename)
-    if not filename.endswith(".md"):
-        filename += ".md"
-
-    file_path = f"docs/{filename}"
-
-    try:
-        from git_manager import git_manager
-
-        # 确保仓库存在
-        if not git_manager.repo_exists(project_id):
-            project = await db.fetch_one("SELECT * FROM projects WHERE id = ?", (project_id,))
-            if project:
-                await git_manager.init_repo(project_id, project["name"])
-
-        # 写入文件
-        await git_manager.write_file(project_id, file_path, content)
-
-        # commit + push
-        commit_hash = await git_manager.commit(
-            project_id,
-            f"[Doc] {title or filename}",
-            author="ChatAssistant",
-        )
-        await git_manager.push(project_id)
-
-        # 保存到 artifacts 表
-        await db.insert("artifacts", {
-            "id": generate_id("ART"),
-            "project_id": project_id,
-            "requirement_id": None,
-            "ticket_id": None,
-            "type": "document",
-            "name": title or filename,
-            "path": file_path,
-            "content": content,
-            "metadata": json.dumps({"source": "chat_assistant", "commit": commit_hash}),
-            "created_at": now_iso(),
-        })
-
-        # 发 SSE 事件
-        await event_manager.publish_to_project(
-            project_id,
-            "document_generated",
-            {"filename": filename, "path": file_path, "title": title},
-        )
-
-        logger.info("📄 文档已生成: %s (commit: %s)", file_path, commit_hash)
-
-        return {
-            "type": "document_generated",
-            "title": title or filename,
-            "path": file_path,
-            "commit": commit_hash,
-            "message": f"文档「{title or filename}」已生成并保存到 {file_path}",
-        }
-    except Exception as e:
-        logger.error("生成文档失败: %s", e)
-        return {"type": "error", "message": f"生成文档失败: {str(e)}"}
-
-
-async def _execute_git_action(project_id: str, action_type: str, data: dict) -> Dict:
-    """执行 Git 操作"""
-    from git_manager import git_manager
-
-    project = await db.fetch_one("SELECT * FROM projects WHERE id = ?", (project_id,))
-    if not project:
-        return {"type": "error", "message": "项目不存在"}
-
-    # 恢复自定义仓库路径
-    repo_path = project.get("git_repo_path")
-    if repo_path and project_id not in git_manager._custom_paths:
-        from git_manager import PROJECTS_DIR
-        if repo_path != str(PROJECTS_DIR / project_id):
-            git_manager.set_project_path(project_id, repo_path)
-
-    if not git_manager.repo_exists(project_id):
-        return {"type": "error", "message": "仓库不存在"}
-
-    try:
-        if action_type == "GIT_SWITCH_BRANCH":
-            branch = data.get("branch", "").strip()
-            if not branch:
-                return {"type": "error", "message": "分支名不能为空"}
-            ok = await git_manager.switch_branch(project_id, branch)
-            if ok:
-                return {"type": "git_result", "action": "switch_branch", "message": f"已切换到分支: {branch}"}
-            return {"type": "error", "message": f"切换分支失败: {branch}"}
-
-        elif action_type == "GIT_LIST_BRANCHES":
-            branches = await git_manager.list_branches(project_id)
-            current = await git_manager.get_current_branch(project_id)
-            branch_list = "\n".join(f"  {'* ' if b == current else '  '}{b}" for b in branches)
-            return {
-                "type": "git_result", "action": "list_branches",
-                "message": f"当前分支: **{current}**\n\n所有分支:\n{branch_list}",
-                "data": {"current": current, "branches": branches},
-            }
-
-        elif action_type == "GIT_LOG":
-            limit = min(data.get("limit", 10), 20)
-            logs = await git_manager.get_log(project_id, limit)
-            if not logs:
-                return {"type": "git_result", "action": "log", "message": "暂无提交记录"}
-            log_lines = []
-            for c in logs:
-                log_lines.append(f"- `{c.get('short_hash', '?')}` {c.get('message', '')} — {c.get('author', '')} ({c.get('date', '')})")
-            return {
-                "type": "git_result", "action": "log",
-                "message": f"最近 {len(logs)} 条提交:\n\n" + "\n".join(log_lines),
-            }
-
-        elif action_type == "GIT_READ_FILE":
-            path = data.get("path", "").strip()
-            if not path:
-                return {"type": "error", "message": "文件路径不能为空"}
-            content = await git_manager.get_file_content(project_id, path)
-            if content is None:
-                return {"type": "error", "message": f"文件不存在: {path}"}
-            # 截断超长内容
-            if len(content) > 5000:
-                content = content[:5000] + f"\n\n... (文件过长，已截断，共 {len(content)} 字符)"
-            return {
-                "type": "git_result", "action": "read_file",
-                "message": f"**{path}** 内容:\n\n```\n{content}\n```",
-            }
-
-        elif action_type == "GIT_MERGE":
-            source = data.get("source", "").strip()
-            target = data.get("target", "").strip()
-            if not source or not target:
-                return {"type": "error", "message": "源分支和目标分支不能为空"}
-            result = await git_manager.merge_branch(project_id, source, target)
-            if result.get("success"):
-                return {
-                    "type": "git_result", "action": "merge",
-                    "message": f"合并成功: {source} → {target} (commit: {result.get('commit', '?')})",
-                }
-            return {"type": "error", "message": f"合并失败: {result.get('error', '未知错误')}"}
-
-        return {"type": "error", "message": f"未知 Git 操作: {action_type}"}
-
-    except Exception as e:
-        logger.error("Git 操作失败: %s", e)
-        return {"type": "error", "message": f"Git 操作失败: {str(e)}"}
-
-
-async def _execute_create_requirement(project_id: str, data: dict) -> Dict:
-    """执行创建需求操作"""
-    title = data.get("title", "").strip()
-    description = data.get("description", "").strip()
-    priority = data.get("priority", "medium")
-
-    if not title or not description:
-        return {"type": "error", "message": "需求标题和描述不能为空"}
-
-    if priority not in ("critical", "high", "medium", "low"):
-        priority = "medium"
-
-    req_id = generate_id("REQ")
-    now = now_iso()
-    req_data = {
-        "id": req_id,
-        "project_id": project_id,
-        "title": title,
-        "description": description,
-        "priority": priority,
-        "status": "submitted",
-        "submitter": "chat_assistant",
-        "prd_content": None,
-        "module": None,
-        "tags": None,
-        "estimated_hours": None,
-        "actual_hours": None,
-        "created_at": now,
-        "updated_at": now,
-        "completed_at": None,
-    }
-    await db.insert("requirements", req_data)
-
-    # 写日志
-    log_id = generate_id("LOG")
-    detail_json = json.dumps({"message": f"通过聊天助手创建需求「{title}」"}, ensure_ascii=False)
-    await db.insert("ticket_logs", {
-        "id": log_id,
-        "ticket_id": None,
-        "subtask_id": None,
-        "requirement_id": req_id,
-        "project_id": project_id,
-        "agent_type": "ChatAssistant",
-        "action": "create",
-        "from_status": None,
-        "to_status": "submitted",
-        "detail": detail_json,
-        "level": "info",
-        "created_at": now,
-    })
-
-    # SSE 事件
-    await event_manager.publish_to_project(
-        project_id, "requirement_created", {"id": req_id, "title": title}
-    )
-
-    logger.info("聊天助手创建需求: %s — %s", req_id, title)
-
-    # === 自动触发拆单（创建后直接启动分析） ===
-    from models import RequirementStatus
-    await db.update(
-        "requirements",
-        {"status": RequirementStatus.ANALYZING.value, "updated_at": now_iso()},
-        "id = ?",
-        (req_id,),
-    )
-
-    # 写分析启动日志
-    start_log_id = generate_id("LOG")
-    start_detail = json.dumps({"message": "ProductAgent 开始分析需求"}, ensure_ascii=False)
-    await db.insert("ticket_logs", {
-        "id": start_log_id,
-        "ticket_id": None,
-        "subtask_id": None,
-        "requirement_id": req_id,
-        "project_id": project_id,
-        "agent_type": "ProductAgent",
-        "action": "start",
-        "from_status": "submitted",
-        "to_status": "analyzing",
-        "detail": start_detail,
-        "level": "info",
-        "created_at": now_iso(),
-    })
-
-    await event_manager.publish_to_project(
-        project_id, "requirement_analyzing", {"id": req_id, "title": title}
-    )
-
-    # 后台执行拆单（由 Orchestrator 调度）
-    import asyncio
-    from orchestrator import orchestrator
-    asyncio.create_task(orchestrator.handle_requirement(project_id, req_id))
-    logger.info("自动触发需求拆单: %s", req_id)
-
-    return {
-        "type": "requirement_created",
-        "requirement_id": req_id,
-        "title": title,
-        "description": description,
-        "priority": priority,
-        "message": f"需求「{title}」已创建，正在自动分析拆单...",
-    }
-
-
-async def _execute_pause_requirement(project_id: str, data: dict) -> Dict:
-    """执行暂停需求操作"""
-    from models import RequirementStatus, validate_requirement_transition
-
-    requirement_id = data.get("requirement_id", "").strip()
-    reason = data.get("reason", "用户通过聊天助手暂停").strip()
-
-    if not requirement_id:
-        return {"type": "error", "message": "需求 ID 不能为空"}
-
-    # 支持模糊匹配：如果传入的不是完整 ID，尝试通过标题关键词匹配
-    req = await db.fetch_one(
-        "SELECT * FROM requirements WHERE id = ? AND project_id = ?",
-        (requirement_id, project_id),
-    )
-    if not req:
-        # 尝试通过标题模糊匹配
-        req = await db.fetch_one(
-            "SELECT * FROM requirements WHERE project_id = ? AND title LIKE ? AND status NOT IN ('completed', 'cancelled')",
-            (project_id, f"%{requirement_id}%"),
-        )
-        if req:
-            requirement_id = req["id"]
-        else:
-            return {"type": "error", "message": f"未找到需求「{requirement_id}」"}
-
-    current_status = req["status"]
-    # 验证状态转换是否合法
-    if not validate_requirement_transition(current_status, "paused"):
-        status_label = {"submitted": "已提交", "analyzing": "分析中", "decomposed": "已拆单",
-                       "in_progress": "进行中", "paused": "已暂停", "completed": "已完成",
-                       "cancelled": "已取消"}.get(current_status, current_status)
-        return {"type": "error", "message": f"需求当前状态为「{status_label}」，无法暂停"}
-
-    now = now_iso()
-    await db.update("requirements", {
-        "status": RequirementStatus.PAUSED.value,
-        "updated_at": now,
-    }, "id = ?", (requirement_id,))
-
-    # 写日志
-    log_id = generate_id("LOG")
-    detail_json = json.dumps({"message": f"通过聊天助手暂停需求，原因: {reason}"}, ensure_ascii=False)
-    await db.insert("ticket_logs", {
-        "id": log_id,
-        "ticket_id": None,
-        "subtask_id": None,
-        "requirement_id": requirement_id,
-        "project_id": project_id,
-        "agent_type": "ChatAssistant",
-        "action": "update_status",
-        "from_status": current_status,
-        "to_status": "paused",
-        "detail": detail_json,
-        "level": "info",
-        "created_at": now,
-    })
-
-    # SSE 事件
-    await event_manager.publish_to_project(
-        project_id, "requirement_status_changed",
-        {"id": requirement_id, "title": req["title"], "from": current_status, "to": "paused"},
-    )
-
-    logger.info("聊天助手暂停需求: %s — %s", requirement_id, req["title"])
-
-    return {
-        "type": "requirement_paused",
-        "requirement_id": requirement_id,
-        "title": req["title"],
-        "from_status": current_status,
-        "to_status": "paused",
-        "reason": reason,
-        "message": f"需求「{req['title']}」已暂停",
-    }
-
-
-async def _execute_resume_requirement(project_id: str, data: dict) -> Dict:
-    """执行恢复需求操作"""
-    from models import RequirementStatus, validate_requirement_transition
-
-    requirement_id = data.get("requirement_id", "").strip()
-
-    if not requirement_id:
-        return {"type": "error", "message": "需求 ID 不能为空"}
-
-    req = await db.fetch_one(
-        "SELECT * FROM requirements WHERE id = ? AND project_id = ?",
-        (requirement_id, project_id),
-    )
-    if not req:
-        # 尝试通过标题模糊匹配
-        req = await db.fetch_one(
-            "SELECT * FROM requirements WHERE project_id = ? AND title LIKE ? AND status = 'paused'",
-            (project_id, f"%{requirement_id}%"),
-        )
-        if req:
-            requirement_id = req["id"]
-        else:
-            return {"type": "error", "message": f"未找到需求「{requirement_id}」或需求不处于暂停状态"}
-
-    current_status = req["status"]
-    if current_status != "paused":
-        return {"type": "error", "message": f"需求当前不处于暂停状态（当前: {current_status}），无法恢复"}
-
-    # 恢复到 in_progress 状态
-    new_status = RequirementStatus.IN_PROGRESS.value
-
-    now = now_iso()
-    await db.update("requirements", {
-        "status": new_status,
-        "updated_at": now,
-    }, "id = ?", (requirement_id,))
-
-    # 写日志
-    log_id = generate_id("LOG")
-    detail_json = json.dumps({"message": "通过聊天助手恢复需求执行"}, ensure_ascii=False)
-    await db.insert("ticket_logs", {
-        "id": log_id,
-        "ticket_id": None,
-        "subtask_id": None,
-        "requirement_id": requirement_id,
-        "project_id": project_id,
-        "agent_type": "ChatAssistant",
-        "action": "update_status",
-        "from_status": current_status,
-        "to_status": new_status,
-        "detail": detail_json,
-        "level": "info",
-        "created_at": now,
-    })
-
-    # SSE 事件
-    await event_manager.publish_to_project(
-        project_id, "requirement_status_changed",
-        {"id": requirement_id, "title": req["title"], "from": current_status, "to": new_status},
-    )
-
-    logger.info("聊天助手恢复需求: %s — %s", requirement_id, req["title"])
-
-    # 恢复需求后，自动继续处理未完成的工单
-    try:
-        from orchestrator import orchestrator
-        import asyncio
-        pending_tickets = await db.fetch_all(
-            "SELECT id FROM tickets WHERE requirement_id = ? AND status NOT IN ('deployed', 'cancelled')",
-            (requirement_id,),
-        )
-        for t in pending_tickets:
-            # 用后台方式继续流转
-            asyncio.create_task(orchestrator.process_ticket(project_id, t["id"]))
-        if pending_tickets:
-            logger.info("恢复需求后继续处理 %d 个工单", len(pending_tickets))
-    except Exception as e:
-        logger.warning("恢复工单流转失败: %s", e)
-
-    return {
-        "type": "requirement_resumed",
-        "requirement_id": requirement_id,
-        "title": req["title"],
-        "from_status": current_status,
-        "to_status": new_status,
-        "message": f"需求「{req['title']}」已恢复执行",
-    }
-
-
-async def _execute_close_requirement(project_id: str, data: dict) -> Dict:
-    """执行关闭需求操作"""
-    from models import RequirementStatus
-
-    requirement_id = data.get("requirement_id", "").strip()
-    reason = data.get("reason", "用户通过聊天助手关闭").strip()
-
-    if not requirement_id:
-        return {"type": "error", "message": "需求 ID 不能为空"}
-
-    req = await db.fetch_one(
-        "SELECT * FROM requirements WHERE id = ? AND project_id = ?",
-        (requirement_id, project_id),
-    )
-    if not req:
-        # 尝试通过标题模糊匹配
-        req = await db.fetch_one(
-            "SELECT * FROM requirements WHERE project_id = ? AND title LIKE ? AND status NOT IN ('completed', 'cancelled')",
-            (project_id, f"%{requirement_id}%"),
-        )
-        if req:
-            requirement_id = req["id"]
-        else:
-            return {"type": "error", "message": f"未找到需求「{requirement_id}」"}
-
-    current_status = req["status"]
-    if current_status in ("completed", "cancelled"):
-        status_label = "已完成" if current_status == "completed" else "已取消"
-        return {"type": "error", "message": f"需求已处于终态「{status_label}」，无需操作"}
-
-    now = now_iso()
-    await db.update("requirements", {
-        "status": RequirementStatus.CANCELLED.value,
-        "updated_at": now,
-    }, "id = ?", (requirement_id,))
-
-    # 同时取消该需求下所有未完成的工单
-    cancelled_tickets = 0
-    tickets = await db.fetch_all(
-        "SELECT id, status FROM tickets WHERE requirement_id = ? AND status NOT IN ('deployed', 'cancelled')",
-        (requirement_id,),
-    )
-    for t in tickets:
-        await db.update("tickets", {
-            "status": "cancelled",
-            "updated_at": now,
-        }, "id = ?", (t["id"],))
-        cancelled_tickets += 1
-
-    # 写日志
-    log_id = generate_id("LOG")
-    detail_json = json.dumps({
-        "message": f"通过聊天助手关闭需求，原因: {reason}",
-        "cancelled_tickets": cancelled_tickets,
-    }, ensure_ascii=False)
-    await db.insert("ticket_logs", {
-        "id": log_id,
-        "ticket_id": None,
-        "subtask_id": None,
-        "requirement_id": requirement_id,
-        "project_id": project_id,
-        "agent_type": "ChatAssistant",
-        "action": "update_status",
-        "from_status": current_status,
-        "to_status": "cancelled",
-        "detail": detail_json,
-        "level": "info",
-        "created_at": now,
-    })
-
-    # SSE 事件
-    await event_manager.publish_to_project(
-        project_id, "requirement_status_changed",
-        {"id": requirement_id, "title": req["title"], "from": current_status, "to": "cancelled",
-         "cancelled_tickets": cancelled_tickets},
-    )
-
-    logger.info("聊天助手关闭需求: %s — %s (同时取消 %d 个工单)", requirement_id, req["title"], cancelled_tickets)
-
-    return {
-        "type": "requirement_closed",
-        "requirement_id": requirement_id,
-        "title": req["title"],
-        "from_status": current_status,
-        "to_status": "cancelled",
-        "reason": reason,
-        "cancelled_tickets": cancelled_tickets,
-        "message": f"需求「{req['title']}」已关闭" + (f"，同时取消了 {cancelled_tickets} 个工单" if cancelled_tickets > 0 else ""),
-    }
 
 
 def _clean_action_tags(response: str) -> str:
