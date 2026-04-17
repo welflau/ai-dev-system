@@ -76,6 +76,7 @@ def _register_builtin_agents():
     from agents.test import TestAgent
     from agents.review import ReviewAgent
     from agents.deploy import DeployAgent
+    from agents.chat_assistant import ChatAssistantAgent
 
     builtin = {
         "ProductAgent": ProductAgent,
@@ -84,6 +85,7 @@ def _register_builtin_agents():
         "TestAgent": TestAgent,
         "ReviewAgent": ReviewAgent,
         "DeployAgent": DeployAgent,
+        "ChatAssistant": ChatAssistantAgent,
     }
     for name, cls in builtin.items():
         if name not in _REGISTRY:

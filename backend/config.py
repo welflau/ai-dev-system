@@ -35,6 +35,10 @@ class Settings:
     # Agent 技能系统（Tool Use）
     ENABLE_AGENT_TOOLS: bool = os.getenv("ENABLE_AGENT_TOOLS", "false").lower() in ("1", "true", "yes")
 
+    # AI 助手走 ChatAssistantAgent + tool_use 新路径（P2 双轨运行用；默认关）
+    # 关闭时走旧的 "LLM + [ACTION:XXX] 文本协议" 路径
+    CHAT_USE_AGENT: bool = os.getenv("CHAT_USE_AGENT", "false").lower() in ("1", "true", "yes")
+
     # Frontend
     FRONTEND_DIR: str = str(BASE_DIR.parent / "frontend")
 

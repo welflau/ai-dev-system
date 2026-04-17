@@ -264,6 +264,7 @@ async def group_chat_all(project_id: str, req: GroupChatRequest):
 async def chat_with_ai(project_id: str, req: ChatRequest):
     """全局聊天 — 用户与 AI 自由对话 + 指令操作"""
     from llm_client import llm_client, set_llm_context, clear_llm_context
+    from config import settings
 
     # 校验项目存在
     project = await db.fetch_one("SELECT * FROM projects WHERE id = ?", (project_id,))
@@ -272,6 +273,12 @@ async def chat_with_ai(project_id: str, req: ChatRequest):
 
     # 获取项目上下文
     project_context = await _build_project_context(project_id, project)
+
+    # === 双轨：feature flag 开 → 走 ChatAssistantAgent + tool_use ===
+    if settings.CHAT_USE_AGENT:
+        return await _chat_via_agent(project_id, project, project_context, req)
+
+    # === 旧路径（默认）：LLM + [ACTION:XXX] 文本协议 ===
 
     # 构建消息
     system_prompt = _build_system_prompt(project, project_context)
@@ -331,6 +338,63 @@ async def chat_with_ai(project_id: str, req: ChatRequest):
 
     finally:
         clear_llm_context()
+
+
+async def _chat_via_agent(
+    project_id: str,
+    project: dict,
+    project_context: dict,
+    req: ChatRequest,
+) -> ChatResponse:
+    """新路径：走 ChatAssistantAgent + tool_use（由 CHAT_USE_AGENT flag 激活）"""
+    import agent_registry as _ar
+
+    # 懒初始化（首次调用时触发 discover_agents）
+    registry = _ar.get_registry()
+    if not registry:
+        _ar.discover_agents()
+        registry = _ar.get_registry()
+
+    agent_cls = registry.get("ChatAssistant")
+    if not agent_cls:
+        logger.error("ChatAssistant agent 未注册，降级到旧路径")
+        raise HTTPException(500, "ChatAssistant agent 未注册")
+    agent = agent_cls()
+
+    # history 统一成 list[dict]（chat() 内部会自适应）
+    history_list = [{"role": m.role, "content": m.content} for m in (req.history or [])]
+
+    agent_result = await agent.chat(
+        user_message=req.message,
+        images=req.images,
+        history=history_list,
+        project=project,
+        project_context=project_context,
+    )
+
+    reply = agent_result.get("reply") or "操作已完成。"
+    action_result = agent_result.get("action")
+
+    logger.info(
+        "ChatAssistantAgent 返回: action_type=%s",
+        (action_result or {}).get("type") if action_result else "None",
+    )
+
+    # 图片处理：confirm_requirement / confirm_bug 卡片附加图片 URL
+    saved_image_urls = None
+    if action_result and action_result.get("type") in ("confirm_requirement", "confirm_bug") and req.images:
+        saved_image_urls = await _save_images(project_id, req.images)
+        if saved_image_urls:
+            action_result["images"] = saved_image_urls
+
+    # 持久化聊天记录
+    if saved_image_urls is not None:
+        await _save_chat_message(project_id, "user", req.message, saved_urls=saved_image_urls)
+    else:
+        await _save_chat_message(project_id, "user", req.message, images=req.images)
+    await _save_chat_message(project_id, "assistant", reply, action=action_result)
+
+    return ChatResponse(reply=reply, action=action_result)
 
 
 class SaveToRepoRequest(BaseModel):

@@ -1,6 +1,6 @@
 # AI Dev System — 待办清单
 
-> 最后更新: 2026-04-15 23:30
+> 最后更新: 2026-04-17
 
 ---
 
@@ -63,8 +63,10 @@
 | 优先级 | 项目 | 说明 |
 |--------|------|------|
 | P1 | 前端 SOP 拖拽编辑器 | 可视化编辑流程，不用手改 YAML |
+| P1 | **需求 Pipeline 可视化由 SOP 驱动** | 当前 Pipeline UI 的 5 阶段在 `api/requirements.py:283` 硬编码 `STAGE_DEFS`，与 `sop/default_sop.yaml` 的 6 阶段不挂钩。改 SOP 不会自动更新 UI。需新增"Pipeline 聚合规则"配置（哪些 SOP 阶段合并成哪个 UI 分组、首尾补哪些非 SOP 阶段如"需求分析"/"合入 Develop"），让 STAGE_DEFS 动态从 SOP+规则生成 |
 | P2 | Memory 持久化索引 | cause_by 索引目前在内存，重启丢失 |
 | P2 | 前端 Agent 配置页 | 可切换 ReactMode、启用/禁用 Action |
+| P2 | **ChatAssistantAgent 默认化** | P2 已引入（`CHAT_USE_AGENT` flag 双轨），P3/P4 阶段将其切为默认并清理旧 `[ACTION:XXX]` 文本协议（详见 `docs/20260417_01_ChatAssistant_Agent化迁移方案.md`） |
 
 ## Phase 3: v0.15 — 智能增强
 
