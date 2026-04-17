@@ -331,7 +331,6 @@ BOARD_COLUMNS = {
     ],
     "testing": [
         TicketStatus.TESTING_IN_PROGRESS,
-        TicketStatus.TESTING_DONE,
         TicketStatus.TESTING_FAILED,
     ],
     "done": [TicketStatus.TESTING_DONE],
