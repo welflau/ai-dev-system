@@ -412,11 +412,14 @@ async def confirm_create_requirement(project_id: str, req: ConfirmRequirementReq
         )
         description = description + img_md
 
-    result = await _execute_create_requirement(project_id, {
+    from actions.chat.create_requirement import CreateRequirementAction
+    action_result = await CreateRequirementAction().run({
+        "project_id": project_id,
         "title": req.title,
         "description": description,
         "priority": req.priority,
     })
+    result = action_result.data
     if result.get("type") == "error":
         raise HTTPException(400, result["message"])
 
@@ -940,6 +943,17 @@ priority 可选值：critical, high, medium, low
 - 如果不确定用户想操作哪个需求，列出当前需求让用户选择
 - 如果需求 ID 不明确，用标题关键词匹配当前需求列表中的需求
 - 暂停/恢复/关闭操作必须确认需求存在且状态允许该操作
+
+## 说到做到（重要）
+- **禁止只说不做**：凡回复中出现"让我查看/检查/看看/查一下/确认一下 XX"、"我需要查看 XX"、"让我先 XX" 之类的措辞，**必须**在同一轮回复末尾附上对应的 [ACTION:...] 指令，由系统实际执行。
+- **一次回复最多一个 action**：如果需要多步查询（比如既想看提交又想看分支），选最关键的那一个发出；等结果回来后再在下一轮发起下一个。**禁止**在同一条回复里写两个 [ACTION:...] 块。
+- 典型对应：
+  - "查看提交记录/最近提交/开发进展" → `[ACTION:GIT_LOG]`
+  - "查看分支/当前在哪个分支" → `[ACTION:GIT_LIST_BRANCHES]`
+  - "看一下 XX 文件内容" → `[ACTION:GIT_READ_FILE]`
+  - "切换到 XX 分支" → `[ACTION:GIT_SWITCH_BRANCH]`
+- 如果你确认不需要真的调用工具（例如信息已经在上面的上下文里直接可得），**不要**用"让我查看"这类措辞，直接基于上下文作答即可。
+- 不要把"查看 XX"留给下一轮——当前轮是你唯一的执行机会。
 """
 
 
@@ -1120,7 +1134,10 @@ async def _parse_and_execute_action(project_id: str, project: dict, response: st
     doc_pattern = r'\[ACTION:GENERATE_DOCUMENT\]\s*(.*?)\s*\[/ACTION\]'
     doc_match = re.search(doc_pattern, response, re.DOTALL)
     if doc_match:
+        from actions.chat.generate_document import GenerateDocumentAction
+
         raw = doc_match.group(1)
+        doc_data = None
         # 解析 filename/title + --- + content
         if '---' in raw:
             header, content = raw.split('---', 1)
@@ -1134,21 +1151,24 @@ async def _parse_and_execute_action(project_id: str, project: dict, response: st
                     title = line.split(':', 1)[1].strip()
             content = content.strip()
             if filename and content:
-                return await _execute_generate_document(project_id, {
-                    "filename": filename, "title": title, "content": content
-                })
+                doc_data = {"filename": filename, "title": title, "content": content}
         else:
             # 回退：尝试 JSON 解析
             try:
-                data = json.loads(raw)
-                return await _execute_generate_document(project_id, data)
+                doc_data = json.loads(raw)
             except json.JSONDecodeError:
                 logger.warning("GENERATE_DOCUMENT 解析失败")
                 return None
 
+        if doc_data:
+            action_result = await GenerateDocumentAction().run({"project_id": project_id, **doc_data})
+            return action_result.data
+        return None
+
     # 通用 JSON 指令匹配 [ACTION:XXX] {...} [/ACTION]
-    # 用贪婪匹配 \{.*\} 确保捕获完整 JSON（包含嵌套结构）
-    pattern = r'\[ACTION:(\w+)\]\s*(\{.*\})\s*\[/ACTION\]'
+    # 用非贪婪 \{.*?\}：避免一条回复里出现两个 action 时，贪婪匹配跨越多个块
+    # 非贪婪 + 必须以 [/ACTION] 结尾的组合会自动回溯扩展，能正确匹配嵌套 JSON
+    pattern = r'\[ACTION:(\w+)\]\s*(\{.*?\})\s*\[/ACTION\]'
     match = re.search(pattern, response, re.DOTALL)
 
     if not match:
@@ -1167,49 +1187,45 @@ async def _parse_and_execute_action(project_id: str, project: dict, response: st
             return None
         logger.info("JSON 修复解析成功")
 
-    if action_type == "CONFIRM_REQUIREMENT":
-        # 不直接创建，返回待确认数据让前端展示确认卡片
-        title = action_data.get("title", "").strip()
-        description = action_data.get("description", "").strip()
-        priority = action_data.get("priority", "medium")
-        if priority not in ("critical", "high", "medium", "low"):
-            priority = "medium"
-        return {
-            "type": "confirm_requirement",
-            "title": title,
-            "description": description,
-            "priority": priority,
-        }
-    elif action_type == "CONFIRM_BUG":
-        # 不直接创建，返回待确认数据让前端展示 BUG 确认卡片
-        title = action_data.get("title", "").strip()
-        description = action_data.get("description", "").strip()
-        priority = action_data.get("priority", "high")
-        if priority not in ("critical", "high", "medium", "low"):
-            priority = "high"
-        requirement_id = action_data.get("requirement_id") or None
-        return {
-            "type": "confirm_bug",
-            "title": title,
-            "description": description,
-            "priority": priority,
-            "requirement_id": requirement_id,
-        }
-    elif action_type == "CREATE_REQUIREMENT":
-        return await _execute_create_requirement(project_id, action_data)
-    elif action_type == "PAUSE_REQUIREMENT":
-        return await _execute_pause_requirement(project_id, action_data)
-    elif action_type == "RESUME_REQUIREMENT":
-        return await _execute_resume_requirement(project_id, action_data)
-    elif action_type == "CLOSE_REQUIREMENT":
-        return await _execute_close_requirement(project_id, action_data)
-    elif action_type == "GENERATE_DOCUMENT":
-        return await _execute_generate_document(project_id, action_data)
-    elif action_type.startswith("GIT_"):
-        return await _execute_git_action(project_id, action_type, action_data)
+    # ACTION 类型 → Action 实例 的映射（P1 改造后：所有能力走 Action 体系）
+    # 对于 GIT_* 一族，原来共享 _execute_git_action 的一个分发器，现在每种子操作一个 Action。
+    from actions.chat.confirm_requirement import ConfirmRequirementAction
+    from actions.chat.confirm_bug import ConfirmBugAction
+    from actions.chat.create_requirement import CreateRequirementAction
+    from actions.chat.pause_requirement import PauseRequirementAction
+    from actions.chat.resume_requirement import ResumeRequirementAction
+    from actions.chat.close_requirement import CloseRequirementAction
+    from actions.chat.generate_document import GenerateDocumentAction
+    from actions.chat.git_log import GitLogAction
+    from actions.chat.git_list_branches import GitListBranchesAction
+    from actions.chat.git_switch_branch import GitSwitchBranchAction
+    from actions.chat.git_read_file import GitReadFileAction
+    from actions.chat.git_merge import GitMergeAction
 
-    logger.warning("未知操作类型: %s", action_type)
-    return None
+    _ACTION_MAP = {
+        "CONFIRM_REQUIREMENT": ConfirmRequirementAction,
+        "CONFIRM_BUG": ConfirmBugAction,
+        "CREATE_REQUIREMENT": CreateRequirementAction,
+        "PAUSE_REQUIREMENT": PauseRequirementAction,
+        "RESUME_REQUIREMENT": ResumeRequirementAction,
+        "CLOSE_REQUIREMENT": CloseRequirementAction,
+        "GENERATE_DOCUMENT": GenerateDocumentAction,
+        "GIT_LOG": GitLogAction,
+        "GIT_LIST_BRANCHES": GitListBranchesAction,
+        "GIT_SWITCH_BRANCH": GitSwitchBranchAction,
+        "GIT_READ_FILE": GitReadFileAction,
+        "GIT_MERGE": GitMergeAction,
+    }
+
+    action_cls = _ACTION_MAP.get(action_type)
+    if not action_cls:
+        logger.warning("未知操作类型: %s", action_type)
+        return None
+
+    # 统一用 ActionBase 协议调用：context 里注入 project_id + action_data
+    ctx = {"project_id": project_id, **action_data}
+    action_result = await action_cls().run(ctx)
+    return action_result.data
 
 
 async def _execute_generate_document(project_id: str, data: dict) -> Dict:
