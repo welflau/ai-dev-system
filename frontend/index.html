@@ -202,7 +202,7 @@
                                 </div>
                                 <div class="column-body" id="col-done"></div>
                             </div>
-                            <div class="board-column" data-status="deployed" style="display:none">
+                            <div class="board-column" data-status="deployed">
                                 <div class="column-header">
                                     <span class="column-title">已部署</span>
                                     <span class="column-count" id="count-deployed">0</span>
@@ -230,11 +230,16 @@
                                     <select id="ticketListStatusFilter" onchange="loadTicketList()">
                                         <option value="">全部状态</option>
                                         <option value="pending">待启动</option>
-                                        <option value="product_analysis_in_progress">产品分析中</option>
-                                        <option value="architecture_in_progress">架构设计中</option>
+                                        <option value="architecture_in_progress">架构中</option>
+                                        <option value="architecture_done">架构完成</option>
                                         <option value="development_in_progress">开发中</option>
+                                        <option value="development_done">开发完成</option>
+                                        <option value="acceptance_passed">验收通过</option>
+                                        <option value="acceptance_rejected">验收不通过</option>
                                         <option value="testing_in_progress">测试中</option>
-                                        <option value="review_in_progress">审查中</option>
+                                        <option value="testing_done">测试通过</option>
+                                        <option value="testing_failed">测试不通过</option>
+                                        <option value="deploying">部署中</option>
                                         <option value="deployed">已部署</option>
                                         <option value="cancelled">已取消</option>
                                     </select>
