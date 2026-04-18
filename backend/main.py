@@ -8,7 +8,7 @@ import os
 import sys
 from pathlib import Path
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -186,6 +186,72 @@ async def get_sop():
         "metadata": get_sop_metadata(config),
         "stages": get_sop_stages(config),
         "rules": orchestrator.transition_rules,
+    }
+
+
+@app.get("/api/sop/config")
+async def get_sop_config_full():
+    """获取 SOP 的完整原始配置（含 pipeline_view / global / 每个 stage 的 config 嵌套）
+
+    供 SOP 编辑器使用，返回可直接回传 PUT 的完整结构。
+    """
+    from orchestrator import orchestrator
+    return orchestrator._sop_config or {}
+
+
+@app.put("/api/sop/config")
+async def update_sop_config(body: dict):
+    """更新 SOP 配置（SOP 编辑器用）
+
+    流程：
+    1. 校验入参（字段齐全、id 唯一、reject_goto / pipeline_view 引用合法）
+    2. 备份当前 yaml 到 sop/backups/default_sop_YYYYMMDD-HHMMSS.yaml
+    3. 写入新 yaml
+    4. 热重载 orchestrator
+    """
+    from sop.loader import SOP_DIR
+    from sop.validator import validate_sop_config
+    from orchestrator import orchestrator
+    from datetime import datetime
+
+    # 1. 校验
+    errors = validate_sop_config(body)
+    if errors:
+        raise HTTPException(400, {"detail": "SOP 配置校验失败", "errors": errors})
+
+    # 2. 备份
+    backup_dir = SOP_DIR / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    sop_file = SOP_DIR / "default_sop.yaml"
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup_path = backup_dir / f"default_sop_{ts}.yaml"
+
+    if sop_file.exists():
+        backup_path.write_text(sop_file.read_text(encoding="utf-8"), encoding="utf-8")
+
+    # 3. 写新 yaml
+    try:
+        import yaml
+        new_yaml = yaml.safe_dump(body, allow_unicode=True, sort_keys=False, indent=2)
+        sop_file.write_text(new_yaml, encoding="utf-8")
+    except Exception as e:
+        raise HTTPException(500, f"写入 yaml 失败: {e}")
+
+    # 4. 热重载
+    try:
+        orchestrator.reload_sop()
+    except Exception as e:
+        # reload 失败则还原备份
+        if backup_path.exists():
+            sop_file.write_text(backup_path.read_text(encoding="utf-8"), encoding="utf-8")
+            orchestrator.reload_sop()
+        raise HTTPException(500, f"热重载失败（已自动回滚）：{e}")
+
+    return {
+        "status": "ok",
+        "backup": backup_path.name,
+        "name": body.get("name", "?"),
+        "stages_count": len(body.get("stages") or []),
     }
 
 

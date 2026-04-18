@@ -564,10 +564,82 @@
                         <div class="settings-page">
                             <div class="settings-page-header">
                                 <h2>🔄 流程配置 (SOP)</h2>
-                                <button class="btn btn-sm" onclick="reloadSOP()">🔄 重载配置</button>
+                                <div class="sop-header-actions">
+                                    <button class="btn btn-sm" id="sopBtnReload" onclick="reloadSOP()">🔄 重载配置</button>
+                                    <button class="btn btn-sm" id="sopBtnEdit" onclick="toggleSOPEditMode()">✏️ 编辑</button>
+                                    <button class="btn btn-sm" id="sopBtnAddStage" onclick="openStageEditorNew()" style="display:none;">+ 新增阶段</button>
+                                    <button class="btn btn-sm" id="sopBtnDiscard" onclick="discardSOPChanges()" style="display:none;">↻ 放弃修改</button>
+                                    <button class="btn btn-sm btn-primary" id="sopBtnSave" onclick="saveSOPConfig()" style="display:none;">💾 保存并重载</button>
+                                </div>
                             </div>
                             <div id="sopInfo" style="margin-bottom:16px;"></div>
                             <div class="sop-flow-container" id="sopFlowChart"></div>
+                        </div>
+                    </div>
+
+                    <!-- ==================== 模态框：SOP 阶段编辑 ==================== -->
+                    <div class="modal-overlay" id="sopStageModal">
+                        <div class="modal modal-lg">
+                            <div class="modal-header">
+                                <h3 id="sopStageModalTitle">编辑阶段</h3>
+                                <button class="btn-icon" onclick="closeModal('sopStageModal')">&times;</button>
+                            </div>
+                            <div class="modal-body">
+                                <div class="form-group">
+                                    <label>阶段 ID <span class="required">*</span></label>
+                                    <input type="text" id="sopStageId" placeholder="如 architecture / development / testing">
+                                    <small class="form-hint">英文，唯一标识，不要有空格</small>
+                                </div>
+                                <div class="form-group">
+                                    <label>中文名 <span class="required">*</span></label>
+                                    <input type="text" id="sopStageName" placeholder="如 架构设计">
+                                </div>
+                                <div class="form-group">
+                                    <label>Agent <span class="required">*</span></label>
+                                    <select id="sopStageAgent">
+                                        <option value="ArchitectAgent">ArchitectAgent</option>
+                                        <option value="DevAgent">DevAgent</option>
+                                        <option value="ProductAgent">ProductAgent</option>
+                                        <option value="TestAgent">TestAgent</option>
+                                        <option value="ReviewAgent">ReviewAgent</option>
+                                        <option value="DeployAgent">DeployAgent</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label>Action <span class="required">*</span></label>
+                                    <input type="text" id="sopStageAction" placeholder="如 design_architecture / develop / run_tests">
+                                    <small class="form-hint">Agent 内部的 action 名，对应 actions/ 目录下的 Action 类</small>
+                                </div>
+                                <div class="form-group">
+                                    <label>触发状态 trigger_on <span class="required">*</span></label>
+                                    <input type="text" id="sopStageTriggerOn" placeholder="如 pending / architecture_done">
+                                </div>
+                                <div class="form-group">
+                                    <label>成功状态 success_status <span class="required">*</span></label>
+                                    <input type="text" id="sopStageSuccessStatus" placeholder="如 architecture_done">
+                                </div>
+                                <div class="form-group">
+                                    <label>拒绝状态 reject_status</label>
+                                    <input type="text" id="sopStageRejectStatus" placeholder="如 acceptance_rejected （可选）">
+                                </div>
+                                <div class="form-group">
+                                    <label>拒绝跳转 reject_goto</label>
+                                    <input type="text" id="sopStageRejectGoto" placeholder="指向另一个阶段 id（可选）">
+                                    <small class="form-hint">验收/测试失败后跳去哪个阶段做返工，对应 stage id</small>
+                                </div>
+                                <div class="form-group">
+                                    <label>说明 description</label>
+                                    <textarea id="sopStageDescription" rows="2"></textarea>
+                                </div>
+                                <div class="form-group">
+                                    <label>通过阈值 pass_threshold</label>
+                                    <input type="number" id="sopStagePassThreshold" placeholder="可选，测试阶段的分数下限">
+                                </div>
+                            </div>
+                            <div class="modal-footer">
+                                <button class="btn" onclick="closeModal('sopStageModal')">取消</button>
+                                <button class="btn btn-primary" onclick="saveStageFromModal()">确认</button>
+                            </div>
                         </div>
                     </div>
 

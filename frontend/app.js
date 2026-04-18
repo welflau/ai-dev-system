@@ -685,15 +685,32 @@ async function mergeBranch(source, target) {
 
 // ==================== SOP 流程配置 ====================
 
+// SOP 编辑器状态
+let _sopEditMode = false;
+let _sopDraft = null;        // 编辑中的完整 config（未保存）
+let _sopEditingIdx = null;   // 当前 modal 正在编辑的 stage index，-1 表示新增
+
 async function loadSOPFlow() {
     const container = document.getElementById('sopFlowChart');
     const infoEl = document.getElementById('sopInfo');
     if (!container) return;
 
     try {
-        const data = await api('/sop');
-        const meta = data.metadata || {};
-        const stages = data.stages || [];
+        // 编辑模式下用本地 draft，非编辑模式从后端拉
+        let stages, meta;
+        if (_sopEditMode && _sopDraft) {
+            stages = (_sopDraft.stages || []).map(s => ({ ...s }));
+            meta = {
+                name: _sopDraft.name || '',
+                version: _sopDraft.version || '',
+                stage_count: stages.length,
+                description: _sopDraft.description || '',
+            };
+        } else {
+            const data = await api('/sop');
+            meta = data.metadata || {};
+            stages = data.stages || [];
+        }
 
         // 元信息
         infoEl.innerHTML = `
@@ -774,17 +791,30 @@ async function loadSOPFlow() {
 
         svg += '</svg>';
 
-        // 阶段详情表格
-        let table = '<table class="sop-table"><thead><tr><th>阶段</th><th>Agent</th><th>触发状态</th><th>成功状态</th><th>打回</th><th>说明</th></tr></thead><tbody>';
-        stages.forEach(s => {
+        // 阶段详情表格（编辑模式多一列操作按钮）
+        const opCol = _sopEditMode ? '<th style="width:160px;">操作</th>' : '';
+        let table = `<table class="sop-table"><thead><tr><th>阶段</th><th>Agent</th><th>触发状态</th><th>成功状态</th><th>打回</th><th>说明</th>${opCol}</tr></thead><tbody>`;
+        stages.forEach((s, idx) => {
             const color = agentColors[s.agent] || '#64748b';
+            let opCell = '';
+            if (_sopEditMode) {
+                const upDisabled = idx === 0 ? 'disabled' : '';
+                const downDisabled = idx === stages.length - 1 ? 'disabled' : '';
+                opCell = `<td>
+                    <button class="btn btn-xs" onclick="moveStage(${idx}, -1)" ${upDisabled} title="上移">↑</button>
+                    <button class="btn btn-xs" onclick="moveStage(${idx}, 1)" ${downDisabled} title="下移">↓</button>
+                    <button class="btn btn-xs" onclick="openStageEditor(${idx})" title="编辑">✏️</button>
+                    <button class="btn btn-xs" onclick="deleteStage(${idx})" title="删除">🗑️</button>
+                </td>`;
+            }
             table += `<tr>
-                <td><strong>${escapeHtml(s.name || s.id)}</strong></td>
+                <td><strong>${escapeHtml(s.name || s.id)}</strong><br><code style="font-size:10px;color:var(--text-muted);">${escapeHtml(s.id)}</code></td>
                 <td><span style="color:${color};font-weight:500;">${escapeHtml(s.agent)}</span></td>
                 <td><code>${escapeHtml(s.trigger_on)}</code></td>
                 <td><code>${escapeHtml(s.success_status || '-')}</code></td>
                 <td>${s.reject_goto ? `<span style="color:#ef4444;">→ ${escapeHtml(s.reject_goto)}</span>` : '-'}</td>
                 <td style="color:var(--text-muted);font-size:12px;">${escapeHtml(s.description || '')}</td>
+                ${opCell}
             </tr>`;
         });
         table += '</tbody></table>';
@@ -802,6 +832,174 @@ async function reloadSOP() {
         loadSOPFlow();
     } catch (e) {
         showToast(`重载失败: ${e.message}`, 'error');
+    }
+}
+
+// -------------------- SOP 编辑器 --------------------
+
+async function toggleSOPEditMode() {
+    if (!_sopEditMode) {
+        // 进入编辑：拉完整配置作为 draft
+        try {
+            const cfg = await api('/sop/config');
+            if (!cfg || !cfg.stages) {
+                showToast('拉取完整 SOP 配置失败', 'error');
+                return;
+            }
+            // 深拷贝（避免编辑影响原始）
+            _sopDraft = JSON.parse(JSON.stringify(cfg));
+            _sopEditMode = true;
+            _updateSOPButtons();
+            loadSOPFlow();
+        } catch (e) {
+            showToast(`进入编辑失败: ${e.message}`, 'error');
+        }
+    } else {
+        // 退出编辑 → 等同于放弃修改
+        discardSOPChanges();
+    }
+}
+
+function _updateSOPButtons() {
+    const btnEdit = document.getElementById('sopBtnEdit');
+    const btnAdd = document.getElementById('sopBtnAddStage');
+    const btnDiscard = document.getElementById('sopBtnDiscard');
+    const btnSave = document.getElementById('sopBtnSave');
+    if (!btnEdit) return;
+    if (_sopEditMode) {
+        btnEdit.textContent = '✅ 退出编辑';
+        btnAdd.style.display = '';
+        btnDiscard.style.display = '';
+        btnSave.style.display = '';
+    } else {
+        btnEdit.textContent = '✏️ 编辑';
+        btnAdd.style.display = 'none';
+        btnDiscard.style.display = 'none';
+        btnSave.style.display = 'none';
+    }
+}
+
+function discardSOPChanges() {
+    if (_sopEditMode) {
+        // 有改动就二次确认
+        if (!confirm('放弃所有未保存的修改？')) return;
+    }
+    _sopEditMode = false;
+    _sopDraft = null;
+    _sopEditingIdx = null;
+    _updateSOPButtons();
+    loadSOPFlow();
+}
+
+function moveStage(idx, delta) {
+    if (!_sopDraft || !_sopDraft.stages) return;
+    const arr = _sopDraft.stages;
+    const newIdx = idx + delta;
+    if (newIdx < 0 || newIdx >= arr.length) return;
+    [arr[idx], arr[newIdx]] = [arr[newIdx], arr[idx]];
+    loadSOPFlow();
+}
+
+function deleteStage(idx) {
+    if (!_sopDraft || !_sopDraft.stages) return;
+    const s = _sopDraft.stages[idx];
+    if (!confirm(`删除阶段「${s.name || s.id}」？\n该操作需点击"保存并重载"后才生效。`)) return;
+    _sopDraft.stages.splice(idx, 1);
+    loadSOPFlow();
+}
+
+function openStageEditor(idx) {
+    if (!_sopDraft || !_sopDraft.stages) return;
+    _sopEditingIdx = idx;
+    const s = _sopDraft.stages[idx] || {};
+    _fillStageForm(s);
+    document.getElementById('sopStageModalTitle').textContent = '编辑阶段';
+    document.getElementById('sopStageModal').classList.add('active');
+}
+
+function openStageEditorNew() {
+    _sopEditingIdx = -1;
+    _fillStageForm({});
+    document.getElementById('sopStageModalTitle').textContent = '新增阶段';
+    document.getElementById('sopStageModal').classList.add('active');
+}
+
+function _fillStageForm(s) {
+    document.getElementById('sopStageId').value = s.id || '';
+    document.getElementById('sopStageName').value = s.name || '';
+    document.getElementById('sopStageAgent').value = s.agent || 'ArchitectAgent';
+    document.getElementById('sopStageAction').value = s.action || '';
+    document.getElementById('sopStageTriggerOn').value = s.trigger_on || '';
+    document.getElementById('sopStageSuccessStatus').value = s.success_status || '';
+    document.getElementById('sopStageRejectStatus').value = s.reject_status || '';
+    document.getElementById('sopStageRejectGoto').value = s.reject_goto || '';
+    document.getElementById('sopStageDescription').value = s.description || '';
+    document.getElementById('sopStagePassThreshold').value = (s.pass_threshold ?? '');
+}
+
+function saveStageFromModal() {
+    const id = document.getElementById('sopStageId').value.trim();
+    const name = document.getElementById('sopStageName').value.trim();
+    const agent = document.getElementById('sopStageAgent').value;
+    const action = document.getElementById('sopStageAction').value.trim();
+    const triggerOn = document.getElementById('sopStageTriggerOn').value.trim();
+    const successStatus = document.getElementById('sopStageSuccessStatus').value.trim();
+
+    if (!id || !name || !agent || !action || !triggerOn || !successStatus) {
+        showToast('必填字段: id / 中文名 / Agent / Action / 触发状态 / 成功状态', 'error');
+        return;
+    }
+
+    const newStage = { id, name, agent, action, trigger_on: triggerOn, success_status: successStatus };
+
+    const rejectStatus = document.getElementById('sopStageRejectStatus').value.trim();
+    const rejectGoto = document.getElementById('sopStageRejectGoto').value.trim();
+    const description = document.getElementById('sopStageDescription').value.trim();
+    const ptVal = document.getElementById('sopStagePassThreshold').value;
+
+    if (rejectStatus) newStage.reject_status = rejectStatus;
+    if (rejectGoto) newStage.reject_goto = rejectGoto;
+    if (description) newStage.description = description;
+    if (ptVal !== '') newStage.pass_threshold = Number(ptVal);
+
+    // 保留现有的 config 嵌套字段（新增则为空 dict）
+    if (_sopEditingIdx >= 0) {
+        const existing = _sopDraft.stages[_sopEditingIdx] || {};
+        if (existing.config) newStage.config = existing.config;
+        // id 重复校验（排除自己）
+        const dupe = _sopDraft.stages.some((s, i) => i !== _sopEditingIdx && s.id === id);
+        if (dupe) { showToast(`阶段 id '${id}' 已存在`, 'error'); return; }
+        _sopDraft.stages[_sopEditingIdx] = newStage;
+    } else {
+        if (_sopDraft.stages.some(s => s.id === id)) {
+            showToast(`阶段 id '${id}' 已存在`, 'error');
+            return;
+        }
+        _sopDraft.stages.push(newStage);
+    }
+
+    closeModal('sopStageModal');
+    loadSOPFlow();
+}
+
+async function saveSOPConfig() {
+    if (!_sopDraft) return;
+    if (!confirm(`保存 SOP 配置并热重载？\n\n当前备份机制会自动留旧版 yaml 到 sop/backups/。\n共 ${_sopDraft.stages.length} 个阶段。`)) return;
+    try {
+        const res = await api('/sop/config', { method: 'PUT', body: _sopDraft });
+        showToast(`SOP 已保存并重载（备份: ${res.backup}）`, 'success');
+        _sopEditMode = false;
+        _sopDraft = null;
+        _updateSOPButtons();
+        loadSOPFlow();
+    } catch (e) {
+        // 显示校验错误（后端 400 时 body 有 errors 数组）
+        let msg = e.message;
+        try {
+            const parsed = JSON.parse(e.message.replace(/^\d+\s*/, ''));
+            if (parsed.errors) msg = '校验失败:\n' + parsed.errors.join('\n');
+        } catch {}
+        showToast(`保存失败: ${msg}`, 'error');
     }
 }
 
