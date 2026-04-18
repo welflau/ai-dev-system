@@ -280,38 +280,18 @@ async def get_requirement_pipeline(project_id: str, req_id: str):
         except Exception:
             return None
 
-    # Pipeline 5 阶段定义（最后阶段为"合入Develop"，部署由项目级 CI/CD 管理）
+    # Pipeline 5 阶段定义 —— 由 SOP 配置派生（sop/loader.py:build_pipeline_stages）
+    # 原硬编码版本已移到 sop/loader.py 的 _legacy_pipeline_stages() 作兜底
+    from sop.loader import build_pipeline_stages
+    from orchestrator import orchestrator
+    _pipeline = build_pipeline_stages(orchestrator._sop_config or {})
+    # 将派生结果转为原先的数据结构，最小化下游改动
     STAGE_DEFS = [
-        ("requirement_analysis", "需求分析", "📋", []),
-        ("architecture", "架构设计", "🏗️",
-         ["architecture_in_progress", "architecture_done"]),
-        ("development", "开发实现", "💻",
-         ["development_in_progress", "development_done",
-          "acceptance_passed", "acceptance_rejected"]),
-        ("testing", "测试验证", "🧪",
-         ["testing_in_progress", "testing_done", "testing_failed"]),
-        ("merge_develop", "合入Develop", "🔀", []),
+        (d["key"], d["name"], d.get("icon", ""), d.get("in_statuses", []))
+        for d in _pipeline["defs"]
     ]
-
-    # 所有"已经过"阶段的状态集合（用于判定阶段已完成）
-    PAST = {
-        "architecture": {"architecture_done", "development_in_progress",
-                         "development_done", "acceptance_passed",
-                         "acceptance_rejected", "testing_in_progress",
-                         "testing_done", "testing_failed", "deploying", "deployed"},
-        "development": {"development_done", "acceptance_passed",
-                        "acceptance_rejected", "testing_in_progress",
-                        "testing_done", "testing_failed", "deploying", "deployed"},
-        "testing": {"testing_done", "deploying", "deployed"},
-    }
-
-    PRE = {
-        "architecture": {"pending"},
-        "development": {"pending", "architecture_in_progress", "architecture_done"},
-        "testing": {"pending", "architecture_in_progress", "architecture_done",
-                    "development_in_progress", "development_done",
-                    "acceptance_passed", "acceptance_rejected"},
-    }
+    PAST = _pipeline["past"]
+    PRE = _pipeline["pre"]
 
     # 构建总体时间线
     trigger_time = req["created_at"]

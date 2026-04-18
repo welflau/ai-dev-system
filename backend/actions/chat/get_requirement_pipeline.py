@@ -18,25 +18,20 @@ from database import db
 logger = logging.getLogger("actions.chat.get_requirement_pipeline")
 
 
-# 和 api/requirements.py 的 STAGE_DEFS 保持一致的判定规则
-_STAGE_DEFS = [
-    {"key": "requirement_analysis", "name": "需求分析"},
-    {"key": "architecture",         "name": "架构设计"},
-    {"key": "development",          "name": "开发实现"},
-    {"key": "testing",              "name": "测试验证"},
-    {"key": "merge_develop",        "name": "合入Develop"},
-]
+# Pipeline 阶段定义由 SOP 驱动（sop/loader.py:build_pipeline_stages），
+# 不再在此硬编码。通过 _get_pipeline_cfg() 按需获取（首次调用缓存）
+_pipeline_cfg_cache = None
 
-# 每阶段状态的"已完成"集合（票据状态 ∈ 这个集合 ⇒ 该阶段已过）
-_PAST = {
-    "architecture": {"architecture_done", "development_in_progress", "development_done",
-                     "acceptance_passed", "acceptance_rejected", "testing_in_progress",
-                     "testing_done", "testing_failed", "deploying", "deployed"},
-    "development": {"development_done", "acceptance_passed", "acceptance_rejected",
-                    "testing_in_progress", "testing_done", "testing_failed",
-                    "deploying", "deployed"},
-    "testing": {"testing_done", "deploying", "deployed"},
-}
+
+def _get_pipeline_cfg():
+    """懒加载 SOP 派生的 pipeline 配置（stage defs + past/pre 映射）"""
+    global _pipeline_cfg_cache
+    if _pipeline_cfg_cache is None:
+        from sop.loader import build_pipeline_stages
+        from orchestrator import orchestrator
+        _pipeline_cfg_cache = build_pipeline_stages(orchestrator._sop_config or {})
+    return _pipeline_cfg_cache
+
 
 _RUNNING_TICKET_STATUSES = {
     "architecture_in_progress", "development_in_progress",
@@ -124,53 +119,53 @@ class GetRequirementPipelineAction(ActionBase):
             (requirement_id,),
         )
 
-        # 5 阶段状态判定
+        # 阶段状态判定 —— 配置驱动（来自 sop/default_sop.yaml 的 pipeline_view）
+        cfg = _get_pipeline_cfg()
         stages: List[Dict[str, Any]] = []
 
-        # 阶段 1：需求分析（看需求本身 status）
-        if req_status == "submitted":
-            a_stage_status = "pending"
-        elif req_status == "analyzing":
-            a_stage_status = "running"
-        elif req_status == "cancelled":
-            a_stage_status = "cancelled"
-        else:
-            a_stage_status = "done"
-        stages.append({"key": "requirement_analysis", "name": "需求分析", "status": a_stage_status})
+        for d in cfg["defs"]:
+            key = d["key"]
+            name = d["name"]
+            synthetic = d.get("synthetic")
 
-        # 阶段 2-4：看工单 status 的分布
-        # 每阶段"正在跑"对应的 ticket status 集合
-        _RUNNING_FOR_STAGE = {
-            "architecture": {"architecture_in_progress"},
-            "development": {"development_in_progress", "acceptance_rejected"},
-            "testing": {"testing_in_progress", "acceptance_passed", "testing_failed"},
-        }
-        _STAGE_NAME = {s["key"]: s["name"] for s in _STAGE_DEFS}
-        for key in ("architecture", "development", "testing"):
-            if not tickets:
-                stages.append({"key": key, "name": _STAGE_NAME[key], "status": "pending"})
-                continue
-            non_cancelled = [t for t in tickets if t["status"] != "cancelled"]
-            if not non_cancelled:
-                stage_status = "cancelled"
-            elif all(t["status"] in _PAST[key] for t in non_cancelled):
-                stage_status = "done"
-            elif any(t["status"] in _RUNNING_FOR_STAGE[key] for t in non_cancelled):
-                stage_status = "running"
+            if synthetic == "requirement_status":
+                # 需求分析阶段：基于需求 status
+                if req_status == "submitted":
+                    s_status = "pending"
+                elif req_status == "analyzing":
+                    s_status = "running"
+                elif req_status == "cancelled":
+                    s_status = "cancelled"
+                else:
+                    s_status = "done"
+            elif synthetic == "merge":
+                # 合入 Develop：基于需求 status + 所有工单是否已 testing_done
+                if req_status == "completed":
+                    s_status = "done"
+                elif tickets and all(t["status"] in {"testing_done", "deployed", "cancelled"} for t in tickets):
+                    s_status = "running"
+                elif req_status == "cancelled":
+                    s_status = "cancelled"
+                else:
+                    s_status = "pending"
             else:
-                stage_status = "pending"
-            stages.append({"key": key, "name": _STAGE_NAME[key], "status": stage_status})
+                # 常规 SOP 聚合阶段：基于工单 status 分布
+                past_set = cfg["past"].get(key, set())
+                running_set = set(d.get("running_statuses") or [])
+                if not tickets:
+                    s_status = "pending"
+                else:
+                    non_cancelled = [t for t in tickets if t["status"] != "cancelled"]
+                    if not non_cancelled:
+                        s_status = "cancelled"
+                    elif all(t["status"] in past_set for t in non_cancelled):
+                        s_status = "done"
+                    elif any(t["status"] in running_set for t in non_cancelled):
+                        s_status = "running"
+                    else:
+                        s_status = "pending"
 
-        # 阶段 5：合入 develop
-        if req_status == "completed":
-            m_stage_status = "done"
-        elif tickets and all(t["status"] in {"testing_done", "deployed", "cancelled"} for t in tickets):
-            m_stage_status = "running"
-        elif req_status == "cancelled":
-            m_stage_status = "cancelled"
-        else:
-            m_stage_status = "pending"
-        stages.append({"key": "merge_develop", "name": "合入Develop", "status": m_stage_status})
+            stages.append({"key": key, "name": name, "status": s_status})
 
         # 当前运行/卡顿工单
         running_tickets = []

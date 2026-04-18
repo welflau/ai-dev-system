@@ -98,3 +98,46 @@ stages:
     config:
       read_existing_code: true
       max_tokens: 16000
+
+# -----------------------------------------------------------------------------
+# Pipeline 可视化配置 — 给需求详情页的 pipeline 卡片用
+# SOP 有 6 个工单流转阶段（见上），UI 按产品线性展示压缩成 5 个视觉分组，
+# 并在首尾补 2 个"非工单"合成阶段：需求分析、合入 Develop。
+# sop_stages 字段指明每个 UI 分组聚合哪些 SOP 阶段 id；
+# synthetic 字段标记不基于工单 status 判定的合成阶段（首尾 2 个）。
+# 派生逻辑：sop/loader.py 的 build_pipeline_stages()
+# -----------------------------------------------------------------------------
+pipeline_view:
+  stages:
+    - key: requirement_analysis
+      name: "需求分析"
+      icon: "📋"
+      synthetic: requirement_status
+      description: "基于需求 status (submitted/analyzing/decomposed) 判定，ProductAgent 拆单"
+
+    - key: architecture
+      name: "架构设计"
+      icon: "🏗️"
+      sop_stages: [architecture]
+      running_statuses: [architecture_in_progress]
+      description: "ArchitectAgent 设计增量技术方案"
+
+    - key: development
+      name: "开发实现"
+      icon: "💻"
+      sop_stages: [development, acceptance, rework]
+      running_statuses: [development_in_progress, acceptance_rejected]
+      description: "DevAgent 开发 + ProductAgent 验收 + 必要时返工"
+
+    - key: testing
+      name: "测试验证"
+      icon: "🧪"
+      sop_stages: [testing, fix_issues]
+      running_statuses: [testing_in_progress, acceptance_passed, testing_failed]
+      description: "TestAgent 多层测试 + 失败时修复"
+
+    - key: merge_develop
+      name: "合入Develop"
+      icon: "🔀"
+      synthetic: merge
+      description: "所有工单 testing_done 后 Orchestrator 合并 feat 分支到 develop"
