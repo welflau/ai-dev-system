@@ -895,7 +895,11 @@
     <aside class="drawer" id="ticketDrawer">
         <div class="drawer-header">
             <div class="drawer-title" id="drawerTitle"></div>
-            <button class="btn-icon" onclick="closeDrawer()">&times;</button>
+            <div class="drawer-header-actions">
+                <button class="btn-icon" id="drawerDockBtn" onclick="toggleDrawerDock()"
+                        title="切换 浮动/固定（Dock）模式">📌</button>
+                <button class="btn-icon" onclick="closeDrawer()">&times;</button>
+            </div>
         </div>
         <div class="drawer-body" id="drawerBody"></div>
     </aside>

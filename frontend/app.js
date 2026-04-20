@@ -1799,6 +1799,9 @@ async function updateTicketStatus(ticketId, newStatus, selectEl) {
 async function openTicketDrawer(ticketId) {
     if (!currentProjectId) return;
 
+    // 应用用户的 Dock 偏好（从 localStorage）
+    _applyDrawerDockPreference();
+
     // 联动聊天面板 — 设置当前工单上下文
     chatCurrentTicketId = ticketId;
 
@@ -2181,6 +2184,45 @@ function toggleCollapsible(blockId) {
 function closeDrawer() {
     document.getElementById('drawerOverlay').classList.remove('active');
     document.getElementById('ticketDrawer').classList.remove('active');
+    // Dock 模式下关闭也要去掉 body 的占位 class
+    document.body.classList.remove('has-docked-drawer');
+}
+
+/** 切换抽屉的 浮动/固定(Dock) 模式。状态保存到 localStorage */
+function toggleDrawerDock() {
+    const drawer = document.getElementById('ticketDrawer');
+    const btn = document.getElementById('drawerDockBtn');
+    const isDocked = drawer.classList.toggle('docked');
+    btn.classList.toggle('active', isDocked);
+    if (isDocked) {
+        document.body.classList.add('has-docked-drawer');
+        btn.title = 'Dock 模式开启（与主内容并排）。点击切回浮动';
+    } else {
+        document.body.classList.remove('has-docked-drawer');
+        btn.title = '浮动模式（遮盖主内容）。点击切 Dock 模式';
+    }
+    try {
+        localStorage.setItem('drawer_dock_mode', isDocked ? '1' : '0');
+    } catch {}
+}
+
+/** 打开抽屉时根据用户偏好自动应用 Dock 状态 */
+function _applyDrawerDockPreference() {
+    let pref = '0';
+    try {
+        pref = localStorage.getItem('drawer_dock_mode') || '0';
+    } catch {}
+    const drawer = document.getElementById('ticketDrawer');
+    const btn = document.getElementById('drawerDockBtn');
+    if (pref === '1') {
+        drawer.classList.add('docked');
+        btn.classList.add('active');
+        document.body.classList.add('has-docked-drawer');
+    } else {
+        drawer.classList.remove('docked');
+        btn.classList.remove('active');
+        document.body.classList.remove('has-docked-drawer');
+    }
 }
 
 /** 加载前置依赖工单详情 */

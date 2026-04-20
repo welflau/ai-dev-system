@@ -1176,6 +1176,30 @@ body.chat-open #projectListPage {
     right: 0;
 }
 
+/* Dock 模式：与主内容并排，不遮盖、无 overlay */
+.drawer.docked {
+    z-index: 50;   /* 低于模态框，允许其他 UI 元素覆盖它 */
+    box-shadow: -2px 0 8px rgba(0, 0, 0, 0.12);
+}
+.drawer.docked + .drawer-overlay,
+body.has-docked-drawer .drawer-overlay {
+    display: none !important;
+}
+/* 当 body 有 Dock drawer 时，主内容区右边预留宽度 */
+body.has-docked-drawer .main-container {
+    padding-right: 500px;
+    transition: padding-right 0.3s ease;
+}
+
+.drawer-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+#drawerDockBtn.active {
+    color: var(--accent, #3b82f6);
+}
+
 .drawer-header {
     display: flex;
     align-items: center;
