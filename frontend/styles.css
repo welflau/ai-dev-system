@@ -350,6 +350,17 @@ body.chat-open #projectListPage {
     border-radius: var(--radius);
     display: flex;
     flex-direction: column;
+    transition: min-width 0.2s ease, max-width 0.2s ease, opacity 0.2s ease;
+}
+/* 空列（本状态当前无工单）：收窄 + 半透明，省出空间给有工单的列 */
+.board-column.empty-col {
+    flex: 0 0 auto;
+    min-width: 110px;
+    max-width: 110px;
+    opacity: 0.45;
+}
+.board-column.empty-col .column-body {
+    display: none;   /* 空列直接不渲染 "暂无工单" 文字，节省垂直空间 */
 }
 
 .column-header {

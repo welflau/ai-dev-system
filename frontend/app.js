@@ -1717,6 +1717,13 @@ async function refreshBoard() {
             if (count) count.textContent = tickets.length;
 
             if (!body) return;
+
+            // 空列：打 .empty-col class 让 CSS 收窄 + 半透明，省出空间
+            const column = body.closest('.board-column');
+            if (column) {
+                column.classList.toggle('empty-col', tickets.length === 0);
+            }
+
             if (tickets.length === 0) {
                 body.innerHTML = '<div class="empty-state"><p style="font-size:12px; padding:16px 0;">暂无工单</p></div>';
                 return;
