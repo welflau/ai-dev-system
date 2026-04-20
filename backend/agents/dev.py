@@ -93,10 +93,12 @@ class DevAgent(BaseAgent):
         if enable_reflection and self.has_action("reflect"):
             refl_result = await self.run_action("reflect", context)
             reflection = refl_result.get("reflection") or {}
+            # 把 retry_count 附到 reflection dict，方便下游（orchestrator 日志/前端）取用
+            reflection["retry_count"] = context.get("retry_count", 1)
             context["reflection"] = reflection
             logger.info(
                 "🔍 Reflection 已注入（retry=%d, confidence=%.2f）",
-                context.get("retry_count", 1),
+                reflection["retry_count"],
                 float(reflection.get("confidence", 0.0) or 0.0),
             )
         else:

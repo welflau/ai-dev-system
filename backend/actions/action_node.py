@@ -4,13 +4,13 @@ ActionNode — 结构化输出节点
 
 核心功能：
 1. 编译 prompt（自动加入 JSON Schema 约束）
-2. 调用 LLM
+2. 调用 LLM（可选携带图片，走 Anthropic vision）
 3. 解析输出为 Pydantic 模型（类型安全）
 4. 解析失败时宽松降级（不崩溃）
 """
 import json
 import logging
-from typing import Type, Optional, Any
+from typing import Type, Optional, Any, List
 from pydantic import BaseModel
 
 logger = logging.getLogger("action_node")
@@ -33,7 +33,14 @@ class ActionNode:
         self.instruct_content: Optional[BaseModel] = None
         self.raw_content: str = ""
 
-    async def fill(self, req: str, llm, max_tokens: int = 16000, temperature: float = 0.3) -> "ActionNode":
+    async def fill(
+        self,
+        req: str,
+        llm,
+        max_tokens: int = 16000,
+        temperature: float = 0.3,
+        images: Optional[List[str]] = None,
+    ) -> "ActionNode":
         """调用 LLM → 解析 → 验证 → 存储
 
         Args:
@@ -41,6 +48,8 @@ class ActionNode:
             llm: LLM client 实例（需有 chat_json 方法）
             max_tokens: 最大输出 token
             temperature: 温度
+            images: 可选，base64 data URL 列表（如 `data:image/png;base64,xxx`）。
+                    提供时走 Anthropic vision，content 被构造成 [image_blocks..., text_block]
 
         Returns:
             self（instruct_content 已填充）
@@ -48,9 +57,14 @@ class ActionNode:
         # 1. 编译 prompt（加入 Schema 约束）
         prompt = self._compile(req)
 
-        # 2. 调用 LLM
+        # 2. 构造消息 content — 无图时字符串，有图时 vision blocks 列表
+        content: Any = prompt
+        if images:
+            content = _build_vision_content(prompt, images)
+
+        # 3. 调用 LLM
         response = await llm.chat_json(
-            [{"role": "user", "content": prompt}],
+            [{"role": "user", "content": content}],
             max_tokens=max_tokens,
             temperature=temperature,
         )
@@ -115,3 +129,31 @@ class ActionNode:
     def __repr__(self):
         filled = "filled" if self.is_filled else "empty"
         return f"<ActionNode:{self.key} ({filled})>"
+
+
+def _build_vision_content(text: str, images: List[str]) -> List[dict]:
+    """把 base64 data URL 列表 + text 构造成 Anthropic vision content blocks。
+    输入：["data:image/png;base64,<b64>", ...]
+    输出：[{type:image, source:...}, ..., {type:text, text:...}]
+    解析失败的图片会被跳过（不阻塞主流程）。
+    """
+    content: List[dict] = []
+    for data_url in images:
+        try:
+            header, b64data = data_url.split(",", 1)
+            # header: "data:image/png;base64"
+            media_type = header.split(";")[0].split(":")[1] if ":" in header else "image/png"
+            if media_type not in ("image/jpeg", "image/png", "image/gif", "image/webp"):
+                media_type = "image/jpeg"
+            content.append({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": media_type,
+                    "data": b64data,
+                },
+            })
+        except Exception as e:
+            logger.warning("ActionNode vision: 跳过解析失败的图片: %s", e)
+    content.append({"type": "text", "text": text})
+    return content

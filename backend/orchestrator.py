@@ -1018,9 +1018,28 @@ class TicketOrchestrator:
 
             # Reflexion：rework / fix_issues 产出的反思写进 ticket_logs
             last_reflection = result.get("last_reflection") if isinstance(result, dict) else None
-            if last_reflection:
+            if last_reflection and isinstance(last_reflection, dict):
                 try:
-                    root_cause = (last_reflection.get("root_cause") or "")[:150]
+                    retry_count = last_reflection.get("retry_count", "?")
+                    root_cause = (last_reflection.get("root_cause") or "").strip()
+                    strategy = (last_reflection.get("strategy_change") or "").strip()
+                    changes = last_reflection.get("specific_changes") or []
+                    confidence = last_reflection.get("confidence", 0.0)
+
+                    # 组合一个人类可读的摘要（不截断，让前端展开看）
+                    parts = [f"[反思 #{retry_count}]"]
+                    if root_cause:
+                        parts.append(f"根因: {root_cause}")
+                    if strategy:
+                        parts.append(f"策略: {strategy}")
+                    if changes:
+                        changes_text = "; ".join(str(c) for c in changes[:3])
+                        parts.append(f"修改: {changes_text}")
+                    if isinstance(confidence, (int, float)):
+                        parts.append(f"(confidence={confidence:.2f})")
+
+                    message = " | ".join(parts)
+
                     await self._log(
                         project_id,
                         ticket.get("requirement_id"),
@@ -1029,7 +1048,7 @@ class TicketOrchestrator:
                         "reflection",
                         None,
                         None,
-                        f"[反思 #{last_reflection.get('retry_count', '?') if isinstance(last_reflection, dict) else '?'}] {root_cause}",
+                        message,
                         "info",
                         detail_data={"reflection": last_reflection},
                     )

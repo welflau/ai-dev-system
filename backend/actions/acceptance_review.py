@@ -1,19 +1,47 @@
 """
-Action: 产品验收（基于运行效果截图，不看代码）
-流程：启动 HTTP server → 截图 → 截图+需求描述发给 LLM → 判断效果是否符合
+Action: 产品验收（基于运行效果截图，真实 vision LLM 看图判断）
+流程：启动 HTTP server → Playwright 截图 → 截图 base64 作为 vision content 发给 LLM → 判断
 """
 import asyncio
+import base64
 import subprocess
 import time
 import logging
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 from actions.base import ActionBase, ActionResult
 from actions.action_node import ActionNode
 from actions.schemas import ReviewOutput
 from llm_client import llm_client
 
 logger = logging.getLogger("action.acceptance_review")
+
+
+def _load_screenshot_as_data_url(screenshot_path: str, project_id: str) -> Optional[str]:
+    """读取截图文件 → base64 data URL
+    screenshot_path 可能是仓库相对路径（screenshots/xxx.png）或绝对路径。
+    返回 `data:image/png;base64,xxxx` 格式，供 ActionNode vision 用。失败返回 None。
+    """
+    if not screenshot_path:
+        return None
+    try:
+        from git_manager import git_manager
+        path = Path(screenshot_path)
+        # 非绝对路径 → 相对仓库根目录
+        if not path.is_absolute():
+            repo_dir = git_manager._repo_path(project_id)
+            path = repo_dir / screenshot_path
+        if not path.exists():
+            logger.warning("验收截图不存在: %s", path)
+            return None
+        ext = path.suffix.lower().lstrip(".")
+        media_type = {"png": "image/png", "jpg": "image/jpeg",
+                      "jpeg": "image/jpeg", "webp": "image/webp"}.get(ext, "image/png")
+        b64 = base64.b64encode(path.read_bytes()).decode("ascii")
+        return f"data:{media_type};base64,{b64}"
+    except Exception as e:
+        logger.warning("加载验收截图失败: %s — %s", screenshot_path, e)
+        return None
 
 
 class AcceptanceReviewAction(ActionBase):
@@ -55,43 +83,66 @@ class AcceptanceReviewAction(ActionBase):
         # === 核心：运行页面并截图 ===
         screenshot_info = ""
         screenshot_path = ""
+        screenshot_data_url: Optional[str] = None
         if module in ("frontend", "design", "other") and project_id:
             screenshot_result = await self._run_and_screenshot(project_id, docs_prefix)
             if screenshot_result:
-                screenshot_info = f"\n\n## 页面运行截图\n页面已成功启动并截图，截图保存在: {screenshot_result['url']}\n页面标题和内容可正常显示。"
                 screenshot_path = screenshot_result.get("url", "")
+                screenshot_data_url = _load_screenshot_as_data_url(screenshot_path, project_id)
+                if screenshot_data_url:
+                    screenshot_info = "\n\n## 页面运行截图\n**已附带截图作为 vision 输入，请直接观察截图内容判断功能是否实现，不要猜测。**"
+                else:
+                    # 截图拍了但读不出来（路径错等）→ 降级到文本描述
+                    screenshot_info = f"\n\n## 页面运行截图\n截图保存在: {screenshot_path}（但 vision 加载失败，本次仅能按代码/文件名判断）"
 
         # 构建验收上下文（基于效果，不基于代码）
         checklist = "\n".join(f"  {i+1}. {item}" for i, item in enumerate(check_items))
+
+        vision_hint = ""
+        if screenshot_data_url:
+            vision_hint = (
+                "\n\n## 🔍 验收重点（有截图）\n"
+                "你会看到一张页面运行截图。请**直接观察截图**判断：\n"
+                "  - 需求描述里的功能在截图里能否看到？（UI 元素/文字/位置/样式）\n"
+                "  - 不要基于文件名/代码列表猜测——以**截图为唯一事实**\n"
+                "  - 截图里能看到的功能 = 实现；看不到 = 未实现。"
+            )
 
         req_context = f"""## 验收任务: {ticket_title}
 
 ## 需求描述
 {ticket_description[:500]}
 
-## 产出文件
+## 产出文件（仅供参考，不做验收依据）
 {', '.join(dev_files[:10]) or '无'}
 仓库已有文件: {', '.join(repo_code_files[:10]) or '无'}
 
 ## 开发备注
 {str(dev_result.get('notes', ''))[:200]}
-{screenshot_info}
+{screenshot_info}{vision_hint}
 
 ## 验收检查清单
 {checklist}
 
 ## 验收标准
-- 基于页面运行效果判断，不是审查代码
-- 文件存在且页面能正常打开 = 基础通过
+- 有截图时，以**截图为准**判断功能是否实现（不要看文件名猜）
+- 无截图时，退回基于代码文件名和开发备注判断
 - 功能符合需求描述 = 通过
 - 评分 {pass_score} 分及以上为通过"""
 
         node = ActionNode(
             key="acceptance_review",
             expected_type=ReviewOutput,
-            instruction="作为产品经理，基于运行效果验收。页面能正常运行且功能基本符合需求即可通过。",
+            instruction="作为产品经理，基于**截图里看得见的运行效果**验收。只判断截图里能不能看到需求里提到的功能，不要猜测代码。",
         )
-        await node.fill(req=req_context, llm=llm_client, max_tokens=1500)
+        await node.fill(
+            req=req_context,
+            llm=llm_client,
+            max_tokens=1500,
+            images=[screenshot_data_url] if screenshot_data_url else None,
+        )
+        if screenshot_data_url:
+            logger.info("🖼️ 验收使用 vision 模式（截图已作为 vision content 传给 LLM）")
 
         review = node.instruct_content
         score = review.score if review else 7
