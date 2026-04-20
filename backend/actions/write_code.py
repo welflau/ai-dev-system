@@ -43,13 +43,18 @@ class WriteCodeAction(ActionBase):
                     code_section = f"\n## 现有入口文件 {fp}\n```\n{existing_code[fp][:2000]}\n```"
                     break
 
+        # Reflexion：重试场景的反思注入
+        reflection = context.get("reflection")
+        retry_count = int(context.get("retry_count") or 1)
+        reflection_block = _format_reflection_block(reflection, retry_count) if reflection else ""
+
         req_context = f"""## 任务: {ticket_title}
 {ticket_description}
 
 ## 架构
 {arch_summary}
 {code_section}
-
+{reflection_block}
 要求: 英文文件名 | 前端内联到 index.html | 增量修改不重写 | 只输出改动文件 | 完整可运行"""
 
         # 使用 ActionNode 结构化输出
@@ -101,3 +106,33 @@ class WriteCodeAction(ActionBase):
             data={"dev_result": {"files": files, "notes": "[降级] 规则引擎"}, "estimated_hours": 2},
             files=files,
         )
+
+
+def _format_reflection_block(reflection: Dict[str, Any], retry_count: int) -> str:
+    """把 ReflectionAction 的结构化反思渲染成 prompt 段落。
+    仅在重试场景（retry_count > 1 且有 reflection）时注入。"""
+    if not reflection or retry_count <= 1:
+        return ""
+
+    missed = reflection.get("missed_requirements") or []
+    changes = reflection.get("specific_changes") or []
+    missed_lines = "\n".join(f"  - {x}" for x in missed) if missed else "  (无)"
+    changes_lines = "\n".join(f"  - {x}" for x in changes) if changes else "  (无)"
+
+    return f"""
+## ⚠️ 上一次失败的反思（第 {retry_count - 1} 次失败后，这是第 {retry_count} 次尝试）
+
+**根本原因**：{reflection.get('root_cause', '') or '(未提供)'}
+
+**上次漏掉/误解的需求点**：
+{missed_lines}
+
+**上次自测环节为何没拦住**：{reflection.get('previous_attempt_issue', '') or '(未提供)'}
+
+**本次策略调整**：{reflection.get('strategy_change', '') or '(未提供)'}
+
+**具体必须执行的修改**：
+{changes_lines}
+
+⚠️ 本次**必须**按上述具体修改指令执行，不能再犯同样的错误。
+"""

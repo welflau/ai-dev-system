@@ -1016,6 +1016,26 @@ class TicketOrchestrator:
             # 标记 Agent 空闲
             self._set_agent_idle(agent_name, success=True)
 
+            # Reflexion：rework / fix_issues 产出的反思写进 ticket_logs
+            last_reflection = result.get("last_reflection") if isinstance(result, dict) else None
+            if last_reflection:
+                try:
+                    root_cause = (last_reflection.get("root_cause") or "")[:150]
+                    await self._log(
+                        project_id,
+                        ticket.get("requirement_id"),
+                        ticket_id,
+                        agent_name,
+                        "reflection",
+                        None,
+                        None,
+                        f"[反思 #{last_reflection.get('retry_count', '?') if isinstance(last_reflection, dict) else '?'}] {root_cause}",
+                        "info",
+                        detail_data={"reflection": last_reflection},
+                    )
+                except Exception as log_err:
+                    logger.warning("写 reflection 日志失败: %s", log_err)
+
             # 处理结果
             await self._handle_agent_result(project_id, ticket_id, ticket, agent_name, action, result)
 

@@ -43,8 +43,14 @@ class PlanCodeChangeAction(ActionBase):
         existing_files = context.get("existing_files", [])
         existing_code = context.get("existing_code", {})
 
+        # Reflexion：重试场景有 reflection，注入到 prompt
+        reflection = context.get("reflection")
+        retry_count = int(context.get("retry_count") or 1)
+        reflection_block = _format_reflection_block(reflection, retry_count) if reflection else ""
+
         # --- Phase 1: 规划变更 ---
-        plan = await self._plan(ticket_title, ticket_description, architecture, existing_files, existing_code)
+        plan = await self._plan(ticket_title, ticket_description, architecture,
+                                existing_files, existing_code, reflection_block)
 
         if not plan or (not plan.files_to_create and not plan.files_to_modify):
             # 规划失败，回退到普通写代码
@@ -100,7 +106,8 @@ class PlanCodeChangeAction(ActionBase):
             files=all_files,
         )
 
-    async def _plan(self, title, description, architecture, existing_files, existing_code) -> CodeChangePlan:
+    async def _plan(self, title, description, architecture, existing_files,
+                    existing_code, reflection_block: str = "") -> CodeChangePlan:
         """Phase 1: 规划要改哪些文件"""
         code_files = [f for f in existing_files if not f.startswith(("docs/", "tests/", ".git", "build/"))]
 
@@ -114,7 +121,7 @@ class PlanCodeChangeAction(ActionBase):
 {description}
 
 ## 架构: {arch_summary}
-
+{reflection_block}
 ## 项目已有文件
 {chr(10).join(f'  - {f}' for f in code_files[:20]) or '  (空项目)'}
 
@@ -189,3 +196,34 @@ class PlanCodeChangeAction(ActionBase):
         except Exception as e:
             logger.warning("修改文件 %s 失败: %s", path, e)
         return ""
+
+
+def _format_reflection_block(reflection: Dict[str, Any], retry_count: int) -> str:
+    """把 ReflectionAction 的结构化反思渲染成 prompt 段落。
+    仅在重试场景（retry_count > 1 且有 reflection）时注入。"""
+    if not reflection or retry_count <= 1:
+        return ""
+
+    missed = reflection.get("missed_requirements") or []
+    changes = reflection.get("specific_changes") or []
+
+    missed_lines = "\n".join(f"  - {x}" for x in missed) if missed else "  (无)"
+    changes_lines = "\n".join(f"  - {x}" for x in changes) if changes else "  (无)"
+
+    return f"""
+## ⚠️ 上一次失败的反思（第 {retry_count - 1} 次失败后，这是第 {retry_count} 次尝试）
+
+**根本原因**：{reflection.get('root_cause', '') or '(未提供)'}
+
+**上次漏掉/误解的需求点**：
+{missed_lines}
+
+**上次自测环节为何没拦住**：{reflection.get('previous_attempt_issue', '') or '(未提供)'}
+
+**本次策略调整**：{reflection.get('strategy_change', '') or '(未提供)'}
+
+**具体必须执行的修改**：
+{changes_lines}
+
+⚠️ 本次**必须**按上述具体修改指令执行，不能再犯同样的错误。规划时要明确标注哪些 change 对应哪个文件变更。
+"""

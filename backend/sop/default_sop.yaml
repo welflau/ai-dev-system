@@ -70,20 +70,24 @@ stages:
   action: rework
   trigger_on: acceptance_rejected
   success_status: development_done
-  description: 验收不通过，根据反馈返工修改
+  description: 验收不通过，根据反馈返工修改（Reflexion：先结构化反思再重开发）
   config:
     read_existing_code: true
     max_tokens: 16000
+    enable_reflection: true
+    reflection_max_prev: 3
 - id: fix_issues
   name: 问题修复
   agent: DevAgent
   action: fix_issues
   trigger_on: testing_failed
   success_status: development_done
-  description: 测试不通过，根据测试报告修复问题
+  description: 测试不通过，根据测试报告修复问题（Reflexion：先结构化反思再重开发）
   config:
     read_existing_code: true
     max_tokens: 16000
+    enable_reflection: true
+    reflection_max_prev: 3
 pipeline_view:
   stages:
   - key: requirement_analysis

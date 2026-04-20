@@ -1,0 +1,216 @@
+"""
+ReflectionAction — 失败反思 Action
+
+触发：DevAgent 的 rework / fix_issues 场景。开发失败（被 ProductAgent 验收打回
+或 TestAgent 测试失败）后，让 LLM 做一次结构化反思：诊断根因、指出漏掉的需求点、
+指定下一次的具体修改策略。反思结果作为结构化 context 注入下一次的代码生成 prompt，
+替代原先"把 rejection_reason 拼到 ticket_description 末尾"的朴素做法。
+
+对标 MagicAI 的 Reflexion 框架 / 论文 Shinn et al. 2023 "Reflexion: Language
+Agents with Verbal Reinforcement Learning"。
+
+输入 context：
+  ticket_description     : 原工单描述
+  failure_type           : "acceptance_rejected" / "testing_failed"
+  rejection_reason       : 验收打回理由（失败类型 = acceptance_rejected）
+  test_issues            : 测试 issue 列表（失败类型 = testing_failed）
+  previous_code          : dict[path -> content] 上次产出的代码
+  retry_count            : 当前第几次重试（从 1 开始）
+  previous_reflections   : list[dict] 历次反思（最多 3 条，按时间正序）
+
+输出 data：
+  {
+    "reflection": {
+      "root_cause": str,
+      "missed_requirements": list[str],
+      "previous_attempt_issue": str,
+      "strategy_change": str,
+      "specific_changes": list[str],
+      "confidence": float,
+    },
+    "retry_count": int,
+  }
+
+降级：LLM 调用失败 / JSON 解析失败时，返回最小反思（confidence <= 0.3），
+不阻塞主流程。
+"""
+import json
+import logging
+from typing import Any, Dict, List
+
+from actions.base import ActionBase, ActionResult
+from llm_client import llm_client
+
+logger = logging.getLogger("actions.reflection")
+
+
+_SYSTEM_PROMPT = """你是一位资深技术主管，正在复盘一次失败的开发工单。
+你的任务：诊断失败的根本原因，提出精确的下一次尝试策略。
+
+硬要求：
+- 根因必须具体到文件/函数/逻辑，不能说"代码没写好"这种废话
+- 遇到多次失败时，必须和上一次的策略**本质不同**，否则就是在兜圈
+- 输出严格 JSON，不要 markdown 包裹，按用户消息里的字段"""
+
+
+def _format_reflection_brief(r: Dict[str, Any]) -> str:
+    """历次反思的一行摘要（用在当前反思的 prompt 里，控制 token）"""
+    root = (r.get("root_cause") or "?")[:120]
+    strategy = (r.get("strategy_change") or "?")[:120]
+    return f"根因: {root}；策略: {strategy}"
+
+
+def _format_previous_code(previous_code: Dict[str, str], max_files: int = 5,
+                         max_chars_per_file: int = 200) -> str:
+    """上次代码摘要（前几个文件的前几百字）"""
+    if not previous_code:
+        return "(无)"
+    lines = []
+    for path, content in list(previous_code.items())[:max_files]:
+        snippet = (content or "")[:max_chars_per_file].replace("\n", " ")
+        lines.append(f"- `{path}`: {snippet}...")
+    if len(previous_code) > max_files:
+        lines.append(f"  ... 还有 {len(previous_code) - max_files} 个文件")
+    return "\n".join(lines)
+
+
+def _parse_json_lenient(raw: str) -> Dict[str, Any]:
+    """容错 JSON 解析：剥 markdown 包裹；提取第一对大括号内容"""
+    s = (raw or "").strip()
+    # 剥 ```json ... ``` 包裹
+    if s.startswith("```"):
+        lines = [ln for ln in s.split("\n") if not ln.strip().startswith("```")]
+        s = "\n".join(lines).strip()
+    # 直接解
+    try:
+        return json.loads(s)
+    except Exception:
+        pass
+    # 提取第一对平衡大括号
+    start = s.find("{")
+    end = s.rfind("}")
+    if start >= 0 and end > start:
+        return json.loads(s[start:end + 1])
+    raise ValueError("无法从 LLM 输出解析出 JSON")
+
+
+def _minimal_reflection(failure_type: str, rejection_reason: str,
+                        test_issues: List[str], error: str) -> Dict[str, Any]:
+    """LLM 失败时的降级反思（只透传失败信号）"""
+    if failure_type == "acceptance_rejected":
+        strategy = rejection_reason or "按验收反馈重写"
+    else:
+        issues = "; ".join(test_issues[:3]) if test_issues else "测试失败"
+        strategy = f"修复测试问题: {issues}"
+    return {
+        "root_cause": f"反思 LLM 调用失败，降级仅透传失败信号（{error}）",
+        "missed_requirements": [],
+        "previous_attempt_issue": "",
+        "strategy_change": strategy,
+        "specific_changes": [],
+        "confidence": 0.3,
+    }
+
+
+class ReflectionAction(ActionBase):
+
+    @property
+    def name(self) -> str:
+        return "reflect"
+
+    @property
+    def description(self) -> str:
+        return "对失败的工单做结构化反思，输出根因 + 策略调整 + 具体修改指令"
+
+    async def run(self, context: Dict[str, Any]) -> ActionResult:
+        ticket_desc = context.get("ticket_description", "") or ""
+        failure_type = context.get("failure_type", "unknown")
+        rejection_reason = context.get("rejection_reason", "") or ""
+        test_issues = context.get("test_issues") or []
+        previous_code = context.get("previous_code") or {}
+        retry_count = int(context.get("retry_count") or 1)
+        previous_reflections = context.get("previous_reflections") or []
+
+        # 构建失败信号段
+        if failure_type == "acceptance_rejected":
+            failure_signal = f"ProductAgent 验收不通过。理由：\n{rejection_reason}"
+        elif failure_type == "testing_failed":
+            issues_text = "\n".join(f"  - {i}" for i in test_issues[:10]) if test_issues else "(无具体 issue)"
+            failure_signal = f"TestAgent 测试不通过。问题列表：\n{issues_text}"
+        else:
+            failure_signal = f"失败类型: {failure_type}"
+
+        # 历次反思段（最多 3 条）
+        prev_block = ""
+        if previous_reflections:
+            keep = previous_reflections[-3:]
+            lines = [f"[第 {i} 次反思] {_format_reflection_brief(r)}"
+                     for i, r in enumerate(keep, 1)]
+            prev_block = (
+                "\n## 历次反思（以下策略执行后仍然失败）\n"
+                + "\n".join(lines)
+                + "\n⚠️ 上面的策略都没生效，这次**必须**换一种本质不同的思路。"
+            )
+
+        code_block = "\n## 上次产出的代码摘要\n" + _format_previous_code(previous_code)
+
+        user_prompt = f"""## 任务
+复盘开发失败并产出结构化反思。
+
+## 原工单描述
+{ticket_desc}
+
+## 本次失败信号（第 {retry_count} 次重试）
+{failure_signal}
+{code_block}
+{prev_block}
+
+## 输出要求：严格 JSON（不要 markdown 包裹）
+{{
+  "root_cause": "一句话说清失败根本原因。要具体到文件/函数/逻辑，不接受『代码没写好』这种空话",
+  "missed_requirements": ["上一次漏掉/误解的具体需求点 1", "条目 2"],
+  "previous_attempt_issue": "上一次的自测环节为什么没拦住这个问题",
+  "strategy_change": "本次策略与上次的本质区别",
+  "specific_changes": ["具体修改 1（到文件 / 位置）", "修改 2"],
+  "confidence": 0.0
+}}
+输出纯 JSON。"""
+
+        messages = [
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ]
+
+        try:
+            raw = await llm_client.chat(messages, temperature=0.3, max_tokens=2000)
+            reflection = _parse_json_lenient(raw)
+            # 字段兜底（LLM 可能漏字段）
+            reflection.setdefault("root_cause", "")
+            reflection.setdefault("missed_requirements", [])
+            reflection.setdefault("previous_attempt_issue", "")
+            reflection.setdefault("strategy_change", rejection_reason or "")
+            reflection.setdefault("specific_changes", [])
+            reflection.setdefault("confidence", 0.5)
+            # 类型兜底
+            if not isinstance(reflection["missed_requirements"], list):
+                reflection["missed_requirements"] = [str(reflection["missed_requirements"])]
+            if not isinstance(reflection["specific_changes"], list):
+                reflection["specific_changes"] = [str(reflection["specific_changes"])]
+            try:
+                reflection["confidence"] = float(reflection["confidence"])
+            except (TypeError, ValueError):
+                reflection["confidence"] = 0.5
+
+            logger.info(
+                "🔍 Reflection #%d: %s",
+                retry_count,
+                (reflection.get("root_cause") or "")[:120],
+            )
+        except Exception as e:
+            logger.warning("Reflection 降级（LLM 或 JSON 解析失败）: %s", e)
+            reflection = _minimal_reflection(failure_type, rejection_reason, test_issues, str(e))
+
+        return ActionResult(
+            success=True,
+            data={"reflection": reflection, "retry_count": retry_count},
+        )
