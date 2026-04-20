@@ -1710,6 +1710,7 @@ async function refreshBoard() {
         const board = data.board || {};
 
         const columns = ['pending', 'architecture', 'development', 'testing', 'done', 'deployed'];
+        let emptyCount = 0;
         columns.forEach(col => {
             const tickets = board[col] || [];
             const body = document.getElementById(`col-${col}`);
@@ -1721,7 +1722,9 @@ async function refreshBoard() {
             // 空列：打 .empty-col class 让 CSS 收窄 + 半透明，省出空间
             const column = body.closest('.board-column');
             if (column) {
-                column.classList.toggle('empty-col', tickets.length === 0);
+                const isEmpty = tickets.length === 0;
+                column.classList.toggle('empty-col', isEmpty);
+                if (isEmpty) emptyCount++;
             }
 
             if (tickets.length === 0) {
@@ -1730,6 +1733,13 @@ async function refreshBoard() {
             }
             body.innerHTML = tickets.map(t => renderTicketCard(t)).join('');
         });
+
+        // 空列数量 >= 3（大部分都空）时，让有工单的列无上限撑开，
+        // 避免 Dock 模式下看板右侧出现大片空白
+        const boardEl = document.getElementById('kanbanBoard');
+        if (boardEl) {
+            boardEl.classList.toggle('expand-active-cols', emptyCount >= 3);
+        }
     } catch (e) {
         showToast(`看板加载失败: ${e.message}`, 'error');
     }

@@ -343,9 +343,9 @@ body.chat-open #projectListPage {
 }
 
 .board-column {
-    flex: 1;
+    flex: 1 1 0;
     min-width: 220px;
-    max-width: 300px;
+    max-width: 380px;        /* 默认上限，看板不太宽时分布合理 */
     background: var(--bg-elevated);
     border-radius: var(--radius);
     display: flex;
@@ -361,6 +361,12 @@ body.chat-open #projectListPage {
 }
 .board-column.empty-col .column-body {
     display: none;   /* 空列直接不渲染 "暂无工单" 文字，节省垂直空间 */
+}
+
+/* 当空列足够多时（大多数列空），让仅存的几列可以无上限撑开，
+   避免看板右侧出现大片空白。通过 body 上的 flag 控制，无副作用兜底 */
+.board.expand-active-cols .board-column:not(.empty-col) {
+    max-width: none;
 }
 
 .column-header {
