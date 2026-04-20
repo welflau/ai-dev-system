@@ -1202,6 +1202,19 @@ body.has-docked-drawer .main-container {
     transition: padding-right 0.3s ease;
 }
 
+/* AI 助手面板同时开着时：Dock drawer 让位给 AI 面板（挪到它左边），
+   主内容区为两者一起让出空间 */
+body.chat-open .drawer.docked.active {
+    right: var(--chat-panel-width, 600px);
+}
+body.chat-open.has-docked-drawer .main-container {
+    padding-right: calc(var(--chat-panel-width, 600px) + 500px);
+}
+/* AI 助手在顶，Dock drawer 在更下层（它们并列时 z-index 不会冲突） */
+body.chat-open .drawer.docked {
+    z-index: 110;
+}
+
 .drawer-header-actions {
     display: flex;
     align-items: center;
