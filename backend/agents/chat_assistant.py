@@ -44,13 +44,47 @@ class _ChatToolExecutor:
     chat_with_tools 协议要求的 tool_executor：async execute(name, input) -> str
     负责：
     1. 往 Action 的 context 里注入 project_id（LLM 看不到的环境变量）
-    2. 跟踪第一个 Action 执行结果 → 用于填充 ChatResponse.action
+    2. 跟踪"最值得展示"的 Action 执行结果 → 用于填充 ChatResponse.action
+
+    关于 primary_action_result 的优先级：
+    当 LLM 在一轮里链式调多个工具时（如 close + confirm_requirement），
+    前端只能展示一个 action 卡片。需要把最重要的那个留下：
+      Tier 1（需用户交互）: confirm_requirement / confirm_bug
+      Tier 2（产出物展示）: document_generated / requirement_pipeline / ticket_status / requirement_logs
+      Tier 3（状态变更回执）: requirement_closed / requirement_paused / requirement_resumed / requirement_created
+      Tier 4（查询结果）: git_result / error
+    数字越小优先级越高；同级取最后一次调用（因为更接近"最终状态"）。
     """
+
+    _TYPE_PRIORITY = {
+        # Tier 1 — 需要用户点击确认，必须让前端渲染
+        "confirm_requirement": 1,
+        "confirm_bug": 1,
+        # Tier 2 — 重要产出物 / 诊断视图
+        "document_generated": 2,
+        "requirement_pipeline": 2,
+        "ticket_status": 2,
+        "requirement_logs": 2,
+        # Tier 3 — 状态变更的回执
+        "requirement_closed": 3,
+        "requirement_paused": 3,
+        "requirement_resumed": 3,
+        "requirement_created": 3,
+        # Tier 4 — 普通查询结果
+        "git_result": 4,
+        "error": 5,
+    }
 
     def __init__(self, agent: "ChatAssistantAgent", project_id: str):
         self.agent = agent
         self.project_id = project_id
-        self.first_action_result: Optional[Dict[str, Any]] = None
+        self.primary_action_result: Optional[Dict[str, Any]] = None
+        self._primary_tier: int = 99  # 越小越优先
+
+    # 向后兼容：保留 first_action_result 的读属性
+    @property
+    def first_action_result(self) -> Optional[Dict[str, Any]]:
+        return self.primary_action_result
 
     async def execute(self, tool_name: str, tool_input: Any) -> str:
         action = self.agent._actions.get(tool_name)
@@ -71,8 +105,12 @@ class _ChatToolExecutor:
         result = await action.run(ctx)
         data = result.data or {}
 
-        if self.first_action_result is None:
-            self.first_action_result = data
+        # 按优先级更新 primary_action_result
+        current_type = data.get("type", "")
+        current_tier = self._TYPE_PRIORITY.get(current_type, 50)
+        if current_tier <= self._primary_tier:
+            self.primary_action_result = data
+            self._primary_tier = current_tier
 
         # 返回给 LLM 的是 JSON 字符串（chat_with_tools 规范）
         return json.dumps(data, ensure_ascii=False)
@@ -299,10 +337,23 @@ class ChatAssistantAgent(BaseAgent):
 - 用户单纯提问、描述现象、讨论方案 → 直接回答，不要调工具
 - 信息已经在上面的上下文里可直接回答 → 不要调 git_* 工具，直接引用上下文作答
 
+## 多步操作（重要）
+- 你可以在**同一轮回复里连续调多个工具**（Anthropic tool_use 原生支持 ReAct 循环）
+- 典型的合理链式调用：
+  - **"重跑/重新做/重来 XX 需求"** → 在同一轮里依次调 `close_requirement`（关闭旧的）
+    + `confirm_requirement`（生成同标题新草稿）。**不要先调 get_requirement_pipeline 诊断**，
+    用户已经明确说"重跑"就是要重来，诊断是多余步骤。新需求的 title 用老需求的 title，
+    description 从上下文里的"## 当前需求状态"推测，或用老需求的文本作为基础。
+  - **"把 XX 合并到 YY"** → `git_list_branches`（确认分支存在）+ `git_merge`
+  - **"查看 XX 卡在哪"** → `get_requirement_pipeline` + `get_requirement_logs`（两边数据一起看更全面）
+- 只在意图真的含糊时才停下来追问，不要把明确意图当含糊意图处理
+- 链式调用时**工具顺序要对**：状态变更（close）在前，产生用户需要确认的草稿（confirm_*）在后，
+  因为前端会优先显示需要用户交互的草稿卡片
+
 ## 注意事项
 - 用中文回复
 - 回答简洁但有信息量
-- 如果用户描述不清晰，先追问再操作，不要擅自调工具
+- 如果用户描述**真的**不清晰才追问；"重跑/重来/改颜色/加功能"这类指令是明确的，直接执行
 - 需求 ID 不明确时用标题关键词模糊匹配（工具本身支持）
 - 需求状态不允许当前操作时，工具会返回错误，据实告知用户
 """

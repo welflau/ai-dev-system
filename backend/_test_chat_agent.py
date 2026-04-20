@@ -82,16 +82,33 @@ async def main():
         assert executor.first_action_result == result
         print("✅ 通过\n")
 
-        # 再调一个：验证 first_action_result 保持第一次
+        # 再调一个同类型的：验证同级 last wins（高优先级交互卡片取最新）
         result2_json = await executor.execute("confirm_requirement", {
             "title": "第二次调用",
             "description": "",
         })
         result2 = json.loads(result2_json)
         assert result2["title"] == "第二次调用"
-        assert executor.first_action_result["title"] == "dispatch 测试", \
-            f"first_action_result 不应变！实际: {executor.first_action_result}"
-        print("=== Test 6: first_action_result 只记录第一次 ===")
+        assert executor.primary_action_result["title"] == "第二次调用", \
+            f"同级 last wins: {executor.primary_action_result}"
+        print("=== Test 6a: 同级 action 后调用覆盖前调用（last wins）===")
+        print("✅ 通过\n")
+
+        # 调一个低优先级的（如 close → tier 3），验证不会覆盖 tier 1 的 confirm_requirement
+        # 构造一个直接往 executor 里填结果的场景：先 close 再 confirm，确认 confirm 胜
+        executor_chain = _ChatToolExecutor(agent, project_id)
+        # tier 3（requirement_closed）先调——但这里走真实 close 会修改 DB，所以 mock tier 3 结果
+        # 改用直接读: 模拟 close_requirement 结果不存在（返回 error 即可）, 然后调 confirm
+        _ = await executor_chain.execute("confirm_requirement", {
+            "title": "should win",
+            "description": "确保 tier 1 赢",
+        })
+        # 随后再调一个 git_list_branches（tier 4），不应该覆盖 tier 1
+        _ = await executor_chain.execute("git_list_branches", {})
+        assert executor_chain.primary_action_result["type"] == "confirm_requirement", \
+            f"tier 1 应胜过 tier 4: {executor_chain.primary_action_result}"
+        assert executor_chain.primary_action_result["title"] == "should win"
+        print("=== Test 6b: 高优先级 action 不被低优先级覆盖（tier 1 > tier 4）===")
         print("✅ 通过\n")
 
     # --- 6. 直接调 create_requirement 被拒 ---
