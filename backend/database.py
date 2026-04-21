@@ -375,6 +375,33 @@ CREATE TABLE IF NOT EXISTS project_environments (
 );
 
 -- ============================================================
+-- 失败案例库（Failure Library）
+-- 跨工单反思学习：捕获 Reflexion 产出的失败反思，供未来相似场景检索
+-- 详见 docs/20260420_02_失败案例库实现方案.md
+-- ============================================================
+CREATE TABLE IF NOT EXISTS failure_cases (
+    id                   TEXT PRIMARY KEY,
+    project_id           TEXT,
+    requirement_id       TEXT,
+    ticket_id            TEXT,
+    agent_type           TEXT NOT NULL,
+    module               TEXT,
+    failure_type         TEXT NOT NULL,
+    ticket_title         TEXT,
+    ticket_description   TEXT,
+    root_cause           TEXT NOT NULL,
+    missed_requirements  TEXT,
+    strategy_change      TEXT,
+    specific_changes     TEXT,
+    confidence           REAL DEFAULT 0.5,
+    keywords             TEXT,
+    resolved             INTEGER DEFAULT 0,
+    resolved_at          TEXT,
+    created_at           TEXT NOT NULL,
+    updated_at           TEXT NOT NULL
+);
+
+-- ============================================================
 -- 索引
 -- ============================================================
 CREATE INDEX IF NOT EXISTS idx_requirements_project ON requirements(project_id);
@@ -397,6 +424,10 @@ CREATE INDEX IF NOT EXISTS idx_ticket_commands_requirement ON ticket_commands(re
 CREATE INDEX IF NOT EXISTS idx_chat_messages_project ON chat_messages(project_id);
 CREATE INDEX IF NOT EXISTS idx_milestones_project ON milestones(project_id);
 CREATE INDEX IF NOT EXISTS idx_milestones_status ON milestones(status);
+CREATE INDEX IF NOT EXISTS idx_failure_cases_lookup
+    ON failure_cases(agent_type, module, failure_type, resolved);
+CREATE INDEX IF NOT EXISTS idx_failure_cases_ticket ON failure_cases(ticket_id);
+CREATE INDEX IF NOT EXISTS idx_failure_cases_project ON failure_cases(project_id);
 CREATE INDEX IF NOT EXISTS idx_requirements_milestone ON requirements(milestone_id);
 CREATE INDEX IF NOT EXISTS idx_ci_builds_project ON ci_builds(project_id);
 CREATE INDEX IF NOT EXISTS idx_ci_builds_status ON ci_builds(status);

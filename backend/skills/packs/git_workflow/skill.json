@@ -1,0 +1,9 @@
+{
+  "name": "git-workflow",
+  "version": "1.0.0",
+  "description": "feat/develop/main 三层分支 + Conventional Commits 提交规范",
+  "author": "ai-dev-system",
+  "tags": ["git", "branching", "workflow"],
+  "inject_mode": "append",
+  "priority": 50
+}

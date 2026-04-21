@@ -40,6 +40,16 @@ class BaseAgent(ABC):
             self._actions[action.name] = action
         self._state: int = -1  # 当前 Action 索引（BY_ORDER 模式用）
 
+        # Skills 注入：按 agent_type 拉取适用的 Skills，拼成一段 prompt。
+        # 为空表示这个 Agent 没挂任何 Skill。
+        # 详见 docs/20260420_01_Skills注入系统实现方案.md
+        try:
+            from skills import skill_loader
+            self._skills_prompt = skill_loader.build_prompt_for_agent(self.agent_type)
+        except Exception as e:  # skills 模块是可选，加载失败不阻塞 Agent 初始化
+            logger.warning("Skills 加载失败（Agent=%s）: %s", self.agent_type, e)
+            self._skills_prompt = ""
+
     @property
     @abstractmethod
     def agent_type(self) -> str:
@@ -67,15 +77,34 @@ class BaseAgent(ABC):
         return {"status": "error", "message": f"Agent {self.agent_type} 没有 Action: {task_name}"}
 
     async def run_action(self, action_name: str, context: Dict[str, Any]) -> Dict[str, Any]:
-        """执行指定 Action"""
+        """执行指定 Action（含 Skills 注入）
+
+        通过 ContextVar 在 action.run() 期间提供 self._skills_prompt，
+        ActionNode._compile() 读取后自动 prepend 到 LLM prompt 开头。
+        ChatAssistant 不走 ActionNode，自己在 _build_system_prompt() 里直接读 self._skills_prompt。
+        """
         action = self._actions.get(action_name)
         if not action:
             return {"status": "error", "message": f"Agent {self.agent_type} 没有 Action: {action_name}"}
-        result = await action.run(context)
+
+        from skills import _current_skills
+        token = _current_skills.set(self._skills_prompt)
+        try:
+            result = await action.run(context)
+        finally:
+            _current_skills.reset(token)
         return result.to_dict()
 
     async def _react_by_order(self, task_name: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """BY_ORDER 模式：按顺序执行所有 Action，前一步输出注入后一步"""
+        from skills import _current_skills
+        token = _current_skills.set(self._skills_prompt)
+        try:
+            return await self._react_by_order_inner(task_name, context)
+        finally:
+            _current_skills.reset(token)
+
+    async def _react_by_order_inner(self, task_name: str, context: Dict[str, Any]) -> Dict[str, Any]:
         result = {}
         action_names = list(self._actions.keys())
         logger.info("🔄 %s BY_ORDER: %s", self.agent_type, " → ".join(action_names))
@@ -108,6 +137,14 @@ class BaseAgent(ABC):
 
     async def _react_with_think(self, task_name: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """REACT 模式：LLM 动态选择下一步 Action"""
+        from skills import _current_skills
+        token = _current_skills.set(self._skills_prompt)
+        try:
+            return await self._react_with_think_inner(task_name, context)
+        finally:
+            _current_skills.reset(token)
+
+    async def _react_with_think_inner(self, task_name: str, context: Dict[str, Any]) -> Dict[str, Any]:
         from llm_client import llm_client
 
         result = {}

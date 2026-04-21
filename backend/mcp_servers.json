@@ -1,0 +1,26 @@
+{
+  "filesystem": {
+    "type": "stdio",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
+    "env": {},
+    "enabled": false,
+    "description": "官方文件系统 MCP（读写指定目录）。启用前需：1) Node.js 已装；2) 把 args 末尾的 '.' 改成允许访问的绝对路径"
+  },
+  "fetch": {
+    "type": "stdio",
+    "command": "uvx",
+    "args": ["mcp-server-fetch"],
+    "env": {},
+    "enabled": false,
+    "description": "官方网页抓取 MCP（从 URL 拿内容）。启用前需：pip install uv（uvx 来自 uv）"
+  },
+  "git": {
+    "type": "stdio",
+    "command": "uvx",
+    "args": ["mcp-server-git"],
+    "env": {},
+    "enabled": false,
+    "description": "官方 Git MCP（仓库操作）。启用前需：pip install uv"
+  }
+}

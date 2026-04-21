@@ -50,7 +50,9 @@ _SYSTEM_PROMPT = """你是一位资深技术主管，正在复盘一次失败的
 硬要求：
 - 根因必须具体到文件/函数/逻辑，不能说"代码没写好"这种废话
 - 遇到多次失败时，必须和上一次的策略**本质不同**，否则就是在兜圈
-- 输出严格 JSON，不要 markdown 包裹，按用户消息里的字段"""
+- 输出严格 JSON，不要 markdown 包裹，按用户消息里的字段
+- 如果用户消息给出了"历史相似失败（跨工单）"且有标记为 ✅已解决 的案例，本次 strategy_change
+  **优先借鉴**该成功策略；对 ❌未解决 的案例要明确说明这次为什么能避开同样的坑"""
 
 
 def _format_reflection_brief(r: Dict[str, Any]) -> str:
@@ -58,6 +60,30 @@ def _format_reflection_brief(r: Dict[str, Any]) -> str:
     root = (r.get("root_cause") or "?")[:120]
     strategy = (r.get("strategy_change") or "?")[:120]
     return f"根因: {root}；策略: {strategy}"
+
+
+def _format_similar_failures(cases: List[Dict[str, Any]]) -> str:
+    """跨工单相似失败渲染成 prompt 段落。
+    每条列出：标记（已解决/未解决）+ 工单标题 + 根因 + 策略 + 具体修改。"""
+    if not cases:
+        return ""
+    lines = ["\n## 历史相似失败（跨工单，供参考避免重复踩坑）"]
+    for i, c in enumerate(cases, 1):
+        mark = "✅已解决" if c.get("resolved") else "❌未解决"
+        title = c.get("ticket_title") or "(无标题)"
+        module = c.get("module") or "?"
+        lines.append(f"\n[案例 {i} — {mark} | module={module}] 工单「{title}」")
+        if c.get("root_cause"):
+            lines.append(f"  根因: {c['root_cause']}")
+        if c.get("strategy_change"):
+            lines.append(f"  策略: {c['strategy_change']}")
+        changes = c.get("specific_changes") or []
+        if changes:
+            lines.append("  具体修改:")
+            for ch in changes[:3]:
+                lines.append(f"    - {ch}")
+    lines.append("\n⚠️ 若上面有 ✅已解决 策略，优先借鉴；❌未解决 策略则要说清本次为什么能规避。")
+    return "\n".join(lines)
 
 
 def _format_previous_code(previous_code: Dict[str, str], max_files: int = 5,
@@ -130,6 +156,7 @@ class ReflectionAction(ActionBase):
         previous_code = context.get("previous_code") or {}
         retry_count = int(context.get("retry_count") or 1)
         previous_reflections = context.get("previous_reflections") or []
+        similar_failures = context.get("similar_failures") or []
 
         # 构建失败信号段
         if failure_type == "acceptance_rejected":
@@ -154,6 +181,9 @@ class ReflectionAction(ActionBase):
 
         code_block = "\n## 上次产出的代码摘要\n" + _format_previous_code(previous_code)
 
+        # 跨工单相似失败段（Failure Library 检索结果；可能为空）
+        similar_block = _format_similar_failures(similar_failures)
+
         user_prompt = f"""## 任务
 复盘开发失败并产出结构化反思。
 
@@ -164,6 +194,7 @@ class ReflectionAction(ActionBase):
 {failure_signal}
 {code_block}
 {prev_block}
+{similar_block}
 
 ## 输出要求：严格 JSON（不要 markdown 包裹）
 {{

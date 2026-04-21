@@ -335,6 +335,23 @@ class LLMClient:
         }
         await db.insert("llm_conversations", data)
 
+        # Session Transcript 镜像（仅 tokens / duration / status，不含完整 prompt/response）
+        try:
+            from session_logger import session_logger
+            await session_logger.log_llm(
+                requirement_id=_llm_ctx.requirement_id,
+                agent=_llm_ctx.agent_type,
+                action=_llm_ctx.action,
+                ticket_id=_llm_ctx.ticket_id,
+                model=self.model,
+                input_tokens=data["input_tokens"],
+                output_tokens=data["output_tokens"],
+                duration_ms=data["duration_ms"],
+                status=data["status"],
+            )
+        except Exception as e:
+            logger.error("SessionLogger.log_llm 失败: %s", e)
+
         # === 推送到前端实时日志面板 ===
         if _llm_ctx.project_id:
             from events import event_manager

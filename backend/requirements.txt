@@ -12,6 +12,10 @@ sse-starlette>=2.0.0
 # LLM
 httpx>=0.27.0
 
+# MCP (Model Context Protocol) — 可选：ChatAssistant 接外部工具服务器
+# 详见 docs/20260421_02_MCP客户端实现方案.md
+mcp>=1.0.0,<2.0.0
+
 # SOP
 pyyaml>=6.0
 

@@ -1,0 +1,9 @@
+{
+  "name": "react-dev",
+  "version": "1.0.0",
+  "description": "React Hooks、组件命名、单文件 index.html 内联模式",
+  "author": "ai-dev-system",
+  "tags": ["react", "html", "frontend"],
+  "inject_mode": "append",
+  "priority": 100
+}

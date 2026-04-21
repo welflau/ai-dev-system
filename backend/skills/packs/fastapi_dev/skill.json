@@ -1,0 +1,9 @@
+{
+  "name": "fastapi-dev",
+  "version": "1.0.0",
+  "description": "FastAPI async 路由、Pydantic v2、SQLite 异步、错误处理",
+  "author": "ai-dev-system",
+  "tags": ["fastapi", "python", "backend", "async"],
+  "inject_mode": "append",
+  "priority": 100
+}

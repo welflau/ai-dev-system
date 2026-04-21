@@ -89,7 +89,19 @@ class ActionNode:
         return self
 
     def _compile(self, context: str) -> str:
-        """编译 prompt = 指令 + 上下文 + JSON Schema 约束"""
+        """编译 prompt = Skills 段（可选） + 指令 + 上下文 + JSON Schema 约束
+
+        Skills 段由 BaseAgent.run_action() 通过 ContextVar `_current_skills` 注入。
+        未运行在 Agent 上下文 / Agent 没挂 Skills 时为空，不影响旧行为。
+        详见 docs/20260420_01_Skills注入系统实现方案.md
+        """
+        try:
+            from skills import _current_skills
+            skills = _current_skills.get()
+        except Exception:
+            skills = ""
+        skills_block = f"## 专业技能 (Skills)\n{skills}\n\n---\n\n" if skills else ""
+
         schema = self.expected_type.model_json_schema()
         properties = schema.get("properties", {})
 
@@ -105,7 +117,7 @@ class ActionNode:
 
         schema_hint = "{\n" + ",\n".join(fields_desc) + "\n}"
 
-        return f"""{self.instruction}
+        return f"""{skills_block}{self.instruction}
 
 {context}
 

@@ -173,3 +173,21 @@ class DevAgent(BaseAgent):
 
         # 上次代码（简化：用 existing_code；完整实现应该从 feat 分支 git read）
         context["previous_code"] = context.get("existing_code") or {}
+
+        # Failure Library：跨工单相似失败（供 ReflectionAction 参考，避免重复踩坑）
+        try:
+            from failure_library import failure_library
+            context["similar_failures"] = await failure_library.search_similar(
+                agent_type=self.agent_type,
+                failure_type=context.get("failure_type", "acceptance_rejected"),
+                ticket_description=context.get("ticket_description", "") or "",
+                module=context.get("module"),
+                project_id=context.get("project_id"),
+                current_ticket_id=ticket_id,
+                limit=3,
+            )
+            if context["similar_failures"]:
+                logger.info("🔎 查到 %d 条跨工单相似失败", len(context["similar_failures"]))
+        except Exception as e:
+            logger.warning("查询 similar_failures 失败: %s", e)
+            context["similar_failures"] = []

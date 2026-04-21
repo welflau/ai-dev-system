@@ -87,6 +87,15 @@ class _ChatToolExecutor:
         return self.primary_action_result
 
     async def execute(self, tool_name: str, tool_input: Any) -> str:
+        # MCP 外部工具（以 "mcp__<server>__" 开头）：分发给 MCP 客户端
+        if tool_name.startswith("mcp__"):
+            try:
+                from mcp_client import mcp_client
+                return await mcp_client.call_tool(tool_name, tool_input if isinstance(tool_input, dict) else {})
+            except Exception as e:
+                logger.warning("MCP 工具调用异常 (%s): %s", tool_name, e)
+                return json.dumps({"error": f"MCP 调用失败: {e}"}, ensure_ascii=False)
+
         action = self.agent._actions.get(tool_name)
         if not action:
             return f"未知工具: {tool_name}"
@@ -145,7 +154,7 @@ class ChatAssistantAgent(BaseAgent):
     # ==================== Tool schemas ====================
 
     def _exposed_tool_schemas(self) -> List[Dict[str, Any]]:
-        """返回可暴露给 LLM 的 tool schema 列表（排除内部 Action）"""
+        """返回可暴露给 LLM 的 tool schema 列表（内部 Action + MCP 外部工具）"""
         schemas = []
         for action in self._actions.values():
             if action.name in _INTERNAL_ONLY_ACTIONS:
@@ -153,6 +162,14 @@ class ChatAssistantAgent(BaseAgent):
             schema = getattr(action, "tool_schema", None)
             if schema:
                 schemas.append(schema)
+
+        # 追加外部 MCP 工具（name 已带 mcp__ 前缀，防冲突）
+        try:
+            from mcp_client import mcp_client
+            schemas.extend(mcp_client.list_all_tool_schemas())
+        except Exception as e:
+            logger.warning("合并 MCP 工具列表失败: %s", e)
+
         return schemas
 
     # ==================== Chat 入口 ====================
@@ -298,6 +315,13 @@ class ChatAssistantAgent(BaseAgent):
             if knowledge_content else ""
         )
 
+        # Skills 注入：ChatAssistant 不走 ActionNode，需在这里直接拼入 system prompt。
+        # self._skills_prompt 由 BaseAgent.__init__() 从 skills.json 里 "inject_to: ChatAssistant" 的条目聚合而来。
+        skills_section = (
+            f"\n## 专业技能 (Skills)\n{self._skills_prompt}\n"
+            if getattr(self, "_skills_prompt", "") else ""
+        )
+
         return f"""你是 AI 自动开发系统的智能助手，当前正在为项目「{project['name']}」提供服务。
 
 ## 项目信息
@@ -320,7 +344,7 @@ class ChatAssistantAgent(BaseAgent):
 
 ## 产出物列表
 {artifacts_summary}
-
+{skills_section}
 ## 你的能力
 你配有一组工具（见 tools 参数），用于：
 - 识别新需求/BUG → 先用 confirm_requirement / confirm_bug 产草稿让用户确认（不要直接创建）

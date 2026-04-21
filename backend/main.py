@@ -103,6 +103,17 @@ async def lifespan(app: FastAPI):
     ci_task = asyncio.create_task(ci_pipeline.start_scheduler())
     logger.info("CI/CD Pipeline 调度器已启动")
 
+    # 启动 MCP 客户端（可选：只启动 mcp_servers.json 里 enabled=true 的 server）
+    try:
+        from mcp_client import mcp_client
+        await mcp_client.start_enabled_servers()
+        active = [n for n, s in mcp_client.get_status().get("servers", {}).items()
+                  if s.get("status") == "running"]
+        if active:
+            logger.info("MCP 客户端就绪：%d 个 server 运行中 (%s)", len(active), ", ".join(active))
+    except Exception as e:
+        logger.warning("MCP 客户端启动失败（ChatAssistant 仍可用内部工具）: %s", e)
+
     logger.info("Server: http://localhost:%s", settings.PORT)
     logger.info("App:    http://localhost:%s/app", settings.PORT)
     logger.info("=" * 60)
@@ -113,6 +124,11 @@ async def lifespan(app: FastAPI):
     bus_task.cancel()
     poll_task.cancel()
     ci_task.cancel()
+    try:
+        from mcp_client import mcp_client
+        await mcp_client.stop_all_servers()
+    except Exception as e:
+        logger.warning("MCP 客户端关闭异常: %s", e)
     await db.disconnect()
     logger.info("数据库连接已关闭")
 
@@ -151,6 +167,7 @@ from api.milestones import router as milestones_router
 from api.ci import router as ci_router
 from api.bugs import router as bugs_router
 from api.knowledge import router as knowledge_router
+from api.mcp_status import router as mcp_status_router
 
 app.include_router(projects_router)
 app.include_router(requirements_router)
@@ -163,6 +180,7 @@ app.include_router(milestones_router)
 app.include_router(ci_router)
 app.include_router(bugs_router)
 app.include_router(knowledge_router)
+app.include_router(mcp_status_router)
 
 
 # ==================== 系统端点 ====================

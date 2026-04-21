@@ -1,0 +1,44 @@
+{
+  "react-dev": {
+    "name": "React/HTML 开发",
+    "description": "React Hooks、组件命名、内联到 index.html 的模式",
+    "prompt_file": "packs/react_dev/prompt.md",
+    "inject_to": [
+      "DevAgent"
+    ],
+    "priority": "high",
+    "enabled": true
+  },
+  "fastapi-dev": {
+    "name": "FastAPI 后端开发",
+    "description": "async 路由、依赖注入、SQLite 异步访问、错误处理",
+    "prompt_file": "packs/fastapi_dev/prompt.md",
+    "inject_to": [
+      "DevAgent"
+    ],
+    "priority": "high",
+    "enabled": true
+  },
+  "playwright-e2e": {
+    "name": "Playwright 端到端测试",
+    "description": "截图、等待策略、断言、跨浏览器兼容",
+    "prompt_file": "packs/playwright_e2e/prompt.md",
+    "inject_to": [
+      "TestAgent",
+      "ProductAgent"
+    ],
+    "priority": "high",
+    "enabled": true
+  },
+  "git-workflow": {
+    "name": "Git 工程化",
+    "description": "feat/develop/main 分支策略、提交消息规范、PR 流程",
+    "prompt_file": "packs/git_workflow/prompt.md",
+    "inject_to": [
+      "DevAgent",
+      "DeployAgent"
+    ],
+    "priority": "medium",
+    "enabled": true
+  }
+}

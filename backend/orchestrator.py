@@ -1055,6 +1055,25 @@ class TicketOrchestrator:
                 except Exception as log_err:
                     logger.warning("写 reflection 日志失败: %s", log_err)
 
+                # Failure Library：同步写一条案例，供未来跨工单检索
+                try:
+                    from failure_library import failure_library
+                    failure_type = ("testing_failed" if action == "fix_issues"
+                                    else "acceptance_rejected")
+                    await failure_library.record(
+                        agent_type=agent_name,
+                        failure_type=failure_type,
+                        reflection=last_reflection,
+                        project_id=project_id,
+                        requirement_id=ticket.get("requirement_id"),
+                        ticket_id=ticket_id,
+                        module=ticket.get("module"),
+                        ticket_title=ticket.get("title", "") or "",
+                        ticket_description=ticket.get("description", "") or "",
+                    )
+                except Exception as fl_err:
+                    logger.warning("FailureLibrary.record 失败（已降级）: %s", fl_err)
+
             # 处理结果
             await self._handle_agent_result(project_id, ticket_id, ticket, agent_name, action, result)
 
@@ -1210,6 +1229,12 @@ class TicketOrchestrator:
                     "验收通过，转测试",
                     detail_data={"git_commit": git_result.get("commit_hash") if git_result else None},
                 )
+                # Failure Library：验收通过说明本工单的历次反思策略最终奏效
+                try:
+                    from failure_library import failure_library
+                    await failure_library.mark_resolved(ticket_id)
+                except Exception as fl_err:
+                    logger.warning("FailureLibrary.mark_resolved 失败: %s", fl_err)
             else:
                 await self._log(
                     project_id, requirement_id, ticket_id, agent_name,
@@ -1240,6 +1265,12 @@ class TicketOrchestrator:
                         "git_files": git_result.get("files", []) if git_result else [],
                     },
                 )
+                # Failure Library：测试通过也算历次反思策略奏效
+                try:
+                    from failure_library import failure_library
+                    await failure_library.mark_resolved(ticket_id)
+                except Exception as fl_err:
+                    logger.warning("FailureLibrary.mark_resolved 失败: %s", fl_err)
 
                 # 保存测试产物
                 await db.insert("artifacts", {
@@ -2140,6 +2171,23 @@ class TicketOrchestrator:
                 "created_at": created_at,
             },
         )
+
+        # Session Transcript 镜像（backend/logs/session_<req_id>/）
+        try:
+            from session_logger import session_logger
+            await session_logger.log_event(
+                requirement_id=requirement_id,
+                kind="log",
+                agent=agent_type,
+                action=action,
+                ticket_id=ticket_id,
+                from_status=from_status,
+                to_status=to_status,
+                message=message,
+                detail=detail_data,
+            )
+        except Exception as e:
+            logger.warning("SessionLogger.log_event 失败: %s", e)
 
 
 # 全局 Orchestrator
