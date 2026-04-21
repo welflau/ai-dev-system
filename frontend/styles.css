@@ -337,6 +337,7 @@ body.chat-open #projectListPage {
 .board {
     display: flex;
     gap: 12px;
+    width: 100%;          /* 强制填满父容器；防止 flex 容器收缩到 content-size 留空白 */
     overflow-x: auto;
     padding-bottom: 12px;
     min-height: 400px;
@@ -344,25 +345,12 @@ body.chat-open #projectListPage {
 
 .board-column {
     flex: 1 1 0;
-    min-width: 220px;
+    min-width: 160px;     /* Dock drawer + AI 助手都开时 6 列也能挤进来；空间够时仍均分 */
     background: var(--bg-elevated);
     border-radius: var(--radius);
     display: flex;
     flex-direction: column;
-    transition: min-width 0.2s ease, max-width 0.2s ease, opacity 0.2s ease;
-    /* 注意：故意不设 max-width。
-       空列被 .empty-col 规则限到 110px；非空列靠 flex:1 自然均分剩余空间，
-       多少列都能 100% 填满看板宽度。 */
-}
-/* 空列（本状态当前无工单）：收窄 + 半透明，省出空间给有工单的列 */
-.board-column.empty-col {
-    flex: 0 0 auto;
-    min-width: 110px;
-    max-width: 110px;
-    opacity: 0.45;
-}
-.board-column.empty-col .column-body {
-    display: none;   /* 空列直接不渲染 "暂无工单" 文字，节省垂直空间 */
+    /* 所有列靠 flex:1 1 0 均分父容器宽度，不管有无工单都等宽 */
 }
 
 .column-header {
@@ -1204,13 +1192,12 @@ body.has-docked-drawer .main-container {
     transition: padding-right 0.3s ease;
 }
 
-/* AI 助手面板同时开着时：Dock drawer 让位给 AI 面板（挪到它左边），
-   主内容区为两者一起让出空间 */
+/* AI 助手面板同时开着时：Dock drawer 让位给 AI 面板（挪到它左边）。
+   注意：main-container.padding-right 只需预留 drawer 500px；chat 的 600px
+   已由 body.chat-open .project-layout { margin-right: 600px } 处理。
+   两者相加 = 1100，刚好容纳 drawer(500) + chat(600)。重复预留会导致中间留空。 */
 body.chat-open .drawer.docked.active {
     right: var(--chat-panel-width, 600px);
-}
-body.chat-open.has-docked-drawer .main-container {
-    padding-right: calc(var(--chat-panel-width, 600px) + 500px);
 }
 /* AI 助手在顶，Dock drawer 在更下层（它们并列时 z-index 不会冲突） */
 body.chat-open .drawer.docked {

@@ -1718,12 +1718,6 @@ async function refreshBoard() {
 
             if (!body) return;
 
-            // 空列：打 .empty-col class 让 CSS 收窄 + 半透明，省出空间
-            const column = body.closest('.board-column');
-            if (column) {
-                column.classList.toggle('empty-col', tickets.length === 0);
-            }
-
             if (tickets.length === 0) {
                 body.innerHTML = '<div class="empty-state"><p style="font-size:12px; padding:16px 0;">暂无工单</p></div>';
                 return;
@@ -1766,8 +1760,8 @@ function renderTicketCard(t) {
     ).join('');
 
     return `
-        <div class="${cardClass}${t.type === 'bug' ? ' bug-ticket' : ''}">
-            <div class="ticket-title" style="cursor:pointer;" onclick="openTicketDrawer('${t.id}')">${t.type === 'bug' ? '<span class="bug-label">BUG</span>' : ''}${escHtml(t.title)}${t.has_error ? ' <span class="ticket-status-badge error" title="测试失败或被拒绝">✗</span>' : t.has_warning ? ' <span class="ticket-status-badge warning" title="测试有警告">⚠</span>' : ''}</div>
+        <div class="${cardClass}${t.type === 'bug' ? ' bug-ticket' : ''}" style="cursor:pointer;" onclick="openTicketDrawer('${t.id}')">
+            <div class="ticket-title">${t.type === 'bug' ? '<span class="bug-label">BUG</span>' : ''}${escHtml(t.title)}${t.has_error ? ' <span class="ticket-status-badge error" title="测试失败或被拒绝">✗</span>' : t.has_warning ? ' <span class="ticket-status-badge warning" title="测试有警告">⚠</span>' : ''}</div>
             <div class="ticket-meta">
                 ${t.module ? `<span class="tag tag-module">${escHtml(t.module)}</span>` : ''}
                 <span class="tag tag-type${t.type === 'bug' ? ' tag-bug' : ''}">${escHtml(t.type || 'feature')}</span>
@@ -5191,9 +5185,8 @@ function copyFileContent() {
  * 从产出文件点击文件链接 → 切换分支 → 跳转到仓库文件页并打开预览
  */
 async function openArtifactFile(filePath, branch) {
-    // 关闭工单详情抽屉
-    document.getElementById('ticketDrawer')?.classList.remove('active');
-    document.getElementById('drawerOverlay')?.classList.remove('active');
+    // 不关闭抽屉 —— 用户希望属性面板原地保留，只切左侧主内容到仓库文件视图。
+    // Dock 模式下 drawer 和 repo tab 并排；浮动模式下 drawer 仍盖在上方也没问题。
 
     // 如果有分支名，先切换分支
     if (branch && currentProjectId) {
