@@ -42,6 +42,9 @@ class TicketStatus(str, Enum):
     # 开发阶段
     DEVELOPMENT_IN_PROGRESS = "development_in_progress"    # 开发中
     DEVELOPMENT_DONE = "development_done"                  # 开发完成
+    # 代码审查阶段（ReviewAgent 独立审查）
+    REVIEW_IN_PROGRESS = "review_in_progress"              # 审查中
+    REVIEW_PASSED = "review_passed"                        # 审查通过（不阻塞；低分写 warning）
     # 验收阶段
     ACCEPTANCE_PASSED = "acceptance_passed"                 # 验收通过
     ACCEPTANCE_REJECTED = "acceptance_rejected"             # 验收不通过
@@ -326,6 +329,8 @@ BOARD_COLUMNS = {
     "development": [
         TicketStatus.DEVELOPMENT_IN_PROGRESS,
         TicketStatus.DEVELOPMENT_DONE,
+        TicketStatus.REVIEW_IN_PROGRESS,   # code_review 阶段归入开发列
+        TicketStatus.REVIEW_PASSED,
         TicketStatus.ACCEPTANCE_REJECTED,
         TicketStatus.ACCEPTANCE_PASSED,
     ],
@@ -345,6 +350,8 @@ STATUS_LABELS = {
     "architecture_done": "架构完成",
     "development_in_progress": "开发中",
     "development_done": "开发完成",
+    "review_in_progress": "审查中",
+    "review_passed": "审查通过",
     "acceptance_passed": "验收通过",
     "acceptance_rejected": "验收不通过",
     "testing_in_progress": "测试中",

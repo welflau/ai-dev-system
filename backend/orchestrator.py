@@ -524,6 +524,20 @@ class TicketOrchestrator:
                 action="analyze_and_decompose",
             )
 
+            # 读取已有代码上下文（避免盲拆单：让 ProductAgent 看到现有文件和关键代码
+            # 之后再判断复杂度/拆出工单，防止与已有架构冲突或重复）
+            from memory import AgentMemory
+            try:
+                code_ctx = await AgentMemory(project_id).get_code_context()
+                existing_files = code_ctx.get("file_list", [])
+                existing_code = code_ctx.get("code", {})
+                if existing_files:
+                    logger.info("📂 decompose 读到代码上下文: %d 文件, %d 片段",
+                                len(existing_files), len(existing_code))
+            except Exception as e:
+                logger.warning("decompose 读代码上下文失败: %s", e)
+                existing_files, existing_code = [], {}
+
             # Agent 执行拆单
             logger.info("🤖 ProductAgent.analyze_and_decompose 开始执行...")
             req_start = time.time()
@@ -531,6 +545,9 @@ class TicketOrchestrator:
                 "title": requirement["title"],
                 "description": requirement["description"],
                 "priority": requirement["priority"],
+                "project_id": project_id,
+                "existing_files": existing_files,
+                "existing_code": existing_code,
             })
             req_elapsed = int((time.time() - req_start) * 1000)
             logger.info("🤖 ProductAgent.analyze_and_decompose 完成 (%dms) → status=%s", req_elapsed, result.get("status"))
@@ -1206,6 +1223,57 @@ class TicketOrchestrator:
                 "path": None,
                 "content": result_json,
                 "metadata": json.dumps({"git": git_result}) if git_result else None,
+                "created_at": now_iso(),
+            })
+
+        elif agent_name == "ReviewAgent":
+            # 代码审查阶段结果（新增：独立于 TestAgent 的盲审修复）
+            new_status = TicketStatus.REVIEW_PASSED.value
+            score = result.get("score", 7)
+            issues = result.get("issues", []) or []
+            suggestions = result.get("suggestions", []) or []
+            sop_cfg = ticket.get("_sop_config") or {}  # 可能为空
+            pass_score = sop_cfg.get("pass_score", 7)
+
+            await db.update("tickets", {
+                "status": new_status,
+                "result": result_json,
+                "updated_at": now_iso(),
+            }, "id = ?", (ticket_id,))
+
+            # 低分只记 warning，不阻塞（block_on_low_score=false 默认）
+            try:
+                score_num = float(score)
+            except (TypeError, ValueError):
+                score_num = 7.0
+            log_level = "warning" if score_num < pass_score else "info"
+            issues_summary = ("; ".join(str(i) for i in issues[:3]) if issues else "无")[:300]
+            await self._log(
+                project_id, requirement_id, ticket_id, agent_name,
+                "code_review", current_status, new_status,
+                f"代码审查完成 {score}/10 → {'低于通过分 (warning)' if log_level == 'warning' else '通过'}"
+                f" | 问题: {issues_summary}",
+                log_level,
+                detail_data={
+                    "score": score,
+                    "issues": issues[:5],
+                    "suggestions": suggestions[:5],
+                    "pass_score": pass_score,
+                    "git_commit": git_result.get("commit_hash") if git_result else None,
+                },
+            )
+
+            # 保存审查产物
+            await db.insert("artifacts", {
+                "id": generate_id("ART"),
+                "project_id": project_id,
+                "requirement_id": requirement_id,
+                "ticket_id": ticket_id,
+                "type": "code_review",
+                "name": f"代码审查 - {ticket['title']}",
+                "path": None,
+                "content": result_json,
+                "metadata": json.dumps({"git": git_result, "score": score}) if git_result else json.dumps({"score": score}),
                 "created_at": now_iso(),
             })
 

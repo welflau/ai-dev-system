@@ -70,11 +70,18 @@ class TestAgent(BaseAgent):
         all_issues.extend(static.get("issues", []))
 
         # === Phase 2: 代码审查 (LLM) ===
-        review = await self._code_review(context)
-        results["phases"].append({"name": "代码审查", **review})
-        total_checks += 1
-        if review.get("score", 0) >= 6:
-            total_passed += 1
+        # v0.16.1: code review 已抽成独立 ReviewAgent 阶段（SOP code_review stage），
+        # 不再由 TestAgent 兼任。SOP config.code_review=false 时跳过，避免重复调用 LLM。
+        sop_cfg = context.get("sop_config") or {}
+        if sop_cfg.get("code_review", False):
+            review = await self._code_review(context)
+            results["phases"].append({"name": "代码审查", **review})
+            total_checks += 1
+            if review.get("score", 0) >= 6:
+                total_passed += 1
+        else:
+            review = {"score": 0, "issues": [], "suggestions": [],
+                      "detail": "(已独立为 ReviewAgent.code_review 阶段，此处跳过)"}
 
         # === Phase 3: 功能测试（按类型分发）===
         func_test = await self._functional_test(project_id, module, dev_result, docs_prefix)

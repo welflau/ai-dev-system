@@ -29,11 +29,22 @@ stages:
     max_tokens: 16000
     self_test: true
     generate_dev_notes: true
+- id: code_review
+  name: 代码审查
+  agent: ReviewAgent
+  action: code_review
+  trigger_on: development_done
+  success_status: review_passed
+  description: ReviewAgent 读取实际代码做审查（非盲审，独立于 TestAgent）
+  config:
+    max_code_chars: 3000
+    pass_score: 7               # 低于此分记 warning，不阻塞
+    block_on_low_score: false   # 未来可开启硬门控
 - id: acceptance
   name: 产品验收
   agent: ProductAgent
   action: acceptance_review
-  trigger_on: development_done
+  trigger_on: review_passed   # 从 development_done 改为 review_passed（先过代码审查再验收）
   success_status: acceptance_passed
   reject_status: acceptance_rejected
   reject_goto: rework
@@ -57,10 +68,10 @@ stages:
   reject_status: testing_failed
   reject_goto: fix_issues
   pass_threshold: 60
-  description: 5层测试：静态分析+代码审查+功能测试+用例生成+执行
+  description: 4 层测试：静态分析 + 功能测试 + 用例生成 + 执行（代码审查已移至独立 ReviewAgent 阶段）
   config:
     static_analysis: true
-    code_review: true
+    code_review: false         # 已独立成 code_review SOP stage
     functional_test: true
     generate_test_cases: true
     run_pytest: true
@@ -108,12 +119,14 @@ pipeline_view:
     icon: 💻
     sop_stages:
     - development
+    - code_review
     - acceptance
     - rework
     running_statuses:
     - development_in_progress
+    - review_in_progress
     - acceptance_rejected
-    description: DevAgent 开发 + ProductAgent 验收 + 必要时返工
+    description: DevAgent 开发 + ReviewAgent 代码审查 + ProductAgent 验收 + 必要时返工
   - key: testing
     name: 测试验证
     icon: 🧪

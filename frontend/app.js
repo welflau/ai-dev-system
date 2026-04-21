@@ -1746,6 +1746,8 @@ function renderTicketCard(t) {
         { value: 'architecture_done', label: '架构完成' },
         { value: 'development_in_progress', label: '开发中' },
         { value: 'development_done', label: '开发完成' },
+        { value: 'review_in_progress', label: '审查中' },
+        { value: 'review_passed', label: '审查通过' },
         { value: 'acceptance_passed', label: '验收通过' },
         { value: 'acceptance_rejected', label: '验收不通过' },
         { value: 'testing_in_progress', label: '测试中' },
@@ -2846,6 +2848,8 @@ function _renderTicketRow(t, isChild) {
         { value: 'architecture_done', label: '架构完成' },
         { value: 'development_in_progress', label: '开发中' },
         { value: 'development_done', label: '开发完成' },
+        { value: 'review_in_progress', label: '审查中' },
+        { value: 'review_passed', label: '审查通过' },
         { value: 'acceptance_passed', label: '验收通过' },
         { value: 'acceptance_rejected', label: '验收不通过' },
         { value: 'testing_in_progress', label: '测试中' },
@@ -4734,6 +4738,7 @@ function pad(n) { return n.toString().padStart(2, '0'); }
 const STATUS_LABELS = {
     pending: '待启动', architecture_in_progress: '架构中', architecture_done: '架构完成',
     development_in_progress: '开发中', development_done: '开发完成',
+    review_in_progress: '审查中', review_passed: '审查通过',
     acceptance_passed: '验收通过', acceptance_rejected: '验收不通过',
     testing_in_progress: '测试中', testing_done: '测试通过', testing_failed: '测试不通过',
     deploying: '部署中', deployed: '已部署', cancelled: '已取消',
@@ -7505,6 +7510,7 @@ function renderRoadmapTicketTable(tickets) {
     const statusLabels = {
         'pending': '待启动', 'architecture_in_progress': '架构中', 'architecture_done': '架构完成',
         'development_in_progress': '开发中', 'development_done': '开发完成',
+        'review_in_progress': '审查中', 'review_passed': '审查通过',
         'acceptance_passed': '验收通过', 'acceptance_rejected': '验收不通过',
         'testing_in_progress': '测试中', 'testing_done': '测试通过', 'testing_failed': '测试不通过',
         'deploying': '部署中', 'deployed': '已部署', 'cancelled': '已取消',
