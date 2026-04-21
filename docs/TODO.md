@@ -50,10 +50,10 @@
 
 ## 盲审修复
 
-| 优先级 | Agent | 问题 | 修复内容 |
-|--------|-------|------|---------|
-| P0 | ProductAgent 拆单 | 不看已有代码就拆单 | 注入 existing_files/code，拆单时参考已有架构 |
-| P0 | ReviewAgent | 完全盲审，不读代码 | 读取实际代码内容 + ActionNode + SOP 配置 |
+| 优先级 | Agent | 问题 | 修复内容 | 状态 |
+|--------|-------|------|---------|------|
+| ✅ | ProductAgent 拆单 | 不看已有代码就拆单 | orchestrator 触发前注入 existing_files/code；AgentMemory.get_code_context() 复用 | **完成 2026-04-21** |
+| ✅ | ReviewAgent | 完全盲审/从未被调用 | 抽成独立 SOP 阶段（dev → code_review → acceptance）+ CodeReviewAction 读实际代码 + ActionNode + SOP 配置；详见 `docs/20260421_03_盲审修复P0实现方案.md` | **完成 2026-04-21** |
 | P1 | DevAgent SelfTest | 不读 Git 仓库实际文件 | 检查仓库中文件而非只看内存 files |
 | P2 | DeployAgent | 不读代码，部署配置通用化 | 读取项目类型生成针对性部署配置 |
 | P2 | ArchitectAgent | 缺 SOP 配置读取 | 使用 sop_config 中的参数 |
