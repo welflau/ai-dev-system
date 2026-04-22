@@ -1439,10 +1439,82 @@ class GlobalChatResponse(BaseModel):
 
 @global_chat_router.post("", response_model=GlobalChatResponse)
 async def global_chat_with_ai(req: GlobalChatRequest):
-    """全局聊天（项目列表页）— 无需 project_id，支持创建项目"""
+    """全局聊天（项目列表页）— 无需 project_id，支持创建项目
+
+    双轨：
+    - CHAT_USE_AGENT=true（默认）→ ChatAssistantAgent.chat_global() + tool_use
+      任何异常自动降级到旧 [ACTION:CREATE_PROJECT] 文本协议路径，保证 SLA
+    - CHAT_USE_AGENT=false → 直接走旧路径
+    """
+    from config import settings
+
+    if settings.CHAT_USE_AGENT:
+        try:
+            return await _global_chat_via_agent(req)
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.warning(
+                "全局新路径失败，降级到旧 [ACTION:CREATE_PROJECT] 文本协议路径: %s: %s",
+                type(e).__name__, e,
+            )
+            # 落地 fallback 事件，方便统计 new-path 失败率
+            try:
+                await db.insert("ticket_logs", {
+                    "id": generate_id("LOG"),
+                    "ticket_id": None,
+                    "subtask_id": None,
+                    "requirement_id": None,
+                    "project_id": None,
+                    "agent_type": "GlobalChatAssistant",
+                    "action": "chat_agent_fallback",
+                    "from_status": None,
+                    "to_status": None,
+                    "level": "warning",
+                    "detail": json.dumps({
+                        "error_type": type(e).__name__,
+                        "error_msg": str(e)[:500],
+                    }, ensure_ascii=False),
+                    "created_at": now_iso(),
+                })
+            except Exception:
+                pass
+
+    return await _global_chat_legacy(req)
+
+
+async def _global_chat_via_agent(req: GlobalChatRequest) -> GlobalChatResponse:
+    """新路径：ChatAssistantAgent.chat_global() + tool_use。"""
+    import agent_registry as _ar
+
+    registry = _ar.get_registry()
+    if not registry:
+        _ar.discover_agents()
+        registry = _ar.get_registry()
+    agent_cls = registry.get("ChatAssistant")
+    if not agent_cls:
+        raise RuntimeError("ChatAssistant agent 未注册")
+    agent = agent_cls()
+
+    projects = await db.fetch_all(
+        "SELECT id, name, status, tech_stack, description, created_at FROM projects ORDER BY created_at DESC LIMIT 20"
+    )
+
+    history = [{"role": m.role, "content": m.content} for m in (req.history or [])]
+
+    result = await agent.chat_global(
+        user_message=req.message,
+        images=req.images,
+        history=history,
+        projects_brief=projects,
+    )
+    return GlobalChatResponse(reply=result["reply"], action=result.get("action"))
+
+
+async def _global_chat_legacy(req: GlobalChatRequest) -> GlobalChatResponse:
+    """旧路径：raw LLM 调用 + 正则抠 [ACTION:CREATE_PROJECT] 协议。"""
     from llm_client import llm_client, set_llm_context, clear_llm_context
 
-    # 获取所有项目列表作为上下文
     projects = await db.fetch_all(
         "SELECT id, name, status, tech_stack, description, created_at FROM projects ORDER BY created_at DESC LIMIT 20"
     )
@@ -1456,19 +1528,35 @@ async def global_chat_with_ai(req: GlobalChatRequest):
 
     messages.append({"role": "user", "content": _build_user_content(req.message, req.images)})
 
-    set_llm_context(agent_type="GlobalChatAssistant", action="global_chat_no_project")
+    set_llm_context(agent_type="GlobalChatAssistant", action="global_chat_no_project_legacy")
 
     try:
         response = await llm_client.chat(messages, temperature=0.7, max_tokens=16000)
-
-        # 解析是否包含 CREATE_PROJECT 操作
         action_result = await _parse_global_action(response)
-
         clean_reply = _clean_action_tags(response)
-
         return GlobalChatResponse(reply=clean_reply, action=action_result)
     finally:
         clear_llm_context()
+
+
+# ---- 确认创建项目端点（新路径用户点击确认后走这里）----
+
+class ConfirmCreateProjectRequest(BaseModel):
+    name: str = Field(..., min_length=1)
+    description: str = Field(default="")
+    tech_stack: str = Field(default="")
+    git_remote_url: str = Field(..., min_length=1)
+    local_repo_path: str = Field(default="")
+
+
+@global_chat_router.post("/confirm-create-project")
+async def confirm_create_project(req: ConfirmCreateProjectRequest):
+    """用户点击"确认创建"按钮后真正落库创建项目。"""
+    from actions.chat.create_project import CreateProjectAction
+    result = await CreateProjectAction().run(req.model_dump())
+    if not result.success:
+        raise HTTPException(400, result.data.get("message") or result.error or "创建失败")
+    return result.data
 
 
 @global_chat_router.get("/projects-brief")
@@ -1561,145 +1649,14 @@ async def _parse_global_action(response: str) -> Optional[Dict]:
 
 
 async def _execute_create_project(data: dict) -> Dict:
-    """通过 AI 对话执行创建项目"""
-    import os
-    from git_manager import git_manager
+    """通过 AI 对话执行创建项目
 
-    name = data.get("name", "").strip()
-    description = data.get("description", "").strip()
-    tech_stack = data.get("tech_stack", "").strip()
-    git_remote_url = data.get("git_remote_url", "").strip()
-    local_repo_path = data.get("local_repo_path", "").strip()
-
-    if not name:
-        return {"type": "error", "message": "项目名称不能为空"}
-    if not git_remote_url:
-        return {"type": "error", "message": "Git 远程仓库 URL 不能为空"}
-
-    try:
-        project_id = generate_id("PRJ")
-        now = now_iso()
-
-        # 确定本地仓库路径
-        if local_repo_path:
-            repo_path = os.path.abspath(local_repo_path)
-            git_manager.set_project_path(project_id, repo_path)
-        else:
-            repo_path = str(git_manager._repo_path(project_id))
-
-        logger.info("AI助手创建项目: %s, 仓库路径: %s", name, repo_path)
-
-        git_dir = os.path.join(repo_path, ".git")
-        cloned = False
-        push_success = False
-
-        if git_remote_url and not os.path.isdir(git_dir):
-            # 远程仓库 + 本地无 .git：尝试 clone
-            if os.path.isdir(repo_path) and os.listdir(repo_path):
-                # 目录非空但无 .git，init + fetch + reset
-                logger.info("目录非空但无 .git，执行 init + fetch + reset")
-                await git_manager._run_git(repo_path, "init", "-b", "main")
-                git_manager.set_project_path(project_id, repo_path)
-                await git_manager.set_remote(project_id, git_remote_url)
-                await git_manager._run_git(repo_path, "fetch", "origin")
-                # 检测远程默认分支
-                rc, refs, _ = await git_manager._run_git(repo_path, "ls-remote", "--symref", "origin", "HEAD")
-                remote_branch = "main"
-                if "refs/heads/" in refs:
-                    for line in refs.splitlines():
-                        if "ref:" in line and "refs/heads/" in line:
-                            remote_branch = line.split("refs/heads/")[-1].split()[0]
-                            break
-                await git_manager._run_git(repo_path, "reset", "--mixed", f"origin/{remote_branch}")
-                await git_manager._run_git(repo_path, "checkout", ".")
-                cloned = True
-            else:
-                # 目录为空或不存在：直接 clone
-                if os.path.isdir(repo_path):
-                    try:
-                        os.rmdir(repo_path)
-                    except OSError:
-                        pass
-                cloned = await git_manager.clone(git_remote_url, repo_path)
-                if cloned:
-                    logger.info("clone 成功，使用远程仓库内容")
-                    git_manager.set_project_path(project_id, repo_path)
-                else:
-                    logger.warning("clone 失败，回退到本地初始化")
-                    os.makedirs(repo_path, exist_ok=True)
-
-        if not cloned:
-            # 本地初始化流程
-            os.makedirs(repo_path, exist_ok=True)
-            for d in git_manager.REPO_DIRS:
-                os.makedirs(os.path.join(repo_path, d), exist_ok=True)
-
-            readme = f"# {name}\n\n{description or '由 AI 自动开发系统创建的项目'}\n"
-            readme_path = os.path.join(repo_path, "README.md")
-            if not os.path.exists(readme_path):
-                with open(readme_path, "w", encoding="utf-8") as f:
-                    f.write(readme)
-
-            gitignore = "__pycache__/\n*.py[cod]\n.venv/\nvenv/\n.idea/\n.vscode/\n.DS_Store\nThumbs.db\n.env\n*.log\n"
-            gitignore_path = os.path.join(repo_path, ".gitignore")
-            if not os.path.exists(gitignore_path):
-                with open(gitignore_path, "w", encoding="utf-8") as f:
-                    f.write(gitignore)
-
-            if not os.path.isdir(git_dir):
-                await git_manager._run_git(repo_path, "init", "-b", "main")
-
-            if git_remote_url:
-                await git_manager.set_remote(project_id, git_remote_url)
-
-            await git_manager._run_git(repo_path, "add", ".")
-            await git_manager._run_git(
-                repo_path, "commit", "-m",
-                f"init: {name} - project initialized by AI Dev System",
-                "--author", "AI Dev System <ai@dev-system.local>",
-            )
-
-            try:
-                push_success = await git_manager.push(project_id)
-            except Exception as e:
-                logger.warning("AI助手创建项目首次推送失败: %s", e)
-
-        # 写入数据库
-        proj_data = {
-            "id": project_id,
-            "name": name,
-            "description": description,
-            "status": "active",
-            "tech_stack": tech_stack,
-            "config": "{}",
-            "git_repo_path": repo_path,
-            "git_remote_url": git_remote_url,
-            "created_at": now,
-            "updated_at": now,
-        }
-        await db.insert("projects", proj_data)
-
-        logger.info("AI助手创建项目完成: %s (%s)", name, project_id)
-
-        # 异步生成初版 Roadmap
-        import asyncio
-        from api.milestones import generate_roadmap_for_project
-        asyncio.create_task(generate_roadmap_for_project(project_id, name, description))
-
-        return {
-            "type": "project_created",
-            "project_id": project_id,
-            "name": name,
-            "description": description,
-            "tech_stack": tech_stack,
-            "git_remote_url": git_remote_url,
-            "push_success": push_success,
-            "message": f"项目「{name}」已创建成功" + ("，并已推送到远程仓库" if push_success else "（首次推送失败，请检查远程仓库权限）"),
-        }
-
-    except Exception as e:
-        logger.error("AI助手创建项目失败: %s", e)
-        return {"type": "error", "message": f"创建项目失败: {str(e)}"}
+    薄 wrapper：保留原签名以兼容 legacy [ACTION:CREATE_PROJECT] 路径；
+    真实逻辑在 actions.chat.create_project.CreateProjectAction 里。
+    """
+    from actions.chat.create_project import CreateProjectAction
+    result = await CreateProjectAction().run(data)
+    return result.data
 
 
 # ==================== 图片消息构建 ====================

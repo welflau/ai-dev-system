@@ -6528,6 +6528,32 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
                 </div>
             </div>
         `;
+    } else if (action && action.type === 'confirm_project') {
+        const safeId = 'proj_confirm_' + Date.now();
+        actionHtml = `
+            <div class="chat-action-card chat-confirm-card chat-confirm-project-card" id="${safeId}"
+                 data-name="${escapeHtml(action.name || '')}"
+                 data-description="${escapeHtml(action.description || '')}"
+                 data-tech-stack="${escapeHtml(action.tech_stack || '')}"
+                 data-git-remote-url="${escapeHtml(action.git_remote_url || '')}"
+                 data-local-repo-path="${escapeHtml(action.local_repo_path || '')}"
+                 style="border-left-color: var(--accent, #a371f7);">
+                <div class="action-title">📦 识别到新建项目意图，是否创建？</div>
+                <div class="action-detail">
+                    <div class="confirm-req-title">${escapeHtml(action.name || '')}</div>
+                    ${action.description ? `<div class="confirm-req-desc">${escapeHtml(action.description)}</div>` : ''}
+                    <div class="confirm-req-meta">
+                        Git 仓库：<code>${escapeHtml(action.git_remote_url || '')}</code>
+                    </div>
+                    ${action.tech_stack ? `<div class="confirm-req-meta">技术栈：${escapeHtml(action.tech_stack)}</div>` : ''}
+                    ${action.local_repo_path ? `<div class="confirm-req-meta">本地路径：<code>${escapeHtml(action.local_repo_path)}</code></div>` : '<div class="confirm-req-meta" style="color:var(--text-muted);font-size:11px;">本地路径：留空，自动生成到 backend/projects/ 下</div>'}
+                </div>
+                <div class="confirm-req-btns">
+                    <button class="btn btn-sm btn-primary" onclick="doConfirmProject('${safeId}')">✅ 确认创建</button>
+                    <button class="btn btn-sm" onclick="doCancelProject('${safeId}')">✗ 取消</button>
+                </div>
+            </div>
+        `;
     } else if (action && action.type === 'confirm_bug') {
         const priorityLabel = {'critical':'🔴 紧急','high':'🟠 高','medium':'🟡 中','low':'🟢 低'}[action.priority] || action.priority;
         const safeId = 'bug_confirm_' + Date.now();
@@ -6649,6 +6675,52 @@ async function doConfirmRequirement(cardId) {
 
 /** 用户取消创建需求 */
 function doCancelRequirement(cardId) {
+    const card = document.getElementById(cardId);
+    if (!card) return;
+    card.style.opacity = '0.5';
+    card.querySelector('.action-title').textContent = '✗ 已取消';
+    const btns = card.querySelector('.confirm-req-btns');
+    if (btns) btns.remove();
+}
+
+/** 用户确认创建项目（全局聊天） */
+async function doConfirmProject(cardId) {
+    const card = document.getElementById(cardId);
+    if (!card) return;
+    const name = card.dataset.name || '';
+    const description = card.dataset.description || '';
+    const tech_stack = card.dataset.techStack || '';
+    const git_remote_url = card.dataset.gitRemoteUrl || '';
+    const local_repo_path = card.dataset.localRepoPath || '';
+    const btns = card.querySelector('.confirm-req-btns');
+    if (btns) btns.innerHTML = '<span style="color:var(--text-muted);font-size:12px">⏳ 创建中（clone 仓库 + 初始化）...</span>';
+    try {
+        const result = await api('/chat/confirm-create-project', {
+            method: 'POST',
+            body: { name, description, tech_stack, git_remote_url, local_repo_path },
+        });
+        card.style.borderLeftColor = 'var(--success, #34d058)';
+        card.querySelector('.action-title').textContent = '✅ 项目已创建';
+        if (btns) {
+            btns.innerHTML = `<span class="action-link" onclick="showProjectDetail('${escapeHtml(result.project_id || '')}')">进入项目 →</span>`;
+        }
+        showToast(`项目「${result.name || name}」已创建`, 'success');
+        // 刷新项目列表 + 延迟跳转详情
+        if (typeof loadProjects === 'function') loadProjects();
+        setTimeout(() => {
+            if (result.project_id && typeof showProjectDetail === 'function') {
+                showProjectDetail(result.project_id);
+            }
+        }, 1200);
+    } catch (e) {
+        card.style.borderLeftColor = 'var(--danger, #ea4a5a)';
+        card.querySelector('.action-title').textContent = '⚠️ 创建失败';
+        if (btns) btns.innerHTML = `<span style="color:var(--danger);font-size:12px">${escapeHtml(e.message)}</span>`;
+    }
+}
+
+/** 用户取消创建项目 */
+function doCancelProject(cardId) {
     const card = document.getElementById(cardId);
     if (!card) return;
     card.style.opacity = '0.5';

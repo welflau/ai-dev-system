@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional
 from agents.base import BaseAgent, ReactMode
 from actions.chat.confirm_requirement import ConfirmRequirementAction
 from actions.chat.confirm_bug import ConfirmBugAction
+from actions.chat.confirm_project import ConfirmProjectAction
 from actions.chat.create_requirement import CreateRequirementAction
 from actions.chat.pause_requirement import PauseRequirementAction
 from actions.chat.resume_requirement import ResumeRequirementAction
@@ -37,6 +38,10 @@ logger = logging.getLogger("agent.chat_assistant")
 
 # 不对 LLM 暴露为 tool 的 Action 名（只能由后端内部调用）
 _INTERNAL_ONLY_ACTIONS = {"create_requirement"}
+
+# 全局聊天（项目列表页，无 project_id）下可用的工具白名单。
+# 全局聊天只应该让 LLM 识别"新建项目"意图，其他工具都依赖 project_id。
+_GLOBAL_CHAT_TOOLS = {"confirm_project"}
 
 
 class _ChatToolExecutor:
@@ -60,6 +65,7 @@ class _ChatToolExecutor:
         # Tier 1 — 需要用户点击确认，必须让前端渲染
         "confirm_requirement": 1,
         "confirm_bug": 1,
+        "confirm_project": 1,
         # Tier 2 — 重要产出物 / 诊断视图
         "document_generated": 2,
         "requirement_pipeline": 2,
@@ -70,12 +76,14 @@ class _ChatToolExecutor:
         "requirement_paused": 3,
         "requirement_resumed": 3,
         "requirement_created": 3,
+        "project_created": 3,
         # Tier 4 — 普通查询结果
         "git_result": 4,
         "error": 5,
     }
 
-    def __init__(self, agent: "ChatAssistantAgent", project_id: str):
+    def __init__(self, agent: "ChatAssistantAgent", project_id: Optional[str] = None):
+        """project_id=None 表示全局聊天场景（项目列表页），此时 ctx 里不注入 project_id"""
         self.agent = agent
         self.project_id = project_id
         self.primary_action_result: Optional[Dict[str, Any]] = None
@@ -110,7 +118,10 @@ class _ChatToolExecutor:
             )
             tool_input = {}
 
-        ctx = {"project_id": self.project_id, **tool_input}
+        # 全局聊天时 project_id=None：不注入到 ctx（confirm_project 等全局工具用不到）
+        ctx = dict(tool_input)
+        if self.project_id is not None:
+            ctx["project_id"] = self.project_id
         result = await action.run(ctx)
         data = result.data or {}
 
@@ -130,6 +141,7 @@ class ChatAssistantAgent(BaseAgent):
     action_classes = [
         ConfirmRequirementAction,
         ConfirmBugAction,
+        ConfirmProjectAction,          # 全局聊天用，暴露给 LLM
         CreateRequirementAction,       # 内部用，不暴露给 LLM
         PauseRequirementAction,
         ResumeRequirementAction,
@@ -153,22 +165,33 @@ class ChatAssistantAgent(BaseAgent):
 
     # ==================== Tool schemas ====================
 
-    def _exposed_tool_schemas(self) -> List[Dict[str, Any]]:
-        """返回可暴露给 LLM 的 tool schema 列表（内部 Action + MCP 外部工具）"""
+    def _exposed_tool_schemas(self, scope: str = "project") -> List[Dict[str, Any]]:
+        """返回可暴露给 LLM 的 tool schema 列表。
+
+        scope="project"（默认）：项目内聊天，暴露所有非 INTERNAL 工具 + MCP 工具。
+        scope="global"：项目列表页的全局聊天，只暴露 _GLOBAL_CHAT_TOOLS 白名单（confirm_project），
+          不带 MCP（外部 MCP 工具大多也需要 project 上下文）。
+        """
         schemas = []
         for action in self._actions.values():
             if action.name in _INTERNAL_ONLY_ACTIONS:
+                continue
+            if scope == "global" and action.name not in _GLOBAL_CHAT_TOOLS:
+                continue
+            if scope == "project" and action.name in _GLOBAL_CHAT_TOOLS:
+                # confirm_project 不在项目内聊天里暴露——项目里不能再创项目
                 continue
             schema = getattr(action, "tool_schema", None)
             if schema:
                 schemas.append(schema)
 
-        # 追加外部 MCP 工具（name 已带 mcp__ 前缀，防冲突）
-        try:
-            from mcp_client import mcp_client
-            schemas.extend(mcp_client.list_all_tool_schemas())
-        except Exception as e:
-            logger.warning("合并 MCP 工具列表失败: %s", e)
+        if scope == "project":
+            # 追加外部 MCP 工具（name 已带 mcp__ 前缀，防冲突）
+            try:
+                from mcp_client import mcp_client
+                schemas.extend(mcp_client.list_all_tool_schemas())
+            except Exception as e:
+                logger.warning("合并 MCP 工具列表失败: %s", e)
 
         return schemas
 
@@ -225,6 +248,55 @@ class ChatAssistantAgent(BaseAgent):
             "reply": reply,
             "action": action,
         }
+
+    # ==================== 全局聊天入口（项目列表页，无 project_id） ====================
+
+    async def chat_global(
+        self,
+        user_message: str,
+        images: Optional[List[str]],
+        history: Optional[List[Dict[str, str]]],
+        projects_brief: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """
+        全局聊天：用户在项目列表页使用 AI 助手，可能要求新建项目或单纯聊天。
+        只暴露 confirm_project 一个工具；用户确认后由 /api/chat/confirm-create-project 端点落库。
+        """
+        from llm_client import llm_client, set_llm_context, clear_llm_context
+
+        system_prompt = self._build_global_system_prompt(projects_brief)
+        messages = self._assemble_messages(history, user_message, images)
+        tools = self._exposed_tool_schemas(scope="global")
+
+        executor = _ChatToolExecutor(self, project_id=None)
+
+        set_llm_context(
+            agent_type=self.agent_type,
+            action="global_chat_v2_no_project",
+        )
+        try:
+            result = await llm_client.chat_with_tools(
+                messages=messages,
+                tools=tools,
+                tool_executor=executor,
+                max_rounds=self.max_react_loop,
+                temperature=0.7,
+                max_tokens=4000,
+                system=system_prompt,
+            )
+        finally:
+            clear_llm_context()
+
+        reply = self._extract_final_text(result.get("messages", []))
+        action = executor.primary_action_result
+
+        if not reply:
+            if action:
+                reply = action.get("message") or "请继续告诉我项目的信息。"
+            else:
+                reply = "请告诉我想建什么项目，至少提供项目名称和 Git 远程仓库 URL。"
+
+        return {"reply": reply, "action": action}
 
     # ==================== 内部工具 ====================
 
@@ -380,4 +452,50 @@ class ChatAssistantAgent(BaseAgent):
 - 如果用户描述**真的**不清晰才追问；"重跑/重来/改颜色/加功能"这类指令是明确的，直接执行
 - 需求 ID 不明确时用标题关键词模糊匹配（工具本身支持）
 - 需求状态不允许当前操作时，工具会返回错误，据实告知用户
+"""
+
+    def _build_global_system_prompt(self, projects_brief: List[Dict[str, Any]]) -> str:
+        """全局聊天（项目列表页）的系统提示词——不挂在任何具体项目上。
+        唯一暴露的工具是 confirm_project，用来产草稿让用户确认后再落库。"""
+        if projects_brief:
+            proj_lines = "\n".join(
+                f"  - [{p.get('status', '?')}] {p.get('name', '')} (id: {p.get('id', '')})"
+                for p in projects_brief[:10]
+            )
+        else:
+            proj_lines = "  （尚无项目）"
+
+        skills_section = (
+            f"\n## 专业技能 (Skills)\n{self._skills_prompt}\n"
+            if getattr(self, "_skills_prompt", "") else ""
+        )
+
+        return f"""你是 AI 自动开发系统的全局助手，当前用户在**项目列表页**，**还没有进入任何具体项目**。
+
+## 已有项目（最多展示 10 个）
+{proj_lines}
+{skills_section}
+## 你的能力（当前语境下）
+你只有一个工具：**confirm_project**。
+- 当用户**明确表示想新建项目**时（"帮我建个项目""新建一个 xxx 项目""clone 一个仓库开始开发"），
+  调用 confirm_project 产出草稿给用户**确认**。**你不会直接建项目**——工具只负责草稿。
+  真正落库在用户点击"确认创建"按钮之后。
+- 其他任何情况（查项目状态、问怎么用系统、讨论需求、提 BUG 等）**不要调工具**，直接回答；
+  如果涉及具体项目，请提示用户先点击进入那个项目再继续对话。
+
+## 判断准则
+- "建一个项目叫 X，Git URL 是 Y" → 信息齐了，调 confirm_project
+- "帮我建个项目" / "新建项目" → 信息不全，**不要调工具**，反问名称 + Git URL
+- "我现在的项目都什么状态" → 根据上面"已有项目"列表直接回答，不调工具
+- "XX 项目卡在哪" → 提示用户进入该项目页再继续问
+
+## confirm_project 的必填字段
+- name：项目名称
+- git_remote_url：Git 远程仓库 URL（https 或 ssh 都行）
+- description / tech_stack / local_repo_path：可选
+
+## 注意事项
+- 用中文回复，简洁
+- 信息不全**绝不**调工具——反问用户补齐
+- 不要自己编 Git URL
 """
