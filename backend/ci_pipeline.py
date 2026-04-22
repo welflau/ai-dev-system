@@ -228,8 +228,15 @@ class CIPipelineRunner:
 
         merge_result = await git_manager.merge_branch(
             project_id, "develop", primary,
-            message=f"ci: develop → {primary} (build {build_id[:12]})"
+            message=f"ci: develop → {primary} (build {build_id[:12]})",
+            keep_conflict=True,  # 冲突时保留现场，下面尝试自动解决
         )
+
+        # 冲突自动解决：分文件类型分派策略
+        if not merge_result["success"] and merge_result.get("has_conflict"):
+            merge_result = await self._auto_resolve_conflict(
+                build_id, project_id, merge_result, logs,
+            )
 
         if merge_result["success"]:
             merge_commit = merge_result.get("commit", "")
@@ -408,6 +415,151 @@ class CIPipelineRunner:
         logger.info("部署成功: %s (项目: %s)", build_id[:8], project_name)
 
     # ==================== 构建辅助 ====================
+
+    # 自动解冲突的文件分类
+    _REPORT_FILE_PATTERNS = (
+        "docs/", "dev-notes/", "screenshots/",
+    )
+    _REPORT_FILE_SUFFIXES = (".md", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".txt")
+    _CODE_FILE_SUFFIXES = (".py", ".js", ".ts", ".tsx", ".jsx", ".html", ".css", ".vue",
+                            ".go", ".java", ".yaml", ".yml", ".json", ".toml")
+
+    # 单次构建内可交给 LLM 解的代码文件数上限（避免 LLM 费用失控）
+    _MAX_AI_RESOLVE_FILES = 3
+
+    @classmethod
+    def _classify_conflict_file(cls, path: str) -> str:
+        """返回 'report' / 'code' / 'unknown'。"""
+        p = path.replace("\\", "/").lower()
+        if any(p.startswith(prefix) for prefix in cls._REPORT_FILE_PATTERNS):
+            return "report"
+        if any(p.endswith(s) for s in cls._REPORT_FILE_SUFFIXES):
+            return "report"
+        if any(p.endswith(s) for s in cls._CODE_FILE_SUFFIXES):
+            return "code"
+        return "unknown"
+
+    async def _auto_resolve_conflict(
+        self,
+        build_id: str,
+        project_id: str,
+        merge_result: Dict,
+        logs: List,
+    ) -> Dict:
+        """尝试自动解决合并冲突。
+        - 报告类文件（docs/**, *.md, screenshots/**）→ `git checkout --theirs <file>` 吞掉 ours
+        - 代码类文件（.py/.js/.html/...）≤ _MAX_AI_RESOLVE_FILES 个 → 调 ResolveMergeConflictAction
+        - 其余或 LLM 失败 → abort + 返回原 failure
+
+        返回结构跟 merge_branch 一样 `{success, commit, pushed}` 或 `{success: False, error}`。
+        """
+        conflict_files = merge_result.get("conflict_files") or []
+        repo_dir = merge_result.get("repo_dir")
+        if not conflict_files or not repo_dir:
+            await git_manager.abort_merge(project_id)
+            return merge_result
+
+        report_files = [f for f in conflict_files if self._classify_conflict_file(f) == "report"]
+        code_files = [f for f in conflict_files if self._classify_conflict_file(f) == "code"]
+        unknown_files = [f for f in conflict_files if self._classify_conflict_file(f) == "unknown"]
+
+        logger.info(
+            "🤝 尝试自动解冲突: 总 %d 个（报告 %d / 代码 %d / 未知 %d）",
+            len(conflict_files), len(report_files), len(code_files), len(unknown_files),
+        )
+
+        if unknown_files:
+            logger.warning("存在未知类型冲突文件，放弃自动解：%s", unknown_files)
+            logs.append({"step": "auto_resolve", "msg": f"发现未知类型冲突文件 {unknown_files}，放弃", "passed": False})
+            await git_manager.abort_merge(project_id)
+            return merge_result
+
+        if len(code_files) > self._MAX_AI_RESOLVE_FILES:
+            logger.warning("代码冲突文件数 %d > 上限 %d，放弃 AI 解", len(code_files), self._MAX_AI_RESOLVE_FILES)
+            logs.append({"step": "auto_resolve", "msg": f"代码冲突文件数超限（{len(code_files)} > {self._MAX_AI_RESOLVE_FILES}）", "passed": False})
+            await git_manager.abort_merge(project_id)
+            return merge_result
+
+        # ---- 报告类：git checkout --theirs <file> ----
+        for f in report_files:
+            rc, _, err = await git_manager._run_git(repo_dir, "checkout", "--theirs", "--", f)
+            if rc != 0:
+                logger.warning("checkout --theirs 失败 (%s): %s", f, err)
+                logs.append({"step": "auto_resolve", "msg": f"报告文件 {f} checkout --theirs 失败", "passed": False})
+                await git_manager.abort_merge(project_id)
+                return merge_result
+            rc, _, err = await git_manager._run_git(repo_dir, "add", "--", f)
+            if rc != 0:
+                await git_manager.abort_merge(project_id)
+                return merge_result
+            logs.append({"step": "auto_resolve", "msg": f"📝 报告文件 {f} 已自动用 develop 版本（-X theirs）", "passed": True})
+
+        # ---- 代码类：读文件内容 → 调 LLM Action ----
+        if code_files:
+            from actions.resolve_merge_conflict import ResolveMergeConflictAction
+
+            file_entries = []
+            for f in code_files:
+                full_path = Path(repo_dir) / f
+                try:
+                    content = full_path.read_text(encoding="utf-8")
+                except Exception as e:
+                    logger.warning("读取冲突文件失败 (%s): %s", f, e)
+                    await git_manager.abort_merge(project_id)
+                    return merge_result
+                file_entries.append({
+                    "path": f,
+                    "content": content,
+                    "ours_label": "HEAD (target)",
+                    "theirs_label": "develop (source)",
+                })
+
+            action = ResolveMergeConflictAction()
+            result = await action.run({"files": file_entries})
+            data = result.data or {}
+            resolved = data.get("resolved") or {}
+            failed = data.get("failed") or []
+
+            if failed or not resolved:
+                logger.warning("LLM 解冲突失败: resolved=%d failed=%d", len(resolved), len(failed))
+                logs.append({
+                    "step": "auto_resolve",
+                    "msg": f"LLM 解代码冲突失败: {failed}",
+                    "passed": False,
+                })
+                await git_manager.abort_merge(project_id)
+                return merge_result
+
+            # 写回并 add
+            for path, content in resolved.items():
+                full_path = Path(repo_dir) / path
+                try:
+                    full_path.write_text(content, encoding="utf-8")
+                except Exception as e:
+                    logger.warning("写回解冲突文件失败 (%s): %s", path, e)
+                    await git_manager.abort_merge(project_id)
+                    return merge_result
+                await git_manager._run_git(repo_dir, "add", "--", path)
+                logs.append({"step": "auto_resolve", "msg": f"🤖 代码文件 {path} 已 LLM 解冲突并暂存", "passed": True})
+
+        # ---- 提交合并结果 ----
+        commit_msg = (
+            f"ci: develop → {(await git_manager.get_primary_branch(project_id)) or 'main'} "
+            f"(build {build_id[:12]}, auto-resolved: "
+            f"{len(report_files)} reports + {len(code_files)} code files)"
+        )
+        finalize = await git_manager.finalize_merge(project_id, message=commit_msg)
+        if not finalize.get("success"):
+            await git_manager.abort_merge(project_id)
+            return merge_result
+
+        logs.append({
+            "step": "auto_resolve",
+            "msg": f"✅ 自动解冲突完成：{len(report_files)} 报告 + {len(code_files)} 代码，commit {finalize.get('commit', '?')}",
+            "passed": True,
+        })
+        logger.info("✅ CI 自动解冲突成功: build=%s commit=%s", build_id[:8], finalize.get("commit"))
+        return finalize
 
     async def _fail_build(self, build_id: str, project_id: str, error: str, logs: List = None):
         """标记构建失败"""

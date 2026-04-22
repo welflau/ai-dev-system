@@ -352,8 +352,14 @@ Thumbs.db
         return True
 
     async def merge_branch(self, project_id: str, source: str, target: str,
-                           message: str = None) -> Dict:
-        """将 source 分支合并到 target 分支，返回结果"""
+                           message: str = None, keep_conflict: bool = False) -> Dict:
+        """将 source 分支合并到 target 分支，返回结果
+
+        keep_conflict=False（默认）：冲突时 abort，保持原状。
+        keep_conflict=True：冲突时**不** abort，保留冲突标记和 index 中的冲突条目，
+          额外返回 `conflict_files` 供调用方尝试自动解决；调用方如果失败请显式
+          abort_merge()。
+        """
         repo_dir = str(self._repo_path(project_id))
 
         # 切到目标分支
@@ -365,7 +371,16 @@ Thumbs.db
         merge_msg = message or f"merge: {source} → {target}"
         rc, out, err = await self._run_git(repo_dir, "merge", source, "--no-ff", "-m", merge_msg)
         if rc != 0:
-            # 合并冲突，abort 并回报
+            if keep_conflict:
+                # 保留冲突让调用方处理；把冲突文件列表也返回
+                conflict_files = await self._list_conflict_files(repo_dir)
+                return {
+                    "success": False,
+                    "error": f"合并冲突: {err}",
+                    "conflict_files": conflict_files,
+                    "repo_dir": repo_dir,
+                    "has_conflict": True,
+                }
             await self._run_git(repo_dir, "merge", "--abort")
             return {"success": False, "error": f"合并冲突: {err}"}
 
@@ -377,6 +392,41 @@ Thumbs.db
         pushed = await self.push(project_id)
 
         logger.info("🔀 分支合并: %s → %s (commit: %s, pushed: %s)", source, target, commit_hash, pushed)
+        return {"success": True, "commit": commit_hash, "pushed": pushed}
+
+    async def _list_conflict_files(self, repo_dir: str) -> List[str]:
+        """在 merge 冲突状态下列出冲突文件（unmerged paths）"""
+        rc, out, _ = await self._run_git(repo_dir, "diff", "--name-only", "--diff-filter=U")
+        if rc != 0 or not out:
+            return []
+        return [p.strip() for p in out.split("\n") if p.strip()]
+
+    async def abort_merge(self, project_id: str) -> bool:
+        """中止正在进行的 merge"""
+        repo_dir = str(self._repo_path(project_id))
+        rc, _, _ = await self._run_git(repo_dir, "merge", "--abort")
+        return rc == 0
+
+    async def finalize_merge(self, project_id: str, message: str = None) -> Dict:
+        """在冲突已解决（工作树无冲突标记、所有冲突文件已 git add）后，
+        commit + push 完成 merge。
+
+        message=None → 用 git 现有的 MERGE_MSG（merge 命令已写好的默认消息）。
+        """
+        repo_dir = str(self._repo_path(project_id))
+
+        if message:
+            rc, out, err = await self._run_git(repo_dir, "commit", "-m", message)
+        else:
+            rc, out, err = await self._run_git(repo_dir, "commit", "--no-edit")
+        if rc != 0:
+            return {"success": False, "error": f"commit 失败: {err or out}"}
+
+        rc, hash_out, _ = await self._run_git(repo_dir, "rev-parse", "--short", "HEAD")
+        commit_hash = hash_out if rc == 0 else None
+
+        pushed = await self.push(project_id)
+        logger.info("🔀 自动解冲突后提交: commit=%s, pushed=%s", commit_hash, pushed)
         return {"success": True, "commit": commit_hash, "pushed": pushed}
 
     async def list_branches(self, project_id: str) -> List[str]:
