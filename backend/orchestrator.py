@@ -576,6 +576,17 @@ class TicketOrchestrator:
                     "info", "analyzing", "analyzing",
                     "[WARNING] LLM 不可用，使用规则引擎降级拆单", "warning"
                 )
+
+            # Self-Consistency 投票留痕（如果开启）
+            vote = result.get("_consistency_vote")
+            if vote:
+                await self._log(
+                    project_id, requirement_id, None, "ProductAgent",
+                    "consistency_vote", None, None,
+                    f"🗳️ 拆单投票: {vote['n_candidates']} 候选 → 选 #{vote['best_index']}"
+                    f"{' (judge fallback)' if vote.get('fallback') else ''} | {vote.get('reasoning', '')[:150]}",
+                    "info", detail_data={"consistency_vote": vote},
+                )
             await db.update("requirements", {
                 "prd_content": prd_summary,
                 "updated_at": now_iso(),
@@ -1158,6 +1169,17 @@ class TicketOrchestrator:
                 "estimated_completion": est_completion,
                 "updated_at": now_iso(),
             }, "id = ?", (ticket_id,))
+
+            # Self-Consistency 投票留痕（如果开启）
+            vote = result.get("_consistency_vote")
+            if vote:
+                await self._log(
+                    project_id, requirement_id, ticket_id, agent_name,
+                    "consistency_vote", None, None,
+                    f"🗳️ 架构投票: {vote['n_candidates']} 候选 → 选 #{vote['best_index']}"
+                    f"{' (judge fallback)' if vote.get('fallback') else ''} | {vote.get('reasoning', '')[:150]}",
+                    "info", detail_data={"consistency_vote": vote},
+                )
 
             await self._log(
                 project_id, requirement_id, ticket_id, agent_name,

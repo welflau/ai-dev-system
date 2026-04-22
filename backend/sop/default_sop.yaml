@@ -16,6 +16,12 @@ stages:
     read_existing_code: true
     max_code_chars: 1500
     max_tokens: 2000
+    # Self-Consistency 投票（可选，默认关闭）
+    # 打开后生成 consistency_n 个候选 → Critic 选 best，质量 +25%，成本 ~4×
+    # 适合关键/复杂需求的架构设计；简单需求不建议开
+    self_consistency: false
+    consistency_n: 3
+    consistency_temperature: 0.8
 - id: development
   name: 代码开发
   agent: DevAgent
@@ -37,7 +43,8 @@ stages:
   success_status: review_passed
   description: ReviewAgent 读取实际代码做审查（非盲审，独立于 TestAgent）
   config:
-    max_code_chars: 3000
+    max_code_chars: 12000       # 覆盖单文件项目 + 多个中等文件；避免截断误判
+    per_file_code_chars: 6000   # 单文件最多展示 6000 字符，超过加 /* truncated */ 标记
     pass_score: 7               # 低于此分记 warning，不阻塞
     block_on_low_score: false   # 未来可开启硬门控
 - id: acceptance

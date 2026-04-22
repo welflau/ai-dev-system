@@ -45,21 +45,58 @@ class DesignArchitectureAction(ActionBase):
 
         req_context = "\n\n".join(ctx_parts)
 
-        # 使用 ActionNode 结构化输出
-        node = ActionNode(
-            key="design_architecture",
-            expected_type=ArchitectureOutput,
-            instruction="为以下任务设计增量架构方案。增量设计，已有代码不推翻，技术栈与已有一致。",
-        )
-        await node.fill(req=req_context, llm=llm_client, max_tokens=2000)
+        # Self-Consistency 投票（opt-in via SOP config）：
+        # 对"架构设计"这类主观发散任务，生成 N=3 候选 → Critic LLM 选 best。
+        # 默认关闭（成本 4×），SOP config.self_consistency=true 时开启。
+        sop_cfg = context.get("sop_config") or {}
+        use_consistency = bool(sop_cfg.get("self_consistency", False))
+
+        def _new_node():
+            return ActionNode(
+                key="design_architecture",
+                expected_type=ArchitectureOutput,
+                instruction="为以下任务设计增量架构方案。增量设计，已有代码不推翻，技术栈与已有一致。",
+            )
+
+        vote_info = None
+        if use_consistency:
+            from actions.voting import fill_with_consistency
+            n = int(sop_cfg.get("consistency_n", 3) or 3)
+            temp = float(sop_cfg.get("consistency_temperature", 0.8) or 0.8)
+            try:
+                best_node, all_nodes, judge_info = await fill_with_consistency(
+                    _new_node, req=req_context, llm=llm_client,
+                    n=n, temperature=temp, max_tokens=2000,
+                    task_desc=f"为「{ticket_title}」设计增量架构方案",
+                )
+                node = best_node
+                vote_info = {
+                    "stage": "design_architecture",
+                    "n_candidates": len(all_nodes),
+                    "best_index": judge_info.get("best_index"),
+                    "reasoning": judge_info.get("reasoning"),
+                    "fallback": judge_info.get("fallback", False),
+                    "temperature": temp,
+                }
+            except Exception as e:
+                logger.warning("Self-Consistency 失败，降级到单次调用: %s", e)
+                node = _new_node()
+                await node.fill(req=req_context, llm=llm_client, max_tokens=2000)
+        else:
+            node = _new_node()
+            await node.fill(req=req_context, llm=llm_client, max_tokens=2000)
 
         arch = node.instruct_content
         arch_dict = arch.model_dump() if arch else {}
         arch_md = _generate_arch_doc(ticket_title, arch_dict)
 
+        result_data = {"architecture": arch_dict, "estimated_hours": arch.estimated_hours if arch else 4}
+        if vote_info:
+            result_data["_consistency_vote"] = vote_info
+
         return ActionResult(
             success=True,
-            data={"architecture": arch_dict, "estimated_hours": arch.estimated_hours if arch else 4},
+            data=result_data,
             files={f"{docs_prefix}architecture.md": arch_md},
         )
 

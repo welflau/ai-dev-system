@@ -76,25 +76,62 @@ class DecomposeAction(ActionBase):
 - 每个工单的 module 字段指定是 frontend/backend/design 等
 - subtasks 用字符串列表（如 ["修改背景色", "调整文字对比度"]）"""
 
-        node = ActionNode(
-            key="decompose",
-            expected_type=DecomposeOutput,
-            instruction="作为产品经理，先判断需求复杂度（simple/medium/complex），再合理拆单。简单需求不要过度拆分。",
-        )
-        await node.fill(req=req_context, llm=llm_client, max_tokens=4000)
+        # Self-Consistency 投票（opt-in via SOP config）：
+        # 拆单是典型的主观发散任务（同一个需求不同拆法差异很大），开启后生成 N=3 候选
+        # → Critic LLM 选 best。默认关闭，SOP config.self_consistency=true 时开启。
+        sop_cfg = context.get("sop_config") or {}
+        use_consistency = bool(sop_cfg.get("self_consistency", False))
+
+        def _new_node():
+            return ActionNode(
+                key="decompose",
+                expected_type=DecomposeOutput,
+                instruction="作为产品经理，先判断需求复杂度（simple/medium/complex），再合理拆单。简单需求不要过度拆分。",
+            )
+
+        vote_info = None
+        if use_consistency:
+            from actions.voting import fill_with_consistency
+            n = int(sop_cfg.get("consistency_n", 3) or 3)
+            temp = float(sop_cfg.get("consistency_temperature", 0.8) or 0.8)
+            try:
+                best_node, all_nodes, judge_info = await fill_with_consistency(
+                    _new_node, req=req_context, llm=llm_client,
+                    n=n, temperature=temp, max_tokens=4000,
+                    task_desc=f"为需求「{title}」做合理拆单（不过度拆分简单需求）",
+                )
+                node = best_node
+                vote_info = {
+                    "stage": "decompose",
+                    "n_candidates": len(all_nodes),
+                    "best_index": judge_info.get("best_index"),
+                    "reasoning": judge_info.get("reasoning"),
+                    "fallback": judge_info.get("fallback", False),
+                    "temperature": temp,
+                }
+            except Exception as e:
+                logger.warning("Self-Consistency 失败，降级到单次调用: %s", e)
+                node = _new_node()
+                await node.fill(req=req_context, llm=llm_client, max_tokens=4000)
+        else:
+            node = _new_node()
+            await node.fill(req=req_context, llm=llm_client, max_tokens=4000)
 
         output = node.instruct_content
         if output and output.tickets:
             complexity = output.complexity or "medium"
             prd_md = f"# PRD — {title}\n\n**复杂度**: {complexity}\n\n{output.prd_summary}\n"
             logger.info("✅ 需求拆单: %s → 复杂度=%s, %d 个工单", title[:20], complexity, len(output.tickets))
+            result_data = {
+                "prd_summary": output.prd_summary,
+                "tickets": output.tickets,
+                "complexity": complexity,
+            }
+            if vote_info:
+                result_data["_consistency_vote"] = vote_info
             return ActionResult(
                 success=True,
-                data={
-                    "prd_summary": output.prd_summary,
-                    "tickets": output.tickets,
-                    "complexity": complexity,
-                },
+                data=result_data,
                 files={f"{docs_prefix}PRD.md": prd_md},
             )
 
