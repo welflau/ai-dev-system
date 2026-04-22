@@ -140,7 +140,9 @@ class PlanCodeChangeAction(ActionBase):
         # 如果是 HTML 且已有 index.html，提供已有代码参考
         ref = ""
         if "index.html" in existing_code:
-            ref = f"\n## 已有 index.html（保持风格一致）\n```\n{existing_code['index.html'][:1500]}\n```"
+            ref_code = existing_code["index.html"]
+            ref_snippet = ref_code if len(ref_code) <= 8000 else ref_code[:8000] + "\n... [已截断] ..."
+            ref = f"\n## 已有 index.html（保持风格一致）\n```\n{ref_snippet}\n```"
 
         prompt = f"""生成文件 `{path}`。
 用途: {purpose}
@@ -166,7 +168,20 @@ class PlanCodeChangeAction(ActionBase):
         return ""
 
     async def _modify_file(self, path: str, original: str, changes: str, title: str) -> str:
-        """Phase 2b: 修改已有文件"""
+        """Phase 2b: 修改已有文件
+
+        关键：原文件一定要完整传给 LLM，不能截断。历史 [:3000] 截断导致
+        LLM 把"截断的 HTML"误认为是"不完整文件"，按自己想象重写整个页面。
+        只在真的超长（>20k）时才截断，并加显式 marker。
+        """
+        if len(original) <= 20000:
+            original_block = original
+        else:
+            original_block = original[:20000] + (
+                f"\n\n/* ... [文件截断显示：原文共 {len(original)} 字符，"
+                f"当前只给出前 20000；未展示部分保留不变] ... */"
+            )
+
         prompt = f"""修改文件 `{path}`。
 
 ## 需要的改动
@@ -175,12 +190,16 @@ class PlanCodeChangeAction(ActionBase):
 ## 任务背景
 {title}
 
-## 原文件内容
+## 原文件完整内容（保留所有原有功能，只做增量改动）
 ```
-{original[:3000]}
+{original_block}
 ```
 
-输出修改后的完整文件内容（不要 markdown 代码块包裹）。保留所有原有功能，只做需要的改动。"""
+输出修改后的完整文件内容（不要 markdown 代码块包裹）。
+⚠️ **硬要求**：
+- 必须保留原文件里所有已实现的功能，不能删减
+- 只在原基础上叠加本次需要的改动
+- 不要"重新设计"页面结构、不要添加未要求的模板化内容（如示例卡片、占位文字等）"""
 
         try:
             content = await llm_client.chat(

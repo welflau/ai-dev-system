@@ -102,12 +102,15 @@ class AgentMemory:
         _flatten(children)
 
         # 读取关键文件内容
+        # 历史 MAX_PER_FILE=3000 太小：8KB+ 的 index.html 被截到 35%，
+        # 导致 DevAgent 看到"不完整 HTML" 以为要补全 → 自作主张重写整个页面。
+        # 提升到 15000/45000 覆盖绝大多数单文件项目的 index.html 完整内容。
         code = {}
         ENTRY_FILES = {"index.html", "main.py", "app.py", "package.json"}
         CODE_EXTS = {".html", ".js", ".jsx", ".ts", ".tsx", ".py", ".css", ".json"}
         total_chars = 0
-        MAX_TOTAL = 15000
-        MAX_PER_FILE = 3000
+        MAX_TOTAL = 45000
+        MAX_PER_FILE = 15000
 
         for fp in file_list:
             if total_chars >= MAX_TOTAL:
@@ -120,11 +123,17 @@ class AgentMemory:
 
             content = await git_manager.get_file_content(self.project_id, fp)
             if content:
-                truncated = content[:MAX_PER_FILE]
-                if len(content) > MAX_PER_FILE:
-                    truncated += f"\n... (truncated, {len(content)} chars)"
-                code[fp] = truncated
-                total_chars += len(truncated)
+                if len(content) <= MAX_PER_FILE:
+                    code[fp] = content
+                    total_chars += len(content)
+                else:
+                    # 真的超长才截，加显式 marker 让 LLM 知道是截断显示，不是文件本身不完整
+                    truncated = content[:MAX_PER_FILE] + (
+                        f"\n\n/* ... [文件截断显示：原文 {len(content)} 字符，"
+                        f"当前只显示前 {MAX_PER_FILE}；代码本身完整，保留未显示部分] ... */"
+                    )
+                    code[fp] = truncated
+                    total_chars += len(truncated)
 
         return {"file_list": file_list, "code": code}
 
