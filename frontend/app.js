@@ -1032,7 +1032,25 @@ async function loadEnvironments() {
                     <span class="env-status-text">${running ? '运行中' : '未启动'}</span>
                 </div>
                 <div class="env-card-body">
-                    <div class="env-info-row"><span class="env-info-label">分支</span><span class="env-info-value">${env.branch ? '🌿 ' + escapeHtml(env.branch) : '-'}</span></div>
+                    ${(() => {
+                        // 后端已做一致性维持：dev → DB 跟 HEAD 走；test/prod → HEAD 被切回 DB。
+                        // 所以 env.branch 已经是"一致后"的值。如果依然 != current_branch 说明后端自动
+                        // 切换失败（比如目录有未提交改动），这时才显示 ⚠️。
+                        const shown = env.branch || '';
+                        const actual = env.current_branch || '';
+                        const stillMismatch = shown && actual && shown !== actual;
+                        const note = env.branch_sync_note || '';
+                        let title = '';
+                        if (stillMismatch) {
+                            title = `目录当前分支: ${actual}\n应为: ${shown}\n${note || '自动对齐失败，请手动处理'}`;
+                        } else if (note) {
+                            title = note;
+                        }
+                        const icon = stillMismatch ? '⚠️ ' : (shown ? '🌿 ' : '');
+                        const display = shown || actual || '-';
+                        return `<div class="env-info-row"><span class="env-info-label">分支</span><span class="env-info-value" title="${escapeHtml(title)}">${icon}${escapeHtml(display)}</span></div>`;
+                    })()}
+                    <div class="env-info-row"><span class="env-info-label">路径</span><span class="env-info-value env-path-value" title="${escapeHtml(env.deploy_path || '')}">${env.deploy_path ? '📁 ' + escapeHtml(env.deploy_path) : '-'}</span></div>
                     <div class="env-info-row"><span class="env-info-label">端口</span><span class="env-info-value">${env.port || '-'}</span></div>
                     <div class="env-info-row"><span class="env-info-label">Commit</span><span class="env-info-value" style="font-family:monospace;">${env.last_commit || '-'}</span></div>
                     <div class="env-info-row"><span class="env-info-label">部署时间</span><span class="env-info-value">${env.last_deployed_at ? formatTime(env.last_deployed_at) : '-'}</span></div>

@@ -306,6 +306,18 @@ Thumbs.db
         rc, out, _ = await self._run_git(repo_dir, "rev-parse", "--abbrev-ref", "HEAD")
         return out if rc == 0 else "main"
 
+    async def get_branch_at_path(self, path: str) -> str:
+        """读任意路径的当前 HEAD 分支（供环境管理显示真实 checkout）。
+        失败返回空串；detached HEAD 返回 "HEAD"。"""
+        from pathlib import Path as _P
+        if not path or not _P(path).exists():
+            return ""
+        try:
+            rc, out, _ = await self._run_git(path, "rev-parse", "--abbrev-ref", "HEAD")
+            return out.strip() if rc == 0 else ""
+        except Exception:
+            return ""
+
     async def get_primary_branch(self, project_id: str) -> str:
         """检测仓库主分支名（main 或 master）
 

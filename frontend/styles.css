@@ -2629,6 +2629,18 @@ input[readonly]:focus {
     color: var(--text);
     text-align: right;
 }
+/* 部署路径通常是长绝对路径，省略中间（从尾部优先保留） */
+.env-path-value {
+    font-family: monospace;
+    font-size: 11px;
+    max-width: 180px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    direction: rtl;           /* 从右往左显示，优先保留路径末尾 */
+    text-align: left;         /* 内容还是正向 */
+    unicode-bidi: plaintext;
+}
 .env-preview-link {
     color: var(--primary);
     text-decoration: none;

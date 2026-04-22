@@ -561,6 +561,20 @@ async def get_project_environments(project_id: str):
     )
     env_map = {e["env_type"]: dict(e) for e in envs}
 
+    # 实时维持"UI 显示的分支 = 目录 HEAD"：
+    # - dev：共享主仓库，HEAD 是 source of truth → DB.branch 跟着 HEAD 走
+    # - test/prod：独立目录，DB.branch（develop/main）是 source of truth → 目录被动过就 checkout 回去
+    from git_manager import git_manager
+    from pathlib import Path as _Path
+
+    async def _is_working_tree_clean(path: str) -> bool:
+        """判断是否无 uncommitted / untracked 文件（切分支前的安全护栏）"""
+        try:
+            rc, out, _ = await git_manager._run_git(path, "status", "--porcelain")
+            return rc == 0 and not out.strip()
+        except Exception:
+            return False
+
     result = []
     for env_type in ("dev", "test", "prod"):
         env = env_map.get(env_type, {})
@@ -569,20 +583,65 @@ async def get_project_environments(project_id: str):
         actually_running = key in DeployAgent._preview_servers
         status = "running" if actually_running else "inactive"
         if env.get("status") == "running" and not actually_running:
-            # 数据库说 running 但进程已死，修正
             await db.execute(
                 "UPDATE project_environments SET status = 'inactive' WHERE project_id = ? AND env_type = ?",
                 (project_id, env_type),
             )
+
+        deploy_path = env.get("deploy_path", "")
+        db_branch = env.get("branch", "")
+        actual_branch = ""
+        sync_note = ""   # 同步动作备忘（供前端 toast / 日志）
+
+        if deploy_path and _Path(deploy_path).exists():
+            try:
+                actual_branch = await git_manager.get_branch_at_path(deploy_path)
+            except Exception:
+                actual_branch = ""
+
+            # --- 一致性维持 ---
+            if env_type == "dev":
+                # dev 共享主仓库：DB 跟着 HEAD 走
+                if actual_branch and actual_branch != db_branch:
+                    await db.execute(
+                        "UPDATE project_environments SET branch = ? WHERE project_id = ? AND env_type = ?",
+                        (actual_branch, project_id, env_type),
+                    )
+                    sync_note = f"DB 分支已更新为当前 HEAD: {actual_branch}"
+                    db_branch = actual_branch
+
+            elif env_type in ("test", "prod"):
+                # test/prod 独立目录：DB 是权威（develop/main），目录偏了就切回来
+                if db_branch and actual_branch and actual_branch != db_branch:
+                    if await _is_working_tree_clean(deploy_path):
+                        try:
+                            rc, _, err = await git_manager._run_git(
+                                deploy_path, "checkout", db_branch,
+                            )
+                            if rc == 0:
+                                actual_branch = db_branch
+                                sync_note = f"目录已自动切回 {db_branch}"
+                                logger.info("环境 %s 自动对齐分支 → %s (path=%s)",
+                                            env_type, db_branch, deploy_path)
+                            else:
+                                sync_note = f"自动切换失败: {err[:100]}"
+                                logger.warning("环境 %s checkout 失败: %s", env_type, err)
+                        except Exception as e:
+                            sync_note = f"切换异常: {e}"
+                    else:
+                        sync_note = f"目录有未提交改动，跳过自动切换（当前: {actual_branch}，应为: {db_branch}）"
+
         result.append({
             "env_type": env_type,
-            "branch": env.get("branch", ""),
-            "deploy_path": env.get("deploy_path", ""),
+            "branch": db_branch,                    # 经过一致性维持后的分支（UI 显示这个）
+            "current_branch": actual_branch,        # 目录当前 HEAD（前端对比用）
+            "deploy_path": deploy_path,
             "port": env.get("port"),
             "status": status,
             "url": env.get("url", ""),
             "last_commit": env.get("last_commit", ""),
             "last_deployed_at": env.get("last_deployed_at", ""),
+            "branch_sync_note": sync_note,
         })
 
     return {"environments": result}
