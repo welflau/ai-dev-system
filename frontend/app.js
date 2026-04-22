@@ -2268,8 +2268,8 @@ function renderTicketActions(ticket) {
     if (ticket.status === 'pending') {
         buttons += `<button class="btn btn-primary btn-sm" onclick="startTicket('${ticket.id}')">▶ 启动</button>`;
     }
-    // 查看 AI 对话按钮
-    buttons += `<button class="btn btn-sm" onclick="selectTicketForChat('${ticket.id}', '${escHtml(ticket.title).replace(/'/g, "\\'")}'); closeDrawer();">💬 AI 对话</button>`;
+    // 查看 AI 对话按钮（保留属性面板打开，方便用户边看工单边对话）
+    buttons += `<button class="btn btn-sm" onclick="selectTicketForChat('${ticket.id}', '${escHtml(ticket.title).replace(/'/g, "\\'")}')">💬 AI 对话</button>`;
     if (ticket.status !== 'deployed' && ticket.status !== 'cancelled') {
         buttons += `<button class="btn btn-sm" style="color:var(--error);" onclick="cancelTicket('${ticket.id}')">✗ 取消</button>`;
     }
@@ -6726,6 +6726,12 @@ function openChatImageViewer(src) {
  */
 function formatChatContent(content) {
     if (!content) return '';
+
+    // 兜底：content 可能是数组/对象（tool_use 消息的多段 content），先转字符串
+    if (typeof content !== 'string') {
+        try { content = JSON.stringify(content); }
+        catch { content = String(content); }
+    }
 
     // 过滤掉残留的 [ACTION:...] ... [/ACTION] 块（后端已 clean，此为兜底）
     // 同时处理 token 截断导致未闭合的 [ACTION:...] 块

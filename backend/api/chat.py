@@ -691,6 +691,43 @@ def _extract_docx(raw: bytes, filename: str) -> str:
         return f"(Word 解析失败: {e})"
 
 
+def _content_to_display_text(content: Any) -> str:
+    """把 LLM 消息的 content 字段展平成纯文本，供前端对话 feed 展示。
+
+    Anthropic 格式下 content 可能是：
+    - str：直接返回
+    - list of blocks：每个 block 是 {"type": "text"|"tool_use"|"tool_result", ...}
+      - text block → 取 "text"
+      - tool_use block → "[tool: xxx(args)]"
+      - tool_result block → "[tool_result: ...]"
+    其他类型兜底为 repr()，永不返回非字符串。
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if not isinstance(block, dict):
+                parts.append(str(block))
+                continue
+            btype = block.get("type")
+            if btype == "text":
+                parts.append(block.get("text", ""))
+            elif btype == "tool_use":
+                name = block.get("name", "?")
+                parts.append(f"[tool: {name}(…)]")
+            elif btype == "tool_result":
+                inner = block.get("content", "")
+                inner_text = _content_to_display_text(inner) if not isinstance(inner, str) else inner
+                parts.append(f"[tool_result] {inner_text}")
+            else:
+                parts.append(str(block))
+        return "\n".join(p for p in parts if p)
+    if content is None:
+        return ""
+    return str(content)
+
+
 @router.get("/tickets/conversations")
 async def get_all_ticket_conversations(project_id: str):
     """获取项目下所有工单的 AI 对话记录（统一 Feed）"""
@@ -742,7 +779,7 @@ async def get_all_ticket_conversations(project_id: str):
         user_msg = ""
         for m in msgs:
             if m.get("role") == "user":
-                user_msg = m.get("content", "")
+                user_msg = _content_to_display_text(m.get("content", ""))
 
         conv_by_ticket[tid].append({
             "type": "conversation",
@@ -846,10 +883,12 @@ async def get_ticket_conversations(project_id: str, ticket_id: str):
             msgs = []
 
         # 取最后一条 user 消息作为用户输入
+        # 注意：tool_use 场景下 content 可能是 list of blocks（Anthropic 多段格式），
+        # 需展平成纯文本给前端显示
         user_msg = ""
         for m in msgs:
             if m.get("role") == "user":
-                user_msg = m.get("content", "")
+                user_msg = _content_to_display_text(m.get("content", ""))
 
         chat_messages.append({
             "id": conv["id"],
