@@ -3668,6 +3668,113 @@ pre.hljs, .hljs pre { background: transparent !important; }
     margin-bottom: 16px;
 }
 
+/* ==================== 内部 Tab 切换条（Agent 配置页用） ==================== */
+.inner-tabs {
+    display: flex;
+    gap: 4px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 16px;
+}
+.inner-tab {
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 8px 14px;
+    font-size: 13px;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: var(--transition);
+    font-family: inherit;
+    margin-bottom: -1px;
+}
+.inner-tab:hover {
+    color: var(--text);
+    background: var(--bg-hover);
+}
+.inner-tab.active {
+    color: var(--primary-light);
+    border-bottom-color: var(--primary-light);
+    font-weight: 600;
+}
+.inner-tab-panel {
+    display: none;
+}
+.inner-tab-panel.active {
+    display: block;
+}
+
+/* MCP 状态卡片 */
+.mcp-server-card {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 12px 14px;
+    margin-bottom: 10px;
+}
+.mcp-server-card.mcp-status-success { border-left-color: var(--success); }
+.mcp-server-card.mcp-status-danger  { border-left-color: var(--danger, #ea4a5a); }
+.mcp-server-card.mcp-status-warning { border-left-color: var(--warning, #f59e0b); }
+.mcp-server-card.mcp-status-muted   { border-left-color: var(--text-muted); opacity: 0.75; }
+.mcp-server-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 6px;
+}
+.mcp-server-name {
+    font-weight: 600;
+    font-size: 14px;
+}
+.mcp-server-status {
+    font-size: 12px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-weight: 500;
+}
+.mcp-badge-success { background: rgba(74,222,128,.15); color: var(--success); }
+.mcp-badge-danger  { background: rgba(234,74,90,.15); color: var(--danger, #ea4a5a); }
+.mcp-badge-warning { background: rgba(245,158,11,.15); color: var(--warning, #f59e0b); }
+.mcp-badge-muted   { background: rgba(156,163,175,.15); color: var(--text-muted); }
+.mcp-server-desc {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+    line-height: 1.4;
+}
+.mcp-error {
+    font-size: 12px;
+    color: var(--danger, #ea4a5a);
+    background: rgba(234,74,90,.08);
+    padding: 6px 8px;
+    border-radius: 4px;
+    margin-bottom: 8px;
+    font-family: monospace;
+}
+.mcp-tools {
+    margin-top: 8px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+}
+.mcp-tools-label {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-right: 4px;
+}
+.mcp-tools-empty {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-style: italic;
+}
+.mcp-tool-tag {
+    font-size: 11px;
+    padding: 2px 8px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-family: monospace;
+}
+
 .settings-card-title {
     font-size: 14px;
     font-weight: 600;

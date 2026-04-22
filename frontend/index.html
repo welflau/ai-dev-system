@@ -121,7 +121,7 @@
                                 <span class="nav-item-icon">🌍</span> 环境管理
                             </a>
                             <a class="nav-item nav-sub-item" data-tab="settings-agents" onclick="switchTab('settings-agents')">
-                                <span class="nav-item-icon">🤖</span> Agent 配置
+                                <span class="nav-item-icon">🤖</span> Agent / 扩展
                             </a>
                             <a class="nav-item nav-sub-item" data-tab="settings-knowledge" onclick="switchTab('settings-knowledge')">
                                 <span class="nav-item-icon">📚</span> 知识库
@@ -658,37 +658,84 @@
                         </div>
                     </div>
 
-                    <!-- Tab: 设置 - Agent 配置 -->
+                    <!-- Tab: 设置 - Agent / 扩展（Agent / MCP / Skills 三合一） -->
                     <div id="tab-settings-agents" class="tab-content">
                         <div class="settings-page">
                             <div class="settings-page-header">
-                                <h2>🤖 Agent 配置</h2>
+                                <h2>🤖 Agent / 扩展</h2>
                             </div>
-                            <div class="settings-card">
-                                <p class="settings-description">项目中使用的 AI Agent 列表，点击查看提示词配置。</p>
-                                <div class="agent-list" id="agentListSettings">
-                                    <div style="text-align:center; padding:20px; color:var(--text-muted); font-size:13px;">加载中...</div>
+
+                            <!-- 内部 Tab 切换条 -->
+                            <div class="inner-tabs" role="tablist">
+                                <button class="inner-tab active" data-inner-tab="agents" onclick="switchAgentConfigTab('agents')">
+                                    🤖 Agent
+                                </button>
+                                <button class="inner-tab" data-inner-tab="mcp" onclick="switchAgentConfigTab('mcp')">
+                                    🔌 MCP 扩展
+                                </button>
+                                <button class="inner-tab" data-inner-tab="skills" onclick="switchAgentConfigTab('skills')">
+                                    🎓 Skills
+                                </button>
+                            </div>
+
+                            <!-- 面板：Agent 列表 -->
+                            <div class="inner-tab-panel active" id="inner-panel-agents">
+                                <div class="settings-card">
+                                    <p class="settings-description">项目中使用的 AI Agent 列表，点击查看提示词配置。</p>
+                                    <div class="agent-list" id="agentListSettings">
+                                        <div style="text-align:center; padding:20px; color:var(--text-muted); font-size:13px;">加载中...</div>
+                                    </div>
+                                </div>
+
+                                <!-- Tool Use 开关 -->
+                                <div class="settings-card" style="margin-top:16px;">
+                                    <h3 class="settings-card-title">🔧 Agent 技能系统（Tool Use）</h3>
+                                    <p class="settings-description" style="margin:8px 0 14px;">
+                                        开启后，DevAgent 将进入 Agentic 模式：LLM 通过调用
+                                        <code>read_file</code>、<code>write_file</code>、<code>list_files</code>、<code>run_command</code>
+                                        等工具迭代完成开发任务，代码质量更高但耗时更长。
+                                    </p>
+                                    <div style="display:flex; align-items:center; gap:12px;">
+                                        <label class="toggle-switch" title="需要 LLM 支持 function calling">
+                                            <input type="checkbox" id="agentToolsToggle" onchange="toggleAgentTools(this.checked)">
+                                            <span class="toggle-slider"></span>
+                                        </label>
+                                        <span id="agentToolsLabel" style="font-size:13px; color:var(--text-muted);">已关闭（One-shot 模式）</span>
+                                    </div>
+                                    <p style="margin-top:10px; font-size:12px; color:var(--text-muted);">
+                                        ⚠️ 需要后端设置环境变量 <code>ENABLE_AGENT_TOOLS=true</code> 方可生效，此开关仅作状态展示。
+                                    </p>
                                 </div>
                             </div>
 
-                            <!-- Tool Use 开关 -->
-                            <div class="settings-card" style="margin-top:16px;">
-                                <h3 class="settings-card-title">🔧 Agent 技能系统（Tool Use）</h3>
-                                <p class="settings-description" style="margin:8px 0 14px;">
-                                    开启后，DevAgent 将进入 Agentic 模式：LLM 通过调用
-                                    <code>read_file</code>、<code>write_file</code>、<code>list_files</code>、<code>run_command</code>
-                                    等工具迭代完成开发任务，代码质量更高但耗时更长。
-                                </p>
-                                <div style="display:flex; align-items:center; gap:12px;">
-                                    <label class="toggle-switch" title="需要 LLM 支持 function calling">
-                                        <input type="checkbox" id="agentToolsToggle" onchange="toggleAgentTools(this.checked)">
-                                        <span class="toggle-slider"></span>
-                                    </label>
-                                    <span id="agentToolsLabel" style="font-size:13px; color:var(--text-muted);">已关闭（One-shot 模式）</span>
+                            <!-- 面板：MCP 扩展 -->
+                            <div class="inner-tab-panel" id="inner-panel-mcp">
+                                <div class="settings-card">
+                                    <p class="settings-description" style="margin-bottom:14px;">
+                                        外部 MCP 服务器（Model Context Protocol）给 AI 助手提供额外工具能力（文件系统、网页抓取、Git 等）。
+                                        当前为只读状态视图；启用/禁用需改 <code>backend/mcp_servers.json</code> 后重启服务或调 <code>POST /api/sop/reload</code>。
+                                    </p>
+                                    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
+                                        <h3 class="settings-card-title" style="margin:0;">已配置的 MCP Server</h3>
+                                        <button class="btn btn-sm btn-ghost" onclick="loadMCPStatus()">🔄 刷新</button>
+                                    </div>
+                                    <div id="mcpServerList"><div class="empty-state-sm">加载中...</div></div>
                                 </div>
-                                <p style="margin-top:10px; font-size:12px; color:var(--text-muted);">
-                                    ⚠️ 需要后端设置环境变量 <code>ENABLE_AGENT_TOOLS=true</code> 方可生效，此开关仅作状态展示。
-                                </p>
+                            </div>
+
+                            <!-- 面板：Skills -->
+                            <div class="inner-tab-panel" id="inner-panel-skills">
+                                <div class="settings-card">
+                                    <p class="settings-description" style="margin-bottom:14px;">
+                                        Skill 包是注入到 Agent system prompt 的专业领域知识（React、FastAPI、Git 工作流等）。
+                                        配置在 <code>backend/skills/skills.json</code>，Prompt 正文在 <code>backend/skills/packs/</code> 下。
+                                    </p>
+                                    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
+                                        <h3 class="settings-card-title" style="margin:0;">已注册的 Skill</h3>
+                                        <button class="btn btn-sm btn-ghost" onclick="loadSkillsList()">🔄 刷新</button>
+                                    </div>
+                                    <div id="skillsList"><div class="empty-state-sm">加载中...</div></div>
+                                </div>
                             </div>
                         </div>
                     </div>

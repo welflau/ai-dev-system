@@ -556,8 +556,131 @@ function switchTab(tab) {
     if (tab === 'settings-repo') loadSettingsRepo();
     if (tab === 'settings-sop') loadSOPFlow();
     if (tab === 'settings-envs') loadEnvironments();
-    if (tab === 'settings-agents') { loadAgentList(); loadAgentToolsStatus(); }
+    if (tab === 'settings-agents') {
+        loadAgentList();
+        loadAgentToolsStatus();
+        loadMCPStatus();
+        loadSkillsList();
+    }
     if (tab === 'settings-knowledge') loadKnowledgeDocs();
+}
+
+// ==================== Agent 配置页内部 Tab 切换 ====================
+
+/** 切换 Agent 配置页内部 Tab（Agent / MCP / Skills） */
+function switchAgentConfigTab(inner) {
+    document.querySelectorAll('.inner-tab').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.innerTab === inner);
+    });
+    document.querySelectorAll('.inner-tab-panel').forEach(panel => {
+        panel.classList.toggle('active', panel.id === `inner-panel-${inner}`);
+    });
+    // 切换时懒加载一次（数据可能已在 switchTab 里加载过，这里做兜底）
+    if (inner === 'mcp') loadMCPStatus();
+    if (inner === 'skills') loadSkillsList();
+}
+
+// ==================== MCP 扩展 ====================
+
+async function loadMCPStatus() {
+    const container = document.getElementById('mcpServerList');
+    if (!container) return;
+    container.innerHTML = '<div class="empty-state-sm">加载中...</div>';
+    try {
+        // /api/mcp/status 是全局路由（不带 project_id 前缀）
+        const resp = await fetch('/api/mcp/status');
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        const servers = data.servers || {};
+        const names = Object.keys(servers);
+        if (names.length === 0) {
+            container.innerHTML = '<div class="empty-state-sm">暂无 MCP server 配置（编辑 backend/mcp_servers.json 后重启服务）</div>';
+            return;
+        }
+
+        const statusClass = (status) => ({
+            running: 'success', disabled: 'muted', not_started: 'warning', error: 'danger', stopped: 'muted',
+        }[status] || 'muted');
+        const statusLabel = (status, enabled) => ({
+            running: '✅ 运行中', disabled: '⚪ 未启用', not_started: '⚠️ 未启动',
+            error: '❌ 启动失败', stopped: '⏹️ 已停止',
+        }[status] || status);
+
+        container.innerHTML = names.map(name => {
+            const s = servers[name];
+            const tools = s.tools || [];
+            const toolsHtml = tools.length
+                ? `<div class="mcp-tools"><div class="mcp-tools-label">暴露工具 (${tools.length})</div>`
+                  + tools.map(t => `<code class="mcp-tool-tag">${escapeHtml(t)}</code>`).join('')
+                  + '</div>'
+                : '<div class="mcp-tools-empty">(无工具 / 未连接)</div>';
+            const errorHtml = s.error ? `<div class="mcp-error">⚠️ ${escapeHtml(s.error)}</div>` : '';
+            return `
+            <div class="mcp-server-card mcp-status-${statusClass(s.status)}">
+                <div class="mcp-server-header">
+                    <span class="mcp-server-name">🔌 ${escapeHtml(name)}</span>
+                    <span class="mcp-server-status mcp-badge-${statusClass(s.status)}">${statusLabel(s.status, s.enabled)}</span>
+                </div>
+                <div class="mcp-server-desc">${escapeHtml(s.description || '(无描述)')}</div>
+                ${errorHtml}
+                ${toolsHtml}
+            </div>`;
+        }).join('');
+    } catch (e) {
+        container.innerHTML = `<div class="empty-state-sm">加载失败: ${escapeHtml(e.message)}</div>`;
+    }
+}
+
+// ==================== Skills 列表（Agent 配置页 → Skills Tab） ====================
+
+async function loadSkillsList() {
+    const container = document.getElementById('skillsList');
+    if (!container) return;
+    container.innerHTML = '<div class="empty-state-sm">加载中...</div>';
+    try {
+        const resp = await fetch('/api/skills');
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        const skills = data.skills || [];
+        if (skills.length === 0) {
+            container.innerHTML = '<div class="empty-state-sm">暂无 Skill（检查 backend/skills/skills.json）</div>';
+            return;
+        }
+
+        const priorityLabel = { high: '高', medium: '中', low: '低' };
+        const priorityClass = { high: 'danger', medium: 'warning', low: 'muted' };
+
+        container.innerHTML = skills.map(sk => {
+            const ok = sk.enabled && sk.prompt_exists;
+            const statusClass = ok ? 'success' : (sk.enabled ? 'danger' : 'muted');
+            const statusLabel = !sk.enabled
+                ? '⚪ 未启用'
+                : (sk.prompt_exists ? '✅ 已启用' : '❌ Prompt 缺失');
+
+            const injectChips = (sk.inject_to || []).length
+                ? sk.inject_to.map(a => `<code class="mcp-tool-tag">${escapeHtml(a)}</code>`).join('')
+                : '<span class="mcp-tools-empty">(未挂到任何 Agent)</span>';
+
+            const pClass = priorityClass[sk.priority] || 'muted';
+            const pLabel = priorityLabel[sk.priority] || sk.priority;
+
+            return `
+            <div class="mcp-server-card mcp-status-${statusClass}">
+                <div class="mcp-server-header">
+                    <span class="mcp-server-name">🎓 ${escapeHtml(sk.name)} <span style="color:var(--text-muted); font-weight:400; font-size:12px;">(${escapeHtml(sk.id)})</span></span>
+                    <span class="mcp-server-status mcp-badge-${statusClass}">${statusLabel}</span>
+                </div>
+                <div class="mcp-server-desc">${escapeHtml(sk.description || '(无描述)')}</div>
+                <div class="mcp-tools">
+                    <div class="mcp-tools-label">注入到</div>
+                    ${injectChips}
+                    <span class="mcp-server-status mcp-badge-${pClass}" style="margin-left:auto;">优先级：${pLabel}</span>
+                </div>
+            </div>`;
+        }).join('');
+    } catch (e) {
+        container.innerHTML = `<div class="empty-state-sm">加载失败: ${escapeHtml(e.message)}</div>`;
+    }
 }
 
 // ==================== 工单子菜单 ====================
