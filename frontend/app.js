@@ -553,6 +553,7 @@ function switchTab(tab) {
     if (tab === 'logs') loadLogs();
     if (tab === 'bugs') loadBugs();
     if (tab === 'settings-general') loadSettingsGeneral();
+    if (tab === 'settings-traits') loadProjectTraitsEditor();
     if (tab === 'settings-repo') loadSettingsRepo();
     if (tab === 'settings-sop') loadSOPFlow();
     if (tab === 'settings-envs') loadEnvironments();
@@ -803,6 +804,215 @@ async function runTraitMatch() {
         }).join('');
     } catch (e) {
         resultDiv.innerHTML = `<div class="empty-state-sm">失败: ${escapeHtml(e.message)}</div>`;
+    }
+}
+
+// ==================== 项目特征编辑器（v0.17 Phase E，项目级 settings-traits Tab） ====================
+
+// 本地工作副本（未保存的 pending 状态）
+let _projTraitsDraft = [];
+let _projPresetDraft = null;
+let _projTaxonomyCache = null;   // {dim: [values]}，缓存避免重复请求
+let _projPresetsCache = null;    // [{preset_id, label, traits}, ...]
+
+async function loadProjectTraitsEditor() {
+    if (!currentProjectId) return;
+    const listDiv = document.getElementById('projectTraitsList');
+    const previewDiv = document.getElementById('projectTraitsPreview');
+    if (listDiv) listDiv.innerHTML = '<div class="empty-state-sm">加载中...</div>';
+    if (previewDiv) previewDiv.innerHTML = '<div class="empty-state-sm">加载中...</div>';
+
+    // 1. 拉 taxonomy + presets（缓存）
+    if (!_projTaxonomyCache) {
+        try {
+            const tax = await (await fetch('/api/traits/taxonomy')).json();
+            _projTaxonomyCache = {};
+            for (const d of (tax.dimensions || [])) {
+                _projTaxonomyCache[d.dim] = d.values || [];
+            }
+        } catch (e) {
+            _projTaxonomyCache = {};
+            console.warn('taxonomy load failed', e);
+        }
+    }
+    if (!_projPresetsCache) {
+        try {
+            const pre = await (await fetch('/api/traits/presets')).json();
+            _projPresetsCache = pre.presets || [];
+        } catch (e) {
+            _projPresetsCache = [];
+        }
+    }
+
+    // 2. 拉当前项目 traits
+    try {
+        const cur = await api(`/projects/${currentProjectId}/traits`);
+        _projTraitsDraft = [...(cur.traits || [])];
+        _projPresetDraft = cur.preset_id || null;
+    } catch (e) {
+        _projTraitsDraft = [];
+        _projPresetDraft = null;
+    }
+
+    // 3. 填 preset select
+    const presetSel = document.getElementById('traitsPresetSelect');
+    if (presetSel) {
+        presetSel.innerHTML = '<option value="">（无，自由组合）</option>' +
+            _projPresetsCache.map(p => `<option value="${escapeHtml(p.preset_id)}" ${p.preset_id === _projPresetDraft ? 'selected' : ''}>${escapeHtml(p.label)}</option>`).join('');
+    }
+
+    // 4. 填维度下拉
+    const dimSel = document.getElementById('traitAddDim');
+    if (dimSel) {
+        dimSel.innerHTML = '<option value="">维度</option>' +
+            Object.keys(_projTaxonomyCache).map(d => `<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('');
+        dimSel.onchange = () => {
+            const valSel = document.getElementById('traitAddVal');
+            const values = _projTaxonomyCache[dimSel.value] || [];
+            valSel.innerHTML = '<option value="">值</option>' +
+                values.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
+        };
+    }
+
+    renderProjectTraitsList();
+    refreshProjectTraitsPreview();
+}
+
+function renderProjectTraitsList() {
+    const listDiv = document.getElementById('projectTraitsList');
+    if (!listDiv) return;
+    if (_projTraitsDraft.length === 0) {
+        listDiv.innerHTML = '<span style="color:var(--text-muted); font-size:12px;">（无 —— 添加至少 platform:* 和 category:* 让 SOP/Skill 能精准匹配）</span>';
+        return;
+    }
+    const validSet = new Set();
+    for (const [dim, vals] of Object.entries(_projTaxonomyCache || {})) {
+        for (const v of vals) validSet.add(`${dim}:${v}`);
+    }
+    listDiv.innerHTML = _projTraitsDraft.map((t, i) => {
+        const isUnknown = validSet.size > 0 && !validSet.has(t);
+        const style = isUnknown
+            ? 'background:rgba(245,158,11,0.15); border-color:rgba(245,158,11,0.5);'
+            : 'background:rgba(163,113,247,0.1); border-color:rgba(163,113,247,0.4);';
+        const warn = isUnknown ? ' title="不在 taxonomy 里的自定义 trait"' : '';
+        return `<code class="mcp-tool-tag" style="${style}"${warn}>
+            ${isUnknown ? '⚠ ' : ''}${escapeHtml(t)}
+            <a style="margin-left:4px; cursor:pointer; color:var(--text-muted);" onclick="removeProjectTrait(${i})">✕</a>
+        </code>`;
+    }).join('');
+
+    // unknowns 提示
+    const unknowns = _projTraitsDraft.filter(t => validSet.size > 0 && !validSet.has(t));
+    const span = document.getElementById('projectTraitsUnknowns');
+    if (span) {
+        span.textContent = unknowns.length ? `⚠ 含 ${unknowns.length} 个非 taxonomy trait，未来可能不被识别` : '';
+    }
+}
+
+function addProjectTrait() {
+    const dimSel = document.getElementById('traitAddDim');
+    const valSel = document.getElementById('traitAddVal');
+    if (!dimSel || !valSel) return;
+    const dim = dimSel.value;
+    const val = valSel.value;
+    if (!dim || !val) {
+        showToast('请选维度和值', 'warning');
+        return;
+    }
+    const trait = `${dim}:${val}`;
+    if (_projTraitsDraft.includes(trait)) {
+        showToast('已有该 trait', 'warning');
+        return;
+    }
+    _projTraitsDraft.push(trait);
+    renderProjectTraitsList();
+    refreshProjectTraitsPreview();
+    // 重置值（维度保留便于连续添加）
+    valSel.value = '';
+}
+
+function removeProjectTrait(index) {
+    _projTraitsDraft.splice(index, 1);
+    renderProjectTraitsList();
+    refreshProjectTraitsPreview();
+}
+
+function applyPresetToTraits(presetId) {
+    if (!presetId) {
+        _projPresetDraft = null;
+        return;
+    }
+    const p = (_projPresetsCache || []).find(x => x.preset_id === presetId);
+    if (!p) return;
+    // 合并：preset 的 traits 加进去（去重）
+    for (const t of (p.traits || [])) {
+        if (!_projTraitsDraft.includes(t)) _projTraitsDraft.push(t);
+    }
+    _projPresetDraft = presetId;
+    renderProjectTraitsList();
+    refreshProjectTraitsPreview();
+    showToast(`已应用 preset: ${p.label}`, 'info');
+}
+
+async function refreshProjectTraitsPreview() {
+    const div = document.getElementById('projectTraitsPreview');
+    if (!div) return;
+    if (_projTraitsDraft.length === 0) {
+        div.innerHTML = '<div class="empty-state-sm">无 traits → 走默认 web SOP (5 阶段)</div>';
+        return;
+    }
+    div.innerHTML = '<div class="empty-state-sm">组装中...</div>';
+    try {
+        const resp = await fetch('/api/projects/preview-assembly', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ traits: _projTraitsDraft, ticket_type: 'feature' }),
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        const cfg = data.effective_config || {};
+        const stages = (cfg.sop && cfg.sop.stages) || [];
+        const skillsFlat = [];
+        for (const [ag, sks] of Object.entries(cfg.skills_by_agent || {})) {
+            for (const s of (sks || [])) skillsFlat.push(`${ag}→${s.id}`);
+        }
+        const warnings = data.warnings || [];
+        const suggestions = data.suggestions || [];
+
+        div.innerHTML = `
+            <div style="margin-bottom:8px;"><strong>SOP (${stages.length} 阶段)</strong>：${stages.map(s => escapeHtml(s.name || s.id)).join(' → ')}</div>
+            ${(cfg.sop && cfg.sop.fragments_activated && cfg.sop.fragments_activated.length)
+                ? `<div style="font-size:12px; color:var(--text-muted); margin-bottom:6px;">激活 fragments: ${cfg.sop.fragments_activated.map(f => escapeHtml(f)).join(', ')}</div>` : ''}
+            ${skillsFlat.length
+                ? `<div><strong>Skill 注入</strong>：${skillsFlat.map(s => `<code style="font-size:10px;background:var(--bg-elevated);padding:1px 5px;border-radius:3px;margin-right:3px;">${escapeHtml(s)}</code>`).join('')}</div>`
+                : '<div style="color:var(--text-muted); font-size:12px;">Skill：无匹配</div>'}
+            ${warnings.length
+                ? `<div style="margin-top:6px; color:var(--warning, #f59e0b); font-size:12px;">⚠️ ${warnings.map(w => escapeHtml(w)).join('; ')}</div>` : ''}
+            ${suggestions.length
+                ? `<div style="margin-top:4px; color:var(--text-muted); font-size:11px;">💡 ${suggestions.map(s => escapeHtml(s.hint)).join(' / ')}</div>` : ''}
+        `;
+    } catch (e) {
+        div.innerHTML = `<div class="empty-state-sm">预览失败: ${escapeHtml(e.message)}</div>`;
+    }
+}
+
+async function saveProjectTraits() {
+    if (!currentProjectId) return;
+    try {
+        const result = await api(`/projects/${currentProjectId}/traits`, {
+            method: 'PATCH',
+            body: {
+                traits: _projTraitsDraft,
+                preset_id: _projPresetDraft || null,
+            },
+        });
+        const unknowns = result.unknowns || [];
+        const msg = unknowns.length
+            ? `已保存 ${(result.traits || []).length} 个 traits（含 ${unknowns.length} 个非 taxonomy，SOP 会忽略它们）`
+            : `已保存 ${(result.traits || []).length} 个 traits，orchestrator 规则已刷新`;
+        showToast(msg, 'success');
+    } catch (e) {
+        showToast(`保存失败: ${e.message}`, 'error');
     }
 }
 

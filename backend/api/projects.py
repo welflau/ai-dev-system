@@ -4,7 +4,8 @@ AI 自动开发系统 - 项目 API
 import json
 import logging
 from fastapi import APIRouter, HTTPException, UploadFile, File
-from typing import List
+from pydantic import BaseModel, Field
+from typing import List, Optional, Dict, Any
 from database import db
 from models import ProjectCreate, ProjectUpdate
 from utils import generate_id, now_iso
@@ -800,10 +801,148 @@ async def detect_local_project(body: dict):
     return result
 
 
-# ==================== v0.17 Preview Assembly API ====================
+# ==================== v0.17 Phase E：项目特征编辑 API ====================
 
-from pydantic import BaseModel, Field
-from typing import Optional, Dict, Any
+class UpdateTraitsRequest(BaseModel):
+    traits: List[str] = Field(default_factory=list, description="新的 traits 列表（完整覆盖）")
+    preset_id: Optional[str] = Field(default=None, description="preset 名，可选")
+    traits_confidence: Optional[Dict[str, Any]] = Field(default=None, description="每个 trait 的置信度（可选，不提供则按 source=manual_edit 补）")
+
+
+def _load_valid_traits() -> set:
+    """从 trait_taxonomy.yaml 加载所有合法的 trait 值"""
+    try:
+        import os as _os
+        import yaml
+        tax_path = _os.path.join(_os.path.dirname(__file__), "..", "skills", "rules", "trait_taxonomy.yaml")
+        tax_path = _os.path.abspath(tax_path)
+        if not _os.path.exists(tax_path):
+            return set()
+        with open(tax_path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        valid = set()
+        for dim_name, dim in data.items():
+            if not isinstance(dim, dict) or "values" not in dim:
+                continue
+            for v in dim["values"]:
+                valid.add(f"{dim_name}:{v}")
+        return valid
+    except Exception as e:
+        logger.warning("加载 trait_taxonomy 失败: %s", e)
+        return set()
+
+
+def _normalize_trait(t: str) -> str:
+    """容错：`multiplayer` → `multiplayer:true`，`genre:fps` 保持原样（由上层校验）"""
+    t = t.strip()
+    if ":" not in t:
+        # 无 value 的 trait，猜测是 features 类型，补 :true
+        return f"{t}:true"
+    return t
+
+
+@router.patch("/{project_id}/traits")
+async def update_project_traits(project_id: str, req: UpdateTraitsRequest):
+    """更新项目 traits + preset_id。
+
+    v0.17 Phase E 的核心编辑端点。
+    - 合法性校验：不在 taxonomy 里的 trait → warning 但允许（允许未来维度扩展的 heads-up）
+    - 自动 normalize：`multiplayer` → `multiplayer:true`
+    - 写库后自动失效 orchestrator 的 rules cache
+    """
+    project = await db.fetch_one("SELECT id, traits FROM projects WHERE id = ?", (project_id,))
+    if not project:
+        raise HTTPException(404, "项目不存在")
+
+    # normalize
+    normalized = [_normalize_trait(t) for t in req.traits if t.strip()]
+    normalized = list(dict.fromkeys(normalized))  # 去重保序
+
+    # 校验合法性
+    valid_set = _load_valid_traits()
+    unknowns = [t for t in normalized if valid_set and t not in valid_set]
+
+    # traits_confidence：用户提供 → 用户的；否则补 source=manual_edit
+    if req.traits_confidence:
+        new_conf = dict(req.traits_confidence)
+    else:
+        import json as _json
+        prev_conf = {}
+        try:
+            prev_raw = await db.fetch_one("SELECT traits_confidence FROM projects WHERE id = ?", (project_id,))
+            if prev_raw and prev_raw.get("traits_confidence"):
+                prev_conf = _json.loads(prev_raw["traits_confidence"])
+        except Exception:
+            pass
+
+        new_conf = {}
+        for t in normalized:
+            if t in prev_conf:
+                new_conf[t] = prev_conf[t]   # 保留原来的 source/evidence
+            else:
+                new_conf[t] = {
+                    "score": 1.0,
+                    "source": "manual_edit",
+                    "evidence": "用户在项目特征页手动添加",
+                }
+
+    import json as _json
+    await db.update(
+        "projects",
+        {
+            "traits": _json.dumps(normalized, ensure_ascii=False),
+            "traits_confidence": _json.dumps(new_conf, ensure_ascii=False),
+            "preset_id": req.preset_id,
+            "updated_at": now_iso(),
+        },
+        "id = ?",
+        (project_id,),
+    )
+
+    # 关键：失效 orchestrator 的 rules cache，下次工单流转会重算 SOP
+    try:
+        from orchestrator import orchestrator
+        orchestrator.invalidate_project_rules(project_id)
+    except Exception as e:
+        logger.warning("invalidate orchestrator rules 失败: %s", e)
+
+    return {
+        "project_id": project_id,
+        "traits": normalized,
+        "preset_id": req.preset_id,
+        "unknowns": unknowns,  # 不在 taxonomy 里的 trait（警告，不阻塞）
+        "traits_confidence": new_conf,
+    }
+
+
+@router.get("/{project_id}/traits")
+async def get_project_traits(project_id: str):
+    """获取项目当前 traits + preset_id + confidence"""
+    row = await db.fetch_one(
+        "SELECT id, name, traits, traits_confidence, preset_id FROM projects WHERE id = ?",
+        (project_id,),
+    )
+    if not row:
+        raise HTTPException(404, "项目不存在")
+    import json as _json
+    try:
+        traits = _json.loads(row.get("traits") or "[]") or []
+    except Exception:
+        traits = []
+    try:
+        traits_confidence = _json.loads(row.get("traits_confidence") or "{}") or {}
+    except Exception:
+        traits_confidence = {}
+    return {
+        "project_id": row["id"],
+        "project_name": row["name"],
+        "traits": traits,
+        "preset_id": row.get("preset_id"),
+        "traits_confidence": traits_confidence,
+    }
+
+
+# ==================== v0.17 Preview Assembly API ====================
 
 
 class PreviewAssemblyRequest(BaseModel):
