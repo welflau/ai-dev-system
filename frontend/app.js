@@ -1756,6 +1756,9 @@ function showImportProjectModal() {
     document.getElementById('importGitRemote').value = '';
     document.getElementById('importLocalPath').value = '';
     document.getElementById('importRepoPath').value = '';
+    // v0.17 Phase D：重置探测状态
+    _detectedTraits = null;
+    _detectedPresetId = null;
 
     // 默认选中远程仓库方式
     document.querySelector('input[name="importType"][value="remote"]').checked = true;
@@ -1804,6 +1807,10 @@ function handleImportTypeChange() {
     }
 }
 
+/** v0.17 Phase D：检测本地项目信息 + traits 候选 */
+let _detectedTraits = null;   // 最近一次探测到的 traits（供 importProject 提交时用）
+let _detectedPresetId = null;
+
 async function detectLocalProjectInfo() {
     const localPath = document.getElementById('importLocalPath').value.trim();
     if (!localPath) {
@@ -1831,16 +1838,62 @@ async function detectLocalProjectInfo() {
             document.getElementById('importTechStack').value = data.tech_stack;
         }
 
-        // 自动填充本地仓库路径（使用选中的路径）
+        // 自动填充本地仓库路径
         document.getElementById('importRepoPath').value = localPath;
 
-        // 显示检测信息
+        // 保存 traits 数据（用户点"导入"时提交）
+        _detectedTraits = (data.detected_traits || []).map(t => t.trait);
+        _detectedPresetId = data.suggested_preset || null;
+
+        // 渲染 detectInfo 内容（含 traits 证据 + preset 建议）
         const detectInfoContent = document.getElementById('detectInfoContent');
-        detectInfoContent.textContent = JSON.stringify(data, null, 2);
+        const traitsArr = data.detected_traits || [];
+        const warningsArr = data.trait_warnings || [];
+
+        let html = `
+            <div style="margin:6px 0; font-size:13px;">
+                <strong>基础信息：</strong>
+                ${data.project_name ? `项目名=${escapeHtml(data.project_name)}` : ''}
+                ${data.tech_stack ? `· 技术栈=${escapeHtml(data.tech_stack)}` : ''}
+                ${data.is_git_repo ? '· Git 仓库 ✓' : ''}
+            </div>
+        `;
+
+        if (traitsArr.length) {
+            html += `
+                <div style="margin-top:10px; padding-top:8px; border-top:1px solid var(--border);">
+                    <div style="font-weight:600; color:var(--primary-light); margin-bottom:6px;">
+                        🏷 探测到的 Traits（${traitsArr.length}）
+                        ${data.suggested_preset ? `<span style="font-weight:400; color:var(--text-muted); font-size:11px; margin-left:8px;">推荐 preset: <code>${escapeHtml(data.suggested_preset)}</code> (匹配度 ${data.preset_match_score})</span>` : ''}
+                    </div>
+                    ${traitsArr.map(t => `
+                        <div style="display:flex; align-items:flex-start; margin-bottom:4px; gap:8px; font-size:12px;">
+                            <code class="mcp-tool-tag" style="background:rgba(163,113,247,0.1); border-color:rgba(163,113,247,0.4); min-width:max-content;">${escapeHtml(t.trait)}</code>
+                            <span style="color:var(--text-muted); font-size:11px;">conf ${t.confidence.toFixed(2)}</span>
+                            <span style="color:var(--text-muted); font-size:11px;">— ${escapeHtml(t.evidence)}</span>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        } else {
+            html += `<div style="margin-top:8px; color:var(--text-muted); font-size:12px;">（未探测到 traits，导入后请进入项目设置手动补充）</div>`;
+        }
+
+        if (warningsArr.length) {
+            html += `
+                <div style="margin-top:10px; color:var(--warning, #f59e0b); font-size:11px;">
+                    ⚠️ ${warningsArr.map(w => escapeHtml(w)).join('；')}
+                </div>
+            `;
+        }
+
+        detectInfoContent.innerHTML = html;
         document.getElementById('detectInfo').style.display = 'block';
 
         showToast('项目信息检测成功', 'success');
     } catch (e) {
+        _detectedTraits = null;
+        _detectedPresetId = null;
         showToast(`检测失败: ${e.message}`, 'error');
     }
 }
@@ -1886,6 +1939,13 @@ async function importProject() {
         const body = { name, description, tech_stack, git_remote_url };
         if (local_repo_path) {
             body.local_repo_path = local_repo_path;
+        }
+        // v0.17 Phase D：带上探测到的 traits / preset（若用户没跑 detect，这些为 null）
+        if (_detectedTraits && _detectedTraits.length) {
+            body.traits = _detectedTraits;
+        }
+        if (_detectedPresetId) {
+            body.preset_id = _detectedPresetId;
         }
 
         const data = await api('/projects', {

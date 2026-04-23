@@ -3,7 +3,7 @@ AI 自动开发系统 - 数据模型与枚举定义
 """
 from enum import Enum
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from datetime import datetime
 
 
@@ -258,6 +258,10 @@ class ProjectCreate(BaseModel):
     tech_stack: Optional[str] = None
     git_remote_url: str = Field(..., min_length=1, description="Git 远程仓库 URL（必填）")
     local_repo_path: Optional[str] = Field(None, description="本地仓库路径（可选，默认为 backend/projects/{project_id}/）")
+    # v0.17 Phase D：导入时带过来的 traits + preset
+    traits: Optional[List[str]] = Field(default=None, description="项目 traits（可选）")
+    preset_id: Optional[str] = Field(default=None, description="preset 名（可选）")
+    traits_confidence: Optional[Dict[str, Any]] = Field(default=None, description="trait 置信度（可选）")
 
 
 class ProjectUpdate(BaseModel):

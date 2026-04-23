@@ -133,6 +133,16 @@ async def create_project(req: ProjectCreate):
             except Exception as e:
                 logger.warning("首次推送失败（忽略）: %s", e)
 
+        # v0.17 Phase D：导入时带过来的 traits
+        traits_list = list(req.traits or [])
+        traits_conf = dict(req.traits_confidence or {})
+        if traits_list and not traits_conf:
+            # 用户从探测结果直接采纳 → 默认 source=file_detected
+            traits_conf = {
+                t: {"score": 0.9, "source": "file_detected", "evidence": "imported via detect-local"}
+                for t in traits_list
+            }
+
         data = {
             "id": project_id,
             "name": req.name,
@@ -142,6 +152,9 @@ async def create_project(req: ProjectCreate):
             "config": "{}",
             "git_repo_path": repo_path,
             "git_remote_url": req.git_remote_url or "",
+            "traits": json.dumps(traits_list, ensure_ascii=False),
+            "traits_confidence": json.dumps(traits_conf, ensure_ascii=False),
+            "preset_id": req.preset_id,
             "created_at": now,
             "updated_at": now,
         }
@@ -763,6 +776,26 @@ async def detect_local_project(body: dict):
 
         if tech_stack:
             result["tech_stack"] = ", ".join(tech_stack)
+
+    # v0.17 Phase D：用 ProjectTypeDetectorAction 探测 traits
+    try:
+        from actions.chat.detect_project_type import ProjectTypeDetectorAction
+        detector_result = await ProjectTypeDetectorAction().run({"repo_path": local_path})
+        if detector_result.success:
+            d = detector_result.data
+            result["detected_traits"] = [
+                {
+                    "trait": c["trait"],
+                    "confidence": c["confidence"],
+                    "evidence": c["evidence"],
+                }
+                for c in (d.get("candidates") or [])
+            ]
+            result["suggested_preset"] = d.get("suggested_preset")
+            result["preset_match_score"] = d.get("preset_match_score", 0)
+            result["trait_warnings"] = d.get("warnings") or []
+    except Exception as e:
+        logger.warning("trait 探测失败（忽略）: %s", e)
 
     return result
 
