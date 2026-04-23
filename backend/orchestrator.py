@@ -50,8 +50,13 @@ class TicketOrchestrator:
         self._sop_config = None
         self.transition_rules = self._load_transition_rules()
 
+        # v0.17 Phase C''：项目级 SOP rules 缓存
+        # key = (project_id, traits_tuple)
+        # value = dict of transition_rules
+        self._project_rules_cache: Dict = {}
+
     def _load_transition_rules(self) -> Dict:
-        """从 SOP YAML 加载状态转换规则"""
+        """从 SOP YAML 加载状态转换规则（默认 web 项目）"""
         try:
             from sop.loader import load_sop, sop_to_transition_rules
             self._sop_config = load_sop("default_sop")
@@ -101,7 +106,93 @@ class TicketOrchestrator:
     def reload_sop(self):
         """热重载 SOP 配置（供 API 调用）"""
         self.transition_rules = self._load_transition_rules()
+        # v0.17 清掉项目级缓存，下次 dispatch 时按最新 default + traits 重算
+        self._project_rules_cache.clear()
         return self._sop_config
+
+    # ==================== v0.17 Phase C''：项目级 SOP 规则 ====================
+
+    async def _get_rules_for_project(
+        self,
+        project_id: str,
+        traits_json: Optional[str] = None,
+    ) -> Dict:
+        """按项目 traits 派生 transition_rules。
+
+        无 traits（老 web 项目 / 未迁移）→ 用 default `self.transition_rules`。
+        有 traits → 调 compose_sop + sop_to_transition_rules，cache 一份。
+
+        cache key 是 (project_id, traits_tuple)；traits 变动自然 miss，
+        旧条目不会被读到（内存占用可忽略）。
+        """
+        if traits_json is None:
+            row = await db.fetch_one(
+                "SELECT traits FROM projects WHERE id = ?", (project_id,)
+            )
+            traits_json = row["traits"] if row else "[]"
+
+        try:
+            import json as _json
+            traits = _json.loads(traits_json) if traits_json else []
+            if not isinstance(traits, list):
+                traits = []
+        except Exception:
+            traits = []
+
+        # 空 traits → 回退到 default（向后兼容所有老项目）
+        if not traits:
+            return self.transition_rules
+
+        traits_tuple = tuple(sorted(traits))
+        cache_key = (project_id, traits_tuple)
+
+        if cache_key in self._project_rules_cache:
+            return self._project_rules_cache[cache_key]
+
+        try:
+            from sop.loader import compose_sop, sop_to_transition_rules
+            sop_config = compose_sop(traits=traits, ticket_type=None)
+            rules = sop_to_transition_rules(sop_config)
+            self._project_rules_cache[cache_key] = rules
+            logger.info(
+                "📋 项目 %s traits=%s → SOP %d 条规则",
+                project_id[:12], traits, len(rules),
+            )
+            return rules
+        except Exception as e:
+            logger.warning(
+                "为项目 %s compose SOP 失败，回退到 default: %s",
+                project_id[:12], e,
+            )
+            return self.transition_rules
+
+    def invalidate_project_rules(self, project_id: str):
+        """清除指定项目的 rules 缓存（当 traits 变动时调用）"""
+        to_remove = [k for k in self._project_rules_cache if k[0] == project_id]
+        for k in to_remove:
+            del self._project_rules_cache[k]
+        if to_remove:
+            logger.info("清除项目 %s 的 SOP 规则缓存（%d 条）", project_id[:12], len(to_remove))
+
+    async def _get_all_actionable_statuses(self) -> List[str]:
+        """轮询扫 ticket 用的 WHERE IN (...) 集合。
+
+        = default rules keys ∪ 所有活跃项目按其 traits compose 出来的 rules keys
+        （union，不重复）。
+        """
+        all_statuses = set(self.transition_rules.keys())
+
+        try:
+            projects = await db.fetch_all(
+                "SELECT id, traits FROM projects WHERE status = 'active'"
+            )
+            for p in projects:
+                rules = await self._get_rules_for_project(p["id"], p.get("traits"))
+                all_statuses.update(rules.keys())
+        except Exception as e:
+            logger.warning("汇总 actionable_statuses 异常（只用 default）: %s", e)
+
+        return list(all_statuses)
 
     def get_agent_status(self) -> Dict:
         """获取所有 Agent 的实时状态"""
@@ -177,8 +268,8 @@ class TicketOrchestrator:
 
     async def _poll_once(self):
         """单次轮询：扫描所有可流转状态的工单并处理"""
-        # 1. 找出所有状态在 transition_rules 中的工单（即有下一步可走的）
-        actionable_statuses = list(self.transition_rules.keys())
+        # 1. v0.17: 找出所有状态在**任一项目 SOP** 中的工单（考虑 traits 派生的额外状态）
+        actionable_statuses = await self._get_all_actionable_statuses()
 
         # 2. 也扫描"进行中"但可能是僵尸的工单（被打回后卡住的）
         in_progress_statuses = [
@@ -926,7 +1017,9 @@ class TicketOrchestrator:
                     return  # 依赖未完成，跳过
 
             current_status = ticket["status"]
-            rule = self.transition_rules.get(current_status)
+            # v0.17: 按项目 traits 派生 rules（无 traits → 回退 default，向后兼容）
+            project_rules = await self._get_rules_for_project(project_id)
+            rule = project_rules.get(current_status)
 
             if not rule:
                 # 终态或无规则，不处理
@@ -1107,8 +1200,10 @@ class TicketOrchestrator:
 
             # === 事件驱动：触发后续工单立即处理 ===
             updated = await db.fetch_one("SELECT status FROM tickets WHERE id = ?", (ticket_id,))
-            if updated and updated["status"] in self.transition_rules:
-                await self._publish_ticket_ready(project_id, ticket_id)
+            if updated:
+                project_rules = await self._get_rules_for_project(project_id)
+                if updated["status"] in project_rules:
+                    await self._publish_ticket_ready(project_id, ticket_id)
 
         except Exception as e:
             logger.error("❌ 工单处理异常 [%s]: %s", ticket_id[:12] if ticket_id else "?", e, exc_info=True)
@@ -1500,8 +1595,10 @@ class TicketOrchestrator:
         # 继续流转到下一个阶段
         await asyncio.sleep(0.5)
         updated_ticket = await db.fetch_one("SELECT * FROM tickets WHERE id = ?", (ticket_id,))
-        if updated_ticket and updated_ticket["status"] in self.transition_rules:
-            await self.process_ticket(project_id, ticket_id)
+        if updated_ticket:
+            project_rules = await self._get_rules_for_project(project_id)
+            if updated_ticket["status"] in project_rules:
+                await self.process_ticket(project_id, ticket_id)
 
     # ==================== Git 文件处理 ====================
 
