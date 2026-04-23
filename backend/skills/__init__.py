@@ -17,8 +17,12 @@ from contextvars import ContextVar
 _current_skills: ContextVar[str] = ContextVar("current_skills", default="")
 
 from skills.loader import SkillLoader
+from skills.preset_matcher import preset_matcher, PresetMatcher, PresetMatch
 
 # 单例：进程启动时加载一次 skills.json，之后全局共享
 skill_loader = SkillLoader()
 
-__all__ = ["skill_loader", "_current_skills", "SkillLoader"]
+__all__ = [
+    "skill_loader", "_current_skills", "SkillLoader",
+    "preset_matcher", "PresetMatcher", "PresetMatch",
+]

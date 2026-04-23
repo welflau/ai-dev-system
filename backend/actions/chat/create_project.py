@@ -54,6 +54,7 @@ class CreateProjectAction(ActionBase):
         }
 
     async def run(self, context: Dict[str, Any]) -> ActionResult:
+        import json as _json
         from git_manager import git_manager
 
         name = (context.get("name") or "").strip()
@@ -62,10 +63,29 @@ class CreateProjectAction(ActionBase):
         git_remote_url = (context.get("git_remote_url") or "").strip()
         local_repo_path = (context.get("local_repo_path") or "").strip()
 
+        # v0.17 traits 字段：
+        #   traits: List[str]，可空（向后兼容，但会打 warning）
+        #   preset_id: Optional[str]
+        #   traits_confidence: Dict，默认记用户来源
+        traits = context.get("traits") or []
+        if not isinstance(traits, list):
+            traits = []
+        traits = [str(t).strip() for t in traits if str(t).strip()]
+        preset_id = (context.get("preset_id") or "").strip() or None
+
+        # traits_confidence：如果是用户确认的（从 confirm_project 过来），全部 source=user_declared
+        traits_confidence = context.get("traits_confidence") or {
+            t: {"score": 1.0, "source": "user_declared" if preset_id is None else "preset",
+                "evidence": f"preset:{preset_id}" if preset_id else "user confirmed in chat"}
+            for t in traits
+        }
+
         if not name:
             return ActionResult(success=False, data={"type": "error", "message": "项目名称不能为空"})
         if not git_remote_url:
             return ActionResult(success=False, data={"type": "error", "message": "Git 远程仓库 URL 不能为空"})
+        if not traits:
+            logger.warning("创建项目 '%s' 时 traits 为空 — 后续 skill/SOP 匹配会退化为通用流程", name)
 
         try:
             project_id = generate_id("PRJ")
@@ -165,6 +185,9 @@ class CreateProjectAction(ActionBase):
                 "config": "{}",
                 "git_repo_path": repo_path,
                 "git_remote_url": git_remote_url,
+                "traits": _json.dumps(traits, ensure_ascii=False),
+                "traits_confidence": _json.dumps(traits_confidence, ensure_ascii=False),
+                "preset_id": preset_id,
                 "created_at": now,
                 "updated_at": now,
             }
@@ -185,6 +208,8 @@ class CreateProjectAction(ActionBase):
                     "description": description,
                     "tech_stack": tech_stack,
                     "git_remote_url": git_remote_url,
+                    "traits": traits,
+                    "preset_id": preset_id,
                     "push_success": push_success,
                     "message": f"项目「{name}」已创建成功" + ("，并已推送到远程仓库" if push_success else "（首次推送失败，请检查远程仓库权限）"),
                 },

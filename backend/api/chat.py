@@ -1547,6 +1547,9 @@ class ConfirmCreateProjectRequest(BaseModel):
     tech_stack: str = Field(default="")
     git_remote_url: str = Field(..., min_length=1)
     local_repo_path: str = Field(default="")
+    traits: List[str] = Field(default_factory=list)              # v0.17
+    preset_id: Optional[str] = Field(default=None)               # v0.17
+    traits_confidence: Dict[str, Any] = Field(default_factory=dict)  # v0.17
 
 
 @global_chat_router.post("/confirm-create-project")

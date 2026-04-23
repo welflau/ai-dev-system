@@ -13,6 +13,7 @@ feature flag: settings.CHAT_USE_AGENT 控制双轨
 """
 import json
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 from agents.base import BaseAgent, ReactMode
@@ -264,7 +265,10 @@ class ChatAssistantAgent(BaseAgent):
         """
         from llm_client import llm_client, set_llm_context, clear_llm_context
 
-        system_prompt = self._build_global_system_prompt(projects_brief)
+        # v0.17: 用 user_message 预计算 preset 推荐，注入到 system prompt
+        preset_suggestions = self._match_preset_suggestions(user_message)
+
+        system_prompt = self._build_global_system_prompt(projects_brief, preset_suggestions)
         messages = self._assemble_messages(history, user_message, images)
         tools = self._exposed_tool_schemas(scope="global")
 
@@ -300,23 +304,146 @@ class ChatAssistantAgent(BaseAgent):
 
     # ==================== 内部工具 ====================
 
+    # ==================== 对话历史压缩（借鉴 MagicAI §6.4）====================
+    # 参数默认值跟 MagicAI 一致，实测对主观任务效果好
+
+    HISTORY_KEEP_RECENT_N = 6         # 最近 N 条全文保留
+    HISTORY_MAX_RECENT_CHARS = 4000   # 最近 N 条每条上限
+    HISTORY_OLDER_CHARS = 800         # 更早的每条压缩后上限
+    HISTORY_MAX_TOTAL_CHARS = 8000    # 历史段总硬上限
+
     def _assemble_messages(
         self,
         history: Optional[List[Dict[str, str]]],
         user_message: str,
         images: Optional[List[str]],
     ) -> List[Dict[str, Any]]:
+        """组装消息 + 压缩对话历史。
+
+        策略（MagicAI 两级）：
+          最近 N 条：全文保留（每条最多 HISTORY_MAX_RECENT_CHARS）
+          更早的：压缩到 HISTORY_OLDER_CHARS / 条
+          整段历史：总量超 HISTORY_MAX_TOTAL_CHARS 时从最老的开始删
+        """
         messages: List[Dict[str, Any]] = []
 
         if history:
-            for msg in history[-20:]:
-                role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", None)
-                content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", None)
-                if role and content is not None:
-                    messages.append({"role": role, "content": content})
+            compressed = self._compress_history(
+                history,
+                keep_recent_n=self.HISTORY_KEEP_RECENT_N,
+                max_recent_chars=self.HISTORY_MAX_RECENT_CHARS,
+                older_msg_chars=self.HISTORY_OLDER_CHARS,
+                max_total_chars=self.HISTORY_MAX_TOTAL_CHARS,
+            )
+            messages.extend(compressed)
 
         messages.append({"role": "user", "content": self._build_user_content(user_message, images)})
         return messages
+
+    @classmethod
+    def _compress_history(
+        cls,
+        history: List[Any],
+        keep_recent_n: int = 6,
+        max_recent_chars: int = 4000,
+        older_msg_chars: int = 800,
+        max_total_chars: int = 8000,
+    ) -> List[Dict[str, Any]]:
+        """把历史消息按两级策略压缩，保证总字符数不超标。"""
+        if not history:
+            return []
+
+        # 归一化：兼容 dict / pydantic model
+        normalized: List[Dict[str, Any]] = []
+        for msg in history:
+            role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", None)
+            content = msg.get("content") if isinstance(msg, dict) else getattr(msg, "content", None)
+            if role and content is not None:
+                normalized.append({"role": role, "content": content})
+
+        if not normalized:
+            return []
+
+        # 分两段
+        recent = normalized[-keep_recent_n:]
+        older = normalized[:-keep_recent_n] if len(normalized) > keep_recent_n else []
+
+        # 分别按对应字符上限截断
+        result = [
+            {"role": m["role"], "content": cls._truncate_content(m["content"], older_msg_chars, compress=True)}
+            for m in older
+        ] + [
+            {"role": m["role"], "content": cls._truncate_content(m["content"], max_recent_chars, compress=False)}
+            for m in recent
+        ]
+
+        # 再做总量硬上限
+        result = cls._trim_to_budget(result, max_total_chars)
+        return result
+
+    @staticmethod
+    def _truncate_content(content: Any, max_chars: int, compress: bool) -> Any:
+        """把单条消息 content 截到 max_chars。
+        compress=True 对更早的消息：去代码块、去多余空白再截（保语义丢细节）。
+        compress=False 对最近消息：只在超长时直接截断加省略。
+        content 可能是 str（常规）或 list[block]（Anthropic tool_use 多段格式）。
+        """
+        if isinstance(content, str):
+            if len(content) <= max_chars:
+                return content
+            if compress:
+                # 去代码块（保留占位）+ 压缩空白
+                stripped = re.sub(r"```[\s\S]*?```", "[...code...]", content)
+                stripped = re.sub(r"\n\s*\n+", "\n", stripped)
+                if len(stripped) <= max_chars:
+                    return stripped
+                return stripped[:max_chars - 3].rstrip() + "..."
+            return content[:max_chars - 3].rstrip() + "..."
+
+        if isinstance(content, list):
+            # Anthropic 多段 content：text / tool_use / tool_result blocks
+            parts: List[str] = []
+            for b in content:
+                if not isinstance(b, dict):
+                    parts.append(str(b)[:200])
+                    continue
+                btype = b.get("type")
+                if btype == "text":
+                    parts.append(b.get("text", "")[:max_chars // 2])
+                elif btype == "tool_use":
+                    parts.append(f"[tool: {b.get('name', '?')}(...)]")
+                elif btype == "tool_result":
+                    inner = b.get("content", "")
+                    inner_s = inner if isinstance(inner, str) else str(inner)[:400]
+                    parts.append(f"[tool_result] {inner_s[:300]}")
+                else:
+                    parts.append(f"[{btype}]")
+            joined = "\n".join(p for p in parts if p)
+            if len(joined) <= max_chars:
+                return joined
+            return joined[:max_chars - 3].rstrip() + "..."
+
+        # 未知类型 → repr
+        s = str(content)
+        return s[:max_chars - 3] + "..." if len(s) > max_chars else s
+
+    @staticmethod
+    def _trim_to_budget(messages: List[Dict[str, Any]], max_total_chars: int) -> List[Dict[str, Any]]:
+        """总量超预算时从最老的开始删，保证至少留 1 条。"""
+        def _len(m):
+            c = m.get("content", "")
+            return len(c) if isinstance(c, str) else len(str(c))
+
+        total = sum(_len(m) for m in messages)
+        if total <= max_total_chars:
+            return messages
+
+        # 从头删直到达标（至少留 1 条）
+        result = list(messages)
+        while total > max_total_chars and len(result) > 1:
+            dropped = result.pop(0)
+            total -= _len(dropped)
+        return result
 
     @staticmethod
     def _build_user_content(text: str, images: Optional[List[str]]):
@@ -454,7 +581,22 @@ class ChatAssistantAgent(BaseAgent):
 - 需求状态不允许当前操作时，工具会返回错误，据实告知用户
 """
 
-    def _build_global_system_prompt(self, projects_brief: List[Dict[str, Any]]) -> str:
+    def _match_preset_suggestions(self, user_message: str) -> List[Any]:
+        """预计算 preset 推荐，注入到 system prompt 给 LLM 参考。"""
+        if not user_message or not user_message.strip():
+            return []
+        try:
+            from skills import preset_matcher
+            return preset_matcher.match(user_message, top_n=3)
+        except Exception as e:
+            logger.warning("PresetMatcher 调用异常（忽略）: %s", e)
+            return []
+
+    def _build_global_system_prompt(
+        self,
+        projects_brief: List[Dict[str, Any]],
+        preset_suggestions: Optional[List[Any]] = None,
+    ) -> str:
         """全局聊天（项目列表页）的系统提示词——不挂在任何具体项目上。
         唯一暴露的工具是 confirm_project，用来产草稿让用户确认后再落库。"""
         if projects_brief:
@@ -470,11 +612,22 @@ class ChatAssistantAgent(BaseAgent):
             if getattr(self, "_skills_prompt", "") else ""
         )
 
+        # v0.17: preset 推荐（从 PresetMatcher 得到）
+        preset_section = ""
+        if preset_suggestions:
+            preset_lines = ["\n## 💡 Preset 匹配推荐（基于用户本次消息预计算）"]
+            preset_lines.append("用户消息命中以下 preset（分数 >= 5 才列出）。若高分 preset 的 traits")
+            preset_lines.append("明显符合用户意图，可以在反问补齐必填维度时**建议使用这个 preset**；")
+            preset_lines.append("用户若采纳，调 confirm_project 时填对应 preset_id 字段。\n")
+            for m in preset_suggestions:
+                preset_lines.append(f"- **{m.preset_id}**（{m.label}，分数 {m.score}）traits: {m.traits}")
+            preset_section = "\n".join(preset_lines) + "\n"
+
         return f"""你是 AI 自动开发系统的全局助手，当前用户在**项目列表页**，**还没有进入任何具体项目**。
 
 ## 已有项目（最多展示 10 个）
 {proj_lines}
-{skills_section}
+{skills_section}{preset_section}
 ## 你的能力（当前语境下）
 你只有一个工具：**confirm_project**。
 - 当用户**明确表示想新建项目**时（"帮我建个项目""新建一个 xxx 项目""clone 一个仓库开始开发"），
@@ -483,19 +636,49 @@ class ChatAssistantAgent(BaseAgent):
 - 其他任何情况（查项目状态、问怎么用系统、讨论需求、提 BUG 等）**不要调工具**，直接回答；
   如果涉及具体项目，请提示用户先点击进入那个项目再继续对话。
 
+## 调 confirm_project 必填字段（**全齐了才能调**）
+
+- **name**（必填）：项目名称
+- **git_remote_url**（必填）：Git 远程仓库 URL
+- **traits**（必填）：项目特征标签数组，至少包含：
+  - `platform:*` —— `web` / `wechat` / `desktop` / `mobile` / `server` / `cli` 任选
+  - `category:*` —— `app` / `game` / `service` / `library` 任选
+  - 如果 `category:game`，还必须加 `engine:*`（`ue5` / `godot4` / `unity` / `cocos` / `none`）
+
+可选但推荐：
+  - `lang:*`（python/javascript/cpp/gdscript/csharp/...）
+  - `framework:*`（react/vue/fastapi/...）
+  - 功能性 trait：`multiplayer` / `realtime` / `i18n` / `offline-first` 等
+  - **preset_id**：如果 traits 跟某个 preset 完全匹配，填 preset_id 标记来源
+
+## 识别维度的反问规则（信息不全时务必反问）
+
+**不要自己瞎猜维度！**任一必填维度缺失就反问，给 3-4 个选项让用户选：
+
+- 用户说"贪吃蛇"→ category:game 有了，但 platform 和 engine 都不明 → 反问：
+  "这个贪吃蛇你想做成哪种？
+   1️⃣ 网页版（HTML5 canvas，浏览器里玩）
+   2️⃣ 微信小程序
+   3️⃣ 桌面游戏（Godot / Unity / UE）
+   4️⃣ 其他"
+
+- 用户说"做个网站" → platform:web 有了，但 category 不明（app 还是 service？）→ 反问：
+  "你这个网站是：
+   1️⃣ 用户前端应用（看内容、填表单、交互）→ category:app
+   2️⃣ 后端 API 服务（给其他系统用）→ category:service
+   3️⃣ 两者都有 → 两个项目分开建议"
+
+- 用户说"UE5 射击游戏" → 全齐（platform:desktop + category:game + engine:ue5 推断出来）→ 可调
+
 ## 判断准则
-- "建一个项目叫 X，Git URL 是 Y" → 信息齐了，调 confirm_project
-- "帮我建个项目" / "新建项目" → 信息不全，**不要调工具**，反问名称 + Git URL
+- **信息维度齐 → 调 confirm_project（traits 必填，从 trait_taxonomy 固定词表里选）**
+- **任一必填维度不明 → 绝不调工具，反问补齐（给预设选项别让用户自由描述）**
 - "我现在的项目都什么状态" → 根据上面"已有项目"列表直接回答，不调工具
 - "XX 项目卡在哪" → 提示用户进入该项目页再继续问
 
-## confirm_project 的必填字段
-- name：项目名称
-- git_remote_url：Git 远程仓库 URL（https 或 ssh 都行）
-- description / tech_stack / local_repo_path：可选
-
 ## 注意事项
 - 用中文回复，简洁
-- 信息不全**绝不**调工具——反问用户补齐
+- 反问时给 3-4 个有限选项，不让用户自由发挥
 - 不要自己编 Git URL
+- traits 的值必须从固定分类里选，不能自创
 """
