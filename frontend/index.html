@@ -39,7 +39,7 @@
             <div class="page-header">
                 <h1>我的项目</h1>
                 <div class="page-header-actions">
-                    <button class="btn btn-ghost" onclick="showGlobalKnowledgeModal()">📚 全局知识库</button>
+                    <button class="btn btn-ghost" onclick="showSystemSettingsModal()">⚙️ 系统设置</button>
                     <button class="btn btn-secondary" onclick="showImportProjectModal()">📥 导入现有工程</button>
                     <button class="btn btn-primary" onclick="showCreateProjectModal()">+ 新建项目</button>
                 </div>
@@ -676,9 +676,6 @@
                                 <button class="inner-tab" data-inner-tab="skills" onclick="switchAgentConfigTab('skills')">
                                     🎓 Skills
                                 </button>
-                                <button class="inner-tab" data-inner-tab="traits" onclick="switchAgentConfigTab('traits')">
-                                    🏷 Traits
-                                </button>
                             </div>
 
                             <!-- 面板：Agent 列表 -->
@@ -741,41 +738,7 @@
                                 </div>
                             </div>
 
-                            <!-- 面板：Traits（v0.17 Phase A.6，只读展示 taxonomy + presets）-->
-                            <div class="inner-tab-panel" id="inner-panel-traits">
-                                <div class="settings-card">
-                                    <p class="settings-description" style="margin-bottom:14px;">
-                                        <strong>v0.17 Trait-First 架构的固定词表</strong>。新建项目时 LLM 从此处选择 trait 组装项目特征。
-                                        配置在 <code>backend/skills/rules/trait_taxonomy.yaml</code> 和 <code>presets.yaml</code>。
-                                        编辑能力留给 Phase E，当前只读。
-                                    </p>
-                                    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
-                                        <h3 class="settings-card-title" style="margin:0;">🏷 Trait Taxonomy</h3>
-                                        <button class="btn btn-sm btn-ghost" onclick="loadTraitsView()">🔄 刷新</button>
-                                    </div>
-                                    <div id="traitsTaxonomyList"><div class="empty-state-sm">加载中...</div></div>
-                                </div>
-
-                                <div class="settings-card" style="margin-top:16px;">
-                                    <h3 class="settings-card-title">📦 内置 Presets</h3>
-                                    <p class="settings-description" style="margin:6px 0 12px;">
-                                        命名的 trait 组合快捷方式。对话中 LLM 会用关键词评分算法推荐匹配的 preset。
-                                    </p>
-                                    <div id="traitsPresetsList"><div class="empty-state-sm">加载中...</div></div>
-                                </div>
-
-                                <div class="settings-card" style="margin-top:16px;">
-                                    <h3 class="settings-card-title">🧪 Preset 匹配测试</h3>
-                                    <p class="settings-description" style="margin:6px 0 12px;">
-                                        输入一段用户可能说的话，看 LLM 会被推荐哪个 preset。跟对话里真实触发的是同一个匹配器。
-                                    </p>
-                                    <div style="display:flex; gap:8px; margin-bottom:12px;">
-                                        <input type="text" id="traitsMatchInput" class="form-control" style="flex:1;" placeholder="例：帮我做个 UE5 平台跳跃游戏">
-                                        <button class="btn btn-primary btn-sm" onclick="runTraitMatch()">试一下</button>
-                                    </div>
-                                    <div id="traitsMatchResult"></div>
-                                </div>
-                            </div>
+                            <!-- Traits 已移到项目列表页「⚙️ 系统设置」Modal 里（系统级配置，跟具体项目无关） -->
                         </div>
                     </div>
 

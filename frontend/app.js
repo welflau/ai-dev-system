@@ -578,7 +578,7 @@ function switchAgentConfigTab(inner) {
     // 切换时懒加载一次（数据可能已在 switchTab 里加载过，这里做兜底）
     if (inner === 'mcp') loadMCPStatus();
     if (inner === 'skills') loadSkillsList();
-    if (inner === 'traits') loadTraitsView();
+    // traits 已移到「系统设置」modal（showSystemSettingsModal('traits')）
 }
 
 // ==================== MCP 扩展 ====================
@@ -8253,15 +8253,16 @@ async function doConfirmBug(cardId) {
     }
 }
 
-// ==================== 知识库管理 ====================
-
-/** 当前知识库编辑器状态 */
-let _knowledgeEditorScope = null;   // 'global' | 'project'
-let _knowledgeEditorFilename = null; // null = 新建
-
-/** 在项目列表页打开全局知识库 modal（不需要打开项目） */
-async function showGlobalKnowledgeModal() {
-    const modalId = 'globalKnowledgeModal';
+// ==================== 系统设置 Modal（v0.17：取代「全局知识库」按钮） ====================
+/**
+ * 项目列表页的「系统设置」按钮入口。
+ * 承载所有**系统级**配置（跟具体项目无关）：
+ *   - 全局知识库（原独立按钮，现集成进来）
+ *   - Traits 配置（trait_taxonomy + presets + 匹配测试，v0.17）
+ * 未来还可加：全局 MCP 启用开关、LLM 配置、全局环境变量等。
+ */
+async function showSystemSettingsModal(initialTab = 'knowledge') {
+    const modalId = 'systemSettingsModal';
     let modal = document.getElementById(modalId);
     if (modal) modal.remove();
 
@@ -8269,19 +8270,65 @@ async function showGlobalKnowledgeModal() {
     modal.id = modalId;
     modal.className = 'modal-overlay active';
     modal.innerHTML = `
-        <div class="modal modal-lg">
+        <div class="modal modal-lg" style="max-width: 960px;">
             <div class="modal-header">
-                <h3>📚 全局知识库</h3>
+                <h3>⚙️ 系统设置</h3>
                 <button class="btn-icon" onclick="document.getElementById('${modalId}').remove()">&times;</button>
             </div>
-            <div class="modal-body" style="padding-bottom:0;">
-                <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">
-                    所有项目共享，适合放编码规范、技术栈说明、安全规则等。（上限 2000 字符/次注入）
-                </p>
-                <div style="display:flex;justify-content:flex-end;margin-bottom:8px;">
-                    <button class="btn btn-primary" onclick="showKnowledgeEditor('global', null)">+ 新建文档</button>
+            <div class="modal-body" style="padding:0; display:flex; flex-direction:column; max-height:80vh;">
+                <div class="inner-tabs" style="margin:16px 20px 0; flex-shrink:0;">
+                    <button class="inner-tab" data-sys-tab="knowledge" onclick="switchSysSettingsTab('knowledge')">
+                        📚 全局知识库
+                    </button>
+                    <button class="inner-tab" data-sys-tab="traits" onclick="switchSysSettingsTab('traits')">
+                        🏷 Traits 配置
+                    </button>
                 </div>
-                <div id="globalKnowledgeModalList"><div class="loading-sm">加载中...</div></div>
+                <div style="flex:1; overflow-y:auto; padding:16px 20px;">
+                    <!-- 全局知识库 panel -->
+                    <div class="sys-settings-panel" id="sys-panel-knowledge">
+                        <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">
+                            所有项目共享，适合放编码规范、技术栈说明、安全规则等。（上限 2000 字符/次注入）
+                        </p>
+                        <div style="display:flex;justify-content:flex-end;margin-bottom:8px;">
+                            <button class="btn btn-primary btn-sm" onclick="showKnowledgeEditor('global', null)">+ 新建文档</button>
+                        </div>
+                        <div id="globalKnowledgeModalList"><div class="empty-state-sm">加载中...</div></div>
+                    </div>
+
+                    <!-- Traits panel -->
+                    <div class="sys-settings-panel" id="sys-panel-traits" style="display:none;">
+                        <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">
+                            <strong>v0.17 Trait-First 架构的固定词表</strong>，新建项目时 LLM 从此处选择 trait 组装项目特征。
+                            配置在 <code>backend/skills/rules/trait_taxonomy.yaml</code> 和 <code>presets.yaml</code>。只读。
+                        </p>
+                        <div class="settings-card">
+                            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:10px;">
+                                <h3 class="settings-card-title" style="margin:0;">🏷 Trait Taxonomy</h3>
+                                <button class="btn btn-sm btn-ghost" onclick="loadTraitsView()">🔄 刷新</button>
+                            </div>
+                            <div id="traitsTaxonomyList"><div class="empty-state-sm">加载中...</div></div>
+                        </div>
+                        <div class="settings-card" style="margin-top:16px;">
+                            <h3 class="settings-card-title">📦 内置 Presets</h3>
+                            <p class="settings-description" style="margin:6px 0 10px;">
+                                命名的 trait 组合快捷方式。对话中 LLM 会用关键词评分算法推荐匹配的 preset。
+                            </p>
+                            <div id="traitsPresetsList"><div class="empty-state-sm">加载中...</div></div>
+                        </div>
+                        <div class="settings-card" style="margin-top:16px;">
+                            <h3 class="settings-card-title">🧪 Preset 匹配测试</h3>
+                            <p class="settings-description" style="margin:6px 0 10px;">
+                                输入一段用户可能说的话，看 LLM 会被推荐哪个 preset。跟对话里真实触发的是同一个匹配器。
+                            </p>
+                            <div style="display:flex; gap:8px; margin-bottom:12px;">
+                                <input type="text" id="traitsMatchInput" class="form-control" style="flex:1;" placeholder="例：帮我做个 UE5 平台跳跃游戏">
+                                <button class="btn btn-primary btn-sm" onclick="runTraitMatch()">试一下</button>
+                            </div>
+                            <div id="traitsMatchResult"></div>
+                        </div>
+                    </div>
+                </div>
             </div>
             <div class="modal-footer">
                 <button class="btn btn-secondary" onclick="document.getElementById('${modalId}').remove()">关闭</button>
@@ -8289,7 +8336,33 @@ async function showGlobalKnowledgeModal() {
         </div>
     `;
     document.body.appendChild(modal);
-    _loadGlobalKnowledgeIntoModal();
+    switchSysSettingsTab(initialTab);
+}
+
+function switchSysSettingsTab(tab) {
+    document.querySelectorAll('#systemSettingsModal [data-sys-tab]').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.sysTab === tab);
+    });
+    document.querySelectorAll('.sys-settings-panel').forEach(p => {
+        p.style.display = p.id === `sys-panel-${tab}` ? 'block' : 'none';
+    });
+    // 懒加载对应 tab 的数据
+    if (tab === 'knowledge') _loadGlobalKnowledgeIntoModal();
+    if (tab === 'traits') loadTraitsView();
+}
+
+// ==================== 知识库管理 ====================
+
+/** 当前知识库编辑器状态 */
+let _knowledgeEditorScope = null;   // 'global' | 'project'
+let _knowledgeEditorFilename = null; // null = 新建
+
+/**
+ * @deprecated 已被 showSystemSettingsModal('knowledge') 取代。
+ * 保留作向后兼容（旧代码引用或未来快捷键可能还用到）。
+ */
+function showGlobalKnowledgeModal() {
+    showSystemSettingsModal('knowledge');
 }
 
 async function _loadGlobalKnowledgeIntoModal() {
