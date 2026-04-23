@@ -1,0 +1,179 @@
+# Project Presets —— 命名的 trait 组合快捷方式
+#
+# v0.17 Trait-First 架构下，preset **降级为**可选快捷方式，不是必选入口。
+# 用户可以从零累积 traits，也可以选 preset 一键填充。
+#
+# 每个 preset 带 keywords，ChatAssistant 对话时用 §9.2 模板匹配算法推荐：
+#   - CJK 关键词精确命中 +5
+#   - 拉丁关键词 word boundary +5，substring +3
+#   - 维度冲突（例如用户说"3D"但 preset 是 2D）-20
+#   - 阈值 ≥5 才推荐
+#
+# 详见：docs/20260423_02_TraitFirst动态组装方案.md §9.2
+
+
+presets:
+  # ===================== 网页类 =====================
+
+  webapp:
+    label: "网页应用"
+    description: "浏览器里运行的通用 web 应用（增删改查、工具类）"
+    traits:
+      - platform:web
+      - category:app
+    keywords:
+      - 网页应用
+      - 网页
+      - 网站
+      - 前端
+      - web
+      - webapp
+      - website
+      - frontend
+      - SPA
+
+  web-game:
+    label: "网页游戏（HTML5）"
+    description: "浏览器里跑的游戏，HTML5 canvas / WebGL / 纯 JS，不用引擎"
+    traits:
+      - platform:web
+      - category:game
+      - engine:none
+      - lang:javascript
+    keywords:
+      - 网页游戏
+      - 网页游
+      - H5
+      - HTML5 游戏
+      - canvas 游戏
+      - web game
+      - browser game
+      - 页游
+
+  wechat-miniapp:
+    label: "微信小程序"
+    description: "微信生态的小程序，特殊 API + 审核约束"
+    traits:
+      - platform:wechat
+      - platform:web
+      - category:app
+      - lang:javascript
+    keywords:
+      - 微信小程序
+      - 小程序
+      - 微信
+      - miniprogram
+      - wechat
+      - wx
+
+  # ===================== 客户端游戏类 =====================
+
+  ue5-game:
+    label: "UE5 客户端游戏"
+    description: "Unreal Engine 5 桌面 / 主机游戏，C++ + Blueprint"
+    traits:
+      - platform:desktop
+      - category:game
+      - engine:ue5
+      - lang:cpp
+    keywords:
+      - UE5
+      - UE 游戏
+      - Unreal
+      - 虚幻
+      - 虚幻 5
+      - Unreal Engine
+      - ue5
+
+  godot-game:
+    label: "Godot 客户端游戏"
+    description: "Godot 4 客户端游戏，GDScript 或 C#"
+    traits:
+      - platform:desktop
+      - category:game
+      - engine:godot4
+      - lang:gdscript
+    keywords:
+      - Godot
+      - godot
+      - gdscript
+      - GDScript
+
+  unity-game:
+    label: "Unity 客户端游戏"
+    description: "Unity 客户端游戏，C# + Unity 生态"
+    traits:
+      - platform:desktop
+      - category:game
+      - engine:unity
+      - lang:csharp
+    keywords:
+      - Unity
+      - unity
+      - "c# 游戏"
+      - 国杀游戏    # 常见中文语境
+      - UnityEngine
+
+  # ===================== 后端服务类 =====================
+
+  api-service:
+    label: "后端 API 服务"
+    description: "Python + FastAPI 的后端 API 服务，REST / WebSocket"
+    traits:
+      - platform:server
+      - category:service
+      - lang:python
+      - framework:fastapi
+    keywords:
+      - API
+      - 接口
+      - 后端
+      - 服务
+      - backend
+      - service
+      - fastapi
+      - rest api
+      - 微服务
+
+
+# ==================== 维度冲突规则（用于扣分）====================
+#
+# 这些规则在模板匹配时做"负向信号"检测：用户描述里出现 A，但候选 preset
+# 声明了 B，则该候选 preset 分数 -20（直接出局，除非其他维度命中极强）。
+#
+# 配合 §9.2 的评分算法使用。
+
+conflict_rules:
+  # "3D" 撞 2D-only 引擎
+  - user_mentions: ["3D", "三维"]
+    preset_traits_has_any: ["engine:godot4"]    # Godot 4 支持 3D，不扣分
+    penalty: 0
+  - user_mentions: ["3D", "三维"]
+    preset_has_keywords_like: ["2D"]
+    penalty: -20
+
+  # "网页" 撞 desktop 类 preset
+  - user_mentions: ["网页", "浏览器", "H5", "web", "browser"]
+    preset_traits_has_all: ["platform:desktop"]
+    penalty: -20
+
+  # "桌面 / 客户端 / PC" 撞 web 类 preset
+  - user_mentions: ["桌面", "客户端", "PC", "desktop"]
+    preset_traits_has_all: ["platform:web"]
+    preset_traits_has_none: ["platform:desktop"]
+    penalty: -15
+
+  # "小程序 / 微信" 撞非微信 preset
+  - user_mentions: ["小程序", "微信", "miniprogram", "wechat"]
+    preset_traits_has_none: ["platform:wechat"]
+    penalty: -15
+
+
+# ==================== 评分阈值 ====================
+
+matching:
+  min_score: 5         # 总分 ≥ 此值才算"匹配"（给出推荐）
+  cjk_keyword_score: 5 # CJK 关键词精确命中
+  latin_keyword_word_boundary: 5   # 拉丁词边界命中
+  latin_keyword_substring: 3       # 拉丁子串命中
+  label_fragment_score: 3          # preset label 分词命中

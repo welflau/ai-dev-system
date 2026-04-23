@@ -63,6 +63,10 @@ class Database:
             ("bugs", "fix_notes", "TEXT"),
             ("bugs", "version_id", "TEXT"),
             ("bugs", "ticket_id", "TEXT"),
+            # v0.17 Trait-First 多项目类型支持
+            ("projects", "traits", "TEXT DEFAULT '[]'"),          # JSON array: ["platform:web", ...]
+            ("projects", "traits_confidence", "TEXT DEFAULT '{}'"),  # JSON: {trait: {score, source, evidence}}
+            ("projects", "preset_id", "TEXT"),                     # 可选，建项目时选的 preset 名字
         ]
         async with self._write_lock:
             for table, column, col_def in migrations:
@@ -133,16 +137,19 @@ SCHEMA_SQL = """
 -- 项目表
 -- ============================================================
 CREATE TABLE IF NOT EXISTS projects (
-    id              TEXT PRIMARY KEY,
-    name            TEXT NOT NULL,
-    description     TEXT,
-    status          TEXT NOT NULL DEFAULT 'active',
-    tech_stack      TEXT,
-    config          TEXT,
-    git_repo_path   TEXT,
-    git_remote_url  TEXT,
-    created_at      TEXT NOT NULL,
-    updated_at      TEXT NOT NULL
+    id                 TEXT PRIMARY KEY,
+    name               TEXT NOT NULL,
+    description        TEXT,
+    status             TEXT NOT NULL DEFAULT 'active',
+    tech_stack         TEXT,
+    config             TEXT,
+    git_repo_path      TEXT,
+    git_remote_url     TEXT,
+    traits             TEXT DEFAULT '[]',   -- v0.17: JSON array of trait strings
+    traits_confidence  TEXT DEFAULT '{}',   -- v0.17: JSON {trait: {score, source, evidence}}
+    preset_id          TEXT,                -- v0.17: 可选，建项目时的 preset 引用
+    created_at         TEXT NOT NULL,
+    updated_at         TEXT NOT NULL
 );
 
 -- ============================================================

@@ -1,0 +1,162 @@
+# Trait Taxonomy —— 项目特征标签的固定枚举
+#
+# v0.17 Trait-First 架构的「词表」。LLM / detector / UI 只能从这里选 trait，
+# 不能自创 —— 否则两个项目的 trait 语义会漂移，skill/SOP/MCP 匹配会乱。
+#
+# 扩 trait 需要改本文件 + review + 部署。不开放给用户 UI 自由输入。
+#
+# 详见方案文档：
+#   docs/20260423_02_TraitFirst动态组装方案.md  §4 Trait Taxonomy 扩展
+
+
+# ==================== 结构性维度（识别项目类型）====================
+
+platform:
+  description: "项目运行的宿主环境"
+  values:
+    - web          # 浏览器
+    - wechat       # 微信小程序 / 微信生态
+    - desktop      # 桌面客户端
+    - mobile       # 手机原生 App（iOS / Android）
+    - server       # 服务端（无 UI）
+    - cli          # 命令行工具
+
+category:
+  description: "项目的产品类别"
+  values:
+    - app          # 通用应用（工具、增删改查类）
+    - game         # 游戏
+    - service      # 后端服务（API、微服务）
+    - library      # 第三方库
+    - doc          # 纯文档站点
+
+engine:
+  description: "游戏 / 客户端引擎（category=game 时必填）"
+  values:
+    - ue5
+    - ue4
+    - godot4
+    - godot3
+    - unity
+    - cocos
+    - none         # 手写 canvas / WebGL / 自研
+
+lang:
+  description: "主要编程语言"
+  values:
+    - python
+    - javascript
+    - typescript
+    - cpp
+    - csharp
+    - gdscript
+    - rust
+    - go
+    - java
+    - kotlin
+    - swift
+
+framework:
+  description: "主要使用的框架（可选，多数能从 engine/lang 推出）"
+  values:
+    - react
+    - vue
+    - svelte
+    - angular
+    - fastapi
+    - django
+    - flask
+    - express
+    - spring
+    - gin
+
+
+# ==================== 功能性维度（正交于项目类型）====================
+
+features:
+  description: "项目具备的功能特性。激活对应 skill / fragment。"
+  values:
+    - multiplayer         # 多人
+    - realtime            # 实时（非异步）
+    - offline-first       # 离线优先
+    - p2p                 # P2P 网络
+    - turn-based          # 回合制
+    - ai-opponent         # AI 对手
+    - leaderboard         # 排行榜
+    - in-app-purchase     # 内购
+    - push-notification   # 推送
+    - analytics           # 数据埋点
+    - social              # 社交（分享/好友/评论）
+
+compliance:
+  description: "合规要求"
+  values:
+    - enterprise          # 企业合规
+    - wechat-review       # 微信审核
+    - ios-appstore        # iOS 商店审核
+    - android-store       # 安卓商店审核
+    - gdpr                # GDPR
+    - hipaa               # HIPAA
+
+quality:
+  description: "质量约束"
+  values:
+    - i18n                # 国际化必需
+    - a11y                # 无障碍
+    - offline             # 可离线运行
+    - pwa                 # PWA
+
+lifecycle:
+  description: "项目生命周期阶段"
+  values:
+    - prototype           # 原型期
+    - mvp                 # MVP
+    - production          # 正式环境
+    - maintenance         # 维护期
+
+vcs:
+  description: "版本控制系统。让 git-workflow 这类 skill 按 vcs:git 条件注入。"
+  values:
+    - git
+    - p4                  # Perforce
+    - svn
+    - hg                  # Mercurial
+
+ticket_type:
+  description: "工单类型。SOP fragments 可 required_ticket_type 过滤，日常小改不跑全套流程。"
+  values:
+    - feature             # 新功能 → 走完整 SOP
+    - bug-fix             # 只调 DevAgent + TestAgent
+    - refactor            # 只调 DevAgent + ReviewAgent
+    - polish              # 只调 DevAgent（小调整，skip review）
+    - rollback            # 只调 DeployAgent
+
+
+# ==================== 约束规则 ====================
+
+constraints:
+  # 推荐至少有 category（决定主流程方向）
+  soft_required:
+    - category
+
+  # 条件性推荐（LLM 对话识别时如果命中条件但缺推荐维度，应反问补齐）
+  recommend_if:
+    - condition: { any_of: ["category:game"] }
+      recommend: ["engine:*"]
+      reason: "游戏项目需要明确引擎才能选对应 skill 和 SOP fragments"
+
+    - condition: { any_of: ["category:service"] }
+      recommend: ["framework:*", "lang:*"]
+      reason: "后端服务需要 framework + lang 才能选对应 skill"
+
+
+# ==================== Skill traits_match 最佳实践（给 skill 作者的参考）====================
+#
+# 写 skill 的 traits_match 时按下面原则选 matcher：
+#
+# | Trait 类型       | 示例                          | 推荐 matcher                         |
+# | 技术栈硬约束     | engine:ue5, framework:fastapi | all_of  （必须满足才注入）             |
+# | 功能特性         | multiplayer, i18n             | any_of  （有就注入）                  |
+# | 排斥条件         | "Playwright 不用于非 web"      | none_of: [platform:desktop, ...]    |
+#
+# 错误用法：把 multiplayer 写 all_of 会要求全部功能都满足才注入，过严。
