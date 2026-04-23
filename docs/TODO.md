@@ -1,6 +1,35 @@
 # AI Dev System — 待办清单
 
-> 最后更新: 2026-04-17
+> 最后更新: 2026-04-23
+
+---
+
+## 🎯 下一个主线：Trait-First 多项目类型支持（v0.17 预定）
+
+支持网页 / 客户端 / 游戏 / UE / Godot / Unity / 微信小程序等多种项目类型。从 flat enum 升级到**trait + preset 混合架构**，skill/SOP/agent/mcp 按 traits 动态组装。详见：
+
+- `docs/20260423_01_项目类型分类体系与对话式识别方案.md`（trait 体系 + 对话式识别）
+- `docs/20260423_02_TraitFirst动态组装方案.md`（SOP fragments 组合 + Preview API，**最终方案**）
+
+**~14.5 天 roadmap，分 7 个 Phase**（A-F + C'）：
+
+| Phase | 内容 | 估时 |
+|---|---|---|
+| A | DB 迁移 + trait_taxonomy + presets.yaml + confirm_project traits 必填 + 对话历史压缩 + preset 关键词推荐 | 2.5 天 |
+| B | SkillLoader 三层过滤（inject_to + traits_match + paths）+ rules/global.md + 现有 4 个 skill 重构（加 vcs:git trait）+ Skill 分组特化压制 | 4.5 天 |
+| C | SOP base+fragments 组合器 + Action/Agent 加 available_for_traits + ticket_type 维度 | 3.5 天 |
+| C' | POST /api/projects/preview-assembly 只读端点 | 1 天 |
+| D | ProjectTypeDetectorAction（导入链路自动探测）| 1.5 天 |
+| E | 前端「项目特征」子 Tab（编辑 traits + 生效配置展示）| 1 天 |
+| F | MCP 加 enabled_for_traits | 0.5 天 |
+
+**推荐节奏**：A+B+C+C'（~11.5 天）一批跑通核心垂直切片，D+E+F（~3 天）二批补全。
+
+**阻塞 / 并吞的 TODO 项**：
+- 本栏目下方"ChatAssistantAgent 默认化"P2 → trait-first 里的 ChatAssistant 反问规则会一起实现
+- 本栏目下方"前端 SOP 拖拽编辑器"P2 → trait-first 的 fragments 组合器是它的前置 + 替代
+- 本栏目下方"DeployAgent 读项目类型"P2 → trait-first 落地后直接靠 traits 读取
+- 本栏目下方"ArchitectAgent 缺 SOP 配置读取"P2 → fragments 组合器覆盖
 
 ---
 
@@ -54,7 +83,7 @@
 |--------|-------|------|---------|------|
 | ✅ | ProductAgent 拆单 | 不看已有代码就拆单 | orchestrator 触发前注入 existing_files/code；AgentMemory.get_code_context() 复用 | **完成 2026-04-21** |
 | ✅ | ReviewAgent | 完全盲审/从未被调用 | 抽成独立 SOP 阶段（dev → code_review → acceptance）+ CodeReviewAction 读实际代码 + ActionNode + SOP 配置；详见 `docs/20260421_03_盲审修复P0实现方案.md` | **完成 2026-04-21** |
-| P1 | DevAgent SelfTest | 不读 Git 仓库实际文件 | 检查仓库中文件而非只看内存 files |
+| ✅ | DevAgent SelfTest | 不读 Git 仓库实际文件 | run() 开头预落盘 + check 6 磁盘落地验证；SOP `verify_disk_files` 开关；详见 `docs/20260422_02_SelfTest读Git实际文件.md` | **完成 2026-04-22** |
 | P2 | DeployAgent | 不读代码，部署配置通用化 | 读取项目类型生成针对性部署配置 |
 | P2 | ArchitectAgent | 缺 SOP 配置读取 | 使用 sop_config 中的参数 |
 
@@ -66,7 +95,7 @@
 | ✅ | **需求 Pipeline 可视化由 SOP 驱动** | **已完成 2026-04-17**：新增 `pipeline_view` 配置节 + `sop/loader.py:build_pipeline_stages()` 派生函数；消除 3 处硬编码（`api/requirements.py:283` 的 STAGE_DEFS/PAST/PRE + 观测 Action 的二次硬编码）。现在改流程只要改 yaml 一处，UI 和观测 Action 同步更新 |
 | P2 | Memory 持久化索引 | cause_by 索引目前在内存，重启丢失 |
 | P2 | 前端 Agent 配置页 | 可切换 ReactMode、启用/禁用 Action |
-| P2 | **ChatAssistantAgent 默认化** | P2 已引入（`CHAT_USE_AGENT` flag 双轨），P3/P4 阶段将其切为默认并清理旧 `[ACTION:XXX]` 文本协议（详见 `docs/20260417_01_ChatAssistant_Agent化迁移方案.md`） |
+| 🔄 | **ChatAssistantAgent 默认化** | 已推进大半：v0.16.5 全局聊天也迁到 Agent + tool_use（详见 `docs/20260422_03_全局AI助手新建项目链路分析与Agent化方案.md`）。剩余：观察期后清理 `_global_chat_legacy` + `_parse_global_action` + `[ACTION:CREATE_PROJECT]` prompt 文本协议（~100 行代码） |
 | ✅ | **ChatAssistant 观测能力** | **已完成 2026-04-17**：新增 `GetRequirementPipelineAction` / `GetTicketStatusAction` / `GetRequirementLogsAction` 三个 Action。AI 现在能回答"XX 卡在哪""最近发生了什么"，直接给出根因（例："被打回 5 次 → 强制通过"）而非猜测 |
 
 ## Phase 3: v0.15 — 智能增强
@@ -86,10 +115,12 @@
 | P2 | v0.16.1 | 多项目协作 | 待开发 |
 | P2 | v0.16.2 | Data Interpreter | 待开发 |
 
-## Bug 修复记录（已完成 14 个）
+## Bug 修复记录（已完成 16 个）
 
 | 日期 | 问题 | 根因 | 修复 |
 |------|------|------|------|
+| 04-22 | 工单 AI 对话 `content.replace is not a function` | v0.15.2 后 tool_use 消息的 content 是 list of blocks 不是字符串 | 后端加 `_content_to_display_text` 展平 + 前端 `formatChatContent` 加类型兜底 (v0.16.4) |
+| 04-22 | 属性面板点「AI 对话」关闭面板 | onclick 里有 closeDrawer() | 去掉 closeDrawer() 调用 (v0.16.4) |
 | 04-15 | 工单卡在 success 状态 | ActionResult.to_dict() 覆盖 data 中的 status | 不覆盖已有 status |
 | 04-15 | 验收死循环 53 次 | BY_ORDER files 覆盖 + 盲审 | 修 files 合并 + 加 max_retries 5 |
 | 04-15 | 产出文件在仓库找不到 | BY_ORDER 后续 Action 覆盖前面的 files | pop files 后再 update |
