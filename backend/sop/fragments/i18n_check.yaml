@@ -1,0 +1,20 @@
+# i18n 完整性检查 —— 声明 i18n 的项目要求所有用户可见字符串都通过 t() 取
+id: i18n_check
+name: 国际化完整性检查
+insert_after: development
+priority: 80
+description: 扫源码发现硬编码的中文/英文用户字符串；要求走 i18n 封装
+
+required_traits:
+  any_of:
+    - i18n
+
+stage:
+  agent: DevAgent
+  action: check_i18n_completeness
+  trigger_on: i18n_check_pending
+  success_status: i18n_check_passed
+  reject_status: i18n_check_failed
+  reject_goto: development
+  config:
+    max_retries: 2

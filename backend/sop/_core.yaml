@@ -1,0 +1,81 @@
+# SOP Core —— 所有项目通用的基础阶段（v0.17 trait-first 骨架）
+#
+# 配合 backend/sop/fragments/*.yaml 做动态组合。
+# fragments 按 required_traits / required_ticket_type 过滤后插入到 core 对应位置。
+# compose 后的 SOP 等价于 default_sop.yaml 的格式，orchestrator 无感消费。
+
+name: 通用开发流程（trait-first 骨架）
+version: "3.0"
+description: 架构 → 开发 → 代码审查 → 产品验收 → 部署
+
+global:
+  max_retries: 5
+  zombie_timeout_seconds: 120
+
+# 基础阶段。fragments 可通过 insert_after / insert_before 插入新阶段在这些之间。
+base_stages:
+  - id: architecture
+    name: 架构设计
+    agent: ArchitectAgent
+    action: design_architecture
+    trigger_on: pending
+    success_status: architecture_done
+    description: 分析需求，设计增量技术架构方案
+    config:
+      read_existing_code: true
+      max_code_chars: 1500
+      max_tokens: 2000
+      self_consistency: false
+      consistency_n: 3
+      consistency_temperature: 0.8
+
+  - id: development
+    name: 代码开发
+    agent: DevAgent
+    action: develop
+    trigger_on: architecture_done
+    success_status: development_done
+    description: 根据架构设计编写代码，含自测
+    config:
+      read_existing_code: true
+      max_code_chars: 2000
+      max_tokens: 16000
+      self_test: true
+      verify_disk_files: true
+      generate_dev_notes: true
+
+  - id: code_review
+    name: 代码审查
+    agent: ReviewAgent
+    action: code_review
+    trigger_on: development_done
+    success_status: review_passed
+    description: ReviewAgent 读取实际代码做审查
+    config:
+      max_code_chars: 12000
+      per_file_code_chars: 6000
+      pass_score: 7
+      block_on_low_score: false
+
+  - id: acceptance
+    name: 产品验收
+    agent: ProductAgent
+    action: acceptance_review
+    trigger_on: review_passed
+    success_status: acceptance_passed
+    reject_status: acceptance_rejected
+    reject_goto: rework
+    description: 产品经理验收代码是否符合需求
+    config:
+      max_rework_count: 5
+      force_pass_after_max_rework: true
+
+  - id: deploy
+    name: 部署
+    agent: DeployAgent
+    action: deploy
+    trigger_on: acceptance_passed
+    success_status: deployed
+    description: 部署到测试环境
+    config:
+      target_env: test

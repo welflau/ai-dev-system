@@ -1,0 +1,21 @@
+# 游戏玩法测试 —— 游戏项目的端到端验证（启动引擎 → headless 跑 → 收集日志）
+id: play_test
+name: 游戏玩法测试
+insert_after: development    # 跟 smoke_test 同层但在 engine_compile 之后
+priority: 85                 # 比 engine_compile (95) 低，保证先编译再跑
+description: 启动游戏 headless 模式跑一遍基础场景，捕获 crash / 错误日志
+
+required_traits:
+  all_of:
+    - category:game
+
+stage:
+  agent: TestAgent
+  action: run_playtest
+  trigger_on: play_test_pending
+  success_status: play_test_passed
+  reject_status: play_test_failed
+  reject_goto: development
+  config:
+    timeout_seconds: 180
+    capture_screenshots: true

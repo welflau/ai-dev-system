@@ -1,0 +1,24 @@
+# 多人联网压力测试 —— 只在 multiplayer 项目开启
+id: multiplayer_stress
+name: 多人联网压力测试
+insert_after: play_test      # 要先跑通单机 playtest 再测多人
+priority: 50
+description: 模拟 N 个客户端同时连入，验证同步稳定性和延迟
+
+required_traits:
+  all_of:
+    - multiplayer:true       # 功能性 trait，默认 value 是 true
+required_ticket_type:
+  any_of:
+    - feature
+
+stage:
+  agent: TestAgent
+  action: run_network_stress
+  trigger_on: mp_stress_pending
+  success_status: mp_stress_passed
+  reject_status: mp_stress_failed
+  reject_goto: development
+  config:
+    simulated_clients: 10
+    duration_seconds: 60

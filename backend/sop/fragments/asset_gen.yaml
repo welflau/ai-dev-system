@@ -1,0 +1,25 @@
+# 美术资产生成 —— 游戏项目特有，在 dev 前产出 sprite/tileset/UI
+id: asset_gen
+name: 美术资产生成
+insert_before: development
+priority: 100
+description: 游戏项目在正式 dev 前先准备所需美术资产（占位图或 AIGC 产出）
+
+required_traits:
+  all_of:
+    - category:game
+required_ticket_type:
+  any_of:
+    - feature    # 只在新功能需要资产时触发
+
+stage:
+  agent: ArtistAgent   # Phase C.2 加的接口，ArtistAgent 类暂未实现，触发会降级
+  action: generate_assets
+  trigger_on: asset_gen_pending
+  success_status: assets_ready
+  config:
+    asset_types:
+      - sprite
+      - tileset
+      - ui_element
+    fallback_to_placeholder: true   # ArtistAgent 未实现时用占位图继续流程

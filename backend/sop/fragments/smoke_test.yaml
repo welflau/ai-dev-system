@@ -1,0 +1,26 @@
+# HTTP smoke test —— web/service 项目开发后跑一次服务级烟测
+id: smoke_test
+name: 冒烟测试
+insert_after: development
+priority: 90
+description: 启动服务 + 发起关键接口请求，验证基础功能可用
+
+required_traits:
+  any_of:
+    - category:service
+    - category:app
+required_ticket_type:
+  any_of:
+    - feature
+    - refactor
+
+stage:
+  agent: TestAgent
+  action: run_tests
+  trigger_on: smoke_test_pending
+  success_status: smoke_test_passed
+  reject_status: smoke_test_failed
+  reject_goto: development
+  config:
+    test_type: smoke
+    max_retries: 3

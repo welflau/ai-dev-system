@@ -33,6 +33,12 @@ class BaseAgent(ABC):
     watch_actions: Set[str] = set()  # 关心的上游 Action（用于消息过滤）
     max_react_loop: int = 5
 
+    # v0.17 trait-first：Agent 可用性按项目 traits 过滤
+    # None = 对所有项目可用（现有 6 个 Role Agent 保持不变）
+    # 例：ArtistAgent.available_for_traits = {"any_of": ["category:game"]}
+    # orchestrator.get_agents_for_project(project_id) 用此字段过滤
+    available_for_traits: Dict[str, Any] = None
+
     def __init__(self):
         self._actions = {}
         for cls in self.action_classes:
@@ -55,6 +61,14 @@ class BaseAgent(ABC):
     @abstractmethod
     def agent_type(self) -> str:
         pass
+
+    @classmethod
+    def is_available_for_traits(cls, traits: List[str] = None) -> bool:
+        """v0.17: 本 Agent 类是否可用于给定 project traits。
+        None / 空 available_for_traits → 永远可用（现有 6 个 Role 保持）。
+        """
+        from actions.base import _match_traits
+        return _match_traits(cls.available_for_traits, set(traits or []))
 
     async def execute(self, task_name: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """根据 react_mode 分发执行"""

@@ -1,15 +1,22 @@
 """
 SOP 配置加载器
 从 YAML 文件加载工作流定义，转换为 orchestrator 可用的 transition_rules
+
+v0.17 Trait-First 扩展：
+- compose_sop(traits, ticket_type) —— 从 _core.yaml + fragments/*.yaml
+  按 traits/ticket_type 过滤动态组装 SOP
+- load_sop() 保持向后兼容，作为无 traits 场景的兜底
 """
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Set
 
 logger = logging.getLogger("sop")
 
 # SOP 目录
 SOP_DIR = Path(__file__).parent
+FRAGMENTS_DIR = SOP_DIR / "fragments"
+CORE_FILE = SOP_DIR / "_core.yaml"
 
 
 def load_sop(name: str = "default_sop") -> Dict[str, Any]:
@@ -31,6 +38,203 @@ def load_sop(name: str = "default_sop") -> Dict[str, Any]:
     logger.info("✅ SOP 已加载: %s (v%s, %d 阶段)",
                 config.get("name", name), config.get("version", "?"), len(config.get("stages", [])))
     return config
+
+
+# ==================== v0.17 Trait-First 组合器 ====================
+
+def compose_sop(
+    traits: Optional[List[str]] = None,
+    ticket_type: Optional[str] = None,
+) -> Dict[str, Any]:
+    """根据 traits + ticket_type 动态组装 SOP。
+
+    流程：
+      1. 读 _core.yaml 的 base_stages
+      2. 扫 fragments/*.yaml
+      3. 按 required_traits / required_ticket_type 过滤 fragments
+      4. 按 insert_after / insert_before 插入 base_stages
+      5. 同插入点按 priority 降序（priority 大的靠近锚点）
+      6. 返回跟 load_sop() 兼容的 dict（stages 列表）
+
+    无 traits 时退化为 base_stages（等价于通用 web SOP）。
+    """
+    import yaml
+
+    # 1. 读 core
+    if not CORE_FILE.exists():
+        logger.warning("_core.yaml 不存在，回退到 default_sop")
+        return load_sop("default_sop")
+
+    with open(CORE_FILE, "r", encoding="utf-8") as f:
+        core = yaml.safe_load(f) or {}
+    base_stages = list(core.get("base_stages", []))
+
+    traits_set = set(traits or [])
+
+    # 2-4. 扫 fragments，过滤 + 分类（按 insert_after/before 分桶）
+    frag_entries: List[Dict] = []
+    if FRAGMENTS_DIR.exists():
+        for ff in sorted(FRAGMENTS_DIR.glob("*.yaml")):
+            try:
+                with open(ff, "r", encoding="utf-8") as f:
+                    frag = yaml.safe_load(f) or {}
+            except Exception as e:
+                logger.warning("fragment %s 解析失败: %s", ff.name, e)
+                continue
+
+            if not _fragment_matches(frag, traits_set, ticket_type):
+                continue
+            frag_entries.append(frag)
+
+    # 5. 按 priority 升序排：低优先级先插入，高优先级后插入。
+    # 因为 insert(idx+1) 会把后插入的挤到锚点+1 位置，导致高优先级最终更靠近锚点（先执行）。
+    # 例：engine_compile (95) + play_test (85) 都 insert_after: development
+    #   ASC 序：play_test 先插 → [dev, play, ...]
+    #         engine 后插到 dev+1 → [dev, eng, play, ...]  ✓ 高优先级（eng）先跑
+    frag_entries.sort(key=lambda f: f.get("priority", 50))
+
+    # 6. 实际插入 —— fixed-point 多轮，解决 fragment-to-fragment 锚点依赖
+    #    每轮只插入锚点已存在的 fragment；重复到无变化为止
+    composed = list(base_stages)
+    pending = list(frag_entries)
+    while True:
+        applied_any = False
+        still_pending: List[Dict] = []
+        for frag in pending:
+            anchor_after = frag.get("insert_after")
+            anchor_before = frag.get("insert_before")
+            stage = frag.get("stage", {})
+            if not stage:
+                logger.warning("fragment %s 缺 stage 块，跳过", frag.get("id"))
+                continue
+            # 把 fragment 自己的 id/name/description 复制到 stage 里
+            for k in ("id", "name", "description"):
+                if k not in stage and frag.get(k):
+                    stage[k] = frag[k]
+
+            if anchor_after:
+                idx = _find_stage_idx(composed, anchor_after)
+                if idx is None:
+                    still_pending.append(frag)  # 等下一轮
+                    continue
+                composed.insert(idx + 1, stage)
+                applied_any = True
+            elif anchor_before:
+                idx = _find_stage_idx(composed, anchor_before)
+                if idx is None:
+                    still_pending.append(frag)
+                    continue
+                composed.insert(idx, stage)
+                applied_any = True
+            else:
+                composed.append(stage)
+                applied_any = True
+
+        pending = still_pending
+        if not applied_any:
+            # 剩下的 fragment 都找不到锚点 —— 放到末尾并 warning
+            for frag in pending:
+                stage = frag.get("stage", {})
+                logger.warning(
+                    "fragment %s: 锚点 %s / %s 未找到，追加到末尾",
+                    stage.get("id"),
+                    frag.get("insert_after"),
+                    frag.get("insert_before"),
+                )
+                composed.append(stage)
+            break
+        if not pending:
+            break
+
+    # 重新链 trigger_on → success_status：fragment 插入后要让前后阶段的状态链连通
+    composed = _relink_stage_transitions(composed)
+
+    result = dict(core)
+    result["stages"] = composed
+    result["base_stages"] = None   # 运行时不需要
+    result["composed_from_fragments"] = [f.get("id") for f in frag_entries]
+    result["traits_used"] = sorted(traits_set)
+    result["ticket_type_used"] = ticket_type
+
+    logger.info(
+        "📋 SOP composed: %d 阶段（base %d + fragments %s）traits=%s ticket=%s",
+        len(composed), len(base_stages),
+        [f.get("id") for f in frag_entries],
+        sorted(traits_set) or "(无)", ticket_type or "(无)",
+    )
+    return result
+
+
+def _fragment_matches(
+    frag: Dict,
+    traits_set: Set[str],
+    ticket_type: Optional[str],
+) -> bool:
+    """单个 fragment 是否适用当前 (traits, ticket_type)"""
+    rt = frag.get("required_traits")
+    if rt:
+        all_of = rt.get("all_of") or []
+        any_of = rt.get("any_of") or []
+        none_of = rt.get("none_of") or []
+        if all_of and not all(t in traits_set for t in all_of):
+            return False
+        if any_of and not any(t in traits_set for t in any_of):
+            return False
+        if none_of and any(t in traits_set for t in none_of):
+            return False
+
+    rtt = frag.get("required_ticket_type")
+    if rtt:
+        if ticket_type is None:
+            # fragment 声明了对 ticket_type 的要求但当前未指定 → 默认不应用
+            # （保守策略；若想默认跑，可改成 return True）
+            return False
+        any_of = rtt.get("any_of") or []
+        none_of = rtt.get("none_of") or []
+        if any_of and ticket_type not in any_of:
+            return False
+        if none_of and ticket_type in none_of:
+            return False
+    return True
+
+
+def _find_stage_idx(stages: List[Dict], stage_id: str) -> Optional[int]:
+    for i, s in enumerate(stages):
+        if s.get("id") == stage_id:
+            return i
+    return None
+
+
+def _relink_stage_transitions(stages: List[Dict]) -> List[Dict]:
+    """fragment 插入后，重新把 trigger_on 链起来。
+
+    规则：
+      - 第一个 stage 的 trigger_on 保持 'pending'（项目起点）
+      - 后续每个 stage 的 trigger_on ← 前一个 stage 的 success_status
+      - fragment 自己声明的 trigger_on（如 smoke_test_pending）被**覆盖** ——
+        因为孤立的 trigger_on 没人产出，orchestrator 永远不会触发
+      - reject_goto 保留 fragment 自己声明的（没 goto 就不改）
+
+    每个阶段的 success_status 不动。reject_status / reject_goto 不动。
+    """
+    if not stages:
+        return stages
+    result = [dict(s) for s in stages]
+
+    prev_success = None
+    for i, s in enumerate(result):
+        if i == 0:
+            # 第一个阶段的 trigger_on 保留（通常是 'pending'）
+            pass
+        else:
+            if prev_success:
+                s["trigger_on"] = prev_success
+        prev_success = s.get("success_status")
+    return result
+
+
+# ==================== end v0.17 ====================
+
 
 
 def sop_to_transition_rules(config: Dict[str, Any]) -> Dict[str, Dict]:

@@ -1,0 +1,25 @@
+# 游戏引擎编译验证 —— UE5/Godot/Unity 项目开发后跑一次引擎编译
+id: engine_compile
+name: 引擎编译验证
+insert_after: development
+priority: 95   # 比 code_review 更靠前：编译不过没必要审代码
+description: 在对应引擎里尝试编译 / 构建项目，发现语法级错误
+
+required_traits:
+  any_of:
+    - engine:ue5
+    - engine:ue4
+    - engine:godot4
+    - engine:godot3
+    - engine:unity
+
+stage:
+  agent: DevAgent
+  action: run_engine_compile
+  trigger_on: engine_compile_pending
+  success_status: engine_compile_passed
+  reject_status: engine_compile_failed
+  reject_goto: development
+  config:
+    max_retries: 3
+    timeout_seconds: 600
