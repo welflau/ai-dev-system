@@ -40,13 +40,14 @@ class BaseAgent(ABC):
             self._actions[action.name] = action
         self._state: int = -1  # 当前 Action 索引（BY_ORDER 模式用）
 
-        # Skills 注入：按 agent_type 拉取适用的 Skills，拼成一段 prompt。
-        # 为空表示这个 Agent 没挂任何 Skill。
-        # 详见 docs/20260420_01_Skills注入系统实现方案.md
+        # Skills / Rules 注入：__init__ 时用无 traits 的默认版本（作为兜底）
+        # 真正 action 执行时会在 run_action / _react_* 里按 context.project_id
+        # 查 project.traits 动态重算（v0.17 Trait-First）。
+        # ChatAssistantAgent 仍直接读 self._skills_prompt（无项目上下文）。
         try:
             from skills import skill_loader
             self._skills_prompt = skill_loader.build_prompt_for_agent(self.agent_type)
-        except Exception as e:  # skills 模块是可选，加载失败不阻塞 Agent 初始化
+        except Exception as e:
             logger.warning("Skills 加载失败（Agent=%s）: %s", self.agent_type, e)
             self._skills_prompt = ""
 
@@ -76,10 +77,34 @@ class BaseAgent(ABC):
         """旧模式兼容：子类没有用 Action 组合时的 fallback"""
         return {"status": "error", "message": f"Agent {self.agent_type} 没有 Action: {task_name}"}
 
-    async def run_action(self, action_name: str, context: Dict[str, Any]) -> Dict[str, Any]:
-        """执行指定 Action（含 Skills 注入）
+    async def _resolve_skills_prompt(self, context: Dict[str, Any]) -> str:
+        """v0.17: 根据 context.project_id 拉项目 traits，动态计算 skills prompt。
+        无 project_id 或查 traits 失败 → 退回 __init__ 时算好的静态版（兜底）。
+        """
+        project_id = context.get("project_id")
+        if not project_id:
+            return self._skills_prompt
 
-        通过 ContextVar 在 action.run() 期间提供 self._skills_prompt，
+        try:
+            from database import db
+            import json as _json
+            row = await db.fetch_one("SELECT traits FROM projects WHERE id = ?", (project_id,))
+            if not row:
+                return self._skills_prompt
+            traits_raw = row.get("traits") or "[]"
+            traits = _json.loads(traits_raw) if isinstance(traits_raw, str) else traits_raw
+            if not isinstance(traits, list):
+                traits = []
+            from skills import skill_loader
+            return skill_loader.build_prompt_for_agent(self.agent_type, traits=traits)
+        except Exception as e:
+            logger.warning("动态计算 skills 失败（Agent=%s, project=%s）: %s", self.agent_type, project_id, e)
+            return self._skills_prompt
+
+    async def run_action(self, action_name: str, context: Dict[str, Any]) -> Dict[str, Any]:
+        """执行指定 Action（含 v0.17 动态 Skills 注入）
+
+        通过 ContextVar 在 action.run() 期间提供 skills_prompt，
         ActionNode._compile() 读取后自动 prepend 到 LLM prompt 开头。
         ChatAssistant 不走 ActionNode，自己在 _build_system_prompt() 里直接读 self._skills_prompt。
         """
@@ -88,7 +113,8 @@ class BaseAgent(ABC):
             return {"status": "error", "message": f"Agent {self.agent_type} 没有 Action: {action_name}"}
 
         from skills import _current_skills
-        token = _current_skills.set(self._skills_prompt)
+        skills_prompt = await self._resolve_skills_prompt(context)
+        token = _current_skills.set(skills_prompt)
         try:
             result = await action.run(context)
         finally:
@@ -98,7 +124,8 @@ class BaseAgent(ABC):
     async def _react_by_order(self, task_name: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """BY_ORDER 模式：按顺序执行所有 Action，前一步输出注入后一步"""
         from skills import _current_skills
-        token = _current_skills.set(self._skills_prompt)
+        skills_prompt = await self._resolve_skills_prompt(context)
+        token = _current_skills.set(skills_prompt)
         try:
             return await self._react_by_order_inner(task_name, context)
         finally:
@@ -138,7 +165,8 @@ class BaseAgent(ABC):
     async def _react_with_think(self, task_name: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """REACT 模式：LLM 动态选择下一步 Action"""
         from skills import _current_skills
-        token = _current_skills.set(self._skills_prompt)
+        skills_prompt = await self._resolve_skills_prompt(context)
+        token = _current_skills.set(skills_prompt)
         try:
             return await self._react_with_think_inner(task_name, context)
         finally:
