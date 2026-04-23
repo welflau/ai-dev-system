@@ -578,6 +578,7 @@ function switchAgentConfigTab(inner) {
     // 切换时懒加载一次（数据可能已在 switchTab 里加载过，这里做兜底）
     if (inner === 'mcp') loadMCPStatus();
     if (inner === 'skills') loadSkillsList();
+    if (inner === 'traits') loadTraitsView();
 }
 
 // ==================== MCP 扩展 ====================
@@ -680,6 +681,128 @@ async function loadSkillsList() {
         }).join('');
     } catch (e) {
         container.innerHTML = `<div class="empty-state-sm">加载失败: ${escapeHtml(e.message)}</div>`;
+    }
+}
+
+// ==================== Traits 查看器（Agent 配置页 → Traits Tab，v0.17 Phase A.6） ====================
+
+async function loadTraitsView() {
+    const taxDiv = document.getElementById('traitsTaxonomyList');
+    const preDiv = document.getElementById('traitsPresetsList');
+    if (!taxDiv || !preDiv) return;
+
+    // 1. taxonomy
+    taxDiv.innerHTML = '<div class="empty-state-sm">加载中...</div>';
+    try {
+        const resp = await fetch('/api/traits/taxonomy');
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        taxDiv.innerHTML = `
+            <div style="font-size:12px; color:var(--text-muted); margin-bottom:10px;">
+                共 ${data.total_dimensions} 维度，${data.total_values} 个 trait 值
+            </div>
+            ${data.dimensions.map(d => `
+                <div class="mcp-server-card" style="border-left-color:var(--primary); padding:10px 12px;">
+                    <div class="mcp-server-header">
+                        <span class="mcp-server-name">${escapeHtml(d.dim)}</span>
+                        <span class="mcp-server-status" style="background:var(--bg); color:var(--text-muted); font-weight:400;">${d.values.length} 个</span>
+                    </div>
+                    <div class="mcp-server-desc" style="font-size:12px; margin-bottom:6px;">${escapeHtml(d.description)}</div>
+                    <div class="mcp-tools" style="gap:4px;">
+                        ${d.values.map(v => `<code class="mcp-tool-tag" title="${escapeHtml(d.dim)}:${escapeHtml(v)}">${escapeHtml(v)}</code>`).join('')}
+                    </div>
+                </div>
+            `).join('')}
+        `;
+    } catch (e) {
+        taxDiv.innerHTML = `<div class="empty-state-sm">加载失败: ${escapeHtml(e.message)}</div>`;
+    }
+
+    // 2. presets
+    preDiv.innerHTML = '<div class="empty-state-sm">加载中...</div>';
+    try {
+        const resp = await fetch('/api/traits/presets');
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        preDiv.innerHTML = `
+            <div style="font-size:12px; color:var(--text-muted); margin-bottom:10px;">
+                ${data.presets.length} 个 preset，${data.conflict_rules.length} 条冲突规则
+            </div>
+            ${data.presets.map(p => `
+                <div class="mcp-server-card" style="border-left-color:var(--accent, #a371f7);">
+                    <div class="mcp-server-header">
+                        <span class="mcp-server-name">📦 ${escapeHtml(p.label)}</span>
+                        <code style="font-size:11px; color:var(--text-muted);">${escapeHtml(p.preset_id)}</code>
+                    </div>
+                    <div class="mcp-server-desc">${escapeHtml(p.description)}</div>
+                    <div class="mcp-tools">
+                        <div class="mcp-tools-label">Traits</div>
+                        ${p.traits.map(t => `<code class="mcp-tool-tag" style="background:rgba(163,113,247,0.1); border-color:rgba(163,113,247,0.4);">${escapeHtml(t)}</code>`).join('')}
+                    </div>
+                    <div class="mcp-tools" style="margin-top:6px;">
+                        <div class="mcp-tools-label">Keywords</div>
+                        ${p.keywords.slice(0, 6).map(k => `<code class="mcp-tool-tag" style="font-size:10px;">${escapeHtml(k)}</code>`).join('')}
+                        ${p.keywords.length > 6 ? `<span style="font-size:11px; color:var(--text-muted);">+${p.keywords.length - 6}</span>` : ''}
+                    </div>
+                </div>
+            `).join('')}
+        `;
+    } catch (e) {
+        preDiv.innerHTML = `<div class="empty-state-sm">加载失败: ${escapeHtml(e.message)}</div>`;
+    }
+}
+
+async function runTraitMatch() {
+    const input = document.getElementById('traitsMatchInput');
+    const resultDiv = document.getElementById('traitsMatchResult');
+    if (!input || !resultDiv) return;
+
+    const message = input.value.trim();
+    if (!message) {
+        resultDiv.innerHTML = '<div class="empty-state-sm">请输入消息</div>';
+        return;
+    }
+
+    resultDiv.innerHTML = '<div class="empty-state-sm">匹配中...</div>';
+    try {
+        const resp = await fetch('/api/traits/match', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message, top_n: 5 }),
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+
+        if (!data.matches || data.matches.length === 0) {
+            resultDiv.innerHTML = '<div class="empty-state-sm">无 preset 匹配（所有分数 &lt; 阈值 5）。LLM 会转为反问用户补齐维度。</div>';
+            return;
+        }
+
+        resultDiv.innerHTML = data.matches.map((m, idx) => {
+            const isTop = idx === 0;
+            const rank = isTop ? '🥇' : (idx === 1 ? '🥈' : (idx === 2 ? '🥉' : `#${idx + 1}`));
+            return `
+                <div class="mcp-server-card" style="border-left-color:${isTop ? 'var(--success)' : 'var(--border)'}; margin-bottom:8px;">
+                    <div class="mcp-server-header">
+                        <span class="mcp-server-name">${rank} ${escapeHtml(m.label)} <code style="font-size:11px; color:var(--text-muted);">${escapeHtml(m.preset_id)}</code></span>
+                        <span class="mcp-server-status mcp-badge-${isTop ? 'success' : 'muted'}">score ${m.score}</span>
+                    </div>
+                    <div class="mcp-tools" style="margin-top:4px;">
+                        ${m.traits.map(t => `<code class="mcp-tool-tag">${escapeHtml(t)}</code>`).join('')}
+                    </div>
+                    ${m.matched_keywords.length > 0 ? `
+                        <div style="margin-top:6px; font-size:11px; color:var(--text-muted);">
+                            ✅ 命中: ${m.matched_keywords.map(k => escapeHtml(k)).join(' · ')}
+                        </div>` : ''}
+                    ${m.conflict_penalties.length > 0 ? `
+                        <div style="margin-top:4px; font-size:11px; color:var(--danger, #ea4a5a);">
+                            ⚠️ 扣分: ${m.conflict_penalties.map(c => escapeHtml(c)).join(' · ')}
+                        </div>` : ''}
+                </div>
+            `;
+        }).join('');
+    } catch (e) {
+        resultDiv.innerHTML = `<div class="empty-state-sm">失败: ${escapeHtml(e.message)}</div>`;
     }
 }
 

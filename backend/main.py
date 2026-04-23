@@ -169,6 +169,7 @@ from api.bugs import router as bugs_router
 from api.knowledge import router as knowledge_router
 from api.mcp_status import router as mcp_status_router
 from api.skills import router as skills_router
+from api.traits import router as traits_router
 
 app.include_router(projects_router)
 app.include_router(requirements_router)
@@ -183,6 +184,7 @@ app.include_router(bugs_router)
 app.include_router(knowledge_router)
 app.include_router(mcp_status_router)
 app.include_router(skills_router)
+app.include_router(traits_router)
 
 
 # ==================== 系统端点 ====================
@@ -503,3 +505,4 @@ if __name__ == "__main__":
         reload=settings.DEBUG,
         reload_dirs=[str(Path(__file__).parent)],
     )
+
