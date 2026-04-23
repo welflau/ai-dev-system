@@ -765,3 +765,173 @@ async def detect_local_project(body: dict):
             result["tech_stack"] = ", ".join(tech_stack)
 
     return result
+
+
+# ==================== v0.17 Preview Assembly API ====================
+
+from pydantic import BaseModel, Field
+from typing import Optional, Dict, Any
+
+
+class PreviewAssemblyRequest(BaseModel):
+    traits: List[str] = Field(default_factory=list, description="项目 traits 列表")
+    ticket_type: Optional[str] = Field(default=None, description="工单类型（可选）：feature/bug-fix/...")
+    include_rules: bool = Field(default=True, description="是否在 skills 预览里列出 alwaysApply 的 rules")
+
+
+def _match_traits_cfg(match_cfg, traits_list: List[str]) -> bool:
+    """本地复制，避免循环 import"""
+    if not match_cfg:
+        return True
+    traits_set = set(traits_list)
+    all_of = match_cfg.get("all_of") or []
+    any_of = match_cfg.get("any_of") or []
+    none_of = match_cfg.get("none_of") or []
+    if all_of and not all(t in traits_set for t in all_of):
+        return False
+    if any_of and not any(t in traits_set for t in any_of):
+        return False
+    if none_of and any(t in traits_set for t in none_of):
+        return False
+    return True
+
+
+@router.post("/preview-assembly")
+async def preview_assembly(req: PreviewAssemblyRequest):
+    """v0.17 Trait-First 核心 API：给定 traits → 实时返回将要组装出来的
+    SOP + Agents + Skills + MCPs + warnings + suggestions。
+
+    前端 confirm_project 确认卡片渲染前调此端点，让用户在点"确认创建"之前
+    看到将用什么流程 / 跑哪些 Agent / 注入哪些 Skill。
+    """
+    from sop.loader import compose_sop
+    from skills import skill_loader
+    from orchestrator import orchestrator
+
+    traits = list(req.traits or [])
+    ticket_type = req.ticket_type
+
+    # 1. SOP 组装
+    sop_composed = compose_sop(traits=traits, ticket_type=ticket_type)
+    sop_stages = [
+        {
+            "id": s.get("id"),
+            "name": s.get("name"),
+            "agent": s.get("agent"),
+            "action": s.get("action"),
+            "trigger_on": s.get("trigger_on"),
+            "success_status": s.get("success_status"),
+            "description": s.get("description"),
+        }
+        for s in sop_composed.get("stages", [])
+    ]
+    fragments_activated = sop_composed.get("composed_from_fragments") or []
+
+    # 2. Agent 过滤
+    all_agents = orchestrator.agents
+    active_agents = []
+    excluded_agents = []
+    for name, agent in all_agents.items():
+        cls = type(agent)
+        avail = getattr(cls, "available_for_traits", None)
+        if _match_traits_cfg(avail, traits):
+            active_agents.append(name)
+        else:
+            excluded_agents.append({
+                "agent": name,
+                "reason": f"available_for_traits={avail} 跟项目 traits 不匹配",
+            })
+
+    # 3. Skill 按 Agent 分组
+    skills_by_agent: Dict[str, List[Dict]] = {}
+    for agent_name in active_agents:
+        skill_ids = skill_loader.get_skills_for_agent(agent_name, traits=traits)
+        skills_by_agent[agent_name] = [
+            {
+                "id": sid,
+                "name": skill_loader.skills[sid].get("name", sid),
+                "priority": skill_loader.skills[sid].get("priority", "medium"),
+                "matched": skill_loader.skills[sid].get("traits_match") or {},
+            }
+            for sid in skill_ids
+        ]
+
+    # Rules（全局，不分 Agent）
+    rules_list = []
+    if req.include_rules:
+        rule_ids = skill_loader.get_rules_for_context(traits=traits)
+        rules_list = [
+            {
+                "id": rid,
+                "description": skill_loader.rules[rid].get("description", ""),
+                "alwaysApply": skill_loader.rules[rid].get("alwaysApply", False),
+            }
+            for rid in rule_ids
+        ]
+
+    # 4. MCP 列表（若客户端已加载）
+    mcps = []
+    try:
+        from mcp_client import mcp_client
+        status = mcp_client.get_status()
+        for name, s in (status.get("servers") or {}).items():
+            enabled_for_traits = s.get("enabled_for_traits")   # Phase F 会启用
+            applicable = _match_traits_cfg(enabled_for_traits, traits) if enabled_for_traits else True
+            mcps.append({
+                "name": name,
+                "enabled": s.get("enabled", False),
+                "status": s.get("status"),
+                "applicable_to_traits": applicable,
+                "tools_count": len(s.get("tools") or []),
+            })
+    except Exception as e:
+        logger.warning("preview: 取 MCP 状态失败: %s", e)
+
+    # 5. Warnings —— 缺必填维度 / 冲突
+    warnings = []
+    has_platform = any(t.startswith("platform:") for t in traits)
+    has_category = any(t.startswith("category:") for t in traits)
+    if not has_platform:
+        warnings.append("缺 platform:* trait（推荐至少有一个）")
+    if not has_category:
+        warnings.append("缺 category:* trait（决定主流程方向）")
+    has_game = "category:game" in traits
+    has_engine = any(t.startswith("engine:") for t in traits)
+    if has_game and not has_engine:
+        warnings.append("category:game 但缺 engine:*（ue5/godot4/unity/none），SOP 会缺引擎编译阶段")
+
+    if not sop_stages:
+        warnings.append("SOP 为空，无可执行阶段")
+
+    # 6. Suggestions —— 基于 traits 推下一步能加什么
+    suggestions = []
+    if has_game and "multiplayer:true" not in traits and has_engine:
+        suggestions.append({
+            "hint": "如果项目涉及多人对战，可加 multiplayer:true，SOP 会自动插入多人压测阶段",
+            "trait": "multiplayer:true",
+        })
+    if "platform:web" in traits and "i18n" not in traits:
+        suggestions.append({
+            "hint": "若需国际化，可加 i18n，SOP 会自动插入 i18n_check 阶段",
+            "trait": "i18n",
+        })
+
+    return {
+        "traits": traits,
+        "ticket_type": ticket_type,
+        "effective_config": {
+            "sop": {
+                "stages": sop_stages,
+                "fragments_activated": fragments_activated,
+            },
+            "agents": {
+                "active": active_agents,
+                "excluded": excluded_agents,
+            },
+            "skills_by_agent": skills_by_agent,
+            "rules": rules_list,
+            "mcps": mcps,
+        },
+        "warnings": warnings,
+        "suggestions": suggestions,
+    }

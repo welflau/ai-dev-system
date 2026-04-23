@@ -6653,6 +6653,16 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
         `;
     } else if (action && action.type === 'confirm_project') {
         const safeId = 'proj_confirm_' + Date.now();
+        const traitsArr = Array.isArray(action.traits) ? action.traits : [];
+        const traitsJsonAttr = escapeHtml(JSON.stringify(traitsArr));
+        const traitChips = traitsArr.length
+            ? `<div class="confirm-req-meta" style="margin-top:6px;">
+                 🏷 Traits: ${traitsArr.map(t => `<code class="mcp-tool-tag" style="background:rgba(163,113,247,0.1); border-color:rgba(163,113,247,0.4); margin-right:3px;">${escapeHtml(t)}</code>`).join('')}
+               </div>`
+            : '<div class="confirm-req-meta" style="color:var(--warning, #f59e0b); font-size:11px;">⚠️ 未带 traits</div>';
+        const presetBadge = action.preset_id
+            ? `<div class="confirm-req-meta" style="font-size:11px; color:var(--text-muted);">📦 Preset: ${escapeHtml(action.preset_id)}</div>`
+            : '';
         actionHtml = `
             <div class="chat-action-card chat-confirm-card chat-confirm-project-card" id="${safeId}"
                  data-name="${escapeHtml(action.name || '')}"
@@ -6660,6 +6670,8 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
                  data-tech-stack="${escapeHtml(action.tech_stack || '')}"
                  data-git-remote-url="${escapeHtml(action.git_remote_url || '')}"
                  data-local-repo-path="${escapeHtml(action.local_repo_path || '')}"
+                 data-traits="${traitsJsonAttr}"
+                 data-preset-id="${escapeHtml(action.preset_id || '')}"
                  style="border-left-color: var(--accent, #a371f7);">
                 <div class="action-title">📦 识别到新建项目意图，是否创建？</div>
                 <div class="action-detail">
@@ -6670,6 +6682,11 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
                     </div>
                     ${action.tech_stack ? `<div class="confirm-req-meta">技术栈：${escapeHtml(action.tech_stack)}</div>` : ''}
                     ${action.local_repo_path ? `<div class="confirm-req-meta">本地路径：<code>${escapeHtml(action.local_repo_path)}</code></div>` : '<div class="confirm-req-meta" style="color:var(--text-muted);font-size:11px;">本地路径：留空，自动生成到 backend/projects/ 下</div>'}
+                    ${traitChips}
+                    ${presetBadge}
+                    <div id="preview_${safeId}" style="margin-top:10px; padding:10px; background:var(--bg); border-radius:6px; font-size:12px;">
+                        <div style="color:var(--text-muted);">🔄 预计组装...</div>
+                    </div>
                 </div>
                 <div class="confirm-req-btns">
                     <button class="btn btn-sm btn-primary" onclick="doConfirmProject('${safeId}')">✅ 确认创建</button>
@@ -6677,6 +6694,8 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
                 </div>
             </div>
         `;
+        // 卡片插入 DOM 后异步加载 preview
+        setTimeout(() => loadProjectAssemblyPreview(safeId, traitsArr), 50);
     } else if (action && action.type === 'confirm_bug') {
         const priorityLabel = {'critical':'🔴 紧急','high':'🟠 高','medium':'🟡 中','low':'🟢 低'}[action.priority] || action.priority;
         const safeId = 'bug_confirm_' + Date.now();
@@ -6806,6 +6825,48 @@ function doCancelRequirement(cardId) {
     if (btns) btns.remove();
 }
 
+/** 加载项目组装预览（v0.17 Phase C'）。安静失败，preview 不可用不应阻塞创建 */
+async function loadProjectAssemblyPreview(cardId, traits) {
+    const previewDiv = document.getElementById(`preview_${cardId}`);
+    if (!previewDiv) return;
+    try {
+        const resp = await fetch('/api/projects/preview-assembly', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ traits: traits || [], ticket_type: 'feature' }),
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        const cfg = data.effective_config || {};
+        const stages = (cfg.sop && cfg.sop.stages) || [];
+        const skillsFlat = [];
+        for (const [ag, sks] of Object.entries(cfg.skills_by_agent || {})) {
+            for (const s of (sks || [])) skillsFlat.push(`${ag}→${s.id}`);
+        }
+        const mcps = (cfg.mcps || []).filter(m => m.applicable_to_traits);
+        const warnings = data.warnings || [];
+        const suggestions = data.suggestions || [];
+
+        previewDiv.innerHTML = `
+            <div style="color:var(--primary-light); font-weight:600; margin-bottom:4px;">🔮 预计组装</div>
+            <div><strong>SOP 流程</strong>（${stages.length} 阶段）：${stages.map(s => escapeHtml(s.name || s.id)).join(' → ')}</div>
+            ${(cfg.sop && cfg.sop.fragments_activated && cfg.sop.fragments_activated.length)
+                ? `<div style="color:var(--text-muted); margin-top:2px;">激活 fragments: ${cfg.sop.fragments_activated.map(f => escapeHtml(f)).join(', ')}</div>` : ''}
+            ${skillsFlat.length
+                ? `<div style="margin-top:4px;"><strong>Skill 注入</strong>：${skillsFlat.map(s => `<code style="font-size:10px;background:var(--bg-elevated);padding:1px 5px;border-radius:3px;margin-right:3px;">${escapeHtml(s)}</code>`).join('')}</div>`
+                : '<div style="color:var(--text-muted); margin-top:4px;">Skill：无（项目类型无匹配 skill）</div>'}
+            ${mcps.length
+                ? `<div style="margin-top:4px;"><strong>MCP</strong>: ${mcps.map(m => escapeHtml(m.name)).join(', ')}</div>` : ''}
+            ${warnings.length
+                ? `<div style="color:var(--warning, #f59e0b); margin-top:4px;">⚠️ ${warnings.map(w => escapeHtml(w)).join('; ')}</div>` : ''}
+            ${suggestions.length
+                ? `<div style="color:var(--text-muted); margin-top:4px; font-size:11px;">💡 ${suggestions.map(s => escapeHtml(s.hint)).join(' / ')}</div>` : ''}
+        `;
+    } catch (e) {
+        previewDiv.innerHTML = `<div style="color:var(--text-muted); font-size:11px;">预览不可用 (${escapeHtml(e.message)})</div>`;
+    }
+}
+
 /** 用户确认创建项目（全局聊天） */
 async function doConfirmProject(cardId) {
     const card = document.getElementById(cardId);
@@ -6815,12 +6876,15 @@ async function doConfirmProject(cardId) {
     const tech_stack = card.dataset.techStack || '';
     const git_remote_url = card.dataset.gitRemoteUrl || '';
     const local_repo_path = card.dataset.localRepoPath || '';
+    let traits = [];
+    try { traits = JSON.parse(card.dataset.traits || '[]'); } catch { traits = []; }
+    const preset_id = card.dataset.presetId || null;
     const btns = card.querySelector('.confirm-req-btns');
     if (btns) btns.innerHTML = '<span style="color:var(--text-muted);font-size:12px">⏳ 创建中（clone 仓库 + 初始化）...</span>';
     try {
         const result = await api('/chat/confirm-create-project', {
             method: 'POST',
-            body: { name, description, tech_stack, git_remote_url, local_repo_path },
+            body: { name, description, tech_stack, git_remote_url, local_repo_path, traits, preset_id: preset_id || null },
         });
         card.style.borderLeftColor = 'var(--success, #34d058)';
         card.querySelector('.action-title').textContent = '✅ 项目已创建';
