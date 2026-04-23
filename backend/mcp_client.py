@@ -30,6 +30,25 @@ logger = logging.getLogger("mcp_client")
 
 _CONFIG_PATH = Path(__file__).parent / "mcp_servers.json"
 _TOOL_PREFIX = "mcp__"
+
+
+def _match_trait_filter(filter_cfg: Optional[Dict[str, Any]], traits: List[str]) -> bool:
+    """v0.17 Phase F：判断 MCP server 的 enabled_for_traits 是否匹配项目 traits。
+    None/空 filter → 视为无约束（永远可用，兼容现有 MCP 配置）。
+    """
+    if not filter_cfg:
+        return True
+    traits_set = set(traits or [])
+    all_of = filter_cfg.get("all_of") or []
+    any_of = filter_cfg.get("any_of") or []
+    none_of = filter_cfg.get("none_of") or []
+    if all_of and not all(t in traits_set for t in all_of):
+        return False
+    if any_of and not any(t in traits_set for t in any_of):
+        return False
+    if none_of and any(t in traits_set for t in none_of):
+        return False
+    return True
 _CALL_TIMEOUT_SEC = 30.0
 _RESPONSE_MAX_CHARS = 10000
 
@@ -219,12 +238,23 @@ class MCPClient:
     def is_mcp_tool(self, tool_name: str) -> bool:
         return tool_name.startswith(_TOOL_PREFIX)
 
-    def list_all_tool_schemas(self) -> List[Dict[str, Any]]:
-        """所有 running server 的工具列表（已加 mcp__ 前缀）"""
+    def list_all_tool_schemas(self, traits: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+        """所有 running server 的工具列表（已加 mcp__ 前缀）
+
+        v0.17 Phase F：如果 server 配了 `enabled_for_traits`，按项目 traits 过滤；
+        没配的 server 视为对所有项目可用。None/空 traits 也视为无过滤（向后兼容）。
+        """
         schemas = []
-        for conn in self._servers.values():
-            if conn.status == "running":
-                schemas.extend(conn.tools)
+        for name, conn in self._servers.items():
+            if conn.status != "running":
+                continue
+            cfg = self._servers_config.get(name, {})
+            trait_filter = cfg.get("enabled_for_traits")
+            if trait_filter and traits is not None:
+                if not _match_trait_filter(trait_filter, traits):
+                    logger.debug("MCP server %s 对 traits=%s 不适用，跳过工具注入", name, traits)
+                    continue
+            schemas.extend(conn.tools)
         return schemas
 
     async def call_tool(self, tool_name: str, tool_input: Dict[str, Any]) -> str:
@@ -246,6 +276,7 @@ class MCPClient:
         result: Dict[str, Any] = {"servers": {}}
         for name, cfg in self._servers_config.items():
             conn = self._servers.get(name)
+            trait_filter = cfg.get("enabled_for_traits")   # v0.17 Phase F
             if conn is None:
                 status = "disabled" if not cfg.get("enabled") else "not_started"
                 result["servers"][name] = {
@@ -254,6 +285,7 @@ class MCPClient:
                     "description": cfg.get("description", ""),
                     "tools": [],
                     "error": None,
+                    "enabled_for_traits": trait_filter,
                 }
             else:
                 result["servers"][name] = {
@@ -262,6 +294,7 @@ class MCPClient:
                     "description": cfg.get("description", ""),
                     "tools": [t["name"] for t in conn.tools],
                     "error": conn.error,
+                    "enabled_for_traits": trait_filter,
                 }
         return result
 

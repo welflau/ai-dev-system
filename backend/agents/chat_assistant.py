@@ -166,12 +166,19 @@ class ChatAssistantAgent(BaseAgent):
 
     # ==================== Tool schemas ====================
 
-    def _exposed_tool_schemas(self, scope: str = "project") -> List[Dict[str, Any]]:
+    def _exposed_tool_schemas(
+        self,
+        scope: str = "project",
+        traits: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
         """返回可暴露给 LLM 的 tool schema 列表。
 
         scope="project"（默认）：项目内聊天，暴露所有非 INTERNAL 工具 + MCP 工具。
         scope="global"：项目列表页的全局聊天，只暴露 _GLOBAL_CHAT_TOOLS 白名单（confirm_project），
           不带 MCP（外部 MCP 工具大多也需要 project 上下文）。
+
+        v0.17 Phase F：项目内聊天把 project.traits 传给 mcp_client，让 MCP server
+        的 `enabled_for_traits` 过滤生效（例如 git MCP 只对 vcs:git 项目暴露）。
         """
         schemas = []
         for action in self._actions.values():
@@ -187,10 +194,10 @@ class ChatAssistantAgent(BaseAgent):
                 schemas.append(schema)
 
         if scope == "project":
-            # 追加外部 MCP 工具（name 已带 mcp__ 前缀，防冲突）
+            # 追加外部 MCP 工具（name 已带 mcp__ 前缀，防冲突），按 project traits 过滤
             try:
                 from mcp_client import mcp_client
-                schemas.extend(mcp_client.list_all_tool_schemas())
+                schemas.extend(mcp_client.list_all_tool_schemas(traits=traits))
             except Exception as e:
                 logger.warning("合并 MCP 工具列表失败: %s", e)
 
@@ -213,7 +220,20 @@ class ChatAssistantAgent(BaseAgent):
 
         system_prompt = self._build_system_prompt(project, project_context)
         messages = self._assemble_messages(history, user_message, images)
-        tools = self._exposed_tool_schemas()
+
+        # v0.17 Phase F：把项目 traits 传给 _exposed_tool_schemas，按 traits 过滤 MCP
+        project_traits = []
+        try:
+            import json as _json
+            traits_raw = project.get("traits") or "[]"
+            if isinstance(traits_raw, str):
+                project_traits = _json.loads(traits_raw) or []
+            elif isinstance(traits_raw, list):
+                project_traits = list(traits_raw)
+        except Exception:
+            project_traits = []
+
+        tools = self._exposed_tool_schemas(scope="project", traits=project_traits)
 
         executor = _ChatToolExecutor(self, project["id"])
 

@@ -21,6 +21,10 @@
     "args": ["mcp-server-git"],
     "env": {},
     "enabled": false,
-    "description": "官方 Git MCP（仓库操作）。启用前需：pip install uv"
+    "description": "官方 Git MCP（仓库操作）。启用前需：pip install uv",
+    "enabled_for_traits": {
+      "any_of": ["vcs:git"]
+    },
+    "_comment_trait_filter": "v0.17 Phase F 示范：只对 vcs:git 项目暴露，P4/SVN 项目不注入此工具"
   }
 }
