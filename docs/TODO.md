@@ -95,6 +95,8 @@
 | ✅ | **需求 Pipeline 可视化由 SOP 驱动** | **已完成 2026-04-17**：新增 `pipeline_view` 配置节 + `sop/loader.py:build_pipeline_stages()` 派生函数；消除 3 处硬编码（`api/requirements.py:283` 的 STAGE_DEFS/PAST/PRE + 观测 Action 的二次硬编码）。现在改流程只要改 yaml 一处，UI 和观测 Action 同步更新 |
 | P2 | Memory 持久化索引 | cause_by 索引目前在内存，重启丢失 |
 | P2 | 前端 Agent 配置页 | 可切换 ReactMode、启用/禁用 Action |
+| P2 | **仓库文件显示 / diff 展示优化** | 文件浏览器：大文件截断策略 / 语法高亮对齐 / 二进制文件占位符；diff 视图：左右分栏 / 行级高亮 / 折叠未变化的大段 / 跳转相关文件 |
+| P2 | **仓库分支管理页显示树形关系** | 当前分支列表是扁平平铺；改成展示 `feat/* → develop → main` 的父子树形 + 每分支的 ahead/behind 数 + 最近一次 commit，一眼看清分支结构 |
 | 🔄 | **ChatAssistantAgent 默认化** | 已推进大半：v0.16.5 全局聊天也迁到 Agent + tool_use（详见 `docs/20260422_03_全局AI助手新建项目链路分析与Agent化方案.md`）。剩余：观察期后清理 `_global_chat_legacy` + `_parse_global_action` + `[ACTION:CREATE_PROJECT]` prompt 文本协议（~100 行代码） |
 | ✅ | **ChatAssistant 观测能力** | **已完成 2026-04-17**：新增 `GetRequirementPipelineAction` / `GetTicketStatusAction` / `GetRequirementLogsAction` 三个 Action。AI 现在能回答"XX 卡在哪""最近发生了什么"，直接给出根因（例："被打回 5 次 → 强制通过"）而非猜测 |
 
