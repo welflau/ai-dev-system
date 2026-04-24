@@ -38,7 +38,21 @@ class DevAgent(BaseAgent):
             return await self._do_rework(context)
         elif task_name == "fix_issues":
             return await self._do_fix_issues(context)
+        elif task_name == "run_engine_compile":
+            return await self._do_run_engine_compile(context)
         return {"status": "error", "message": f"未知任务: {task_name}"}
+
+    async def _do_run_engine_compile(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """UE 引擎编译验证（v0.18 Phase A）—— 调 UnrealBuildTool 编译项目。
+
+        入参通过 context 透传：engine_path / uproject_path / target_name / platform / config。
+        若 context 缺项，Action 会自动解析（resolve_project_engine + _infer_target_name）。
+        """
+        from actions.ue_compile_check import UECompileCheckAction
+        action = UECompileCheckAction()
+        result = await action.run(context)
+        # ActionResult.to_dict() 已经把 status / errors / warnings / products 都平铺好
+        return result.to_dict()
 
     async def _do_develop(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """开发：根据是否有已有代码选择策略"""
