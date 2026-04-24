@@ -91,8 +91,48 @@ class DevAgent(BaseAgent):
         return await self._do_retry_with_reflection(context)
 
     async def _do_fix_issues(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """测试失败修复（Reflexion）：先反思失败根因 → 再按反思策略重开发"""
-        context["failure_type"] = "testing_failed"
+        """失败修复（Reflexion）：先识别是什么类型的失败，再反思根因 → 按策略重开发。
+
+        v0.18 Phase D：支持 engine_compile_failed 场景 —— 从最近一条 reject 日志读
+        结构化编译 errors，注入 context 供 reflect + write_code 用。
+        """
+        from database import db
+
+        ticket_id = context.get("ticket_id")
+        failure_type = "testing_failed"   # 默认兜底
+
+        if ticket_id:
+            cur = await db.fetch_one("SELECT status FROM tickets WHERE id = ?", (ticket_id,))
+            cur_status = (cur or {}).get("status") or ""
+            if cur_status == "engine_compile_failed":
+                failure_type = "engine_compile_failed"
+            elif cur_status == "testing_failed":
+                failure_type = "testing_failed"
+            elif cur_status == "acceptance_rejected":
+                failure_type = "acceptance_rejected"
+
+            # 对于编译失败，从最近的 reject 日志 detail 里拿 errors 列表
+            if failure_type == "engine_compile_failed":
+                log = await db.fetch_one(
+                    """SELECT detail FROM ticket_logs
+                       WHERE ticket_id = ? AND action = 'reject'
+                       ORDER BY created_at DESC LIMIT 1""",
+                    (ticket_id,),
+                )
+                if log and log.get("detail"):
+                    try:
+                        det = json.loads(log["detail"])
+                        context["compile_errors"] = det.get("errors") or []
+                        context["compile_warnings"] = det.get("warnings") or []
+                        context["compile_command"] = det.get("command") or ""
+                        logger.info(
+                            "🔧 fix_issues 接到编译失败 context: %d errors",
+                            len(context["compile_errors"]),
+                        )
+                    except Exception as e:
+                        logger.warning("解析编译失败 detail 异常: %s", e)
+
+        context["failure_type"] = failure_type
         return await self._do_retry_with_reflection(context)
 
     async def _do_retry_with_reflection(self, context: Dict[str, Any]) -> Dict[str, Any]:
@@ -116,13 +156,24 @@ class DevAgent(BaseAgent):
                 float(reflection.get("confidence", 0.0) or 0.0),
             )
         else:
-            # 降级到旧逻辑：只拼 rejection_reason / test_issues 到描述
+            # 降级到旧逻辑：把失败信号拼到 ticket_description
             reflection = None
-            if context.get("failure_type") == "acceptance_rejected":
+            ft = context.get("failure_type")
+            if ft == "acceptance_rejected":
                 rr = context.get("rejection_reason", "")
                 if rr:
                     context["ticket_description"] = (
                         f"{context.get('ticket_description', '')} [返工原因] {rr}"
+                    )
+            elif ft == "engine_compile_failed":
+                errs = context.get("compile_errors") or []
+                if errs:
+                    brief = "; ".join(
+                        f"{e.get('file', '?')}:{e.get('line', '?')} {e.get('code', '')} {(e.get('msg') or '')[:80]}"
+                        for e in errs[:5]
+                    )
+                    context["ticket_description"] = (
+                        f"{context.get('ticket_description', '')} [编译错误] {brief}"
                     )
             else:
                 ti = context.get("test_issues", [])

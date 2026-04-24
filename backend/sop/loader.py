@@ -338,8 +338,15 @@ def _merge_pipeline_view(
 
 
 def sop_to_transition_rules(config: Dict[str, Any]) -> Dict[str, Dict]:
-    """将 SOP 配置转换为 orchestrator 的 transition_rules 格式"""
+    """将 SOP 配置转换为 orchestrator 的 transition_rules 格式
+
+    v0.18 Phase D: 除了 trigger_on → agent.action 的主规则，还会从 reject_status +
+    reject_goto 派生 **失败回跳规则**：reject_status → {goto stage 的 agent}.fix_issues。
+    这让 SOP yaml 里声明的"编译失败走 fix_issues 反思重写"能自动落地，
+    不再需要手写对应规则。
+    """
     stages = config.get("stages", [])
+    stages_by_id = {s.get("id"): s for s in stages if s.get("id")}
     rules = {}
 
     for stage in stages:
@@ -362,6 +369,24 @@ def sop_to_transition_rules(config: Dict[str, Any]) -> Dict[str, Dict]:
             rule["config"] = stage["config"]
 
         rules[trigger] = rule
+
+        # v0.18 D：派生 reject 回跳规则
+        reject_status = stage.get("reject_status")
+        reject_goto = stage.get("reject_goto")
+        if reject_status and reject_goto and reject_status not in rules:
+            goto_stage = stages_by_id.get(reject_goto)
+            if goto_stage:
+                rules[reject_status] = {
+                    "agent": goto_stage.get("agent", "DevAgent"),
+                    # fix_issues 是 DevAgent 的反思修复 action；若 goto 的 agent 不是
+                    # DevAgent（未来扩展场景），保留 goto 阶段自己的 action 作兜底
+                    "action": "fix_issues" if goto_stage.get("agent") == "DevAgent"
+                              else goto_stage.get("action", "fix_issues"),
+                    "next_status": _get_next_status(goto_stage),
+                    "config": goto_stage.get("config", {}),
+                    "_rework_source_stage": stage.get("id"),
+                    "_rework_goto_stage": reject_goto,
+                }
 
     logger.info("📋 转换规则: %d 条状态转换", len(rules))
     return rules

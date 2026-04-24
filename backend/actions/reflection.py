@@ -159,11 +159,46 @@ class ReflectionAction(ActionBase):
         similar_failures = context.get("similar_failures") or []
 
         # 构建失败信号段
+        compile_errors = context.get("compile_errors") or []
+        compile_warnings = context.get("compile_warnings") or []
+        compile_cmd = context.get("compile_command") or ""
+
         if failure_type == "acceptance_rejected":
             failure_signal = f"ProductAgent 验收不通过。理由：\n{rejection_reason}"
         elif failure_type == "testing_failed":
             issues_text = "\n".join(f"  - {i}" for i in test_issues[:10]) if test_issues else "(无具体 issue)"
             failure_signal = f"TestAgent 测试不通过。问题列表：\n{issues_text}"
+        elif failure_type == "engine_compile_failed":
+            # v0.18 Phase D：UE 编译失败场景 —— errors 已结构化
+            lines = []
+            lines.append(f"UnrealBuildTool 编译失败 ({len(compile_errors)} errors, {len(compile_warnings)} warnings)。")
+            if compile_cmd:
+                lines.append(f"编译命令: `{compile_cmd}`")
+            lines.append("\n错误列表（最多前 10 条）：")
+            for e in compile_errors[:10]:
+                fname = (e.get("file") or "?").split("\\")[-1].split("/")[-1]
+                lines.append(
+                    f"  - [{e.get('category', '?')}] {fname}:{e.get('line', '?')} "
+                    f"{e.get('code', '')} — {(e.get('msg') or '')[:180]}"
+                )
+            if compile_warnings:
+                lines.append("\n部分警告（前 3 条）：")
+                for w in compile_warnings[:3]:
+                    fname = (w.get("file") or "?").split("\\")[-1].split("/")[-1]
+                    lines.append(
+                        f"  - [{w.get('category', '?')}] {fname}:{w.get('line', '?')} "
+                        f"{w.get('code', '')} — {(w.get('msg') or '')[:120]}"
+                    )
+            lines.append(
+                "\n⚠️ UE 常见坑：\n"
+                "  - 同名头文件（UHT 禁止）\n"
+                "  - 漏 UCLASS/UFUNCTION/UPROPERTY 宏\n"
+                "  - Build.cs 缺模块依赖（Core/CoreUObject/Engine/InputCore/EnhancedInput 等）\n"
+                "  - include 的头文件路径错误（.generated.h 要匹配 class 名）\n"
+                "  - GENERATED_BODY() 遗漏 或位置错\n"
+                "  - 在 .cpp 直接 new FClass() 但 class 没继承 UObject 走不了 GC"
+            )
+            failure_signal = "\n".join(lines)
         else:
             failure_signal = f"失败类型: {failure_type}"
 

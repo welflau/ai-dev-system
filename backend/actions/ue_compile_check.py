@@ -392,7 +392,16 @@ class UECompileCheckAction(ActionBase):
         # 8. 打包结果
         head = text[:8192]
         tail = text[-8192:] if len(text) > 8192 else ""
-        status = "success" if exit_code == 0 and not errors else "error"
+        # 状态语义（关键）：
+        # - success        UBT exit=0 且无 errors
+        # - compile_failed UBT 真跑了但编译失败（有 errors 或 exit!=0 带输出）
+        #   → orchestrator 会走 reject_goto: development 链路触发 fix_issues 修复
+        # - error（保留给 Action 早期返回）UBT 没启动 / uproject 找不到等环境问题
+        #   → orchestrator 走 BLOCKED 人工介入
+        if exit_code == 0 and not errors:
+            status = "success"
+        else:
+            status = "compile_failed"
 
         logger.info(
             "🔧 UBT done: exit=%d errors=%d warnings=%d duration=%.1fs",

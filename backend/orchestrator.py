@@ -1353,7 +1353,64 @@ class TicketOrchestrator:
             })
 
         elif agent_name == "DevAgent":
-            # 开发完成
+            # v0.18 Phase D：UE 引擎编译阶段（action=run_engine_compile）有自己的结果语义。
+            # UECompileCheckAction 返回 status 可以是 success / compile_failed（早期 error
+            # 已在开头的 BLOCKED 分支被捕获，此处只可能到 success 或 compile_failed）。
+            if action == "run_engine_compile":
+                r_status = result.get("status")
+                errors_list = result.get("errors") or []
+                if r_status == "success":
+                    new_status = "engine_compile_passed"
+                    await db.update("tickets", {
+                        "status": new_status,
+                        "result": result_json,
+                        "updated_at": now_iso(),
+                    }, "id = ?", (ticket_id,))
+                    await self._log(
+                        project_id, requirement_id, ticket_id, agent_name,
+                        "complete", current_status, new_status,
+                        f"UBT 编译通过（{result.get('duration_ms', 0) // 1000}s，"
+                        f"target={result.get('target_name')}）",
+                        detail_data={
+                            "exit_code": result.get("exit_code"),
+                            "duration_ms": result.get("duration_ms"),
+                            "products": result.get("products"),
+                            "command": result.get("command"),
+                        },
+                    )
+                    # 通过不落 artifacts（产物列表已在 result 里有）
+                else:
+                    # compile_failed → 走 reject_goto: development 链路
+                    # 状态设 engine_compile_failed；SOP 里 engine_compile stage 的 reject_status
+                    # 就是它，后续 poll 轮询时根据 SOP 查 reject_goto 拿到 "development"，
+                    # 组装成一条 {engine_compile_failed → DevAgent.fix_issues} 的规则
+                    new_status = "engine_compile_failed"
+                    await db.update("tickets", {
+                        "status": new_status,
+                        "result": result_json,
+                        "updated_at": now_iso(),
+                    }, "id = ?", (ticket_id,))
+                    err_brief = "; ".join(
+                        f"{e.get('file', '?').split(chr(92))[-1]}:{e.get('line', '?')} {e.get('code', '')} {e.get('msg', '')[:80]}"
+                        for e in errors_list[:3]
+                    )
+                    await self._log(
+                        project_id, requirement_id, ticket_id, agent_name,
+                        "reject", current_status, new_status,
+                        f"UBT 编译失败 · {len(errors_list)} errors · 将触发 DevAgent.fix_issues 修复",
+                        "warning",
+                        detail_data={
+                            "errors": errors_list[:10],
+                            "warnings": (result.get("warnings") or [])[:5],
+                            "exit_code": result.get("exit_code"),
+                            "duration_ms": result.get("duration_ms"),
+                            "command": result.get("command"),
+                            "err_brief": err_brief,
+                        },
+                    )
+                return   # 不进入下面的产物落库
+
+            # 常规 develop / rework / fix_issues → development_done
             new_status = TicketStatus.DEVELOPMENT_DONE.value
 
             # 自测结果
