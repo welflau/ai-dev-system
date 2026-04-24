@@ -552,8 +552,10 @@ function switchTab(tab) {
     if (tab === 'cicd') loadCICD();
     if (tab === 'logs') loadLogs();
     if (tab === 'bugs') loadBugs();
-    if (tab === 'settings-general') loadSettingsGeneral();
-    if (tab === 'settings-traits') loadProjectTraitsEditor();
+    if (tab === 'settings-general') {
+        loadSettingsGeneral();
+        loadProjectTraitsEditor();   // v0.17: 项目特征合并进基本信息页
+    }
     if (tab === 'settings-repo') loadSettingsRepo();
     if (tab === 'settings-sop') loadSOPFlow();
     if (tab === 'settings-envs') loadEnvironments();
@@ -807,7 +809,7 @@ async function runTraitMatch() {
     }
 }
 
-// ==================== 项目特征编辑器（v0.17 Phase E，项目级 settings-traits Tab） ====================
+// ==================== 项目特征编辑器（v0.17 Phase E；合并进基本信息页） ====================
 
 // 本地工作副本（未保存的 pending 状态）
 let _projTraitsDraft = [];

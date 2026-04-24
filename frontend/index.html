@@ -111,9 +111,6 @@
                             <a class="nav-item nav-sub-item" data-tab="settings-general" onclick="switchTab('settings-general')">
                                 <span class="nav-item-icon">📋</span> 基本信息
                             </a>
-                            <a class="nav-item nav-sub-item" data-tab="settings-traits" onclick="switchTab('settings-traits')">
-                                <span class="nav-item-icon">🏷</span> 项目特征
-                            </a>
                             <a class="nav-item nav-sub-item" data-tab="settings-repo" onclick="switchTab('settings-repo')">
                                 <span class="nav-item-icon">📂</span> 仓库配置
                             </a>
@@ -507,21 +504,16 @@
                                     <input type="text" id="settingsCreatedAt" readonly disabled>
                                 </div>
                             </div>
-                        </div>
-                    </div>
 
-                    <!-- Tab: 设置 - 项目特征（v0.17 Phase E） -->
-                    <div id="tab-settings-traits" class="tab-content">
-                        <div class="settings-page">
-                            <div class="settings-page-header">
-                                <h2>🏷 项目特征</h2>
-                                <button class="btn btn-primary btn-sm" onclick="saveProjectTraits()">💾 保存修改</button>
-                            </div>
-
-                            <div class="settings-card">
+                            <!-- v0.17 Phase E：项目特征（trait-first 配置）合并进基本信息页 -->
+                            <div class="settings-card" style="margin-top:16px;">
+                                <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+                                    <h3 class="settings-card-title" style="margin:0;">🏷 项目特征</h3>
+                                    <button class="btn btn-sm btn-ghost" onclick="saveProjectTraits()">💾 保存特征</button>
+                                </div>
                                 <p class="settings-description" style="margin-bottom:12px;">
                                     项目的 traits 决定了会按什么 SOP 流程调度 / 注入哪些 Skill / 启用哪些 MCP。
-                                    改动后会**立即生效**（orchestrator 缓存自动失效，下个工单按新规则跑）。
+                                    改动后会<strong>立即生效</strong>（orchestrator 缓存自动失效，下个工单按新规则跑）。
                                 </p>
 
                                 <div style="display:flex; align-items:center; gap:12px; margin-bottom:14px;">
