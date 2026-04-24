@@ -1,0 +1,46 @@
+# UE 项目模板映射（v0.18 Phase A.5）
+#
+# trait → Epic 官方模板。InstantiateUETemplateAction 按 traits 命中第一个匹配项。
+# priority 大的先尝试，空 / 缺省 priority=50。兜底用 priority=0 的项。
+#
+# 只列 CPP 变体（不带 BP 后缀）—— BP-only 模板里没有 Source/，不适合 AI 开发系统。
+
+mappings:
+  - template: TP_FirstPerson
+    priority: 100
+    match:
+      all_of: [engine:ue5, category:game]
+      any_of: [genre:fps, genre:first_person]
+    description: "第一人称模板（带武器系统 + 物理）"
+
+  - template: TP_ThirdPerson
+    priority: 90
+    match:
+      all_of: [engine:ue5, category:game]
+      any_of: [genre:third_person, genre:action, genre:adventure]
+    description: "第三人称模板（角色控制 + 相机）"
+
+  - template: TP_TopDown
+    priority: 85
+    match:
+      all_of: [engine:ue5, category:game]
+      any_of: [genre:topdown, genre:rpg, genre:rts, genre:moba]
+    description: "俯视角模板（点击移动）"
+
+  - template: TP_VehicleAdv
+    priority: 80
+    match:
+      all_of: [engine:ue5, category:game]
+      any_of: [genre:racing, genre:vehicle, genre:driving]
+    description: "高级载具模板（物理驾驶）"
+
+  # VR 项目（platform:vr 这个 trait 未来加，目前注释形式记一下）
+  # - template: TP_VirtualRealityBP   # 只有 BP 变体，暂不支持
+  #   match: {all_of: [engine:ue5, platform:vr]}
+
+  # 兜底：任何 UE5 项目都至少能用 TP_Blank
+  - template: TP_Blank
+    priority: 0
+    match:
+      all_of: [engine:ue5]
+    description: "空白模板（最小可编译骨架）"
