@@ -544,6 +544,34 @@ class ChatAssistantAgent(BaseAgent):
             if getattr(self, "_skills_prompt", "") else ""
         )
 
+        # v0.18：解析项目 traits，若是 UE 项目则加 UE 专属意图路由
+        import json as _json
+        try:
+            _raw = project.get("traits") or "[]"
+            project_traits = _json.loads(_raw) if isinstance(_raw, str) else list(_raw)
+            if not isinstance(project_traits, list):
+                project_traits = []
+        except Exception:
+            project_traits = []
+        project_traits = [str(t) for t in project_traits]
+        is_ue_project = any(t.startswith("engine:ue") for t in project_traits)
+
+        traits_line = (
+            f"- 项目特征：{', '.join(project_traits)}"
+            if project_traits else "- 项目特征：（未设置）"
+        )
+
+        ue_routing = ""
+        if is_ue_project:
+            ue_routing = """
+
+## 🎮 UE 项目意图路由（优先级最高，在 confirm_requirement 之前判断）
+- "生成框架 / 创建骨架 / 初始化工程 / 基于 TP_* 模板 / 做个 FPS / TPS / TopDown 游戏 / 从模板开始" 等
+  → **优先调 propose_ue_framework**（产出方案卡片让用户选引擎/模板/项目名后点确认才真落地）
+  → ⚠️ 不要调 confirm_requirement 把这个当成"新需求"处理 —— 这是工程骨架生成，不是加功能需求
+- 用户在 UE 项目里提"加个武器系统 / 做个 AI / 实现倒计时"这种**具体功能** → 调 confirm_requirement（走需求流）
+- 简单说：**动"整个工程骨架"用 propose_ue_framework；动"某个功能模块"用 confirm_requirement**"""
+
         return f"""你是 AI 自动开发系统的智能助手，当前正在为项目「{project['name']}」提供服务。
 
 ## 项目信息
@@ -551,6 +579,8 @@ class ChatAssistantAgent(BaseAgent):
 - 描述：{project.get('description') or '无描述'}
 - 技术栈：{project.get('tech_stack') or '未指定'}
 - Git 仓库：{project.get('git_repo_path') or '未配置'}
+{traits_line}
+{ue_routing}
 {knowledge_section}
 ## 当前需求状态
 {req_summary}
