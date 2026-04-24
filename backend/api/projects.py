@@ -942,6 +942,73 @@ async def get_project_traits(project_id: str):
     }
 
 
+# ==================== v0.18 UE 配置 API ====================
+
+
+class UEConfigRequest(BaseModel):
+    ue_engine_path: Optional[str] = None
+    ue_engine_version: Optional[str] = None
+    ue_engine_type: Optional[str] = None         # "launcher" | "source_build"
+    uproject_path: Optional[str] = None
+    ue_target_name: Optional[str] = None
+    ue_target_platform: Optional[str] = None
+    ue_target_config: Optional[str] = None
+
+
+@router.get("/{project_id}/ue-config")
+async def get_project_ue_config(project_id: str):
+    """获取项目的 UE 配置字段（Phase B 持久化的字段）。"""
+    row = await db.fetch_one(
+        """SELECT id, name, traits, ue_engine_path, ue_engine_version, ue_engine_type,
+                  uproject_path, ue_target_name, ue_target_platform, ue_target_config
+           FROM projects WHERE id = ?""",
+        (project_id,),
+    )
+    if not row:
+        raise HTTPException(404, "项目不存在")
+
+    # 判断是不是 UE 项目（有 engine:ue* trait）
+    import json as _json
+    try:
+        traits = _json.loads(row.get("traits") or "[]") or []
+    except Exception:
+        traits = []
+    is_ue = any(t.startswith("engine:ue") for t in traits)
+
+    return {
+        "project_id": row["id"],
+        "project_name": row["name"],
+        "is_ue_project": is_ue,
+        "ue_engine_path": row.get("ue_engine_path"),
+        "ue_engine_version": row.get("ue_engine_version"),
+        "ue_engine_type": row.get("ue_engine_type"),
+        "uproject_path": row.get("uproject_path"),
+        "ue_target_name": row.get("ue_target_name"),
+        "ue_target_platform": row.get("ue_target_platform") or "Win64",
+        "ue_target_config": row.get("ue_target_config") or "Development",
+    }
+
+
+@router.patch("/{project_id}/ue-config")
+async def update_project_ue_config(project_id: str, req: UEConfigRequest):
+    """更新项目的 UE 配置字段（按需更新，None 字段跳过）。"""
+    existing = await db.fetch_one("SELECT id FROM projects WHERE id = ?", (project_id,))
+    if not existing:
+        raise HTTPException(404, "项目不存在")
+
+    # 仅更新非 None 字段
+    updates = {
+        k: v for k, v in req.model_dump().items()
+        if v is not None
+    }
+    if not updates:
+        return {"message": "无变更"}
+
+    updates["updated_at"] = now_iso()
+    await db.update("projects", updates, "id = ?", (project_id,))
+    return {"message": "UE 配置已更新", "updated_fields": list(updates.keys())}
+
+
 # ==================== v0.17 Preview Assembly API ====================
 
 

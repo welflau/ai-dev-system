@@ -2287,6 +2287,30 @@ class TicketOrchestrator:
                 except json.JSONDecodeError:
                     context["test_result"] = {}
 
+        # v0.18 Phase B：注入项目级 UE 配置（引擎/uproject/target 等），供
+        # UECompileCheckAction / InstantiateUETemplateAction 等 UE 相关 action 透传使用。
+        # 这样 DevAgent.run_engine_compile 不再需要每次从前端卡片 context 里取。
+        try:
+            proj_row = await db.fetch_one(
+                """SELECT ue_engine_path, ue_engine_version, ue_engine_type,
+                          uproject_path, ue_target_name, ue_target_platform, ue_target_config
+                   FROM projects WHERE id = ?""",
+                (project_id,),
+            )
+            if proj_row:
+                for k, v in proj_row.items():
+                    if v is not None and v != "":
+                        context[k] = v
+                # uproject_path 若是相对路径，拼成绝对
+                up = context.get("uproject_path")
+                if up and not Path(up).is_absolute():
+                    from git_manager import git_manager
+                    rp = git_manager._repo_path(project_id)
+                    if rp:
+                        context["uproject_path"] = str(Path(rp) / up)
+        except Exception as e:
+            logger.warning("读取项目 UE 配置失败（非致命）: %s", e)
+
         # === 增量开发上下文：读取仓库中已有文件 ===
         try:
             from memory import AgentMemory

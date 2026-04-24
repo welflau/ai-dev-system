@@ -69,6 +69,14 @@ class Database:
             ("projects", "preset_id", "TEXT"),                     # 可选，建项目时选的 preset 名字
             # v0.17 卡壳诊断（BLOCKED 工单的 LLM 诊断结果）
             ("tickets", "diagnosis", "TEXT"),                      # JSON: {symptom, root_cause, severity, suggested_actions, ...}
+            # v0.18 UE 项目配置（持久化到项目级别，避免每次卡片里重选）
+            ("projects", "ue_engine_path", "TEXT"),                # 引擎根目录，如 "G:/EpicGames/UE_5.3"
+            ("projects", "ue_engine_version", "TEXT"),             # 版本号冗余，如 "5.3.2"
+            ("projects", "ue_engine_type", "TEXT"),                # "launcher" / "source_build"
+            ("projects", "uproject_path", "TEXT"),                 # .uproject 相对仓库根路径
+            ("projects", "ue_target_name", "TEXT"),                # 编译 target 名，如 "TestFPSEditor"
+            ("projects", "ue_target_platform", "TEXT DEFAULT 'Win64'"),
+            ("projects", "ue_target_config", "TEXT DEFAULT 'Development'"),
         ]
         async with self._write_lock:
             for table, column, col_def in migrations:

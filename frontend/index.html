@@ -554,6 +554,52 @@
                                 </p>
                                 <div id="projectTraitsPreview"><div class="empty-state-sm">加载中...</div></div>
                             </div>
+
+                            <!-- v0.18：UE 项目专属配置（仅 engine:ue* 项目显示） -->
+                            <div class="settings-card" id="ueConfigCard" style="margin-top:16px; display:none;">
+                                <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+                                    <h3 class="settings-card-title" style="margin:0;">🎮 UE 引擎配置</h3>
+                                    <button class="btn btn-sm btn-ghost" onclick="saveProjectUEConfig()">💾 保存 UE 配置</button>
+                                </div>
+                                <p class="settings-description" style="margin-bottom:12px;">
+                                    持久化本项目的 UE 引擎路径 / .uproject / target / 平台配置。
+                                    orchestrator 分派 <code>run_engine_compile</code> 时会自动透传这些参数。
+                                </p>
+                                <div class="form-group">
+                                    <label>UE 引擎</label>
+                                    <select id="ueConfigEngine" class="form-control">
+                                        <option value="">(加载中...)</option>
+                                    </select>
+                                    <small class="form-hint">下拉列的是本机检测到的引擎（HKLM + HKCU）</small>
+                                </div>
+                                <div class="form-group">
+                                    <label>.uproject 路径</label>
+                                    <input type="text" id="ueConfigUproject" placeholder="如 TestFPS.uproject（相对仓库根）或绝对路径">
+                                </div>
+                                <div class="form-group" style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:8px;">
+                                    <div>
+                                        <label>编译 Target</label>
+                                        <input type="text" id="ueConfigTarget" placeholder="如 TestFPSEditor">
+                                    </div>
+                                    <div>
+                                        <label>平台</label>
+                                        <select id="ueConfigPlatform" class="form-control">
+                                            <option value="Win64">Win64</option>
+                                            <option value="Linux">Linux</option>
+                                            <option value="Mac">Mac</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label>Configuration</label>
+                                        <select id="ueConfigBuildConfig" class="form-control">
+                                            <option value="Development">Development</option>
+                                            <option value="DebugGame">DebugGame</option>
+                                            <option value="Shipping">Shipping</option>
+                                            <option value="Test">Test</option>
+                                        </select>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     </div>
 

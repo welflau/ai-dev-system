@@ -556,6 +556,7 @@ function switchTab(tab) {
     if (tab === 'settings-general') {
         loadSettingsGeneral();
         loadProjectTraitsEditor();   // v0.17: 项目特征合并进基本信息页
+        loadProjectUEConfig();       // v0.18 B: UE 项目专属配置（仅 UE 项目显示）
     }
     if (tab === 'settings-repo') loadSettingsRepo();
     if (tab === 'settings-sop') loadSOPFlow();
@@ -1014,6 +1015,83 @@ async function saveProjectTraits() {
             ? `已保存 ${(result.traits || []).length} 个 traits（含 ${unknowns.length} 个非 taxonomy，SOP 会忽略它们）`
             : `已保存 ${(result.traits || []).length} 个 traits，orchestrator 规则已刷新`;
         showToast(msg, 'success');
+    } catch (e) {
+        showToast(`保存失败: ${e.message}`, 'error');
+    }
+}
+
+// ==================== UE 项目配置（v0.18 Phase B） ====================
+
+async function loadProjectUEConfig() {
+    if (!currentProjectId) return;
+    const card = document.getElementById('ueConfigCard');
+    if (!card) return;
+
+    try {
+        const cfg = await api(`/projects/${currentProjectId}/ue-config`);
+        // 非 UE 项目不显示本 card
+        if (!cfg.is_ue_project) {
+            card.style.display = 'none';
+            return;
+        }
+        card.style.display = '';
+
+        // 加载引擎下拉（复用 /api/ue-engines/detect）
+        const engineSel = document.getElementById('ueConfigEngine');
+        if (engineSel) {
+            try {
+                const data = await api('/ue-engines/detect');
+                const engines = data.engines || [];
+                const currentPath = cfg.ue_engine_path || '';
+                engineSel.innerHTML = ['<option value="">(未指定)</option>']
+                    .concat(engines.map(e => {
+                        const sel = e.path === currentPath ? 'selected' : '';
+                        const ubt = e.has_ubt ? '' : ' ⚠无UBT';
+                        return `<option value="${escapeHtml(e.path)}" data-version="${escapeHtml(e.version)}" data-type="${escapeHtml(e.type)}" ${sel}>${escapeHtml(e.version)} [${e.type}]${ubt} — ${escapeHtml(e.path)}</option>`;
+                    })).join('');
+                // 当前路径不在列表里（比如已删除的引擎），补一项
+                if (currentPath && !engines.some(e => e.path === currentPath)) {
+                    engineSel.innerHTML += `<option value="${escapeHtml(currentPath)}" selected>${escapeHtml(currentPath)} (当前保存值，本机未检测到)</option>`;
+                }
+            } catch (e) {
+                engineSel.innerHTML = `<option value="${escapeHtml(cfg.ue_engine_path || '')}" selected>${escapeHtml(cfg.ue_engine_path || '(加载引擎列表失败)')}</option>`;
+            }
+        }
+
+        document.getElementById('ueConfigUproject').value = cfg.uproject_path || '';
+        document.getElementById('ueConfigTarget').value = cfg.ue_target_name || '';
+        document.getElementById('ueConfigPlatform').value = cfg.ue_target_platform || 'Win64';
+        document.getElementById('ueConfigBuildConfig').value = cfg.ue_target_config || 'Development';
+    } catch (e) {
+        console.warn('loadProjectUEConfig 失败:', e);
+        card.style.display = 'none';
+    }
+}
+
+async function saveProjectUEConfig() {
+    if (!currentProjectId) return;
+    const engineSel = document.getElementById('ueConfigEngine');
+    const engineOpt = engineSel?.selectedOptions[0];
+    const enginePath = engineSel?.value || '';
+    const engineVersion = engineOpt?.dataset?.version || '';
+    const engineType = engineOpt?.dataset?.type || '';
+
+    const body = {
+        ue_engine_path: enginePath,
+        ue_engine_version: engineVersion,
+        ue_engine_type: engineType,
+        uproject_path: (document.getElementById('ueConfigUproject')?.value || '').trim(),
+        ue_target_name: (document.getElementById('ueConfigTarget')?.value || '').trim(),
+        ue_target_platform: document.getElementById('ueConfigPlatform')?.value || 'Win64',
+        ue_target_config: document.getElementById('ueConfigBuildConfig')?.value || 'Development',
+    };
+
+    try {
+        await api(`/projects/${currentProjectId}/ue-config`, {
+            method: 'PATCH',
+            body,
+        });
+        showToast('UE 配置已保存', 'success');
     } catch (e) {
         showToast(`保存失败: ${e.message}`, 'error');
     }
