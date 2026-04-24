@@ -67,6 +67,8 @@ class Database:
             ("projects", "traits", "TEXT DEFAULT '[]'"),          # JSON array: ["platform:web", ...]
             ("projects", "traits_confidence", "TEXT DEFAULT '{}'"),  # JSON: {trait: {score, source, evidence}}
             ("projects", "preset_id", "TEXT"),                     # 可选，建项目时选的 preset 名字
+            # v0.17 卡壳诊断（BLOCKED 工单的 LLM 诊断结果）
+            ("tickets", "diagnosis", "TEXT"),                      # JSON: {symptom, root_cause, severity, suggested_actions, ...}
         ]
         async with self._write_lock:
             for table, column, col_def in migrations:

@@ -333,6 +333,52 @@ async def reject_ticket(project_id: str, ticket_id: str, req: TicketRejectReques
     return {"message": message, "new_status": new_status}
 
 
+@router.post("/api/projects/{project_id}/tickets/{ticket_id}/diagnose")
+async def diagnose_ticket(project_id: str, ticket_id: str, background_tasks: BackgroundTasks):
+    """手动触发/重新触发诊断。结果异步写回 tickets.diagnosis。"""
+    existing = await db.fetch_one(
+        "SELECT * FROM tickets WHERE id = ? AND project_id = ?",
+        (ticket_id, project_id),
+    )
+    if not existing:
+        raise HTTPException(404, "工单不存在")
+
+    # 从最近一条 error 日志提取 agent/action/error，供诊断使用
+    # 若该 ticket 从未产出 error（手动诊断健康工单），也能跑，传空 error
+    latest_err = await db.fetch_one(
+        "SELECT agent_type, action, detail, from_status FROM ticket_logs "
+        "WHERE ticket_id = ? AND level = 'error' "
+        "ORDER BY created_at DESC LIMIT 1",
+        (ticket_id,),
+    )
+    agent_name = "?"
+    action_name = "?"
+    error_msg = ""
+    blocked_from = existing["status"]
+    if latest_err:
+        agent_name = latest_err.get("agent_type") or "?"
+        try:
+            det = json.loads(latest_err.get("detail") or "{}")
+            action_name = det.get("action") or latest_err.get("action") or "?"
+            error_msg = det.get("error") or det.get("message") or ""
+        except Exception:
+            action_name = latest_err.get("action") or "?"
+        blocked_from = latest_err.get("from_status") or blocked_from
+
+    from orchestrator import orchestrator
+    background_tasks.add_task(
+        orchestrator._diagnose_blocked_ticket,
+        project_id=project_id,
+        ticket_id=ticket_id,
+        current_ticket=dict(existing),
+        agent_name=agent_name,
+        action=action_name,
+        error_msg=error_msg,
+        blocked_from_status=blocked_from,
+    )
+    return {"message": "诊断已触发，结果将异步写入 tickets.diagnosis"}
+
+
 @router.post("/api/projects/{project_id}/tickets/{ticket_id}/unblock")
 async def unblock_ticket(project_id: str, ticket_id: str, target_status: str = "pending"):
     """解除 blocked 工单（人工介入后使用）。

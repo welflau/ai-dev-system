@@ -2268,12 +2268,18 @@ async function refreshBoard() {
 function renderTicketCard(t) {
     // 判断卡片状态样式
     let cardClass = 'ticket-card';
-    if (t.status.includes('_in_progress') || t.status === 'deploying') cardClass += ' running';
+    if (t.status === 'blocked') cardClass += ' rejected';   // 复用红色样式
+    else if (t.status.includes('_in_progress') || t.status === 'deploying') cardClass += ' running';
     else if (t.status === 'deployed') cardClass += ' done';
     else if (t.status.includes('rejected') || t.status.includes('failed')) cardClass += ' rejected';
 
     const priorityLabel = {1: 'P1', 2: 'P2', 3: 'P3', 4: 'P4', 5: 'P5'};
     const pLabel = priorityLabel[t.priority] || `P${t.priority}`;
+
+    // blocked 工单显示🚧 角标
+    const blockedBadge = t.status === 'blocked'
+        ? ' <span class="ticket-status-badge error" title="工单已卡住，点进去看诊断">🚧</span>'
+        : '';
 
     // 所有工单状态选项
     const allStatuses = [
@@ -2291,6 +2297,7 @@ function renderTicketCard(t) {
         { value: 'testing_failed', label: '测试不通过' },
         { value: 'deploying', label: '部署中' },
         { value: 'deployed', label: '已部署' },
+        { value: 'blocked', label: '🚧 已卡住' },
         { value: 'cancelled', label: '已取消' },
     ];
     const statusOptions = allStatuses.map(s =>
@@ -2299,7 +2306,7 @@ function renderTicketCard(t) {
 
     return `
         <div class="${cardClass}${t.type === 'bug' ? ' bug-ticket' : ''}" style="cursor:pointer;" onclick="openTicketDrawer('${t.id}')">
-            <div class="ticket-title">${t.type === 'bug' ? '<span class="bug-label">BUG</span>' : ''}${escHtml(t.title)}${t.has_error ? ' <span class="ticket-status-badge error" title="测试失败或被拒绝">✗</span>' : t.has_warning ? ' <span class="ticket-status-badge warning" title="测试有警告">⚠</span>' : ''}</div>
+            <div class="ticket-title">${t.type === 'bug' ? '<span class="bug-label">BUG</span>' : ''}${escHtml(t.title)}${blockedBadge}${t.has_error ? ' <span class="ticket-status-badge error" title="测试失败或被拒绝">✗</span>' : t.has_warning ? ' <span class="ticket-status-badge warning" title="测试有警告">⚠</span>' : ''}</div>
             <div class="ticket-meta">
                 ${t.module ? `<span class="tag tag-module">${escHtml(t.module)}</span>` : ''}
                 <span class="tag tag-type${t.type === 'bug' ? ' tag-bug' : ''}">${escHtml(t.type || 'feature')}</span>
@@ -2397,6 +2404,9 @@ async function openTicketDrawer(ticketId) {
 
         // 操作按钮
         html += renderTicketActions(data);
+
+        // 🩺 诊断面板（blocked 工单显著位置）
+        html += renderDiagnosisPanel(data);
 
         // 依赖关系
         let depsArr = [];
@@ -2663,6 +2673,11 @@ function renderTicketActions(ticket) {
     if (ticket.status === 'pending') {
         buttons += `<button class="btn btn-primary btn-sm" onclick="startTicket('${ticket.id}')">▶ 启动</button>`;
     }
+    // blocked 工单专属操作：重新诊断 + 解除
+    if (ticket.status === 'blocked') {
+        buttons += `<button class="btn btn-primary btn-sm" onclick="diagnoseTicket('${ticket.id}')">🔄 重新诊断</button>`;
+        buttons += `<button class="btn btn-sm" onclick="unblockTicket('${ticket.id}')">↪️ 解除 blocked</button>`;
+    }
     // 查看 AI 对话按钮（保留属性面板打开，方便用户边看工单边对话）
     buttons += `<button class="btn btn-sm" onclick="selectTicketForChat('${ticket.id}', '${escHtml(ticket.title).replace(/'/g, "\\'")}')">💬 AI 对话</button>`;
     if (ticket.status !== 'deployed' && ticket.status !== 'cancelled') {
@@ -2670,6 +2685,72 @@ function renderTicketActions(ticket) {
     }
     if (!buttons) return '';
     return `<div class="drawer-section"><h4>操作</h4><div style="display:flex; gap:8px; flex-wrap:wrap;">${buttons}</div></div>`;
+}
+
+// ==================== 诊断面板 ====================
+
+function renderDiagnosisPanel(ticket) {
+    if (!ticket.diagnosis) {
+        if (ticket.status !== 'blocked') return '';
+        return `
+        <div class="drawer-section" style="background: var(--bg-warning, #fff7e6); border-left: 3px solid var(--warning, #faad14); padding: 12px;">
+            <h4>🩺 诊断</h4>
+            <div style="font-size:13px; color:var(--text-secondary);">诊断正在进行中…（进入 blocked 后自动触发；若等待超过 30 秒，可点"🔄 重新诊断"）</div>
+        </div>`;
+    }
+    let d;
+    try { d = typeof ticket.diagnosis === 'string' ? JSON.parse(ticket.diagnosis) : ticket.diagnosis; }
+    catch (e) { return ''; }
+    if (!d || typeof d !== 'object') return '';
+
+    const sevColor = { low: '#52c41a', medium: '#faad14', high: '#ff4d4f' }[d.severity] || '#faad14';
+    const sevLabel = { low: '低', medium: '中', high: '高' }[d.severity] || d.severity || '中';
+    const conf = typeof d.confidence === 'number' ? (d.confidence * 100).toFixed(0) + '%' : '?';
+    const actions = (d.suggested_actions || [])
+        .slice(0, 4)
+        .map((a, i) => `
+            <li style="margin-bottom:6px;">
+                <span style="color:var(--text-secondary);">[${a.who || '?'}]</span>
+                ${escHtml(a.action || '')}
+            </li>
+        `).join('');
+    const files = (d.related_files || []).slice(0, 5)
+        .map(f => `<code style="background:var(--bg-secondary); padding:1px 6px; border-radius:3px;">${escHtml(f)}</code>`).join(' ');
+
+    return `
+    <div class="drawer-section" style="background: var(--bg-warning, #fff7e6); border-left: 3px solid ${sevColor}; padding: 12px;">
+        <h4>🩺 诊断结果 <span style="font-weight:normal; font-size:12px; color:var(--text-secondary);">严重度: <span style="color:${sevColor};">${sevLabel}</span> · 置信度 ${conf}</span></h4>
+        <div style="margin-bottom:8px;"><strong>现象:</strong> ${escHtml(d.symptom || '-')}</div>
+        <div style="margin-bottom:8px;"><strong>根因:</strong> ${escHtml(d.root_cause || '-')}</div>
+        ${actions ? `<div style="margin-bottom:8px;"><strong>建议:</strong><ol style="margin:4px 0 0 20px; padding:0;">${actions}</ol></div>` : ''}
+        ${files ? `<div style="margin-bottom:8px;"><strong>相关文件:</strong> ${files}</div>` : ''}
+        ${d.note ? `<div style="font-size:11px; color:var(--text-secondary); margin-top:6px;">${escHtml(d.note)}</div>` : ''}
+        ${d.created_at ? `<div style="font-size:11px; color:var(--text-secondary);">诊断时间: ${d.created_at.replace('T', ' ').slice(0, 19)}</div>` : ''}
+    </div>`;
+}
+
+async function diagnoseTicket(ticketId) {
+    if (!currentProjectId) return;
+    try {
+        await api(`/projects/${currentProjectId}/tickets/${ticketId}/diagnose`, { method: 'POST' });
+        showToast('诊断已触发，稍候自动更新', 'info');
+    } catch (e) {
+        showToast(`诊断触发失败: ${e.message}`, 'error');
+    }
+}
+
+async function unblockTicket(ticketId) {
+    if (!currentProjectId) return;
+    const target = prompt('解除到哪个状态？（默认 pending 重新跑）', 'pending');
+    if (!target) return;
+    try {
+        await api(`/projects/${currentProjectId}/tickets/${ticketId}/unblock?target_status=${encodeURIComponent(target)}`, { method: 'POST' });
+        showToast(`已解除 → ${target}`, 'success');
+        closeDrawer();
+        setTimeout(refreshBoard, 500);
+    } catch (e) {
+        showToast(`解除失败: ${e.message}`, 'error');
+    }
 }
 
 async function startTicket(ticketId) {
@@ -4620,6 +4701,33 @@ function connectSSE(projectId) {
         eventSource.addEventListener('ticket_rejected', (e) => {
             const data = JSON.parse(e.data);
             showToast(`工单被打回: ${data.reason || ''}`, 'warning');
+            refreshBoard();
+        });
+
+        eventSource.addEventListener('ticket_blocked', (e) => {
+            const data = JSON.parse(e.data);
+            console.warn('[SSE] ticket_blocked:', data);
+            showToast(`🚧 工单卡住: ${data.agent}.${data.action} 失败，AI 诊断中...`, 'warning');
+            refreshBoard();
+        });
+
+        eventSource.addEventListener('ticket_diagnosed', (e) => {
+            const data = JSON.parse(e.data);
+            console.info('[SSE] ticket_diagnosed:', data);
+            const d = data.diagnosis || {};
+            const sev = d.severity || 'medium';
+            const toastType = sev === 'high' ? 'error' : 'warning';
+            showToast(`🩺 诊断完成: ${(d.root_cause || '').slice(0, 60)}`, toastType);
+            refreshBoard();
+            // 如果当前打开的抽屉就是这个 ticket（用 chatCurrentTicketId 作代理），重新加载
+            if (typeof chatCurrentTicketId !== 'undefined' && chatCurrentTicketId === data.ticket_id) {
+                openTicketDrawer(data.ticket_id);
+            }
+        });
+
+        eventSource.addEventListener('ticket_unblocked', (e) => {
+            const data = JSON.parse(e.data);
+            showToast(`工单已解除 blocked → ${data.to}`, 'success');
             refreshBoard();
         });
 

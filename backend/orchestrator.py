@@ -1275,6 +1275,18 @@ class TicketOrchestrator:
                 "🚧 工单 blocked: %s %s.%s → %s",
                 ticket_id[:12], agent_name, action, err_msg[:120],
             )
+
+            # fire-and-forget：后台跑 LLM 诊断，不阻塞主 poll 循环
+            # 结果写回 tickets.diagnosis，SSE 推前端
+            asyncio.create_task(self._diagnose_blocked_ticket(
+                project_id=project_id,
+                ticket_id=ticket_id,
+                current_ticket=dict(current_ticket) if current_ticket else dict(ticket),
+                agent_name=agent_name,
+                action=action,
+                error_msg=err_msg,
+                blocked_from_status=current_status,
+            ))
             return
 
         # 保存执行结果（先 pop 二进制媒体文件，避免 JSON 序列化失败）
@@ -2340,6 +2352,121 @@ class TicketOrchestrator:
             "DeployAgent": "deployer",
         }
         return mapping.get(agent_name, "unknown")
+
+    async def _diagnose_blocked_ticket(
+        self,
+        project_id: str,
+        ticket_id: str,
+        current_ticket: Dict,
+        agent_name: str,
+        action: str,
+        error_msg: str,
+        blocked_from_status: str,
+    ):
+        """后台跑一次 LLM 诊断，写回 tickets.diagnosis 并发 SSE 事件。
+        fire-and-forget：任何异常都只打日志，绝不冒泡到 poll 循环。
+        """
+        try:
+            # 收集上下文
+            import json as _json
+            proj_row = await db.fetch_one(
+                "SELECT traits FROM projects WHERE id = ?", (project_id,)
+            )
+            traits: List[str] = []
+            if proj_row:
+                try:
+                    raw = proj_row.get("traits") or "[]"
+                    parsed = _json.loads(raw) if isinstance(raw, str) else raw
+                    if isinstance(parsed, list):
+                        traits = [str(t) for t in parsed]
+                except Exception:
+                    pass
+
+            # 最近 10 条日志（最新在前）
+            recent_logs = await db.fetch_all(
+                "SELECT agent_type, action, from_status, to_status, detail, created_at "
+                "FROM ticket_logs WHERE ticket_id = ? "
+                "ORDER BY created_at DESC LIMIT 10",
+                (ticket_id,),
+            )
+
+            # 定位该 action 对应的 SOP 阶段定义（若能 compose）
+            sop_stage: Dict[str, Any] = {}
+            try:
+                from sop.loader import compose_sop
+                cfg = compose_sop(traits=traits, ticket_type=None)
+                for s in (cfg.get("stages") or []):
+                    if s.get("action") == action and s.get("agent") == agent_name:
+                        sop_stage = dict(s)
+                        break
+            except Exception:
+                pass
+
+            context = {
+                "ticket_id": ticket_id,
+                "ticket_title": current_ticket.get("title", ""),
+                "ticket_description": current_ticket.get("description", ""),
+                "project_id": project_id,
+                "project_traits": traits,
+                "current_status": blocked_from_status,
+                "failed_agent": agent_name,
+                "failed_action": action,
+                "failed_error_message": error_msg,
+                "recent_logs": recent_logs,
+                "sop_stage": sop_stage,
+            }
+
+            from actions.diagnose_ticket import DiagnoseTicketAction
+            action_obj = DiagnoseTicketAction()
+            result = await action_obj.run(context)
+            diagnosis = (result.data or {}).get("diagnosis") or {}
+
+            # 写回 ticket
+            await db.update(
+                "tickets",
+                {
+                    "diagnosis": _json.dumps(diagnosis, ensure_ascii=False),
+                    "updated_at": now_iso(),
+                },
+                "id = ?",
+                (ticket_id,),
+            )
+
+            # 日志 + SSE
+            await self._log(
+                project_id,
+                current_ticket.get("requirement_id"),
+                ticket_id,
+                "System",
+                "diagnose",
+                None,
+                None,
+                f"🩺 诊断完成: {(diagnosis.get('symptom') or '')[:80]} | "
+                f"根因: {(diagnosis.get('root_cause') or '')[:100]} | "
+                f"置信度={diagnosis.get('confidence', 0):.2f}",
+                "info",
+                detail_data={"diagnosis": diagnosis},
+            )
+
+            await event_manager.publish_to_project(
+                project_id,
+                "ticket_diagnosed",
+                {
+                    "ticket_id": ticket_id,
+                    "diagnosis": diagnosis,
+                },
+            )
+
+            logger.info(
+                "🩺 工单 %s 诊断完成 | %s",
+                ticket_id[:12],
+                (diagnosis.get("root_cause") or "")[:120],
+            )
+        except Exception as e:
+            logger.error(
+                "🩺 诊断后台任务失败 ticket=%s: %s",
+                ticket_id[:12], e, exc_info=True,
+            )
 
     async def _log(
         self,
