@@ -460,6 +460,7 @@ function showPage(pageId) {
 function showProjectList() {
     currentProjectId = null;
     currentProject = null;
+    closeDrawer();   // 切走时把工单详情抽屉收起来，否则列表页会继续顶着
     disconnectSSE();
     showPage('projectListPage');
     updateBreadcrumb([{ text: '项目列表', onClick: 'showProjectList()' }]);
