@@ -3443,6 +3443,9 @@ function _renderTicketRow(t, isChild) {
 
     // 标题列：父工单有子工单时显示展开箭头
     const bugLabel = t.type === 'bug' ? '<span class="bug-label">BUG</span>' : '';
+    const blockedBadge = t.status === 'blocked'
+        ? ' <span class="ticket-status-badge error" title="工单已卡住，点进去看诊断">🚧</span>'
+        : '';
     const warnIcon = t.has_error ? '<span class="ticket-status-badge error" title="测试失败或被拒绝">✗</span>'
                    : t.has_warning ? '<span class="ticket-status-badge warning" title="测试有警告">⚠</span>'
                    : '';
@@ -3450,14 +3453,14 @@ function _renderTicketRow(t, isChild) {
     if (!isChild && hasChildren) {
         titleHtml = `
             <span class="tl-expand-arrow" onclick="event.stopPropagation(); toggleTicketChildren('${t.id}', this)">▶</span>
-            ${bugLabel}<span class="tl-title-text">${escHtml(t.title)}</span>${warnIcon}
+            ${bugLabel}<span class="tl-title-text">${escHtml(t.title)}</span>${blockedBadge}${warnIcon}
             <span class="tl-child-count-badge">${childCount}</span>`;
     } else if (isChild) {
         titleHtml = `
             <span class="tl-child-indent">└</span>
-            ${bugLabel}<span class="tl-title-text">${escHtml(t.title)}</span>${warnIcon}`;
+            ${bugLabel}<span class="tl-title-text">${escHtml(t.title)}</span>${blockedBadge}${warnIcon}`;
     } else {
-        titleHtml = `${bugLabel}<span class="tl-title-text">${escHtml(t.title)}</span>${warnIcon}`;
+        titleHtml = `${bugLabel}<span class="tl-title-text">${escHtml(t.title)}</span>${blockedBadge}${warnIcon}`;
     }
     if (t.description && !isChild) {
         titleHtml += `<span class="tl-title-desc">${escHtml(t.description)}</span>`;
@@ -3479,14 +3482,17 @@ function _renderTicketRow(t, isChild) {
         { value: 'testing_failed', label: '测试不通过' },
         { value: 'deploying', label: '部署中' },
         { value: 'deployed', label: '已部署' },
+        { value: 'blocked', label: '🚧 已卡住' },
         { value: 'cancelled', label: '已取消' },
     ];
     const statusOptions = allStatuses.map(s =>
         `<option value="${s.value}" ${t.status === s.value ? 'selected' : ''}>${s.label}</option>`
     ).join('');
 
+    const rowBlockedCls = t.status === 'blocked' ? ' tl-row-blocked' : '';
+
     return `
-        <tr class="tl-table-row${childClass}" ${parentAttr}
+        <tr class="tl-table-row${childClass}${rowBlockedCls}" ${parentAttr}
             ${isChild ? `data-child-of="${t.parent_ticket_id}" style="display:none;"` : ''}>
             <td class="tl-col-id"><span class="tl-id-badge">#${shortId}</span></td>
             <td class="tl-col-title" style="cursor:pointer;" onclick="openTicketDrawer('${t.id}')">${titleHtml}</td>
@@ -3577,6 +3583,7 @@ function renderTicketListBoard(container, tickets) {
     const statusGroups = {
         pending: { label: '待启动', color: 'var(--text-muted)', tickets: [] },
         in_progress: { label: '进行中', color: 'var(--info)', tickets: [] },
+        blocked: { label: '🚧 已卡住', color: 'var(--error)', tickets: [] },
         review: { label: '待审查', color: 'var(--warning)', tickets: [] },
         testing: { label: '测试中', color: 'var(--accent)', tickets: [] },
         done: { label: '已完成', color: 'var(--success)', tickets: [] },
@@ -3586,7 +3593,8 @@ function renderTicketListBoard(container, tickets) {
     const parentOnly = tickets.filter(t => !t.parent_ticket_id);
     parentOnly.forEach(t => {
         const s = t.status;
-        if (s === 'pending') statusGroups.pending.tickets.push(t);
+        if (s === 'blocked') statusGroups.blocked.tickets.push(t);
+        else if (s === 'pending') statusGroups.pending.tickets.push(t);
         else if (s.includes('_in_progress') || s === 'deploying' || s === 'analyzing') statusGroups.in_progress.tickets.push(t);
         else if (s.includes('review') || s.includes('rejected')) statusGroups.review.tickets.push(t);
         else if (s.includes('testing')) statusGroups.testing.tickets.push(t);
@@ -5391,6 +5399,7 @@ const STATUS_LABELS = {
     acceptance_passed: '验收通过', acceptance_rejected: '验收不通过',
     testing_in_progress: '测试中', testing_done: '测试通过', testing_failed: '测试不通过',
     deploying: '部署中', deployed: '已部署', cancelled: '已取消',
+    blocked: '🚧 已卡住',
     submitted: '已提交', analyzing: '分析中', decomposed: '已拆单',
     in_progress: '进行中', paused: '已暂停', completed: '已完成', cancelled: '已取消',
 };
@@ -5400,6 +5409,7 @@ function getStatusLabel(status) {
 }
 
 function getStatusColor(status) {
+    if (status === 'blocked') return 'var(--error)';
     if (status.includes('deployed') || status === 'completed' || status === 'testing_done' || status === 'acceptance_passed') return 'var(--success)';
     if (status.includes('_in_progress') || status === 'deploying' || status === 'analyzing' || status === 'in_progress') return 'var(--info)';
     if (status.includes('rejected') || status.includes('failed') || status === 'cancelled') return 'var(--error)';

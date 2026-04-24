@@ -4393,6 +4393,16 @@ pre.hljs, .hljs pre { background: transparent !important; }
 .tl-table-row:hover {
     background: var(--bg-hover);
 }
+/* blocked 工单一整行左红条 + 轻微红色底 */
+.tl-table-row.tl-row-blocked > td:first-child {
+    box-shadow: inset 3px 0 0 var(--error);
+}
+.tl-table-row.tl-row-blocked {
+    background: rgba(239, 68, 68, 0.04);
+}
+.tl-table-row.tl-row-blocked:hover {
+    background: rgba(239, 68, 68, 0.1);
+}
 
 .tl-id-badge {
     font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
