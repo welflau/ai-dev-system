@@ -19,3 +19,10 @@ stage:
   config:
     timeout_seconds: 180
     capture_screenshots: true
+
+pipeline_view_contrib:
+  group: testing
+  create_if_missing:
+    name: 测试验证
+    icon: 🧪
+    insert_after: development

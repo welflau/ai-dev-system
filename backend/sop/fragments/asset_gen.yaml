@@ -23,3 +23,11 @@ stage:
       - tileset
       - ui_element
     fallback_to_placeholder: true   # ArtistAgent 未实现时用占位图继续流程
+
+# 美术资产是 dev 前的准备工作，给独立 UI 组展示（区别于测试组）
+pipeline_view_contrib:
+  group: asset_preparation
+  create_if_missing:
+    name: 资产准备
+    icon: 🎨
+    insert_before: development

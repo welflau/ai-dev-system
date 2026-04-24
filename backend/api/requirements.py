@@ -3,6 +3,7 @@ AI 自动开发系统 - 需求 API
 """
 import json
 import logging
+from typing import List
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from database import db
 
@@ -280,11 +281,37 @@ async def get_requirement_pipeline(project_id: str, req_id: str):
         except Exception:
             return None
 
-    # Pipeline 5 阶段定义 —— 由 SOP 配置派生（sop/loader.py:build_pipeline_stages）
-    # 原硬编码版本已移到 sop/loader.py 的 _legacy_pipeline_stages() 作兜底
-    from sop.loader import build_pipeline_stages
+    # Pipeline 阶段定义 —— v0.17 按项目 traits 动态派生
+    # 先读项目 traits，调 compose_sop 组装出该项目专属的 SOP 配置
+    # 再 build_pipeline_stages 转成 UI 5/6/N 格视图
+    from sop.loader import build_pipeline_stages, compose_sop
     from orchestrator import orchestrator
-    _pipeline = build_pipeline_stages(orchestrator._sop_config or {})
+    import json as _json
+    project_row = await db.fetch_one(
+        "SELECT traits FROM projects WHERE id = ?",
+        (project_id,),
+    )
+    project_traits: List[str] = []
+    if project_row:
+        try:
+            raw = project_row.get("traits") or "[]"
+            parsed = _json.loads(raw) if isinstance(raw, str) else raw
+            if isinstance(parsed, list):
+                project_traits = [str(t) for t in parsed]
+        except Exception:
+            project_traits = []
+    # ticket_type 层面不做精细过滤——pipeline 视图是需求级的，要展示所有可能的阶段
+    try:
+        sop_config = compose_sop(traits=project_traits, ticket_type=None)
+    except Exception as e:
+        # compose 失败时兜底到全局 SOP（避免单个项目 traits 异常拖垮整个 API）
+        import logging as _logging
+        _logging.getLogger("api").warning(
+            "compose_sop 失败 project=%s traits=%s err=%s, 回退到全局 SOP",
+            project_id, project_traits, e,
+        )
+        sop_config = orchestrator._sop_config or {}
+    _pipeline = build_pipeline_stages(sop_config)
     # 将派生结果转为原先的数据结构，最小化下游改动
     STAGE_DEFS = [
         (d["key"], d["name"], d.get("icon", ""), d.get("in_statuses", []))

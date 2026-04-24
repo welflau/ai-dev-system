@@ -24,3 +24,11 @@ stage:
   config:
     test_type: smoke
     max_retries: 3
+
+# Pipeline UI 归组（Phase C.2）
+pipeline_view_contrib:
+  group: testing
+  create_if_missing:
+    name: 测试验证
+    icon: 🧪
+    insert_after: development

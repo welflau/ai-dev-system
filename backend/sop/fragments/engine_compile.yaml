@@ -23,3 +23,12 @@ stage:
   config:
     max_retries: 3
     timeout_seconds: 600
+
+# 编译归到"测试验证"组（按 priority=95 跟 smoke_test/play_test 同列表，
+# 最终在 SOP 里 engine_compile 会跑在 code_review 前，但 UI 视图不需要这么细）
+pipeline_view_contrib:
+  group: testing
+  create_if_missing:
+    name: 测试验证
+    icon: 🧪
+    insert_after: development

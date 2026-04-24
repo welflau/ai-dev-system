@@ -79,3 +79,57 @@ base_stages:
     description: 部署到测试环境
     config:
       target_env: test
+
+  # 返工阶段：acceptance_rejected 或 testing_failed 时回到 DevAgent 修复
+  # orchestrator 通过 reject_goto 查找此 stage，需要它存在（否则 pipeline_view 会 warn）
+  - id: rework
+    name: 返工修复
+    agent: DevAgent
+    action: fix_issues
+    trigger_on: acceptance_rejected
+    success_status: development_done
+    description: 验收/测试未通过，根据反馈修复问题后重新进入 code_review
+    config:
+      read_existing_code: true
+      max_tokens: 16000
+      enable_reflection: true
+      reflection_max_prev: 3
+
+# Pipeline UI 展示配置（蓝盾风格的 N 阶段视图）。
+# compose_sop 会把 fragments 里的 pipeline_view_contrib 合并到这里（Phase C.3）。
+# 基础布局：需求分析（合成） → 架构设计 → 开发实现 → 合入Develop（合成）。
+# fragments（如 smoke_test / play_test / engine_compile）会动态往"测试验证"组插，
+# 没有任何 fragment 时该组不出现，web 项目维持 4 格视图。
+pipeline_view:
+  stages:
+    - key: requirement_analysis
+      name: 需求分析
+      icon: 📋
+      synthetic: requirement_status
+      description: 基于需求 status (submitted/analyzing/decomposed) 判定，ProductAgent 拆单
+    - key: architecture
+      name: 架构设计
+      icon: 🏗️
+      sop_stages:
+        - architecture
+      running_statuses:
+        - architecture_in_progress
+      description: ArchitectAgent 设计增量技术方案
+    - key: development
+      name: 开发实现
+      icon: 💻
+      sop_stages:
+        - development
+        - code_review
+        - acceptance
+        - rework
+      running_statuses:
+        - development_in_progress
+        - review_in_progress
+        - acceptance_rejected
+      description: DevAgent 开发 + ReviewAgent 代码审查 + ProductAgent 验收 + 必要时返工
+    - key: merge_develop
+      name: 合入Develop
+      icon: 🔀
+      synthetic: merge
+      description: 所有工单完成后 Orchestrator 合并 feat 分支到 develop

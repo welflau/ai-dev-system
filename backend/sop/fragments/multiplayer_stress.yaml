@@ -22,3 +22,10 @@ stage:
   config:
     simulated_clients: 10
     duration_seconds: 60
+
+pipeline_view_contrib:
+  group: testing
+  create_if_missing:
+    name: 测试验证
+    icon: 🧪
+    insert_after: development

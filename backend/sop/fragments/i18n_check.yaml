@@ -18,3 +18,10 @@ stage:
   reject_goto: development
   config:
     max_retries: 2
+
+pipeline_view_contrib:
+  group: testing
+  create_if_missing:
+    name: 测试验证
+    icon: 🧪
+    insert_after: development

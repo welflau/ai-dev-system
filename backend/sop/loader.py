@@ -149,9 +149,16 @@ def compose_sop(
     # 重新链 trigger_on → success_status：fragment 插入后要让前后阶段的状态链连通
     composed = _relink_stage_transitions(composed)
 
+    # 合并 fragments 的 pipeline_view_contrib 到 core 的 pipeline_view
+    merged_view = _merge_pipeline_view(
+        core.get("pipeline_view") or {},
+        frag_entries,
+    )
+
     result = dict(core)
     result["stages"] = composed
     result["base_stages"] = None   # 运行时不需要
+    result["pipeline_view"] = merged_view
     result["composed_from_fragments"] = [f.get("id") for f in frag_entries]
     result["traits_used"] = sorted(traits_set)
     result["ticket_type_used"] = ticket_type
@@ -230,6 +237,92 @@ def _relink_stage_transitions(stages: List[Dict]) -> List[Dict]:
             if prev_success:
                 s["trigger_on"] = prev_success
         prev_success = s.get("success_status")
+    return result
+
+
+def _merge_pipeline_view(
+    core_view: Dict[str, Any],
+    frag_entries: List[Dict],
+) -> Dict[str, Any]:
+    """把 fragments 的 pipeline_view_contrib 合并进 core 的 pipeline_view。
+
+    - 已存在的 UI 组 → 把 fragment 的 stage.id 追加到该组的 sop_stages，
+      running_statuses 也合并（如果 fragment 自己声明了 reject_status 就一并加）
+    - 不存在的 UI 组 → 按 create_if_missing 建新组，insert_after/before 指定相对位置
+
+    fragments 没声明 pipeline_view_contrib 的 —— 默认归到 "testing" 组（兜底）。
+    """
+    stages = [dict(s) for s in (core_view.get("stages") or [])]
+    # 深拷贝可变字段，避免同一个 list 对象被多次 append 污染原 yaml cache
+    for s in stages:
+        if "sop_stages" in s:
+            s["sop_stages"] = list(s["sop_stages"])
+        if "running_statuses" in s:
+            s["running_statuses"] = list(s["running_statuses"])
+
+    def _find(key: str) -> Optional[int]:
+        for i, s in enumerate(stages):
+            if s.get("key") == key:
+                return i
+        return None
+
+    for frag in frag_entries:
+        stage_def = frag.get("stage", {}) or {}
+        sid = stage_def.get("id") or frag.get("id")
+        if not sid:
+            continue
+
+        contrib = frag.get("pipeline_view_contrib") or {}
+        group = contrib.get("group") or "testing"  # 默认挂到测试组
+        create_if_missing = contrib.get("create_if_missing") or {}
+
+        idx = _find(group)
+        if idx is None:
+            # 新建 UI 组
+            new_stage = {
+                "key": group,
+                "name": create_if_missing.get("name", group),
+                "icon": create_if_missing.get("icon", ""),
+                "description": create_if_missing.get("description", ""),
+                "sop_stages": [],
+                "running_statuses": [],
+            }
+            insert_after = create_if_missing.get("insert_after")
+            insert_before = create_if_missing.get("insert_before")
+            anchor_idx = None
+            if insert_after:
+                anchor_idx = _find(insert_after)
+                if anchor_idx is not None:
+                    stages.insert(anchor_idx + 1, new_stage)
+            if anchor_idx is None and insert_before:
+                anchor_idx = _find(insert_before)
+                if anchor_idx is not None:
+                    stages.insert(anchor_idx, new_stage)
+            if anchor_idx is None:
+                # 没锚点 —— 放到 merge_develop 之前（若有），否则末尾
+                merge_idx = _find("merge_develop")
+                if merge_idx is not None:
+                    stages.insert(merge_idx, new_stage)
+                else:
+                    stages.append(new_stage)
+            idx = _find(group)
+
+        # 往 group 里塞 sop_stage id + running_statuses
+        target = stages[idx]
+        target.setdefault("sop_stages", [])
+        target.setdefault("running_statuses", [])
+        if sid not in target["sop_stages"]:
+            target["sop_stages"].append(sid)
+
+        # 收集该 fragment 可能的 running 状态：trigger_on / reject_status
+        # （success_status 不算 running——它是"过了"这组才有的状态）
+        for status_key in ("trigger_on", "reject_status"):
+            st = stage_def.get(status_key)
+            if st and st not in target["running_statuses"]:
+                target["running_statuses"].append(st)
+
+    result = dict(core_view)
+    result["stages"] = stages
     return result
 
 
