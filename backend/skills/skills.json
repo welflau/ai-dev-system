@@ -43,5 +43,28 @@
     "traits_match": {
       "any_of": ["vcs:git"]
     }
+  },
+  "unreal-cpp-dev": {
+    "name": "Unreal Engine C++ 开发",
+    "description": "UE C++ 规范：UCLASS/UPROPERTY/UFUNCTION 宏、类型系统、Build.cs 依赖、UHT 常见坑",
+    "prompt_file": "packs/unreal_cpp_dev/prompt.md",
+    "inject_to": ["DevAgent"],
+    "priority": "high",
+    "enabled": true,
+    "traits_match": {
+      "any_of": ["engine:ue5", "engine:ue4"]
+    },
+    "paths": ["Source/**/*.h", "Source/**/*.cpp", "**/*.Build.cs"]
+  },
+  "unreal-project": {
+    "name": "Unreal Engine 项目结构",
+    "description": "UE 项目布局（Source/Content/Config）、模块划分、.uproject/Target.cs 配置、修改原则",
+    "prompt_file": "packs/unreal_project/prompt.md",
+    "inject_to": ["DevAgent", "ArchitectAgent"],
+    "priority": "medium",
+    "enabled": true,
+    "traits_match": {
+      "any_of": ["engine:ue5", "engine:ue4"]
+    }
   }
 }
