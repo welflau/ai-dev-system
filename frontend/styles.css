@@ -1432,6 +1432,28 @@ body.chat-open .drawer.docked {
     gap: 8px;
 }
 
+.ue-fw-done-banner {
+    background: rgba(245, 158, 11, 0.12);
+    border: 1px solid rgba(245, 158, 11, 0.35);
+    color: var(--text);
+    padding: 8px 12px;
+    border-radius: 4px;
+    margin: 8px 0 12px;
+    font-size: 12px;
+    line-height: 1.6;
+}
+.ue-fw-done-banner code {
+    background: var(--bg-elevated);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 11px;
+}
+.ue-fw-done-hint {
+    margin-top: 4px;
+    color: var(--text-muted);
+    font-size: 11px;
+}
+
 .detail-grid {
     display: grid;
     grid-template-columns: 100px 1fr;

@@ -2760,10 +2760,48 @@ async function unblockTicket(ticketId) {
 
 // ==================== UE 框架方案卡片（v0.18 A.6） ====================
 
+// localStorage key：per-project 最后一次成功生成的摘要，刷新后识别"已执行过"防重复点
+function _ueFwDoneKey(projectId) { return `uefw_done:${projectId}`; }
+
+function _ueFwReadDone(projectId) {
+    try {
+        const raw = localStorage.getItem(_ueFwDoneKey(projectId));
+        return raw ? JSON.parse(raw) : null;
+    } catch { return null; }
+}
+
+function _ueFwWriteDone(projectId, info) {
+    try {
+        localStorage.setItem(_ueFwDoneKey(projectId), JSON.stringify(info));
+    } catch {}
+}
+
+function _ueFwRelTime(iso) {
+    if (!iso) return '';
+    const diff = Date.now() - new Date(iso).getTime();
+    if (diff < 60000) return '刚刚';
+    if (diff < 3600000) return Math.floor(diff / 60000) + ' 分钟前';
+    if (diff < 86400000) return Math.floor(diff / 3600000) + ' 小时前';
+    return Math.floor(diff / 86400000) + ' 天前';
+}
+
 function renderUEFrameworkCard(action) {
     const safeId = 'ueframework_' + Date.now();
     const engines = action.engines || [];
     const altTemplates = action.alternative_templates || [];
+
+    // 刷新回来的旧卡片：若本项目之前已成功生成过，顶部加提示 + 按钮文案改覆盖
+    const prevDone = _ueFwReadDone(action.project_id);
+    const doneBanner = prevDone
+        ? `<div class="ue-fw-done-banner">
+             ⚠️ 该项目最近已生成过 <code>${escapeHtml(prevDone.template || '?')}</code>
+             → <code>${escapeHtml(prevDone.project_name || '?')}</code>
+             · commit <code>${escapeHtml(prevDone.commit || '?')}</code>
+             · ${_ueFwRelTime(prevDone.at)}
+             <div class="ue-fw-done-hint">再次确认会<b>覆盖</b>当前代码并产生新 commit。如果只是刷新页面，请点"✗ 取消"。</div>
+           </div>`
+        : '';
+    const confirmText = prevDone ? '⚠ 覆盖重新生成' : '✓ 确认生成';
 
     const engineOptions = engines.map((e, i) => {
         const sel = e.recommended ? 'selected' : '';
@@ -2782,7 +2820,8 @@ function renderUEFrameworkCard(action) {
            </div>`
         : '';
 
-    const allowOverwrite = !action.repo_is_empty;
+    // 有 prevDone 时强制 allow_overwrite=true（因为项目里已有生成的代码）
+    const allowOverwrite = !action.repo_is_empty || !!prevDone;
 
     return `
     <div class="chat-action-card chat-ue-framework-card" id="${safeId}"
@@ -2791,6 +2830,7 @@ function renderUEFrameworkCard(action) {
          data-target-dir="${escapeHtml(action.target_dir || '')}"
          data-allow-overwrite-default="${allowOverwrite ? '1' : '0'}">
         <div class="action-title">🎮 UE 框架方案（请确认）</div>
+        ${doneBanner}
         <div class="action-detail">
             <div class="ue-fw-row">
                 <span class="ue-fw-label">项目名</span>
@@ -2826,7 +2866,7 @@ function renderUEFrameworkCard(action) {
             ${warningsHtml}
         </div>
         <div class="confirm-req-btns">
-            <button class="btn btn-sm btn-primary" onclick="doInstantiateUEFramework('${safeId}')">✓ 确认生成</button>
+            <button class="btn btn-sm ${prevDone ? 'btn-danger' : 'btn-primary'}" onclick="doInstantiateUEFramework('${safeId}')">${confirmText}</button>
             <button class="btn btn-sm" onclick="doCancelUEFramework('${safeId}')">✗ 取消</button>
         </div>
     </div>`;
@@ -2870,6 +2910,14 @@ async function doInstantiateUEFramework(cardId) {
             throw new Error(err.detail || r.statusText);
         }
         const d = await r.json();
+        // 记成功指纹到 localStorage，刷新后能识别"已执行过"
+        _ueFwWriteDone(projectId, {
+            template: d.template,
+            project_name: d.project_name,
+            commit: d.git_commit,
+            files: d.files_created,
+            at: new Date().toISOString(),
+        });
         showToast(`✓ 生成完成：${d.files_created} 文件 (${d.template})${d.git_commit ? ' [' + d.git_commit + ']' : ''}`, 'success');
         // 替换卡片为成功提示
         // 把 onclick 的参数先存到 data-* 避免引号嵌套导致 HTML 断裂
