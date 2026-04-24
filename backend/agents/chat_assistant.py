@@ -33,6 +33,7 @@ from actions.chat.git_merge import GitMergeAction
 from actions.chat.get_requirement_pipeline import GetRequirementPipelineAction
 from actions.chat.get_ticket_status import GetTicketStatusAction
 from actions.chat.get_requirement_logs import GetRequirementLogsAction
+from actions.chat.propose_ue_framework import ProposeUEFrameworkAction
 
 logger = logging.getLogger("agent.chat_assistant")
 
@@ -67,6 +68,7 @@ class _ChatToolExecutor:
         "confirm_requirement": 1,
         "confirm_bug": 1,
         "confirm_project": 1,
+        "propose_ue_framework": 1,   # v0.18 A.6
         # Tier 2 — 重要产出物 / 诊断视图
         "document_generated": 2,
         "requirement_pipeline": 2,
@@ -156,6 +158,7 @@ class ChatAssistantAgent(BaseAgent):
         GetRequirementPipelineAction,
         GetTicketStatusAction,
         GetRequirementLogsAction,
+        ProposeUEFrameworkAction,      # v0.18 Phase A.6 — UE 框架方案卡片
     ]
     react_mode = ReactMode.REACT
     max_react_loop = 3   # 聊天场景不需要太多轮

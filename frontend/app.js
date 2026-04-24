@@ -2757,6 +2757,172 @@ async function unblockTicket(ticketId) {
     }
 }
 
+// ==================== UE 框架方案卡片（v0.18 A.6） ====================
+
+function renderUEFrameworkCard(action) {
+    const safeId = 'ueframework_' + Date.now();
+    const engines = action.engines || [];
+    const altTemplates = action.alternative_templates || [];
+
+    const engineOptions = engines.map((e, i) => {
+        const sel = e.recommended ? 'selected' : '';
+        const ubt = e.has_ubt ? '' : ' (缺 UBT)';
+        return `<option value="${escapeHtml(e.path)}" ${sel}>${escapeHtml(e.version)} [${e.type}]${ubt} — ${escapeHtml(e.path)}</option>`;
+    }).join('');
+
+    const templateOptions = altTemplates.map(t => {
+        const sel = t === action.recommended_template ? 'selected' : '';
+        return `<option value="${escapeHtml(t)}" ${sel}>${escapeHtml(t)}</option>`;
+    }).join('');
+
+    const warningsHtml = (action.warnings || []).length > 0
+        ? `<div class="ue-framework-warnings">
+             ${action.warnings.map(w => `<div>⚠️ ${escapeHtml(w)}</div>`).join('')}
+           </div>`
+        : '';
+
+    const allowOverwrite = !action.repo_is_empty;
+
+    return `
+    <div class="chat-action-card chat-ue-framework-card" id="${safeId}"
+         data-project-id="${escapeHtml(action.project_id || '')}"
+         data-project-name-target="${escapeHtml(action.project_name_target || '')}"
+         data-target-dir="${escapeHtml(action.target_dir || '')}"
+         data-allow-overwrite-default="${allowOverwrite ? '1' : '0'}">
+        <div class="action-title">🎮 UE 框架方案（请确认）</div>
+        <div class="action-detail">
+            <div class="ue-fw-row">
+                <span class="ue-fw-label">项目名</span>
+                <input id="${safeId}_name" type="text" class="ue-fw-input" value="${escapeHtml(action.project_name_target || '')}" />
+                <span class="ue-fw-hint">作为 rename 目标（类名/模块名）</span>
+            </div>
+            <div class="ue-fw-row">
+                <span class="ue-fw-label">引擎</span>
+                <select id="${safeId}_engine" class="ue-fw-input">${engineOptions}</select>
+            </div>
+            <div class="ue-fw-row">
+                <span class="ue-fw-label">模板</span>
+                <select id="${safeId}_template" class="ue-fw-input">${templateOptions}</select>
+                <span class="ue-fw-hint">${escapeHtml(action.template_reason || '')}</span>
+            </div>
+            <div class="ue-fw-row">
+                <span class="ue-fw-label">目标仓库</span>
+                <code class="ue-fw-code">${escapeHtml(action.target_dir || '')}</code>
+                ${action.repo_is_empty
+                    ? '<span class="ue-fw-tag ok">空</span>'
+                    : '<span class="ue-fw-tag warn">已有内容</span>'}
+            </div>
+            <div class="ue-fw-row">
+                <label class="ue-fw-checkbox">
+                    <input id="${safeId}_overwrite" type="checkbox" ${allowOverwrite ? 'checked' : ''} />
+                    覆盖已有文件（allow_overwrite）
+                </label>
+                <label class="ue-fw-checkbox">
+                    <input id="${safeId}_assets" type="checkbox" checked />
+                    拷贝 Content/ 资产（.uasset）
+                </label>
+            </div>
+            ${warningsHtml}
+        </div>
+        <div class="confirm-req-btns">
+            <button class="btn btn-sm btn-primary" onclick="doInstantiateUEFramework('${safeId}')">✓ 确认生成</button>
+            <button class="btn btn-sm" onclick="doCancelUEFramework('${safeId}')">✗ 取消</button>
+        </div>
+    </div>`;
+}
+
+async function doInstantiateUEFramework(cardId) {
+    const card = document.getElementById(cardId);
+    if (!card) return;
+    const projectId = card.dataset.projectId;
+    if (!projectId) { showToast('缺 project_id', 'error'); return; }
+
+    const engine = document.getElementById(`${cardId}_engine`)?.value || '';
+    const template = document.getElementById(`${cardId}_template`)?.value || '';
+    const projectName = (document.getElementById(`${cardId}_name`)?.value || '').trim();
+    const allowOverwrite = document.getElementById(`${cardId}_overwrite`)?.checked;
+    const copyAssets = document.getElementById(`${cardId}_assets`)?.checked;
+
+    if (!engine || !template || !projectName) {
+        showToast('引擎/模板/项目名不能为空', 'error'); return;
+    }
+    if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(projectName)) {
+        showToast('项目名需首字母 + 字母/数字/下划线', 'error'); return;
+    }
+
+    card.querySelectorAll('button').forEach(b => b.disabled = true);
+    showToast('正在生成 UE 骨架…', 'info');
+    try {
+        const r = await fetch(`/api/projects/${projectId}/ue-framework/instantiate`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                template_name: template,
+                engine_path: engine,
+                project_name: projectName,
+                allow_overwrite: !!allowOverwrite,
+                copy_content_assets: !!copyAssets,
+            }),
+        });
+        if (!r.ok) {
+            const err = await r.json().catch(() => ({detail: r.statusText}));
+            throw new Error(err.detail || r.statusText);
+        }
+        const d = await r.json();
+        showToast(`✓ 生成完成：${d.files_created} 文件 (${d.template})${d.git_commit ? ' [' + d.git_commit + ']' : ''}`, 'success');
+        // 替换卡片为成功提示
+        card.innerHTML = `
+            <div class="action-title">✓ UE 框架已生成</div>
+            <div class="action-detail">
+                <div>模板：<code>${escapeHtml(d.template)}</code></div>
+                <div>项目名：<code>${escapeHtml(d.project_name)}</code></div>
+                <div>引擎：${escapeHtml(d.engine_version || '')}</div>
+                <div>文件数：${d.files_created} (skip ${d.files_skipped || 0})</div>
+                <div>.uproject: <code>${escapeHtml(d.uproject_path)}</code></div>
+                ${d.git_commit ? `<div>Git commit: <code>${escapeHtml(d.git_commit)}</code></div>` : ''}
+            </div>
+            <div class="confirm-req-btns">
+                <button class="btn btn-sm btn-primary" onclick="doBaselineCompile('${projectId}', '${escapeHtml(engine)}', '${escapeHtml(projectName)}')">🔧 跑基线编译</button>
+            </div>`;
+    } catch (e) {
+        showToast(`生成失败：${e.message}`, 'error');
+        card.querySelectorAll('button').forEach(b => b.disabled = false);
+    }
+}
+
+function doCancelUEFramework(cardId) {
+    const card = document.getElementById(cardId);
+    if (!card) return;
+    card.innerHTML = '<div class="action-title" style="color:var(--text-muted);">✗ 已取消</div>';
+}
+
+async function doBaselineCompile(projectId, enginePath, projectName) {
+    showToast('正在跑 UBT 编译…（首次可能 2-5 分钟）', 'info');
+    try {
+        const r = await fetch(`/api/projects/${projectId}/ue-framework/baseline-compile`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                engine_path: enginePath,
+                target_name: `${projectName}Editor`,
+                timeout_seconds: 600,
+            }),
+        });
+        if (!r.ok) {
+            const err = await r.json().catch(() => ({detail: r.statusText}));
+            throw new Error(err.detail || r.statusText);
+        }
+        const d = await r.json();
+        const ok = d.status === 'success';
+        const msg = ok
+            ? `✓ 编译通过（耗时 ${Math.round((d.duration_ms || 0) / 1000)}s）`
+            : `✗ 编译失败：${(d.errors || []).length} 个 error / ${(d.warnings || []).length} warning`;
+        showToast(msg, ok ? 'success' : 'error');
+    } catch (e) {
+        showToast(`编译触发失败：${e.message}`, 'error');
+    }
+}
+
 async function startTicket(ticketId) {
     try {
         await api(`/projects/${currentProjectId}/tickets/${ticketId}/start`, { method: 'POST' });
@@ -7091,6 +7257,8 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
         `;
         // 卡片插入 DOM 后异步加载 preview
         setTimeout(() => loadProjectAssemblyPreview(safeId, traitsArr), 50);
+    } else if (action && action.type === 'propose_ue_framework') {
+        actionHtml = renderUEFrameworkCard(action);
     } else if (action && action.type === 'confirm_bug') {
         const priorityLabel = {'critical':'🔴 紧急','high':'🟠 高','medium':'🟡 中','low':'🟢 低'}[action.priority] || action.priority;
         const safeId = 'bug_confirm_' + Date.now();
