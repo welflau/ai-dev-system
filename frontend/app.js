@@ -2693,9 +2693,9 @@ function renderDiagnosisPanel(ticket) {
     if (!ticket.diagnosis) {
         if (ticket.status !== 'blocked') return '';
         return `
-        <div class="drawer-section" style="background: var(--bg-warning, #fff7e6); border-left: 3px solid var(--warning, #faad14); padding: 12px;">
+        <div class="drawer-section diagnosis-panel sev-medium">
             <h4>🩺 诊断</h4>
-            <div style="font-size:13px; color:var(--text-secondary);">诊断正在进行中…（进入 blocked 后自动触发；若等待超过 30 秒，可点"🔄 重新诊断"）</div>
+            <div class="diagnosis-pending">诊断正在进行中…（进入 blocked 后自动触发；若等待超过 30 秒，可点"🔄 重新诊断"）</div>
         </div>`;
     }
     let d;
@@ -2703,29 +2703,33 @@ function renderDiagnosisPanel(ticket) {
     catch (e) { return ''; }
     if (!d || typeof d !== 'object') return '';
 
-    const sevColor = { low: '#52c41a', medium: '#faad14', high: '#ff4d4f' }[d.severity] || '#faad14';
-    const sevLabel = { low: '低', medium: '中', high: '高' }[d.severity] || d.severity || '中';
+    const sev = ['low', 'medium', 'high'].includes(d.severity) ? d.severity : 'medium';
+    const sevLabel = { low: '低', medium: '中', high: '高' }[sev];
     const conf = typeof d.confidence === 'number' ? (d.confidence * 100).toFixed(0) + '%' : '?';
     const actions = (d.suggested_actions || [])
         .slice(0, 4)
-        .map((a, i) => `
-            <li style="margin-bottom:6px;">
-                <span style="color:var(--text-secondary);">[${a.who || '?'}]</span>
-                ${escHtml(a.action || '')}
+        .map(a => `
+            <li>
+                <span class="diagnosis-who">[${escHtml(a.who || '?')}]</span>
+                <span class="diagnosis-action-text">${escHtml(a.action || '')}</span>
             </li>
         `).join('');
     const files = (d.related_files || []).slice(0, 5)
-        .map(f => `<code style="background:var(--bg-secondary); padding:1px 6px; border-radius:3px;">${escHtml(f)}</code>`).join(' ');
+        .map(f => `<code class="diagnosis-file">${escHtml(f)}</code>`).join(' ');
 
     return `
-    <div class="drawer-section" style="background: var(--bg-warning, #fff7e6); border-left: 3px solid ${sevColor}; padding: 12px;">
-        <h4>🩺 诊断结果 <span style="font-weight:normal; font-size:12px; color:var(--text-secondary);">严重度: <span style="color:${sevColor};">${sevLabel}</span> · 置信度 ${conf}</span></h4>
-        <div style="margin-bottom:8px;"><strong>现象:</strong> ${escHtml(d.symptom || '-')}</div>
-        <div style="margin-bottom:8px;"><strong>根因:</strong> ${escHtml(d.root_cause || '-')}</div>
-        ${actions ? `<div style="margin-bottom:8px;"><strong>建议:</strong><ol style="margin:4px 0 0 20px; padding:0;">${actions}</ol></div>` : ''}
-        ${files ? `<div style="margin-bottom:8px;"><strong>相关文件:</strong> ${files}</div>` : ''}
-        ${d.note ? `<div style="font-size:11px; color:var(--text-secondary); margin-top:6px;">${escHtml(d.note)}</div>` : ''}
-        ${d.created_at ? `<div style="font-size:11px; color:var(--text-secondary);">诊断时间: ${d.created_at.replace('T', ' ').slice(0, 19)}</div>` : ''}
+    <div class="drawer-section diagnosis-panel sev-${sev}">
+        <h4>🩺 诊断结果
+            <span class="diagnosis-meta">
+                严重度 <span class="diagnosis-sev-label">${sevLabel}</span> · 置信度 ${conf}
+            </span>
+        </h4>
+        <div class="diagnosis-row"><span class="diagnosis-label">现象</span><span>${escHtml(d.symptom || '-')}</span></div>
+        <div class="diagnosis-row"><span class="diagnosis-label">根因</span><span>${escHtml(d.root_cause || '-')}</span></div>
+        ${actions ? `<div class="diagnosis-row"><span class="diagnosis-label">建议</span><ol class="diagnosis-actions">${actions}</ol></div>` : ''}
+        ${files ? `<div class="diagnosis-row"><span class="diagnosis-label">相关文件</span><span>${files}</span></div>` : ''}
+        ${d.note ? `<div class="diagnosis-footer">${escHtml(d.note)}</div>` : ''}
+        ${d.created_at ? `<div class="diagnosis-footer">诊断时间: ${escHtml(d.created_at.replace('T', ' ').slice(0, 19))}</div>` : ''}
     </div>`;
 }
 

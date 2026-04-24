@@ -1247,6 +1247,97 @@ body.chat-open .drawer.docked {
     border-bottom: 1px solid var(--border);
 }
 
+/* ========= 诊断面板（blocked 工单的 AI 诊断结果） ========= */
+.diagnosis-panel {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-left-width: 3px;
+    border-radius: var(--radius-sm);
+    padding: 12px 14px;
+}
+.diagnosis-panel.sev-low    { border-left-color: var(--success); }
+.diagnosis-panel.sev-medium { border-left-color: var(--warning); }
+.diagnosis-panel.sev-high   { border-left-color: var(--error); }
+
+.diagnosis-panel h4 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+    color: var(--text);
+    text-transform: none;
+    letter-spacing: 0;
+    border-bottom: none;
+    padding-bottom: 0;
+}
+.diagnosis-meta {
+    font-size: 11px;
+    font-weight: 400;
+    color: var(--text-muted);
+    letter-spacing: 0;
+}
+.diagnosis-sev-label {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-weight: 600;
+}
+.sev-low    .diagnosis-sev-label { background: rgba(34,197,94,0.15);  color: var(--success); }
+.sev-medium .diagnosis-sev-label { background: rgba(245,158,11,0.15); color: var(--warning); }
+.sev-high   .diagnosis-sev-label { background: rgba(239,68,68,0.15);  color: var(--error); }
+
+.diagnosis-row {
+    display: grid;
+    grid-template-columns: 68px 1fr;
+    gap: 10px;
+    margin-bottom: 8px;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text);
+}
+.diagnosis-label {
+    color: var(--text-muted);
+    font-size: 12px;
+    padding-top: 2px;
+}
+.diagnosis-actions {
+    margin: 0;
+    padding-left: 18px;
+    color: var(--text);
+}
+.diagnosis-actions li {
+    margin-bottom: 4px;
+    line-height: 1.6;
+}
+.diagnosis-who {
+    color: var(--text-muted);
+    font-size: 11px;
+    margin-right: 4px;
+}
+.diagnosis-action-text {
+    color: var(--text);
+}
+.diagnosis-file {
+    display: inline-block;
+    background: var(--bg-elevated);
+    color: var(--text-secondary);
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-size: 12px;
+    margin-right: 4px;
+}
+.diagnosis-footer {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 6px;
+}
+.diagnosis-pending {
+    font-size: 13px;
+    color: var(--text-secondary);
+    padding: 4px 0;
+}
+
 .detail-grid {
     display: grid;
     grid-template-columns: 100px 1fr;
