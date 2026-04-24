@@ -221,6 +221,10 @@ def _relink_stage_transitions(stages: List[Dict]) -> List[Dict]:
       - fragment 自己声明的 trigger_on（如 smoke_test_pending）被**覆盖** ——
         因为孤立的 trigger_on 没人产出，orchestrator 永远不会触发
       - reject_goto 保留 fragment 自己声明的（没 goto 就不改）
+      - **branch_only: true 的 stage 跳过**：它们是 reject_goto 分支目标
+        （典型如 rework），只通过拒绝跳转进入，不在线性主链上。
+        同时它们也不参与 prev_success 的链接（不然后面 stage 会被接到
+        分支 stage 的 success 上，比如 acceptance 接到 rework.success=development_done）
 
     每个阶段的 success_status 不动。reject_status / reject_goto 不动。
     """
@@ -230,6 +234,9 @@ def _relink_stage_transitions(stages: List[Dict]) -> List[Dict]:
 
     prev_success = None
     for i, s in enumerate(result):
+        if s.get("branch_only"):
+            # 分支目标：保留原声明的 trigger_on / success_status，不参与线性链
+            continue
         if i == 0:
             # 第一个阶段的 trigger_on 保留（通常是 'pending'）
             pass

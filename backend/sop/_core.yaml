@@ -81,13 +81,20 @@ base_stages:
       target_env: test
 
   # 返工阶段：acceptance_rejected 或 testing_failed 时回到 DevAgent 修复
-  # orchestrator 通过 reject_goto 查找此 stage，需要它存在（否则 pipeline_view 会 warn）
+  # orchestrator 通过 reject_goto 查找此 stage，需要它存在
+  #
+  # branch_only: true —— 这是分支目标（只通过 reject_goto 进入），不在线性 pipeline 里。
+  # compose_sop 的 _relink_stage_transitions 必须跳过此 stage，否则 rework 的 trigger_on
+  # 会被前一个 stage 的 success_status 覆盖，导致死循环（例：deploy.success=deployed 覆盖
+  # rework.trigger=acceptance_rejected 后，rework 被 deployed 触发 → 产出 development_done
+  # → 重新触发 engine_compile / code_review → 又走到 deploy → 又触发 rework → ...）
   - id: rework
     name: 返工修复
     agent: DevAgent
     action: fix_issues
     trigger_on: acceptance_rejected
     success_status: development_done
+    branch_only: true
     description: 验收/测试未通过，根据反馈修复问题后重新进入 code_review
     config:
       read_existing_code: true
