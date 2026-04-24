@@ -1,10 +1,25 @@
 # AI Dev System — 待办清单
 
-> 最后更新: 2026-04-23
+> 最后更新: 2026-04-24
 
 ---
 
-## 🎯 下一个主线：Trait-First 多项目类型支持（v0.17 预定）
+## ✅ v0.18 UE 深耕（已完成 2026-04-24）
+
+7/8 Phase 完成 + 24/24 smoke 测试通过，详见 `dev-notes/2026-04-24_v0.18_完结总结.md`。
+核心交付：UE 引擎检测 / 模板实例化 / UBT 编译 + 错误解析 / Reflexion 自动修复 /
+Skill Packs / 项目 UE 配置持久化 / 对话式 UE 框架生成。
+
+**下一主线待定**：候选方向见 `2026-04-24_v0.18_完结总结.md §9`：
+- v0.19 `run_playtest` (headless UE + Automation Framework)
+- v0.19 `generate_assets` + ArtistAgent
+- v0.19 全局聊天串联"建项目 + 生成骨架"一键流
+- v0.19+ action state 持久化消除所有确认卡片刷新后重复点击问题
+- 跨平台 UE 引擎检测 (Mac/Linux)
+
+---
+
+## 🎯 上一主线：Trait-First 多项目类型支持（v0.17，已完成）
 
 支持网页 / 客户端 / 游戏 / UE / Godot / Unity / 微信小程序等多种项目类型。从 flat enum 升级到**trait + preset 混合架构**，skill/SOP/agent/mcp 按 traits 动态组装。详见：
 
