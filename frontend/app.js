@@ -2808,19 +2808,27 @@ function closeDrawer() {
     document.body.classList.remove('has-docked-drawer');
 }
 
+/** 统一的按钮状态同步（图标 + title + active class + body class） */
+function _syncDockBtnState(isDocked) {
+    const btn = document.getElementById('drawerDockBtn');
+    if (!btn) return;
+    btn.classList.toggle('active', isDocked);
+    if (isDocked) {
+        btn.innerHTML = '📍';  // Dock 态 = 实心定位
+        btn.title = 'Dock 模式开启（与主内容并排）。点击切回浮动';
+        document.body.classList.add('has-docked-drawer');
+    } else {
+        btn.innerHTML = '📌';  // 浮动态 = 图钉
+        btn.title = '浮动模式（遮盖主内容）。点击切 Dock 模式';
+        document.body.classList.remove('has-docked-drawer');
+    }
+}
+
 /** 切换抽屉的 浮动/固定(Dock) 模式。状态保存到 localStorage */
 function toggleDrawerDock() {
     const drawer = document.getElementById('ticketDrawer');
-    const btn = document.getElementById('drawerDockBtn');
     const isDocked = drawer.classList.toggle('docked');
-    btn.classList.toggle('active', isDocked);
-    if (isDocked) {
-        document.body.classList.add('has-docked-drawer');
-        btn.title = 'Dock 模式开启（与主内容并排）。点击切回浮动';
-    } else {
-        document.body.classList.remove('has-docked-drawer');
-        btn.title = '浮动模式（遮盖主内容）。点击切 Dock 模式';
-    }
+    _syncDockBtnState(isDocked);
     try {
         localStorage.setItem('drawer_dock_mode', isDocked ? '1' : '0');
     } catch {}
@@ -2833,16 +2841,9 @@ function _applyDrawerDockPreference() {
         pref = localStorage.getItem('drawer_dock_mode') || '0';
     } catch {}
     const drawer = document.getElementById('ticketDrawer');
-    const btn = document.getElementById('drawerDockBtn');
-    if (pref === '1') {
-        drawer.classList.add('docked');
-        btn.classList.add('active');
-        document.body.classList.add('has-docked-drawer');
-    } else {
-        drawer.classList.remove('docked');
-        btn.classList.remove('active');
-        document.body.classList.remove('has-docked-drawer');
-    }
+    const isDocked = pref === '1';
+    drawer.classList.toggle('docked', isDocked);
+    _syncDockBtnState(isDocked);
 }
 
 /** 加载前置依赖工单详情 */
