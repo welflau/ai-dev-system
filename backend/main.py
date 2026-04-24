@@ -170,6 +170,7 @@ from api.knowledge import router as knowledge_router
 from api.mcp_status import router as mcp_status_router
 from api.skills import router as skills_router
 from api.traits import router as traits_router
+from api.ue_engines import router as ue_engines_router
 
 app.include_router(projects_router)
 app.include_router(requirements_router)
@@ -185,6 +186,7 @@ app.include_router(knowledge_router)
 app.include_router(mcp_status_router)
 app.include_router(skills_router)
 app.include_router(traits_router)
+app.include_router(ue_engines_router)
 
 
 # ==================== 系统端点 ====================
