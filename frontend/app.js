@@ -2871,18 +2871,24 @@ async function doInstantiateUEFramework(cardId) {
         const d = await r.json();
         showToast(`✓ 生成完成：${d.files_created} 文件 (${d.template})${d.git_commit ? ' [' + d.git_commit + ']' : ''}`, 'success');
         // 替换卡片为成功提示
+        // 把 onclick 的参数先存到 data-* 避免引号嵌套导致 HTML 断裂
+        const resultId = `uefwres_${Date.now()}`;
         card.innerHTML = `
-            <div class="action-title">✓ UE 框架已生成</div>
+            <div class="action-title" style="color:var(--success, #22c55e);">✓ UE 框架已生成</div>
             <div class="action-detail">
-                <div>模板：<code>${escapeHtml(d.template)}</code></div>
-                <div>项目名：<code>${escapeHtml(d.project_name)}</code></div>
-                <div>引擎：${escapeHtml(d.engine_version || '')}</div>
-                <div>文件数：${d.files_created} (skip ${d.files_skipped || 0})</div>
-                <div>.uproject: <code>${escapeHtml(d.uproject_path)}</code></div>
-                ${d.git_commit ? `<div>Git commit: <code>${escapeHtml(d.git_commit)}</code></div>` : ''}
+                <div class="ue-fw-row"><span class="ue-fw-label">模板</span><code class="ue-fw-code">${escapeHtml(d.template)}</code></div>
+                <div class="ue-fw-row"><span class="ue-fw-label">项目名</span><code class="ue-fw-code">${escapeHtml(d.project_name)}</code></div>
+                <div class="ue-fw-row"><span class="ue-fw-label">引擎</span><code class="ue-fw-code">${escapeHtml(d.engine_version || '')}</code></div>
+                <div class="ue-fw-row"><span class="ue-fw-label">文件数</span><span>${d.files_created} <span class="ue-fw-hint">(skip ${d.files_skipped || 0})</span></span></div>
+                <div class="ue-fw-row"><span class="ue-fw-label">.uproject</span><code class="ue-fw-code">${escapeHtml(d.uproject_path)}</code></div>
+                ${d.git_commit ? `<div class="ue-fw-row"><span class="ue-fw-label">Git commit</span><code class="ue-fw-code">${escapeHtml(d.git_commit)}</code></div>` : ''}
             </div>
-            <div class="confirm-req-btns">
-                <button class="btn btn-sm btn-primary" onclick="doBaselineCompile('${projectId}', '${escapeHtml(engine)}', '${escapeHtml(projectName)}')">🔧 跑基线编译</button>
+            <div class="ue-fw-actions" id="${resultId}"
+                 data-project-id="${escapeHtml(projectId)}"
+                 data-engine="${escapeHtml(engine)}"
+                 data-project-name="${escapeHtml(projectName)}">
+                <button class="btn btn-sm btn-primary" onclick="doBaselineCompileFromCard('${resultId}')">🔧 跑基线编译</button>
+                <span class="ue-fw-hint" style="margin-left:8px;">首次编译 2-5 分钟，toast 会提示结果</span>
             </div>`;
     } catch (e) {
         showToast(`生成失败：${e.message}`, 'error');
@@ -2894,6 +2900,12 @@ function doCancelUEFramework(cardId) {
     const card = document.getElementById(cardId);
     if (!card) return;
     card.innerHTML = '<div class="action-title" style="color:var(--text-muted);">✗ 已取消</div>';
+}
+
+async function doBaselineCompileFromCard(blockId) {
+    const el = document.getElementById(blockId);
+    if (!el) return;
+    return doBaselineCompile(el.dataset.projectId, el.dataset.engine, el.dataset.projectName);
 }
 
 async function doBaselineCompile(projectId, enginePath, projectName) {

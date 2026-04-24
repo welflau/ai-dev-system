@@ -1422,6 +1422,16 @@ body.chat-open .drawer.docked {
 }
 .ue-framework-warnings > div { margin-bottom: 3px; }
 
+.ue-fw-actions {
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
 .detail-grid {
     display: grid;
     grid-template-columns: 100px 1fr;
