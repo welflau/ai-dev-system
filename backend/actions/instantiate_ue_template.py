@@ -276,14 +276,28 @@ class InstantiateUETemplateAction(ActionBase):
         copy_content = bool(context.get("copy_content_assets", True))
         traits = context.get("project_traits") or context.get("traits") or []
 
+        # 日志回调：调用方（API）可以传入 async callback(line: str) 把关键步骤推 SSE
+        log_cb = context.get("log_callback")
+
+        async def _log(msg: str):
+            logger.info(msg)
+            if log_cb:
+                try:
+                    await log_cb(msg)
+                except Exception:
+                    pass
+
         if not engine_path:
             return _err("缺 engine_path（用 UEEngineResolver 先解析）")
+        await _log(f"[engine] 验证引擎 {engine_path}")
         engine_info = verify_engine(engine_path)
         if not engine_info.path or not engine_info.has_editor:
             return _err(
                 "引擎验证失败或不完整（缺 UnrealEditor.exe）",
                 detail={"engine": engine_info.to_dict()},
             )
+
+        await _log(f"[engine] OK：UE {engine_info.version} [{engine_info.type}] has_ubt={engine_info.has_ubt}")
 
         # 未指定模板 → 按 traits 自动挑
         if not template_name:
@@ -294,7 +308,9 @@ class InstantiateUETemplateAction(ActionBase):
                     detail={"traits": list(traits)},
                 )
             template_name = picked
-            logger.info("按 traits %s 挑选模板: %s", traits, template_name)
+            await _log(f"[template] 按 traits {traits} 自动挑选模板: {template_name}")
+        else:
+            await _log(f"[template] 使用指定模板: {template_name}")
 
         if not target_dir:
             return _err("缺 target_dir（项目仓库目录）")
@@ -328,16 +344,22 @@ class InstantiateUETemplateAction(ActionBase):
                 detail={"existing_top": [p.name for p in existing[:10]]},
             )
 
+        await _log(f"[copy] 模板源: {src}")
+        await _log(f"[copy] 目标仓库: {target}")
+
         # 解析 TemplateDefs.ini
         defs = _parse_template_defs(src / "Config" / "TemplateDefs.ini")
-        logger.info(
-            "TemplateDefs: ignore_folders=%d ignore_files=%d folder_renames=%d filename_repl=%d content_repl=%d",
-            len(defs["folders_to_ignore"]),
-            len(defs["files_to_ignore"]),
-            len(defs["folder_renames"]),
-            len(defs["filename_replacements"]),
-            len(defs["content_replacements"]),
+        await _log(
+            f"[rules] TemplateDefs 解析: "
+            f"ignore_folders={len(defs['folders_to_ignore'])} "
+            f"ignore_files={len(defs['files_to_ignore'])} "
+            f"folder_renames={len(defs['folder_renames'])} "
+            f"filename_repl={len(defs['filename_replacements'])} "
+            f"content_repl={len(defs['content_replacements'])}"
         )
+        for frm, to in defs["folder_renames"]:
+            await _log(f"[rules]   folder: {frm}  →  {to}")
+        await _log(f"[rename] tokens: TEMPLATENAME='{template_name}' → PROJECTNAME='{project_name}'")
 
         tokens = _compute_tokens(template_name, project_name)
         content_exts = set()
@@ -408,6 +430,8 @@ class InstantiateUETemplateAction(ActionBase):
                     shutil.copy2(src_file, dest_abs)
                 files_created += 1
 
+        await _log(f"[copy] 完成: {files_created} 文件（skip {files_skipped}）")
+
         # 创建 .uproject（模板的 .uproject 在 FilesToIgnore 里，需要自己生成）
         # EngineAssociation 约定：官方 Launcher = "5.3" (Major.Minor)；
         #                         自编译 build = "{GUID}"（从 engine_info 里拿）
@@ -417,14 +441,13 @@ class InstantiateUETemplateAction(ActionBase):
             parts = (engine_info.version or "").split(".")
             assoc = ".".join(parts[:2]) if len(parts) >= 2 else (engine_info.version or "")
         uproject_abs = _write_uproject(target, project_name, assoc)
+        await _log(f"[uproject] 写入: {uproject_abs} (EngineAssociation={assoc})")
+
         notes.append(f"拷贝模板 {template_name} → {files_created} 文件（skip {files_skipped}）")
         notes.append(f"项目名替换: {template_name} → {project_name}")
         notes.append(f".uproject 已生成: {uproject_abs.name}")
 
-        logger.info(
-            "✔ 模板实例化完成: %s → %s (%d 文件)",
-            template_name, project_name, files_created,
-        )
+        await _log(f"[done] 模板实例化完成: {template_name} → {project_name} ({files_created} 文件)")
 
         return ActionResult(
             success=True,

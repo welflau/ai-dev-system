@@ -72,7 +72,13 @@ async def propose(project_id: str, req: ProposeRequest):
 
 @router.post("/instantiate")
 async def instantiate(project_id: str, req: InstantiateRequest):
-    """真跑模板实例化。用户点 [✓ 确认生成] 触发。返回 files_created + uproject_path 给前端。"""
+    """真跑模板实例化。用户点 [✓ 确认生成] 触发。
+
+    同步执行（1-5s），期间通过 SSE 事件 ue_instantiate_log 推每个里程碑 log 到前端日志面板。
+    返回最终结果 data（含 files_created / uproject_path / git_commit）给卡片替换 DOM 用。
+    """
+    from events import event_manager
+
     proj = await db.fetch_one("SELECT id, name FROM projects WHERE id = ?", (project_id,))
     if not proj:
         raise HTTPException(404, "项目不存在")
@@ -84,7 +90,31 @@ async def instantiate(project_id: str, req: InstantiateRequest):
         raise HTTPException(500, "无法确定项目仓库路径")
     target_dir = str(repo_path)
 
-    # 执行 Action
+    async def _push_log(line: str):
+        try:
+            await event_manager.publish_to_project(
+                project_id, "ue_instantiate_log", {"line": line}
+            )
+        except Exception:
+            pass
+
+    # 启动事件
+    try:
+        await event_manager.publish_to_project(
+            project_id, "ue_instantiate_started",
+            {
+                "template": req.template_name,
+                "project_name": req.project_name,
+                "engine_path": req.engine_path,
+                "target_dir": target_dir,
+            },
+        )
+    except Exception:
+        pass
+
+    await _push_log(f"[api] POST /instantiate template={req.template_name} project={req.project_name}")
+
+    # 执行 Action（带 log_callback）
     from actions.instantiate_ue_template import InstantiateUETemplateAction
     action = InstantiateUETemplateAction()
     context = {
@@ -94,35 +124,41 @@ async def instantiate(project_id: str, req: InstantiateRequest):
         "project_name": req.project_name,
         "allow_overwrite": req.allow_overwrite,
         "copy_content_assets": req.copy_content_assets,
+        "log_callback": _push_log,
     }
     result = await action.run(context)
     if not result.success:
         data = result.data or {}
+        await _push_log(f"[error] {result.error or data.get('message') or '实例化失败'}")
         raise HTTPException(400, result.error or data.get("message") or "实例化失败")
 
-    # 可选：git commit 落地
+    # Git commit 落地（每步都推 log）
     git_commit: Optional[str] = None
     if git_manager.repo_exists(project_id):
         try:
             msg = req.commit_message or f"feat: 基于 {req.template_name} 生成 UE 项目框架"
-            # 简单 add + commit；分支切换放后续（对话式流程会主动切 feat/ue-framework）
+            await _push_log(f"[git] cwd={target_dir}")
+            await _push_log(f"[git] git add -A")
             await git_manager._run_git(target_dir, "add", "-A")
+            await _push_log(f"[git] git commit -m \"{msg}\" --allow-empty")
             rc, out, err = await git_manager._run_git(
                 target_dir, "commit", "-m", msg, "--allow-empty",
             )
             if rc == 0:
-                # 拿 commit hash
                 rc2, out2, _ = await git_manager._run_git(
                     target_dir, "rev-parse", "HEAD",
                 )
                 if rc2 == 0:
                     git_commit = (out2 or "").strip()[:12]
+                    await _push_log(f"[git] commit: {git_commit}")
+            else:
+                await _push_log(f"[git] commit rc={rc} err={(err or '').strip()[:200]}")
         except Exception as e:
             logger.warning("git commit 落地失败（非致命）: %s", e)
+            await _push_log(f"[git] 异常（非致命）: {e}")
 
-    # 广播事件（前端订阅 ue_framework_instantiated 可收到）
+    # 完成事件（原有）
     try:
-        from events import event_manager
         await event_manager.publish_to_project(
             project_id,
             "ue_framework_instantiated",
@@ -136,6 +172,10 @@ async def instantiate(project_id: str, req: InstantiateRequest):
         )
     except Exception:
         pass
+
+    await _push_log(
+        f"[done] 实例化完成 · {result.data.get('files_created')} 文件 · commit={git_commit or '(无)'}"
+    )
 
     return {
         **result.data,
@@ -195,6 +235,12 @@ async def baseline_compile(project_id: str, req: BaselineCompileRequest):
         try:
             result = await action.run(context)
             data = result.data or {}
+
+            # 执行的 UBT 命令也推一条 log（让"执行了什么"可追溯）
+            cmd_str = data.get("command")
+            if cmd_str:
+                await _log_cb(f"[ubt] cmd: {cmd_str}")
+                await _log_cb(f"[ubt] exit={data.get('exit_code')} duration={data.get('duration_ms', 0)}ms")
         except Exception as e:
             logger.exception("baseline-compile 后台异常")
             data = {

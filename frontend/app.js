@@ -4918,6 +4918,38 @@ function connectSSE(projectId) {
             refreshBoard();
         });
 
+        // v0.18 模板实例化：启动 + 流式 log
+        eventSource.addEventListener('ue_instantiate_started', (e) => {
+            const data = JSON.parse(e.data);
+            showToast(`🎮 开始生成框架：${data.template} → ${data.project_name}`, 'info');
+            appendLogEntry({
+                agent_type: 'UE-FW',
+                action: 'start',
+                detail: JSON.stringify({
+                    message: `模板实例化启动：${data.template} → ${data.project_name}（${data.target_dir}）`,
+                }),
+                level: 'info',
+                created_at: new Date().toISOString(),
+            });
+        });
+
+        eventSource.addEventListener('ue_instantiate_log', (e) => {
+            const data = JSON.parse(e.data);
+            const line = (data.line || '').trim();
+            if (!line) return;
+            const lower = line.toLowerCase();
+            let level = 'info';
+            if (line.startsWith('[error]') || lower.includes('error')) level = 'error';
+            else if (lower.includes('warn')) level = 'warn';
+            appendLogEntry({
+                agent_type: 'UE-FW',
+                action: 'inst',
+                detail: JSON.stringify({message: line}),
+                level: level,
+                created_at: new Date().toISOString(),
+            });
+        });
+
         // v0.18 基线编译：启动 + 流式 log + 最终结果
         eventSource.addEventListener('ue_compile_started', (e) => {
             const data = JSON.parse(e.data);
