@@ -2909,7 +2909,6 @@ async function doBaselineCompileFromCard(blockId) {
 }
 
 async function doBaselineCompile(projectId, enginePath, projectName) {
-    showToast('正在跑 UBT 编译…（首次可能 2-5 分钟）', 'info');
     try {
         const r = await fetch(`/api/projects/${projectId}/ue-framework/baseline-compile`, {
             method: 'POST',
@@ -2924,12 +2923,9 @@ async function doBaselineCompile(projectId, enginePath, projectName) {
             const err = await r.json().catch(() => ({detail: r.statusText}));
             throw new Error(err.detail || r.statusText);
         }
-        const d = await r.json();
-        const ok = d.status === 'success';
-        const msg = ok
-            ? `✓ 编译通过（耗时 ${Math.round((d.duration_ms || 0) / 1000)}s）`
-            : `✗ 编译失败：${(d.errors || []).length} 个 error / ${(d.warnings || []).length} warning`;
-        showToast(msg, ok ? 'success' : 'error');
+        // 立即返回 {status:"started"} — 真实结果通过 SSE ue_compile_started / ue_compile_log /
+        // ue_baseline_compile_result 推到"操作日志"面板与 toast
+        showToast('🔧 UBT 已在后台启动，日志会实时推到"操作日志"面板', 'info');
     } catch (e) {
         showToast(`编译触发失败：${e.message}`, 'error');
     }
@@ -4920,6 +4916,60 @@ function connectSSE(projectId) {
             const data = JSON.parse(e.data);
             showToast(`工单已解除 blocked → ${data.to}`, 'success');
             refreshBoard();
+        });
+
+        // v0.18 基线编译：启动 + 流式 log + 最终结果
+        eventSource.addEventListener('ue_compile_started', (e) => {
+            const data = JSON.parse(e.data);
+            showToast(`🔧 UBT 启动：${data.target || ''} ${data.platform || ''} ${data.config || ''}`, 'info');
+            appendLogEntry({
+                agent_type: 'UBT',
+                action: 'start',
+                detail: JSON.stringify({message: `UBT 开始编译 ${data.target} ${data.platform} ${data.config}`}),
+                level: 'info',
+                created_at: new Date().toISOString(),
+            });
+        });
+
+        eventSource.addEventListener('ue_compile_log', (e) => {
+            const data = JSON.parse(e.data);
+            const line = (data.line || '').trim();
+            if (!line) return;
+            const lower = line.toLowerCase();
+            let level = 'info';
+            if (lower.includes('error') || lower.includes(': fatal')) level = 'error';
+            else if (lower.includes('warning')) level = 'warn';
+            appendLogEntry({
+                agent_type: 'UBT',
+                action: 'compile',
+                detail: JSON.stringify({message: line}),
+                level: level,
+                created_at: new Date().toISOString(),
+            });
+        });
+
+        eventSource.addEventListener('ue_baseline_compile_result', (e) => {
+            const data = JSON.parse(e.data);
+            const ok = data.status === 'success';
+            const secs = Math.round((data.duration_ms || 0) / 1000);
+            if (ok) {
+                showToast(`✓ UBT 编译通过（${secs}s）`, 'success');
+            } else {
+                showToast(`✗ UBT 编译失败：${data.errors_count} errors / ${data.warnings_count} warnings（${secs}s）`, 'error');
+            }
+            appendLogEntry({
+                agent_type: 'UBT',
+                action: ok ? 'compile_ok' : 'compile_fail',
+                detail: JSON.stringify({
+                    message: ok
+                        ? `✓ 编译通过 (${secs}s)`
+                        : `✗ 编译失败 (${secs}s, ${data.errors_count} errors)`,
+                    errors: data.errors,
+                    command: data.command,
+                }),
+                level: ok ? 'info' : 'error',
+                created_at: new Date().toISOString(),
+            });
         });
 
         eventSource.addEventListener('requirement_analyzing', (e) => {

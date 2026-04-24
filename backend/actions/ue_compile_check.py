@@ -294,7 +294,8 @@ class UECompileCheckAction(ActionBase):
         cmd_str = " ".join(f'"{c}"' if " " in c else c for c in cmd)
         logger.info("🔧 UBT 命令: %s", cmd_str)
 
-        # 5. 执行
+        # 5. 执行（流式：逐行读 stdout，每行回调一次 log_callback）
+        log_callback = context.get("log_callback")  # 可选 async callback(line: str)
         t0 = time.time()
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -307,9 +308,27 @@ class UECompileCheckAction(ActionBase):
         except Exception as e:
             return _err(f"启动 UBT 异常: {e}")
 
+        collected_lines: List[str] = []
+
+        async def _pump_stdout():
+            """循环读 stdout，每行即时推送 + 累积到内存"""
+            assert proc.stdout is not None
+            while True:
+                raw = await proc.stdout.readline()
+                if not raw:
+                    break
+                line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+                collected_lines.append(line)
+                if log_callback is not None:
+                    try:
+                        await log_callback(line)
+                    except Exception as e:
+                        logger.debug("log_callback 异常（忽略）: %s", e)
+
         try:
-            stdout_bytes, _ = await asyncio.wait_for(
-                proc.communicate(), timeout=timeout_seconds
+            await asyncio.wait_for(
+                asyncio.gather(_pump_stdout(), proc.wait()),
+                timeout=timeout_seconds,
             )
         except asyncio.TimeoutError:
             try:
@@ -320,12 +339,16 @@ class UECompileCheckAction(ActionBase):
             duration_ms = int((time.time() - t0) * 1000)
             return _err(
                 f"UBT 超时（{timeout_seconds}s）",
-                detail={"duration_ms": duration_ms, "command": cmd_str,
-                        "engine_used": engine_info.to_dict()},
+                detail={
+                    "duration_ms": duration_ms,
+                    "command": cmd_str,
+                    "engine_used": engine_info.to_dict(),
+                    "partial_output": "\n".join(collected_lines[-100:]),
+                },
             )
 
         duration_ms = int((time.time() - t0) * 1000)
-        text = stdout_bytes.decode("utf-8", errors="replace")
+        text = "\n".join(collected_lines)
         exit_code = proc.returncode if proc.returncode is not None else -1
 
         # 6. 解析

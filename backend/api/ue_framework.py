@@ -145,41 +145,84 @@ async def instantiate(project_id: str, req: InstantiateRequest):
 
 @router.post("/baseline-compile")
 async def baseline_compile(project_id: str, req: BaselineCompileRequest):
-    """对刚生成的骨架跑一次 UnrealBuildTool 验证基线。"""
-    from actions.ue_compile_check import UECompileCheckAction
-    from git_manager import git_manager
+    """对刚生成的骨架跑一次 UnrealBuildTool 验证基线。
 
-    action = UECompileCheckAction()
-    context: Dict[str, Any] = {
-        "project_id": project_id,
-        "target_platform": req.target_platform,
-        "target_config": req.target_config,
-        "timeout_seconds": req.timeout_seconds,
-    }
-    if req.engine_path:
-        context["engine_path"] = req.engine_path
-    if req.target_name:
-        context["target_name"] = req.target_name
+    **异步模式**：立即返回 {status: "started"}，UBT 在后台跑。过程通过 SSE 推：
+      - ue_compile_log     每行 UBT 输出（流式）
+      - ue_compile_started 启动事件（含命令）
+      - ue_baseline_compile_result 最终结果
+    前端订阅这三个事件即可实现实时日志流 + 最终结果展示。
+    """
+    import asyncio
+    from events import event_manager
 
-    # 若前端没给 uproject_path，Action 会自己从 project git repo 扫
-    result = await action.run(context)
-    data = result.data or {}
+    async def _log_cb(line: str):
+        try:
+            await event_manager.publish_to_project(
+                project_id,
+                "ue_compile_log",
+                {"line": line},
+            )
+        except Exception:
+            pass
 
-    # 广播事件
-    try:
-        from events import event_manager
-        await event_manager.publish_to_project(
-            project_id,
-            "ue_baseline_compile_result",
-            {
-                "status": data.get("status"),
-                "exit_code": data.get("exit_code"),
-                "errors_count": len(data.get("errors") or []),
-                "warnings_count": len(data.get("warnings") or []),
-                "duration_ms": data.get("duration_ms"),
-            },
-        )
-    except Exception:
-        pass
+    async def _run_compile_bg():
+        from actions.ue_compile_check import UECompileCheckAction
+        action = UECompileCheckAction()
+        context: Dict[str, Any] = {
+            "project_id": project_id,
+            "target_platform": req.target_platform,
+            "target_config": req.target_config,
+            "timeout_seconds": req.timeout_seconds,
+            "log_callback": _log_cb,
+        }
+        if req.engine_path:
+            context["engine_path"] = req.engine_path
+        if req.target_name:
+            context["target_name"] = req.target_name
 
-    return data
+        # 启动事件（给前端清空日志区做准备）
+        try:
+            await event_manager.publish_to_project(
+                project_id,
+                "ue_compile_started",
+                {"target": req.target_name or "", "platform": req.target_platform,
+                 "config": req.target_config},
+            )
+        except Exception:
+            pass
+
+        try:
+            result = await action.run(context)
+            data = result.data or {}
+        except Exception as e:
+            logger.exception("baseline-compile 后台异常")
+            data = {
+                "status": "error",
+                "message": f"Action 异常: {e}",
+                "errors": [],
+                "warnings": [],
+            }
+
+        # 广播最终结果
+        try:
+            await event_manager.publish_to_project(
+                project_id,
+                "ue_baseline_compile_result",
+                {
+                    "status": data.get("status"),
+                    "exit_code": data.get("exit_code"),
+                    "duration_ms": data.get("duration_ms"),
+                    "errors_count": len(data.get("errors") or []),
+                    "warnings_count": len(data.get("warnings") or []),
+                    "errors": (data.get("errors") or [])[:10],   # 前 10 条详细展示
+                    "message": data.get("message"),
+                    "products": data.get("products"),
+                    "command": data.get("command"),
+                },
+            )
+        except Exception:
+            pass
+
+    asyncio.create_task(_run_compile_bg())
+    return {"status": "started", "message": "基线编译已在后台启动，请看实时日志"}
