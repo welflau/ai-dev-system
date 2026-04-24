@@ -1239,6 +1239,44 @@ class TicketOrchestrator:
         current_ticket = await db.fetch_one("SELECT * FROM tickets WHERE id = ?", (ticket_id,))
         current_status = current_ticket["status"] if current_ticket else ticket["status"]
 
+        # === 止血：Agent 返回 error 直接标记 blocked，阻止 orchestrator 再次分派 ===
+        # 典型场景：fragment 声明的 action（如 run_engine_compile）未在 Agent 中实现，
+        # execute() 走 fallthrough 返回 {"status": "error", "message": "未知任务: xxx"}。
+        # 之前 orchestrator 无视此 error，按 agent_name 分支强写下一状态（如 DevAgent 一律
+        # 写成 development_done），导致 ticket 在同一状态反复触发同一规则，死循环 + 烧 token。
+        if isinstance(result, dict) and result.get("status") == "error":
+            err_msg = str(result.get("message") or result.get("error") or "Agent 返回 error")
+            blocked_status = TicketStatus.BLOCKED.value
+            await db.update("tickets", {
+                "status": blocked_status,
+                "result": json.dumps(result, ensure_ascii=False),
+                "updated_at": now_iso(),
+            }, "id = ?", (ticket_id,))
+            await self._log(
+                project_id, requirement_id, ticket_id, agent_name,
+                "blocked", current_status, blocked_status,
+                f"{agent_name}.{action} 返回 error，工单已标记 blocked 等待人工介入 | {err_msg[:300]}",
+                "error",
+                detail_data={"action": action, "error": err_msg, "raw_result": result},
+            )
+            await event_manager.publish_to_project(
+                project_id,
+                "ticket_blocked",
+                {
+                    "ticket_id": ticket_id,
+                    "from": current_status,
+                    "to": blocked_status,
+                    "agent": agent_name,
+                    "action": action,
+                    "error": err_msg[:300],
+                },
+            )
+            logger.warning(
+                "🚧 工单 blocked: %s %s.%s → %s",
+                ticket_id[:12], agent_name, action, err_msg[:120],
+            )
+            return
+
         # 保存执行结果（先 pop 二进制媒体文件，避免 JSON 序列化失败）
         media_files_temp = result.pop("_media_files", None)  # 暂存，稍后写入 Git
         result_json = json.dumps(result, ensure_ascii=False)

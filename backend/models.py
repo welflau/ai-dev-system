@@ -57,6 +57,7 @@ class TicketStatus(str, Enum):
     DEPLOYED = "deployed"                                  # 已部署
     # 终态
     CANCELLED = "cancelled"                                # 已取消
+    BLOCKED = "blocked"                                    # 卡住待人工介入（如 Agent 返回 error / action 未实现）
 
 
 class SubtaskStatus(str, Enum):

@@ -333,6 +333,48 @@ async def reject_ticket(project_id: str, ticket_id: str, req: TicketRejectReques
     return {"message": message, "new_status": new_status}
 
 
+@router.post("/api/projects/{project_id}/tickets/{ticket_id}/unblock")
+async def unblock_ticket(project_id: str, ticket_id: str, target_status: str = "pending"):
+    """解除 blocked 工单（人工介入后使用）。
+    target_status 默认回到 pending 重新跑，也可指定其他状态（如 development_done 跳过未实现的 action）。
+    """
+    existing = await db.fetch_one(
+        "SELECT * FROM tickets WHERE id = ? AND project_id = ?",
+        (ticket_id, project_id),
+    )
+    if not existing:
+        raise HTTPException(404, "工单不存在")
+
+    if existing["status"] != TicketStatus.BLOCKED.value:
+        raise HTTPException(400, f"当前状态「{existing['status']}」不是 blocked，无需解除")
+
+    # 校验 target_status 是合法枚举
+    valid_statuses = {s.value for s in TicketStatus}
+    if target_status not in valid_statuses:
+        raise HTTPException(400, f"目标状态「{target_status}」非法")
+
+    await db.update(
+        "tickets",
+        {"status": target_status, "updated_at": now_iso()},
+        "id = ?",
+        (ticket_id,),
+    )
+
+    await _log_ticket(
+        project_id, existing["requirement_id"], ticket_id,
+        "Operator", "unblock", TicketStatus.BLOCKED.value, target_status,
+        f"工单已从 blocked 解除 → {target_status}",
+    )
+
+    await event_manager.publish_to_project(
+        project_id,
+        "ticket_unblocked",
+        {"ticket_id": ticket_id, "from": TicketStatus.BLOCKED.value, "to": target_status},
+    )
+
+    return {"message": "工单已解除 blocked", "new_status": target_status}
+
+
 # ==================== 子任务 ====================
 
 
