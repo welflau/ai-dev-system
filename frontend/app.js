@@ -4985,8 +4985,13 @@ function connectSSE(projectId) {
             const data = JSON.parse(e.data);
             const ok = data.status === 'success';
             const secs = Math.round((data.duration_ms || 0) / 1000);
+            // 区分两种失败：UBT 真跑但编译失败（有 errors）/ Action 早期就错（无 errors + 有 message）
+            const hasErrors = (data.errors_count || 0) > 0;
+            const earlyErr = !ok && !hasErrors && data.message;
             if (ok) {
                 showToast(`✓ UBT 编译通过（${secs}s）`, 'success');
+            } else if (earlyErr) {
+                showToast(`✗ UBT 未能启动：${data.message}`, 'error');
             } else {
                 showToast(`✗ UBT 编译失败：${data.errors_count} errors / ${data.warnings_count} warnings（${secs}s）`, 'error');
             }
@@ -4996,9 +5001,12 @@ function connectSSE(projectId) {
                 detail: JSON.stringify({
                     message: ok
                         ? `✓ 编译通过 (${secs}s)`
-                        : `✗ 编译失败 (${secs}s, ${data.errors_count} errors)`,
+                        : earlyErr
+                            ? `✗ UBT 未能启动: ${data.message}`
+                            : `✗ 编译失败 (${secs}s, ${data.errors_count} errors)`,
                     errors: data.errors,
                     command: data.command,
+                    raw_message: data.message,
                 }),
                 level: ok ? 'info' : 'error',
                 created_at: new Date().toISOString(),

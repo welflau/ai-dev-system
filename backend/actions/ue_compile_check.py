@@ -213,8 +213,23 @@ class UECompileCheckAction(ActionBase):
             or 600
         )
 
+        log_cb = context.get("log_callback")
+
+        async def _log(msg: str):
+            logger.info(msg)
+            if log_cb:
+                try:
+                    await log_cb(msg)
+                except Exception:
+                    pass
+
+        async def _err_log(msg: str, detail: Optional[Dict] = None):
+            await _log(f"[error] {msg}")
+            return _err(msg, detail)
+
         uproject_path = context.get("uproject_path") or context.get("uproject")
         engine_path = context.get("engine_path") or context.get("ue_engine_path")
+        await _log(f"[ubt] 入参 engine_path={engine_path or '(无)'}  uproject={uproject_path or '(无)'}")
 
         # 未显式指定 uproject → 从项目 Git 仓库根扫 *.uproject 自动探测
         if not uproject_path:
@@ -223,13 +238,18 @@ class UECompileCheckAction(ActionBase):
                 try:
                     from git_manager import git_manager
                     repo_path = git_manager._repo_path(project_id)
+                    await _log(f"[ubt] 自动探测 .uproject @ {repo_path}")
                     if repo_path and Path(repo_path).is_dir():
                         found = sorted(Path(repo_path).glob("*.uproject"))
                         if found:
                             uproject_path = str(found[0])
-                            logger.info("🔍 自动探测到 .uproject: %s", uproject_path)
+                            await _log(f"[ubt] 已定位 .uproject: {uproject_path}")
+                        else:
+                            await _log(f"[ubt] 仓库内无 .uproject 文件")
+                    else:
+                        await _log(f"[ubt] 仓库目录不存在或不是目录: {repo_path}")
                 except Exception as e:
-                    logger.warning("自动探测 .uproject 失败: %s", e)
+                    await _log(f"[ubt] 自动探测 .uproject 异常: {e}")
         target_name = context.get("target_name") or context.get("ue_target_name")
         platform = (context.get("target_platform")
                     or context.get("ue_target_platform")
@@ -241,21 +261,28 @@ class UECompileCheckAction(ActionBase):
         # 1. 解析引擎
         engine_info: Optional[UEEngineInfo] = None
         if engine_path:
+            await _log(f"[ubt] verify_engine({engine_path})")
             engine_info = verify_engine(engine_path)
         elif uproject_path:
+            await _log(f"[ubt] resolve_project_engine({uproject_path})")
             engine_info = resolve_project_engine(uproject_path)
         else:
-            return _err("缺少 engine_path 和 uproject_path，无法定位 UE 引擎")
+            return await _err_log("缺少 engine_path 和 uproject_path，无法定位 UE 引擎")
 
         if not engine_info or not engine_info.path:
-            return _err(
+            return await _err_log(
                 "无法定位 UE 引擎。请在项目设置里配置 ue_engine_path，或确保 "
                 ".uproject 的 EngineAssociation 对应的版本已安装",
                 detail={"uproject_path": uproject_path, "engine_path_tried": engine_path},
             )
 
+        await _log(
+            f"[ubt] 引擎 OK: {engine_info.path} (UE {engine_info.version} "
+            f"[{engine_info.type}] has_ubt={engine_info.has_ubt})"
+        )
+
         if not engine_info.has_ubt:
-            return _err(
+            return await _err_log(
                 f"引擎 {engine_info.path} 缺 UnrealBuildTool.exe。"
                 f"若是自编译 build，需先运行 GenerateProjectFiles.bat + 编引擎",
                 detail={"engine": engine_info.to_dict()},
@@ -263,23 +290,26 @@ class UECompileCheckAction(ActionBase):
 
         ubt = get_ubt_path(engine_info.path)
         if not ubt:
-            return _err(f"UBT 路径计算失败: {engine_info.path}")
+            return await _err_log(f"UBT 路径计算失败: {engine_info.path}")
 
         # 2. uproject 验证
         if not uproject_path:
-            return _err("缺 uproject_path")
+            return await _err_log("缺 uproject_path")
         up = Path(uproject_path)
         if not up.is_file():
-            return _err(f".uproject 不存在: {up}")
+            return await _err_log(f".uproject 不存在: {up}")
 
         # 3. 推断 target_name
         if not target_name:
             target_name = _infer_target_name(up, prefer_editor=True)
             if not target_name:
-                return _err(
+                return await _err_log(
                     "无法推断 target_name。请在项目设置里配置，或确保 "
                     f"Source/ 下有 <ProjectName>(Editor).Target.cs"
                 )
+            await _log(f"[ubt] 自动推断 target={target_name}")
+        else:
+            await _log(f"[ubt] 指定 target={target_name}")
 
         # 4. 组装命令
         cmd = [
@@ -292,10 +322,11 @@ class UECompileCheckAction(ActionBase):
             "-NoHotReload",
         ]
         cmd_str = " ".join(f'"{c}"' if " " in c else c for c in cmd)
-        logger.info("🔧 UBT 命令: %s", cmd_str)
+        # 启动前先把命令推出来，即便 subprocess 启动失败也能看到"准备执行什么"
+        await _log(f"[ubt] cmd: {cmd_str}")
 
         # 5. 执行（流式：逐行读 stdout，每行回调一次 log_callback）
-        log_callback = context.get("log_callback")  # 可选 async callback(line: str)
+        log_callback = log_cb  # 流式 stdout 每行也走同一 callback
         t0 = time.time()
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -303,10 +334,11 @@ class UECompileCheckAction(ActionBase):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,   # 合并
             )
+            await _log(f"[ubt] subprocess pid={proc.pid}, 开始读 stdout...")
         except FileNotFoundError:
-            return _err(f"启动 UBT 失败: {ubt} 不存在或权限不足")
+            return await _err_log(f"启动 UBT 失败: {ubt} 不存在或权限不足")
         except Exception as e:
-            return _err(f"启动 UBT 异常: {e}")
+            return await _err_log(f"启动 UBT 异常: {e}")
 
         collected_lines: List[str] = []
 
