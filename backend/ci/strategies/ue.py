@@ -237,6 +237,10 @@ class UECIStrategy(CIStrategy):
                 else CIBuildStatus.FAILED.value
             )
             err_msgs = data.get("errors") or []
+            # 末尾 8KB stdout 存进 raw_output_tail，供前端"详情"弹窗显示
+            raw_tail = (data.get("raw_tail") or data.get("partial_output") or "")[-8192:]
+            raw_head = (data.get("raw_head") or "")[:2048]
+            raw_output = (raw_head + "\n...\n" + raw_tail).strip() if raw_head and raw_tail else (raw_head or raw_tail)
             await db.update("ci_builds", {
                 "status": status,
                 "build_log": json.dumps(logs, ensure_ascii=False),
@@ -244,6 +248,7 @@ class UECIStrategy(CIStrategy):
                     f"{(e.get('file') or '?').split(chr(92))[-1]}:{e.get('line', '?')} {e.get('code', '')} {(e.get('msg') or '')[:80]}"
                     for e in err_msgs[:3]
                 )[:500] if status == CIBuildStatus.FAILED.value else None,
+                "raw_output_tail": raw_output[:10240] if raw_output else None,
                 "completed_at": now_iso(),
             }, "id = ?", (build_id,))
 

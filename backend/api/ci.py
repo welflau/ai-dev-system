@@ -64,10 +64,11 @@ async def list_builds(project_id: str, build_type: str = None, limit: int = 20, 
 
 @router.get("/builds/{build_id}")
 async def get_build(project_id: str, build_id: str):
-    """获取单个构建详情"""
+    """获取单个构建详情（含 raw_output_tail 供前端详情弹窗显示）"""
     build = await ci_pipeline.get_build_detail(build_id)
     if not build or build["project_id"] != project_id:
         raise HTTPException(404, "构建记录不存在")
+    # raw_output_tail 直接从 DB 读（ci_pipeline.get_build_detail 用 SELECT * 会带上）
     return build
 
 

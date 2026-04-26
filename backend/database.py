@@ -80,6 +80,8 @@ class Database:
             # v0.19.1 action state 持久化：防止卡片刷新后被重复点击
             ("chat_messages", "action_state", "TEXT"),   # NULL / pending / executed / cancelled
             ("chat_messages", "action_result", "TEXT"),  # JSON：{executed_at, commit, template, ...}
+            # v0.19.x 构建详情：存最后 8KB stdout，供"详情"弹窗显示
+            ("ci_builds", "raw_output_tail", "TEXT"),
             # v0.19.x 工单面板"当前进度"区：让 UBT / Package 的 3-5 分钟等待有活性反馈
             ("tickets", "current_action", "TEXT"),              # "DevAgent.run_engine_compile"
             ("tickets", "current_action_started_at", "TEXT"),   # ISO 时间戳

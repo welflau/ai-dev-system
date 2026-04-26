@@ -9891,21 +9891,19 @@ function renderCICDBuildHistory(builds) {
         const cancelBtn = (b.status === 'pending' || b.status === 'running')
             ? `<button class="btn btn-sm" onclick="cancelCIBuild('${b.id}')">取消</button>`
             : '';
+        // v0.19.x：详情按钮
+        const detailBtn = `<button class="btn btn-sm" onclick="openCIBuildDetail('${b.id}','${b.build_type}','${b.status}')" title="查看完整输出">详情</button>`;
 
-        html += `<tr class="cicd-row-${b.status}">`;
+        html += `<tr class="cicd-row-${b.status}" style="cursor:pointer" onclick="openCIBuildDetail('${b.id}','${b.build_type}','${b.status}')">`;
         html += `<td>${statusIcon} ${b.status}</td>`;
         html += `<td><span class="cicd-type-badge cicd-type-${b.build_type}">${typeLabel}</span></td>`;
-        html += `<td>${b.branch}</td>`;
+        html += `<td>${b.branch || '-'}</td>`;
         html += `<td><code>${b.commit_hash ? b.commit_hash.substring(0, 8) : '-'}</code></td>`;
         html += `<td>${triggerLabel}</td>`;
         html += `<td>${timeStr}</td>`;
         html += `<td>${durStr}</td>`;
-        html += `<td>${cancelBtn}</td>`;
+        html += `<td onclick="event.stopPropagation()">${cancelBtn} ${detailBtn}</td>`;
         html += '</tr>';
-
-        if (b.error_message) {
-            html += `<tr class="cicd-error-row"><td colspan="8" class="cicd-error-cell">${_htmlEsc(b.error_message)}</td></tr>`;
-        }
     });
 
     html += '</tbody></table>';
@@ -9931,6 +9929,98 @@ async function triggerCIBuild(buildType) {
         }
     } catch (e) {
         showToast(`触发失败: ${e.message}`, 'error');
+    }
+}
+
+/** v0.19.x 构建详情弹窗 */
+async function openCIBuildDetail(buildId, buildType, buildStatus) {
+    if (!currentProjectId) return;
+    const modalId = 'ciBuildDetailModal';
+    let modal = document.getElementById(modalId);
+    if (modal) modal.remove();
+
+    modal = document.createElement('div');
+    modal.id = modalId;
+    modal.className = 'modal-overlay active';
+    modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+    modal.innerHTML = `
+    <div class="modal modal-lg" style="max-width:900px;max-height:85vh;display:flex;flex-direction:column;">
+      <div class="modal-header" style="flex-shrink:0;">
+        <h3>📋 构建详情 <span style="font-size:12px;color:var(--text-muted);font-weight:400;">${escapeHtml(buildType)} · ${escapeHtml(buildId.slice(0,16))}</span></h3>
+        <button class="btn-icon" onclick="document.getElementById('${modalId}').remove()">&times;</button>
+      </div>
+      <div id="${modalId}_body" style="flex:1;overflow-y:auto;padding:14px 18px;font-family:ui-monospace,SFMono-Regular,monospace;font-size:12px;background:var(--bg);white-space:pre-wrap;word-break:break-all;line-height:1.6;">
+        <span style="color:var(--text-muted);">加载中...</span>
+      </div>
+      <div style="flex-shrink:0;padding:10px 18px;border-top:1px solid var(--border);display:flex;gap:8px;align-items:center;">
+        <span id="${modalId}_status" style="font-size:12px;color:var(--text-muted);flex:1;"></span>
+        <button class="btn btn-sm" onclick="document.getElementById('${modalId}').remove()">关闭</button>
+      </div>
+    </div>`;
+    document.body.appendChild(modal);
+
+    const body = document.getElementById(`${modalId}_body`);
+    const statusEl = document.getElementById(`${modalId}_status`);
+    const isRunning = (buildStatus === 'pending' || buildStatus === 'running');
+
+    const appendLine = (line) => {
+        body.textContent += line + '\n';
+        body.scrollTop = body.scrollHeight;
+    };
+
+    if (isRunning) {
+        body.textContent = '';
+        statusEl.textContent = '🔄 构建中，实时输出…';
+        // SSE 实时订阅
+        const sseTopics = {ubt_compile:['ue_compile_log'],playtest:['ue_playtest_log'],
+            package_client:['ue_package_log'],take_screenshot:['ue_screenshot_log'],
+            develop_build:['ci_build_log'],master_build:['ci_build_log']};
+        const topics = sseTopics[buildType] || ['ci_build_log'];
+        const es = window._deliverySSE;
+        const handlers = [];
+        if (es) {
+            topics.forEach(topic => {
+                const h = (e) => {
+                    try { const d = JSON.parse(e.data); const l = d.line || d.message || ''; if (l) appendLine(l); } catch {}
+                };
+                es.addEventListener(topic, h);
+                handlers.push([topic, h]);
+            });
+        }
+        // 关弹窗时解绑
+        new MutationObserver((_, obs) => {
+            if (!document.getElementById(modalId)) { handlers.forEach(([t,h]) => es && es.removeEventListener(t,h)); obs.disconnect(); }
+        }).observe(document.body, {childList:true, subtree:false});
+        // 同步已有历史
+        try {
+            const d = await api(`/projects/${currentProjectId}/ci/builds/${buildId}`);
+            if (d.raw_output_tail) body.textContent = d.raw_output_tail + '\n\n--- 实时输出 ---\n';
+        } catch {}
+    } else {
+        try {
+            const d = await api(`/projects/${currentProjectId}/ci/builds/${buildId}`);
+            const lines = [];
+            if (d.build_log) {
+                try {
+                    const steps = JSON.parse(d.build_log);
+                    lines.push('=== Build Steps ===');
+                    steps.forEach(s => {
+                        lines.push(`${s.passed !== false ? '✅' : '❌'} [${s.step}] ${s.msg || ''}`);
+                        if (s.errors) s.errors.forEach(e => lines.push(`   └ ${JSON.stringify(e).slice(0,200)}`));
+                    });
+                } catch {}
+            }
+            if (d.error_message) { lines.push('\n=== Error ==='); lines.push(d.error_message); }
+            if (d.raw_output_tail) { lines.push('\n=== Stdout (tail) ==='); lines.push(d.raw_output_tail); }
+            if (!lines.length) lines.push('(无输出记录)');
+            body.textContent = lines.join('\n');
+            const dur = d.started_at && d.completed_at
+                ? Math.round((new Date(d.completed_at)-new Date(d.started_at))/1000)+'s' : '-';
+            statusEl.textContent = `${d.status} · ${d.build_type} · 耗时 ${dur}`;
+            body.scrollTop = body.scrollHeight;
+        } catch (e) {
+            body.textContent = '加载失败: ' + e.message;
+        }
     }
 }
 
