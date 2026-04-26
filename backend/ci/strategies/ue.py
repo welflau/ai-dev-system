@@ -161,6 +161,18 @@ class UECIStrategy(CIStrategy):
             "started_at": now_iso(),
         }, "id = ?", (build_id,))
 
+        # 实时累积 stdout（让 "详情" 抽屉在构建运行中也能显示内容）
+        _live_lines: List[str] = []
+        _live_flush_count = [0]
+
+        async def _flush_live_lines():
+            """每 10 行或每条重要行写进 DB 的 raw_output_tail（限 8KB）"""
+            tail = "\n".join(_live_lines[-400:])[-8192:]
+            try:
+                await db.update("ci_builds", {"raw_output_tail": tail}, "id = ?", (build_id,))
+            except Exception:
+                pass
+
         async def _log_cb(line: str):
             try:
                 # 事件类型按 build_type 分派，前端既有订阅器能接住
@@ -172,6 +184,11 @@ class UECIStrategy(CIStrategy):
                     "take_screenshot": "ue_screenshot_log",
                 }.get(build_type, "ci_build_log")
                 await event_manager.publish_to_project(project_id, event_type, {"line": line})
+                # 同时写 DB，让"详情"抽屉轮询时能看到实时内容
+                _live_lines.append(line)
+                _live_flush_count[0] += 1
+                if _live_flush_count[0] % 10 == 0 or any(k in line.lower() for k in ("[cmd]", "cmd:", "error", "warning", "result", "started", "[screenshot]", "[ubt]", "[playtest]")):
+                    await _flush_live_lines()
             except Exception:
                 pass
 
