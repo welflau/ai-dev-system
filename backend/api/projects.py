@@ -564,6 +564,38 @@ async def get_git_file(project_id: str, path: str):
     return {"path": path, "content": content}
 
 
+@router.get("/{project_id}/screenshots/{filename}")
+async def get_project_screenshot(project_id: str, filename: str):
+    """v0.19.x：读取 UE 运行截图（存在项目截图目录，不在 git repo 内）"""
+    import re
+    from fastapi.responses import FileResponse as FR
+    from git_manager import git_manager as _gm
+
+    # 安全校验：只允许文件名，不允许路径穿越
+    if ".." in filename or "/" in filename or "\\" in filename:
+        raise HTTPException(400, "非法文件名")
+    if not re.match(r"^[\w\-. ]+\.(png|jpg|jpeg|webp|gif)$", filename, re.IGNORECASE):
+        raise HTTPException(400, "不支持的文件类型")
+
+    repo_path = _gm._repo_path(project_id)
+    if not repo_path:
+        raise HTTPException(404, "项目不存在")
+
+    # 先找 git repo 下的 screenshots/
+    shot_path = Path(repo_path) / "screenshots" / filename
+    if not shot_path.is_file():
+        # 再找 UE 原生截图目录
+        from pathlib import Path as _P
+        for uproject in _P(repo_path).glob("*.uproject"):
+            ue_shot = uproject.parent / "Saved" / "Screenshots" / "WindowsEditor" / filename
+            if ue_shot.is_file():
+                shot_path = ue_shot
+                break
+    if not shot_path.is_file():
+        raise HTTPException(404, "截图不存在")
+    return FR(str(shot_path))
+
+
 @router.get("/{project_id}/git/file-raw")
 async def get_git_file_raw(project_id: str, path: str):
     """读取仓库中的二进制文件（图片等）"""

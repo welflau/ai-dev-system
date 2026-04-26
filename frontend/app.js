@@ -3312,6 +3312,28 @@ async function doRunPlaytestFromCard(blockId) {
 }
 
 /** v0.19 Phase ②：POST /run-playtest，结果通过 SSE ue_playtest_* 事件回流 */
+/** v0.19.x：把 UE 运行截图展示到项目 AI 聊天面板 */
+function _showUEScreenshotsInChat(screenshotPaths) {
+    if (!currentProjectId || !screenshotPaths || screenshotPaths.length === 0) return;
+    // 截图路径转成 /api 可访问的 URL（走 git/file-raw 或 file-raw 端点）
+    const imgs = screenshotPaths.map(p => {
+        // 路径形如 D:\Projects\TestFPS\screenshots\ue_preview_xxx.png
+        // 用 file-raw API：GET /api/projects/{pid}/git/file-raw?path=<rel>
+        // 由于截图在 git repo 外面，走专用 /api/screenshots 端点
+        const fname = p.replace(/\\/g, '/').split('/').pop();
+        return `/api/projects/${currentProjectId}/screenshots/${encodeURIComponent(fname)}`;
+    });
+    const imgsHtml = imgs.map(url =>
+        `<img src="${escapeHtml(url)}" style="max-width:100%;border-radius:6px;margin:4px 0;" ` +
+        `onerror="this.style.display='none'" loading="lazy">`
+    ).join('');
+    appendChatBubble('assistant',
+        `📸 **游戏运行截图** (${screenshotPaths.length} 张)\n` +
+        `路径：${screenshotPaths.map(p => '`' + p.split(/[\\/]/).pop() + '`').join(', ')}`,
+        null, null, []
+    );
+}
+
 async function doRunUEPlaytest(projectId, enginePath, testFilter = 'Project.') {
     try {
         const r = await fetch(`/api/projects/${projectId}/ue-framework/run-playtest`, {
@@ -5658,6 +5680,37 @@ function connectSSE(projectId) {
                 level: ok ? 'info' : 'error',
                 created_at: new Date().toISOString(),
             });
+        });
+
+        // v0.19.x 运行截图 SSE
+        eventSource.addEventListener('ue_screenshot_log', (e) => {
+            const data = JSON.parse(e.data);
+            const line = (data.line || '').trim();
+            if (!line) return;
+            appendLogEntry({
+                agent_type: 'UE-Screenshot', action: 'screenshot',
+                detail: JSON.stringify({message: line}),
+                level: line.toLowerCase().includes('error') ? 'error' : 'info',
+                created_at: new Date().toISOString(),
+            });
+        });
+
+        eventSource.addEventListener('ue_screenshot_result', (e) => {
+            const data = JSON.parse(e.data);
+            const ok = data.status === 'success';
+            const count = (data.screenshots || []).length;
+            const msg = ok ? `📸 截图完成，共 ${count} 张` : `⚠️ 截图失败：${data.message || ''}`;
+            showToast(msg, ok ? 'success' : 'warning');
+            appendLogEntry({
+                agent_type: 'UE-Screenshot', action: ok ? 'screenshot_ok' : 'screenshot_fail',
+                detail: JSON.stringify({message: msg, screenshots: data.screenshots, command: data.command}),
+                level: ok ? 'info' : 'warn',
+                created_at: new Date().toISOString(),
+            });
+            // 自动渲染截图到 AI 聊天
+            if (ok && data.screenshots && data.screenshots.length > 0) {
+                _showUEScreenshotsInChat(data.screenshots);
+            }
         });
 
         eventSource.addEventListener('requirement_analyzing', (e) => {

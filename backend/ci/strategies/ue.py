@@ -38,9 +38,14 @@ class UECIStrategy(CIStrategy):
                 blocking=True,
             ),
             PipelineStage(
+                id="take_screenshot", name="运行截图", icon="📸",
+                description="启动游戏截效果图（需 GPU，首次启动 1-3 分钟）",
+                blocking=False,
+            ),
+            PipelineStage(
                 id="playtest", name="Automation 测试", icon="🎮",
                 description="headless UnrealEditor-Cmd 跑 Automation Framework（复用 UEPlaytestAction）",
-                blocking=True,
+                blocking=False,
             ),
             PipelineStage(
                 id="package_client", name="打包 Client", icon="🎯",
@@ -80,6 +85,10 @@ class UECIStrategy(CIStrategy):
             BuildTypeSpec(
                 id="ubt_compile", display_name="编译 (UBT)", icon="🔧",
                 description="只跑 UBT 编译 Editor target",
+            ),
+            BuildTypeSpec(
+                id="take_screenshot", display_name="运行截图", icon="📸",
+                description="启动游戏截效果图（需要 GPU，首次 1-3 分钟）",
             ),
             BuildTypeSpec(
                 id="playtest", display_name="跑 Automation", icon="🎮",
@@ -160,6 +169,7 @@ class UECIStrategy(CIStrategy):
                     "playtest": "ue_playtest_log",
                     "package_client": "ue_package_log",
                     "package_server": "ue_package_log",
+                    "take_screenshot": "ue_screenshot_log",
                 }.get(build_type, "ci_build_log")
                 await event_manager.publish_to_project(project_id, event_type, {"line": line})
             except Exception:
@@ -187,6 +197,20 @@ class UECIStrategy(CIStrategy):
                 })
                 data = result.data or {}
                 logs.append({"step": "playtest", "passed": data.get("status") == "success"})
+
+            elif build_type == "take_screenshot":
+                from actions.ue_screenshot import UEScreenshotAction
+                result = await UEScreenshotAction().run({
+                    "project_id": project_id,
+                    "log_callback": _log_cb,
+                    **kwargs,
+                })
+                data = result.data or {}
+                logs.append({
+                    "step": "take_screenshot",
+                    "passed": data.get("status") == "success",
+                    "screenshots": data.get("screenshots", []),
+                })
 
             elif build_type == "package_client":
                 from actions.ue_package import UEPackageAction

@@ -466,13 +466,30 @@ class SelfTestAction(ActionBase):
                             },
                         })
 
+        # Layer 3：可选截效果图（SOP config: ue_screenshot=true，默认关因为需要 GPU + 启动慢）
+        screenshots: List[str] = []
+        if sop_cfg.get("ue_screenshot", False):
+            try:
+                from actions.ue_screenshot import UEScreenshotAction
+                shot_result = await UEScreenshotAction().run({
+                    **context,
+                    "timeout_seconds": sop_cfg.get("ue_screenshot_timeout", 180),
+                    "log_callback": context.get("log_callback"),
+                })
+                sd = shot_result.data or {}
+                screenshots = sd.get("screenshots") or []
+                logger.info("📸 UE 截图: %d 张", len(screenshots))
+            except Exception as e:
+                logger.warning("UE 截图失败（忽略）: %s", e)
+
         return ActionResult(success=True, data={
             "self_test": {
                 "passed": True,
                 "total": len(issues),
-                "summary": f"UE 自测通过 ({len(warnings)} warnings)",
+                "summary": f"UE 自测通过 ({len(warnings)} warnings)" + (f"，{len(screenshots)} 张截图" if screenshots else ""),
                 "phase": "passed",
-                "issues": issues,   # warnings 仍带回来给前端展示
+                "issues": issues,
                 "ue_lint_summary": summary,
+                "screenshots": screenshots,
             },
         })
