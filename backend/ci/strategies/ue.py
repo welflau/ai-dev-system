@@ -206,11 +206,15 @@ class UECIStrategy(CIStrategy):
                     **kwargs,
                 })
                 data = result.data or {}
+                shots = data.get("screenshots") or []
                 logs.append({
                     "step": "take_screenshot",
                     "passed": data.get("status") == "success",
-                    "screenshots": data.get("screenshots", []),
+                    "screenshots": shots,
                 })
+                # 截图成功 → 把结果图持久化到项目聊天（让 AI 助手面板显示）
+                if shots:
+                    await self._save_screenshot_to_chat(project_id, shots, build_id)
 
             elif build_type == "package_client":
                 from actions.ue_package import UEPackageAction
@@ -271,6 +275,37 @@ class UECIStrategy(CIStrategy):
             })
             # 异常情况也主动通知
             await self._proactive_diagnose(project_id, build_type, {"status": "error", "message": err_msg}, build_id)
+
+    async def _save_screenshot_to_chat(
+        self, project_id: str, shot_paths: List[str], build_id: str
+    ):
+        """截图成功后把结果图写到项目 AI 助手聊天，刷新后可见"""
+        try:
+            from api.chat import _save_chat_message
+            from pathlib import Path as _P
+
+            img_urls = []
+            for p in shot_paths[:3]:
+                fname = _P(p).name
+                img_urls.append(f"/api/projects/{project_id}/screenshots/{fname}")
+
+            content = f"📸 **Editor 截图完成**（build `{build_id[:12]}`）"
+            action = {
+                "type": "ue_screenshot_result",
+                "screenshots": img_urls,
+                "local_paths": shot_paths,
+                "project_id": project_id,
+                "build_id": build_id,
+            }
+            await _save_chat_message(
+                project_id=project_id,
+                role="assistant",
+                content=content,
+                action=action,
+            )
+            logger.info("📸 截图消息已写入项目聊天 [%s]: %d 张", project_id[:8], len(img_urls))
+        except Exception as e:
+            logger.warning("截图消息写入聊天失败（忽略）: %s", e)
 
     async def _proactive_diagnose(
         self, project_id: str, build_type: str, data: Dict[str, Any], build_id: str

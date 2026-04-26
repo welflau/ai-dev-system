@@ -5788,6 +5788,10 @@ function connectSSE(projectId) {
                 created_at: new Date().toISOString()});
             // v0.19.x 实时刷新 Pipeline 卡片（UE 和 Web 都需要）
             if (document.getElementById('tab-cicd')?.classList.contains('active')) loadDeliveryPage();
+            // 截图成功时刷新聊天拿截图消息
+            if (ok && data.build_type === 'take_screenshot') {
+                if (typeof loadChatHistory === 'function' && currentProjectId) setTimeout(loadChatHistory, 800);
+            }
         });
 
         eventSource.addEventListener('ci_build_failed', (e) => {
@@ -8250,6 +8254,23 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
         setTimeout(() => loadProjectAssemblyPreview(safeId, traitsArr), 50);
     } else if (action && action.type === 'propose_ue_framework') {
         actionHtml = renderUEFrameworkCard(action);
+    } else if (action && action.type === 'ue_screenshot_result') {
+        // 截图结果卡：显示效果图
+        const shots = action.screenshots || [];
+        const imgsHtml = shots.map(url =>
+            `<div style="margin:6px 0;">
+               <img src="${escapeHtml(url)}" style="max-width:100%;border-radius:6px;cursor:pointer;"
+                    onclick="window.open(this.src,'_blank')" title="点击查看原图"
+                    onerror="this.parentElement.innerHTML='<span style=\\'color:var(--text-muted);font-size:11px;\\'>图片加载失败</span>'">
+             </div>`
+        ).join('');
+        actionHtml = `
+        <div class="chat-action-card" style="border-left-color:var(--success);">
+            <div class="action-title">📸 Editor 截图</div>
+            <div class="action-detail">
+                ${imgsHtml || '<span style="color:var(--text-muted);font-size:11px;">无截图</span>'}
+            </div>
+        </div>`;
     } else if (action && action.type === 'ci_build_diagnosis') {
         actionHtml = renderCIBuildDiagnosisCard(action);
     } else if (action && action.type === 'confirm_bug') {
