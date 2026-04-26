@@ -141,11 +141,17 @@ _save_screenshot_to_chat()
 
 ## 截图效果
 
-MyFPS `Lvl_FirstPerson` 关卡 Editor Viewport：
+### 单张效果图（HighResShot 输出）
+
+MyFPS `Lvl_FirstPerson` 关卡 Editor Viewport — 棋盘格地板 + 默认玩家角色：
 
 ![HighresScreenshot](../backend/chat_images/ue_screenshots/PRJ-20260424-f650c9/HighresScreenshot00003.png)
 
-棋盘格地板 + 默认玩家角色。
+### AI 助手聊天面板截图展示（功能完整效果）
+
+截图成功后自动出现在右侧 AI 助手聊天里（3 张连续截图），Pipeline 卡片同时显示 UBT 编译成功：
+
+![AI 助手截图展示](screenshots/20260426_ue_screenshot_in_chat.png)
 
 ---
 
