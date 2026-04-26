@@ -122,12 +122,19 @@ class UECIStrategy(CIStrategy):
             return {"error": f"UE 策略不支持 {build_type}；可选: {sorted(valid)}"}
 
         # 写 ci_builds 行（让构建历史可见）
+        # UE 构建编译磁盘上当前分支的代码——记录实际分支供用户参考
+        try:
+            from git_manager import git_manager
+            current_branch = await git_manager.get_current_branch(project_id) or ""
+        except Exception:
+            current_branch = ""
+
         build_id = generate_id("ci-")
         await db.insert("ci_builds", {
             "id": build_id,
             "project_id": project_id,
             "build_type": build_type,
-            "branch": "",  # UE 的构建不强绑分支
+            "branch": current_branch,  # 实际正在编译的分支
             "status": CIBuildStatus.PENDING.value,
             "trigger": trigger,
             "created_at": now_iso(),
