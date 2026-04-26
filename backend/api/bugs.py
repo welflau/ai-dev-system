@@ -61,7 +61,7 @@ class BugUpdate(BaseModel):
 @router.get("")
 async def list_bugs(project_id: str, status: Optional[str] = None):
     """获取项目 BUG 列表"""
-    _check_project_exists(project_id)
+    await _check_project_exists(project_id)
     if status:
         bugs = await db.fetch_all(
             "SELECT * FROM bugs WHERE project_id = ? AND status = ? ORDER BY created_at DESC",
