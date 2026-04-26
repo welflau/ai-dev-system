@@ -1689,6 +1689,45 @@ body.chat-open .drawer.docked {
     font-style: italic;
 }
 
+/* v0.19.x 构建详情右侧抽屉 */
+.ci-build-detail-drawer {
+    position: fixed;
+    top: 0;
+    right: -700px;
+    width: 680px;
+    height: 100vh;
+    background: var(--bg-card, #161b22);
+    border-left: 1px solid var(--border, rgba(255,255,255,0.1));
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    transition: right 0.25s ease;
+    box-shadow: -4px 0 24px rgba(0,0,0,0.4);
+}
+.ci-build-detail-drawer.active {
+    right: 0;
+}
+.ci-detail-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+.ci-detail-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 14px 18px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11.5px;
+    background: var(--bg, #0d1117);
+    white-space: pre-wrap;
+    word-break: break-all;
+    line-height: 1.65;
+    color: var(--text);
+}
+
 /* v0.19.1 action state 摘要卡（已执行 / 已取消） */
 .chat-action-state-summary {
     background: var(--bg-card);

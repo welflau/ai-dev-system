@@ -9932,95 +9932,119 @@ async function triggerCIBuild(buildType) {
     }
 }
 
-/** v0.19.x 构建详情弹窗 */
+/** v0.19.x 构建详情右侧抽屉 */
+let _ciBuildDetailPoller = null;
+
+function closeCIBuildDetail() {
+    const el = document.getElementById('ciBuildDetailDrawer');
+    if (el) el.classList.remove('active');
+    if (_ciBuildDetailPoller) { clearInterval(_ciBuildDetailPoller); _ciBuildDetailPoller = null; }
+    // 解绑 SSE handlers
+    if (window._ciBuildSSEHandlers) {
+        window._ciBuildSSEHandlers.forEach(([t, h]) => eventSource && eventSource.removeEventListener(t, h));
+        window._ciBuildSSEHandlers = [];
+    }
+}
+
 async function openCIBuildDetail(buildId, buildType, buildStatus) {
     if (!currentProjectId) return;
-    const modalId = 'ciBuildDetailModal';
-    let modal = document.getElementById(modalId);
-    if (modal) modal.remove();
+    closeCIBuildDetail();  // 先关掉旧的
 
-    modal = document.createElement('div');
-    modal.id = modalId;
-    modal.className = 'modal-overlay active';
-    modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
-    modal.innerHTML = `
-    <div class="modal modal-lg" style="max-width:900px;max-height:85vh;display:flex;flex-direction:column;">
-      <div class="modal-header" style="flex-shrink:0;">
-        <h3>📋 构建详情 <span style="font-size:12px;color:var(--text-muted);font-weight:400;">${escapeHtml(buildType)} · ${escapeHtml(buildId.slice(0,16))}</span></h3>
-        <button class="btn-icon" onclick="document.getElementById('${modalId}').remove()">&times;</button>
-      </div>
-      <div id="${modalId}_body" style="flex:1;overflow-y:auto;padding:14px 18px;font-family:ui-monospace,SFMono-Regular,monospace;font-size:12px;background:var(--bg);white-space:pre-wrap;word-break:break-all;line-height:1.6;">
-        <span style="color:var(--text-muted);">加载中...</span>
-      </div>
-      <div style="flex-shrink:0;padding:10px 18px;border-top:1px solid var(--border);display:flex;gap:8px;align-items:center;">
-        <span id="${modalId}_status" style="font-size:12px;color:var(--text-muted);flex:1;"></span>
-        <button class="btn btn-sm" onclick="document.getElementById('${modalId}').remove()">关闭</button>
-      </div>
-    </div>`;
-    document.body.appendChild(modal);
+    // 创建抽屉（首次）
+    let drawer = document.getElementById('ciBuildDetailDrawer');
+    if (!drawer) {
+        drawer = document.createElement('div');
+        drawer.id = 'ciBuildDetailDrawer';
+        drawer.className = 'ci-build-detail-drawer';
+        drawer.innerHTML = `
+        <div class="ci-detail-header">
+            <div>
+                <div id="ciDetailTitle" style="font-weight:600; font-size:14px;"></div>
+                <div id="ciDetailMeta" style="font-size:11px; color:var(--text-muted); margin-top:2px;"></div>
+            </div>
+            <button class="btn-icon" onclick="closeCIBuildDetail()">&times;</button>
+        </div>
+        <div id="ciDetailBody" class="ci-detail-body"></div>`;
+        document.body.appendChild(drawer);
+    }
 
-    const body = document.getElementById(`${modalId}_body`);
-    const statusEl = document.getElementById(`${modalId}_status`);
-    const isRunning = (buildStatus === 'pending' || buildStatus === 'running');
+    drawer.classList.add('active');
+    const titleEl = document.getElementById('ciDetailTitle');
+    const metaEl = document.getElementById('ciDetailMeta');
+    const body = document.getElementById('ciDetailBody');
 
-    const appendLine = (line) => {
-        body.textContent += line + '\n';
+    titleEl.textContent = `📋 ${buildType}`;
+    metaEl.textContent = buildId.slice(0, 20) + '…';
+    body.textContent = '加载中…';
+
+    const isRunning = buildStatus === 'pending' || buildStatus === 'running';
+
+    const renderBuild = (d) => {
+        const lines = [];
+        // meta
+        const dur = d.started_at && d.completed_at
+            ? Math.round((new Date(d.completed_at)-new Date(d.started_at))/1000)+'s' : '-';
+        metaEl.textContent = `${d.status} · ${d.build_type} · 耗时 ${dur} · ${d.trigger||''} · ${(d.created_at||'').replace('T',' ').slice(0,19)}`;
+
+        // steps
+        if (d.build_log) {
+            try {
+                const steps = JSON.parse(d.build_log);
+                lines.push('─── Build Steps ───');
+                steps.forEach(s => {
+                    lines.push(`${s.passed !== false ? '✅' : '❌'} ${s.step}  ${s.msg||''}`);
+                    if (s.errors) s.errors.slice(0,5).forEach(e => lines.push(`   │ ${(e.file||'?').split(/[\\/]/).pop()}:${e.line||'?'} ${e.code||''} ${(e.msg||'').slice(0,120)}`));
+                });
+            } catch {}
+        }
+        if (d.error_message) { lines.push(''); lines.push('─── Error ───'); lines.push(d.error_message); }
+        if (d.raw_output_tail) { lines.push(''); lines.push('─── Stdout (last 8KB) ───'); lines.push(d.raw_output_tail); }
+        if (!lines.length) lines.push('(无输出记录)');
+        body.textContent = lines.join('\n');
         body.scrollTop = body.scrollHeight;
     };
 
+    // 首次拉数据
+    try {
+        const d = await api(`/projects/${currentProjectId}/ci/builds/${buildId}`);
+        renderBuild(d);
+    } catch (e) {
+        body.textContent = '加载失败: ' + e.message;
+    }
+
     if (isRunning) {
-        body.textContent = '';
-        statusEl.textContent = '🔄 构建中，实时输出…';
-        // SSE 实时订阅
-        const sseTopics = {ubt_compile:['ue_compile_log'],playtest:['ue_playtest_log'],
-            package_client:['ue_package_log'],take_screenshot:['ue_screenshot_log'],
-            develop_build:['ci_build_log'],master_build:['ci_build_log']};
-        const topics = sseTopics[buildType] || ['ci_build_log'];
-        const es = window._deliverySSE;
-        const handlers = [];
-        if (es) {
-            topics.forEach(topic => {
-                const h = (e) => {
-                    try { const d = JSON.parse(e.data); const l = d.line || d.message || ''; if (l) appendLine(l); } catch {}
-                };
-                es.addEventListener(topic, h);
-                handlers.push([topic, h]);
-            });
-        }
-        // 关弹窗时解绑
-        new MutationObserver((_, obs) => {
-            if (!document.getElementById(modalId)) { handlers.forEach(([t,h]) => es && es.removeEventListener(t,h)); obs.disconnect(); }
-        }).observe(document.body, {childList:true, subtree:false});
-        // 同步已有历史
-        try {
-            const d = await api(`/projects/${currentProjectId}/ci/builds/${buildId}`);
-            if (d.raw_output_tail) body.textContent = d.raw_output_tail + '\n\n--- 实时输出 ---\n';
-        } catch {}
-    } else {
-        try {
-            const d = await api(`/projects/${currentProjectId}/ci/builds/${buildId}`);
-            const lines = [];
-            if (d.build_log) {
+        // 1. SSE 实时追加行
+        const topicMap = {ubt_compile:'ue_compile_log', playtest:'ue_playtest_log',
+            package_client:'ue_package_log', take_screenshot:'ue_screenshot_log'};
+        const topic = topicMap[buildType];
+        window._ciBuildSSEHandlers = [];
+        if (topic && eventSource) {
+            const h = (e) => {
                 try {
-                    const steps = JSON.parse(d.build_log);
-                    lines.push('=== Build Steps ===');
-                    steps.forEach(s => {
-                        lines.push(`${s.passed !== false ? '✅' : '❌'} [${s.step}] ${s.msg || ''}`);
-                        if (s.errors) s.errors.forEach(e => lines.push(`   └ ${JSON.stringify(e).slice(0,200)}`));
-                    });
+                    const d = JSON.parse(e.data);
+                    const l = d.line || d.message || '';
+                    if (!l) return;
+                    body.textContent += l + '\n';
+                    body.scrollTop = body.scrollHeight;
                 } catch {}
-            }
-            if (d.error_message) { lines.push('\n=== Error ==='); lines.push(d.error_message); }
-            if (d.raw_output_tail) { lines.push('\n=== Stdout (tail) ==='); lines.push(d.raw_output_tail); }
-            if (!lines.length) lines.push('(无输出记录)');
-            body.textContent = lines.join('\n');
-            const dur = d.started_at && d.completed_at
-                ? Math.round((new Date(d.completed_at)-new Date(d.started_at))/1000)+'s' : '-';
-            statusEl.textContent = `${d.status} · ${d.build_type} · 耗时 ${dur}`;
-            body.scrollTop = body.scrollHeight;
-        } catch (e) {
-            body.textContent = '加载失败: ' + e.message;
+            };
+            eventSource.addEventListener(topic, h);
+            window._ciBuildSSEHandlers.push([topic, h]);
         }
+        // 2. 每 5s 轮询刷新（确保显示 build_log 步骤 + raw_tail）
+        _ciBuildDetailPoller = setInterval(async () => {
+            if (!document.getElementById('ciBuildDetailDrawer')?.classList.contains('active')) {
+                closeCIBuildDetail(); return;
+            }
+            try {
+                const d = await api(`/projects/${currentProjectId}/ci/builds/${buildId}`);
+                if (d.status !== 'pending' && d.status !== 'running') {
+                    renderBuild(d);
+                    closeCIBuildDetail(); // 完成后停轮询但保持抽屉
+                    drawer.classList.add('active');  // re-open after close clears SSE
+                }
+            } catch {}
+        }, 5000);
     }
 }
 
