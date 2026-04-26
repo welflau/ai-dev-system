@@ -9937,9 +9937,15 @@ let _ciBuildDetailPoller = null;
 
 function closeCIBuildDetail() {
     const el = document.getElementById('ciBuildDetailDrawer');
-    if (el) el.classList.remove('active');
+    if (el) {
+        el.classList.remove('active');
+        // 解绑点击外部的 handler
+        if (el._outsideHandler) {
+            document.removeEventListener('click', el._outsideHandler);
+            el._outsideHandler = null;
+        }
+    }
     if (_ciBuildDetailPoller) { clearInterval(_ciBuildDetailPoller); _ciBuildDetailPoller = null; }
-    // 解绑 SSE handlers
     if (window._ciBuildSSEHandlers) {
         window._ciBuildSSEHandlers.forEach(([t, h]) => eventSource && eventSource.removeEventListener(t, h));
         window._ciBuildSSEHandlers = [];
@@ -9969,6 +9975,19 @@ async function openCIBuildDetail(buildId, buildType, buildStatus) {
     }
 
     drawer.classList.add('active');
+
+    // 点击抽屉外部自动收缩（只绑一次）
+    if (!drawer._outsideHandler) {
+        drawer._outsideHandler = (e) => {
+            const d = document.getElementById('ciBuildDetailDrawer');
+            if (d && d.classList.contains('active') && !d.contains(e.target)) {
+                closeCIBuildDetail();
+            }
+        };
+        // 延迟绑定避免触发打开时的点击
+        setTimeout(() => document.addEventListener('click', drawer._outsideHandler), 100);
+    }
+
     const titleEl = document.getElementById('ciDetailTitle');
     const metaEl = document.getElementById('ciDetailMeta');
     const body = document.getElementById('ciDetailBody');
