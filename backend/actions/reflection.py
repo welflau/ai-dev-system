@@ -196,7 +196,10 @@ class ReflectionAction(ActionBase):
                 "  - Build.cs 缺模块依赖（Core/CoreUObject/Engine/InputCore/EnhancedInput 等）\n"
                 "  - include 的头文件路径错误（.generated.h 要匹配 class 名）\n"
                 "  - GENERATED_BODY() 遗漏 或位置错\n"
-                "  - 在 .cpp 直接 new FClass() 但 class 没继承 UObject 走不了 GC"
+                "  - 在 .cpp 直接 new FClass() 但 class 没继承 UObject 走不了 GC\n"
+                "\n🚫 重要：这是 Unreal Engine C++ 项目，修复时只能输出 .h/.cpp/.Build.cs 文件！\n"
+                "  绝对不能输出 Python/JavaScript/HTML/Flask/FastAPI 代码。\n"
+                "  如果你觉得需要写 Python——你理解错了编译错误，请重新分析上面的 error 列表。"
             )
             failure_signal = "\n".join(lines)
         elif failure_type == "play_test_failed":
@@ -249,7 +252,8 @@ class ReflectionAction(ActionBase):
                     lines.append(f"   → 建议: {suggest}")
             lines.append(
                 "\n⚠️ 这些错在下游 UBT 编译会必然暴露（3-5 分钟后），"
-                "但我们在开发阶段就用静态规则提前拦住。请严格按 suggest 修正，不要引入新的同类问题。"
+                "但我们在开发阶段就用静态规则提前拦住。请严格按 suggest 修正，不要引入新的同类问题。\n"
+                "\n🚫 提醒：这是 UE C++ 项目。修复时只输出 .h/.cpp/.Build.cs，绝对不能写 Python/JS/HTML！"
             )
             failure_signal = "\n".join(lines)
         else:

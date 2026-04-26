@@ -645,7 +645,80 @@ def rule_R7_type_headers(
 # ==================== 主入口 ====================
 
 
+def rule_R8_ue_file_types(
+    content: str, file_path_rel: str, repo_path: Path, ctx: Dict[str, Any]
+) -> List[Issue]:
+    """UE 项目里不能写 Python/JS/Web 文件——防止 DevAgent 在修复循环里退化为 Web 代码
+
+    常见场景：DevAgent fix_issues 第 N 次循环后"忘记"自己在 UE 项目里，
+    开始生成 Python/Flask/JS 等非 UE 文件。Layer 1 立刻拦截。
+    """
+    _FORBIDDEN_EXTS = {
+        ".py", ".js", ".ts", ".jsx", ".tsx", ".html", ".css", ".vue",
+        ".json",   # 允许例外：.uproject / .uplugin 是 JSON，但它们不在 Source/ 里
+        ".rb", ".go", ".java", ".php", ".rs",
+    }
+    _ALLOWED_JSON_PATTERNS = {".uproject", ".uplugin", ".json"}  # uasset 目录的 JSON 保留
+
+    path = Path(file_path_rel)
+    ext = path.suffix.lower()
+    if ext not in _FORBIDDEN_EXTS:
+        return []
+
+    # .json 允许 .uproject / .uplugin 及 Config/ 目录
+    if ext == ".json":
+        name = path.name.lower()
+        if name.endswith((".uproject", ".uplugin")):
+            return []
+        if "config" in str(path).lower() or "settings" in str(path).lower():
+            return []
+
+    # Python 特征加强判断：文件内容含 import flask / import django / def main() 等
+    _PYTHON_MARKERS = [
+        "import flask", "import django", "from flask", "from django",
+        "import fastapi", "import uvicorn", "import requests",
+        "#!/usr/bin/env python", "if __name__ == '__main__'",
+    ]
+    if ext == ".py":
+        has_marker = any(m in content for m in _PYTHON_MARKERS)
+    else:
+        has_marker = True  # 其他禁止扩展名直接报
+
+    if not has_marker and ext == ".py":
+        # 纯 Python 脚本但没有 Web 框架迹象：降级为 warning（可能是 UE Python 工具）
+        return [{
+            "rule": "R8",
+            "file": file_path_rel,
+            "line": None,
+            "blocking": False,
+            "category": "wrong-file-type",
+            "msg": (
+                f"UE 项目里写了 Python 文件 {file_path_rel}。"
+                f"如果是 UE 自动化工具脚本可以忽略，否则可能是 DevAgent 写错了代码类型"
+            ),
+            "suggest": "UE C++ 项目应输出 .h/.cpp/.Build.cs/.Target.cs 文件，不是 Python",
+        }]
+
+    return [{
+        "rule": "R8",
+        "file": file_path_rel,
+        "line": None,
+        "blocking": True,
+        "category": "wrong-file-type",
+        "msg": (
+            f"UE 项目里写了 {ext} 文件（{file_path_rel}）。"
+            f"DevAgent 可能在修复循环里退化为 Web/Python 开发模式，"
+            f"忘记当前是 Unreal Engine C++ 项目"
+        ),
+        "suggest": (
+            "请重新生成 C++ 文件（.h/.cpp）来修复编译错误，"
+            "不要生成 Python/JavaScript/HTML 等非 UE 文件"
+        ),
+    }]
+
+
 _RULE_FUNCS = [
+    rule_R8_ue_file_types,   # 最高优先：先拦退化行为
     rule_R1_uclass_genbody,
     rule_R2_onrep_override,
     rule_R3_include_paths,

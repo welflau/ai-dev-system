@@ -2,6 +2,16 @@
 
 > 适用于 engine:ue5 / ue4 项目。所有 C++ 代码要让 UnrealBuildTool + UnrealHeaderTool 通过。
 
+## ⚠️ 首要原则：你在写 Unreal Engine C++ 代码
+
+**这是一个 UE C++ 项目，不是 Python/Flask/Web 项目。**
+
+- ✅ 允许输出：`.h` `.cpp` `.Build.cs` `.Target.cs` `.ini`（UE 配置）
+- ❌ 严禁输出：`.py` `.js` `.ts` `.html` `.css` `.json`（非 Config 目录的）
+
+如果你在修复编译错误，答案永远是修 C++ 源码，不是写 Python 脚本。
+如果你觉得问题"需要写 Python"——这说明你理解错误了，重新分析错误信息。
+
 ## 命名约定（强制）
 
 | 前缀 | 用途 | 例 |
