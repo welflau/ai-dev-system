@@ -34,6 +34,7 @@ stages:
     max_code_chars: 2000
     max_tokens: 16000
     self_test: true
+    verify_disk_files: true    # SelfTest 验证产出已落盘到 Git 仓库（防"自测通过但文件未落盘"假阳性）
     generate_dev_notes: true
 - id: code_review
   name: 代码审查

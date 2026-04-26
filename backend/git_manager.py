@@ -6,7 +6,7 @@ import logging
 import os
 import json
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from datetime import datetime
 
 from config import BASE_DIR
@@ -437,6 +437,102 @@ Thumbs.db
             return []
         return [b.strip().lstrip("* ") for b in out.split("\n") if b.strip()]
 
+    async def list_branches_enriched(self, project_id: str) -> List[Dict[str, Any]]:
+        """v0.19.1 仓库分支视图：含 upstream / ahead-behind / 最后一次提交 / 推测 parent
+
+        输出按 committerdate 降序；parent 依靠 merge-base 启发算法，对 main/master/develop
+        做候选，和自身 merge-base 最晚的那个视为直接父。找不到则 parent=None（作为根）。
+        """
+        repo_dir = str(self._repo_path(project_id))
+        # 拉全量分支元数据（只取本地 refs）
+        fmt = "%(refname:short)|%(upstream:short)|%(committerdate:iso-strict)|%(objectname:short)|%(subject)"
+        rc, out, _ = await self._run_git(
+            repo_dir, "for-each-ref", f"--format={fmt}", "refs/heads",
+        )
+        if rc != 0 or not out:
+            return []
+
+        current = (await self.get_current_branch(project_id)) or ""
+        branches: List[Dict[str, Any]] = []
+        names: List[str] = []
+        for raw in out.splitlines():
+            if not raw.strip():
+                continue
+            parts = raw.split("|", 4)
+            if len(parts) < 5:
+                parts += [""] * (5 - len(parts))
+            name, upstream, cdate, sha, subject = parts
+            branches.append({
+                "name": name.strip(),
+                "upstream": upstream.strip() or None,
+                "last_commit_at": cdate.strip() or None,
+                "last_commit_sha": sha.strip() or None,
+                "last_commit_subject": subject.strip() or "",
+                "ahead": 0,
+                "behind": 0,
+                "parent": None,
+                "current": name.strip() == current,
+            })
+            names.append(name.strip())
+
+        # ahead / behind —— upstream 有的话用 upstream，没有用启发 parent（后面再算）
+        for b in branches:
+            if b["upstream"]:
+                ahead, behind = await self._ahead_behind(repo_dir, b["name"], b["upstream"])
+                b["ahead"], b["behind"] = ahead, behind
+
+        # 基于命名约定的 parent 推断（graph 分析对 merge-heavy 仓库会反直觉，
+        # 因为 `merge: develop → main` 后 develop 就成了 main 的祖先）：
+        #   - main / master           → 根（parent=None）
+        #   - develop                 → main / master（若存在）
+        #   - feat/* fix/* hotfix/*   → develop（若存在）否则 main / master
+        #   - 其他                    → 按 merge-base 找最近的主干分支
+        trunk = "main" if "main" in names else ("master" if "master" in names else None)
+        has_develop = "develop" in names
+
+        async def _pick_parent(child: str) -> Optional[str]:
+            if child in ("main", "master"):
+                return None
+            if child == "develop":
+                return trunk
+            # feat/fix/hotfix 等特性分支
+            if has_develop:
+                # 只有当 develop 确实是 child 的祖先时才挂到 develop 下，
+                # 否则挂到 trunk（避免 "feat/old 从 master 切出、develop 后来才建" 这种历史 edge case）
+                anc_rc, _, _ = await self._run_git(
+                    repo_dir, "merge-base", "--is-ancestor", "develop", child,
+                )
+                if anc_rc == 0:
+                    return "develop"
+            return trunk
+
+        for b in branches:
+            # 候选分支本身：parent 也允许其他 candidate（形成 main→develop→master 链）
+            parent = await _pick_parent(b["name"])
+            b["parent"] = parent
+
+            # 对没 upstream 的分支，用 parent 当基准算 ahead/behind
+            if b["ahead"] == 0 and b["behind"] == 0 and not b["upstream"] and parent:
+                ahead, behind = await self._ahead_behind(repo_dir, b["name"], parent)
+                b["ahead"], b["behind"] = ahead, behind
+
+        # 按 committerdate 降序
+        branches.sort(key=lambda x: x.get("last_commit_at") or "", reverse=True)
+        return branches
+
+    async def _ahead_behind(self, repo_dir: str, a: str, b: str) -> tuple:
+        """返回 (a 相对 b 领先数, a 相对 b 落后数)"""
+        rc, out, _ = await self._run_git(
+            repo_dir, "rev-list", "--left-right", "--count", f"{a}...{b}",
+        )
+        if rc != 0 or not out:
+            return 0, 0
+        try:
+            left, right = out.strip().split()
+            return int(left), int(right)
+        except Exception:
+            return 0, 0
+
     async def ensure_branch(self, project_id: str, branch_name: str, from_branch: str = None):
         """确保分支存在，不存在则创建（从 from_branch 或当前分支）"""
         branches = await self.list_branches(project_id)
@@ -482,6 +578,124 @@ Thumbs.db
         }
 
     # ==================== 查询 ====================
+
+    async def get_commit_detail(self, project_id: str, sha: str) -> Optional[Dict]:
+        """v0.19.1：获取单次提交的详细信息 + 每文件 patch。
+
+        返回：
+          {
+            sha, short_sha, author, email, date, subject, body,
+            files: [{path, old_path?, status, additions, deletions, binary, patch}]
+          }
+        status: A/M/D/R/C/T。RENAME 带 old_path。
+        """
+        repo_dir = str(self._repo_path(project_id))
+
+        # 1. 元数据
+        rc, out, _ = await self._run_git(
+            repo_dir, "show", "-s", "--format=%H%n%h%n%an%n%ae%n%ai%n%s%n%b", sha,
+        )
+        if rc != 0 or not out:
+            return None
+        parts = out.split("\n", 6)
+        if len(parts) < 6:
+            return None
+        meta = {
+            "sha": parts[0],
+            "short_sha": parts[1],
+            "author": parts[2],
+            "email": parts[3],
+            "date": parts[4],
+            "subject": parts[5],
+            "body": parts[6] if len(parts) > 6 else "",
+        }
+
+        # 2. 文件状态 + numstat
+        rc2, out2, _ = await self._run_git(
+            repo_dir, "show", "--name-status", "--format=", sha,
+        )
+        files_status: Dict[str, Dict[str, Any]] = {}
+        if rc2 == 0 and out2:
+            for line in out2.strip().split("\n"):
+                if not line.strip():
+                    continue
+                cols = line.split("\t")
+                st = cols[0][0] if cols else ""
+                if st in ("R", "C") and len(cols) >= 3:
+                    old_path, new_path = cols[1], cols[2]
+                    files_status[new_path] = {
+                        "path": new_path, "old_path": old_path, "status": st,
+                    }
+                elif len(cols) >= 2:
+                    files_status[cols[1]] = {"path": cols[1], "status": st}
+
+        rc3, out3, _ = await self._run_git(
+            repo_dir, "show", "--numstat", "--format=", sha,
+        )
+        if rc3 == 0 and out3:
+            for line in out3.strip().split("\n"):
+                if not line.strip():
+                    continue
+                cols = line.split("\t")
+                if len(cols) < 3:
+                    continue
+                add_s, del_s, p = cols[0], cols[1], cols[2]
+                key = p
+                # rename: path 在 numstat 里是 "{old => new}"，从 name-status 里更可靠
+                for k, v in files_status.items():
+                    if v.get("path") == p or v.get("old_path") == p or k == p:
+                        key = k
+                        break
+                entry = files_status.setdefault(key, {"path": key, "status": "M"})
+                if add_s == "-" and del_s == "-":
+                    entry["binary"] = True
+                    entry["additions"] = 0
+                    entry["deletions"] = 0
+                else:
+                    try:
+                        entry["additions"] = int(add_s)
+                        entry["deletions"] = int(del_s)
+                    except ValueError:
+                        entry["additions"] = entry["deletions"] = 0
+                    entry["binary"] = False
+
+        # 3. 每文件 patch（--format= 去掉头部）
+        rc4, out4, _ = await self._run_git(
+            repo_dir, "show", "--format=", sha,
+        )
+        patches_by_file: Dict[str, str] = {}
+        if rc4 == 0 and out4:
+            # 按 "diff --git " 切割
+            cur_file: Optional[str] = None
+            cur_lines: List[str] = []
+
+            def _flush():
+                if cur_file is not None:
+                    patches_by_file[cur_file] = "\n".join(cur_lines)
+
+            for raw in out4.split("\n"):
+                if raw.startswith("diff --git "):
+                    _flush()
+                    cur_lines = [raw]
+                    # diff --git a/<path> b/<path>   — 提取 b 路径
+                    try:
+                        # 最后一个 "b/" 之后是目标路径
+                        idx = raw.rfind(" b/")
+                        cur_file = raw[idx + 3:] if idx >= 0 else None
+                    except Exception:
+                        cur_file = None
+                else:
+                    cur_lines.append(raw)
+            _flush()
+
+        for k, v in files_status.items():
+            v["patch"] = patches_by_file.get(v.get("path") or k, "")
+            v.setdefault("additions", 0)
+            v.setdefault("deletions", 0)
+            v.setdefault("binary", False)
+
+        meta["files"] = list(files_status.values())
+        return meta
 
     async def get_log(self, project_id: str, limit: int = 20) -> List[Dict]:
         """获取 git log"""

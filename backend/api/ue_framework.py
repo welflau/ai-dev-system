@@ -50,6 +50,14 @@ class BaselineCompileRequest(BaseModel):
     timeout_seconds: int = 600
 
 
+class PlaytestRequest(BaseModel):
+    """v0.19 Phase ②：UE Automation Framework 冒烟测试"""
+    engine_path: Optional[str] = None
+    test_filter: Optional[str] = None       # 默认 "Project."
+    test_names: Optional[List[str]] = None  # 直接指定测试名；填了覆盖 filter
+    timeout_seconds: int = 600
+
+
 # ==================== 端点 ====================
 
 
@@ -272,3 +280,87 @@ async def baseline_compile(project_id: str, req: BaselineCompileRequest):
 
     asyncio.create_task(_run_compile_bg())
     return {"status": "started", "message": "基线编译已在后台启动，请看实时日志"}
+
+
+@router.post("/run-playtest")
+async def run_playtest(project_id: str, req: PlaytestRequest):
+    """v0.19 Phase ②：跑 UE Automation Framework 测试。
+
+    **异步**：立即返回 {status:"started"}，UnrealEditor-Cmd 后台跑。事件流：
+      - ue_playtest_started 启动事件（命令 + filter）
+      - ue_playtest_log     每行 Editor 输出（流式）
+      - ue_playtest_result  最终结果（含 tests / summary / screenshots）
+    """
+    import asyncio
+    from events import event_manager
+
+    async def _log_cb(line: str):
+        try:
+            await event_manager.publish_to_project(
+                project_id, "ue_playtest_log", {"line": line},
+            )
+        except Exception:
+            pass
+
+    async def _run_bg():
+        from actions.ue_playtest import UEPlaytestAction
+        action = UEPlaytestAction()
+        context: Dict[str, Any] = {
+            "project_id": project_id,
+            "timeout_seconds": req.timeout_seconds,
+            "log_callback": _log_cb,
+        }
+        if req.engine_path:
+            context["engine_path"] = req.engine_path
+        if req.test_filter:
+            context["test_filter"] = req.test_filter
+        if req.test_names:
+            context["test_names"] = req.test_names
+
+        try:
+            await event_manager.publish_to_project(
+                project_id, "ue_playtest_started",
+                {"test_filter": req.test_filter or "Project.",
+                 "test_names": req.test_names},
+            )
+        except Exception:
+            pass
+
+        try:
+            result = await action.run(context)
+            data = result.data or {}
+            cmd_str = data.get("command")
+            if cmd_str:
+                await _log_cb(f"[playtest] cmd: {cmd_str}")
+                await _log_cb(
+                    f"[playtest] exit={data.get('exit_code')} "
+                    f"duration={data.get('duration_ms', 0)}ms"
+                )
+        except Exception as e:
+            logger.exception("run-playtest 后台异常")
+            data = {
+                "status": "error",
+                "message": f"Action 异常: {e}",
+                "tests": [],
+                "summary": {"total": 0, "passed": 0, "failed": 0, "skipped": 0},
+            }
+
+        try:
+            await event_manager.publish_to_project(
+                project_id, "ue_playtest_result",
+                {
+                    "status": data.get("status"),
+                    "exit_code": data.get("exit_code"),
+                    "duration_ms": data.get("duration_ms"),
+                    "summary": data.get("summary"),
+                    "tests": (data.get("tests") or [])[:20],
+                    "screenshots": (data.get("screenshots") or [])[:10],
+                    "message": data.get("message"),
+                    "command": data.get("command"),
+                },
+            )
+        except Exception:
+            pass
+
+    asyncio.create_task(_run_bg())
+    return {"status": "started", "message": "Playtest 已在后台启动，请看实时日志"}

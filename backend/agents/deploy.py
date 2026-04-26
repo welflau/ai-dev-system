@@ -46,8 +46,50 @@ class DeployAgent(BaseAgent):
     async def execute(self, task_name: str, context: Dict[str, Any]) -> Dict[str, Any]:
         if task_name == "deploy":
             return await self.deploy(context)
-        else:
-            return {"status": "error", "message": f"未知任务: {task_name}"}
+        # v0.19.x Phase D：trait-first CI 分派
+        if task_name == "run_ci_deploy":
+            return await self.run_ci_deploy(context)
+        return {"status": "error", "message": f"未知任务: {task_name}"}
+
+    async def run_ci_deploy(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """SOP deploy_web / deploy_ue fragment 触发时调度到对应 CI 策略
+
+        SOP config 里声明了 build_type（如 develop_build / package_client），
+        我们按项目 traits 挑 strategy → 调 strategy.trigger_build。
+        失败返回的 status=error 让 orchestrator 走 reject_goto 到 DevAgent.fix_issues。
+        """
+        from ci.loader import ci_loader
+
+        project_id = context.get("project_id", "")
+        sop_cfg = context.get("sop_config") or {}
+        build_type = sop_cfg.get("build_type") or "deploy"
+
+        strategy = await ci_loader.pick_for_project(project_id)
+        logger.info(
+            "🚀 run_ci_deploy: project=%s strategy=%s build_type=%s",
+            project_id[:8], strategy.name, build_type,
+        )
+
+        # 把 SOP config 里的其他参数透传（platform / configuration / timeout_seconds 等）
+        passthrough = {k: v for k, v in sop_cfg.items() if k not in ("build_type", "max_retries")}
+        result = await strategy.trigger_build(
+            project_id, build_type, trigger="sop", **passthrough,
+        )
+
+        if isinstance(result, dict) and result.get("error"):
+            return {"status": "error", "message": result["error"]}
+
+        # strategy.trigger_build 是异步 fire-and-forget，这里只知道启动结果。
+        # 具体成败通过 ci_build_completed SSE 事件后续通知，这里先标 success-pending。
+        return {
+            "status": "success",
+            "deploy_result": {
+                "strategy": strategy.name,
+                "build_type": build_type,
+                "build_id": result.get("build_id") if isinstance(result, dict) else None,
+            },
+            "files": {},
+        }
 
     async def deploy(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """部署：启动本地预览服务 + 生成部署配置"""

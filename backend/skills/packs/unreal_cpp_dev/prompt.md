@@ -237,3 +237,40 @@ OnHealthChanged.Broadcast(Health);
 6. 用了 UObject 就走 NewObject，不 `new`？
 7. `.generated.h` 是最后一个 include？
 8. 头文件里的裸引用尽量前向声明，.cpp 再 include？
+
+## ⚠️ 静态预检会拦的 7 类错（v0.19.x Layer 1，务必提前避开）
+
+DevAgent 写完会过 7 条 UE 静态规则（`actions/ue_lint/rules.py`），违反的工单会
+立刻回 fix_issues。写代码时主动避开能省 3-5 分钟 UBT fail 循环：
+
+**R1** UCLASS/USTRUCT 下 10 行内必须有 `GENERATED_BODY()`。
+
+**R2** 子类 override 父类已有的 `OnRep_*` 时**不要加 `UFUNCTION()` 宏**，写
+`virtual void OnRep_Score() override;` 即可。常见父类 OnRep：APlayerState.OnRep_Score/
+OnRep_PlayerName、AActor.OnRep_Owner、ACharacter.OnRep_IsCrouched。反之子类
+**新增**的 OnRep_MyVar 必须加 UFUNCTION()。
+
+**R3** `#include "XXX.h"` 的 XXX.h 必须可被 UE 找到。**文件在子目录时必须写
+路径前缀**：`#include "Character/FPSCharacterBase.h"` 而不是 `"FPSCharacterBase.h"`。
+
+**R4** Build.cs 的 module 名要是合法 UE 模块。`"Components"` 不是模块是
+Engine 子目录。常用：`Core CoreUObject Engine InputCore EnhancedInput Slate
+SlateCore UMG GameplayTasks AIModule NavigationSystem UnrealEd`。
+
+**R5** `.uproject` 的 `"Modules"` 数组必须覆盖 Source/ 下所有 `*.Build.cs`。
+漏声明会让 UBT 不编译该模块。
+
+**R6** Target.cs 的 `IncludeOrderVersion` 跟引擎对齐：UE 5.3 下用
+`EngineIncludeOrderVersion.Unreal5_3`，用 Unreal5_1 会 deprecate warning。
+
+**R7** 用到 UE 类型必需对应 `#include`（forward decl 够不上实例化）：
+- `UCapsuleComponent` → `#include "Components/CapsuleComponent.h"`
+- `USpringArmComponent` → `#include "GameFramework/SpringArmComponent.h"`
+- `UCameraComponent` → `#include "Camera/CameraComponent.h"`
+- `UCharacterMovementComponent` → `#include "GameFramework/CharacterMovementComponent.h"`
+- `UEnhancedInputComponent` → `#include "EnhancedInputComponent.h"`
+- `UInputAction/UInputMappingContext` → 同名 header
+- `FInputActionValue` → `#include "InputActionValue.h"`
+- `UGameplayStatics` → `#include "Kismet/GameplayStatics.h"`
+
+误报时可加 `// @ue-lint-skip R2` 注释关单条规则。

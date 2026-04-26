@@ -563,6 +563,34 @@ async def save_chat_to_repo(project_id: str, req: SaveToRepoRequest):
         raise HTTPException(500, f"保存失败: {str(e)}")
 
 
+class ActionStatePatchRequest(BaseModel):
+    """v0.19.1 action state 持久化：前端点击卡片按钮成功后上报状态"""
+    state: str = Field(..., pattern="^(pending|executed|cancelled)$")
+    result: Optional[Dict[str, Any]] = Field(default=None, description="执行产物摘要，可选")
+
+
+@router.patch("/messages/{message_id}/action-state")
+async def patch_message_action_state(
+    project_id: str, message_id: str, req: ActionStatePatchRequest,
+):
+    """更新某条聊天消息的 action_state（pending→executed / cancelled）
+    用于卡片点击幂等：刷新后前端看到 state=executed 就渲染历史摘要而非可点按钮。
+    """
+    msg = await db.fetch_one(
+        "SELECT id, project_id, action_type FROM chat_messages WHERE id = ? AND project_id = ?",
+        (message_id, project_id),
+    )
+    if not msg:
+        raise HTTPException(404, "消息不存在")
+
+    update: Dict[str, Any] = {"action_state": req.state}
+    if req.result is not None:
+        update["action_result"] = json.dumps(req.result, ensure_ascii=False)
+
+    await db.update("chat_messages", update, "id = ?", (message_id,))
+    return {"ok": True, "message_id": message_id, "state": req.state}
+
+
 @router.get("/history")
 async def get_chat_history(project_id: str, limit: int = 50):
     """获取项目全局聊天历史"""
@@ -585,6 +613,13 @@ async def get_chat_history(project_id: str, limit: int = 50):
     for row in rows:
         msg = dict(row)
         msg["images"] = json.loads(msg.pop("images_json", None) or "[]")
+        # v0.19.1 action_result JSON → dict 给前端直接用
+        raw_ar = msg.get("action_result")
+        if isinstance(raw_ar, str) and raw_ar:
+            try:
+                msg["action_result"] = json.loads(raw_ar)
+            except Exception:
+                pass  # 保持字符串，前端容错
         # 旧记录 assistant content 可能为空（历史 bug），用 action_data 的 message 填充
         if msg["role"] == "assistant" and not (msg.get("content") or "").strip():
             action_data = json.loads(msg.get("action_data") or "{}")

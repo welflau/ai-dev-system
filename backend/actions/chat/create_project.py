@@ -14,7 +14,7 @@ CreateProjectAction — 真正创建项目（clone/init Git + 写库 + 异步跑
 import asyncio
 import logging
 import os
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from actions.base import ActionBase, ActionResult
 from database import db
@@ -199,21 +199,59 @@ class CreateProjectAction(ActionBase):
             from api.milestones import generate_roadmap_for_project
             asyncio.create_task(generate_roadmap_for_project(project_id, name, description))
 
-            return ActionResult(
-                success=True,
-                data={
-                    "type": "project_created",
-                    "project_id": project_id,
-                    "name": name,
-                    "description": description,
-                    "tech_stack": tech_stack,
-                    "git_remote_url": git_remote_url,
-                    "traits": traits,
-                    "preset_id": preset_id,
-                    "push_success": push_success,
-                    "message": f"项目「{name}」已创建成功" + ("，并已推送到远程仓库" if push_success else "（首次推送失败，请检查远程仓库权限）"),
-                },
-            )
+            # v0.19.1 对话一键流：UE 项目自动弹 propose 方案卡，持久化到项目聊天
+            # 前端跳转到项目详情后，loadChatHistory 自然能拿到这条消息，无需前端再串 API。
+            auto_next: Optional[Dict[str, Any]] = None
+            is_ue_project = any(t.startswith("engine:ue") for t in traits)
+            if is_ue_project:
+                try:
+                    from actions.chat.propose_ue_framework import ProposeUEFrameworkAction
+                    from api.chat import _save_chat_message
+
+                    propose_result = await ProposeUEFrameworkAction().run({
+                        "project_id": project_id,
+                    })
+                    if propose_result.success:
+                        intro = (
+                            "✨ 检测到这是 UE 项目，已自动为你生成了框架方案。"
+                            "请在下方卡片里确认引擎和模板后点「确认生成」。"
+                        )
+                        await _save_chat_message(
+                            project_id=project_id,
+                            role="assistant",
+                            content=intro,
+                            action=propose_result.data,
+                        )
+                        auto_next = {
+                            "type": "propose_ue_framework",
+                            "project_id": project_id,
+                            "persisted": True,
+                            "reason": "UE 项目 onboarding：propose 卡片已持久化到项目聊天",
+                        }
+                    else:
+                        logger.warning(
+                            "UE auto-propose failed for %s: %s",
+                            project_id, propose_result.error or "unknown",
+                        )
+                except Exception as e:
+                    logger.warning("UE auto-propose 异常: %s", e)
+
+            data = {
+                "type": "project_created",
+                "project_id": project_id,
+                "name": name,
+                "description": description,
+                "tech_stack": tech_stack,
+                "git_remote_url": git_remote_url,
+                "traits": traits,
+                "preset_id": preset_id,
+                "push_success": push_success,
+                "message": f"项目「{name}」已创建成功" + ("，并已推送到远程仓库" if push_success else "（首次推送失败，请检查远程仓库权限）"),
+            }
+            if auto_next:
+                data["auto_next"] = auto_next
+
+            return ActionResult(success=True, data=data)
 
         except Exception as e:
             logger.error("AI助手创建项目失败: %s", e)

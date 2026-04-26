@@ -91,7 +91,7 @@
                             📊 统计面板
                         </a>
                         <a class="nav-item" data-tab="cicd" onclick="switchTab('cicd')">
-                            🔄 CI/CD
+                            🚀 交付 &amp; 环境
                         </a>
                         <a class="nav-item" data-tab="agents" onclick="switchTab('agents')">
                             🤖 Agent 监控
@@ -117,9 +117,7 @@
                             <a class="nav-item nav-sub-item" data-tab="settings-sop" onclick="switchTab('settings-sop')">
                                 <span class="nav-item-icon">🔄</span> 流程配置
                             </a>
-                            <a class="nav-item nav-sub-item" data-tab="settings-envs" onclick="switchTab('settings-envs')">
-                                <span class="nav-item-icon">🌍</span> 环境管理
-                            </a>
+                            <!-- v0.19.x: 「环境管理」已合并到「🚀 交付 & 环境」主入口，这里撤下 -->
                             <a class="nav-item nav-sub-item" data-tab="settings-agents" onclick="switchTab('settings-agents')">
                                 <span class="nav-item-icon">🤖</span> Agent / 扩展
                             </a>
@@ -422,22 +420,33 @@
                         </div>
                     </div>
 
-                    <!-- Tab: CI/CD Pipeline -->
+                    <!-- Tab: 交付 & 环境（v0.19.x：CI/CD + 环境管理合并） -->
                     <div id="tab-cicd" class="tab-content">
                         <div class="cicd-page">
-                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
-                                <h2 style="margin:0;">🔄 CI/CD Pipeline</h2>
-                                <div style="display:flex; gap:8px;">
-                                    <button class="btn btn-sm btn-secondary" onclick="triggerCIBuild('develop_build')">▶ 构建 Develop</button>
-                                    <button class="btn btn-sm btn-secondary" onclick="triggerCIBuild('master_build')">▶ 构建 Master</button>
-                                    <button class="btn btn-sm btn-accent" onclick="triggerCIBuild('deploy')">🚀 部署</button>
-                                    <button class="btn btn-sm" onclick="loadCICD()">🔄 刷新</button>
+                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                                <h2 style="margin:0;">🚀 交付 &amp; 环境</h2>
+                                <div style="display:flex; gap:8px; align-items:center;">
+                                    <span id="deliveryStrategyBadge" class="mcp-tool-tag"
+                                          style="font-size:11px; padding:3px 8px;"
+                                          title="当前项目匹配的 CI 策略">-</span>
+                                    <div id="deliveryBuildTriggers" style="display:flex; gap:6px;"></div>
+                                    <button class="btn btn-sm" onclick="loadDeliveryPage()">🔄 刷新</button>
                                 </div>
                             </div>
-                            <!-- 三阶段流水线 -->
+                            <p id="deliveryStrategyDesc" style="color:var(--text-muted);font-size:12px;margin:0 0 14px 0;"></p>
+
+                            <!-- Pipeline 阶段进度条（按 strategy 动态生成） -->
+                            <h3 class="delivery-section-title">Pipeline</h3>
                             <div class="cicd-pipeline-flow" id="cicdPipelineFlow"></div>
+
+                            <!-- 环境卡片（按 strategy 动态生成） -->
+                            <h3 class="delivery-section-title" style="margin-top:20px;">环境</h3>
+                            <div class="env-cards" id="envCards">
+                                <div class="env-card">加载中...</div>
+                            </div>
+
                             <!-- 构建历史 -->
-                            <h3 style="margin-top:24px;">构建历史</h3>
+                            <h3 class="delivery-section-title" style="margin-top:20px;">最近构建</h3>
                             <div class="cicd-build-history" id="cicdBuildHistory"></div>
                         </div>
                     </div>
@@ -739,17 +748,16 @@
                         </div>
                     </div>
 
+                    <!-- v0.19.x: 「环境管理」已合并到「🚀 交付 & 环境」；此 tab 保留为兼容占位（旧书签） -->
                     <div id="tab-settings-envs" class="tab-content">
                         <div class="settings-page">
                             <div class="settings-page-header">
                                 <h2>🌍 环境管理</h2>
-                                <button class="btn btn-sm" onclick="loadEnvironments()">🔄 刷新</button>
                             </div>
-                            <p style="color:var(--text-muted);font-size:13px;margin-bottom:16px;">
-                                分支与环境对应：feat/* → 开发(dev) | develop → 测试(test) | main → 生产(prod)
-                            </p>
-                            <div class="env-cards" id="envCards">
-                                <div class="env-card">加载中...</div>
+                            <div class="empty-state" style="padding:32px; text-align:center;">
+                                <div style="font-size:36px; margin-bottom:12px;">🚀</div>
+                                <p style="margin-bottom:8px;">环境管理已合并到「交付 &amp; 环境」主入口</p>
+                                <button class="btn btn-primary" onclick="switchTab('cicd')">前往「交付 &amp; 环境」 →</button>
                             </div>
                         </div>
                     </div>

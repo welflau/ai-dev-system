@@ -77,6 +77,14 @@ class Database:
             ("projects", "ue_target_name", "TEXT"),                # 编译 target 名，如 "TestFPSEditor"
             ("projects", "ue_target_platform", "TEXT DEFAULT 'Win64'"),
             ("projects", "ue_target_config", "TEXT DEFAULT 'Development'"),
+            # v0.19.1 action state 持久化：防止卡片刷新后被重复点击
+            ("chat_messages", "action_state", "TEXT"),   # NULL / pending / executed / cancelled
+            ("chat_messages", "action_result", "TEXT"),  # JSON：{executed_at, commit, template, ...}
+            # v0.19.x 工单面板"当前进度"区：让 UBT / Package 的 3-5 分钟等待有活性反馈
+            ("tickets", "current_action", "TEXT"),              # "DevAgent.run_engine_compile"
+            ("tickets", "current_action_started_at", "TEXT"),   # ISO 时间戳
+            ("tickets", "current_action_latest_log", "TEXT"),   # 最近一行关键 log（<=200 字符）
+            ("tickets", "current_action_updated_at", "TEXT"),   # 最近一次心跳时间
         ]
         async with self._write_lock:
             for table, column, col_def in migrations:

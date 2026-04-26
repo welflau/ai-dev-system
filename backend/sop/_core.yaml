@@ -35,6 +35,10 @@ base_stages:
     action: develop
     trigger_on: architecture_done
     success_status: development_done
+    # v0.19.x A 方案：UE 自测 Layer 1 失败 → self_test_failed → reject_goto 回 development
+    # sop_to_transition_rules 会自动派生 self_test_failed → DevAgent.fix_issues
+    reject_status: self_test_failed
+    reject_goto: development
     description: 根据架构设计编写代码，含自测
     config:
       read_existing_code: true
@@ -43,6 +47,11 @@ base_stages:
       self_test: true
       verify_disk_files: true
       generate_dev_notes: true
+      # v0.19.x A 方案 Layer 2：UBT -SingleFile 预编译（30-90s，可选）
+      # 默认关（Layer 1 静态规则已能抓 80% 新手错；开启意味着每次开发多等 1 分钟）
+      # UE 项目深度迭代时建议打开，通过 SOP fragment 覆盖即可
+      ue_precompile: false
+      ue_precompile_timeout: 120
 
   - id: code_review
     name: 代码审查

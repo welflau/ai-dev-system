@@ -227,6 +227,96 @@ class TicketOrchestrator:
             key: prev.get(key, 0) + 1,
         }
 
+    # ==================== 工单级"当前进度"字段（v0.19.x） ====================
+    #
+    # tickets.current_action / _started_at / _latest_log / _updated_at 四列驱动
+    # 工单属性面板的「📍 当前进度」区。分派 action 前 set，完成/异常后清。
+    # 中间的 log 心跳走 Phase ②：log_callback → 过滤关键字 → 5s throttle → 写 DB。
+
+    async def _set_ticket_current_action(self, ticket_id: str, action_label: str):
+        """Action 开始：写 current_action + started_at，清空 latest_log"""
+        if not ticket_id:
+            return
+        try:
+            await db.update("tickets", {
+                "current_action": action_label,
+                "current_action_started_at": now_iso(),
+                "current_action_latest_log": None,
+                "current_action_updated_at": None,
+            }, "id = ?", (ticket_id,))
+        except Exception as e:
+            logger.debug("set_ticket_current_action 失败（忽略）: %s", e)
+
+    async def _clear_ticket_current_action(self, ticket_id: str):
+        """Action 结束（无论成败）：清 4 列"""
+        if not ticket_id:
+            return
+        try:
+            await db.update("tickets", {
+                "current_action": None,
+                "current_action_started_at": None,
+                "current_action_latest_log": None,
+                "current_action_updated_at": None,
+            }, "id = ?", (ticket_id,))
+        except Exception as e:
+            logger.debug("clear_ticket_current_action 失败（忽略）: %s", e)
+
+    def _make_ticket_progress_callback(self, project_id: str, ticket_id: str):
+        """生产 log 心跳 callback：关键字过滤 + 5s throttle + 去重 + 写 DB + 推 SSE
+
+        返回 async callable(line: str) → None；闭包维护 state（上次时间 / 上次 line）。
+        UE actions 把它接入自己的 stdout 流式 pump 即可，不改变原有 log_callback 契约。
+        """
+        import re as _re
+        import time as _time
+
+        # 命中这些关键字才写进度（避免 UBT 200 行/秒打爆 SQLite）
+        important_re = _re.compile(
+            r"(error|warning|fatal|"
+            r"\[ubt\]|\[playtest\]|\[package\]|\[engine\]|\[uat\]|"
+            r"compiling|linking|cooking|staging|packaging|"
+            r"running|completed|result=)",
+            _re.IGNORECASE,
+        )
+        state = {"last_t": 0.0, "last_line": ""}
+        THROTTLE_SEC = 5.0
+
+        async def _cb(line: str):
+            if not ticket_id or not line:
+                return
+            if not important_re.search(line):
+                return
+            line = line[:200]
+            if line == state["last_line"]:
+                return
+            now = _time.time()
+            if now - state["last_t"] < THROTTLE_SEC:
+                return
+            state["last_t"] = now
+            state["last_line"] = line
+            ts = now_iso()
+            try:
+                await db.update("tickets", {
+                    "current_action_latest_log": line,
+                    "current_action_updated_at": ts,
+                }, "id = ?", (ticket_id,))
+            except Exception:
+                pass
+            # 推 SSE 给前端 drawer 订阅
+            try:
+                from events import event_manager
+                await event_manager.publish_to_project(
+                    project_id, "ticket_action_progress", {
+                        "ticket_id": ticket_id,
+                        "latest_log": line,
+                        "latest_log_at": ts,
+                    },
+                )
+            except Exception:
+                pass
+
+        return _cb
+
     # ==================== 轮询调度 ====================
 
     async def start_event_bus(self):
@@ -1123,7 +1213,12 @@ class TicketOrchestrator:
 
             logger.info("🤖 %s.%s 开始执行...", agent_name, action)
             agent_start = time.time()
-            result = await agent.execute(action, context)
+            # v0.19.x 工单面板进度区：写 current_action 字段
+            await self._set_ticket_current_action(ticket_id, f"{agent_name}.{action}")
+            try:
+                result = await agent.execute(action, context)
+            finally:
+                await self._clear_ticket_current_action(ticket_id)
             agent_elapsed = int((time.time() - agent_start) * 1000)
             logger.info(
                 "🤖 %s.%s 完成 (%dms) → status=%s, files=%d",
@@ -1411,11 +1506,38 @@ class TicketOrchestrator:
                 return   # 不进入下面的产物落库
 
             # 常规 develop / rework / fix_issues → development_done
-            new_status = TicketStatus.DEVELOPMENT_DONE.value
-
-            # 自测结果
+            # v0.19.x A 方案：若 self_test 失败（UE blocking 静态错）→ self_test_failed
+            # → SOP 派生 self_test_failed → DevAgent.fix_issues 自动回跳
             self_test = result.get("self_test", {})
             test_summary = self_test.get("summary", "未自测")
+            blocking_issues = self_test.get("ue_blocking_issues") or []
+
+            if blocking_issues:
+                new_status = "self_test_failed"
+                await db.update("tickets", {
+                    "status": new_status,
+                    "result": result_json,
+                    "updated_at": now_iso(),
+                }, "id = ?", (ticket_id,))
+                err_brief = "; ".join(
+                    f"[{i.get('rule')}] {(i.get('file') or '?').split('/')[-1]}:{i.get('line') or '?'} "
+                    f"{(i.get('msg') or '')[:80]}"
+                    for i in blocking_issues[:3]
+                )
+                await self._log(
+                    project_id, requirement_id, ticket_id, agent_name,
+                    "reject", current_status, new_status,
+                    f"UE 自测不通过 · {len(blocking_issues)} blocking · 将触发 fix_issues 修复",
+                    "warning",
+                    detail_data={
+                        "issues": blocking_issues[:10],
+                        "summary": self_test.get("ue_lint_summary"),
+                        "err_brief": err_brief,
+                    },
+                )
+                return   # 不落代码产物，等修好再落
+
+            new_status = TicketStatus.DEVELOPMENT_DONE.value
 
             await db.update("tickets", {
                 "status": new_status,
@@ -1535,6 +1657,62 @@ class TicketOrchestrator:
                 )
 
         elif agent_name == "TestAgent":
+            # v0.19 Phase ②：UE playtest 阶段（action=run_playtest）有自己的结果语义
+            # UEPlaytestAction 返回 status: success / playtest_failed / error
+            if action == "run_playtest":
+                r_status = result.get("status")
+                summary = result.get("summary") or {}
+                failed_tests = [t for t in (result.get("tests") or []) if t.get("result") == "failed"]
+                if r_status == "success":
+                    new_status = "play_test_passed"
+                    await db.update("tickets", {
+                        "status": new_status,
+                        "result": result_json,
+                        "updated_at": now_iso(),
+                    }, "id = ?", (ticket_id,))
+                    await self._log(
+                        project_id, requirement_id, ticket_id, agent_name,
+                        "complete", current_status, new_status,
+                        f"Playtest 通过（{summary.get('passed', 0)}/{summary.get('total', 0)}，"
+                        f"{result.get('duration_ms', 0) // 1000}s）",
+                        detail_data={
+                            "exit_code": result.get("exit_code"),
+                            "duration_ms": result.get("duration_ms"),
+                            "summary": summary,
+                            "screenshots": (result.get("screenshots") or [])[:5],
+                            "command": result.get("command"),
+                        },
+                    )
+                else:
+                    # playtest_failed → play_test_failed → SOP reject_goto development
+                    new_status = "play_test_failed"
+                    await db.update("tickets", {
+                        "status": new_status,
+                        "result": result_json,
+                        "updated_at": now_iso(),
+                    }, "id = ?", (ticket_id,))
+                    fail_brief = "; ".join(
+                        f"{t.get('name', '?')}: {'/'.join((t.get('errors') or ['?'])[:1])[:60]}"
+                        for t in failed_tests[:3]
+                    )
+                    await self._log(
+                        project_id, requirement_id, ticket_id, agent_name,
+                        "reject", current_status, new_status,
+                        f"Playtest 失败 · {summary.get('failed', len(failed_tests))}/{summary.get('total', 0)} failed · "
+                        f"将触发 DevAgent.fix_issues 修复",
+                        "warning",
+                        detail_data={
+                            "tests": failed_tests[:10],
+                            "summary": summary,
+                            "screenshots": (result.get("screenshots") or [])[:5],
+                            "exit_code": result.get("exit_code"),
+                            "duration_ms": result.get("duration_ms"),
+                            "command": result.get("command"),
+                            "fail_brief": fail_brief,
+                        },
+                    )
+                return   # 不进入下面的常规 testing 分支
+
             # 测试结果（只接受合法状态）
             test_status = result.get("status", "testing_done")
             if test_status not in (TicketStatus.TESTING_DONE.value, TicketStatus.TESTING_FAILED.value):
@@ -2256,6 +2434,8 @@ class TicketOrchestrator:
             "docs_prefix": f"docs/{ticket['requirement_id'][-6:]}/{ticket['id'][-6:]}/",
             "src_prefix": f"src/{ticket.get('module', 'other')}/",
             "tests_prefix": f"tests/{ticket['requirement_id'][-6:]}/",
+            # v0.19.x 工单面板进度区：让 UE 流式 actions 写心跳
+            "_ticket_progress_cb": self._make_ticket_progress_callback(project_id, ticket["id"]),
         }
 
         # 若为 BUG ticket，附加 BUG 原始信息
@@ -2290,6 +2470,22 @@ class TicketOrchestrator:
         # v0.18 Phase B：注入项目级 UE 配置（引擎/uproject/target 等），供
         # UECompileCheckAction / InstantiateUETemplateAction 等 UE 相关 action 透传使用。
         # 这样 DevAgent.run_engine_compile 不再需要每次从前端卡片 context 里取。
+        #
+        # v0.19.x A 方案：同时注入 traits，让 SelfTestAction 按 trait 分 UE / web 分支
+        try:
+            traits_row = await db.fetch_one(
+                "SELECT traits FROM projects WHERE id = ?", (project_id,),
+            )
+            raw = (traits_row or {}).get("traits") or "[]"
+            try:
+                traits_list = json.loads(raw) if isinstance(raw, str) else list(raw)
+            except Exception:
+                traits_list = []
+            if isinstance(traits_list, list):
+                context["traits"] = [str(t) for t in traits_list if t]
+        except Exception as e:
+            logger.debug("读 traits 失败（忽略）: %s", e)
+
         try:
             proj_row = await db.fetch_one(
                 """SELECT ue_engine_path, ue_engine_version, ue_engine_type,

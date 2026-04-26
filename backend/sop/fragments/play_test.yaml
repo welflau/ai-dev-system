@@ -3,11 +3,13 @@ id: play_test
 name: 游戏玩法测试
 insert_after: development    # 跟 smoke_test 同层但在 engine_compile 之后
 priority: 85                 # 比 engine_compile (95) 低，保证先编译再跑
-description: 启动游戏 headless 模式跑一遍基础场景，捕获 crash / 错误日志
+description: 启动 UnrealEditor-Cmd 跑 Automation Framework 测试，捕获失败 + 截图
 
+# v0.19 Phase ②：先只做 UE。Godot/Unity 的 play_test 逻辑后续单独做 fragment。
 required_traits:
-  all_of:
-    - category:game
+  any_of:
+    - engine:ue5
+    - engine:ue4
 
 stage:
   agent: TestAgent
@@ -17,7 +19,8 @@ stage:
   reject_status: play_test_failed
   reject_goto: development
   config:
-    timeout_seconds: 180
+    timeout_seconds: 600       # 首次可能 3-5 min（shader 编译）
+    test_filter: "Project."    # UE Automation filter，默认只跑项目自身的 Functional Tests
     capture_screenshots: true
 
 pipeline_view_contrib:

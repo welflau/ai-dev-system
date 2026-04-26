@@ -199,6 +199,59 @@ class ReflectionAction(ActionBase):
                 "  - 在 .cpp 直接 new FClass() 但 class 没继承 UObject 走不了 GC"
             )
             failure_signal = "\n".join(lines)
+        elif failure_type == "play_test_failed":
+            # v0.19 Phase ②：UE Automation 测试失败
+            failed_tests = context.get("failed_tests") or []
+            summary = context.get("playtest_summary") or {}
+            pt_cmd = context.get("playtest_command") or ""
+            lines = []
+            lines.append(
+                f"UE Automation 测试失败 ({summary.get('failed', len(failed_tests))}/"
+                f"{summary.get('total', 0)} failed)。"
+            )
+            if pt_cmd:
+                lines.append(f"测试命令: `{pt_cmd}`")
+            lines.append("\n失败测试（最多前 5 个）：")
+            for t in failed_tests[:5]:
+                name = t.get("name", "?")
+                errs = "; ".join((t.get("errors") or [])[:2])[:200] or "(未捕获 error 行)"
+                lines.append(f"  - {name}")
+                lines.append(f"    → {errs}")
+            lines.append(
+                "\n⚠️ UE Automation 常见失败原因：\n"
+                "  - Functional Test actor 未正确 Register（需 PostRegisterAllComponents 注册）\n"
+                "  - 资产引用路径过期（BP 重命名后 C++ 里的 SoftObjectPath 没更新）\n"
+                "  - Enhanced Input mapping 缺失（IA / IMC 没在 BP 或 DefaultInput.ini 里绑）\n"
+                "  - Tick 逻辑依赖某帧已初始化但未用 FTimerHandle/GameState 等待\n"
+                "  - nullrhi 模式下 UMG/渲染相关断言（检查是否强依赖真 GPU）\n"
+                "  - Spawn/Replication 依赖客户端世界，单机 playtest 跑不到"
+            )
+            failure_signal = "\n".join(lines)
+        elif failure_type == "self_test_failed":
+            # v0.19.x A 方案：UE 静态预检（Layer 1）失败
+            issues = context.get("ue_blocking_issues") or []
+            lines = []
+            lines.append(
+                f"UE 自测失败（Layer 1 静态预检）：{len(issues)} 条 blocking issues。"
+                f"**每条都是静态可发现的 UE C++ 常见错**，请按 suggest 逐条修复。"
+            )
+            lines.append("\n问题清单：")
+            for idx, iss in enumerate(issues[:10], 1):
+                rule = iss.get("rule", "?")
+                file = iss.get("file", "?")
+                line = iss.get("line")
+                msg = (iss.get("msg") or "").replace("\n", " ")[:220]
+                suggest = iss.get("suggest") or ""
+                lines.append(
+                    f"{idx}. [{rule}] {file}:{line or '?'} — {msg}"
+                )
+                if suggest:
+                    lines.append(f"   → 建议: {suggest}")
+            lines.append(
+                "\n⚠️ 这些错在下游 UBT 编译会必然暴露（3-5 分钟后），"
+                "但我们在开发阶段就用静态规则提前拦住。请严格按 suggest 修正，不要引入新的同类问题。"
+            )
+            failure_signal = "\n".join(lines)
         else:
             failure_signal = f"失败类型: {failure_type}"
 

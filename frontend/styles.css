@@ -1454,6 +1454,261 @@ body.chat-open .drawer.docked {
     font-size: 11px;
 }
 
+/* v0.19.1 commit diff 内嵌展开 */
+.git-commit-item {
+    cursor: pointer;
+    transition: background 0.12s ease;
+}
+.git-commit-item:hover {
+    background: var(--bg-elevated, rgba(255,255,255,0.04));
+}
+.git-commit-item.expanded {
+    background: var(--bg-card, rgba(255,255,255,0.02));
+}
+.git-commit-diff {
+    margin-top: 8px;
+    border-top: 1px solid var(--border, rgba(255,255,255,0.08));
+    padding-top: 6px;
+    cursor: default;
+}
+.diff-loading, .diff-error, .diff-empty {
+    padding: 10px;
+    color: var(--text-muted);
+    font-size: 12px;
+}
+.commit-diff-wrap { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+.commit-diff-head { font-size: 11px; color: var(--text-muted); margin-bottom: 6px; }
+.diff-file { border: 1px solid var(--border); border-radius: 4px; margin-bottom: 8px; overflow: hidden; }
+.diff-file[open] .diff-file-head { border-bottom: 1px solid var(--border); }
+.diff-file-head {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 10px; cursor: pointer; background: var(--bg-card);
+    font-size: 11px; list-style: none;
+}
+.diff-file-head::-webkit-details-marker { display: none; }
+.diff-file-head:hover { background: var(--bg-elevated); }
+.diff-file-status {
+    padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 600;
+    flex-shrink: 0;
+}
+.diff-file-status.s-A { background: rgba(63,185,80,0.15); color: #3fb950; }
+.diff-file-status.s-M { background: rgba(88,166,255,0.15); color: #58a6ff; }
+.diff-file-status.s-D { background: rgba(248,81,73,0.15); color: #f85149; }
+.diff-file-status.s-R { background: rgba(210,153,34,0.15); color: #d29922; }
+.diff-file-path { flex: 1; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.diff-file-stats { flex-shrink: 0; font-size: 10px; }
+.diff-stat-add { color: #3fb950; }
+.diff-stat-del { color: #f85149; }
+.diff-stat-binary { color: var(--text-muted); font-style: italic; }
+.diff-file-body, .diff-file-binary, .diff-file-empty { padding: 0; background: var(--bg); }
+.diff-file-binary, .diff-file-empty { padding: 10px; font-size: 11px; color: var(--text-muted); font-style: italic; }
+.diff-patch {
+    margin: 0; padding: 6px 0; font-size: 11px; line-height: 1.5;
+    overflow-x: auto; white-space: pre;
+}
+.diff-patch .d-hdr { display: block; color: var(--text-muted); padding: 0 10px; opacity: 0.7; }
+.diff-patch .d-hunk { display: block; color: #58a6ff; padding: 1px 10px; background: rgba(88,166,255,0.06); }
+.diff-patch .d-add { display: block; color: #3fb950; padding: 1px 10px; background: rgba(63,185,80,0.08); }
+.diff-patch .d-del { display: block; color: #f85149; padding: 1px 10px; background: rgba(248,81,73,0.08); }
+.diff-patch .d-ctx { display: block; color: var(--text); padding: 1px 10px; }
+.d-fold summary {
+    cursor: pointer; color: var(--text-muted); font-style: italic;
+    padding: 4px 10px; background: var(--bg-elevated); font-size: 10px; list-style: none;
+}
+.d-fold summary::-webkit-details-marker { display: none; }
+.d-fold summary:hover { color: var(--text); background: rgba(88,166,255,0.1); }
+.d-fold-pre {
+    margin: 0; padding: 4px 10px; white-space: pre; font-size: 11px;
+    color: var(--text); line-height: 1.5;
+}
+.file-binary-placeholder {
+    padding: 40px 20px;
+    text-align: center;
+    background: var(--bg-card);
+    border-radius: 6px;
+}
+
+/* v0.19.1 分支树视图 */
+.branch-tree {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: 12px;
+    margin: 6px 0;
+}
+.branch-node {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    padding-left: calc(10px + var(--depth, 0) * 20px);
+    background: var(--bg-card, rgba(255,255,255,0.02));
+    border-left: 2px solid transparent;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.12s ease, border-color 0.12s ease;
+    position: relative;
+}
+.branch-node:hover {
+    background: var(--bg-elevated, rgba(255,255,255,0.06));
+    border-left-color: var(--primary, #58a6ff);
+}
+.branch-node[style*="--depth:1"]::before,
+.branch-node[style*="--depth:2"]::before,
+.branch-node[style*="--depth:3"]::before {
+    content: '└';
+    position: absolute;
+    left: calc(var(--depth, 0) * 20px - 10px);
+    color: var(--text-muted);
+    font-size: 11px;
+    opacity: 0.6;
+}
+.branch-node .branch-icon {
+    font-size: 13px;
+    flex-shrink: 0;
+}
+.branch-node .branch-name {
+    font-weight: 500;
+    color: var(--text);
+    flex-shrink: 0;
+    min-width: 80px;
+}
+.branch-node .branch-name.current {
+    color: var(--success, #3fb950);
+    font-weight: 700;
+}
+.branch-ab {
+    display: inline-flex;
+    gap: 3px;
+    font-size: 10px;
+    flex-shrink: 0;
+}
+.ab-ahead {
+    color: var(--success, #3fb950);
+    background: rgba(63, 185, 80, 0.1);
+    padding: 1px 5px;
+    border-radius: 3px;
+}
+.ab-behind {
+    color: var(--warning, #f0a020);
+    background: rgba(240, 160, 32, 0.1);
+    padding: 1px 5px;
+    border-radius: 3px;
+}
+.branch-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-muted);
+    font-size: 11px;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+}
+.branch-meta code {
+    background: var(--bg-elevated);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 10px;
+    flex-shrink: 0;
+}
+.branch-subj {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+    flex: 1;
+}
+.branch-time {
+    flex-shrink: 0;
+    opacity: 0.7;
+    font-size: 10px;
+}
+
+/* v0.19.x CI 构建失败主动诊断卡 */
+.chat-ci-diagnosis {
+    font-size: 12px;
+}
+.chat-ci-diagnosis .action-title {
+    margin-bottom: 8px;
+}
+.diag-errors {
+    background: var(--bg, rgba(0,0,0,0.15));
+    border-radius: 4px;
+    padding: 6px 10px;
+    margin-bottom: 6px;
+    max-height: 160px;
+    overflow-y: auto;
+}
+.diag-error-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    padding: 3px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    flex-wrap: wrap;
+    line-height: 1.5;
+}
+.diag-error-row:last-child { border-bottom: none; }
+.diag-err-file {
+    font-family: ui-monospace, monospace;
+    font-size: 10px;
+    background: var(--bg-elevated);
+    padding: 1px 5px;
+    border-radius: 3px;
+    flex-shrink: 0;
+    color: var(--text-muted);
+}
+.diag-err-code {
+    font-size: 10px;
+    color: var(--danger, #ea4a5a);
+    font-weight: 600;
+    flex-shrink: 0;
+}
+.diag-err-cat {
+    font-size: 10px;
+    color: var(--text-muted);
+    background: rgba(255,255,255,0.06);
+    padding: 1px 4px;
+    border-radius: 3px;
+    flex-shrink: 0;
+}
+.diag-err-msg {
+    color: var(--text);
+    font-size: 11px;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.diag-more {
+    font-size: 10px;
+    color: var(--text-muted);
+    padding: 4px 0 2px;
+    font-style: italic;
+}
+
+/* v0.19.1 action state 摘要卡（已执行 / 已取消） */
+.chat-action-state-summary {
+    background: var(--bg-card);
+    font-size: 12px;
+}
+.chat-action-state-summary .action-title {
+    font-size: 13px;
+    margin-bottom: 4px;
+}
+.chat-action-state-summary .action-detail {
+    color: var(--text-muted);
+    font-size: 11px;
+}
+.chat-action-state-summary code {
+    background: var(--bg-elevated);
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-size: 10px;
+}
+
 .detail-grid {
     display: grid;
     grid-template-columns: 100px 1fr;
@@ -6423,6 +6678,101 @@ body.chat-open .chat-panel {
 }
 
 /* ==================== CI/CD Pipeline ==================== */
+
+/* v0.19.x 工单「📍 当前进度」区 */
+.ticket-action-progress {
+    background: var(--bg-card, rgba(255, 255, 255, 0.03));
+    border-left: 3px solid var(--primary, #58a6ff);
+    border-radius: 6px;
+    padding: 12px 14px;
+    margin: 0 0 14px 0;
+    font-size: 12px;
+}
+.ticket-action-progress .progress-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+.ticket-action-progress .progress-icon {
+    font-size: 14px;
+}
+.ticket-action-progress .progress-title {
+    font-weight: 600;
+    color: var(--text);
+    flex: 1;
+}
+.ticket-action-progress .progress-health-badge {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.06);
+    flex-shrink: 0;
+}
+.ticket-action-progress .progress-no-percent {
+    font-size: 10px;
+    color: var(--text-muted);
+    opacity: 0.6;
+    cursor: help;
+    flex-shrink: 0;
+}
+.ticket-action-progress .progress-action-line {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 6px;
+    flex-wrap: wrap;
+}
+.ticket-action-progress .progress-action-name {
+    background: var(--bg-elevated, rgba(255, 255, 255, 0.05));
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    color: var(--text);
+}
+.ticket-action-progress .progress-elapsed {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+.ticket-action-progress .progress-silence {
+    font-size: 11px;
+    color: var(--text-muted);
+    opacity: 0.8;
+}
+.ticket-action-progress .progress-latest-log {
+    background: var(--bg, rgba(0, 0, 0, 0.15));
+    border-radius: 4px;
+    padding: 6px 10px;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-size: 11px;
+    color: var(--text-muted);
+    overflow-x: auto;
+    white-space: nowrap;
+    max-height: 40px;
+    line-height: 1.6;
+}
+.ticket-action-progress .progress-foot {
+    margin-top: 8px;
+    text-align: right;
+}
+.flash-highlight {
+    animation: flash-bg 1.5s ease;
+}
+@keyframes flash-bg {
+    0%   { background: rgba(88, 166, 255, 0.3); }
+    100% { background: transparent; }
+}
+
+/* v0.19.x Phase B: 交付 & 环境页的 section 标题 */
+.delivery-section-title {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin: 4px 0 8px 0;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
 
 .cicd-stages-row {
     display: flex;

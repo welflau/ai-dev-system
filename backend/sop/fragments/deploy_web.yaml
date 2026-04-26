@@ -1,0 +1,30 @@
+# Web 项目部署 —— acceptance 通过后自动跑 develop_build（语法 + 冒烟 + 合入主分支 + test 部署）
+# v0.19.x Phase D
+id: deploy_web
+name: 部署（Web）
+insert_after: acceptance
+priority: 70
+description: Web 项目交付：develop → main 合并 + test / prod 环境部署
+
+required_traits:
+  any_of:
+    - platform:web
+    - category:app
+
+stage:
+  agent: DeployAgent
+  action: run_ci_deploy
+  trigger_on: deployment_pending
+  success_status: deployed
+  reject_status: deployment_failed
+  reject_goto: development
+  config:
+    build_type: develop_build     # 让 strategy 决定执行什么
+    max_retries: 2
+
+pipeline_view_contrib:
+  group: delivery
+  create_if_missing:
+    name: 交付
+    icon: 🚀
+    insert_after: acceptance

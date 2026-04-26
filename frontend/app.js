@@ -550,7 +550,7 @@ function switchTab(tab) {
     if (tab === 'roadmap') loadRoadmap();
     if (tab === 'stats') loadStats();
     if (tab === 'agents') startAgentMonitor();
-    if (tab === 'cicd') loadCICD();
+    if (tab === 'cicd') loadDeliveryPage();
     if (tab === 'logs') loadLogs();
     if (tab === 'bugs') loadBugs();
     if (tab === 'settings-general') {
@@ -1164,29 +1164,79 @@ async function loadSettingsRepo() {
     await loadBranchInfo();
 }
 
-/** 加载分支列表和合并操作 */
+/** 加载分支列表和合并操作（v0.19.1 升级：树形视图 + ahead/behind + 最近提交） */
 async function loadBranchInfo() {
     if (!currentProjectId) return;
     const container = document.getElementById('branchInfoContainer');
     if (!container) return;
     try {
-        const data = await api(`/projects/${currentProjectId}/git/branches`);
+        const data = await api(`/projects/${currentProjectId}/git/branches/tree`);
         const branches = data.branches || [];
         const current = data.current || '?';
+        const names = branches.map(b => b.name);
 
-        let html = `<div style="margin-bottom:12px;">
+        let html = `<div style="margin-bottom:10px;">
             <span style="font-size:12px; color:var(--text-muted);">当前分支:</span>
             <span class="req-branch-tag">🌿 ${escHtml(current)}</span>
+            <span style="font-size:11px; color:var(--text-muted); margin-left:8px;">共 ${branches.length} 分支</span>
         </div>`;
 
         if (branches.length > 0) {
-            html += `<div style="font-size:12px; color:var(--text-muted); margin-bottom:8px;">所有分支 (${branches.length}):</div>`;
-            html += branches.map(b => `<span class="tag tag-module" style="margin:2px 4px 2px 0; font-size:11px;">${escHtml(b)}</span>`).join('');
+            // 构建 parent → children 映射
+            const byName = Object.fromEntries(branches.map(b => [b.name, b]));
+            const childrenOf = {};
+            const roots = [];
+            for (const b of branches) {
+                if (b.parent && byName[b.parent]) {
+                    (childrenOf[b.parent] = childrenOf[b.parent] || []).push(b);
+                } else {
+                    roots.push(b);
+                }
+            }
+            // 每个分组内按最近提交时间降序
+            const byTimeDesc = (a, b) =>
+                (b.last_commit_at || '').localeCompare(a.last_commit_at || '');
+            roots.sort(byTimeDesc);
+            for (const k of Object.keys(childrenOf)) childrenOf[k].sort(byTimeDesc);
+
+            html += `<div class="branch-tree">`;
+            const visited = new Set();
+            const walk = (b, depth) => {
+                if (visited.has(b.name)) return '';
+                visited.add(b.name);
+                const isCurrent = b.name === current;
+                const aheadBehind = (b.ahead || b.behind)
+                    ? `<span class="branch-ab" title="相对 ${escHtml(b.upstream || b.parent || 'base')}">
+                          ${b.ahead ? `<span class="ab-ahead">↑${b.ahead}</span>` : ''}
+                          ${b.behind ? `<span class="ab-behind">↓${b.behind}</span>` : ''}
+                       </span>`
+                    : '';
+                const lastTime = b.last_commit_at ? _fmtRelTime(b.last_commit_at) : '';
+                const subject = b.last_commit_subject || '';
+                const sha = b.last_commit_sha || '';
+                let node = `<div class="branch-node" style="--depth:${depth}"
+                                 data-name="${escHtml(b.name)}"
+                                 onclick="switchRepoBranch('${escHtml(b.name)}')">
+                    <span class="branch-icon">${isCurrent ? '🌿' : '🌱'}</span>
+                    <span class="branch-name ${isCurrent ? 'current' : ''}">${escHtml(b.name)}</span>
+                    ${aheadBehind}
+                    <span class="branch-meta">
+                        ${sha ? `<code>${escHtml(sha)}</code>` : ''}
+                        ${subject ? `<span class="branch-subj" title="${escHtml(subject)}">${escHtml(subject.slice(0, 56))}${subject.length > 56 ? '…' : ''}</span>` : ''}
+                        ${lastTime ? `<span class="branch-time">${escHtml(lastTime)}</span>` : ''}
+                    </span>
+                </div>`;
+                const kids = childrenOf[b.name] || [];
+                for (const k of kids) node += walk(k, depth + 1);
+                return node;
+            };
+            for (const r of roots) html += walk(r, 0);
+            html += `</div>`;
         }
 
-        // 合并操作按钮
-        const hasDevelop = branches.includes('develop');
-        const mainBranch = branches.includes('main') ? 'main' : (branches.includes('master') ? 'master' : null);
+        // 合并操作按钮（保留原功能）
+        const hasDevelop = names.includes('develop');
+        const mainBranch = names.includes('main') ? 'main' : (names.includes('master') ? 'master' : null);
         if (hasDevelop && mainBranch) {
             html += `<div style="margin-top:16px; display:flex; gap:8px;">
                 <button class="btn btn-primary btn-sm" onclick="mergeBranch('develop', '${mainBranch}')">
@@ -1197,8 +1247,21 @@ async function loadBranchInfo() {
 
         container.innerHTML = html;
     } catch (e) {
-        container.innerHTML = `<span style="color:var(--text-muted); font-size:12px;">分支信息加载失败</span>`;
+        container.innerHTML = `<span style="color:var(--text-muted); font-size:12px;">分支信息加载失败：${escHtml(e.message || '')}</span>`;
     }
+}
+
+/** 分支树辅助：ISO 时间 → 相对时间（几分钟前 / x 天前） */
+function _fmtRelTime(iso) {
+    if (!iso) return '';
+    try {
+        const diff = Date.now() - new Date(iso).getTime();
+        if (diff < 60000) return '刚刚';
+        if (diff < 3600000) return Math.floor(diff / 60000) + ' 分钟前';
+        if (diff < 86400000) return Math.floor(diff / 3600000) + ' 小时前';
+        if (diff < 2592000000) return Math.floor(diff / 86400000) + ' 天前';
+        return Math.floor(diff / 2592000000) + ' 个月前';
+    } catch { return ''; }
 }
 
 /** 触发分支合并 */
@@ -1540,92 +1603,40 @@ async function saveSOPConfig() {
     }
 }
 
-// ==================== 环境管理 ====================
+// ==================== 环境管理（v0.19.x 合并到「交付 & 环境」页） ====================
+// loadEnvironments / deployEnv / stopEnv 的实现迁移到 loadDeliveryPage，
+// 此处留 alias 见下方（在 loadDeliveryPage 定义后）
 
-async function loadEnvironments() {
+async function deployEnv(envName) {
     if (!currentProjectId) return;
-    const container = document.getElementById('envCards');
-    if (!container) return;
-
+    showToast(`正在部署 ${envName} 环境...`, 'info');
     try {
-        const data = await api(`/projects/${currentProjectId}/environments`);
-        const envs = data.environments || [];
-
-        const envMeta = {
-            dev:  { icon: '🔧', label: '开发环境', color: 'var(--info)', desc: 'feat/* 分支，Agent 开发后自动部署' },
-            test: { icon: '🧪', label: '测试环境', color: 'var(--warning, #f59e0b)', desc: 'develop 分支，构建通过后自动部署' },
-            prod: { icon: '🚀', label: '生产环境', color: 'var(--success)', desc: 'main 分支，Master 构建通过后部署' },
-        };
-
-        container.innerHTML = envs.map(env => {
-            const meta = envMeta[env.env_type] || {};
-            const running = env.status === 'running';
-            return `
-            <div class="env-card ${running ? 'env-running' : ''}">
-                <div class="env-card-header">
-                    <span class="env-icon">${meta.icon || '🌍'}</span>
-                    <span class="env-label">${meta.label || env.env_type}</span>
-                    <span class="env-status-dot" style="background:${running ? meta.color : 'var(--text-muted)'}"></span>
-                    <span class="env-status-text">${running ? '运行中' : '未启动'}</span>
-                </div>
-                <div class="env-card-body">
-                    ${(() => {
-                        // 后端已做一致性维持：dev → DB 跟 HEAD 走；test/prod → HEAD 被切回 DB。
-                        // 所以 env.branch 已经是"一致后"的值。如果依然 != current_branch 说明后端自动
-                        // 切换失败（比如目录有未提交改动），这时才显示 ⚠️。
-                        const shown = env.branch || '';
-                        const actual = env.current_branch || '';
-                        const stillMismatch = shown && actual && shown !== actual;
-                        const note = env.branch_sync_note || '';
-                        let title = '';
-                        if (stillMismatch) {
-                            title = `目录当前分支: ${actual}\n应为: ${shown}\n${note || '自动对齐失败，请手动处理'}`;
-                        } else if (note) {
-                            title = note;
-                        }
-                        const icon = stillMismatch ? '⚠️ ' : (shown ? '🌿 ' : '');
-                        const display = shown || actual || '-';
-                        return `<div class="env-info-row"><span class="env-info-label">分支</span><span class="env-info-value" title="${escapeHtml(title)}">${icon}${escapeHtml(display)}</span></div>`;
-                    })()}
-                    <div class="env-info-row"><span class="env-info-label">路径</span><span class="env-info-value env-path-value" title="${escapeHtml(env.deploy_path || '')}">${env.deploy_path ? '📁 ' + escapeHtml(env.deploy_path) : '-'}</span></div>
-                    <div class="env-info-row"><span class="env-info-label">端口</span><span class="env-info-value">${env.port || '-'}</span></div>
-                    <div class="env-info-row"><span class="env-info-label">Commit</span><span class="env-info-value" style="font-family:monospace;">${env.last_commit || '-'}</span></div>
-                    <div class="env-info-row"><span class="env-info-label">部署时间</span><span class="env-info-value">${env.last_deployed_at ? formatTime(env.last_deployed_at) : '-'}</span></div>
-                    ${running && env.url ? `<div class="env-info-row"><span class="env-info-label">预览</span><a class="env-preview-link" href="${env.url}" target="_blank">${env.url}</a></div>` : ''}
-                </div>
-                <div class="env-card-actions">
-                    ${running
-                        ? `<button class="btn btn-sm btn-danger" onclick="stopEnv('${env.env_type}')">停止</button>
-                           <a class="btn btn-sm btn-primary" href="${env.url}" target="_blank">打开预览</a>`
-                        : `<button class="btn btn-sm btn-primary" onclick="deployEnv('${env.env_type}')">部署</button>`
-                    }
-                </div>
-                <div class="env-desc">${meta.desc || ''}</div>
-            </div>`;
-        }).join('');
+        // v0.19.x: 新走 strategy-driven 端点；若 404（老后端）降级到老端点
+        let res;
+        try {
+            res = await api(`/projects/${currentProjectId}/ci/environments/${envName}/deploy`, { method: 'POST', body: {} });
+        } catch (e1) {
+            // 降级
+            res = await api(`/projects/${currentProjectId}/environments/${envName}/deploy`, { method: 'POST' });
+        }
+        showToast(`${envName} 环境已部署${res.url ? ': ' + res.url : ''}`, 'success');
+        loadDeliveryPage();
     } catch (e) {
-        container.innerHTML = `<div class="env-card">加载失败: ${escapeHtml(e.message)}</div>`;
+        showToast(`${envName} 部署失败: ${e.message}`, 'error');
     }
 }
 
-async function deployEnv(envType) {
-    if (!currentProjectId) return;
-    showToast(`正在部署 ${envType} 环境...`, 'info');
-    try {
-        const res = await api(`/projects/${currentProjectId}/environments/${envType}/deploy`, { method: 'POST' });
-        showToast(`${envType} 环境已部署: ${res.url}`, 'success');
-        loadEnvironments();
-    } catch (e) {
-        showToast(`${envType} 部署失败: ${e.message}`, 'error');
-    }
-}
-
-async function stopEnv(envType) {
+async function stopEnv(envName) {
     if (!currentProjectId) return;
     try {
-        await api(`/projects/${currentProjectId}/environments/${envType}/stop`, { method: 'POST' });
-        showToast(`${envType} 环境已停止`, 'info');
-        loadEnvironments();
+        try {
+            await api(`/projects/${currentProjectId}/ci/environments/${envName}/stop`, { method: 'POST' });
+        } catch (e1) {
+            // 降级老端点
+            await api(`/projects/${currentProjectId}/environments/${envName}/stop`, { method: 'POST' });
+        }
+        showToast(`${envName} 环境已停止`, 'info');
+        loadDeliveryPage();
     } catch (e) {
         showToast(`停止失败: ${e.message}`, 'error');
     }
@@ -2459,6 +2470,25 @@ async function openTicketDrawer(ticketId) {
                 ${data.started_at ? `<span class="detail-label">开始时间</span><span class="detail-value">${formatDateTime(data.started_at)}</span>` : ''}
                 ${data.completed_at ? `<span class="detail-label">完成时间</span><span class="detail-value">${formatDateTime(data.completed_at)}</span>` : ''}
             </div>
+        </div>
+
+        <!-- v0.19.x 当前进度区（JS 异步填充；无 current_action 时自动隐藏） -->
+        <div id="ticketActionProgress" class="ticket-action-progress" data-ticket-id="${escHtml(data.id)}" style="display:none;">
+            <div class="progress-head">
+                <span class="progress-icon">⚡</span>
+                <span class="progress-title">当前进度</span>
+                <span class="progress-health-badge">⚪ —</span>
+                <span class="progress-no-percent" title="UE 构建工具链（UBT / RunUAT / UnrealEditor-Cmd）不输出百分比。只显示活性 + 最新一行。">无精确 %ⓘ</span>
+            </div>
+            <div class="progress-action-line">
+                <code class="progress-action-name">—</code>
+                <span class="progress-elapsed">—</span>
+                <span class="progress-silence"></span>
+            </div>
+            <div class="progress-latest-log">—</div>
+            <div class="progress-foot">
+                <a class="action-link" onclick="scrollToLogPanel()">查看操作日志 →</a>
+            </div>
         </div>`;
 
         // 描述（支持 Markdown 图片语法渲染）
@@ -2685,6 +2715,8 @@ async function openTicketDrawer(ticketId) {
         // 打开抽屉
         document.getElementById('drawerOverlay').classList.add('active');
         document.getElementById('ticketDrawer').classList.add('active');
+        // v0.19.x 启动进度区（首次拉数据 + 5s ticker 刷已用时）
+        _startTicketActionProgress(ticketId);
     } catch (e) {
         showToast(`加载工单失败: ${e.message}`, 'error');
     }
@@ -2863,12 +2895,211 @@ function _ueFwRelTime(iso) {
     return Math.floor(diff / 86400000) + ' 天前';
 }
 
+/**
+ * v0.19.1 action state 持久化：通过 PATCH 把卡片按钮点击结果回写到 chat_messages
+ *
+ * @param {string} messageId  chat_messages.id
+ * @param {'executed'|'cancelled'} state
+ * @param {object?} result  可选摘要，如 {commit, template, project_name, at}
+ */
+async function patchActionState(messageId, state, result = null) {
+    if (!messageId || !currentProjectId) return false;
+    try {
+        await api(`/projects/${currentProjectId}/chat/messages/${messageId}/action-state`, {
+            method: 'PATCH',
+            body: { state, result: result || undefined },
+        });
+        return true;
+    } catch (e) {
+        console.warn('[action-state] patch failed:', e);
+        return false;
+    }
+}
+
+/**
+ * 通用"已执行 / 已取消"占位卡片渲染
+ * 历史消息刷新回来时，state ∈ executed / cancelled 直接走此分支，避免重复可点按钮
+ */
+function renderActionStateSummary(action) {
+    const state = action._state;
+    const result = action._result || {};
+    const isExec = state === 'executed';
+    const title = isExec ? '✅ 已执行' : '✗ 已取消';
+    const borderColor = isExec ? 'var(--success, #34d058)' : 'var(--text-muted, #8b949e)';
+    const opacity = isExec ? '1' : '0.6';
+
+    // 根据卡片类型给一个简短的执行摘要
+    let summary = '';
+    if (action.type === 'propose_ue_framework' && isExec) {
+        const tmpl = escapeHtml(result.template || action.recommended_template || '?');
+        const pname = escapeHtml(result.project_name || action.project_name_target || '?');
+        const commit = escapeHtml((result.commit || '').slice(0, 10) || '?');
+        const atStr = result.at ? `（${escapeHtml(_ueFwRelTime(result.at))}）` : '';
+        summary = `模板 <code>${tmpl}</code> → <code>${pname}</code> · commit <code>${commit}</code>${atStr}`;
+    } else if (action.type === 'confirm_project' && isExec) {
+        summary = `项目 <strong>${escapeHtml(action.name || '?')}</strong> 已创建`;
+    } else if (action.type === 'confirm_requirement' && isExec) {
+        summary = `需求 <strong>${escapeHtml(action.title || '?')}</strong> 已创建`;
+    } else if (action.type === 'confirm_bug' && isExec) {
+        summary = `Bug <strong>${escapeHtml(action.title || '?')}</strong> 已上报`;
+    } else if (!isExec && result.reason) {
+        summary = `取消原因：${escapeHtml(result.reason)}`;
+    }
+
+    return `
+    <div class="chat-action-card chat-action-state-summary"
+         style="border-left-color: ${borderColor}; opacity: ${opacity};">
+        <div class="action-title">${title}</div>
+        ${summary ? `<div class="action-detail">${summary}</div>` : ''}
+    </div>`;
+}
+
+/**
+ * v0.19.1 对话一键流 —— 建项目成功后自动触发下一步
+ *
+ * 后端 CreateProjectAction 对 UE 项目已调 ProposeUEFrameworkAction 并把结果
+ * 作为 assistant 消息持久化到 chat_messages。前端这里只要保证聊天面板是开的 +
+ * 强制 reload 一次历史，propose 方案卡会自然渲染出来（复用 renderUEFrameworkCard）。
+ *
+ * auto_next 当前只识别 propose_ue_framework；未来其他 type 在此扩展。
+ */
+function runAutoNextAfterProjectCreated(projectId, autoNext) {
+    if (!projectId || !autoNext || !autoNext.type) return;
+
+    if (autoNext.type !== 'propose_ue_framework') {
+        console.warn('[auto_next] unsupported type:', autoNext.type);
+        return;
+    }
+
+    // 确认跳转已生效
+    if (typeof currentProjectId === 'undefined' || currentProjectId !== projectId) {
+        // 晚一点再试一次（showProjectDetail 可能还没跑完）
+        setTimeout(() => runAutoNextAfterProjectCreated(projectId, autoNext), 400);
+        return;
+    }
+
+    // 打开聊天面板（若未开）并强制重载历史拿到后端刚持久化的 propose 卡片
+    const ensureChatOpen = () => {
+        if (typeof chatPanelOpen !== 'undefined' && !chatPanelOpen
+            && typeof toggleChatPanel === 'function') {
+            toggleChatPanel();  // 会触发 loadChatHistory（chatMode === 'global'）
+            return;
+        }
+        // 面板已开：手动重载一次
+        if (typeof loadChatHistory === 'function') {
+            loadChatHistory();
+        }
+    };
+
+    // 稍等片刻让 showProjectDetail 把 UI 切换完
+    setTimeout(ensureChatOpen, 600);
+
+    if (typeof showToast === 'function') {
+        showToast('检测到 UE 项目，已自动生成框架方案卡片', 'info');
+    }
+}
+
+/**
+ * v0.19.x 主动诊断卡片：CI 构建失败后 AI 自动写到聊天的诊断 + "创建修复工单"按钮
+ */
+function renderCIBuildDiagnosisCard(action) {
+    if (!action) return '';
+    const hasErrors = action.has_errors;
+    const buildType = escapeHtml(action.build_type || '');
+    const buildId = escapeHtml(action.build_id || '');
+    const errors = action.errors || [];
+    const errCount = action.error_count || 0;
+    const warnCount = action.warning_count || 0;
+    const borderColor = hasErrors ? 'var(--danger, #ea4a5a)' : 'var(--warning, #f0a020)';
+    const statusIcon = hasErrors ? '❌' : '⚠️';
+    const typeLabel = {'ubt_compile':'UBT 编译','playtest':'Automation 测试','package_client':'RunUAT 打包'}[buildType] || buildType;
+
+    let errHtml = '';
+    if (errors.length > 0) {
+        errHtml = `<div class="diag-errors">`;
+        errors.slice(0, 5).forEach(e => {
+            const fname = (e.file || '?').replace(/\\/g, '/').split('/').pop();
+            const line = e.line || '?';
+            const code = escapeHtml(e.code || '');
+            const msg = escapeHtml((e.msg || '').slice(0, 120));
+            const cat = escapeHtml(e.category || '');
+            errHtml += `<div class="diag-error-row">
+                <code class="diag-err-file">${escapeHtml(fname)}:${escapeHtml(String(line))}</code>
+                ${code ? `<span class="diag-err-code">${code}</span>` : ''}
+                ${cat ? `<span class="diag-err-cat">${cat}</span>` : ''}
+                <span class="diag-err-msg">${msg}</span>
+            </div>`;
+        });
+        if (errCount > 5) errHtml += `<div class="diag-more">…还有 ${errCount - 5} 个错误</div>`;
+        errHtml += `</div>`;
+    }
+
+    const safeCardId = 'diag_' + Date.now();
+    return `
+    <div class="chat-action-card chat-ci-diagnosis" id="${safeCardId}"
+         style="border-left-color: ${borderColor};"
+         data-project-id="${escapeHtml(action.project_id || '')}"
+         data-build-id="${buildId}"
+         data-build-type="${buildType}"
+         data-message-id="${escapeHtml(action._message_id || '')}">
+        <div class="action-title">${statusIcon} ${typeLabel} 失败 &nbsp;<span style="font-size:11px; font-weight:400; color:var(--text-muted);">${errCount} errors · ${warnCount} warnings</span></div>
+        ${errHtml}
+        ${hasErrors ? `
+        <div class="confirm-req-btns" style="margin-top:10px;">
+            <button class="btn btn-sm btn-primary" onclick="createCompileFixTask('${safeCardId}')">
+                🔧 让 DevAgent 自动修复
+            </button>
+            <a class="action-link" onclick="switchTab('cicd')">查看完整日志 →</a>
+        </div>` : ''}
+    </div>`;
+}
+
+/** 用户点"让 DevAgent 自动修复"——创建修复工单并推进到 development 阶段 */
+async function createCompileFixTask(cardId) {
+    const card = document.getElementById(cardId);
+    if (!card || !currentProjectId) return;
+    const btns = card.querySelector('.confirm-req-btns');
+    if (btns) btns.innerHTML = '<span style="color:var(--text-muted);font-size:12px">⏳ 创建修复工单中...</span>';
+    try {
+        // 创建需求 + 工单
+        const buildType = card.dataset.buildType || 'ubt_compile';
+        const typeLabel = {'ubt_compile':'UBT 编译','playtest':'Automation 测试','package_client':'RunUAT 打包'}[buildType] || buildType;
+        const res = await api(`/projects/${currentProjectId}/chat/confirm-create-requirement`, {
+            method: 'POST',
+            body: {
+                title: `修复 ${typeLabel} 失败`,
+                description: `手动 CI 触发的 ${typeLabel} 失败，请 DevAgent 分析错误并自动修复代码。`,
+                priority: 'high',
+                images: [],
+            },
+        });
+        showToast(`修复工单已创建`, 'success');
+        if (btns) btns.innerHTML = `<span style="color:var(--success);">✅ 修复工单已创建</span>
+            <a class="action-link" onclick="switchTab('board')">查看工单 →</a>`;
+        // v0.19.1 action state 持久化
+        const msgId = card.dataset.messageId || '';
+        if (msgId) patchActionState(msgId, 'executed', {at: new Date().toISOString()});
+        // 刷新看板
+        setTimeout(() => { if (typeof loadRequirements === 'function') loadRequirements(); }, 500);
+    } catch (e) {
+        showToast(`创建失败: ${e.message}`, 'error');
+        const btns2 = card.querySelector('.confirm-req-btns');
+        if (btns2) btns2.innerHTML = `<button class="btn btn-sm btn-primary" onclick="createCompileFixTask('${cardId}')">🔧 让 DevAgent 自动修复</button>`;
+    }
+}
+
 function renderUEFrameworkCard(action) {
+    // v0.19.1：若该消息已有 action_state=executed / cancelled，直接渲染摘要卡（替代 localStorage）
+    if (action._message_id && action._state && action._state !== 'pending') {
+        return renderActionStateSummary(action);
+    }
+
     const safeId = 'ueframework_' + Date.now();
     const engines = action.engines || [];
     const altTemplates = action.alternative_templates || [];
 
     // 刷新回来的旧卡片：若本项目之前已成功生成过，顶部加提示 + 按钮文案改覆盖
+    // （保留 localStorage 兜底以防老消息没持久化 state）
     const prevDone = _ueFwReadDone(action.project_id);
     const doneBanner = prevDone
         ? `<div class="ue-fw-done-banner">
@@ -2906,7 +3137,9 @@ function renderUEFrameworkCard(action) {
          data-project-id="${escapeHtml(action.project_id || '')}"
          data-project-name-target="${escapeHtml(action.project_name_target || '')}"
          data-target-dir="${escapeHtml(action.target_dir || '')}"
-         data-allow-overwrite-default="${allowOverwrite ? '1' : '0'}">
+         data-allow-overwrite-default="${allowOverwrite ? '1' : '0'}"
+         data-message-id="${escapeHtml(action._message_id || '')}"
+         data-recommended-template="${escapeHtml(action.recommended_template || '')}">
         <div class="action-title">🎮 UE 框架方案（请确认）</div>
         ${doneBanner}
         <div class="action-detail">
@@ -2988,14 +3221,21 @@ async function doInstantiateUEFramework(cardId) {
             throw new Error(err.detail || r.statusText);
         }
         const d = await r.json();
-        // 记成功指纹到 localStorage，刷新后能识别"已执行过"
-        _ueFwWriteDone(projectId, {
+        const doneInfo = {
             template: d.template,
             project_name: d.project_name,
             commit: d.git_commit,
             files: d.files_created,
             at: new Date().toISOString(),
-        });
+        };
+        // 新路径：PATCH action_state → executed（持久化到 chat_messages）
+        const msgId = card.dataset.messageId || '';
+        if (msgId) {
+            patchActionState(msgId, 'executed', doneInfo);
+        } else {
+            // 兜底：老消息没 message_id，保留 localStorage 指纹
+            _ueFwWriteDone(projectId, doneInfo);
+        }
         showToast(`✓ 生成完成：${d.files_created} 文件 (${d.template})${d.git_commit ? ' [' + d.git_commit + ']' : ''}`, 'success');
         // 替换卡片为成功提示
         // 把 onclick 的参数先存到 data-* 避免引号嵌套导致 HTML 断裂
@@ -3015,7 +3255,8 @@ async function doInstantiateUEFramework(cardId) {
                  data-engine="${escapeHtml(engine)}"
                  data-project-name="${escapeHtml(projectName)}">
                 <button class="btn btn-sm btn-primary" onclick="doBaselineCompileFromCard('${resultId}')">🔧 跑基线编译</button>
-                <span class="ue-fw-hint" style="margin-left:8px;">首次编译 2-5 分钟，toast 会提示结果</span>
+                <button class="btn btn-sm" onclick="doRunPlaytestFromCard('${resultId}')">🎮 跑 Playtest</button>
+                <span class="ue-fw-hint" style="margin-left:8px;">编译 2-5 min · Playtest 3-5 min，均流式推日志</span>
             </div>`;
     } catch (e) {
         showToast(`生成失败：${e.message}`, 'error');
@@ -3027,6 +3268,11 @@ function doCancelUEFramework(cardId) {
     const card = document.getElementById(cardId);
     if (!card) return;
     card.innerHTML = '<div class="action-title" style="color:var(--text-muted);">✗ 已取消</div>';
+    // 持久化 cancelled，刷新后不再出按钮
+    const msgId = card.dataset.messageId || '';
+    if (msgId) {
+        patchActionState(msgId, 'cancelled', { at: new Date().toISOString() });
+    }
 }
 
 async function doBaselineCompileFromCard(blockId) {
@@ -3055,6 +3301,35 @@ async function doBaselineCompile(projectId, enginePath, projectName) {
         showToast('🔧 UBT 已在后台启动，日志会实时推到"操作日志"面板', 'info');
     } catch (e) {
         showToast(`编译触发失败：${e.message}`, 'error');
+    }
+}
+
+/** v0.19 Phase ②：从卡片触发 UE Automation 冒烟测试 */
+async function doRunPlaytestFromCard(blockId) {
+    const el = document.getElementById(blockId);
+    if (!el) return;
+    return doRunUEPlaytest(el.dataset.projectId, el.dataset.engine);
+}
+
+/** v0.19 Phase ②：POST /run-playtest，结果通过 SSE ue_playtest_* 事件回流 */
+async function doRunUEPlaytest(projectId, enginePath, testFilter = 'Project.') {
+    try {
+        const r = await fetch(`/api/projects/${projectId}/ue-framework/run-playtest`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                engine_path: enginePath,
+                test_filter: testFilter,
+                timeout_seconds: 600,
+            }),
+        });
+        if (!r.ok) {
+            const err = await r.json().catch(() => ({detail: r.statusText}));
+            throw new Error(err.detail || r.statusText);
+        }
+        showToast('🎮 UE Automation 已在后台启动，日志会实时推到"操作日志"面板', 'info');
+    } catch (e) {
+        showToast(`Playtest 触发失败：${e.message}`, 'error');
     }
 }
 
@@ -3111,6 +3386,159 @@ function closeDrawer() {
     document.getElementById('ticketDrawer').classList.remove('active');
     // Dock 模式下关闭也要去掉 body 的占位 class
     document.body.classList.remove('has-docked-drawer');
+    // v0.19.x：停掉进度区 ticker
+    _stopTicketActionProgress();
+}
+
+// ==================== v0.19.x 工单「📍 当前进度」区 ====================
+
+let _ticketProgressState = null;   // {ticketId, tickerInterval, startedAt, lastLogAt, currentAction}
+
+const _PROGRESS_HEALTH_MAP = {
+    active:   { icon: '🟢', label: '运行中',   color: 'var(--success)' },
+    silent:   { icon: '🟡', label: '静默中',   color: 'var(--warning, #f0a020)' },
+    zombie:   { icon: '🔴', label: '疑似挂起', color: 'var(--danger, #ea4a5a)' },
+    starting: { icon: '⚪', label: '刚启动',   color: 'var(--text-muted)' },
+};
+
+async function _startTicketActionProgress(ticketId) {
+    _stopTicketActionProgress();   // 清旧态
+    if (!ticketId || !currentProjectId) return;
+    _ticketProgressState = {
+        ticketId,
+        tickerInterval: null,
+        startedAt: null,
+        lastLogAt: null,
+        currentAction: null,
+    };
+    // 首次拉数据
+    await _refreshTicketActionProgress();
+    // 每 5 秒刷已用时显示（只读本地 state，不打 API）
+    _ticketProgressState.tickerInterval = setInterval(() => {
+        _tickTicketActionProgress();
+    }, 5000);
+}
+
+function _stopTicketActionProgress() {
+    if (_ticketProgressState?.tickerInterval) {
+        clearInterval(_ticketProgressState.tickerInterval);
+    }
+    _ticketProgressState = null;
+    const el = document.getElementById('ticketActionProgress');
+    if (el) el.style.display = 'none';
+}
+
+/** 从后端拉一次完整数据；之后靠 SSE 事件增量刷 latest_log */
+async function _refreshTicketActionProgress() {
+    const st = _ticketProgressState;
+    if (!st) return;
+    const el = document.getElementById('ticketActionProgress');
+    if (!el || el.dataset.ticketId !== st.ticketId) return;
+    try {
+        const data = await api(`/projects/${currentProjectId}/tickets/${st.ticketId}/current-action`);
+        if (!data.current_action) {
+            el.style.display = 'none';
+            st.currentAction = null;
+            return;
+        }
+        st.currentAction = data.current_action;
+        st.startedAt = data.started_at;
+        st.lastLogAt = data.latest_log_at;
+
+        el.style.display = '';
+        el.querySelector('.progress-action-name').textContent = data.current_action;
+        _renderProgressHealth(el, data.health);
+        _renderProgressElapsed(el, data.elapsed_ms, data.silence_ms);
+        const logEl = el.querySelector('.progress-latest-log');
+        if (logEl) logEl.textContent = data.latest_log || '（暂无输出）';
+    } catch (e) {
+        console.warn('[progress] refresh failed:', e);
+    }
+}
+
+/** 5s ticker：仅用本地 startedAt / lastLogAt 重算 elapsed / silence */
+function _tickTicketActionProgress() {
+    const st = _ticketProgressState;
+    const el = document.getElementById('ticketActionProgress');
+    if (!st || !el || !st.currentAction) return;
+
+    const now = Date.now();
+    let elapsedMs = null;
+    let silenceMs = null;
+    if (st.startedAt) {
+        try { elapsedMs = now - new Date(st.startedAt).getTime(); } catch {}
+    }
+    if (st.lastLogAt) {
+        try { silenceMs = now - new Date(st.lastLogAt).getTime(); } catch {}
+    }
+    _renderProgressElapsed(el, elapsedMs, silenceMs);
+
+    // 活性状态随时间推进也要更新（60s/300s 阈值）
+    const health = _deriveHealthClient(elapsedMs, silenceMs, st.lastLogAt);
+    _renderProgressHealth(el, health);
+
+    // 每分钟强制重拉一次（兜底 SSE 丢包）
+    if (elapsedMs != null && Math.floor(elapsedMs / 60000) !== Math.floor((elapsedMs - 5000) / 60000)) {
+        _refreshTicketActionProgress();
+    }
+}
+
+function _deriveHealthClient(elapsedMs, silenceMs, lastLogAt) {
+    if (!lastLogAt) {
+        if (elapsedMs == null || elapsedMs < 60_000) return 'starting';
+        if (elapsedMs < 300_000) return 'silent';
+        return 'zombie';
+    }
+    if (silenceMs == null) return 'active';
+    if (silenceMs < 60_000) return 'active';
+    if (silenceMs < 300_000) return 'silent';
+    return 'zombie';
+}
+
+function _renderProgressHealth(el, health) {
+    const badge = el.querySelector('.progress-health-badge');
+    if (!badge) return;
+    const info = _PROGRESS_HEALTH_MAP[health] || _PROGRESS_HEALTH_MAP.starting;
+    badge.textContent = `${info.icon} ${info.label}`;
+    badge.style.color = info.color;
+}
+
+function _renderProgressElapsed(el, elapsedMs, silenceMs) {
+    const elapsedEl = el.querySelector('.progress-elapsed');
+    const silenceEl = el.querySelector('.progress-silence');
+    if (elapsedEl) {
+        elapsedEl.textContent = elapsedMs != null ? `⏱ 已用时 ${_fmtDurationShort(elapsedMs)}` : '';
+    }
+    if (silenceEl) {
+        if (silenceMs == null) {
+            silenceEl.textContent = '';
+        } else if (silenceMs < 10_000) {
+            silenceEl.textContent = '🔄 刚刚有输出';
+        } else {
+            silenceEl.textContent = `· ${_fmtDurationShort(silenceMs)}前有输出`;
+        }
+    }
+}
+
+function _fmtDurationShort(ms) {
+    if (ms == null) return '-';
+    const sec = Math.max(0, Math.floor(ms / 1000));
+    if (sec < 60) return `${sec}s`;
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    if (m < 60) return `${m}m ${s}s`;
+    const h = Math.floor(m / 60);
+    return `${h}h ${m % 60}m`;
+}
+
+/** 跳到操作日志面板（点击"查看操作日志 →"） */
+function scrollToLogPanel() {
+    const logPanel = document.getElementById('logPanel') || document.getElementById('logTimeline');
+    if (logPanel) {
+        logPanel.scrollIntoView({behavior: 'smooth', block: 'center'});
+        logPanel.classList.add('flash-highlight');
+        setTimeout(() => logPanel.classList.remove('flash-highlight'), 1500);
+    }
 }
 
 /** 统一的按钮状态同步（图标 + title + active class + body class） */
@@ -5090,6 +5518,31 @@ function connectSSE(projectId) {
             });
         });
 
+        // v0.19.x 工单进度 SSE：后端 heartbeat_cb 关键行触发 → 更新 drawer 进度区
+        eventSource.addEventListener('ticket_action_progress', (e) => {
+            try {
+                const data = JSON.parse(e.data);
+                if (!data.ticket_id) return;
+                const st = _ticketProgressState;
+                if (!st || st.ticketId !== data.ticket_id) return;   // 不是当前 drawer 的工单
+                const el = document.getElementById('ticketActionProgress');
+                if (!el || el.dataset.ticketId !== data.ticket_id) return;
+                // 更新 state
+                if (data.latest_log_at) st.lastLogAt = data.latest_log_at;
+                // 刷新最新 log
+                const logEl = el.querySelector('.progress-latest-log');
+                if (logEl && data.latest_log) logEl.textContent = data.latest_log;
+                // health 重算
+                const now = Date.now();
+                const elapsedMs = st.startedAt ? (now - new Date(st.startedAt).getTime()) : null;
+                const silenceMs = st.lastLogAt ? (now - new Date(st.lastLogAt).getTime()) : null;
+                _renderProgressElapsed(el, elapsedMs, silenceMs);
+                _renderProgressHealth(el, _deriveHealthClient(elapsedMs, silenceMs, st.lastLogAt));
+            } catch (err) {
+                console.warn('[progress SSE] parse failed:', err);
+            }
+        });
+
         eventSource.addEventListener('ue_compile_log', (e) => {
             const data = JSON.parse(e.data);
             const line = (data.line || '').trim();
@@ -5131,6 +5584,74 @@ function connectSSE(projectId) {
                             ? `✗ UBT 未能启动: ${data.message}`
                             : `✗ 编译失败 (${secs}s, ${data.errors_count} errors)`,
                     errors: data.errors,
+                    command: data.command,
+                    raw_message: data.message,
+                }),
+                level: ok ? 'info' : 'error',
+                created_at: new Date().toISOString(),
+            });
+        });
+
+        // v0.19 Phase ② UE Playtest: 启动 + 流式 log + 最终结果
+        eventSource.addEventListener('ue_playtest_started', (e) => {
+            const data = JSON.parse(e.data);
+            const scope = data.test_names && data.test_names.length
+                ? `${data.test_names.length} 个指定测试`
+                : `filter=${data.test_filter || 'Project.'}`;
+            showToast(`🎮 UE Automation 启动：${scope}`, 'info');
+            appendLogEntry({
+                agent_type: 'UE-Automation',
+                action: 'start',
+                detail: JSON.stringify({message: `Playtest 开始 (${scope})`}),
+                level: 'info',
+                created_at: new Date().toISOString(),
+            });
+        });
+
+        eventSource.addEventListener('ue_playtest_log', (e) => {
+            const data = JSON.parse(e.data);
+            const line = (data.line || '').trim();
+            if (!line) return;
+            const lower = line.toLowerCase();
+            let level = 'info';
+            if (lower.includes('error') || lower.includes(': fatal') || lower.includes('result={failed}')) level = 'error';
+            else if (lower.includes('warning')) level = 'warn';
+            appendLogEntry({
+                agent_type: 'UE-Automation',
+                action: 'playtest',
+                detail: JSON.stringify({message: line}),
+                level: level,
+                created_at: new Date().toISOString(),
+            });
+        });
+
+        eventSource.addEventListener('ue_playtest_result', (e) => {
+            const data = JSON.parse(e.data);
+            const ok = data.status === 'success';
+            const secs = Math.round((data.duration_ms || 0) / 1000);
+            const sum = data.summary || {};
+            const hasResults = (sum.total || 0) > 0;
+            const earlyErr = !ok && !hasResults && data.message;
+            if (ok) {
+                showToast(`✓ Playtest 通过（${sum.passed}/${sum.total}，${secs}s）`, 'success');
+            } else if (earlyErr) {
+                showToast(`✗ Playtest 未能启动：${data.message}`, 'error');
+            } else {
+                showToast(`✗ Playtest 失败：${sum.failed}/${sum.total} failed（${secs}s）`, 'error');
+            }
+            const failedTests = (data.tests || []).filter(t => t.result === 'failed');
+            appendLogEntry({
+                agent_type: 'UE-Automation',
+                action: ok ? 'playtest_ok' : 'playtest_fail',
+                detail: JSON.stringify({
+                    message: ok
+                        ? `✓ Playtest 通过 (${sum.passed}/${sum.total}, ${secs}s)`
+                        : earlyErr
+                            ? `✗ Playtest 未能启动: ${data.message}`
+                            : `✗ Playtest 失败 (${secs}s, ${sum.failed}/${sum.total} failed)`,
+                    summary: sum,
+                    failed_tests: failedTests,
+                    screenshots: data.screenshots,
                     command: data.command,
                     raw_message: data.message,
                 }),
@@ -5205,23 +5726,28 @@ function connectSSE(projectId) {
 
         eventSource.addEventListener('ci_build_completed', (e) => {
             const data = JSON.parse(e.data);
-            console.log('[SSE] ci_build_completed:', data);
-            const labels = {develop_build: 'Develop 构建', master_build: 'Master 构建', deploy: '部署'};
             const ok = data.status === 'success';
-            const msg = `${ok ? '✅' : '❌'} ${labels[data.build_type] || data.build_type} ${ok ? '成功' : '失败'}`;
+            const label = data.build_type || 'build';
+            const msg = `${ok ? '✅' : '❌'} ${label} ${ok ? '成功' : '失败'}`;
             showToast(msg, ok ? 'success' : 'error');
-            appendLogEntry({id: 'ci-' + Date.now(), agent_type: 'CI/CD', action: data.build_type, detail: JSON.stringify({message: msg}), level: ok ? 'info' : 'error', created_at: new Date().toISOString()});
-            if (document.getElementById('tab-cicd')?.classList.contains('active')) loadCICD();
+            appendLogEntry({id: 'ci-' + Date.now(), agent_type: 'CI/CD', action: data.build_type,
+                detail: JSON.stringify({message: msg}), level: ok ? 'info' : 'error',
+                created_at: new Date().toISOString()});
+            // v0.19.x 实时刷新 Pipeline 卡片（UE 和 Web 都需要）
+            if (document.getElementById('tab-cicd')?.classList.contains('active')) loadDeliveryPage();
         });
 
         eventSource.addEventListener('ci_build_failed', (e) => {
             const data = JSON.parse(e.data);
-            console.log('[SSE] ci_build_failed:', data);
-            const labels = {develop_build: 'Develop 构建', master_build: 'Master 构建', deploy: '部署'};
-            const msg = `❌ ${labels[data.build_type] || data.build_type} 失败: ${data.error_message || ''}`;
+            const label = data.build_type || 'build';
+            const msg = `❌ ${label} 失败: ${data.error_message || ''}`;
             showToast(msg, 'error');
-            appendLogEntry({id: 'ci-' + Date.now(), agent_type: 'CI/CD', action: data.build_type, detail: JSON.stringify({message: msg}), level: 'error', created_at: new Date().toISOString()});
-            if (document.getElementById('tab-cicd')?.classList.contains('active')) loadCICD();
+            appendLogEntry({id: 'ci-' + Date.now(), agent_type: 'CI/CD', action: data.build_type,
+                detail: JSON.stringify({message: msg}), level: 'error',
+                created_at: new Date().toISOString()});
+            // 刷新 Pipeline 卡片 + 加载最新聊天（诊断卡）
+            if (document.getElementById('tab-cicd')?.classList.contains('active')) loadDeliveryPage();
+            if (typeof loadChatHistory === 'function' && currentProjectId) setTimeout(loadChatHistory, 1500);
         });
 
         eventSource.addEventListener('ci_branch_merged', (e) => {
@@ -6071,6 +6597,18 @@ async function viewRepoFile(path, itemEl) {
     const codeWrap = document.getElementById('fileCodeWrap');
     const infoBar = document.getElementById('fileInfoBar');
 
+    // 先判断扩展名：图片/二进制类文件走 file-raw 直接 <img>，不碰文本 API（后端对二进制返回 404）
+    const imgExts = ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'ico', 'bmp'];
+    if (imgExts.includes(ext)) {
+        infoBar.innerHTML = `
+            <span class="file-info-badge">${escapeHtml(ext)}</span>
+            <span class="file-info-item"><span class="file-info-label">类型</span>图像</span>
+        `;
+        const rawUrl = `/api/projects/${currentProjectId}/git/file-raw?path=${encodeURIComponent(path)}`;
+        codeWrap.innerHTML = `<div class="file-preview-img"><img src="${rawUrl}" alt="${escapeHtml(fileName)}" style="max-width:100%;max-height:500px;border-radius:6px;" onerror="this.parentElement.innerHTML='<div class=&quot;file-error&quot;>图片加载失败：${escapeHtml(path)}</div>'"></div>`;
+        return;
+    }
+
     try {
         const data = await api(`/projects/${currentProjectId}/git/file?path=${encodeURIComponent(path)}`);
         const content = data.content || '';
@@ -6085,13 +6623,6 @@ async function viewRepoFile(path, itemEl) {
             <span class="file-info-item"><span class="file-info-label">行数</span>${lineCount}</span>
             <span class="file-info-item"><span class="file-info-label">编码</span>UTF-8</span>
         `;
-
-        // 判断是否为图片
-        const imgExts = ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'ico', 'bmp'];
-        if (imgExts.includes(ext)) {
-            codeWrap.innerHTML = `<div class="file-preview-img"><img src="/projects/${currentProjectId}/git/file-raw?path=${encodeURIComponent(path)}" alt="${escapeHtml(fileName)}" style="max-width:100%;max-height:500px;border-radius:6px;"></div>`;
-            return;
-        }
 
         // Markdown 渲染预览
         if (ext === 'md' || ext === 'markdown') {
@@ -6187,17 +6718,65 @@ function toggleMarkdownView(container, content, ext, btn) {
     }
 }
 
+/** v0.19.1 二进制内容启发判定：有 NUL 字节或高比例不可打印字符就视为二进制 */
+function _looksLikeBinary(s) {
+    if (!s || typeof s !== 'string') return false;
+    // 采样前 4KB，避免整文件扫描
+    const sample = s.length > 4096 ? s.slice(0, 4096) : s;
+    if (sample.indexOf(' ') !== -1) return true;
+    let nonprint = 0;
+    for (let i = 0; i < sample.length; i++) {
+        const c = sample.charCodeAt(i);
+        // 可打印 ASCII + 常见空白 + 非 ASCII 全部算"正常"
+        if (c < 32 && c !== 9 && c !== 10 && c !== 13) nonprint++;
+    }
+    return sample.length > 0 && nonprint / sample.length > 0.15;
+}
+
 function renderCodeWithLineNumbers(container, content, ext, path) {
+    // v0.19.1 二进制文件占位
+    if (_looksLikeBinary(content)) {
+        const fname = path ? path.split('/').pop() : '(未知文件)';
+        container.innerHTML = `
+            <div class="file-binary-placeholder">
+                <div class="emoji" style="font-size:48px;">📦</div>
+                <div style="margin-top:8px; font-size:13px; color:var(--text-muted);">
+                    二进制文件，无法在浏览器预览
+                </div>
+                <div style="margin-top:4px; font-size:11px; color:var(--text-muted);">
+                    ${escapeHtml(fname)}
+                </div>
+            </div>
+        `;
+        return;
+    }
+
     // 尝试语法高亮
     let highlighted = '';
     const langMap = {
-        py: 'python', js: 'javascript', ts: 'typescript', html: 'html', css: 'css',
-        md: 'markdown', json: 'json', yml: 'yaml', yaml: 'yaml', toml: 'ini',
-        sh: 'bash', bash: 'bash', sql: 'sql', dockerfile: 'dockerfile',
-        go: 'go', rs: 'rust', java: 'java', cpp: 'cpp', c: 'c', rb: 'ruby',
-        php: 'php', swift: 'swift', kt: 'kotlin', xml: 'xml', ini: 'ini',
+        py: 'python', js: 'javascript', ts: 'typescript',
+        jsx: 'javascript', tsx: 'typescript',
+        html: 'html', css: 'css', scss: 'scss',
+        md: 'markdown', json: 'json', yml: 'yaml', yaml: 'yaml',
+        toml: 'ini', ini: 'ini', env: 'ini',
+        sh: 'bash', bash: 'bash', zsh: 'bash', ps1: 'powershell',
+        sql: 'sql', dockerfile: 'dockerfile',
+        go: 'go', rs: 'rust', java: 'java', cpp: 'cpp', cc: 'cpp',
+        c: 'c', h: 'cpp', hpp: 'cpp',
+        cs: 'csharp',  // v0.19.1：UE 的 .cs / .Build.cs / .Target.cs
+        rb: 'ruby', php: 'php', swift: 'swift', kt: 'kotlin',
+        xml: 'xml',
+        uproject: 'json', uplugin: 'json',  // v0.19.1 UE 配置走 JSON 高亮
+        vue: 'html', svelte: 'html',
     };
-    const lang = langMap[ext] || '';
+    // 文件名特殊处理：Dockerfile / Makefile / *.Build.cs / *.Target.cs 等
+    const fname = (path || '').split('/').pop() || '';
+    let lang = langMap[ext] || '';
+    if (!lang) {
+        if (/^dockerfile(\.|$)/i.test(fname)) lang = 'dockerfile';
+        else if (/^makefile$/i.test(fname)) lang = 'makefile';
+        else if (/\.(build|target)\.cs$/i.test(fname)) lang = 'csharp';
+    }
 
     try {
         if (lang && window.hljs) {
@@ -6288,18 +6867,127 @@ async function loadGitLog() {
         }
 
         list.innerHTML = commits.map(c => `
-            <div class="git-commit-item">
+            <div class="git-commit-item" data-sha="${escapeHtml(c.hash)}" onclick="toggleCommitDiff(this)">
                 <div class="git-commit-top">
                     <span class="git-commit-hash">${escapeHtml(c.short_hash)}</span>
                     <span class="git-commit-time">${formatTime(c.date)}</span>
                 </div>
                 <div class="git-commit-msg">${escapeHtml(c.message)}</div>
                 <div class="git-commit-author">👤 ${escapeHtml(c.author)}</div>
+                <div class="git-commit-diff" style="display:none;"></div>
             </div>
         `).join('');
     } catch (err) {
         list.innerHTML = `<div class="log-panel-empty">加载失败: ${err.message}</div>`;
     }
+}
+
+/** v0.19.1：点击 commit 条目展开/收起 diff */
+async function toggleCommitDiff(itemEl) {
+    const diffEl = itemEl.querySelector('.git-commit-diff');
+    const sha = itemEl.dataset.sha;
+    if (!diffEl || !sha) return;
+
+    // 已展开 → 收起
+    if (diffEl.style.display !== 'none') {
+        diffEl.style.display = 'none';
+        itemEl.classList.remove('expanded');
+        return;
+    }
+
+    // 首次展开 → 拉数据
+    itemEl.classList.add('expanded');
+    diffEl.style.display = 'block';
+    if (diffEl.dataset.loaded === '1') return;
+
+    diffEl.innerHTML = '<div class="diff-loading">⏳ 加载 diff...</div>';
+    try {
+        const data = await api(`/projects/${currentProjectId}/git/commit/${sha}`);
+        diffEl.innerHTML = renderCommitDiff(data);
+        diffEl.dataset.loaded = '1';
+    } catch (e) {
+        diffEl.innerHTML = `<div class="diff-error">加载失败: ${escapeHtml(e.message)}</div>`;
+    }
+}
+
+/** v0.19.1：渲染 commit 的文件级 diff（行级高亮 + 折叠未变化大段） */
+function renderCommitDiff(commit) {
+    if (!commit || !Array.isArray(commit.files)) return '<div class="diff-error">commit 数据为空</div>';
+    const files = commit.files;
+    if (files.length === 0) return '<div class="diff-empty">无文件变更</div>';
+
+    let html = `<div class="commit-diff-wrap" onclick="event.stopPropagation()">`;
+    html += `<div class="commit-diff-head">📑 ${files.length} 个文件变更</div>`;
+    for (const f of files) {
+        const stMap = {A: '新增', M: '修改', D: '删除', R: '重命名', C: '复制', T: '类型变更'};
+        const statusLabel = stMap[f.status] || f.status || '?';
+        const stats = f.binary
+            ? '<span class="diff-stat-binary">二进制</span>'
+            : `<span class="diff-stat-add">+${f.additions || 0}</span> <span class="diff-stat-del">-${f.deletions || 0}</span>`;
+        const pathLabel = f.old_path
+            ? `${escapeHtml(f.old_path)} → ${escapeHtml(f.path)}`
+            : escapeHtml(f.path);
+
+        html += `<details class="diff-file" ${files.length <= 3 ? 'open' : ''}>`;
+        html += `<summary class="diff-file-head">
+                    <span class="diff-file-status s-${escapeHtml(f.status || 'M')}">${escapeHtml(statusLabel)}</span>
+                    <span class="diff-file-path">${pathLabel}</span>
+                    <span class="diff-file-stats">${stats}</span>
+                 </summary>`;
+        if (f.binary) {
+            html += `<div class="diff-file-binary">📦 二进制文件，无法展示</div>`;
+        } else if (f.patch) {
+            html += `<div class="diff-file-body">${renderDiffPatch(f.patch)}</div>`;
+        } else {
+            html += `<div class="diff-file-empty">（无差异内容）</div>`;
+        }
+        html += `</details>`;
+    }
+    html += `</div>`;
+    return html;
+}
+
+/** 把 unified diff 文本转成行级高亮 HTML；连续 10+ 行未变化自动折叠 */
+function renderDiffPatch(patch) {
+    const lines = patch.split('\n');
+    const out = [];
+    let ctxBuf = [];
+
+    const flushCtx = () => {
+        if (ctxBuf.length === 0) return;
+        if (ctxBuf.length > 10) {
+            const firstFew = ctxBuf.slice(0, 3);
+            const lastFew = ctxBuf.slice(-3);
+            const hiddenCount = ctxBuf.length - 6;
+            out.push(firstFew.map(l => `<span class="d-ctx">${escapeHtml(l)}</span>`).join('\n'));
+            out.push(`<details class="d-fold"><summary>… ${hiddenCount} 行未变化 …</summary><pre class="d-fold-pre">${escapeHtml(ctxBuf.slice(3, -3).join('\n'))}</pre></details>`);
+            out.push(lastFew.map(l => `<span class="d-ctx">${escapeHtml(l)}</span>`).join('\n'));
+        } else {
+            out.push(ctxBuf.map(l => `<span class="d-ctx">${escapeHtml(l)}</span>`).join('\n'));
+        }
+        ctxBuf = [];
+    };
+
+    for (const l of lines) {
+        if (l.startsWith('+++') || l.startsWith('---') || l.startsWith('diff --git ') || l.startsWith('index ') || l.startsWith('new file mode') || l.startsWith('deleted file mode') || l.startsWith('similarity index') || l.startsWith('rename from') || l.startsWith('rename to')) {
+            flushCtx();
+            out.push(`<span class="d-hdr">${escapeHtml(l)}</span>`);
+        } else if (l.startsWith('@@')) {
+            flushCtx();
+            out.push(`<span class="d-hunk">${escapeHtml(l)}</span>`);
+        } else if (l.startsWith('+')) {
+            flushCtx();
+            out.push(`<span class="d-add">${escapeHtml(l)}</span>`);
+        } else if (l.startsWith('-')) {
+            flushCtx();
+            out.push(`<span class="d-del">${escapeHtml(l)}</span>`);
+        } else {
+            // 上下文行
+            ctxBuf.push(l);
+        }
+    }
+    flushCtx();
+    return `<pre class="diff-patch">${out.join('\n')}</pre>`;
 }
 
 function getFileIcon(ext) {
@@ -6816,11 +7504,22 @@ async function loadChatHistory() {
 
         container.innerHTML = '';
         for (const msg of messages) {
+            let actionObj = null;
+            if (msg.action_data) {
+                try { actionObj = JSON.parse(msg.action_data); }
+                catch { actionObj = null; }
+            }
+            // v0.19.1 action_state 注入：卡片按 _state 渲染历史已执行 / 已取消
+            if (actionObj) {
+                actionObj._message_id = msg.id;
+                actionObj._state = msg.action_state || 'pending';
+                actionObj._result = msg.action_result || null;
+            }
             appendChatBubble(
                 msg.role,
                 msg.content,
                 msg.created_at,
-                msg.action_data ? JSON.parse(msg.action_data) : null,
+                actionObj,
                 msg.images || []
             );
         }
@@ -7245,6 +7944,10 @@ async function sendChatMessage() {
             setTimeout(() => {
                 if (action.project_id) {
                     showProjectDetail(action.project_id);
+                    // v0.19.1 对话一键流：若后端带了 auto_next 信号，跳转后自动触发下一步
+                    if (action.auto_next && typeof runAutoNextAfterProjectCreated === 'function') {
+                        runAutoNextAfterProjectCreated(action.project_id, action.auto_next);
+                    }
                 } else {
                     loadProjects();
                 }
@@ -7414,6 +8117,10 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
                 <div class="action-detail">${escapeHtml(action.message || '未知错误')}</div>
             </div>
         `;
+    } else if (action && action._state && action._state !== 'pending'
+               && ['confirm_requirement', 'confirm_project', 'confirm_bug'].includes(action.type)) {
+        // v0.19.1：刷新回来的已执行 / 已取消卡片直接走摘要渲染，避免重复可点按钮
+        actionHtml = renderActionStateSummary(action);
     } else if (action && action.type === 'confirm_requirement') {
         const priorityLabel = {'critical':'🔴 紧急','high':'🟠 高','medium':'🟡 中','low':'🟢 低'}[action.priority] || action.priority;
         const safeId = 'req_confirm_' + Date.now();
@@ -7427,6 +8134,7 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
                  data-description="${escapeHtml(action.description)}"
                  data-priority="${escapeHtml(action.priority)}"
                  data-images="${imagesJson}"
+                 data-message-id="${escapeHtml(action._message_id || '')}"
                  style="border-left-color: var(--primary);">
                 <div class="action-title">📋 识别到新需求，是否创建？</div>
                 <div class="action-detail">
@@ -7462,6 +8170,7 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
                  data-local-repo-path="${escapeHtml(action.local_repo_path || '')}"
                  data-traits="${traitsJsonAttr}"
                  data-preset-id="${escapeHtml(action.preset_id || '')}"
+                 data-message-id="${escapeHtml(action._message_id || '')}"
                  style="border-left-color: var(--accent, #a371f7);">
                 <div class="action-title">📦 识别到新建项目意图，是否创建？</div>
                 <div class="action-detail">
@@ -7488,6 +8197,8 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
         setTimeout(() => loadProjectAssemblyPreview(safeId, traitsArr), 50);
     } else if (action && action.type === 'propose_ue_framework') {
         actionHtml = renderUEFrameworkCard(action);
+    } else if (action && action.type === 'ci_build_diagnosis') {
+        actionHtml = renderCIBuildDiagnosisCard(action);
     } else if (action && action.type === 'confirm_bug') {
         const priorityLabel = {'critical':'🔴 紧急','high':'🟠 高','medium':'🟡 中','low':'🟢 低'}[action.priority] || action.priority;
         const safeId = 'bug_confirm_' + Date.now();
@@ -7502,6 +8213,7 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
                  data-priority="${escapeHtml(action.priority)}"
                  data-requirement-id="${escapeHtml(action.requirement_id || '')}"
                  data-images="${imagesJson}"
+                 data-message-id="${escapeHtml(action._message_id || '')}"
                  style="border-left-color: var(--danger, #ea4a5a);">
                 <div class="action-title">🐛 识别到 BUG，是否上报？</div>
                 <div class="action-detail">
@@ -7596,6 +8308,9 @@ async function doConfirmRequirement(cardId) {
         card.querySelector('.action-title').textContent = '✅ 需求已创建';
         if (btns) btns.innerHTML = `<span class="action-link" onclick="switchTab('requirements')">查看需求列表 →</span>`;
         showToast(`需求「${title}」已创建`, 'success');
+        // v0.19.1：状态持久化
+        const msgId = card.dataset.messageId || '';
+        if (msgId) patchActionState(msgId, 'executed', { title, at: new Date().toISOString() });
         setTimeout(() => {
             if (typeof loadRequirements === 'function') loadRequirements();
             if (typeof refreshBoard === 'function') refreshBoard();
@@ -7615,6 +8330,8 @@ function doCancelRequirement(cardId) {
     card.querySelector('.action-title').textContent = '✗ 已取消';
     const btns = card.querySelector('.confirm-req-btns');
     if (btns) btns.remove();
+    const msgId = card.dataset.messageId || '';
+    if (msgId) patchActionState(msgId, 'cancelled', { at: new Date().toISOString() });
 }
 
 /** 加载项目组装预览（v0.17 Phase C'）。安静失败，preview 不可用不应阻塞创建 */
@@ -7689,6 +8406,10 @@ async function doConfirmProject(cardId) {
         setTimeout(() => {
             if (result.project_id && typeof showProjectDetail === 'function') {
                 showProjectDetail(result.project_id);
+                // v0.19.1 对话一键流：UE 项目自动触发 propose_ue_framework
+                if (result.auto_next && typeof runAutoNextAfterProjectCreated === 'function') {
+                    runAutoNextAfterProjectCreated(result.project_id, result.auto_next);
+                }
             }
         }, 1200);
     } catch (e) {
@@ -8783,21 +9504,219 @@ const CI_STAGE_META = {
     deploy:        { name: '部署上线',         icon: '🚀', desc: 'master 构建通过后自动部署到生产环境' },
 };
 
-async function loadCICD() {
+/** v0.19.x Phase B：「交付 & 环境」统一加载
+ *
+ * 拉三份数据：
+ *   1. /ci/pipeline-definition —— strategy + stages + environments + build_types
+ *   2. /ci/status              —— 每个构建类型的最新状态（用于给 pipeline stage 染色）
+ *   3. /ci/builds              —— 构建历史表
+ *   4. /ci/environments        —— 环境实时状态（strategy 驱动版本）
+ *
+ * 策略定义决定 pipeline 的 stage 数量 & 环境数量，Web / UE 项目会自动变形。
+ */
+async function loadDeliveryPage() {
     if (!currentProjectId) return;
     try {
-        const [statusRes, buildsRes] = await Promise.all([
+        const [defRes, statusRes, buildsRes, envsRes] = await Promise.all([
+            fetch(`${API}/projects/${currentProjectId}/ci/pipeline-definition`),
             fetch(`${API}/projects/${currentProjectId}/ci/status`),
             fetch(`${API}/projects/${currentProjectId}/ci/builds?limit=30`),
+            fetch(`${API}/projects/${currentProjectId}/ci/environments`),
         ]);
-        const status = await statusRes.json();
-        const buildsData = await buildsRes.json();
-        renderCICDPipeline(status);
+        const def = defRes.ok ? await defRes.json() : {strategy: '?', stages: [], environments: [], build_types: []};
+        const status = statusRes.ok ? await statusRes.json() : {stages: {}};
+        const buildsData = buildsRes.ok ? await buildsRes.json() : {builds: []};
+        const envsData = envsRes.ok ? await envsRes.json() : {environments: []};
+
+        renderDeliveryStrategyHeader(def);
+        renderDeliveryPipeline(def, status);
+        renderDeliveryEnvironments(envsData.environments || []);
         renderCICDBuildHistory(buildsData.builds || []);
     } catch (e) {
-        console.error('loadCICD error:', e);
-        document.getElementById('cicdPipelineFlow').innerHTML = '<div class="empty-state"><p>加载 CI/CD 数据失败</p></div>';
+        console.error('loadDeliveryPage error:', e);
+        const pf = document.getElementById('cicdPipelineFlow');
+        if (pf) pf.innerHTML = '<div class="empty-state"><p>加载交付数据失败</p></div>';
     }
+}
+
+/** 向后兼容：loadCICD 别名（其他地方还可能调） */
+const loadCICD = loadDeliveryPage;
+
+/** 向后兼容：loadEnvironments 别名 */
+const loadEnvironments = loadDeliveryPage;
+
+/** 渲染顶部 strategy 徽章 + build_types 触发按钮 */
+function renderDeliveryStrategyHeader(def) {
+    const badge = document.getElementById('deliveryStrategyBadge');
+    const desc = document.getElementById('deliveryStrategyDesc');
+    const triggers = document.getElementById('deliveryBuildTriggers');
+    if (!badge || !triggers) return;
+
+    const strategy = def.strategy || '?';
+    badge.textContent = `策略: ${strategy}`;
+    badge.title = `匹配规则: ${JSON.stringify(def.required_traits || {})} · priority=${def.priority || 0}`;
+
+    const desc_parts = [];
+    if (def.stages?.length) desc_parts.push(`${def.stages.length} 个 Pipeline 阶段`);
+    if (def.environments?.length) desc_parts.push(`${def.environments.length} 个环境`);
+    if (def.build_types?.length) desc_parts.push(`${def.build_types.length} 种手动构建`);
+    if (desc) desc.textContent = desc_parts.join(' · ') || '';
+
+    // build_types 按钮（按 strategy 定义动态生成）
+    if (def.build_types?.length) {
+        triggers.innerHTML = def.build_types.map(bt => {
+            const cls = bt.id === 'deploy' ? 'btn-accent' : 'btn-secondary';
+            return `<button class="btn btn-sm ${cls}"
+                            onclick="triggerCIBuild('${escapeHtml(bt.id)}')"
+                            title="${escapeHtml(bt.description || '')}">${escapeHtml(bt.icon || '▶')} ${escapeHtml(bt.display_name || bt.id)}</button>`;
+        }).join('');
+    } else {
+        triggers.innerHTML = '<span style="font-size:11px; color:var(--text-muted);">本策略无手动构建入口</span>';
+    }
+}
+
+/** 按 strategy 定义渲染 pipeline 进度条 */
+function renderDeliveryPipeline(def, status) {
+    const container = document.getElementById('cicdPipelineFlow');
+    if (!container) return;
+
+    const stages = def.stages || [];
+    if (!stages.length) {
+        container.innerHTML = '<div class="empty-state"><p>本策略未声明 pipeline 阶段</p></div>';
+        return;
+    }
+
+    // status.stages 是按 build_type 存的，用一个 stage → status 对应表：
+    // 约定 pipeline stage.id 跟 build_type 相关的取 status.stages[build_type]
+    // stage.id → build_type 映射：Web 固定名 + UE/其他 strategy 的 stage id 直接等于 build_type
+    const buildTypeByStageId = {
+        // Web strategy
+        syntax_check: 'develop_build',
+        smoke_test: 'develop_build',
+        merge_to_main: 'develop_build',
+        deploy_test: 'deploy',
+        deploy_prod: 'master_build',
+        // UE strategy（stage.id == build_type，直接 passthrough）
+        ubt_compile: 'ubt_compile',
+        playtest: 'playtest',
+        package_client: 'package_client',
+        package_server: 'package_server',
+    };
+
+    const statusLabels = {pending: '排队中', running: '构建中', success: '成功', failed: '失败', cancelled: '已取消'};
+
+    let html = '<div class="cicd-stages-row">';
+    stages.forEach((stage, idx) => {
+        const bt = buildTypeByStageId[stage.id];
+        const latest = bt ? (status.stages?.[bt]?.latest) : null;
+        let statusClass = 'pending';
+        let statusText = '待运行';
+        let commit = '-';
+        let timeText = '-';
+        let durText = '-';
+        if (latest) {
+            statusClass = latest.status;
+            statusText = statusLabels[latest.status] || latest.status;
+            commit = latest.commit_hash ? latest.commit_hash.substring(0, 8) : '-';
+            if (latest.created_at) {
+                try { timeText = new Date(latest.created_at).toLocaleString('zh-CN', {month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}); } catch {}
+            }
+            if (latest.started_at && latest.completed_at) {
+                try {
+                    const dur = Math.round((new Date(latest.completed_at) - new Date(latest.started_at)) / 1000);
+                    durText = dur >= 60 ? `${Math.floor(dur/60)}m ${dur%60}s` : `${dur}s`;
+                } catch {}
+            }
+        }
+
+        html += `
+        <div class="cicd-stage cicd-stage-${statusClass}" title="${escapeHtml(stage.description || '')}">
+            <div class="cicd-stage-header">
+                <span class="cicd-stage-icon">${escapeHtml(stage.icon || '●')}</span>
+                <span class="cicd-stage-name">${escapeHtml(stage.name)}</span>
+            </div>
+            <div class="cicd-stage-status">
+                <span class="cicd-status-dot cicd-dot-${statusClass}"></span>
+                <span class="cicd-status-text">${statusText}</span>
+            </div>
+            <div class="cicd-stage-details">
+                <div class="cicd-detail-row"><span class="cicd-detail-label">Commit</span><span class="cicd-detail-value">${commit}</span></div>
+                <div class="cicd-detail-row"><span class="cicd-detail-label">时间</span><span class="cicd-detail-value">${timeText}</span></div>
+                <div class="cicd-detail-row"><span class="cicd-detail-label">耗时</span><span class="cicd-detail-value">${durText}</span></div>
+            </div>
+            ${latest && latest.error_message ? `<div class="cicd-stage-error">${_htmlEsc(latest.error_message)}</div>` : ''}
+            <div class="cicd-stage-desc">${escapeHtml(stage.description || '')}</div>
+        </div>
+        ${idx < stages.length - 1 ? '<div class="cicd-connector"><span>→</span></div>' : ''}`;
+    });
+    html += '</div>';
+    container.innerHTML = html;
+}
+
+/** 按 strategy 返回的 environments 渲染环境卡片 */
+function renderDeliveryEnvironments(envs) {
+    const container = document.getElementById('envCards');
+    if (!container) return;
+
+    if (!envs.length) {
+        container.innerHTML = '<div class="env-card">本策略未声明环境</div>';
+        return;
+    }
+
+    container.innerHTML = envs.map(env => {
+        const running = env.status === 'running';
+        const icon = env.icon || '🌍';
+        const label = env.display_name || env.name || env.env_type || '-';
+        const desc = env.description || '';
+        const canDeploy = env.can_deploy !== false;
+        const canStop = env.can_stop !== false;
+        const envName = env.name || env.env_type;
+
+        // 分支显示 + 一致性告警（继承自 loadEnvironments 的逻辑）
+        const shown = env.branch || '';
+        const actual = env.current_branch || '';
+        const stillMismatch = shown && actual && shown !== actual;
+        const note = env.branch_sync_note || '';
+        let title = '';
+        if (stillMismatch) {
+            title = `目录当前: ${actual}\n应为: ${shown}\n${note || '自动对齐失败，请手动处理'}`;
+        } else if (note) {
+            title = note;
+        }
+        const branchIcon = stillMismatch ? '⚠️ ' : (shown ? '🌿 ' : '');
+        const branchDisplay = shown || actual || (env.branch_binding || '-');
+
+        return `
+        <div class="env-card ${running ? 'env-running' : ''}">
+            <div class="env-card-header">
+                <span class="env-icon">${escapeHtml(icon)}</span>
+                <span class="env-label">${escapeHtml(label)}</span>
+                <span class="env-status-dot" style="background:${running ? 'var(--success)' : 'var(--text-muted)'}"></span>
+                <span class="env-status-text">${running ? '运行中' : '未启动'}</span>
+            </div>
+            <div class="env-card-body">
+                <div class="env-info-row">
+                    <span class="env-info-label">分支</span>
+                    <span class="env-info-value" title="${escapeHtml(title)}">${branchIcon}${escapeHtml(branchDisplay)}</span>
+                </div>
+                ${env.deploy_path ? `<div class="env-info-row"><span class="env-info-label">路径</span><span class="env-info-value env-path-value" title="${escapeHtml(env.deploy_path)}">📁 ${escapeHtml(env.deploy_path)}</span></div>` : ''}
+                ${env.port ? `<div class="env-info-row"><span class="env-info-label">端口</span><span class="env-info-value">${env.port}</span></div>` : ''}
+                ${env.last_commit ? `<div class="env-info-row"><span class="env-info-label">Commit</span><span class="env-info-value" style="font-family:monospace;">${escapeHtml(env.last_commit)}</span></div>` : ''}
+                ${env.last_deployed_at ? `<div class="env-info-row"><span class="env-info-label">部署时间</span><span class="env-info-value">${formatTime(env.last_deployed_at)}</span></div>` : ''}
+                ${running && env.url ? `<div class="env-info-row"><span class="env-info-label">预览</span><a class="env-preview-link" href="${env.url}" target="_blank">${escapeHtml(env.url)}</a></div>` : ''}
+            </div>
+            <div class="env-card-actions">
+                ${running && canStop
+                    ? `<button class="btn btn-sm btn-danger" onclick="stopEnv('${escapeHtml(envName)}')">停止</button>
+                       ${env.url ? `<a class="btn btn-sm btn-primary" href="${env.url}" target="_blank">打开预览</a>` : ''}`
+                    : (canDeploy
+                        ? `<button class="btn btn-sm btn-primary" onclick="deployEnv('${escapeHtml(envName)}')">部署</button>`
+                        : '<span style="font-size:11px; color:var(--text-muted);">本环境不支持手动部署</span>')
+                }
+            </div>
+            <div class="env-desc">${escapeHtml(desc)}</div>
+        </div>`;
+    }).join('');
 }
 
 function renderCICDPipeline(status) {
@@ -8921,8 +9840,7 @@ function renderCICDBuildHistory(builds) {
 
 async function triggerCIBuild(buildType) {
     if (!currentProjectId) return;
-    const labels = { develop_build: 'Develop 构建', master_build: 'Master 构建', deploy: '部署' };
-    if (!confirm(`确定要手动触发 ${labels[buildType] || buildType} 吗？`)) return;
+    if (!confirm(`确定要手动触发 ${buildType} 吗？`)) return;
 
     try {
         const res = await fetch(`${API}/projects/${currentProjectId}/ci/builds/trigger`, {
@@ -8931,8 +9849,8 @@ async function triggerCIBuild(buildType) {
             body: JSON.stringify({ build_type: buildType }),
         });
         if (res.ok) {
-            showToast(`${labels[buildType]} 已触发`, 'success');
-            setTimeout(() => loadCICD(), 1000);
+            showToast(`${buildType} 已触发`, 'success');
+            setTimeout(() => loadDeliveryPage(), 1000);
         } else {
             const err = await res.json();
             showToast(`触发失败: ${err.detail || '未知错误'}`, 'error');
@@ -8948,7 +9866,7 @@ async function cancelCIBuild(buildId) {
         const res = await fetch(`${API}/projects/${currentProjectId}/ci/builds/${buildId}/cancel`, { method: 'POST' });
         if (res.ok) {
             showToast('构建已取消', 'info');
-            loadCICD();
+            loadDeliveryPage();
         } else {
             showToast('取消失败', 'error');
         }
@@ -9101,6 +10019,9 @@ async function doConfirmBug(cardId) {
         card.querySelector('.action-title').textContent = '✅ BUG 已上报';
         if (btns) btns.innerHTML = `<span class="action-link" onclick="switchTab('bugs')">查看 BUG 列表 →</span>`;
         showToast(`BUG「${title}」已上报`, 'success');
+        // v0.19.1：状态持久化
+        const msgId = card.dataset.messageId || '';
+        if (msgId) patchActionState(msgId, 'executed', { title, at: new Date().toISOString() });
         setTimeout(() => { if (typeof loadBugs === 'function') loadBugs(); }, 500);
     } catch (e) {
         card.style.borderLeftColor = 'var(--danger, #ea4a5a)';

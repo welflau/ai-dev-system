@@ -686,17 +686,30 @@ class CIPipelineRunner:
     # ==================== 查询 ====================
 
     async def get_pipeline_status(self, project_id: str) -> Dict:
-        """获取项目 CI/CD 总览"""
+        """获取项目 CI/CD 总览
+
+        v0.19.x: 动态发现该项目所有 build_type（包含 UE 的 ubt_compile/playtest/package_client 等）
+        而不是硬编码 Web 的三种。
+        """
         stages = {}
-        for build_type in ["develop_build", "master_build", "deploy"]:
-            # 最新构建
+
+        # 发现该项目所有已存在的 build_type
+        type_rows = await db.fetch_all(
+            "SELECT DISTINCT build_type FROM ci_builds WHERE project_id = ?",
+            (project_id,),
+        )
+        # 合并固定 Web 类型 + 项目实际用过的类型
+        all_types = {"develop_build", "master_build", "deploy"} | {
+            r["build_type"] for r in type_rows if r.get("build_type")
+        }
+
+        for build_type in all_types:
             latest = await db.fetch_one(
                 "SELECT * FROM ci_builds "
                 "WHERE project_id = ? AND build_type = ? "
                 "ORDER BY created_at DESC LIMIT 1",
                 (project_id, build_type),
             )
-            # 最新成功构建
             last_success = await db.fetch_one(
                 "SELECT completed_at, commit_hash FROM ci_builds "
                 "WHERE project_id = ? AND build_type = ? AND status = 'success' "

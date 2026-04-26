@@ -428,6 +428,24 @@ async def get_git_branches(project_id: str):
     return {"branches": branches, "current": current}
 
 
+@router.get("/{project_id}/git/branches/tree")
+async def get_git_branches_tree(project_id: str):
+    """v0.19.1：分支树形视图数据（含 upstream / ahead-behind / 最后一次提交 / 推测 parent）
+
+    返回：
+      {
+        "branches": [ {name, upstream, parent, ahead, behind,
+                       last_commit_at, last_commit_sha, last_commit_subject, current}, ... ],
+        "current": "<当前分支>"
+      }
+    前端自行依 parent 字段 build 树。
+    """
+    from git_manager import git_manager
+    branches = await git_manager.list_branches_enriched(project_id)
+    current = await git_manager.get_current_branch(project_id)
+    return {"branches": branches, "current": current}
+
+
 @router.post("/{project_id}/git/switch-branch")
 async def switch_git_branch(project_id: str, body: dict):
     """切换 Git 分支"""
@@ -513,6 +531,22 @@ async def get_git_log(project_id: str, limit: int = 20):
     _ensure_git_path(project)
     logs = await git_manager.get_log(project_id, limit)
     return {"commits": logs, "total": len(logs)}
+
+
+@router.get("/{project_id}/git/commit/{sha}")
+async def get_git_commit_detail(project_id: str, sha: str):
+    """v0.19.1：单次提交详情 + 每文件 patch"""
+    project = await db.fetch_one("SELECT * FROM projects WHERE id = ?", (project_id,))
+    if not project:
+        raise HTTPException(404, "项目不存在")
+    _ensure_git_path(project)
+    # 基本合法性校验：sha 只允许 hex
+    if not sha or not all(c in "0123456789abcdefABCDEF" for c in sha) or len(sha) > 40:
+        raise HTTPException(400, "非法的 commit sha")
+    detail = await git_manager.get_commit_detail(project_id, sha)
+    if not detail:
+        raise HTTPException(404, "commit 不存在")
+    return detail
 
 
 @router.get("/{project_id}/git/file")

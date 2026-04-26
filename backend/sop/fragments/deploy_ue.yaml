@@ -1,0 +1,33 @@
+# UE 项目打包 —— play_test 通过后自动跑 RunUAT BuildCookRun Win64 Shipping
+# v0.19.x Phase D
+id: deploy_ue
+name: 打包（UE）
+insert_after: play_test
+priority: 80           # 高于 deploy_web 的 70，因为 UE 项目也可能命中 category:app（罕见），需精准
+description: UE 项目交付：Cook + Pak + Archive（Win64 Shipping Client）
+
+required_traits:
+  any_of:
+    - engine:ue5
+    - engine:ue4
+
+stage:
+  agent: DeployAgent
+  action: run_ci_deploy
+  trigger_on: packaging_pending
+  success_status: packaged
+  reject_status: packaging_failed
+  reject_goto: development
+  config:
+    build_type: package_client
+    platform: Win64
+    configuration: Shipping
+    timeout_seconds: 1800      # 首次 cook + shader 可能 10-30 min
+    include_build: true         # 先 -build 过一次 C++，省得 RunUAT 自己判断
+
+pipeline_view_contrib:
+  group: delivery
+  create_if_missing:
+    name: 交付
+    icon: 🚀
+    insert_after: play_test

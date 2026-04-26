@@ -1,6 +1,108 @@
 # AI Dev System — 待办清单
 
-> 最后更新: 2026-04-24
+> 最后更新: 2026-04-26
+
+---
+
+## 🎯 下一主线推荐（两条并行，共 ~3.5 天）
+
+### A. DevAgent UE 项目自测 · `docs/20260426_01_DevAgent_UE项目自测方案.md`（~2 天）
+
+**为什么优先**：TestFPS 实战刚暴露 UE DevAgent 自测层几乎是空的——5 个静态可发现的错全漏到 engine_compile stage，每次循环 3-5 分钟 + 一次 LLM fix_issues。
+
+**三层设计**：
+- **Layer 1 静态预检**（亚秒级，必做）——7 条规则：UCLASS/GENERATED_BODY、子类 OnRep 禁 UFUNCTION、include 路径可定位、Build.cs 依赖白名单、.uproject Modules 同步、Target.cs IncludeOrderVersion 兼容、常用类型必需 header
+- **Layer 2 UBT SingleFile 预编译**（30-90s，SOP config 开关）
+- **Layer 3 独立 engine_compile / play_test stage**（已有，保留）
+
+**预期效果**：TestFPS 历史 5/5 错全抓 · 新手错回合数从 3-5 次压到 0-1 次 · 月省 10-20 刀 LLM + 1-2h 等待
+
+**7 Phase ~2 天**
+
+### B. 工单面板「当前进度」区 · `docs/20260426_02_工单面板当前进度区设计.md`（~1.5 天）
+
+**为什么配套做**：A 方案 Layer 2 有 30-90s 等待，当前工单面板全黑箱。本方案让 UBT / Package 的 3-5 min 等待有活性反馈。
+
+**核心**：
+- tickets 表加 4 列（current_action / started_at / latest_log / updated_at）
+- 所有 log_callback 嵌一层心跳写 DB + SSE 推 `ticket_action_progress`
+- drawer 顶部 4 字段进度区：action · 已用时 · 活性 health（🟢 active / 🟡 silent / 🔴 zombie / ⚪ starting）· 最新 log 摘要
+- **不做百分比进度条**（UE 工具链不给）——心跳 + 最新行比假进度条更有用
+
+**6 Phase ~1.5 天**
+
+### 推荐节奏
+两方案互补：A 让错更早发现，B 让剩余要跑 UBT 的情况过程透明。**可先做 B**（1 天见 UI 改善），再做 A（拦截 80% 错）；或反过来先筑 A 的规则底。
+
+---
+
+## 🔄 v0.19 三合一（代码就绪，未真机实操 + 未 commit，2026-04-25）
+
+详见 `docs/20260424_04_v019三合一工作安排.md`。6/6 交付 + 76/76 smoke：
+
+- **①a** 对话一键流：UE 项目建完自动弹 propose 方案卡（server-side 持久化）
+- **①b** action state 持久化：`chat_messages.action_state` 列 + PATCH 端点，4 个 confirm_* 卡片刷新后显示摘要不再重复可点
+- **②**  UE `run_playtest`：Automation Framework headless + 日志解析 + SOP 派生 `play_test_failed → fix_issues` + Reflexion UE 专属 prompt + SSE 事件
+- **③a** 文件浏览器：二进制占位 + `.uproject/.Build.cs/.Target.cs` 语法高亮
+- **③b** Commit Diff：`GET /git/commit/{sha}` + 内嵌行级 diff + 未变化大段折叠
+- **③c** 分支树形：`list_branches_enriched` + 基于命名约定的 parent 推断 + ahead/behind 徽标
+
+**剩余工作**：浏览器实操验收 / 真机 UE playtest / commit 拆分策略 / ②D Functional Test 脚手架自动生成延后 / ③b 真 side-by-side 分栏 diff 延后
+
+---
+
+## 🎯 v0.20+ 候选：UE 编辑态 MCP 集成
+
+详细选型分析：`docs/20260425_01_UE编辑态MCP集成选型分析.md`
+
+调研了两个候选：
+
+| 项目 | 结论 |
+|---|---|
+| [flopperam/unreal-engine-mcp](https://github.com/flopperam/unreal-engine-mcp) (851★) | 成熟 demo，有 `create_town`/`construct_mansion` 等高层 DSL；过于 opinionated，不适合作 SDK |
+| [Italink/UnrealClientProtocol](https://github.com/Italink/UnrealClientProtocol) (105★) | **推荐方向**：reflection-based 原子 + NodeCode 文本 IR + 零 engine 修改；契合我们 Agent 架构 |
+
+**价值**（按优先级排）：
+1. Reflexion 时查 editor 现状（当前盲猜）
+2. 改 BP 变量默认值 / 材质参数（当前需重编）
+3. 批量改资产 / 生成测试场景 actor
+4. BP 图编辑（NodeCode 文本 IR）
+
+**不立即做的理由**：
+- v0.19 UE playtest 还没真机实操
+- 常驻 editor 进程（~4GB 内存 / 启动 30s+）是个大子系统
+- TestFPS 纯 C++ 项目，价值未被验证
+- MCP 生态未稳，观察 3-6 个月
+
+**前置条件**（任一满足可启动）：
+- 用户有 BP/Asset 重度项目
+- v0.19 离线链路真项目跑稳 ≥ 3 轮
+- 官方或 1k+★ 替代品出现
+
+**若动手，~9.5 天** 8 个 Phase（详见分析文档 §7.3）
+
+---
+
+## ✅ v0.19.x CI/CD 环境管理合并 + trait-first pipeline（已完成 2026-04-26）
+
+详见 `docs/20260425_02_CICD环境合并与项目类型感知Pipeline方案.md`。Phase A-E 全部交付 + 30/30 smoke：
+
+- **Phase A** `CIStrategy` 抽象 + Loader + Web 策略（委托老 ci_pipeline 零侵入）+ Default 兜底 + 3 新端点（pipeline-definition / strategies / environments）
+- **Phase B** 前端「🚀 交付 & 环境」页合并 + 按 strategy 动态渲染 + 原 "环境管理" 导航撤下
+- **Phase C** `UECIStrategy`（priority=100）+ `UEPackageAction`（RunUAT BuildCookRun）+ UE 独有环境
+- **Phase D** SOP fragments `deploy_web.yaml` / `deploy_ue.yaml` + `DeployAgent.run_ci_deploy` 统一调度
+- **Phase E** `_test_v019_ci_phase_abcd.py` 30/30 smoke 通过
+
+**剩余**：浏览器实操 + commit
+
+---
+
+## 其他候选方向
+
+- v0.19 `generate_assets` + ArtistAgent（AIGC 资产生成）
+- 全局聊天直接串联"创建项目 → 生成骨架"一条龙（已做 ①a，差串联全局）
+- 跨平台 UE 引擎检测 (Mac/Linux)
+- **v0.20+ UE 编辑态 MCP 集成**（见上方 §v0.20+ 候选）
 
 ---
 
@@ -9,13 +111,6 @@
 7/8 Phase 完成 + 24/24 smoke 测试通过，详见 `dev-notes/2026-04-24_v0.18_完结总结.md`。
 核心交付：UE 引擎检测 / 模板实例化 / UBT 编译 + 错误解析 / Reflexion 自动修复 /
 Skill Packs / 项目 UE 配置持久化 / 对话式 UE 框架生成。
-
-**下一主线待定**：候选方向见 `2026-04-24_v0.18_完结总结.md §9`：
-- v0.19 `run_playtest` (headless UE + Automation Framework)
-- v0.19 `generate_assets` + ArtistAgent
-- v0.19 全局聊天串联"建项目 + 生成骨架"一键流
-- v0.19+ action state 持久化消除所有确认卡片刷新后重复点击问题
-- 跨平台 UE 引擎检测 (Mac/Linux)
 
 ---
 

@@ -106,6 +106,12 @@ class DevAgent(BaseAgent):
             cur_status = (cur or {}).get("status") or ""
             if cur_status == "engine_compile_failed":
                 failure_type = "engine_compile_failed"
+            elif cur_status == "play_test_failed":
+                # v0.19 Phase ②：UE Automation playtest 失败
+                failure_type = "play_test_failed"
+            elif cur_status == "self_test_failed":
+                # v0.19.x A 方案：UE 静态预检（Layer 1）失败
+                failure_type = "self_test_failed"
             elif cur_status == "testing_failed":
                 failure_type = "testing_failed"
             elif cur_status == "acceptance_rejected":
@@ -131,6 +137,46 @@ class DevAgent(BaseAgent):
                         )
                     except Exception as e:
                         logger.warning("解析编译失败 detail 异常: %s", e)
+
+            # v0.19.x A 方案：UE 静态预检失败 → 从 artifacts 拉 blocking issues
+            # （self_test 失败时 orchestrator 把 issues 存进 ticket.result）
+            if failure_type == "self_test_failed":
+                t_row = await db.fetch_one(
+                    "SELECT result FROM tickets WHERE id = ?", (ticket_id,)
+                )
+                if t_row and t_row.get("result"):
+                    try:
+                        r = json.loads(t_row["result"])
+                        st = r.get("self_test") or {}
+                        blocking_issues = st.get("ue_blocking_issues") or []
+                        context["ue_blocking_issues"] = blocking_issues
+                        logger.info(
+                            "🔍 fix_issues 接到 UE 自测 blocking context: %d issues",
+                            len(blocking_issues),
+                        )
+                    except Exception as e:
+                        logger.warning("解析 self_test result 异常: %s", e)
+
+            # v0.19：playtest 失败，从 reject 日志拿失败测试列表
+            if failure_type == "play_test_failed":
+                log = await db.fetch_one(
+                    """SELECT detail FROM ticket_logs
+                       WHERE ticket_id = ? AND action = 'reject'
+                       ORDER BY created_at DESC LIMIT 1""",
+                    (ticket_id,),
+                )
+                if log and log.get("detail"):
+                    try:
+                        det = json.loads(log["detail"])
+                        context["failed_tests"] = det.get("tests") or []
+                        context["playtest_summary"] = det.get("summary") or {}
+                        context["playtest_command"] = det.get("command") or ""
+                        logger.info(
+                            "🎮 fix_issues 接到 playtest 失败 context: %d failed tests",
+                            len(context["failed_tests"]),
+                        )
+                    except Exception as e:
+                        logger.warning("解析 playtest 失败 detail 异常: %s", e)
 
         context["failure_type"] = failure_type
         return await self._do_retry_with_reflection(context)

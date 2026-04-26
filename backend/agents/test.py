@@ -39,7 +39,37 @@ class TestAgent(BaseAgent):
     async def execute(self, task_name: str, context: Dict[str, Any]) -> Dict[str, Any]:
         if task_name == "run_tests":
             return await self.run_tests(context)
+        # v0.19 Phase ②：UE Automation Framework 冒烟测试
+        if task_name == "run_playtest":
+            return await self.run_playtest(context)
         return {"status": "error", "message": f"未知任务: {task_name}"}
+
+    async def run_playtest(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """跑 UE Automation Framework 测试（headless UnrealEditor-Cmd）"""
+        from actions.ue_playtest import UEPlaytestAction
+
+        # 打通 SSE log 回调
+        from events import event_manager
+        project_id = context.get("project_id")
+
+        async def _push_log(line: str):
+            if not project_id:
+                return
+            try:
+                await event_manager.publish_to_project(
+                    project_id, "ue_playtest_log", {"line": line}
+                )
+            except Exception:
+                pass
+
+        ctx = dict(context)
+        ctx["log_callback"] = _push_log
+
+        action = UEPlaytestAction()
+        result = await action.run(ctx)
+        d = result.to_dict() if hasattr(result, "to_dict") else (result.data or {})
+        # orchestrator 按 status 分流：success → play_test_passed；其他 → play_test_failed / BLOCKED
+        return d
 
     async def run_tests(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """主测试流程：5 层测试"""

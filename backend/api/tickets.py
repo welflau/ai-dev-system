@@ -140,6 +140,120 @@ async def get_ticket(project_id: str, ticket_id: str):
     }
 
 
+@router.get("/api/projects/{project_id}/tickets/{ticket_id}/current-action")
+async def get_ticket_current_action(project_id: str, ticket_id: str):
+    """v0.19.x 工单面板「📍 当前进度」区数据源
+
+    返回 current_action / started_at / latest_log / updated_at + 后端算好的
+    elapsed_ms / silence_ms / health，让前端直接渲染不用自己算。
+    """
+    from datetime import datetime, timezone
+
+    ticket = await db.fetch_one(
+        "SELECT id, current_action, current_action_started_at, "
+        "current_action_latest_log, current_action_updated_at "
+        "FROM tickets WHERE id = ? AND project_id = ?",
+        (ticket_id, project_id),
+    )
+    if not ticket:
+        raise HTTPException(404, "工单不存在")
+
+    current_action = ticket.get("current_action")
+    if not current_action:
+        return {
+            "ticket_id": ticket_id,
+            "current_action": None,
+            "health": None,
+        }
+
+    def _parse_iso(s: str):
+        if not s:
+            return None
+        try:
+            # aiosqlite 回来的 ISO 字符串可能带 Z 或不带时区
+            if s.endswith("Z"):
+                s = s[:-1] + "+00:00"
+            return datetime.fromisoformat(s)
+        except Exception:
+            return None
+
+    now = datetime.now(timezone.utc)
+
+    started_at = _parse_iso(ticket.get("current_action_started_at"))
+    updated_at = _parse_iso(ticket.get("current_action_updated_at"))
+
+    elapsed_ms = None
+    if started_at:
+        try:
+            if started_at.tzinfo is None:
+                started_at = started_at.replace(tzinfo=timezone.utc)
+            elapsed_ms = int((now - started_at).total_seconds() * 1000)
+        except Exception:
+            pass
+
+    silence_ms = None
+    if updated_at:
+        try:
+            if updated_at.tzinfo is None:
+                updated_at = updated_at.replace(tzinfo=timezone.utc)
+            silence_ms = int((now - updated_at).total_seconds() * 1000)
+        except Exception:
+            pass
+
+    # 活性判定（秒）：
+    #   < 60s  有新 log 或 刚开始没 log  → active / starting
+    #   60-300 → silent
+    #   > 300  → zombie（可能进程挂了）
+    if updated_at is None:
+        # 还没收到 log 心跳
+        if elapsed_ms is None or elapsed_ms < 60_000:
+            health = "starting"
+        elif elapsed_ms < 300_000:
+            health = "silent"
+        else:
+            health = "zombie"
+    else:
+        if silence_ms is None:
+            health = "active"
+        elif silence_ms < 60_000:
+            health = "active"
+        elif silence_ms < 300_000:
+            health = "silent"
+        else:
+            health = "zombie"
+
+    return {
+        "ticket_id": ticket_id,
+        "current_action": current_action,
+        "started_at": ticket.get("current_action_started_at"),
+        "elapsed_ms": elapsed_ms,
+        "latest_log": ticket.get("current_action_latest_log"),
+        "latest_log_at": ticket.get("current_action_updated_at"),
+        "silence_ms": silence_ms,
+        "health": health,
+    }
+
+
+@router.get("/api/projects/{project_id}/_tickets-current-actions")
+async def get_tickets_current_actions(project_id: str, ids: str = ""):
+    """批量查多个工单的 current_action。ids=T1,T2,T3 逗号分隔。
+
+    看板页面场景：多工单同屏显示"⚡ 运行中"徽标时批量拉一次，避免 N 个请求。
+    """
+    id_list = [i.strip() for i in ids.split(",") if i.strip()]
+    if not id_list:
+        return {"items": {}}
+
+    placeholders = ",".join(["?"] * len(id_list))
+    rows = await db.fetch_all(
+        f"SELECT id, current_action FROM tickets "
+        f"WHERE project_id = ? AND id IN ({placeholders}) "
+        f"AND current_action IS NOT NULL",
+        (project_id, *id_list),
+    )
+    return {"items": {r["id"]: r["current_action"] for r in rows}}
+
+
 @router.put("/api/projects/{project_id}/tickets/{ticket_id}")
 async def update_ticket(project_id: str, ticket_id: str, req: TicketUpdate):
     """更新工单基本信息"""

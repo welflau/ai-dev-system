@@ -34,6 +34,7 @@ from actions.chat.get_requirement_pipeline import GetRequirementPipelineAction
 from actions.chat.get_ticket_status import GetTicketStatusAction
 from actions.chat.get_requirement_logs import GetRequirementLogsAction
 from actions.chat.propose_ue_framework import ProposeUEFrameworkAction
+from actions.chat.get_build_logs import GetBuildLogsAction     # v0.19.x 构建日志查询
 
 logger = logging.getLogger("agent.chat_assistant")
 
@@ -74,6 +75,7 @@ class _ChatToolExecutor:
         "requirement_pipeline": 2,
         "ticket_status": 2,
         "requirement_logs": 2,
+        "build_logs": 2,               # v0.19.x — 构建/编译日志诊断
         # Tier 3 — 状态变更的回执
         "requirement_closed": 3,
         "requirement_paused": 3,
@@ -159,6 +161,7 @@ class ChatAssistantAgent(BaseAgent):
         GetTicketStatusAction,
         GetRequirementLogsAction,
         ProposeUEFrameworkAction,      # v0.18 Phase A.6 — UE 框架方案卡片
+        GetBuildLogsAction,            # v0.19.x — 查构建/编译日志让 AI 自动诊断
     ]
     react_mode = ReactMode.REACT
     max_react_loop = 3   # 聊天场景不需要太多轮

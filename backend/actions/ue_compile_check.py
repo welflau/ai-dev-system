@@ -321,53 +321,103 @@ class UECompileCheckAction(ActionBase):
             "-waitmutex",
             "-NoHotReload",
         ]
+        # v0.19.x A 方案 Layer 2：-SingleFile 支持快速增量预编（30-90s vs 3-5min）
+        single_files = context.get("single_files") or []
+        if single_files:
+            # UBT 支持多次 -SingleFile，但实测取第一个就够（主错会暴露）
+            for sf in single_files[:1]:
+                cmd.append(f"-SingleFile={sf}")
+            await _log(f"[ubt] SingleFile 模式: {single_files[0]}")
         cmd_str = " ".join(f'"{c}"' if " " in c else c for c in cmd)
         # 启动前先把命令推出来，即便 subprocess 启动失败也能看到"准备执行什么"
         await _log(f"[ubt] cmd: {cmd_str}")
 
-        # 5. 执行（流式：逐行读 stdout，每行回调一次 log_callback）
-        log_callback = log_cb  # 流式 stdout 每行也走同一 callback
+        # 5. 执行
+        # v0.19.x: 用 subprocess.Popen + 线程队列替代 asyncio.create_subprocess_exec
+        # 原因：Python 3.14 asyncio ProactorEventLoop 在 Windows 上与 UE5.7 UBA 子进程
+        # 管理存在兼容性问题（create_subprocess_exec 抛空异常）。
+        # 线程方案完全绕开 asyncio 子进程，同时通过 asyncio.Queue 保留流式输出。
+        import subprocess as _subprocess
+        import threading as _threading
+
+        log_callback = log_cb
+        progress_cb = context.get("_ticket_progress_cb")
         t0 = time.time()
+        collected_lines: List[str] = []
+        _sentinel = object()
+
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,   # 合并
+            proc = _subprocess.Popen(
+                cmd,
+                stdin=_subprocess.DEVNULL,
+                stdout=_subprocess.PIPE,
+                stderr=_subprocess.STDOUT,
+                encoding="utf-8",
+                errors="replace",
             )
-            await _log(f"[ubt] subprocess pid={proc.pid}, 开始读 stdout...")
-        except FileNotFoundError:
+        except FileNotFoundError as fe:
+            logger.error("UBT FileNotFoundError: ubt=%s err=%r", ubt, fe, exc_info=True)
             return await _err_log(f"启动 UBT 失败: {ubt} 不存在或权限不足")
         except Exception as e:
-            return await _err_log(f"启动 UBT 异常: {e}")
+            logger.error("UBT Popen Exception type=%s repr=%r", type(e).__name__, e, exc_info=True)
+            err_detail = f"{type(e).__name__}: {e!r}"
+            return await _err_log(f"启动 UBT 异常: {err_detail}")
 
-        collected_lines: List[str] = []
+        await _log(f"[ubt] subprocess pid={proc.pid}, 开始读 stdout (thread mode)...")
 
-        async def _pump_stdout():
-            """循环读 stdout，每行即时推送 + 累积到内存"""
-            assert proc.stdout is not None
+        # 线程读 stdout → asyncio Queue
+        loop = asyncio.get_event_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+
+        def _reader_thread():
+            try:
+                assert proc.stdout is not None
+                for raw_line in proc.stdout:
+                    line = raw_line.rstrip("\r\n")
+                    loop.call_soon_threadsafe(queue.put_nowait, line)
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, _sentinel)
+
+        reader = _threading.Thread(target=_reader_thread, daemon=True)
+        reader.start()
+
+        timed_out = False
+        try:
+            deadline = t0 + timeout_seconds
             while True:
-                raw = await proc.stdout.readline()
-                if not raw:
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    timed_out = True
                     break
-                line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=min(remaining, 5.0))
+                except asyncio.TimeoutError:
+                    # 5s 没输出就继续等（可能在编译 shader）
+                    continue
+                if item is _sentinel:
+                    break
+                line = item
                 collected_lines.append(line)
                 if log_callback is not None:
                     try:
                         await log_callback(line)
-                    except Exception as e:
-                        logger.debug("log_callback 异常（忽略）: %s", e)
+                    except Exception:
+                        pass
+                if progress_cb is not None:
+                    try:
+                        await progress_cb(line)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
-        try:
-            await asyncio.wait_for(
-                asyncio.gather(_pump_stdout(), proc.wait()),
-                timeout=timeout_seconds,
-            )
-        except asyncio.TimeoutError:
+        if timed_out:
             try:
                 proc.kill()
-                await proc.wait()
+                proc.wait(timeout=5)
             except Exception:
                 pass
+            reader.join(timeout=2)
             duration_ms = int((time.time() - t0) * 1000)
             return _err(
                 f"UBT 超时（{timeout_seconds}s）",
@@ -378,6 +428,9 @@ class UECompileCheckAction(ActionBase):
                     "partial_output": "\n".join(collected_lines[-100:]),
                 },
             )
+
+        proc.wait(timeout=10)
+        reader.join(timeout=5)
 
         duration_ms = int((time.time() - t0) * 1000)
         text = "\n".join(collected_lines)
