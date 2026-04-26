@@ -261,6 +261,65 @@ class TicketOrchestrator:
         except Exception as e:
             logger.debug("clear_ticket_current_action 失败（忽略）: %s", e)
 
+    async def _create_compile_bug(
+        self,
+        project_id: str,
+        requirement_id: Optional[str],
+        ticket_id: str,
+        errors_list: List[Dict],
+        err_brief: str,
+    ):
+        """UBT 编译失败时自动创建 Bug 记录（走正式 Bug 流程，在 BUG 列表可见）"""
+        try:
+            bug_id = generate_id("BUG")
+            # 格式化错误描述
+            err_lines = ["UBT 编译失败，以下为结构化错误列表：\n"]
+            for i, e in enumerate(errors_list[:15], 1):
+                fname = (e.get("file") or "?").replace("\\", "/").split("/")[-1]
+                err_lines.append(
+                    f"{i}. `{fname}:{e.get('line', '?')}` "
+                    f"**{e.get('code', '')}**（{e.get('category', 'compile')}）: "
+                    f"{(e.get('msg') or '')[:200]}"
+                )
+            if len(errors_list) > 15:
+                err_lines.append(f"… 还有 {len(errors_list) - 15} 个错误")
+
+            description = "\n".join(err_lines)
+
+            await db.insert("bugs", {
+                "id": bug_id,
+                "project_id": project_id,
+                "requirement_id": requirement_id,
+                "ticket_id": ticket_id,    # 关联触发此 Bug 的工单
+                "title": f"UBT 编译失败: {err_brief[:120]}",
+                "description": description,
+                "priority": "high",
+                "status": "in_dev",        # DevAgent 立即处理
+                "created_at": now_iso(),
+                "updated_at": now_iso(),
+            })
+            logger.info("🐛 编译失败 Bug 已创建: %s (ticket=%s)", bug_id, ticket_id)
+        except Exception as e:
+            logger.warning("创建编译 Bug 失败（忽略）: %s", e)
+
+    async def _resolve_compile_bug(self, ticket_id: str, project_id: str):
+        """编译通过时把关联的 in_dev Bug 标为 fixed"""
+        try:
+            rows = await db.fetch_all(
+                "SELECT id FROM bugs WHERE ticket_id = ? AND project_id = ? AND status = 'in_dev'",
+                (ticket_id, project_id),
+            )
+            for r in rows:
+                await db.update("bugs", {
+                    "status": "fixed",
+                    "fix_notes": "UBT 编译通过，自动标记修复",
+                    "fixed_at": now_iso(),
+                    "updated_at": now_iso(),
+                }, "id = ?", (r["id"],))
+                logger.info("✅ 编译 Bug %s 已自动标为 fixed", r["id"])
+        except Exception as e:
+            logger.warning("自动 resolve Bug 失败（忽略）: %s", e)
+
     def _make_ticket_progress_callback(self, project_id: str, ticket_id: str):
         """生产 log 心跳 callback：关键字过滤 + 5s throttle + 去重 + 写 DB + 推 SSE
 
@@ -1461,6 +1520,8 @@ class TicketOrchestrator:
                         "result": result_json,
                         "updated_at": now_iso(),
                     }, "id = ?", (ticket_id,))
+                    # v0.19.x：编译通过 → 把关联 Bug 标为 fixed
+                    await self._resolve_compile_bug(ticket_id, project_id)
                     await self._log(
                         project_id, requirement_id, ticket_id, agent_name,
                         "complete", current_status, new_status,
@@ -1476,9 +1537,6 @@ class TicketOrchestrator:
                     # 通过不落 artifacts（产物列表已在 result 里有）
                 else:
                     # compile_failed → 走 reject_goto: development 链路
-                    # 状态设 engine_compile_failed；SOP 里 engine_compile stage 的 reject_status
-                    # 就是它，后续 poll 轮询时根据 SOP 查 reject_goto 拿到 "development"，
-                    # 组装成一条 {engine_compile_failed → DevAgent.fix_issues} 的规则
                     new_status = "engine_compile_failed"
                     await db.update("tickets", {
                         "status": new_status,
@@ -1492,7 +1550,7 @@ class TicketOrchestrator:
                     await self._log(
                         project_id, requirement_id, ticket_id, agent_name,
                         "reject", current_status, new_status,
-                        f"UBT 编译失败 · {len(errors_list)} errors · 将触发 DevAgent.fix_issues 修复",
+                        f"UBT 编译失败 · {len(errors_list)} errors · 已创建 Bug 记录，DevAgent.fix_issues 将修复",
                         "warning",
                         detail_data={
                             "errors": errors_list[:10],
@@ -1502,6 +1560,10 @@ class TicketOrchestrator:
                             "command": result.get("command"),
                             "err_brief": err_brief,
                         },
+                    )
+                    # v0.19.x：编译失败自动创建 Bug 记录（走正式 Bug 流程）
+                    await self._create_compile_bug(
+                        project_id, requirement_id, ticket_id, errors_list, err_brief,
                     )
                 return   # 不进入下面的产物落库
 

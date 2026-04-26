@@ -276,9 +276,12 @@ class UECIStrategy(CIStrategy):
                 "strategy": "ue",
             })
 
-            # v0.19.x 主动诊断：编译失败时 AI 助手主动写诊断消息到项目聊天
+            # v0.19.x 主动诊断 + 自动创建 Bug
             if status == CIBuildStatus.FAILED.value:
                 await self._proactive_diagnose(project_id, build_type, data, build_id)
+                # CI 触发的编译失败同样创建 Bug（走正式 Bug 流程）
+                if build_type == "ubt_compile" and (data.get("errors") or data.get("status") == "error"):
+                    await self._create_ci_compile_bug(project_id, build_id, data)
 
         except Exception as e:
             import traceback
@@ -297,6 +300,49 @@ class UECIStrategy(CIStrategy):
             })
             # 异常情况也主动通知
             await self._proactive_diagnose(project_id, build_type, {"status": "error", "message": err_msg}, build_id)
+
+    async def _create_ci_compile_bug(
+        self, project_id: str, build_id: str, data: Dict[str, Any]
+    ):
+        """CI 手动触发编译失败时自动创建 Bug（与 SOP 路径统一）"""
+        try:
+            from database import db
+            from utils import generate_id, now_iso
+
+            errors = data.get("errors") or []
+            err_brief = "; ".join(
+                f"{(e.get('file') or '?').split(chr(92))[-1]}:{e.get('line', '?')} "
+                f"{e.get('code', '')} {(e.get('msg') or '')[:80]}"
+                for e in errors[:3]
+            )[:120]
+            if not err_brief and data.get("message"):
+                err_brief = data["message"][:120]
+            if not err_brief:
+                err_brief = "启动失败（引擎/uproject 配置问题）"
+
+            err_lines = [f"CI 手动编译失败（build_id: {build_id[:16]}）\n"]
+            for i, e in enumerate(errors[:15], 1):
+                fname = (e.get("file") or "?").replace("\\", "/").split("/")[-1]
+                err_lines.append(
+                    f"{i}. `{fname}:{e.get('line', '?')}` "
+                    f"**{e.get('code', '')}**: {(e.get('msg') or '')[:200]}"
+                )
+
+            await db.insert("bugs", {
+                "id": generate_id("BUG"),
+                "project_id": project_id,
+                "requirement_id": None,
+                "ticket_id": None,
+                "title": f"UBT 编译失败（CI）: {err_brief}",
+                "description": "\n".join(err_lines) or "（无详细错误）",
+                "priority": "high",
+                "status": "open",
+                "created_at": now_iso(),
+                "updated_at": now_iso(),
+            })
+            logger.info("🐛 CI 编译失败 Bug 已创建 [%s]", project_id[:8])
+        except Exception as e:
+            logger.warning("CI 编译 Bug 创建失败（忽略）: %s", e)
 
     async def _save_screenshot_to_chat(
         self, project_id: str, shot_paths: List[str], build_id: str
