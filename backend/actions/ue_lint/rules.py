@@ -456,6 +456,65 @@ def _run_R5_at_project_level(repo_path: Path, ctx: Dict[str, Any]) -> List[Issue
                 f'{{"Name": "{name}", "Type": "Runtime", "LoadingPhase": "Default"}}'
             ),
         })
+
+    # R5b：插件与代码一致性——代码里 #include 了某插件头但 .uproject 没启用该插件
+    # 只检查最常见的：StateTree / GameplayStateTree / EnhancedInput
+    _PLUGIN_HEADER_MAP = {
+        "StateTree": [
+            "StateTree", "StateTreeExecutionContext", "StateTreeTaskBase",
+            "StateTreeConditionBase", "StateTreeAIComponent",
+        ],
+        "GameplayStateTree": ["GameplayStateTree"],
+        "EnhancedInput": [
+            "EnhancedInputComponent", "EnhancedInputSubsystems",
+            "InputAction", "InputMappingContext", "InputActionValue",
+        ],
+    }
+    declared_plugins: Set[str] = {
+        p.get("Name", "") for p in (up_data.get("Plugins") or [])
+        if p.get("Enabled") is not False
+    }
+    for plugin_name, header_keywords in _PLUGIN_HEADER_MAP.items():
+        if plugin_name in declared_plugins:
+            continue
+        # 扫 Source/ 下所有 .h/.cpp 的 #include 是否用到这些头
+        used_in: List[str] = []
+        for p in source_root.rglob("*.[ch]pp"):
+            try:
+                raw = p.read_text(encoding="utf-8", errors="replace")
+                if any(kw in raw for kw in header_keywords):
+                    used_in.append(str(p.relative_to(repo_path).as_posix()))
+                    if len(used_in) >= 3:
+                        break
+            except Exception:
+                pass
+        if not source_root.rglob("*.[h]"):
+            for p in source_root.rglob("*.h"):
+                try:
+                    raw = p.read_text(encoding="utf-8", errors="replace")
+                    if any(kw in raw for kw in header_keywords):
+                        used_in.append(str(p.relative_to(repo_path).as_posix()))
+                        if len(used_in) >= 3:
+                            break
+                except Exception:
+                    pass
+        if used_in:
+            issues.append({
+                "rule": "R5b",
+                "file": up_path.name,
+                "line": None,
+                "blocking": True,
+                "category": "uproject-missing-plugin",
+                "msg": (
+                    f"代码里使用了 {plugin_name} 插件的头文件 "
+                    f"（{used_in[0]} 等），但 .uproject 没有启用 {plugin_name} 插件。"
+                    f"UBT 编译时找不到对应模块"
+                ),
+                "suggest": (
+                    f'在 {up_path.name} 的 "Plugins" 数组里加入 '
+                    f'{{"Name": "{plugin_name}", "Enabled": true}}'
+                ),
+            })
     return issues
 
 
