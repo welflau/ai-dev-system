@@ -19,7 +19,7 @@ async def main():
     ctx = {
         "project_id": pid,
         "uproject_path": f"{repo}/MyFPS.uproject",
-        "timeout_seconds": 300,  # Editor full init ~4.5 min (pre-warm measured 07:39→07:43)
+        "timeout_seconds": 450,  # 300s load + 150s buffer for HighResShot + cleanup
         "screenshot_width": 1280,
         "screenshot_height": 720,
         "log_callback": log,

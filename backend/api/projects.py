@@ -577,20 +577,17 @@ async def get_project_screenshot(project_id: str, filename: str):
     if not re.match(r"^[\w\-. ]+\.(png|jpg|jpeg|webp|gif)$", filename, re.IGNORECASE):
         raise HTTPException(400, "不支持的文件类型")
 
-    repo_path = _gm._repo_path(project_id)
-    if not repo_path:
-        raise HTTPException(404, "项目不存在")
+    from config import BASE_DIR as _BASE_DIR
 
-    # 先找 git repo 下的 screenshots/
-    shot_path = Path(repo_path) / "screenshots" / filename
+    # 优先找 chat_images/ue_screenshots/<pid>/（持久化存储位置）
+    base_dir = _BASE_DIR / "chat_images" / "ue_screenshots"
+    shot_path = base_dir / project_id / filename
+
     if not shot_path.is_file():
-        # 再找 UE 原生截图目录
-        from pathlib import Path as _P
-        for uproject in _P(repo_path).glob("*.uproject"):
-            ue_shot = uproject.parent / "Saved" / "Screenshots" / "WindowsEditor" / filename
-            if ue_shot.is_file():
-                shot_path = ue_shot
-                break
+        # 兜底：repo 目录下的 screenshots/（兼容旧路径）
+        repo_path = _gm._repo_path(project_id)
+        if repo_path:
+            shot_path = Path(repo_path) / "screenshots" / filename
     if not shot_path.is_file():
         raise HTTPException(404, "截图不存在")
     return FR(str(shot_path))

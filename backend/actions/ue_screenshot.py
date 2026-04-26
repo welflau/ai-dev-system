@@ -133,19 +133,16 @@ class UEScreenshotAction(ActionBase):
 
         await _log(f"[screenshot] 引擎: {engine_info.path} ({engine_info.version})")
 
-        # 截图输出目录
+        # 截图保存到 backend/chat_images/ue_screenshots/（持久化，不在 git 管理的项目目录内）
+        # 由现有 chat_images API serve，可直接在前端显示
         project_id = context.get("project_id")
         if context.get("output_dir"):
             output_dir = Path(context["output_dir"])
-        elif project_id:
-            try:
-                from git_manager import git_manager
-                repo = git_manager._repo_path(project_id)
-                output_dir = Path(repo) / "screenshots" if repo else up.parent / "screenshots"
-            except Exception:
-                output_dir = up.parent / "screenshots"
         else:
-            output_dir = up.parent / "screenshots"
+            # backend/chat_images/ue_screenshots/<project_id>/
+            from config import BASE_DIR
+            base = BASE_DIR / "chat_images" / "ue_screenshots"
+            output_dir = base / (project_id or "unknown")
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # UE 原生截图目录
@@ -206,66 +203,79 @@ class UEScreenshotAction(ActionBase):
         reader = threading.Thread(target=_reader, daemon=True)
         reader.start()
 
+        # 所有可能的截图输出目录（UE 会往里存）
+        shot_search_dirs = [
+            up.parent / "Saved" / "Screenshots" / "WindowsEditor",
+            up.parent / "Saved" / "Screenshots" / "Windows",
+            up.parent / "Saved" / "Screenshots",
+        ]
+        # 预建目录（防止 UE 找不到目录报错）
+        for d in shot_search_dirs:
+            d.mkdir(parents=True, exist_ok=True)
+
         deadline = t0 + timeout_seconds
         collected: List[str] = []
-        screenshot_detected = False
+        found_shots: List[Path] = []
 
         while True:
             remaining = deadline - time.time()
             if remaining <= 0:
                 try:
                     proc.kill()
+                    proc.wait(timeout=10)   # 多给 10s 让 editor flush 截图
+                except Exception:
+                    pass
+                # kill 后最后扫一次（截图可能刚写完）
+                await asyncio.sleep(2)
+                for d in shot_search_dirs:
+                    if not d.exists(): continue
+                    for p in sorted(d.glob("*.png"), key=lambda x: x.stat().st_mtime, reverse=True):
+                        if p.stat().st_mtime >= t0 - 2:
+                            found_shots.append(p)
+                    if found_shots:
+                        await _log(f"[screenshot] 超时后发现截图: {found_shots[0].name}")
+                        break
+                break
+
+            # 每轮读一条 log（超时 2s 就轮询一次）
+            try:
+                item = await asyncio.wait_for(queue.get(), timeout=min(remaining, 2.0))
+            except asyncio.TimeoutError:
+                if proc.poll() is not None:
+                    break
+            else:
+                if item is _sentinel:
+                    break
+                line = item
+                collected.append(line)
+                if log_cb:
+                    try:
+                        await log_cb(line)
+                    except Exception:
+                        pass
+
+            # 每轮轮询截图目录（2s 节奏），一发现就立刻抢救
+            for d in shot_search_dirs:
+                if not d.exists():
+                    continue
+                for p in sorted(d.glob("*.png"), key=lambda x: x.stat().st_mtime, reverse=True):
+                    if p.stat().st_mtime >= t0 - 2:
+                        found_shots.append(p)
+                if found_shots:
+                    await _log(f"[screenshot] 发现截图 {found_shots[0].name}，立刻保存...")
+                    break
+            if found_shots:
+                # 截图已出现，kill editor（不等 Exit 命令）
+                try:
+                    proc.kill()
                     proc.wait(timeout=5)
                 except Exception:
                     pass
                 break
-            try:
-                item = await asyncio.wait_for(queue.get(), timeout=min(remaining, 5.0))
-            except asyncio.TimeoutError:
-                # 超时等待但进程还在 → 继续
-                if proc.poll() is not None:
-                    break
-                continue
-            if item is _sentinel:
-                break
-            line = item
-            collected.append(line)
-            if log_cb:
-                try:
-                    await log_cb(line)
-                except Exception:
-                    pass
-            # 检测截图完成信号
-            if "highresshot" in line.lower() or shot_filename.lower() in line.lower():
-                screenshot_detected = True
-                await _log(f"[screenshot] 截图信号: {line[:200]}")
 
-        proc.wait(timeout=10)
+        proc.wait(timeout=5)
         reader.join(timeout=3)
         duration_ms = int((time.time() - t0) * 1000)
-
-        # 查找截图文件——UE 可能把截图存到多个目录之一
-        found_shots: List[Path] = []
-        search_dirs = [
-            ue_shot_dir,                                         # Saved/Screenshots/WindowsEditor
-            up.parent / "Saved" / "Screenshots" / "Windows",    # Saved/Screenshots/Windows
-            up.parent / "Saved" / "Screenshots",                 # Saved/Screenshots
-        ]
-
-        for search_dir in search_dirs:
-            if not search_dir.is_dir():
-                continue
-            # 精确匹配
-            for p in search_dir.glob(f"*{shot_filename}"):
-                found_shots.append(p)
-            # 时间匹配（本次运行后新增的 png）
-            if not found_shots:
-                for p in sorted(search_dir.glob("*.png"), key=lambda x: x.stat().st_mtime, reverse=True):
-                    if p.stat().st_mtime >= t0 - 5:
-                        found_shots.append(p)
-            if found_shots:
-                await _log(f"[screenshot] 在 {search_dir} 找到 {len(found_shots)} 张截图")
-                break
 
         # 拷贝到项目 screenshots 目录
         saved_paths: List[str] = []
