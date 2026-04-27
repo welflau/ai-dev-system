@@ -45,8 +45,9 @@ logger = logging.getLogger("agent.chat_assistant")
 _INTERNAL_ONLY_ACTIONS = {"create_requirement"}
 
 # 全局聊天（项目列表页，无 project_id）下可用的工具白名单。
-# 全局聊天只应该让 LLM 识别"新建项目"意图，其他工具都依赖 project_id。
-_GLOBAL_CHAT_TOOLS = {"confirm_project"}
+# confirm_project：识别新建项目意图
+# search_knowledge / search_ticket_history：全局模式下搜全库（无 project_id 过滤）
+_GLOBAL_CHAT_TOOLS = {"confirm_project", "search_knowledge", "search_ticket_history"}
 
 
 class _ChatToolExecutor:

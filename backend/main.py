@@ -116,6 +116,8 @@ async def lifespan(app: FastAPI):
                     await _upsert_knowledge_index(pid_dir.name, md.name, md.read_text(encoding="utf-8", errors="replace"))
                     indexed += 1
         # 强制 rebuild（确保 tokenizer 变更后旧数据被重建）
+        # 先 integrity-check 刷新 FTS5 schema 缓存，再 rebuild
+        await db.execute("INSERT INTO knowledge_fts(knowledge_fts) VALUES('integrity-check')")
         await db.execute("INSERT INTO knowledge_fts(knowledge_fts) VALUES('rebuild')")
         if indexed:
             logger.info("知识库 FTS5 索引：补录 %d 个文档", indexed)

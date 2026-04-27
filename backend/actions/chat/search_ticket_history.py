@@ -69,27 +69,40 @@ class SearchTicketHistoryAction(ActionBase):
             return ActionResult(status="fail", data={"error": "query 不能为空"})
 
         try:
-            rows = await db.fetch_all("""
-                SELECT tf.ticket_id,
-                       snippet(tickets_fts, 0, '**', '**', '...', 40) AS snippet,
-                       t.title, t.status, t.type, t.module,
-                       (SELECT tl.detail
-                        FROM ticket_logs tl
-                        WHERE tl.ticket_id = tf.ticket_id
-                          AND tl.action = 'reflection'
-                        ORDER BY tl.created_at DESC
-                        LIMIT 1) AS reflection_detail,
-                       t.updated_at
-                FROM tickets_fts tf
-                JOIN tickets t ON tf.ticket_id = t.id
-                WHERE tickets_fts MATCH ?
-                  AND tf.project_id = ?
-                  AND t.status IN (
-                      'acceptance_passed', 'testing_done', 'deployed', 'development_done'
-                  )
-                ORDER BY rank
-                LIMIT ?
-            """, (query, project_id, limit))
+            if project_id:
+                rows = await db.fetch_all("""
+                    SELECT tf.ticket_id,
+                           snippet(tickets_fts, 0, '**', '**', '...', 40) AS snippet,
+                           t.title, t.status, t.type, t.module,
+                           (SELECT tl.detail FROM ticket_logs tl
+                            WHERE tl.ticket_id = tf.ticket_id AND tl.action = 'reflection'
+                            ORDER BY tl.created_at DESC LIMIT 1) AS reflection_detail,
+                           t.updated_at
+                    FROM tickets_fts tf
+                    JOIN tickets t ON tf.ticket_id = t.id
+                    WHERE tickets_fts MATCH ?
+                      AND tf.project_id = ?
+                      AND t.status IN ('acceptance_passed','testing_done','deployed','development_done')
+                    ORDER BY rank
+                    LIMIT ?
+                """, (query, project_id, limit))
+            else:
+                # 全局模式：搜全部项目
+                rows = await db.fetch_all("""
+                    SELECT tf.ticket_id,
+                           snippet(tickets_fts, 0, '**', '**', '...', 40) AS snippet,
+                           t.title, t.status, t.type, t.module,
+                           (SELECT tl.detail FROM ticket_logs tl
+                            WHERE tl.ticket_id = tf.ticket_id AND tl.action = 'reflection'
+                            ORDER BY tl.created_at DESC LIMIT 1) AS reflection_detail,
+                           t.updated_at, t.project_id
+                    FROM tickets_fts tf
+                    JOIN tickets t ON tf.ticket_id = t.id
+                    WHERE tickets_fts MATCH ?
+                      AND t.status IN ('acceptance_passed','testing_done','deployed','development_done')
+                    ORDER BY rank
+                    LIMIT ?
+                """, (query, limit))
         except Exception as e:
             logger.warning("tickets_fts 搜索出错: %s", e)
             return ActionResult(status="fail", data={"error": f"搜索失败: {e}"})

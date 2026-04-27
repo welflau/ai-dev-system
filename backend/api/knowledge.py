@@ -300,16 +300,29 @@ async def _do_search_knowledge(q: str, project_id: Optional[str], limit: int):
     if not q.strip():
         raise HTTPException(400, "查询不能为空")
     try:
-        rows = await db.fetch_all("""
-            SELECT ki.filename, ki.project_id,
-                   snippet(knowledge_fts, 0, '**', '**', '...', 40) AS snippet
-            FROM knowledge_fts
-            JOIN knowledge_index ki ON knowledge_fts.rowid = ki.id
-            WHERE knowledge_fts MATCH ?
-              AND (ki.project_id = ? OR ki.project_id IS NULL)
-            ORDER BY rank
-            LIMIT ?
-        """, (q, project_id, limit))
+        if project_id:
+            # 项目内：该项目文档 + 全局文档
+            rows = await db.fetch_all("""
+                SELECT ki.filename, ki.project_id,
+                       snippet(knowledge_fts, 0, '**', '**', '...', 40) AS snippet
+                FROM knowledge_fts
+                JOIN knowledge_index ki ON knowledge_fts.rowid = ki.id
+                WHERE knowledge_fts MATCH ?
+                  AND (ki.project_id = ? OR ki.project_id IS NULL)
+                ORDER BY rank
+                LIMIT ?
+            """, (q, project_id, limit))
+        else:
+            # 全局模式：搜索所有项目 + 全局文档
+            rows = await db.fetch_all("""
+                SELECT ki.filename, ki.project_id,
+                       snippet(knowledge_fts, 0, '**', '**', '...', 40) AS snippet
+                FROM knowledge_fts
+                JOIN knowledge_index ki ON knowledge_fts.rowid = ki.id
+                WHERE knowledge_fts MATCH ?
+                ORDER BY rank
+                LIMIT ?
+            """, (q, limit))
     except Exception as e:
         logger.warning("knowledge_fts 搜索失败: %s", e)
         raise HTTPException(500, f"搜索失败: {e}")

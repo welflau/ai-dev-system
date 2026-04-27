@@ -68,18 +68,33 @@ class SearchKnowledgeAction(ActionBase):
             return ActionResult(status="fail", data={"error": "query 不能为空"})
 
         try:
-            rows = await db.fetch_all("""
-                SELECT ki.filename,
-                       ki.project_id,
-                       snippet(knowledge_fts, 0, '**', '**', '...', 40) AS snippet,
-                       substr(ki.content, 1, 500)                        AS preview
-                FROM knowledge_fts
-                JOIN knowledge_index ki ON knowledge_fts.rowid = ki.id
-                WHERE knowledge_fts MATCH ?
-                  AND (ki.project_id = ? OR ki.project_id IS NULL)
-                ORDER BY rank
-                LIMIT ?
-            """, (query, project_id, limit))
+            if project_id:
+                # 项目内：该项目文档 + 全局文档
+                rows = await db.fetch_all("""
+                    SELECT ki.filename,
+                           ki.project_id,
+                           snippet(knowledge_fts, 0, '**', '**', '...', 40) AS snippet,
+                           substr(ki.content, 1, 500)                        AS preview
+                    FROM knowledge_fts
+                    JOIN knowledge_index ki ON knowledge_fts.rowid = ki.id
+                    WHERE knowledge_fts MATCH ?
+                      AND (ki.project_id = ? OR ki.project_id IS NULL)
+                    ORDER BY rank
+                    LIMIT ?
+                """, (query, project_id, limit))
+            else:
+                # 全局模式：搜索所有项目 + 全局文档
+                rows = await db.fetch_all("""
+                    SELECT ki.filename,
+                           ki.project_id,
+                           snippet(knowledge_fts, 0, '**', '**', '...', 40) AS snippet,
+                           substr(ki.content, 1, 500)                        AS preview
+                    FROM knowledge_fts
+                    JOIN knowledge_index ki ON knowledge_fts.rowid = ki.id
+                    WHERE knowledge_fts MATCH ?
+                    ORDER BY rank
+                    LIMIT ?
+                """, (query, limit))
         except Exception as e:
             logger.warning("knowledge_fts 搜索出错: %s", e)
             return ActionResult(status="fail", data={"error": f"搜索失败: {e}"})
