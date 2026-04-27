@@ -105,10 +105,27 @@ async def lifespan(app: FastAPI):
     # 补录现有 docs 文件到 knowledge_index（首次启动迁移）
     try:
         from api.knowledge import _upsert_knowledge_index, GLOBAL_DOCS_DIR, PROJECTS_DIR as K_PROJECTS_DIR
+        from config import BASE_DIR as _BDIR
+        SYSTEM_ROOT = _BDIR.parent  # F:\A_Works\ai-dev-system
         indexed = 0
+
+        # 1. 系统自身的 docs/ 和 dev-notes/（全局知识，filename 带前缀区分）
+        for sys_dir, prefix in [
+            (SYSTEM_ROOT / "docs",      "sys_docs__"),
+            (SYSTEM_ROOT / "dev-notes", "sys_devnotes__"),
+        ]:
+            if sys_dir.is_dir():
+                for md in sorted(sys_dir.glob("*.md")):
+                    fname = prefix + md.name
+                    await _upsert_knowledge_index(None, fname, md.read_text(encoding="utf-8", errors="replace"))
+                    indexed += 1
+
+        # 2. 用户在全局知识库 Tab 手动写入的文档
         for md in GLOBAL_DOCS_DIR.glob("*.md"):
             await _upsert_knowledge_index(None, md.name, md.read_text(encoding="utf-8", errors="replace"))
             indexed += 1
+
+        # 3. 各项目的 docs/
         for pid_dir in K_PROJECTS_DIR.iterdir():
             docs_dir = pid_dir / "docs"
             if docs_dir.is_dir():
