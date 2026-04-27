@@ -257,7 +257,8 @@ class ProjectCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=200)
     description: Optional[str] = None
     tech_stack: Optional[str] = None
-    git_remote_url: str = Field(..., min_length=1, description="Git 远程仓库 URL（必填）")
+    git_remote_url: Optional[str] = Field(None, description="主 Remote URL（origin）")
+    git_remotes: Optional[List[Dict[str, str]]] = Field(None, description="多 Remote 列表 [{name, url}, ...]")
     local_repo_path: Optional[str] = Field(None, description="本地仓库路径（可选，默认为 backend/projects/{project_id}/）")
     # v0.17 Phase D：导入时带过来的 traits + preset
     traits: Optional[List[str]] = Field(default=None, description="项目 traits（可选）")
@@ -271,6 +272,10 @@ class ProjectUpdate(BaseModel):
     tech_stack: Optional[str] = None
     status: Optional[str] = None
     git_remote_url: Optional[str] = None
+
+
+class RepoPathUpdate(BaseModel):
+    repo_path: str
 
 
 class RequirementCreate(BaseModel):

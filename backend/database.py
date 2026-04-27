@@ -87,6 +87,9 @@ class Database:
             ("tickets", "current_action_started_at", "TEXT"),   # ISO 时间戳
             ("tickets", "current_action_latest_log", "TEXT"),   # 最近一行关键 log（<=200 字符）
             ("tickets", "current_action_updated_at", "TEXT"),   # 最近一次心跳时间
+            # 多 Remote 管理
+            ("projects", "git_remotes",     "TEXT DEFAULT '[]'"),      # JSON: [{name, url}, ...]
+            ("projects", "git_push_remote", "TEXT DEFAULT 'origin'"),  # 默认 push 目标 remote 名
         ]
         async with self._write_lock:
             for table, column, col_def in migrations:

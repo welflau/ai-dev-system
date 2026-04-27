@@ -1154,14 +1154,122 @@ function loadSettingsGeneral() {
 async function loadSettingsRepo() {
     if (!currentProject) return;
     const p = currentProject;
-    document.getElementById('settingsGitRemote').value = p.git_remote_url || '';
     document.getElementById('settingsRepoPath').value = p.git_repo_path || '默认路径';
 
-    // 加载仓库状态
-    await refreshRepoStatus();
+    // 并行加载三个独立区域
+    await Promise.all([
+        loadRemotes(),
+        refreshRepoStatus(),
+        loadBranchInfo(),
+    ]);
+}
 
-    // 加载分支信息
-    await loadBranchInfo();
+/** 加载 Remote 列表（GET /git/remotes） */
+async function loadRemotes() {
+    if (!currentProjectId) return;
+    const container = document.getElementById('remotesList');
+    if (!container) return;
+    try {
+        const data = await api(`/projects/${currentProjectId}/git/remotes`);
+        _renderRemotes(data);
+    } catch (e) {
+        container.innerHTML = `<span style="color:var(--danger);font-size:12px;">加载失败: ${e.message}</span>`;
+    }
+}
+
+function _renderRemotes(data) {
+    const container = document.getElementById('remotesList');
+    if (!container) return;
+    const { remotes = [], push_remote } = data;
+
+    // 更新 badge
+    const badge = document.getElementById('pushRemoteBadge');
+    const nameEl = document.getElementById('currentPushRemoteName');
+    if (badge && nameEl) {
+        nameEl.textContent = push_remote || 'origin';
+        badge.style.display = remotes.length ? '' : 'none';
+    }
+
+    if (!remotes.length) {
+        container.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">暂无 Remote 配置</span>';
+        return;
+    }
+
+    container.innerHTML = remotes.map(r => `
+        <div class="remote-row">
+            <span class="remote-name">${escapeHtml(r.name)}</span>
+            <span class="remote-url" title="${escapeHtml(r.url)}">${escapeHtml(r.url)}</span>
+            <span class="remote-actions">
+                ${r.is_push_default
+                    ? `<span class="push-default-tag">📤 Push 默认</span>`
+                    : `<button class="btn btn-xs btn-outline" onclick="setPushRemote('${escapeHtml(r.name)}')">设为默认</button>`
+                }
+                <button class="btn btn-xs" onclick="window.open('${escapeHtml(r.url.replace(/\.git$/, ''))}','_blank')" title="在浏览器中打开">🔗</button>
+                <button class="btn btn-xs btn-danger-outline" onclick="deleteRemote('${escapeHtml(r.name)}')" title="删除">✕</button>
+            </span>
+        </div>
+    `).join('');
+}
+
+function toggleAddRemote(btn) {
+    const section = document.getElementById('addRemoteSection');
+    if (!section) return;
+    const open = section.style.display !== 'none';
+    section.style.display = open ? 'none' : 'block';
+    if (btn) btn.textContent = open ? '＋ 添加 Remote' : '－ 取消';
+    if (!open) document.getElementById('newRemoteName')?.focus();
+}
+
+/** 添加 Remote */
+async function addRemote() {
+    const name = (document.getElementById('newRemoteName').value || '').trim();
+    const url  = (document.getElementById('newRemoteUrl').value  || '').trim();
+    if (!name) { showToast('请填写 Remote 名称', 'error'); return; }
+    if (!url)  { showToast('请填写 Remote URL', 'error'); return; }
+    try {
+        const data = await api(`/projects/${currentProjectId}/git/remotes`, {
+            method: 'POST', body: { name, url }
+        });
+        document.getElementById('newRemoteName').value = '';
+        document.getElementById('newRemoteUrl').value  = '';
+        // 收起添加区域
+        const section = document.getElementById('addRemoteSection');
+        const btn = document.querySelector('.add-remote-toggle');
+        if (section) section.style.display = 'none';
+        if (btn) btn.textContent = '＋ 添加 Remote';
+        _renderRemotes(data);
+        showToast(`Remote "${name}" 已添加`, 'success');
+    } catch (e) {
+        showToast(`添加失败: ${e.message}`, 'error');
+    }
+}
+
+/** 删除 Remote */
+async function deleteRemote(name) {
+    if (!confirm(`确认删除 Remote "${name}"？`)) return;
+    try {
+        const data = await api(`/projects/${currentProjectId}/git/remotes/${encodeURIComponent(name)}`, {
+            method: 'DELETE'
+        });
+        _renderRemotes(data);
+        showToast(`Remote "${name}" 已删除`, 'success');
+    } catch (e) {
+        showToast(`删除失败: ${e.message}`, 'error');
+    }
+}
+
+/** 设置默认 Push Remote */
+async function setPushRemote(name) {
+    if (!confirm(`将 Push 默认 Remote 切换为 "${name}"？\nAI 提交代码时将 push 到此 Remote。`)) return;
+    try {
+        const data = await api(`/projects/${currentProjectId}/git/push-remote`, {
+            method: 'PUT', body: { remote_name: name }
+        });
+        _renderRemotes(data);
+        showToast(`Push 默认已切换为 "${name}"`, 'success');
+    } catch (e) {
+        showToast(`切换失败: ${e.message}`, 'error');
+    }
 }
 
 /** 加载分支列表和合并操作（v0.19.1 升级：树形视图 + ahead/behind + 最近提交） */
@@ -1731,6 +1839,54 @@ async function saveRepoSettings() {
     }
 }
 
+/** 本地仓库路径修改流程 */
+function startEditRepoPath() {
+    document.getElementById('repoPathEditArea').style.display = 'block';
+    document.getElementById('btnEditRepoPath').style.display = 'none';
+    const current = document.getElementById('settingsRepoPath').value;
+    document.getElementById('settingsRepoPathNew').value = (current && current !== '默认路径') ? current : '';
+    document.getElementById('settingsRepoPathNew').focus();
+    document.getElementById('repoPathHint').textContent = '';
+    document.getElementById('repoPathHint').style.color = '';
+}
+
+function cancelEditRepoPath() {
+    document.getElementById('repoPathEditArea').style.display = 'none';
+    document.getElementById('btnEditRepoPath').style.display = '';
+}
+
+async function saveRepoPath() {
+    const newPath = document.getElementById('settingsRepoPathNew').value.trim();
+    if (!newPath) { showToast('路径不能为空', 'error'); return; }
+
+    const current = document.getElementById('settingsRepoPath').value;
+    if (newPath === current) { cancelEditRepoPath(); return; }
+
+    if (!confirm(`确认将本地仓库路径修改为：\n${newPath}\n\nAI 将从新路径读写代码，请确保路径正确。`)) return;
+
+    const hint = document.getElementById('repoPathHint');
+    hint.textContent = '验证中...';
+    hint.style.color = '';
+
+    try {
+        const data = await api(`/projects/${currentProjectId}/repo-path`, {
+            method: 'PUT',
+            body: { repo_path: newPath }
+        });
+        currentProject = data;
+        document.getElementById('settingsRepoPath').value = data.git_repo_path || newPath;
+        cancelEditRepoPath();
+        if (data.warning) {
+            showToast(`路径已保存（⚠️ ${data.warning}）`, 'warning');
+        } else {
+            showToast('本地路径已更新', 'success');
+        }
+    } catch (e) {
+        hint.textContent = `❌ ${e.message}`;
+        hint.style.color = 'var(--danger)';
+    }
+}
+
 /** 在浏览器中打开 Git 远程仓库 */
 function openGitRemoteUrl() {
     const url = document.getElementById('settingsGitRemote')?.value;
@@ -2061,6 +2217,7 @@ function showImportProjectModal() {
     // v0.17 Phase D：重置探测状态
     _detectedTraits = null;
     _detectedPresetId = null;
+    _detectedGitRemotes = null;
 
     // 默认选中远程仓库方式
     document.querySelector('input[name="importType"][value="remote"]').checked = true;
@@ -2110,8 +2267,9 @@ function handleImportTypeChange() {
 }
 
 /** v0.17 Phase D：检测本地项目信息 + traits 候选 */
-let _detectedTraits = null;   // 最近一次探测到的 traits（供 importProject 提交时用）
+let _detectedTraits = null;      // 最近一次探测到的 traits（供 importProject 提交时用）
 let _detectedPresetId = null;
+let _detectedGitRemotes = null;  // 探测到的多 remote 列表 [{name, url}, ...]
 
 async function detectLocalProjectInfo() {
     const localPath = document.getElementById('importLocalPath').value.trim();
@@ -2133,6 +2291,8 @@ async function detectLocalProjectInfo() {
         if (data.git_remote_url) {
             document.getElementById('importGitRemote').value = data.git_remote_url;
         }
+        // 保存多 remote 列表（提交时带上，导入后仓库配置里直接显示所有 remote）
+        _detectedGitRemotes = (data.git_remotes && data.git_remotes.length > 1) ? data.git_remotes : null;
         if (data.description) {
             document.getElementById('importProjectDesc').value = data.description;
         }
@@ -2152,6 +2312,7 @@ async function detectLocalProjectInfo() {
         const traitsArr = data.detected_traits || [];
         const warningsArr = data.trait_warnings || [];
 
+        const remotesArr = data.git_remotes || [];
         let html = `
             <div style="margin:6px 0; font-size:13px;">
                 <strong>基础信息：</strong>
@@ -2159,6 +2320,11 @@ async function detectLocalProjectInfo() {
                 ${data.tech_stack ? `· 技术栈=${escapeHtml(data.tech_stack)}` : ''}
                 ${data.is_git_repo ? '· Git 仓库 ✓' : ''}
             </div>
+            ${remotesArr.length > 1 ? `
+            <div style="margin:6px 0; font-size:12px; color:var(--accent);">
+                🔗 检测到 ${remotesArr.length} 个 Remote：${remotesArr.map(r => `<code>${escapeHtml(r.name)}</code>`).join(' · ')}
+                （将全部导入，push 默认为 <code>origin</code>）
+            </div>` : ''}
         `;
 
         if (traitsArr.length) {
@@ -2196,6 +2362,7 @@ async function detectLocalProjectInfo() {
     } catch (e) {
         _detectedTraits = null;
         _detectedPresetId = null;
+        _detectedGitRemotes = null;
         showToast(`检测失败: ${e.message}`, 'error');
     }
 }
@@ -2248,6 +2415,10 @@ async function importProject() {
         }
         if (_detectedPresetId) {
             body.preset_id = _detectedPresetId;
+        }
+        // 多 remote：探测到 >1 个时带上完整列表
+        if (_detectedGitRemotes && _detectedGitRemotes.length > 1) {
+            body.git_remotes = _detectedGitRemotes;
         }
 
         const data = await api('/projects', {

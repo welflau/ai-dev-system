@@ -74,17 +74,31 @@ async def lifespan(app: FastAPI):
     from git_manager import PROJECTS_DIR, git_manager
     logger.info("Git 项目仓库目录: %s", PROJECTS_DIR)
 
-    # 从数据库恢复自定义 git_repo_path 映射
+    # 从数据库恢复自定义 git_repo_path 映射 + push remote 配置
+    import json as _json
     projects = await db.fetch_all(
-        "SELECT id, git_repo_path FROM projects WHERE git_repo_path IS NOT NULL AND git_repo_path != ''"
+        "SELECT id, git_repo_path, git_remote_url, git_remotes, git_push_remote FROM projects"
     )
     restored = 0
     for p in projects:
-        repo_path = p["git_repo_path"]
-        default_path = str(PROJECTS_DIR / p["id"])
-        if repo_path != default_path:
-            git_manager.set_project_path(p["id"], repo_path)
-            restored += 1
+        repo_path = p.get("git_repo_path") or ""
+        if repo_path:
+            default_path = str(PROJECTS_DIR / p["id"])
+            if repo_path != default_path:
+                git_manager.set_project_path(p["id"], repo_path)
+                restored += 1
+
+        # 恢复 push remote 配置
+        push_remote = p.get("git_push_remote") or "origin"
+        git_manager.set_push_remote(p["id"], push_remote)
+
+        # 补全旧数据：git_remotes 空但 git_remote_url 有值 → 自动迁移
+        git_remotes_raw = p.get("git_remotes") or "[]"
+        if (git_remotes_raw == "[]" or not git_remotes_raw) and p.get("git_remote_url"):
+            await db.update("projects", {
+                "git_remotes": _json.dumps([{"name": "origin", "url": p["git_remote_url"]}])
+            }, "id = ?", (p["id"],))
+
     if restored:
         logger.info("已恢复 %d 个项目的自定义仓库路径映射", restored)
 

@@ -3,11 +3,12 @@ AI 自动开发系统 - 项目 API
 """
 import json
 import logging
+import os
 from fastapi import APIRouter, HTTPException, UploadFile, File
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 from database import db
-from models import ProjectCreate, ProjectUpdate
+from models import ProjectCreate, ProjectUpdate, RepoPathUpdate
 from utils import generate_id, now_iso
 from git_manager import git_manager
 
@@ -144,6 +145,28 @@ async def create_project(req: ProjectCreate):
                 for t in traits_list
             }
 
+        # 整理 git_remotes：优先用请求里的数组，否则从 git_remote_url 构造
+        remotes_list = req.git_remotes or []
+        if not remotes_list and req.git_remote_url:
+            remotes_list = [{"name": "origin", "url": req.git_remote_url}]
+        # 把所有 remote 注册到 git（本地 clone 场景已经有 origin，跳过已存在的）
+        for r in remotes_list:
+            rname, rurl = r.get("name", ""), r.get("url", "")
+            if rname and rurl and rname != "origin":  # origin 已由 set_remote/clone 处理
+                try:
+                    await git_manager.add_remote(project_id, rname, rurl)
+                except Exception as e:
+                    logger.warning("注册 remote '%s' 失败（忽略）: %s", rname, e)
+
+        # 从 git_remotes 推断 git_remote_url（取 origin，fallback 第一个）
+        origin_url = req.git_remote_url or ""
+        if not origin_url and remotes_list:
+            origin_entry = next((r for r in remotes_list if r.get("name") == "origin"), remotes_list[0])
+            origin_url = origin_entry.get("url", "")
+
+        # push_remote 默认 "origin"
+        git_manager.set_push_remote(project_id, "origin")
+
         data = {
             "id": project_id,
             "name": req.name,
@@ -152,7 +175,9 @@ async def create_project(req: ProjectCreate):
             "tech_stack": req.tech_stack or "",
             "config": "{}",
             "git_repo_path": repo_path,
-            "git_remote_url": req.git_remote_url or "",
+            "git_remote_url": origin_url,
+            "git_remotes": json.dumps(remotes_list, ensure_ascii=False),
+            "git_push_remote": "origin",
             "traits": json.dumps(traits_list, ensure_ascii=False),
             "traits_confidence": json.dumps(traits_conf, ensure_ascii=False),
             "preset_id": req.preset_id,
@@ -161,7 +186,12 @@ async def create_project(req: ProjectCreate):
         }
         await db.insert("projects", data)
 
-        logger.info("项目创建完成: %s (%s)", req.name, project_id)
+        if remotes_list:
+            logger.info("项目创建完成: %s (%s)，%d 个 Remote: %s",
+                        req.name, project_id, len(remotes_list),
+                        ", ".join(r.get("name","?") for r in remotes_list))
+        else:
+            logger.info("项目创建完成: %s (%s)", req.name, project_id)
 
         # 异步生成初版 Roadmap（不阻塞创建流程）
         asyncio.create_task(generate_roadmap_for_project(
@@ -369,14 +399,57 @@ async def update_project(project_id: str, req: ProjectUpdate):
         update_data["updated_at"] = now_iso()
         await db.update("projects", update_data, "id = ?", (project_id,))
 
-        # 如果更新了 git_remote_url，同步到 GitManager
+        # 如果更新了 git_remote_url，同步到 GitManager 并更新 git_remotes 里的 origin 条目
         if "git_remote_url" in update_data and git_manager.repo_exists(project_id):
             try:
-                await git_manager.set_remote(project_id, update_data["git_remote_url"])
+                new_url = update_data["git_remote_url"]
+                await git_manager.set_remote(project_id, new_url)
+                # 同步更新 git_remotes JSON 里 origin 的 url
+                fresh = await db.fetch_one("SELECT git_remotes FROM projects WHERE id = ?", (project_id,))
+                remotes = json.loads(fresh.get("git_remotes") or "[]")
+                updated = False
+                for r in remotes:
+                    if r.get("name") == "origin":
+                        r["url"] = new_url
+                        updated = True
+                if not updated:
+                    remotes.insert(0, {"name": "origin", "url": new_url})
+                await db.update("projects", {"git_remotes": json.dumps(remotes)}, "id = ?", (project_id,))
             except Exception as e:
                 logger.warning("同步 git remote 失败: %s", e)
 
     return await get_project(project_id)
+
+
+@router.put("/{project_id}/repo-path")
+async def update_project_repo_path(project_id: str, req: RepoPathUpdate):
+    """修改项目本地仓库路径（敏感操作，独立端点）"""
+    project = await db.fetch_one("SELECT * FROM projects WHERE id = ?", (project_id,))
+    if not project:
+        raise HTTPException(404, "项目不存在")
+
+    new_path = req.repo_path.strip()
+    if not new_path:
+        raise HTTPException(422, "路径不能为空")
+
+    if not os.path.isdir(new_path):
+        raise HTTPException(400, f"目录不存在，请确认路径正确：{new_path}")
+
+    warning = None
+    if not os.path.isdir(os.path.join(new_path, ".git")):
+        warning = "目录存在但不是 Git 仓库"
+
+    await db.update("projects", {
+        "git_repo_path": new_path,
+        "updated_at": now_iso(),
+    }, "id = ?", (project_id,))
+
+    logger.info("项目 %s 本地路径已修改: %s → %s", project_id, project.get("git_repo_path"), new_path)
+
+    result = await get_project(project_id)
+    if warning:
+        result["warning"] = warning
+    return result
 
 
 @router.delete("/{project_id}")
@@ -505,6 +578,142 @@ async def set_git_remote(project_id: str, body: dict):
     }, "id = ?", (project_id,))
 
     return {"status": "ok", "remote_url": url}
+
+
+async def _remotes_response(project_id: str, push_remote: str, db_remotes_raw: str = None) -> dict:
+    """从 git 读取 remote 列表；git 为空时从 DB 恢复并写入 git"""
+    if git_manager.repo_exists(project_id):
+        git_remotes = await git_manager.list_remotes(project_id)
+        # git 里没有 remote，但 DB 有记录 → 自动恢复到 git
+        if not git_remotes and db_remotes_raw:
+            db_list = json.loads(db_remotes_raw or "[]")
+            for r in db_list:
+                name, url = r.get("name", ""), r.get("url", "")
+                if name and url:
+                    try:
+                        await git_manager.add_remote(project_id, name, url)
+                    except Exception:
+                        pass
+            git_remotes = await git_manager.list_remotes(project_id)
+    else:
+        git_remotes = []
+    remotes = [
+        {"name": r["name"], "url": r["url"], "is_push_default": r["name"] == push_remote}
+        for r in git_remotes
+    ]
+    return {"remotes": remotes, "push_remote": push_remote}
+
+
+@router.get("/{project_id}/git/remotes")
+async def list_git_remotes(project_id: str):
+    """列出项目所有 Git Remote（含 push 默认标记）"""
+    project = await db.fetch_one("SELECT * FROM projects WHERE id = ?", (project_id,))
+    if not project:
+        raise HTTPException(404, "项目不存在")
+
+    _ensure_git_path(project)
+    push_remote = project.get("git_push_remote") or "origin"
+    return await _remotes_response(project_id, push_remote, project.get("git_remotes"))
+
+
+@router.post("/{project_id}/git/remotes")
+async def add_git_remote(project_id: str, body: dict):
+    """添加新 Remote"""
+    project = await db.fetch_one("SELECT * FROM projects WHERE id = ?", (project_id,))
+    if not project:
+        raise HTTPException(404, "项目不存在")
+
+    name = (body.get("name") or "").strip()
+    url = (body.get("url") or "").strip()
+    if not name:
+        raise HTTPException(400, "Remote 名称不能为空")
+    if not url:
+        raise HTTPException(400, "Remote URL 不能为空")
+    if not name.replace("-", "").replace("_", "").isalnum():
+        raise HTTPException(400, "Remote 名称只能包含字母、数字、-、_")
+
+    _ensure_git_path(project)
+
+    if not git_manager.repo_exists(project_id):
+        await git_manager.init_repo(project_id, project["name"], project.get("description", ""))
+
+    ok = await git_manager.add_remote(project_id, name, url)
+    if not ok:
+        raise HTTPException(500, f"添加 Remote '{name}' 失败")
+
+    # 同步到 DB git_remotes
+    remotes = json.loads(project.get("git_remotes") or "[]")
+    remotes = [r for r in remotes if r.get("name") != name]  # 去旧
+    remotes.append({"name": name, "url": url})
+    updates: dict = {"git_remotes": json.dumps(remotes), "updated_at": now_iso()}
+    # 如果是第一个 remote，同时更新 git_remote_url 兼容旧字段
+    if name == "origin":
+        updates["git_remote_url"] = url
+    await db.update("projects", updates, "id = ?", (project_id,))
+
+    push_remote = project.get("git_push_remote") or "origin"
+    return await _remotes_response(project_id, push_remote)
+
+
+@router.delete("/{project_id}/git/remotes/{remote_name}")
+async def delete_git_remote(project_id: str, remote_name: str):
+    """删除指定 Remote"""
+    project = await db.fetch_one("SELECT * FROM projects WHERE id = ?", (project_id,))
+    if not project:
+        raise HTTPException(404, "项目不存在")
+
+    push_remote = project.get("git_push_remote") or "origin"
+
+    if remote_name == push_remote:
+        raise HTTPException(400, "无法删除当前 Push 默认 Remote，请先将其他 Remote 设为默认")
+
+    _ensure_git_path(project)
+    # 用 git 实际数量判断（DB 可能滞后）
+    git_remotes_list = await git_manager.list_remotes(project_id) if git_manager.repo_exists(project_id) else []
+    if len(git_remotes_list) <= 1:
+        raise HTTPException(400, "至少保留一个 Remote，无法删除")
+
+    if git_manager.repo_exists(project_id):
+        await git_manager.remove_remote(project_id, remote_name)
+
+    remotes_db = json.loads(project.get("git_remotes") or "[]")
+    remotes_db = [r for r in remotes_db if r.get("name") != remote_name]
+    await db.update("projects", {
+        "git_remotes": json.dumps(remotes_db),
+        "updated_at": now_iso(),
+    }, "id = ?", (project_id,))
+
+    return await _remotes_response(project_id, push_remote)
+
+
+@router.put("/{project_id}/git/push-remote")
+async def set_push_remote(project_id: str, body: dict):
+    """设置项目的默认 Push Remote"""
+    project = await db.fetch_one("SELECT * FROM projects WHERE id = ?", (project_id,))
+    if not project:
+        raise HTTPException(404, "项目不存在")
+
+    remote_name = (body.get("remote_name") or "").strip()
+    if not remote_name:
+        raise HTTPException(400, "remote_name 不能为空")
+
+    # 验证 remote 存在
+    _ensure_git_path(project)
+    if git_manager.repo_exists(project_id):
+        git_remotes = await git_manager.list_remotes(project_id)
+        names = [r["name"] for r in git_remotes]
+        if names and remote_name not in names:
+            raise HTTPException(400, f"Remote '{remote_name}' 不存在，可用: {', '.join(names)}")
+
+    await db.update("projects", {
+        "git_push_remote": remote_name,
+        "updated_at": now_iso(),
+    }, "id = ?", (project_id,))
+    git_manager.set_push_remote(project_id, remote_name)
+    logger.info("项目 %s 默认 push remote 设为: %s", project_id, remote_name)
+
+    remotes = json.loads(project.get("git_remotes") or "[]")
+    return await _remotes_response(project_id, remote_name)
 
 
 @router.get("/{project_id}/git/tree")
@@ -786,15 +995,18 @@ async def detect_local_project(body: dict):
     result["is_git_repo"] = is_git_repo
 
     if is_git_repo:
-        # 尝试获取远程仓库 URL
+        # 读取所有 remote（去重 fetch/push 同名条目）
         rc, out, err = await git_manager._run_git(local_path, "remote", "-v")
         if rc == 0 and out:
-            # 解析远程 URL（第一行，第二列）
-            lines = out.strip().split("\n")
-            if lines:
-                parts = lines[0].split()
+            seen: dict = {}
+            for line in out.strip().splitlines():
+                parts = line.split()
                 if len(parts) >= 2:
-                    result["git_remote_url"] = parts[1]
+                    seen[parts[0]] = parts[1]
+            remotes = [{"name": n, "url": u} for n, u in seen.items()]
+            if remotes:
+                result["git_remotes"] = remotes
+                result["git_remote_url"] = remotes[0]["url"]  # 兼容旧字段，取第一个
 
         # 尝试获取项目描述（从 README.md）
         readme_files = ["README.md", "README.txt", "readme.md", "readme.txt"]

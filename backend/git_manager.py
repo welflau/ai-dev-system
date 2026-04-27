@@ -37,10 +37,16 @@ class GitManager:
     def __init__(self):
         # 存储项目 ID 到自定义路径的映射
         self._custom_paths: Dict[str, str] = {}
+        # 存储项目 ID 到默认 push remote 名的映射
+        self._push_remotes: Dict[str, str] = {}
 
     def set_project_path(self, project_id: str, path: str):
         """设置项目的自定义仓库路径"""
         self._custom_paths[project_id] = path
+
+    def set_push_remote(self, project_id: str, remote_name: str):
+        """设置项目的默认 push remote 名"""
+        self._push_remotes[project_id] = remote_name
 
     def _repo_path(self, project_id: str) -> Path:
         """获取项目仓库路径（优先使用自定义路径）"""
@@ -202,8 +208,12 @@ Thumbs.db
         rc, hash_out, _ = await self._run_git(repo_dir, "rev-parse", "--short", "HEAD")
         return hash_out if rc == 0 else None
 
-    async def push(self, project_id: str, remote: str = "origin", branch: str = None) -> bool:
+    async def push(self, project_id: str, remote: str = None, branch: str = None) -> bool:
         """git push（仅在配置了远程仓库时执行，禁止 Agent 直接 push 到 main/master）"""
+        # remote=None 时使用项目配置的 push remote，fallback "origin"
+        if remote is None:
+            remote = self._push_remotes.get(project_id, "origin")
+
         repo_dir = str(self._repo_path(project_id))
 
         # check if remote exists
@@ -274,6 +284,42 @@ Thumbs.db
             await self._run_git(repo_dir, "remote", "set-url", remote, url)
         else:
             await self._run_git(repo_dir, "remote", "add", remote, url)
+        return True
+
+    async def list_remotes(self, project_id: str) -> List[Dict]:
+        """返回仓库所有 remote 列表（去重 fetch/push 相同 url）"""
+        repo_dir = str(self._repo_path(project_id))
+        rc, out, _ = await self._run_git(repo_dir, "remote", "-v")
+        if rc != 0 or not out:
+            return []
+        seen: Dict[str, str] = {}
+        for line in out.splitlines():
+            parts = line.split()
+            if len(parts) >= 2:
+                name, url = parts[0], parts[1]
+                seen[name] = url  # 同名 remote fetch/push url 相同时去重
+        return [{"name": n, "url": u} for n, u in seen.items()]
+
+    async def add_remote(self, project_id: str, name: str, url: str) -> bool:
+        """添加新 remote"""
+        repo_dir = str(self._repo_path(project_id))
+        rc, out, _ = await self._run_git(repo_dir, "remote")
+        if name in (out or "").splitlines():
+            await self._run_git(repo_dir, "remote", "set-url", name, url)
+        else:
+            rc, _, err = await self._run_git(repo_dir, "remote", "add", name, url)
+            if rc != 0:
+                logger.error("git remote add '%s' failed: %s", name, err)
+                return False
+        return True
+
+    async def remove_remote(self, project_id: str, name: str) -> bool:
+        """删除 remote"""
+        repo_dir = str(self._repo_path(project_id))
+        rc, _, err = await self._run_git(repo_dir, "remote", "remove", name)
+        if rc != 0:
+            logger.error("git remote remove '%s' failed: %s", name, err)
+            return False
         return True
 
     # ==================== 分支管理 ====================

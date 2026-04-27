@@ -617,14 +617,30 @@
                         <div class="settings-page">
                             <div class="settings-page-header">
                                 <h2>📂 仓库配置</h2>
-                                <button class="btn btn-primary btn-sm" onclick="saveRepoSettings()">💾 保存更改</button>
                             </div>
                             <div class="settings-card">
-                                <div class="form-group">
-                                    <label>Git 远程仓库 URL</label>
-                                    <div class="input-with-action">
-                                        <input type="text" id="settingsGitRemote" placeholder="https://github.com/username/repo.git">
-                                        <button class="btn btn-sm" onclick="openGitRemoteUrl()" title="在浏览器中打开">🔗</button>
+                                <div class="settings-card-title-row">
+                                    <h3 class="settings-card-title">Remote 管理</h3>
+                                    <span class="push-remote-badge" id="pushRemoteBadge" style="display:none;">
+                                        📤 Push → <strong id="currentPushRemoteName">origin</strong>
+                                    </span>
+                                </div>
+                                <div id="remotesList" class="remotes-list">
+                                    <span style="color:var(--text-muted);font-size:12px;">加载中...</span>
+                                </div>
+                                <button class="btn btn-sm btn-outline add-remote-toggle" onclick="toggleAddRemote(this)">＋ 添加 Remote</button>
+                                <div class="add-remote-section" id="addRemoteSection" style="display:none;">
+                                    <div class="add-remote-field">
+                                        <label class="add-remote-sublabel">名称</label>
+                                        <input type="text" id="newRemoteName" placeholder="upstream" maxlength="50">
+                                    </div>
+                                    <div class="add-remote-field">
+                                        <label class="add-remote-sublabel">URL</label>
+                                        <input type="text" id="newRemoteUrl" placeholder="https://github.com/org/repo.git">
+                                    </div>
+                                    <div style="display:flex;gap:6px;margin-top:4px;">
+                                        <button class="btn btn-sm btn-primary" style="flex:1;" onclick="addRemote()">确认添加</button>
+                                        <button class="btn btn-sm" onclick="toggleAddRemote(document.querySelector('.add-remote-toggle'))">取消</button>
                                     </div>
                                 </div>
                                 <div class="form-group">
@@ -632,6 +648,16 @@
                                     <div class="input-with-action">
                                         <input type="text" id="settingsRepoPath" readonly disabled>
                                         <button class="btn btn-sm" onclick="copyToClipboard(document.getElementById('settingsRepoPath').value)" title="复制路径">📋</button>
+                                        <button class="btn btn-sm btn-warning-outline" id="btnEditRepoPath" onclick="startEditRepoPath()" title="修改本地路径">✏️ 修改</button>
+                                    </div>
+                                    <div id="repoPathEditArea" style="display:none; margin-top:8px;">
+                                        <div class="warning-banner">⚠️ 此操作会切换 AI 读写代码的本地目录，请确保新路径正确。</div>
+                                        <div class="input-with-action" style="margin-top:6px;">
+                                            <input type="text" id="settingsRepoPathNew" placeholder="输入新的绝对路径，例: D:/Projects/MyGame">
+                                            <button class="btn btn-sm btn-primary" onclick="saveRepoPath()">保存</button>
+                                            <button class="btn btn-sm" onclick="cancelEditRepoPath()">取消</button>
+                                        </div>
+                                        <small id="repoPathHint" class="form-hint"></small>
                                     </div>
                                     <small class="form-hint">仓库在本地磁盘的绝对路径</small>
                                 </div>

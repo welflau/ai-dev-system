@@ -7436,3 +7436,127 @@ body.chat-open .chat-panel {
     margin-top: 4px;
 }
 
+.warning-banner {
+    background: rgba(240, 165, 0, 0.1);
+    border: 1px solid var(--warning, #f0a500);
+    border-radius: 4px;
+    padding: 6px 10px;
+    font-size: 13px;
+    color: var(--text-primary);
+}
+
+.btn-warning-outline {
+    border: 1px solid var(--warning, #f0a500);
+    color: var(--warning, #f0a500);
+    background: transparent;
+}
+.btn-warning-outline:hover {
+    background: rgba(240, 165, 0, 0.1);
+}
+
+/* Remote 管理 */
+.settings-card-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+}
+.settings-card-title-row .settings-card-title {
+    margin-bottom: 0;
+}
+.push-remote-badge {
+    font-size: 12px;
+    background: rgba(99, 179, 237, 0.12);
+    border: 1px solid var(--accent, #63b3ed);
+    border-radius: 12px;
+    padding: 3px 10px;
+    color: var(--accent, #63b3ed);
+    white-space: nowrap;
+}
+.remotes-list {
+    margin-bottom: 12px;
+}
+.remote-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 0;
+    border-bottom: 1px solid var(--border, #2d3748);
+    font-size: 13px;
+}
+.remote-row:last-child {
+    border-bottom: none;
+}
+.remote-name {
+    font-weight: 600;
+    min-width: 80px;
+    color: var(--text-primary);
+}
+.remote-url {
+    flex: 1;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.remote-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+}
+.push-default-tag {
+    font-size: 11px;
+    background: rgba(99, 179, 237, 0.15);
+    color: var(--accent, #63b3ed);
+    border-radius: 4px;
+    padding: 2px 7px;
+    white-space: nowrap;
+}
+.btn-xs {
+    padding: 2px 7px;
+    font-size: 11px;
+    border-radius: 4px;
+    cursor: pointer;
+    border: 1px solid var(--border, #2d3748);
+    background: transparent;
+    color: var(--text-secondary);
+    transition: background 0.15s;
+}
+.btn-xs:hover { background: var(--bg-hover, rgba(255,255,255,0.06)); }
+.btn-xs.btn-outline { border-color: var(--accent, #63b3ed); color: var(--accent, #63b3ed); }
+.btn-xs.btn-outline:hover { background: rgba(99,179,237,0.1); }
+.btn-xs.btn-danger-outline { border-color: var(--danger, #fc8181); color: var(--danger, #fc8181); }
+.btn-xs.btn-danger-outline:hover { background: rgba(252,129,129,0.1); }
+.add-remote-toggle {
+    width: 100%;
+    margin-top: 10px;
+    border-style: dashed;
+    color: var(--text-muted);
+    justify-content: center;
+}
+.add-remote-toggle:hover { color: var(--text-primary); }
+.add-remote-section {
+    margin-top: 8px;
+    padding: 10px 12px;
+    border: 1px dashed var(--border, #2d3748);
+    border-radius: 6px;
+    background: rgba(255,255,255,0.02);
+}
+.add-remote-field {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+.add-remote-sublabel {
+    font-size: 12px;
+    color: var(--text-muted);
+    width: 32px;
+    flex-shrink: 0;
+}
+.add-remote-field input {
+    flex: 1;
+    min-width: 0;
+}
+
