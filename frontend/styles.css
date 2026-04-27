@@ -7560,3 +7560,36 @@ body.chat-open .chat-panel {
     min-width: 0;
 }
 
+/* 系统知识库 */
+.sys-doc-group { margin-bottom: 10px; }
+.sys-doc-group-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 4px;
+}
+.sys-doc-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+    border-bottom: 1px solid var(--border, #2d3748);
+    font-size: 12px;
+}
+.sys-doc-row:last-child { border-bottom: none; }
+.sys-doc-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-secondary);
+}
+.sys-doc-size {
+    color: var(--text-muted);
+    flex-shrink: 0;
+    width: 44px;
+    text-align: right;
+}
+

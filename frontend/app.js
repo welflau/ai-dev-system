@@ -10533,8 +10533,61 @@ async function _loadGlobalKnowledgeIntoModal() {
 
 /** 知识库 Tab 统一入口 */
 async function loadSettingsKnowledge() {
-    if (!currentProjectId) return;
-    await Promise.all([loadKnowledgeScanPaths(), loadKnowledgeDocs()]);
+    await Promise.all([
+        loadSystemDocs(),
+        loadKnowledgeDocs(),
+        ...(currentProjectId ? [loadKnowledgeScanPaths()] : []),
+    ]);
+}
+
+/** 加载系统知识库（docs/ + dev-notes/，只读） */
+async function loadSystemDocs() {
+    const container = document.getElementById('systemDocsList');
+    if (!container) return;
+    try {
+        const data = await api('/knowledge/system');
+        const docs = data.docs || [];
+        if (!docs.length) {
+            container.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">暂无系统文档</span>';
+            return;
+        }
+        const byGroup = { docs: [], devnotes: [] };
+        docs.forEach(d => (byGroup[d.group] || byGroup.docs).push(d));
+
+        const renderGroup = (title, icon, items) => {
+            if (!items.length) return '';
+            return `
+                <div class="sys-doc-group">
+                    <div class="sys-doc-group-title">${icon} ${title}（${items.length}）</div>
+                    ${items.map(d => `
+                        <div class="sys-doc-row">
+                            <span class="sys-doc-name" title="${escapeHtml(d.display_name)}">${escapeHtml(d.display_name)}</span>
+                            <span class="sys-doc-size">${Math.round(d.size / 1024 * 10) / 10}KB</span>
+                            <button class="btn btn-xs btn-outline" onclick="previewSystemDoc('${escapeHtml(d.filename)}')">预览</button>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        };
+
+        container.innerHTML =
+            renderGroup('技术方案文档', '📄', byGroup.docs) +
+            renderGroup('开发日志', '📝', byGroup.devnotes);
+    } catch (e) {
+        if (container) container.innerHTML = `<span style="color:var(--danger);font-size:12px;">加载失败: ${escapeHtml(e.message)}</span>`;
+    }
+}
+
+/** 预览系统文档内容（从 knowledge_index 读取） */
+async function previewSystemDoc(filename) {
+    try {
+        const data = await api(`/knowledge/search?q=${encodeURIComponent(filename.replace(/^sys_(docs|devnotes)__/, ''))}&limit=1`);
+        const result = (data.results || []).find(r => r.filename === filename);
+        const content = result ? result.preview : '（无预览内容）';
+        alert(`📄 ${filename}\n\n${content}`);
+    } catch (e) {
+        showToast(`预览失败: ${e.message}`, 'error');
+    }
 }
 
 // ===================== 扫描路径管理 =====================

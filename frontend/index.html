@@ -882,8 +882,18 @@
                                 </p>
                             </div>
 
-                            <!-- 全局知识库 -->
+                            <!-- 系统知识库（只读，来自 docs/ 和 dev-notes/） -->
                             <div class="settings-card">
+                                <div class="settings-card-title-row">
+                                    <h3 class="settings-card-title">🗂 系统知识库</h3>
+                                    <span style="font-size:12px;color:var(--text-muted);">只读 · 自动索引</span>
+                                </div>
+                                <p class="settings-description" style="margin-bottom:10px;">系统自身的技术方案文档与开发日志，全局 AI 助手可直接搜索引用。</p>
+                                <div id="systemDocsList"><div class="empty-state-sm">加载中...</div></div>
+                            </div>
+
+                            <!-- 全局知识库 -->
+                            <div class="settings-card" style="margin-top:16px;">
                                 <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
                                     <div>
                                         <h3 class="settings-card-title">🌐 全局知识库</h3>

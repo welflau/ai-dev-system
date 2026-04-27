@@ -85,12 +85,23 @@ def _check_injection(content: str) -> Optional[str]:
 async def _upsert_knowledge_index(project_id: Optional[str], filename: str, content: str):
     """写入/更新 knowledge_index（触发器自动维护 FTS5）"""
     try:
-        await db.execute("""
-            INSERT INTO knowledge_index (project_id, filename, content, updated_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(project_id, filename) DO UPDATE SET
-                content=excluded.content, updated_at=excluded.updated_at
-        """, (project_id, filename, content, now_iso()))
+        if project_id is None:
+            # NULL 在 SQLite UNIQUE 约束里不生效，用 DELETE + INSERT 保证幂等
+            await db.execute(
+                "DELETE FROM knowledge_index WHERE project_id IS NULL AND filename = ?",
+                (filename,)
+            )
+            await db.execute(
+                "INSERT INTO knowledge_index (project_id, filename, content, updated_at) VALUES (NULL, ?, ?, ?)",
+                (filename, content, now_iso())
+            )
+        else:
+            await db.execute("""
+                INSERT INTO knowledge_index (project_id, filename, content, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(project_id, filename) DO UPDATE SET
+                    content=excluded.content, updated_at=excluded.updated_at
+            """, (project_id, filename, content, now_iso()))
     except Exception as e:
         logger.warning("knowledge_index 写入失败（忽略）: %s", e)
 
@@ -125,6 +136,35 @@ async def list_global_docs():
     d = _get_docs_dir(None)
     files = sorted(d.glob("*.md"), key=lambda f: f.stat().st_mtime, reverse=True)
     return {"docs": [_doc_info(f) for f in files]}
+
+
+@router.get("/system")
+async def list_system_docs():
+    """列出系统自身 docs/ 和 dev-notes/ 的索引文档（只读，来自 knowledge_index）"""
+    rows = await db.fetch_all("""
+        SELECT filename, length(content) AS size, updated_at
+        FROM knowledge_index
+        WHERE project_id IS NULL
+          AND (filename LIKE 'sys\\_docs\\_\\_%' ESCAPE '\\' OR filename LIKE 'sys\\_devnotes\\_\\_%' ESCAPE '\\')
+        ORDER BY filename
+    """)
+    docs = []
+    for r in rows:
+        fname = r["filename"]
+        if fname.startswith("sys_docs__"):
+            group = "docs"
+            display = fname[len("sys_docs__"):]
+        else:
+            group = "devnotes"
+            display = fname[len("sys_devnotes__"):]
+        docs.append({
+            "filename": fname,
+            "display_name": display,
+            "group": group,
+            "size": r["size"],
+            "updated_at": r["updated_at"],
+        })
+    return {"docs": docs}
 
 
 @router.get("/projects/{project_id}")
