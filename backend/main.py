@@ -102,6 +102,24 @@ async def lifespan(app: FastAPI):
     if restored:
         logger.info("已恢复 %d 个项目的自定义仓库路径映射", restored)
 
+    # 补录现有 docs 文件到 knowledge_index（首次启动迁移）
+    try:
+        from api.knowledge import _upsert_knowledge_index, GLOBAL_DOCS_DIR, PROJECTS_DIR as K_PROJECTS_DIR
+        indexed = 0
+        for md in GLOBAL_DOCS_DIR.glob("*.md"):
+            await _upsert_knowledge_index(None, md.name, md.read_text(encoding="utf-8", errors="replace"))
+            indexed += 1
+        for pid_dir in K_PROJECTS_DIR.iterdir():
+            docs_dir = pid_dir / "docs"
+            if docs_dir.is_dir():
+                for md in docs_dir.glob("*.md"):
+                    await _upsert_knowledge_index(pid_dir.name, md.name, md.read_text(encoding="utf-8", errors="replace"))
+                    indexed += 1
+        if indexed:
+            logger.info("知识库 FTS5 索引：补录 %d 个文档", indexed)
+    except Exception as e:
+        logger.warning("知识库 FTS5 补录失败（忽略）: %s", e)
+
     # 启动工单轮询调度器
     from orchestrator import orchestrator
     # 启动内部事件总线（事件驱动，主调度方式）

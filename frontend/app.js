@@ -567,7 +567,7 @@ function switchTab(tab) {
         loadMCPStatus();
         loadSkillsList();
     }
-    if (tab === 'settings-knowledge') loadKnowledgeDocs();
+    if (tab === 'settings-knowledge') loadSettingsKnowledge();
 }
 
 // ==================== Agent 配置页内部 Tab 切换 ====================
@@ -10528,6 +10528,160 @@ async function _loadGlobalKnowledgeIntoModal() {
         renderKnowledgeDocList(container, res.docs || [], 'global', null);
     } catch (e) {
         container.innerHTML = `<div class="empty-state-sm">加载失败: ${escHtml(e.message)}</div>`;
+    }
+}
+
+/** 知识库 Tab 统一入口 */
+async function loadSettingsKnowledge() {
+    if (!currentProjectId) return;
+    await Promise.all([loadKnowledgeScanPaths(), loadKnowledgeDocs()]);
+}
+
+// ===================== 扫描路径管理 =====================
+
+let _scanPaths = [];  // 当前项目的扫描路径列表（内存中维护）
+
+async function loadKnowledgeScanPaths() {
+    if (!currentProjectId) return;
+    const container = document.getElementById('knowledgeScanPaths');
+    if (!container) return;
+    try {
+        const data = await api(`/knowledge/projects/${currentProjectId}/scan-paths`);
+        _scanPaths = data.scan_paths || [];
+        _renderScanPaths(data);
+    } catch (e) {
+        if (container) container.innerHTML = `<span style="color:var(--danger);font-size:12px;">加载失败: ${escapeHtml(e.message)}</span>`;
+    }
+}
+
+function _renderScanPaths(data) {
+    const container = document.getElementById('knowledgeScanPaths');
+    if (!container) return;
+    const paths = data.scan_paths || [];
+    const suggestions = data.default_suggestions || [];
+
+    let html = '';
+    if (paths.length === 0 && suggestions.length === 0) {
+        html = '<span style="color:var(--text-muted);font-size:12px;">暂未配置扫描路径，点击下方「＋ 添加路径」或使用建议路径。</span>';
+    }
+
+    // 已配置路径
+    html += paths.map(p => `
+        <div class="remote-row" style="align-items:center;">
+            <span class="remote-name" style="min-width:100px;">${escapeHtml(p.path)}</span>
+            <span class="remote-url" style="font-size:12px;">
+                ${p.exists ? `<span style="color:var(--success)">✓ 存在</span> · ${p.file_count} 个文件` : '<span style="color:var(--text-muted)">目录不存在</span>'}
+            </span>
+            <span class="remote-actions">
+                <label class="toggle-sm" title="${p.enabled ? '禁用' : '启用'}">
+                    <input type="checkbox" ${p.enabled ? 'checked' : ''} onchange="toggleScanPath('${escapeHtml(p.path)}', this.checked)">
+                    <span>${p.enabled ? '启用' : '停用'}</span>
+                </label>
+                <button class="btn btn-xs btn-danger-outline" onclick="deleteScanPath('${escapeHtml(p.path)}')">✕</button>
+            </span>
+        </div>
+    `).join('');
+
+    // 建议路径（未配置但在仓库中存在）
+    if (suggestions.length > 0) {
+        html += `<div style="margin-top:8px;font-size:12px;color:var(--text-muted);">建议添加：</div>`;
+        html += suggestions.map(s => `
+            <div class="remote-row" style="align-items:center;opacity:0.7;">
+                <span class="remote-name" style="min-width:100px;">${escapeHtml(s.path)}</span>
+                <span class="remote-url" style="font-size:12px;">${s.file_count} 个文件</span>
+                <span class="remote-actions">
+                    <button class="btn btn-xs btn-outline" onclick="quickAddScanPath('${escapeHtml(s.path)}')">+ 添加</button>
+                </span>
+            </div>
+        `).join('');
+    }
+
+    container.innerHTML = html || '<span style="color:var(--text-muted);font-size:12px;">暂无扫描路径</span>';
+}
+
+async function _saveScanPaths() {
+    await api(`/knowledge/projects/${currentProjectId}/scan-paths`, {
+        method: 'PUT',
+        body: { scan_paths: _scanPaths },
+    });
+    await loadKnowledgeScanPaths();
+}
+
+async function toggleScanPath(path, enabled) {
+    _scanPaths = _scanPaths.map(p => p.path === path ? { ...p, enabled } : p);
+    await _saveScanPaths();
+}
+
+async function deleteScanPath(path) {
+    if (!confirm(`删除扫描路径「${path}」？`)) return;
+    _scanPaths = _scanPaths.filter(p => p.path !== path);
+    await _saveScanPaths();
+}
+
+async function quickAddScanPath(path) {
+    _scanPaths = [..._scanPaths.filter(p => p.path !== path), { path, enabled: true }];
+    await _saveScanPaths();
+    showToast(`已添加路径 "${path}"`, 'success');
+}
+
+function toggleAddScanPath(open) {
+    const section = document.getElementById('addScanPathSection');
+    const btn = document.querySelector('#knowledgeSyncCard .add-remote-toggle');
+    if (!section) return;
+    section.style.display = open ? 'block' : 'none';
+    if (btn) btn.textContent = open ? '－ 取消' : '＋ 添加路径';
+    if (open) document.getElementById('newScanPath')?.focus();
+}
+
+async function addScanPath() {
+    const path = (document.getElementById('newScanPath')?.value || '').trim();
+    if (!path) { showToast('请输入路径', 'error'); return; }
+    if (_scanPaths.find(p => p.path === path)) { showToast('路径已存在', 'warning'); return; }
+    _scanPaths = [..._scanPaths, { path, enabled: true }];
+    await _saveScanPaths();
+    document.getElementById('newScanPath').value = '';
+    toggleAddScanPath(false);
+    showToast(`已添加路径 "${path}"`, 'success');
+}
+
+// ===================== 同步操作 =====================
+
+async function previewSync() {
+    if (!currentProjectId) return;
+    const statusEl = document.getElementById('knowledgeSyncStatus');
+    if (statusEl) statusEl.textContent = '扫描中...';
+    try {
+        const data = await api(`/knowledge/projects/${currentProjectId}/sync-preview`);
+        if (statusEl) statusEl.textContent = '';
+
+        const files = data.files || [];
+        const lines = files.map(f =>
+            `${f.would_skip ? '⚠️ 跳过' : '✓ 同步'} ${escapeHtml(f.path)} (${Math.round(f.size/1024*10)/10}KB)${f.skip_reason ? ' — ' + escapeHtml(f.skip_reason) : ''}`
+        ).join('\n');
+
+        const msg = files.length === 0
+            ? '未发现可同步的 Markdown 文件（请检查扫描路径配置）'
+            : `共 ${data.total} 个文件：${data.sync_count} 个将同步，${data.skipped_count} 个跳过\n\n${lines}`;
+
+        alert(msg);
+    } catch (e) {
+        if (statusEl) statusEl.textContent = '';
+        showToast(`预览失败: ${e.message}`, 'error');
+    }
+}
+
+async function syncKnowledge() {
+    if (!currentProjectId) return;
+    const statusEl = document.getElementById('knowledgeSyncStatus');
+    if (statusEl) statusEl.textContent = '同步中...';
+    try {
+        const data = await api(`/knowledge/projects/${currentProjectId}/sync-from-repo`, { method: 'POST' });
+        if (statusEl) statusEl.textContent = `上次同步: ${new Date().toLocaleTimeString()}`;
+        showToast(`同步完成：${data.synced.length} 个文件${data.skipped.length ? `，${data.skipped.length} 个跳过` : ''}`, 'success');
+        await loadKnowledgeDocs();
+    } catch (e) {
+        if (statusEl) statusEl.textContent = '';
+        showToast(`同步失败: ${e.message}`, 'error');
     }
 }
 

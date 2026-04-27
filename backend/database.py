@@ -90,6 +90,8 @@ class Database:
             # 多 Remote 管理
             ("projects", "git_remotes",     "TEXT DEFAULT '[]'"),      # JSON: [{name, url}, ...]
             ("projects", "git_push_remote", "TEXT DEFAULT 'origin'"),  # 默认 push 目标 remote 名
+            # 知识库扫描路径配置
+            ("projects", "knowledge_scan_paths", "TEXT DEFAULT '[]'"),  # JSON: [{path, enabled}]
         ]
         async with self._write_lock:
             for table, column, col_def in migrations:
@@ -466,6 +468,40 @@ CREATE INDEX IF NOT EXISTS idx_project_environments_project ON project_environme
 CREATE INDEX IF NOT EXISTS idx_bugs_project ON bugs(project_id);
 CREATE INDEX IF NOT EXISTS idx_bugs_status ON bugs(status);
 CREATE INDEX IF NOT EXISTS idx_bugs_requirement ON bugs(requirement_id);
+
+-- ============================================================
+-- 知识库全文索引（FTS5）
+-- ============================================================
+CREATE TABLE IF NOT EXISTS knowledge_index (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id TEXT,
+    filename   TEXT NOT NULL,
+    content    TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(project_id, filename)
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
+    content,
+    content=knowledge_index,
+    content_rowid=id
+);
+
+CREATE TRIGGER IF NOT EXISTS knowledge_fts_ai
+  AFTER INSERT ON knowledge_index BEGIN
+    INSERT INTO knowledge_fts(rowid, content) VALUES (new.id, new.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS knowledge_fts_au
+  AFTER UPDATE ON knowledge_index BEGIN
+    INSERT INTO knowledge_fts(knowledge_fts, rowid, content) VALUES ('delete', old.id, old.content);
+    INSERT INTO knowledge_fts(rowid, content) VALUES (new.id, new.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS knowledge_fts_ad
+  AFTER DELETE ON knowledge_index BEGIN
+    INSERT INTO knowledge_fts(knowledge_fts, rowid, content) VALUES ('delete', old.id, old.content);
+END;
 """
 
 

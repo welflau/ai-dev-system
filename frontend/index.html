@@ -894,6 +894,31 @@
                                 <div id="globalDocsList"><div class="empty-state-sm">加载中...</div></div>
                             </div>
 
+                            <!-- 从仓库同步 -->
+                            <div class="settings-card" id="knowledgeSyncCard" style="margin-top:16px;">
+                                <div class="settings-card-title-row">
+                                    <h3 class="settings-card-title">🔄 从仓库同步</h3>
+                                    <span id="knowledgeSyncStatus" style="font-size:12px;color:var(--text-muted);"></span>
+                                </div>
+                                <p class="settings-description" style="margin-bottom:10px;">自动扫描 git 仓库里的 Markdown 文档，同步到项目知识库供 AI 使用。</p>
+                                <div id="knowledgeScanPaths"><span style="color:var(--text-muted);font-size:12px;">加载中...</span></div>
+                                <div class="add-remote-section" id="addScanPathSection" style="display:none;">
+                                    <div class="add-remote-field">
+                                        <label class="add-remote-sublabel">路径</label>
+                                        <input type="text" id="newScanPath" placeholder="相对仓库根目录，如 Docs">
+                                    </div>
+                                    <div style="display:flex;gap:6px;margin-top:4px;">
+                                        <button class="btn btn-sm btn-primary" style="flex:1;" onclick="addScanPath()">确认添加</button>
+                                        <button class="btn btn-sm" onclick="toggleAddScanPath(false)">取消</button>
+                                    </div>
+                                </div>
+                                <button class="btn btn-sm btn-outline add-remote-toggle" style="margin-top:8px;" onclick="toggleAddScanPath(true)">＋ 添加路径</button>
+                                <div style="margin-top:10px;display:flex;gap:8px;align-items:center;">
+                                    <button class="btn btn-sm btn-primary" onclick="syncKnowledge()">🔄 立即同步</button>
+                                    <button class="btn btn-xs btn-outline" onclick="previewSync()">预览文件</button>
+                                </div>
+                            </div>
+
                             <!-- 项目知识库 -->
                             <div class="settings-card" style="margin-top:16px;">
                                 <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
