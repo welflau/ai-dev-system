@@ -35,7 +35,8 @@ from actions.chat.get_ticket_status import GetTicketStatusAction
 from actions.chat.get_requirement_logs import GetRequirementLogsAction
 from actions.chat.propose_ue_framework import ProposeUEFrameworkAction
 from actions.chat.get_build_logs import GetBuildLogsAction     # v0.19.x 构建日志查询
-from actions.chat.search_knowledge import SearchKnowledgeAction  # 知识库全文搜索
+from actions.chat.search_knowledge import SearchKnowledgeAction        # 知识库全文搜索
+from actions.chat.search_ticket_history import SearchTicketHistoryAction  # 历史工单检索
 
 logger = logging.getLogger("agent.chat_assistant")
 
@@ -164,6 +165,7 @@ class ChatAssistantAgent(BaseAgent):
         ProposeUEFrameworkAction,      # v0.18 Phase A.6 — UE 框架方案卡片
         GetBuildLogsAction,            # v0.19.x — 查构建/编译日志让 AI 自动诊断
         SearchKnowledgeAction,         # 知识库全文搜索（FTS5）
+        SearchTicketHistoryAction,     # 历史工单解决方案检索（FTS5）
     ]
     react_mode = ReactMode.REACT
     max_react_loop = 3   # 聊天场景不需要太多轮

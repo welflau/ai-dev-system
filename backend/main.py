@@ -115,10 +115,42 @@ async def lifespan(app: FastAPI):
                 for md in docs_dir.glob("*.md"):
                     await _upsert_knowledge_index(pid_dir.name, md.name, md.read_text(encoding="utf-8", errors="replace"))
                     indexed += 1
+        # 强制 rebuild（确保 tokenizer 变更后旧数据被重建）
+        await db.execute("INSERT INTO knowledge_fts(knowledge_fts) VALUES('rebuild')")
         if indexed:
             logger.info("知识库 FTS5 索引：补录 %d 个文档", indexed)
     except Exception as e:
         logger.warning("知识库 FTS5 补录失败（忽略）: %s", e)
+
+    # 补录已完成工单到 tickets_fts（首次启动迁移）
+    try:
+        from api.knowledge import _upsert_tickets_fts
+        done_tickets = await db.fetch_all("""
+            SELECT t.id, t.project_id, t.title, t.description,
+                   (SELECT tl.detail FROM ticket_logs tl
+                    WHERE tl.ticket_id = t.id AND tl.action = 'reflection'
+                    ORDER BY tl.created_at DESC LIMIT 1) AS reflection_detail
+            FROM tickets t
+            WHERE t.status IN ('acceptance_passed', 'testing_done', 'deployed', 'development_done')
+        """)
+        fts_indexed = 0
+        for t in done_tickets:
+            text = f"{t['title']} {t['description'] or ''}"
+            if t["reflection_detail"]:
+                try:
+                    ref = _json.loads(t["reflection_detail"])
+                    root_cause = ref.get("reflection", {}).get("root_cause", "")
+                    if root_cause:
+                        text += f" {root_cause}"
+                except Exception:
+                    pass
+            await _upsert_tickets_fts(t["id"], t["project_id"], text)
+            fts_indexed += 1
+        if fts_indexed:
+            logger.info("工单历史 FTS5 索引：补录 %d 个工单", fts_indexed)
+    except Exception as e:
+        logger.warning("工单历史 FTS5 补录失败（忽略）: %s", e)
+    # tickets_fts 无需 rebuild（internal content，INSERT 后直接可搜）
 
     # 启动工单轮询调度器
     from orchestrator import orchestrator

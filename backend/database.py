@@ -484,7 +484,8 @@ CREATE TABLE IF NOT EXISTS knowledge_index (
 CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
     content,
     content=knowledge_index,
-    content_rowid=id
+    content_rowid=id,
+    tokenize="trigram"
 );
 
 CREATE TRIGGER IF NOT EXISTS knowledge_fts_ai
@@ -502,6 +503,16 @@ CREATE TRIGGER IF NOT EXISTS knowledge_fts_ad
   AFTER DELETE ON knowledge_index BEGIN
     INSERT INTO knowledge_fts(knowledge_fts, rowid, content) VALUES ('delete', old.id, old.content);
 END;
+
+-- ============================================================
+-- 工单历史全文索引（FTS5，internal content）
+-- ============================================================
+CREATE VIRTUAL TABLE IF NOT EXISTS tickets_fts USING fts5(
+    search_text,
+    ticket_id UNINDEXED,
+    project_id UNINDEXED,
+    tokenize="trigram"
+);
 """
 
 

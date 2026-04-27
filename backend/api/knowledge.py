@@ -95,6 +95,18 @@ async def _upsert_knowledge_index(project_id: Optional[str], filename: str, cont
         logger.warning("knowledge_index 写入失败（忽略）: %s", e)
 
 
+async def _upsert_tickets_fts(ticket_id: str, project_id: str, search_text: str):
+    """写入/更新 tickets_fts（DELETE + INSERT，FTS5 不支持 ON CONFLICT）"""
+    try:
+        await db.execute("DELETE FROM tickets_fts WHERE ticket_id = ?", (ticket_id,))
+        await db.execute(
+            "INSERT INTO tickets_fts(search_text, ticket_id, project_id) VALUES (?, ?, ?)",
+            (search_text, ticket_id, project_id)
+        )
+    except Exception as e:
+        logger.warning("tickets_fts 写入失败（忽略）: %s", e)
+
+
 async def _delete_knowledge_index(project_id: Optional[str], filename: str):
     """从 knowledge_index 删除（触发器自动维护 FTS5）"""
     try:

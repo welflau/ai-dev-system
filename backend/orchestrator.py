@@ -1330,6 +1330,26 @@ class TicketOrchestrator:
                 except Exception as log_err:
                     logger.warning("写 reflection 日志失败: %s", log_err)
 
+                # tickets_fts：reflection 后将根因加入搜索索引（让历史检索能找到错误类型）
+                try:
+                    ticket_base = await db.fetch_one(
+                        "SELECT title, description FROM tickets WHERE id = ?", (ticket_id,)
+                    )
+                    if ticket_base:
+                        root_cause = (last_reflection.get("root_cause") or "").strip()
+                        errors_str = " ".join(
+                            str(e) for e in (last_reflection.get("specific_changes") or [])[:3]
+                        )
+                        search_text = (
+                            f"{ticket_base['title']} "
+                            f"{ticket_base['description'] or ''} "
+                            f"{root_cause} {errors_str}"
+                        ).strip()
+                        from api.knowledge import _upsert_tickets_fts
+                        await _upsert_tickets_fts(ticket_id, project_id, search_text)
+                except Exception as fts_err:
+                    logger.warning("tickets_fts 更新失败（忽略）: %s", fts_err)
+
                 # Failure Library：同步写一条案例，供未来跨工单检索
                 try:
                     from failure_library import failure_library
@@ -1711,6 +1731,8 @@ class TicketOrchestrator:
                     await failure_library.mark_resolved(ticket_id)
                 except Exception as fl_err:
                     logger.warning("FailureLibrary.mark_resolved 失败: %s", fl_err)
+                # 知识蒸馏：验收通过后，后台尝试将修复经验沉淀到知识库（fire-and-forget）
+                _fire_knowledge_distill(project_id, ticket_id)
             else:
                 await self._log(
                     project_id, requirement_id, ticket_id, agent_name,
@@ -2883,3 +2905,29 @@ class TicketOrchestrator:
 
 # 全局 Orchestrator
 orchestrator = TicketOrchestrator()
+
+
+def _fire_knowledge_distill(project_id: str, ticket_id: str):
+    """验收通过后，后台尝试将修复经验蒸馏到知识库（fire-and-forget）"""
+    import asyncio as _asyncio
+
+    async def _run():
+        try:
+            cycle_count = await db.fetch_one(
+                "SELECT count(*) as n FROM ticket_logs "
+                "WHERE ticket_id = ? AND action IN ('reject', 'error', 'reflection')",
+                (ticket_id,),
+            )
+            if not cycle_count or cycle_count["n"] == 0:
+                return  # 无失败-修复循环，无需蒸馏
+            from actions.knowledge_distill import KnowledgeDistillAction
+            await KnowledgeDistillAction().run({"ticket_id": ticket_id, "project_id": project_id})
+        except Exception as e:
+            logger.warning("[知识蒸馏] 失败（忽略）: %s", e)
+
+    try:
+        loop = _asyncio.get_event_loop()
+        if loop.is_running():
+            loop.create_task(_run())
+    except Exception:
+        pass
