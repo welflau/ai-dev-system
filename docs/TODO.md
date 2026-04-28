@@ -4,20 +4,27 @@
 
 ---
 
-## 🎯 下一主线推荐
+## 🎯 下一主线推荐（两条，按优先级）
 
-### UE 自测 Layer 2：UBT -SingleFile 预编译（~0.5 天）
+### A. PlanCodeChangeAction — 解决 DevAgent 全文件重写（~1.5 天，P1）
 
-**背景**：Layer 1（7条静态规则）和工单进度区已在 2026-04-26 完成（v0.19.x 大包）。Layer 2 是唯一遗留项。
+**问题**：DevAgent 修复小 bug 时常把整个文件重写，导致：无关代码被改动 / ReviewAgent 和 ProductAgent 验收噪音大 / Reflexion 修复时"找不到原来代码"。
 
-**内容**：`_core.yaml` 里 `ue_precompile` 默认 `false`，需要：
-- 确认 `UECompileCheckAction` `-SingleFile` 参数已支持（已在 `ue_compile_check.py` 实现）
-- SOP fragment/config 开关调优（`ue_precompile: true` on UE 项目）
-- smoke test 验证链路
+**方案**：新 Action `PlanCodeChangeAction`（对标 MetaGPT `WriteCodePlanAndChange`）：
+1. 先 LLM 规划"改哪些文件的哪些函数"（JSON plan）
+2. 按 plan 逐文件做精准增量修改，不碰无关代码
 
-详见 `docs/20260426_01_DevAgent_UE项目自测方案.md` §4。
+详见 Action 池扩充 §中期 P1。
+
+### B. v0.19 三合一 + CI/CD 浏览器实操验收（需手动，随时）
+
+代码已就绪，等浏览器跑一遍验收后 commit。见 `🔄 v0.19 三合一` 和 `✅ v0.19.x CI/CD` 节。
 
 ---
+
+## ✅ DevAgent UE 自测 Layer 2（已完成 2026-04-28）
+
+SOP `stage_overrides` 机制 + `engine_compile.yaml` 自动为 UE 项目开启 `ue_precompile: true`（UBT -SingleFile 30-90s）。详见 `dev-notes/2026-04-28_UE自测Layer2_SOP_stage_overrides.md`。
 
 ## ✅ DevAgent UE 自测 Layer 1（已完成 2026-04-26）
 
@@ -137,49 +144,31 @@ Skill Packs / 项目 UE 配置持久化 / 对话式 UE 框架生成。
 
 ---
 
-## Action 池扩充（参考 MetaGPT 42 个 Action，当前 4 个）
+## Action 池（已完成 v0.15.0，2026-04-16）
 
-### 短期 P0（配合盲审修复）
-
-| Action | 说明 | 对标 MetaGPT | 状态 |
-|--------|------|-------------|------|
-| `CodeReviewAction` | 独立代码审查，读取实际代码内容 | `WriteCodeReview` | 待开发 |
-| `DecomposeAction` | 需求拆单迁移到 ActionNode | `WriteTasks` | 待开发 |
-
-### 中期 P1（配合 Phase 3）
-
-| Action | 说明 | 对标 MetaGPT | 状态 |
-|--------|------|-------------|------|
-| `PlanCodeChangeAction` | 先规划改哪些文件再逐个修改（解决全文件重写） | `WriteCodePlanAndChange` | 待开发 |
-| `DebugErrorAction` | 分析错误日志，定位根因，生成修复方案 | `DebugError` | 待开发 |
-| `ResearchAction` | 联网搜索 + 竞品调研 | `CollectLinks` + `ConductResearch` | 待开发 |
-| `SummarizeCodeAction` | 代码摘要（给下游 Agent 传精简上下文） | `SummarizeCode` | 待开发 |
-
-### 长期 P2（配合 Phase 4）
-
-| Action | 说明 | 对标 MetaGPT | 状态 |
-|--------|------|-------------|------|
-| `WritePRDAction` | 正式 PRD 文档生成 | `WritePRD` | 待开发 |
-| `RebuildClassViewAction` | 从代码生成类图（导入项目用） | `RebuildClassView` | 待开发 |
-| `WritePlanAction` | 数据分析计划 | `WritePlan` (DI) | 待开发 |
-| `ExecuteCodeAction` | 执行代码并获取输出 | `RunCode` + `ExecuteNbCode` | 待开发 |
-| `WriteTestAction` | 独立测试用例生成（从 TestAgent 抽离） | `WriteTest` | 待开发 |
-| `DesignReviewAction` | 架构设计审查 | `DesignReview` | 待开发 |
+| Action | 说明 | 状态 |
+|--------|------|------|
+| `CodeReviewAction` | 读取实际代码做审查（解决盲审） | ✅ |
+| `DecomposeAction` | 需求拆单 ActionNode（读已有代码） | ✅ |
+| `PlanCodeChangeAction` | 先规划再精准增量修改（解决全文件重写） | ✅ |
+| `SummarizeCodeAction` | 代码摘要 | ✅ |
+| `DebugErrorAction` | 分析错误日志，定位根因 | ⬜ P1 |
+| `ResearchAction` | 联网搜索 + 竞品调研 | ⬜ P2 |
+| `WritePRDAction` / `WriteTestAction` / `ExecuteCodeAction` 等 | 长期 P2 | ⬜ P2 |
 
 ---
 
-## ActionNode 迁移（MetaGPT 移植未完成）
+## ActionNode 迁移（已全部完成，v0.15.0，2026-04-16）
 
-| 优先级 | Agent | 当前状态 | 待办 |
-|--------|-------|---------|------|
-| ✅ | ArchitectAgent | ActionNode + Watch | 已完成 |
-| ✅ | DevAgent | ActionNode + BY_ORDER + Watch | 已完成 |
-| ✅ | ProductAgent 验收 | ActionNode + Watch + SOP config | 已完成 |
-| P1 | **ProductAgent 拆单** | legacy，手动 json.loads | 迁移到 ActionNode + DecomposeOutput Schema |
-| P1 | **TestAgent** | legacy，无 ActionNode | 迁移核心逻辑到 Action + ActionNode |
-| P2 | **ReviewAgent** | legacy，完全盲审 | 迁移到 ActionNode + 读取实际代码 |
-| P2 | **DeployAgent** | legacy | 迁移到 ActionNode |
-| P2 | **REACT 模式** | 预留接口，等同 BY_ORDER | 实现 LLM 动态选择下一步 Action |
+| Agent | 状态 |
+|-------|------|
+| ArchitectAgent | ✅ ActionNode + Watch |
+| DevAgent | ✅ ActionNode + BY_ORDER + PlanCodeChange/WriteCode 智能分发 |
+| ProductAgent 拆单 + 验收 | ✅ ActionNode + DecomposeOutput Schema |
+| TestAgent | ✅ 委托 CodeReviewAction |
+| ReviewAgent | ✅ ActionNode 实审（非盲审） |
+| DeployAgent | 🔄 legacy 保留（特殊逻辑），P2 迁移 |
+| REACT 模式 | ✅ LLM 动态选择 Action（`_react_with_think`） |
 
 ## 盲审修复
 
