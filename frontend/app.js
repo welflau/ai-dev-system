@@ -7510,9 +7510,22 @@ async function handleFileAttachment(files) {
             continue;
         }
 
-        // 文档/代码：需要上传到后端提取文本
+        // 纯文本文件（MD/TXT 等）：全局聊天下直接本地读取，无需项目上下文
+        const isPlainText = /^(md|txt|csv|json|yaml|yml|toml|ini|conf|log|ts|js|py|java|cs|cpp|h|go|rs|swift|kt)$/.test(ext);
+        if (!currentProjectId && isPlainText) {
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                const text = ev.target.result || '';
+                chatPendingDocs.push({ filename: file.name, text, chars: text.length });
+                renderChatDocPreviews();
+            };
+            reader.readAsText(file, 'utf-8');
+            continue;
+        }
+
+        // 其他文档（PDF/DOCX 等）：需要上传到后端提取文本
         if (!currentProjectId) {
-            showToast('上传文档附件需要先选择一个项目', 'warning');
+            showToast('PDF/DOCX 等文件需要先选择一个项目，MD/TXT 文件可直接上传', 'warning');
             continue;
         }
         const formData = new FormData();
