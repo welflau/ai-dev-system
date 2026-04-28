@@ -48,13 +48,17 @@ class WriteCodeAction(ActionBase):
         retry_count = int(context.get("retry_count") or 1)
         reflection_block = _format_reflection_block(reflection, retry_count) if reflection else ""
 
+        # Insight 主动注入：历史经验
+        prior_insights = context.get("prior_insights", "")
+        insights_block = f"\n{prior_insights}\n" if prior_insights else ""
+
         req_context = f"""## 任务: {ticket_title}
 {ticket_description}
 
 ## 架构
 {arch_summary}
 {code_section}
-{reflection_block}
+{insights_block}{reflection_block}
 要求: 英文文件名 | 前端内联到 index.html | 增量修改不重写 | 只输出改动文件 | 完整可运行"""
 
         # 使用 ActionNode 结构化输出

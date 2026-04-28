@@ -48,9 +48,13 @@ class PlanCodeChangeAction(ActionBase):
         retry_count = int(context.get("retry_count") or 1)
         reflection_block = _format_reflection_block(reflection, retry_count) if reflection else ""
 
+        # Insight 主动注入：历史经验
+        prior_insights = context.get("prior_insights", "")
+
         # --- Phase 1: 规划变更 ---
         plan = await self._plan(ticket_title, ticket_description, architecture,
-                                existing_files, existing_code, reflection_block)
+                                existing_files, existing_code, reflection_block,
+                                prior_insights)
 
         if not plan or (not plan.files_to_create and not plan.files_to_modify):
             # 规划失败，回退到普通写代码
@@ -107,7 +111,8 @@ class PlanCodeChangeAction(ActionBase):
         )
 
     async def _plan(self, title, description, architecture, existing_files,
-                    existing_code, reflection_block: str = "") -> CodeChangePlan:
+                    existing_code, reflection_block: str = "",
+                    prior_insights: str = "") -> CodeChangePlan:
         """Phase 1: 规划要改哪些文件"""
         code_files = [f for f in existing_files if not f.startswith(("docs/", "tests/", ".git", "build/"))]
 
@@ -117,11 +122,13 @@ class PlanCodeChangeAction(ActionBase):
             arch = architecture.get("architecture", architecture)
             arch_summary = json.dumps({k: arch[k] for k in ("architecture_type", "tech_stack", "module_design") if k in arch}, ensure_ascii=False)[:800]
 
+        insights_block = f"\n{prior_insights}\n" if prior_insights else ""
+
         req_context = f"""## 任务: {title}
 {description}
 
 ## 架构: {arch_summary}
-{reflection_block}
+{insights_block}{reflection_block}
 ## 项目已有文件
 {chr(10).join(f'  - {f}' for f in code_files[:20]) or '  (空项目)'}
 

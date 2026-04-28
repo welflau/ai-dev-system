@@ -2620,7 +2620,92 @@ class TicketOrchestrator:
             logger.warning("读取知识库失败: %s", e)
             context["knowledge_docs"] = ""
 
+        # === Insight 主动注入：编码前自动检索相关历史经验 ===
+        try:
+            context["prior_insights"] = await self._fetch_prior_insights(
+                ticket["title"], project_id
+            )
+        except Exception as e:
+            logger.warning("Insight 注入失败（非致命）: %s", e)
+            context["prior_insights"] = ""
+
         return context
+
+    async def _fetch_prior_insights(self, ticket_title: str, project_id: str) -> str:
+        """编码前主动检索相关历史经验，注入 prior_insights 供 DevAgent 参考。
+
+        来源1：knowledge_fts（知识库文档 + dev-notes）
+        来源2：tickets_fts（已完成工单的 Reflexion 根因分析）
+        """
+        if not ticket_title or not ticket_title.strip():
+            return ""
+
+        # FTS5 安全化：去掉特殊字符，整体用双引号包裹短语搜索
+        clean = ticket_title.replace('"', ' ').strip()
+        import re as _re
+        fts_query = f'"{clean}"' if _re.search(r'[.\-+*():!]', clean) else clean
+
+        parts = []
+
+        # --- 1. 知识库命中 ---
+        try:
+            rows = await db.fetch_all("""
+                SELECT ki.filename,
+                       snippet(knowledge_fts, 0, '', '', '...', 40) AS snippet
+                FROM knowledge_fts
+                JOIN knowledge_index ki ON knowledge_fts.rowid = ki.id
+                WHERE knowledge_fts MATCH ?
+                  AND (ki.project_id = ? OR ki.project_id IS NULL)
+                ORDER BY rank
+                LIMIT 3
+            """, (fts_query, project_id))
+            if rows:
+                lines = [f"- [{r['filename']}] {r['snippet']}" for r in rows]
+                parts.append("## 相关知识库条目\n" + "\n".join(lines))
+        except Exception as e:
+            logger.debug("prior_insights 知识库查询失败: %s", e)
+
+        # --- 2. 历史工单 Reflexion 根因 ---
+        try:
+            rows = await db.fetch_all("""
+                SELECT t.title,
+                       snippet(tickets_fts, 0, '', '', '...', 30) AS snippet,
+                       (SELECT tl.detail FROM ticket_logs tl
+                        WHERE tl.ticket_id = tf.ticket_id AND tl.action = 'reflection'
+                        ORDER BY tl.created_at DESC LIMIT 1) AS reflection_detail
+                FROM tickets_fts tf
+                JOIN tickets t ON tf.ticket_id = t.id
+                WHERE tickets_fts MATCH ?
+                  AND tf.project_id = ?
+                  AND t.status IN ('acceptance_passed','testing_done','deployed')
+                ORDER BY rank
+                LIMIT 3
+            """, (fts_query, project_id))
+            if rows:
+                lines = []
+                for r in rows:
+                    entry = f"- [{r['title']}] {r['snippet']}"
+                    if r["reflection_detail"]:
+                        try:
+                            rd = json.loads(r["reflection_detail"])
+                            if rd.get("root_cause"):
+                                entry += f"\n  曾经根因: {rd['root_cause']}"
+                            if rd.get("strategy_change"):
+                                entry += f"\n  修复策略: {rd['strategy_change']}"
+                        except Exception:
+                            pass
+                    lines.append(entry)
+                parts.append("## 相关历史工单经验\n" + "\n".join(lines))
+        except Exception as e:
+            logger.debug("prior_insights 历史工单查询失败: %s", e)
+
+        if not parts:
+            return ""
+
+        return (
+            "# 历史经验（编码前参考，避免重复踩坑）\n\n"
+            + "\n\n".join(parts)
+        )
 
     def _load_knowledge_docs(self, project_id: str, global_limit: int = 2000, project_limit: int = 3000) -> str:
         """读取全局知识库 + 项目知识库文档，返回拼接文本"""
