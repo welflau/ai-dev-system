@@ -8177,13 +8177,14 @@ async function sendChatMessage() {
 
         const reply = resp.reply || '(无回复)';
         const action = resp.action || null;
+        const actions = resp.actions || [];
 
         // 更新历史
         chatHistory.push({ role: 'user', content: fullMessage });
         chatHistory.push({ role: 'assistant', content: reply });
 
-        // 添加回复气泡
-        appendChatBubble('assistant', reply, null, action);
+        // 添加回复气泡（actions 有多条时渲染批量确认卡片）
+        appendChatBubble('assistant', reply, null, action, [], actions);
         scrollChatToBottom();
 
         // 项目创建成功（全局模式）
@@ -8263,7 +8264,37 @@ async function sendChatMessage() {
 /**
  * 追加聊天气泡
  */
-function appendChatBubble(role, content, timestamp = null, action = null, images = []) {
+/** 构建单张 confirm_requirement 卡片 HTML（供单张和批量场景复用） */
+function _buildConfirmCardHtml(action) {
+    const priorityLabel = {'critical':'🔴 紧急','high':'🟠 高','medium':'🟡 中','low':'🟢 低'}[action.priority] || action.priority;
+    const safeId = 'req_confirm_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
+    const imagesJson = action.images && action.images.length ? escapeHtml(JSON.stringify(action.images)) : '';
+    const imagesPreview = action.images && action.images.length
+        ? `<div class="confirm-card-images">${action.images.map(u => `<img src="${escapeHtml(u)}" class="confirm-card-img" onclick="event.stopPropagation();window.open(this.src,'_blank')" title="点击查看大图">`).join('')}</div>`
+        : '';
+    return `
+        <div class="chat-action-card chat-confirm-card" id="${safeId}"
+             data-title="${escapeHtml(action.title)}"
+             data-description="${escapeHtml(action.description || '')}"
+             data-priority="${escapeHtml(action.priority || 'medium')}"
+             data-images="${imagesJson}"
+             data-message-id="${escapeHtml(action._message_id || '')}"
+             style="border-left-color: var(--primary);">
+            <div class="action-title">📋 识别到新需求，是否创建？</div>
+            <div class="action-detail">
+                <div class="confirm-req-title">${escapeHtml(action.title)}</div>
+                <div class="confirm-req-desc">${escapeHtml(action.description || '')}</div>
+                <div class="confirm-req-meta">优先级：${priorityLabel}</div>
+                ${imagesPreview}
+            </div>
+            <div class="confirm-req-btns">
+                <button class="btn btn-sm btn-primary" onclick="doConfirmRequirement('${safeId}')">✅ 确认创建</button>
+                <button class="btn btn-sm" onclick="doCancelRequirement('${safeId}')">✗ 取消</button>
+            </div>
+        </div>`;
+}
+
+function appendChatBubble(role, content, timestamp = null, action = null, images = [], actions = []) {
     const container = chatMode === 'group'
         ? (document.getElementById('groupChatMessages') || document.getElementById('chatMessages'))
         : document.getElementById('chatMessages');
@@ -8274,7 +8305,11 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
     const timeStr = timestamp ? formatTime(timestamp) : formatTime(new Date().toISOString());
 
     let actionHtml = '';
-    if (action && action.type === 'requirement_created') {
+
+    // 批量 confirm_requirement / confirm_bug 卡片（文档分析场景）
+    if (actions && actions.length > 1) {
+        actionHtml = actions.map(a => _buildConfirmCardHtml(a)).join('');
+    } else if (action && action.type === 'requirement_created') {
         actionHtml = `
             <div class="chat-action-card">
                 <div class="action-title">✅ 需求已创建</div>
@@ -8371,33 +8406,7 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
         // v0.19.1：刷新回来的已执行 / 已取消卡片直接走摘要渲染，避免重复可点按钮
         actionHtml = renderActionStateSummary(action);
     } else if (action && action.type === 'confirm_requirement') {
-        const priorityLabel = {'critical':'🔴 紧急','high':'🟠 高','medium':'🟡 中','low':'🟢 低'}[action.priority] || action.priority;
-        const safeId = 'req_confirm_' + Date.now();
-        const imagesJson = action.images && action.images.length ? escapeHtml(JSON.stringify(action.images)) : '';
-        const imagesPreview = action.images && action.images.length
-            ? `<div class="confirm-card-images">${action.images.map(u => `<img src="${escapeHtml(u)}" class="confirm-card-img" onclick="event.stopPropagation();window.open(this.src,'_blank')" title="点击查看大图">`).join('')}</div>`
-            : '';
-        actionHtml = `
-            <div class="chat-action-card chat-confirm-card" id="${safeId}"
-                 data-title="${escapeHtml(action.title)}"
-                 data-description="${escapeHtml(action.description)}"
-                 data-priority="${escapeHtml(action.priority)}"
-                 data-images="${imagesJson}"
-                 data-message-id="${escapeHtml(action._message_id || '')}"
-                 style="border-left-color: var(--primary);">
-                <div class="action-title">📋 识别到新需求，是否创建？</div>
-                <div class="action-detail">
-                    <div class="confirm-req-title">${escapeHtml(action.title)}</div>
-                    <div class="confirm-req-desc">${escapeHtml(action.description)}</div>
-                    <div class="confirm-req-meta">优先级：${priorityLabel}</div>
-                    ${imagesPreview}
-                </div>
-                <div class="confirm-req-btns">
-                    <button class="btn btn-sm btn-primary" onclick="doConfirmRequirement('${safeId}')">✅ 确认创建</button>
-                    <button class="btn btn-sm" onclick="doCancelRequirement('${safeId}')">✗ 取消</button>
-                </div>
-            </div>
-        `;
+        actionHtml = _buildConfirmCardHtml(action);
     } else if (action && action.type === 'confirm_project') {
         const safeId = 'proj_confirm_' + Date.now();
         const traitsArr = Array.isArray(action.traits) ? action.traits : [];

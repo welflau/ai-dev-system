@@ -41,6 +41,7 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     reply: str = Field(..., description="AI 回复")
     action: Optional[Dict[str, Any]] = Field(default=None, description="执行的操作信息")
+    actions: Optional[List[Dict[str, Any]]] = Field(default=None, description="批量操作卡片（文档分析等场景）")
 
 
 class GroupChatRequest(BaseModel):
@@ -1470,6 +1471,7 @@ class GlobalChatRequest(BaseModel):
 class GlobalChatResponse(BaseModel):
     reply: str = Field(..., description="AI 回复")
     action: Optional[Dict[str, Any]] = Field(default=None, description="执行的操作信息")
+    actions: Optional[List[Dict[str, Any]]] = Field(default=None, description="批量操作卡片（文档分析等场景）")
 
 
 @global_chat_router.post("", response_model=GlobalChatResponse)

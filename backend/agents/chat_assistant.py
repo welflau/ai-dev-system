@@ -90,12 +90,17 @@ class _ChatToolExecutor:
         "error": 5,
     }
 
+    # 需要收集全量结果的类型（用户需要逐条确认）
+    _COLLECT_ALL_TYPES = {"confirm_requirement", "confirm_bug"}
+
     def __init__(self, agent: "ChatAssistantAgent", project_id: Optional[str] = None):
         """project_id=None 表示全局聊天场景（项目列表页），此时 ctx 里不注入 project_id"""
         self.agent = agent
         self.project_id = project_id
         self.primary_action_result: Optional[Dict[str, Any]] = None
         self._primary_tier: int = 99  # 越小越优先
+        # 批量收集：confirm_requirement / confirm_bug 每次调用都保留，供前端渲染多张卡片
+        self.all_confirm_results: List[Dict[str, Any]] = []
 
     # 向后兼容：保留 first_action_result 的读属性
     @property
@@ -139,6 +144,10 @@ class _ChatToolExecutor:
         if current_tier <= self._primary_tier:
             self.primary_action_result = data
             self._primary_tier = current_tier
+
+        # 批量收集：confirm_requirement / confirm_bug 每次调用都追加
+        if current_type in self._COLLECT_ALL_TYPES:
+            self.all_confirm_results.append(data)
 
         # 返回给 LLM 的是 JSON 字符串（chat_with_tools 规范）
         return json.dumps(data, ensure_ascii=False)
@@ -268,6 +277,8 @@ class ChatAssistantAgent(BaseAgent):
 
         reply = self._extract_final_text(result.get("messages", []))
         action = executor.first_action_result
+        # 多张确认卡片（文档分析批量提取需求场景）
+        actions = executor.all_confirm_results if len(executor.all_confirm_results) > 1 else None
 
         # 兜底：LLM 啥也没说但工具执行了，用 action.message 或固定文案
         if not reply:
@@ -279,6 +290,7 @@ class ChatAssistantAgent(BaseAgent):
         return {
             "reply": reply,
             "action": action,
+            "actions": actions,
         }
 
     # ==================== 全局聊天入口（项目列表页，无 project_id） ====================
@@ -324,6 +336,7 @@ class ChatAssistantAgent(BaseAgent):
 
         reply = self._extract_final_text(result.get("messages", []))
         action = executor.primary_action_result
+        actions = executor.all_confirm_results if len(executor.all_confirm_results) > 1 else None
 
         if not reply:
             if action:
@@ -331,7 +344,7 @@ class ChatAssistantAgent(BaseAgent):
             else:
                 reply = "请告诉我想建什么项目，至少提供项目名称和 Git 远程仓库 URL。"
 
-        return {"reply": reply, "action": action}
+        return {"reply": reply, "action": action, "actions": actions}
 
     # ==================== 内部工具 ====================
 
@@ -618,7 +631,8 @@ class ChatAssistantAgent(BaseAgent):
 ## 读取用户上传的文件
 当消息中包含 `【附件：xxx.md】` 或其他文件内容时：
 - 仔细阅读文件内容，结合项目上下文给出具体分析
-- 需求文档 / PRD → 分析功能点，主动询问是否要据此创建需求（调 confirm_requirement）
+- 需求文档 / PRD → **从文档中提取所有独立需求点，每个需求调用一次 `confirm_requirement`**
+  （同一轮回复可连续调多次，前端会为每条需求渲染独立的确认卡片，用户逐条确认）
 - 设计文档 / 技术方案 → 讨论实现思路，指出潜在风险
 - 代码文件 → 审查逻辑，结合已有代码给出修改建议
 - **不要只复述文件内容**，要给出有价值的分析和下一步行动建议
