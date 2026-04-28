@@ -615,6 +615,14 @@ class ChatAssistantAgent(BaseAgent):
 - **诊断需求进度** → get_requirement_pipeline（"XX 卡在哪"）/
   get_ticket_status（工单详细状态）/ get_requirement_logs（最近活动 + 错误）
 
+## 读取用户上传的文件
+当消息中包含 `【附件：xxx.md】` 或其他文件内容时：
+- 仔细阅读文件内容，结合项目上下文给出具体分析
+- 需求文档 / PRD → 分析功能点，主动询问是否要据此创建需求（调 confirm_requirement）
+- 设计文档 / 技术方案 → 讨论实现思路，指出潜在风险
+- 代码文件 → 审查逻辑，结合已有代码给出修改建议
+- **不要只复述文件内容**，要给出有价值的分析和下一步行动建议
+
 ## 判断准则
 - 用户**明确要求**新增/开发某功能（"帮我加…""做一个…""实现…功能"）→ 调 confirm_requirement
 - 用户描述已有功能的缺陷/报错/崩溃/白屏 → 调 confirm_bug（不是需求）

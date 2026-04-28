@@ -7510,9 +7510,9 @@ async function handleFileAttachment(files) {
             continue;
         }
 
-        // 纯文本文件（MD/TXT 等）：全局聊天下直接本地读取，无需项目上下文
-        const isPlainText = /^(md|txt|csv|json|yaml|yml|toml|ini|conf|log|ts|js|py|java|cs|cpp|h|go|rs|swift|kt)$/.test(ext);
-        if (!currentProjectId && isPlainText) {
+        // 纯文本文件（MD/TXT/代码等）：直接客户端读取，全局聊天和项目内聊天均支持
+        const isPlainText = /^(md|txt|csv|json|yaml|yml|toml|ini|conf|log|ts|js|py|java|cs|cpp|h|go|rs|swift|kt|sh|sql|xml|rb|php)$/.test(ext);
+        if (isPlainText) {
             const reader = new FileReader();
             reader.onload = (ev) => {
                 const text = ev.target.result || '';
@@ -7523,9 +7523,9 @@ async function handleFileAttachment(files) {
             continue;
         }
 
-        // 其他文档（PDF/DOCX 等）：需要上传到后端提取文本
+        // PDF/DOCX 等二进制文档：需要上传到后端提取文本，且必须在项目内
         if (!currentProjectId) {
-            showToast('PDF/DOCX 等文件需要先选择一个项目，MD/TXT 文件可直接上传', 'warning');
+            showToast('PDF/DOCX 等文件需要先进入项目再上传，MD/TXT 文件可直接发送', 'warning');
             continue;
         }
         const formData = new FormData();
