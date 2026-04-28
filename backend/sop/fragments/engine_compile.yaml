@@ -24,6 +24,14 @@ stage:
     max_retries: 3
     timeout_seconds: 600
 
+# UE 项目启用 Layer 2 UBT -SingleFile 预编译（self_test 内部开关）
+# Godot/Unity 不支持该参数，但 self_test.py 只在 UE 分支里读它，无副作用
+stage_overrides:
+  - id: development
+    config:
+      ue_precompile: true
+      ue_precompile_timeout: 120
+
 # 编译归到"测试验证"组（按 priority=95 跟 smoke_test/play_test 同列表，
 # 最终在 SOP 里 engine_compile 会跑在 code_review 前，但 UI 视图不需要这么细）
 pipeline_view_contrib:

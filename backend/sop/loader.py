@@ -146,6 +146,19 @@ def compose_sop(
         if not pending:
             break
 
+    # 7. 处理 stage_overrides：fragment 可以 patch 已有 stage 的 config
+    for frag in frag_entries:
+        for ov in (frag.get("stage_overrides") or []):
+            ov_id = ov.get("id")
+            ov_cfg = ov.get("config") or {}
+            if not ov_id or not ov_cfg:
+                continue
+            idx = _find_stage_idx(composed, ov_id)
+            if idx is None:
+                logger.warning("stage_overrides: stage '%s' 不存在，跳过", ov_id)
+                continue
+            composed[idx].setdefault("config", {}).update(ov_cfg)
+
     # 重新链 trigger_on → success_status：fragment 插入后要让前后阶段的状态链连通
     composed = _relink_stage_transitions(composed)
 

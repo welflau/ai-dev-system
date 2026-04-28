@@ -1,38 +1,32 @@
 # AI Dev System — 待办清单
 
-> 最后更新: 2026-04-26
+> 最后更新: 2026-04-28
 
 ---
 
-## 🎯 下一主线推荐（两条并行，共 ~3.5 天）
+## 🎯 下一主线推荐
 
-### A. DevAgent UE 项目自测 · `docs/20260426_01_DevAgent_UE项目自测方案.md`（~2 天）
+### UE 自测 Layer 2：UBT -SingleFile 预编译（~0.5 天）
 
-**为什么优先**：TestFPS 实战刚暴露 UE DevAgent 自测层几乎是空的——5 个静态可发现的错全漏到 engine_compile stage，每次循环 3-5 分钟 + 一次 LLM fix_issues。
+**背景**：Layer 1（7条静态规则）和工单进度区已在 2026-04-26 完成（v0.19.x 大包）。Layer 2 是唯一遗留项。
 
-**三层设计**：
-- **Layer 1 静态预检**（亚秒级，必做）——7 条规则：UCLASS/GENERATED_BODY、子类 OnRep 禁 UFUNCTION、include 路径可定位、Build.cs 依赖白名单、.uproject Modules 同步、Target.cs IncludeOrderVersion 兼容、常用类型必需 header
-- **Layer 2 UBT SingleFile 预编译**（30-90s，SOP config 开关）
-- **Layer 3 独立 engine_compile / play_test stage**（已有，保留）
+**内容**：`_core.yaml` 里 `ue_precompile` 默认 `false`，需要：
+- 确认 `UECompileCheckAction` `-SingleFile` 参数已支持（已在 `ue_compile_check.py` 实现）
+- SOP fragment/config 开关调优（`ue_precompile: true` on UE 项目）
+- smoke test 验证链路
 
-**预期效果**：TestFPS 历史 5/5 错全抓 · 新手错回合数从 3-5 次压到 0-1 次 · 月省 10-20 刀 LLM + 1-2h 等待
+详见 `docs/20260426_01_DevAgent_UE项目自测方案.md` §4。
 
-**7 Phase ~2 天**
+---
 
-### B. 工单面板「当前进度」区 · `docs/20260426_02_工单面板当前进度区设计.md`（~1.5 天）
+## ✅ DevAgent UE 自测 Layer 1（已完成 2026-04-26）
 
-**为什么配套做**：A 方案 Layer 2 有 30-90s 等待，当前工单面板全黑箱。本方案让 UBT / Package 的 3-5 min 等待有活性反馈。
+7 条静态规则（`actions/ue_lint/rules.py`）：R1 GENERATED_BODY · R2 OnRep 禁 UFUNCTION · R3 include 路径 · R4 Build.cs 模块白名单 · R5 .uproject Modules 同步 · R6 Target.cs IncludeOrderVersion · R7 常用类型必需 header  
+接入 `SelfTestAction`，`self_test_failed → DevAgent.fix_issues` 回跳。
 
-**核心**：
-- tickets 表加 4 列（current_action / started_at / latest_log / updated_at）
-- 所有 log_callback 嵌一层心跳写 DB + SSE 推 `ticket_action_progress`
-- drawer 顶部 4 字段进度区：action · 已用时 · 活性 health（🟢 active / 🟡 silent / 🔴 zombie / ⚪ starting）· 最新 log 摘要
-- **不做百分比进度条**（UE 工具链不给）——心跳 + 最新行比假进度条更有用
+## ✅ 工单面板「当前进度」区（已完成 2026-04-26）
 
-**6 Phase ~1.5 天**
-
-### 推荐节奏
-两方案互补：A 让错更早发现，B 让剩余要跑 UBT 的情况过程透明。**可先做 B**（1 天见 UI 改善），再做 A（拦截 80% 错）；或反过来先筑 A 的规则底。
+`tickets.current_action*` 4 列 + orchestrator 心跳 + SSE `ticket_action_progress` + drawer 进度区（活性 🟢🟡🔴⚪）。
 
 ---
 
