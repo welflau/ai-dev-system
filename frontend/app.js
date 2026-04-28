@@ -8026,6 +8026,14 @@ async function sendChatMessage() {
 
     if (!fullMessage.trim() && images.length === 0) return;
 
+    // 发送前将内容存入历史（去重：与最近一条相同则不存）
+    if (message && message !== _chatInputHistory[0]) {
+        _chatInputHistory.unshift(message);
+        if (_chatInputHistory.length > 50) _chatInputHistory.pop(); // 最多保留 50 条
+    }
+    _chatHistoryIdx = -1;
+    _chatInputDraft = '';
+
     chatSending = true;
     const sendBtn = document.getElementById('chatSendBtn');
     sendBtn.disabled = true;
@@ -9006,6 +9014,11 @@ function clearChatPanel() {
     }
 }
 
+// 聊天输入历史（类 terminal 上下键回溯）
+const _chatInputHistory = [];
+let _chatHistoryIdx = -1;       // -1 = 当前草稿
+let _chatInputDraft = '';        // 用户正在编辑的草稿，上键前保存
+
 /**
  * 处理键盘事件
  */
@@ -9013,6 +9026,46 @@ function handleChatKeydown(e) {
     if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         sendChatMessage();
+        return;
+    }
+
+    const input = document.getElementById('chatInput');
+    if (!input) return;
+
+    if (e.key === 'ArrowUp') {
+        // 只在光标在第一行且输入框为空或单行时触发（避免干扰多行编辑）
+        const val = input.value;
+        const cursorAtStart = input.selectionStart === 0;
+        const isSingleLine = !val.includes('\n');
+        if (!cursorAtStart && !(isSingleLine && val === '')) return;
+        if (_chatInputHistory.length === 0) return;
+
+        e.preventDefault();
+        if (_chatHistoryIdx === -1) {
+            // 首次按上键，保存当前草稿
+            _chatInputDraft = val;
+        }
+        _chatHistoryIdx = Math.min(_chatHistoryIdx + 1, _chatInputHistory.length - 1);
+        input.value = _chatInputHistory[_chatHistoryIdx];
+        input.selectionStart = input.selectionEnd = input.value.length;
+        autoResizeChatInput();
+        return;
+    }
+
+    if (e.key === 'ArrowDown') {
+        if (_chatHistoryIdx === -1) return;
+        e.preventDefault();
+        _chatHistoryIdx--;
+        input.value = _chatHistoryIdx === -1 ? _chatInputDraft : _chatInputHistory[_chatHistoryIdx];
+        input.selectionStart = input.selectionEnd = input.value.length;
+        autoResizeChatInput();
+        return;
+    }
+
+    // 任意其他键：重置历史游标
+    if (_chatHistoryIdx !== -1 && e.key.length === 1) {
+        _chatHistoryIdx = -1;
+        _chatInputDraft = '';
     }
 }
 
@@ -10442,13 +10495,23 @@ async function showSystemSettingsModal(initialTab = 'knowledge') {
                 <div style="flex:1; overflow-y:auto; padding:16px 20px;">
                     <!-- 全局知识库 panel -->
                     <div class="sys-settings-panel" id="sys-panel-knowledge">
-                        <p style="font-size:13px;color:var(--text-muted);margin-bottom:12px;">
-                            所有项目共享，适合放编码规范、技术栈说明、安全规则等。（上限 2000 字符/次注入）
-                        </p>
-                        <div style="display:flex;justify-content:flex-end;margin-bottom:8px;">
-                            <button class="btn btn-primary btn-sm" onclick="showKnowledgeEditor('global', null)">+ 新建文档</button>
+                        <!-- 系统文档（只读） -->
+                        <div style="margin-bottom:16px;">
+                            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+                                <span style="font-size:13px;font-weight:600;">🗂 系统知识库</span>
+                                <span style="font-size:11px;color:var(--text-muted);">只读 · 自动索引</span>
+                            </div>
+                            <div id="sysDocsModalList"><div class="empty-state-sm" style="font-size:12px;">加载中...</div></div>
                         </div>
-                        <div id="globalKnowledgeModalList"><div class="empty-state-sm">加载中...</div></div>
+                        <!-- 用户自定义全局文档 -->
+                        <div>
+                            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+                                <span style="font-size:13px;font-weight:600;">🌐 自定义全局文档</span>
+                                <button class="btn btn-primary btn-sm" onclick="showKnowledgeEditor('global', null)">+ 新建文档</button>
+                            </div>
+                            <p style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">所有项目共享，适合放编码规范、技术栈说明、安全规则等。（上限 2000 字符/次注入）</p>
+                            <div id="globalKnowledgeModalList"><div class="empty-state-sm">加载中...</div></div>
+                        </div>
                     </div>
 
                     <!-- Traits panel -->
@@ -10521,14 +10584,52 @@ function showGlobalKnowledgeModal() {
 }
 
 async function _loadGlobalKnowledgeIntoModal() {
-    const container = document.getElementById('globalKnowledgeModalList');
-    if (!container) return;
-    try {
-        const res = await api('/knowledge/global');
-        renderKnowledgeDocList(container, res.docs || [], 'global', null);
-    } catch (e) {
-        container.innerHTML = `<div class="empty-state-sm">加载失败: ${escHtml(e.message)}</div>`;
-    }
+    // 并行加载系统文档 + 用户自定义全局文档
+    const [sysContainer, customContainer] = [
+        document.getElementById('sysDocsModalList'),
+        document.getElementById('globalKnowledgeModalList'),
+    ];
+
+    await Promise.all([
+        // 系统知识库（只读）
+        sysContainer ? (async () => {
+            try {
+                const data = await api('/knowledge/system');
+                const docs = data.docs || [];
+                if (!docs.length) {
+                    sysContainer.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">暂无系统文档</span>';
+                    return;
+                }
+                const byGroup = { docs: [], devnotes: [] };
+                docs.forEach(d => (byGroup[d.group] || byGroup.docs).push(d));
+                const renderGroup = (title, icon, items) => !items.length ? '' : `
+                    <div class="sys-doc-group">
+                        <div class="sys-doc-group-title">${icon} ${title}（${items.length}）</div>
+                        ${items.map(d => `
+                            <div class="sys-doc-row">
+                                <span class="sys-doc-name" title="${escapeHtml(d.display_name)}">${escapeHtml(d.display_name)}</span>
+                                <span class="sys-doc-size">${Math.round(d.size / 1024 * 10) / 10}KB</span>
+                            </div>
+                        `).join('')}
+                    </div>`;
+                sysContainer.innerHTML =
+                    renderGroup('技术方案文档', '📄', byGroup.docs) +
+                    renderGroup('开发日志', '📝', byGroup.devnotes);
+            } catch (e) {
+                sysContainer.innerHTML = `<span style="color:var(--danger);font-size:12px;">加载失败</span>`;
+            }
+        })() : Promise.resolve(),
+
+        // 用户自定义全局文档
+        customContainer ? (async () => {
+            try {
+                const res = await api('/knowledge/global');
+                renderKnowledgeDocList(customContainer, res.docs || [], 'global', null);
+            } catch (e) {
+                customContainer.innerHTML = `<div class="empty-state-sm">加载失败: ${escHtml(e.message)}</div>`;
+            }
+        })() : Promise.resolve(),
+    ]);
 }
 
 /** 知识库 Tab 统一入口 */
