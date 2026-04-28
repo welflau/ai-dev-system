@@ -1474,48 +1474,8 @@ class GlobalChatResponse(BaseModel):
 
 @global_chat_router.post("", response_model=GlobalChatResponse)
 async def global_chat_with_ai(req: GlobalChatRequest):
-    """全局聊天（项目列表页）— 无需 project_id，支持创建项目
-
-    双轨：
-    - CHAT_USE_AGENT=true（默认）→ ChatAssistantAgent.chat_global() + tool_use
-      任何异常自动降级到旧 [ACTION:CREATE_PROJECT] 文本协议路径，保证 SLA
-    - CHAT_USE_AGENT=false → 直接走旧路径
-    """
-    from config import settings
-
-    if settings.CHAT_USE_AGENT:
-        try:
-            return await _global_chat_via_agent(req)
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.warning(
-                "全局新路径失败，降级到旧 [ACTION:CREATE_PROJECT] 文本协议路径: %s: %s",
-                type(e).__name__, e,
-            )
-            # 落地 fallback 事件，方便统计 new-path 失败率
-            try:
-                await db.insert("ticket_logs", {
-                    "id": generate_id("LOG"),
-                    "ticket_id": None,
-                    "subtask_id": None,
-                    "requirement_id": None,
-                    "project_id": None,
-                    "agent_type": "GlobalChatAssistant",
-                    "action": "chat_agent_fallback",
-                    "from_status": None,
-                    "to_status": None,
-                    "level": "warning",
-                    "detail": json.dumps({
-                        "error_type": type(e).__name__,
-                        "error_msg": str(e)[:500],
-                    }, ensure_ascii=False),
-                    "created_at": now_iso(),
-                })
-            except Exception:
-                pass
-
-    return await _global_chat_legacy(req)
+    """全局聊天（项目列表页）— ChatAssistantAgent + tool_use"""
+    return await _global_chat_via_agent(req)
 
 
 async def _global_chat_via_agent(req: GlobalChatRequest) -> GlobalChatResponse:
@@ -1546,35 +1506,7 @@ async def _global_chat_via_agent(req: GlobalChatRequest) -> GlobalChatResponse:
     return GlobalChatResponse(reply=result["reply"], action=result.get("action"))
 
 
-async def _global_chat_legacy(req: GlobalChatRequest) -> GlobalChatResponse:
-    """旧路径：raw LLM 调用 + 正则抠 [ACTION:CREATE_PROJECT] 协议。"""
-    from llm_client import llm_client, set_llm_context, clear_llm_context
-
-    projects = await db.fetch_all(
-        "SELECT id, name, status, tech_stack, description, created_at FROM projects ORDER BY created_at DESC LIMIT 20"
-    )
-
-    system_prompt = _build_global_system_prompt(projects)
-    messages = [{"role": "system", "content": system_prompt}]
-
-    if req.history:
-        for msg in req.history[-20:]:
-            messages.append({"role": msg.role, "content": msg.content})
-
-    messages.append({"role": "user", "content": _build_user_content(req.message, req.images)})
-
-    set_llm_context(agent_type="GlobalChatAssistant", action="global_chat_no_project_legacy")
-
-    try:
-        response = await llm_client.chat(messages, temperature=0.7, max_tokens=16000)
-        action_result = await _parse_global_action(response)
-        clean_reply = _clean_action_tags(response)
-        return GlobalChatResponse(reply=clean_reply, action=action_result)
-    finally:
-        clear_llm_context()
-
-
-# ---- 确认创建项目端点（新路径用户点击确认后走这里）----
+# ---- 确认创建项目端点 ----
 
 class ConfirmCreateProjectRequest(BaseModel):
     name: str = Field(..., min_length=1)
@@ -1605,96 +1537,6 @@ async def get_projects_brief():
     )
     return {"projects": projects, "total": len(projects)}
 
-
-def _build_global_system_prompt(projects: list) -> str:
-    """构建全局聊天系统提示词（无项目上下文）"""
-    if projects:
-        proj_lines = []
-        for p in projects[:10]:
-            proj_lines.append(f"  - [{p['status']}] {p['name']} (技术栈: {p.get('tech_stack') or '未指定'})")
-        proj_summary = "\n".join(proj_lines)
-    else:
-        proj_summary = "  暂无项目"
-
-    return f"""你是 AI 自动开发系统的智能助手。当前用户尚未进入任何项目，你正在项目列表页提供服务。
-
-## 当前项目列表
-{proj_summary}
-
-## 你的能力
-1. **回答问题**：关于系统功能、使用方法的任何问题
-2. **创建项目**：当用户想创建新项目时，收集必要信息后创建
-3. **推荐操作**：引导用户进入已有项目，或创建新项目
-
-## 创建项目的必填信息
-创建项目需要以下信息：
-- **项目名称**（必填）：项目的名称
-- **Git 远程仓库 URL**（必填）：如 https://github.com/username/repo.git
-- **项目描述**（可选）：项目的简要说明
-- **技术栈**（可选）：如 Python, FastAPI, React 等
-- **本地仓库路径**（可选）：留空则自动生成
-
-## 对话式创建项目流程
-当用户表达想创建项目的意图时：
-1. 先确认用户想创建项目
-2. 逐步收集缺少的必填信息（名称、Git URL），可以一次问多个
-3. 可选信息可以建议用户填写，但不强制
-4. 信息收集完毕后，向用户确认所有信息，等用户确认后再创建
-5. 用户确认后，输出创建指令
-
-## 操作指令格式
-当信息收集完毕且用户确认后，在回复末尾附加（必须是独立一行）：
-
-### 创建项目
-[ACTION:CREATE_PROJECT]
-{{"name": "项目名称", "description": "项目描述", "tech_stack": "技术栈", "git_remote_url": "Git远程仓库URL", "local_repo_path": ""}}
-[/ACTION]
-
-## 注意事项
-- 用中文回复
-- 回答简洁但有信息量
-- 创建项目前必须确认用户的意图和必填信息
-- 如果用户只说了项目名没说 Git URL，要追问 Git URL
-- 不要自己编造 Git URL
-- 用户说"确认"、"好的"、"创建吧"等表示同意时才执行创建
-"""
-
-
-async def _parse_global_action(response: str) -> Optional[Dict]:
-    """解析全局聊天中的操作指令"""
-    import re
-
-    pattern = r'\[ACTION:(\w+)\]\s*(\{.*?\})\s*\[/ACTION\]'
-    match = re.search(pattern, response, re.DOTALL)
-
-    if not match:
-        return None
-
-    action_type = match.group(1)
-    action_data_str = match.group(2)
-
-    try:
-        action_data = json.loads(action_data_str)
-    except json.JSONDecodeError:
-        logger.warning("无法解析全局操作数据: %s", action_data_str)
-        return None
-
-    if action_type == "CREATE_PROJECT":
-        return await _execute_create_project(action_data)
-
-    logger.warning("未知全局操作类型: %s", action_type)
-    return None
-
-
-async def _execute_create_project(data: dict) -> Dict:
-    """通过 AI 对话执行创建项目
-
-    薄 wrapper：保留原签名以兼容 legacy [ACTION:CREATE_PROJECT] 路径；
-    真实逻辑在 actions.chat.create_project.CreateProjectAction 里。
-    """
-    from actions.chat.create_project import CreateProjectAction
-    result = await CreateProjectAction().run(data)
-    return result.data
 
 
 # ==================== 图片消息构建 ====================

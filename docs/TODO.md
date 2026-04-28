@@ -4,19 +4,41 @@
 
 ---
 
-## 🎯 下一主线推荐（两条，按优先级）
+## 🎯 下一主线推荐（三条，按优先级）
 
-### A. PlanCodeChangeAction — 解决 DevAgent 全文件重写（~1.5 天，P1）
+### A. Memory 持久化系统（~1.5 天，P1）
 
-**问题**：DevAgent 修复小 bug 时常把整个文件重写，导致：无关代码被改动 / ReviewAgent 和 ProductAgent 验收噪音大 / Reflexion 修复时"找不到原来代码"。
+**来源**：对标 `ai_multi_agent_dev` 的结构化交接物设计，同时解决我方已知技术债。详见 `docs/20260428_02_ai_multi_agent_dev对比分析与借鉴方案.md`。
 
-**方案**：新 Action `PlanCodeChangeAction`（对标 MetaGPT `WriteCodePlanAndChange`）：
-1. 先 LLM 规划"改哪些文件的哪些函数"（JSON plan）
-2. 按 plan 逐文件做精准增量修改，不碰无关代码
+**问题**：`cause_by` 关系链存内存重启丢失；Orchestrator 传递上下文靠函数参数，跨进程无法查询历史；ChatAssistant 无法回答"当初为什么这样设计"。
 
-详见 Action 池扩充 §中期 P1。
+**方案**：新增 `agent_memory` 表（4 种类型：decision / handoff / project_status / active_worker），Orchestrator 在关键节点自动写入，ChatAssistant 新增 `GetMemoryAction` 查询。
 
-### B. v0.19 三合一 + CI/CD 浏览器实操验收（需手动，随时）
+### B. Insight 主动注入（~0.5 天，P1）
+
+**来源**：腾讯 KM《如何让 AI 分工帮我做游戏（三）》vibecli insight 系统。详见 `docs/20260428_02_ai_multi_agent_dev对比分析与借鉴方案.md §3.3`。
+
+**问题**：DevAgent 编码时从不查知识库，过去踩的坑不会自动被规避。
+
+**方案**：在 `orchestrator._build_context()` 里，用任务标题 + traits 自动调 `SearchKnowledgeAction` + `SearchTicketHistoryAction` 各一次，结果注入 DevAgent context 的 `prior_insights` 字段。FTS5 基础设施已有，零新增依赖。
+
+### C. 研发效率统计（~1.5 天，P2）
+
+**来源**：对标 `ai_multi_agent_dev` 的 `dev-efficiency-tracker`，基于我方现有 `ticket_logs` 数据补聚合层。
+
+**方案**：新增 `GET /api/projects/{id}/efficiency` 端点 + 前端效率看板（需求交付周期 / Agent 耗时占比 / Reflexion 重试排行）。
+
+### D. Unity HTML 原型管线（~5 天，P2，前置：engine:unity 基础完善）
+
+**来源**：腾讯 KM《如何让 AI 分工帮我做游戏（三）》HTML 原型 → Unity 管线。详见 `docs/20260428_02_ai_multi_agent_dev对比分析与借鉴方案.md §3.4`。
+
+**问题**：Unity 启动慢、热重载重，开发一个方向错误的功能损失 1-2 周；AI 写 HTML 质量远高于直接写 Unity UI 代码。
+
+**方案**：
+- Phase 1（2 天）：`html_prototype` SOP fragment（engine:unity 注入），DevAgent 先生成 HTML 原型，SelfTestAction 浏览器验证玩法循环，通过后进入 Unity 开发
+- Phase 2（3 天）：`HtmlToUnityAction`，解析 HTML DOM → 生成 Unity Prefab 骨架 + ButtonBinder / PanelController C# 脚本
+
+### E. v0.19 三合一 + CI/CD 浏览器实操验收（需手动，随时）
 
 代码已就绪，等浏览器跑一遍验收后 commit。见 `🔄 v0.19 三合一` 和 `✅ v0.19.x CI/CD` 节。
 

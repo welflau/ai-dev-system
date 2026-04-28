@@ -87,8 +87,8 @@ class SearchKnowledgeAction(ActionBase):
                 rows = await db.fetch_all("""
                     SELECT ki.filename,
                            ki.project_id,
-                           snippet(knowledge_fts, 0, '**', '**', '...', 40) AS snippet,
-                           substr(ki.content, 1, 500)                        AS preview
+                           snippet(knowledge_fts, 0, '**', '**', '...', 64) AS snippet,
+                           substr(ki.content, 1, 1500)                       AS preview
                     FROM knowledge_fts
                     JOIN knowledge_index ki ON knowledge_fts.rowid = ki.id
                     WHERE knowledge_fts MATCH ?
@@ -100,8 +100,8 @@ class SearchKnowledgeAction(ActionBase):
                 rows = await db.fetch_all("""
                     SELECT ki.filename,
                            ki.project_id,
-                           snippet(knowledge_fts, 0, '**', '**', '...', 40) AS snippet,
-                           substr(ki.content, 1, 500)                        AS preview
+                           snippet(knowledge_fts, 0, '**', '**', '...', 64) AS snippet,
+                           substr(ki.content, 1, 1500)                       AS preview
                     FROM knowledge_fts
                     JOIN knowledge_index ki ON knowledge_fts.rowid = ki.id
                     WHERE knowledge_fts MATCH ?
