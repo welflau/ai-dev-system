@@ -11,6 +11,10 @@ let currentProject = null;
 let currentPipelineReqId = null;
 let eventSource = null;
 
+// 全局聊天状态快照——进入项目时保存，返回列表时恢复
+let _globalChatHistory = [];
+let _globalChatDom = '';
+
 // ==================== 工具函数 ====================
 
 /**
@@ -491,20 +495,38 @@ function showProjectDetail(projectId) {
 function _updateChatPanelForContext() {
     const modeBar = document.getElementById('chatModeBar');
     const modeBtn = document.getElementById('chatModeBtn');
+    const msgContainer = document.getElementById('chatMessages');
+
     if (currentProjectId) {
+        // 进入项目：先把全局聊天状态存起来
+        _globalChatHistory = [...chatHistory];
+        _globalChatDom = msgContainer ? msgContainer.innerHTML : '';
+
         if (modeBar) modeBar.style.display = '';
         if (modeBtn) modeBtn.style.display = '';
     } else {
+        // 返回列表：切回全局模式
         if (modeBar) modeBar.style.display = 'none';
         if (modeBtn) modeBtn.style.display = 'none';
         if (chatMode !== 'global') setChatMode('global');
     }
-    // 重置聊天历史和界面
+
+    // 重置当前聊天历史
     chatHistory = [];
+
     if (chatPanelOpen) {
-        showChatWelcome();
-        if (currentProjectId && chatMode === 'global') {
-            loadChatHistory();
+        if (!currentProjectId && _globalChatDom) {
+            // 恢复全局聊天记录
+            chatHistory = [..._globalChatHistory];
+            if (msgContainer) {
+                msgContainer.innerHTML = _globalChatDom;
+                scrollChatToBottom();
+            }
+        } else {
+            showChatWelcome();
+            if (currentProjectId && chatMode === 'global') {
+                loadChatHistory();
+            }
         }
     }
 }
