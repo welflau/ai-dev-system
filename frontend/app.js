@@ -8162,7 +8162,7 @@ async function sendChatMessage() {
                     }),
                 });
                 document.getElementById('chatTyping')?.remove();
-                chatHistory.push({ role: 'user', content: fullMessage });
+                chatHistory.push({ role: 'user', content: _buildUserHistoryContent(fullMessage, images) });
                 chatHistory.push({ role: 'assistant', content: resp.reply });
                 appendGroupAgentBubble(resp.agent, resp.emoji, resp.color, resp.reply);
                 scrollChatToBottom();
@@ -8178,7 +8178,7 @@ async function sendChatMessage() {
                     }),
                 });
                 document.getElementById('chatTyping')?.remove();
-                chatHistory.push({ role: 'user', content: fullMessage });
+                chatHistory.push({ role: 'user', content: _buildUserHistoryContent(fullMessage, images) });
                 // 逐个显示每个 Agent 的回复，带小延迟营造依次发言感
                 if (resp.replies && resp.replies.length > 0) {
                     const lastReply = resp.replies[resp.replies.length - 1];
@@ -8223,8 +8223,8 @@ async function sendChatMessage() {
         const action = resp.action || null;
         const actions = resp.actions || [];
 
-        // 更新历史
-        chatHistory.push({ role: 'user', content: fullMessage });
+        // 更新历史（图片用多模态 blocks 保存，后续追问时 AI 仍知道有图）
+        chatHistory.push({ role: 'user', content: _buildUserHistoryContent(fullMessage, images) });
         chatHistory.push({ role: 'assistant', content: reply });
 
         // 添加回复气泡（actions 有多条时渲染批量确认卡片）
@@ -8329,6 +8329,24 @@ async function sendChatMessage() {
 /**
  * 追加聊天气泡
  */
+/**
+ * 构建存入 chatHistory 的用户消息 content。
+ * 有图片时用多模态 blocks（后端 _compress_history 会把旧轮图片压缩为 [image] 占位），
+ * 这样后续追问时 AI 仍能在历史里看到"这条消息带过图片"。
+ */
+function _buildUserHistoryContent(text, images) {
+    if (!images || images.length === 0) return text;
+    const blocks = images.map(url => {
+        try {
+            const [header, b64] = url.split(',', 2);
+            const mediaType = header.split(';')[0].split(':')[1] || 'image/jpeg';
+            return { type: 'image', source: { type: 'base64', media_type: mediaType, data: b64 } };
+        } catch (e) { return null; }
+    }).filter(Boolean);
+    if (text) blocks.push({ type: 'text', text });
+    return blocks.length > 0 ? blocks : text;
+}
+
 /** 构建单张 confirm_requirement 卡片 HTML（供单张和批量场景复用） */
 function _buildConfirmCardHtml(action) {
     const priorityLabel = {'critical':'🔴 紧急','high':'🟠 高','medium':'🟡 中','low':'🟢 低'}[action.priority] || action.priority;
