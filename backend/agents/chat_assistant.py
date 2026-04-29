@@ -21,7 +21,7 @@ from actions.chat.confirm_requirement import ConfirmRequirementAction, ConfirmRe
 from actions.chat.confirm_bug import ConfirmBugAction
 from actions.chat.confirm_project import ConfirmProjectAction
 from actions.chat.create_requirement import CreateRequirementAction
-from actions.chat.pause_requirement import PauseRequirementAction
+from actions.chat.pause_requirement import PauseRequirementAction, PauseRequirementsBatchAction
 from actions.chat.resume_requirement import ResumeRequirementAction
 from actions.chat.close_requirement import CloseRequirementAction
 from actions.chat.generate_document import GenerateDocumentAction
@@ -201,6 +201,7 @@ class ChatAssistantAgent(BaseAgent):
         ConfirmProjectAction,          # 全局聊天用，暴露给 LLM
         CreateRequirementAction,       # 内部用，不暴露给 LLM
         PauseRequirementAction,
+        PauseRequirementsBatchAction,
         ResumeRequirementAction,
         CloseRequirementAction,
         GenerateDocumentAction,
@@ -666,6 +667,7 @@ class ChatAssistantAgent(BaseAgent):
 - 识别单条新需求 → confirm_requirement；识别多条需求（≥2）→ confirm_requirements_batch（一张勾选卡）
 - 识别 BUG → confirm_bug 产草稿让用户确认（不要直接创建）
 - 管理需求状态 → pause / resume / close
+- **批量暂停所有/多条需求** → pause_requirements_batch（用户说"暂停所有工单/需求""先全部停下"时）
 - 查看项目 → git_log / git_list_branches / git_read_file
 - 切换/合并分支 → git_switch_branch / git_merge
 - 生成文档 → generate_document（直接写入 docs/ 并 commit+push）

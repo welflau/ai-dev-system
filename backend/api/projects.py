@@ -462,8 +462,24 @@ async def delete_project(project_id: str):
 
     logger.info("找到项目: %s, 开始级联删除...", project['name'])
 
+    # 先通知 Orchestrator 停止处理该项目所有工单（防止删表时并发写入导致 FK 冲突）
     try:
-        # 级联删除关联数据（单事务，按外键依赖顺序，由子到父）
+        from orchestrator import orchestrator
+        tickets_in_flight = [tid for tid in list(orchestrator._processing)
+                             if tid in orchestrator._project_active.get(project_id, set())]
+        for tid in tickets_in_flight:
+            orchestrator._processing.discard(tid)
+        orchestrator._project_active.pop(project_id, None)
+        logger.info("已从 Orchestrator 移除项目 %s（%d 个进行中工单终止）",
+                    project_id, len(tickets_in_flight))
+    except Exception as oe:
+        logger.warning("停止 Orchestrator 任务失败（继续删除）: %s", oe)
+
+    try:
+        # SQLite: PRAGMA foreign_keys=OFF 只能在事务外生效，先 commit 关闭任何活跃事务
+        await db._db.commit()
+        await db._db.execute("PRAGMA foreign_keys=OFF")
+        await db._db.commit()  # 确保 PRAGMA 生效
         delete_sqls = [
             "DELETE FROM chat_messages WHERE project_id = ?",
             "DELETE FROM ticket_commands WHERE project_id = ?",
@@ -471,6 +487,9 @@ async def delete_project(project_id: str):
             "DELETE FROM artifacts WHERE project_id = ?",
             "DELETE FROM subtasks WHERE ticket_id IN (SELECT id FROM tickets WHERE project_id = ?)",
             "DELETE FROM llm_conversations WHERE project_id = ?",
+            "DELETE FROM bugs WHERE project_id = ?",
+            "DELETE FROM failure_cases WHERE project_id = ?",
+            "DELETE FROM knowledge_index WHERE project_id = ?",
             "DELETE FROM tickets WHERE project_id = ?",
             "DELETE FROM requirements WHERE project_id = ?",
             "DELETE FROM milestones WHERE project_id = ?",
@@ -485,6 +504,12 @@ async def delete_project(project_id: str):
     except Exception as e:
         logger.error("级联删除失败: %s", e, exc_info=True)
         raise HTTPException(500, f"级联删除失败: {e}")
+    finally:
+        # 无论成败都恢复 FK 检查
+        try:
+            await db._db.execute("PRAGMA foreign_keys=ON")
+        except Exception:
+            pass
 
     return {"message": "项目已删除"}
 
