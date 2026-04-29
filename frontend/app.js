@@ -8239,6 +8239,18 @@ async function sendChatMessage() {
         if (action && action.type === 'document_generated') {
             showToast(`文档「${action.title || action.path}」已生成`, 'success');
         }
+
+        // 文档保存确认卡片：项目内聊天 + 有附件时，AI 回复后追加
+        if (currentProjectId && docs.length > 0) {
+            for (const doc of docs) {
+                appendChatBubble('assistant', '', null, {
+                    type: '_save_to_docs',
+                    filename: doc.filename,
+                    text: doc.text,
+                });
+            }
+            scrollChatToBottom();
+        }
         } // end if (chatMode !== 'group')
 
     } catch (e) {
@@ -8394,6 +8406,25 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
                 ${gitLinkHtml}
             </div>
         `;
+    } else if (action && action.type === '_save_to_docs') {
+        const safeId = 'save_doc_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
+        const destPath = 'docs/' + action.filename;
+        // 暂存内容供按钮回调使用
+        window._pendingDocSaves = window._pendingDocSaves || {};
+        window._pendingDocSaves[safeId] = { filename: destPath, text: action.text };
+        actionHtml = `
+            <div class="chat-action-card chat-confirm-card" id="${safeId}"
+                 style="border-left-color: var(--info, #58a6ff);">
+                <div class="action-title">📁 是否保存到项目文档？</div>
+                <div class="action-detail">
+                    <div class="confirm-req-title">${escapeHtml(action.filename)}</div>
+                    <div class="confirm-req-meta">保存路径：<code>${escapeHtml(destPath)}</code></div>
+                </div>
+                <div class="confirm-req-btns">
+                    <button class="btn btn-sm btn-primary" onclick="doSaveDocToRepo('${safeId}')">💾 保存到 docs/</button>
+                    <button class="btn btn-sm" onclick="this.closest('.chat-action-card').remove()">✗ 不保存</button>
+                </div>
+            </div>`;
     } else if (action && action.type === 'error') {
         actionHtml = `
             <div class="chat-action-card" style="border-left-color: var(--danger, #ea4a5a);">
@@ -8562,6 +8593,39 @@ function appendGroupAgentBubble(agentName, emoji, color, content) {
         </div>
     `;
     container.appendChild(msgEl);
+}
+
+/** 用户确认将上传的文档保存到项目 docs/ */
+async function doSaveDocToRepo(cardId) {
+    const pending = (window._pendingDocSaves || {})[cardId];
+    const card = document.getElementById(cardId);
+    if (!pending || !currentProjectId) return;
+
+    const btn = card ? card.querySelector('.btn-primary') : null;
+    if (btn) { btn.disabled = true; btn.textContent = '保存中…'; }
+
+    try {
+        const resp = await api(`/projects/${currentProjectId}/chat/save-to-repo`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filename: pending.filename, content: pending.text }),
+        });
+        if (card) {
+            card.innerHTML = `
+                <div class="action-title">✅ 已保存</div>
+                <div class="action-detail">
+                    <code>${escapeHtml(resp.path || pending.filename)}</code>
+                    ${resp.commit ? ` · commit <code>${escapeHtml(resp.commit.slice(0, 7))}</code>` : ''}
+                </div>
+                <span class="action-link" onclick="switchTab('repo')">查看仓库文件 →</span>`;
+            card.style.borderLeftColor = 'var(--success, #34d058)';
+        }
+        delete window._pendingDocSaves[cardId];
+        showToast(`文档已保存到 ${resp.path || pending.filename}`, 'success');
+    } catch (e) {
+        if (btn) { btn.disabled = false; btn.textContent = '💾 保存到 docs/'; }
+        showToast(`保存失败: ${e.message || e}`, 'error');
+    }
 }
 
 /** 用户确认创建需求 */
