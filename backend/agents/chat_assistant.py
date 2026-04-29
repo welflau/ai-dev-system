@@ -340,9 +340,9 @@ class ChatAssistantAgent(BaseAgent):
 
         if not reply:
             if action:
-                reply = action.get("message") or "请继续告诉我项目的信息。"
+                reply = action.get("message") or "操作已完成。"
             else:
-                reply = "请告诉我想建什么项目，至少提供项目名称和 Git 远程仓库 URL。"
+                reply = "有什么可以帮你的？"
 
         return {"reply": reply, "action": action, "actions": actions}
 
@@ -777,10 +777,12 @@ class ChatAssistantAgent(BaseAgent):
 - 用户说"UE5 射击游戏" → 全齐（platform:desktop + category:game + engine:ue5 推断出来）→ 可调
 
 ## 判断准则
-- **信息维度齐 → 调 confirm_project（traits 必填，从 trait_taxonomy 固定词表里选）**
-- **任一必填维度不明 → 绝不调工具，反问补齐（给预设选项别让用户自由描述）**
+- **用户闲聊、提问、发图片、讨论技术方案** → 直接回答，不调工具，不强行引导建项目
+- **用户明确表达想建项目** → 收集信息，信息齐了调 confirm_project
+- **任一必填维度不明** → 反问补齐（给预设选项）
 - "我现在的项目都什么状态" → 根据上面"已有项目"列表直接回答，不调工具
 - "XX 项目卡在哪" → 提示用户进入该项目页再继续问
+- 图片内容 → 正常描述和分析，若图片和项目开发相关可顺带询问是否要建项目
 
 ## 注意事项
 - 用中文回复，简洁
