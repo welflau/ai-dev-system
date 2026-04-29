@@ -5,17 +5,31 @@ AI 自动开发系统 - 聊天 API
 2. 全局聊天（无项目）：项目列表页的 AI 对话，支持创建项目
 3. Job 聊天历史：加载某个工单的 AI 对话记录
 """
+import asyncio
 import base64
 import json
 import logging
 import uuid
 from pathlib import Path
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, HTTPException, UploadFile, File, Request
 from pydantic import BaseModel, Field
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union
 from database import db
 from utils import generate_id, now_iso
 from events import event_manager
+
+# 全局聊天思考日志：session_id → asyncio.Queue（fire-and-forget SSE 频道）
+_THINKING_QUEUES: Dict[str, asyncio.Queue] = {}
+
+
+def get_thinking_queue(session_id: str) -> asyncio.Queue:
+    if session_id not in _THINKING_QUEUES:
+        _THINKING_QUEUES[session_id] = asyncio.Queue()
+    return _THINKING_QUEUES[session_id]
+
+
+def remove_thinking_queue(session_id: str) -> None:
+    _THINKING_QUEUES.pop(session_id, None)
 
 logger = logging.getLogger("chat")
 
@@ -29,7 +43,8 @@ global_chat_router = APIRouter(prefix="/api/chat", tags=["global-chat"])
 
 class ChatMessage(BaseModel):
     role: str = Field(..., description="消息角色: user / assistant / system")
-    content: str = Field(..., description="消息内容")
+    # content 可能是纯字符串，也可能是 Anthropic 多模态 block 列表（历史里带图片时前端会传 list）
+    content: Union[str, List[Dict[str, Any]]] = Field(..., description="消息内容（字符串或多模态 block 列表）")
 
 
 class ChatRequest(BaseModel):
@@ -1466,6 +1481,7 @@ class GlobalChatRequest(BaseModel):
     message: str = Field(..., min_length=1, description="用户消息")
     history: Optional[List[ChatMessage]] = Field(default=None, description="历史消息（可选）")
     images: Optional[List[str]] = Field(default=None, description="图片列表，base64 data URL")
+    session_id: Optional[str] = Field(default=None, description="思考日志 SSE session ID（可选）")
 
 
 class GlobalChatResponse(BaseModel):
@@ -1504,8 +1520,14 @@ async def _global_chat_via_agent(req: GlobalChatRequest) -> GlobalChatResponse:
         images=req.images,
         history=history,
         projects_brief=projects,
+        session_id=req.session_id,
     )
-    return GlobalChatResponse(reply=result["reply"], action=result.get("action"))
+    # 请求完成后关闭思考日志队列
+    if req.session_id:
+        q = _THINKING_QUEUES.get(req.session_id)
+        if q:
+            await q.put(None)  # None = 结束信号
+    return GlobalChatResponse(reply=result["reply"], action=result.get("action"), actions=result.get("actions"))
 
 
 # ---- 确认创建项目端点 ----
@@ -1519,6 +1541,31 @@ class ConfirmCreateProjectRequest(BaseModel):
     traits: List[str] = Field(default_factory=list)              # v0.17
     preset_id: Optional[str] = Field(default=None)               # v0.17
     traits_confidence: Dict[str, Any] = Field(default_factory=dict)  # v0.17
+
+
+@global_chat_router.get("/thinking-stream")
+async def global_chat_thinking_stream(session_id: str, request: Request):
+    """全局聊天思考日志 SSE 流（按 session_id 隔离，供前端实时展示工具调用进度）"""
+    from sse_starlette.sse import EventSourceResponse
+
+    queue = get_thinking_queue(session_id)
+
+    async def generator():
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=1.0)
+                    if event is None:   # 结束信号
+                        break
+                    yield {"event": "chat_thinking_log", "data": json.dumps(event, ensure_ascii=False)}
+                except asyncio.TimeoutError:
+                    yield {"event": "ping", "data": "{}"}   # keepalive
+        finally:
+            remove_thinking_queue(session_id)
+
+    return EventSourceResponse(generator())
 
 
 @global_chat_router.post("/confirm-create-project")

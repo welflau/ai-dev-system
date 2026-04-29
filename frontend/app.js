@@ -497,10 +497,22 @@ function _updateChatPanelForContext() {
     const modeBtn = document.getElementById('chatModeBtn');
     const msgContainer = document.getElementById('chatMessages');
 
+    // 切换 context 时：若有进行中的请求，清理残留状态（请求本身仍在后台跑，但结果会被丢弃）
+    if (chatSending) {
+        chatSending = false;
+        document.getElementById('chatSendBtn') && (document.getElementById('chatSendBtn').disabled = false);
+        document.getElementById('chatTyping')?.remove();
+        if (typeof _thinkingESrc !== 'undefined' && _thinkingESrc) {
+            _thinkingESrc.close(); _thinkingESrc = null;
+        }
+    }
+
     if (currentProjectId) {
-        // 进入项目：先把全局聊天状态存起来
+        // 进入项目：把全局聊天状态存起来（确保不含 typing 气泡）
+        const clone = msgContainer ? msgContainer.cloneNode(true) : null;
+        clone?.querySelector('#chatTyping')?.remove();
         _globalChatHistory = [...chatHistory];
-        _globalChatDom = msgContainer ? msgContainer.innerHTML : '';
+        _globalChatDom = clone ? clone.innerHTML : '';
 
         if (modeBar) modeBar.style.display = '';
         if (modeBtn) modeBtn.style.display = '';
@@ -6062,6 +6074,33 @@ function connectSSE(projectId) {
             }
         });
 
+        // AI 助手思考日志：工具调用前后推送，显示在 chatTyping 气泡下方
+        eventSource.addEventListener('chat_thinking_log', (e) => {
+            const data = JSON.parse(e.data);
+            const logEl = document.getElementById('chatThinkingLog');
+            if (!logEl) return;
+            logEl.style.display = 'block';
+            const toolLabel = {
+                search_knowledge: '🔍 搜索知识库', search_ticket_history: '🗂 检索历史工单',
+                fetch_url: '🌐 访问链接', git_log: '📜 查提交历史', git_read_file: '📄 读取文件',
+                generate_document: '📝 生成文档', confirm_save_doc: '💾 准备保存文档',
+                confirm_requirement: '📋 识别需求', confirm_bug: '🐛 识别 BUG',
+                get_requirement_pipeline: '🔍 查需求进度', get_ticket_status: '📊 查工单状态',
+                get_requirement_logs: '📋 查工单日志', get_build_logs: '🔧 查构建日志',
+                confirm_project: '🏗 识别新建项目',
+            }[data.tool] || `🔧 ${data.tool}`;
+            const line = document.createElement('div');
+            if (data.step === 'start') {
+                line.textContent = `${toolLabel}${data.args_hint ? ' ' + data.args_hint : ''}…`;
+                line.style.color = 'var(--primary-light, #a5b4fc)';
+            } else {
+                line.textContent = `  ↩ ${data.summary || '完成'}`;
+                line.style.color = 'var(--text-muted)';
+            }
+            logEl.appendChild(line);
+            logEl.scrollTop = logEl.scrollHeight;
+        });
+
         eventSource.onerror = () => {
             console.warn('[SSE] 连接断开，30 秒后重连');
             disconnectSSE();
@@ -7766,12 +7805,52 @@ function toggleChatMode() {
     setChatMode(next[chatMode] || 'global');
 }
 
+// localStorage 持久化 key（全局聊天，无项目）
+const _GLOBAL_CHAT_STORAGE_KEY = 'ai_dev_global_chat_v1';
+
+function _saveGlobalChatToStorage() {
+    if (currentProjectId) return;
+    const dom = document.getElementById('chatMessages')?.innerHTML || '';
+    try {
+        localStorage.setItem(_GLOBAL_CHAT_STORAGE_KEY, JSON.stringify({
+            history: chatHistory,
+            dom,
+            savedAt: Date.now(),
+        }));
+    } catch (_) {}
+}
+
+function _loadGlobalChatFromStorage() {
+    try {
+        const raw = localStorage.getItem(_GLOBAL_CHAT_STORAGE_KEY);
+        if (!raw) return false;
+        const data = JSON.parse(raw);
+        if (!data.dom) return false;
+        chatHistory = data.history || [];
+        _globalChatHistory = [...chatHistory];
+        _globalChatDom = data.dom;
+        const container = document.getElementById('chatMessages');
+        if (container) {
+            container.innerHTML = data.dom;
+            scrollChatToBottom();
+        }
+        return true;
+    } catch (_) { return false; }
+}
+
 /**
  * 加载全局聊天历史
  */
 async function loadChatHistory() {
     if (!currentProjectId) {
-        showChatWelcome();
+        // 优先从内存恢复，其次从 localStorage，均无则显示欢迎语
+        if (_globalChatDom) {
+            chatHistory = [..._globalChatHistory];
+            const container = document.getElementById('chatMessages');
+            if (container) { container.innerHTML = _globalChatDom; scrollChatToBottom(); }
+        } else if (!_loadGlobalChatFromStorage()) {
+            showChatWelcome();
+        }
         return;
     }
 
@@ -8070,6 +8149,9 @@ function appendToTicketFeed(logData) {
 async function sendChatMessage() {
     if (chatSending || (chatMode !== 'global' && chatMode !== 'group')) return;
 
+    // 记住发送时的 context，回调时若已切换则丢弃响应（防止跨 context 串台）
+    const _sendContextId = currentProjectId;
+
     const input = document.getElementById('chatInput');
     const message = input.value.trim();
     const images = [...chatPendingImages]; // 拷贝一份，防止发送中被修改
@@ -8119,13 +8201,14 @@ async function sendChatMessage() {
     typingEl.innerHTML = `
         <div class="chat-msg-avatar">🤖</div>
         <div class="chat-msg-content">
-            <div class="chat-msg-bubble">
+            <div class="chat-msg-bubble" style="display:inline-block;">
                 <div class="chat-typing">
                     <div class="chat-typing-dot"></div>
                     <div class="chat-typing-dot"></div>
                     <div class="chat-typing-dot"></div>
                 </div>
             </div>
+            <div id="chatThinkingLog" style="display:none; margin-top:4px; max-height:80px; overflow-y:auto; font-size:10px; line-height:1.5; color:var(--text-muted); background:var(--bg); border:1px solid var(--border); border-radius:4px; padding:4px 8px; font-family:monospace;"></div>
         </div>
     `;
     const typingContainer = chatMode === 'group'
@@ -8133,6 +8216,37 @@ async function sendChatMessage() {
         : document.getElementById('chatMessages');
     typingContainer.appendChild(typingEl);
     scrollChatToBottom();
+
+    // 全局聊天（无项目）：生成 session_id，订阅思考日志 SSE
+    let _thinkingSessionId = null;
+    let _thinkingESrc = null;
+    if (!currentProjectId && chatMode === 'global') {
+        _thinkingSessionId = crypto.randomUUID();
+        _thinkingESrc = new EventSource(`${API}/chat/thinking-stream?session_id=${_thinkingSessionId}`);
+        _thinkingESrc.addEventListener('chat_thinking_log', (e) => {
+            const data = JSON.parse(e.data);
+            const logEl = document.getElementById('chatThinkingLog');
+            if (!logEl) return;
+            logEl.style.display = 'block';
+            const toolLabel = {
+                search_knowledge: '🔍 搜索知识库', search_ticket_history: '🗂 检索历史工单',
+                fetch_url: '🌐 访问链接', git_read_file: '📄 读取文件',
+                generate_document: '📝 生成文档', confirm_save_doc: '💾 准备保存文档',
+                confirm_requirement: '📋 识别需求', confirm_bug: '🐛 识别 BUG',
+                confirm_project: '🏗 识别新建项目',
+            }[data.tool] || `🔧 ${data.tool}`;
+            const line = document.createElement('div');
+            if (data.step === 'start') {
+                line.textContent = `${toolLabel}${data.args_hint ? ' ' + data.args_hint : ''}…`;
+                line.style.color = 'var(--primary-light, #a5b4fc)';
+            } else {
+                line.textContent = `  ↩ ${data.summary || '完成'}`;
+                line.style.color = 'var(--text-muted)';
+            }
+            logEl.appendChild(line);
+            logEl.scrollTop = logEl.scrollHeight;
+        });
+    }
 
     try {
         // 构建历史（只取最近 10 条）
@@ -8211,6 +8325,7 @@ async function sendChatMessage() {
                     message: fullMessage,
                     history: historyToSend,
                     images: images.length > 0 ? images : undefined,
+                    session_id: _thinkingSessionId || undefined,
                 }),
             });
         }
@@ -8218,6 +8333,11 @@ async function sendChatMessage() {
         if (chatMode !== 'group') {
         // 移除加载动画
         document.getElementById('chatTyping')?.remove();
+
+        // 若发送时和回调时 context 不同（用户已切换项目/返回全局），丢弃本次回复
+        if (currentProjectId !== _sendContextId) {
+            return;
+        }
 
         const reply = resp.reply || '(无回复)';
         const action = resp.action || null;
@@ -8230,6 +8350,9 @@ async function sendChatMessage() {
         // 添加回复气泡（actions 有多条时渲染批量确认卡片）
         appendChatBubble('assistant', reply, null, action, [], actions);
         scrollChatToBottom();
+
+        // 全局聊天持久化到 localStorage（刷新后可恢复）
+        if (!currentProjectId) _saveGlobalChatToStorage();
 
         // 项目创建成功（全局模式）
         if (action && action.type === 'project_created') {
@@ -8323,6 +8446,8 @@ async function sendChatMessage() {
         chatSending = false;
         sendBtn.disabled = false;
         input.focus();
+        // 关闭全局聊天思考日志 SSE
+        if (_thinkingESrc) { _thinkingESrc.close(); _thinkingESrc = null; }
     }
 }
 
@@ -8517,8 +8642,9 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
         const traitsArr = Array.isArray(action.traits) ? action.traits : [];
         const traitsJsonAttr = escapeHtml(JSON.stringify(traitsArr));
         const traitChips = traitsArr.length
-            ? `<div class="confirm-req-meta" style="margin-top:6px;">
-                 🏷 Traits: ${traitsArr.map(t => `<code class="mcp-tool-tag" style="background:rgba(163,113,247,0.1); border-color:rgba(163,113,247,0.4); margin-right:3px;">${escapeHtml(t)}</code>`).join('')}
+            ? `<div class="confirm-req-meta" style="margin-top:6px; display:flex; flex-wrap:wrap; align-items:center; gap:4px 6px;">
+                 <span style="flex:0 0 auto;">🏷 Traits:</span>
+                 ${traitsArr.map(t => `<code class="mcp-tool-tag" style="background:rgba(163,113,247,0.1); border-color:rgba(163,113,247,0.4);">${escapeHtml(t)}</code>`).join('')}
                </div>`
             : '<div class="confirm-req-meta" style="color:var(--warning, #f59e0b); font-size:11px;">⚠️ 未带 traits</div>';
         const presetBadge = action.preset_id
@@ -8579,6 +8705,30 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
         </div>`;
     } else if (action && action.type === 'ci_build_diagnosis') {
         actionHtml = renderCIBuildDiagnosisCard(action);
+    } else if (action && action.type === 'confirm_save_doc') {
+        const safeId = _nextCardId('save_doc');
+        const preview = (action.content || '').slice(0, 200).replace(/\n/g, ' ');
+        actionHtml = `
+            <div class="chat-action-card chat-confirm-card" id="${safeId}"
+                 data-project-id="${escapeHtml(action.project_id || '')}"
+                 data-filename="${escapeHtml(action.filename || '')}"
+                 data-content="${escapeHtml(action.content || '')}"
+                 style="border-left-color: var(--success, #34d058);">
+                <div class="action-title">💾 保存为项目文档</div>
+                <div class="action-detail">
+                    <div class="confirm-req-title">${escapeHtml(action.title || action.filename || '')}</div>
+                    <div class="confirm-req-meta">
+                        项目：<strong>${escapeHtml(action.project_name || action.project_id || '')}</strong>
+                        &nbsp;·&nbsp; 路径：<code>docs/${escapeHtml(action.filename || '')}</code>
+                    </div>
+                    <div class="confirm-req-desc" style="margin-top:6px; font-family:monospace; white-space:pre-wrap;">${escapeHtml(preview)}${(action.content || '').length > 200 ? '…' : ''}</div>
+                </div>
+                <div class="confirm-req-btns">
+                    <button class="btn btn-sm btn-primary" onclick="doConfirmSaveDoc('${safeId}')">💾 确认保存</button>
+                    <button class="btn btn-sm" onclick="this.closest('.chat-action-card').remove()">✗ 取消</button>
+                </div>
+            </div>
+        `;
     } else if (action && action.type === 'confirm_bug') {
         const priorityLabel = {'critical':'🔴 紧急','high':'🟠 高','medium':'🟡 中','low':'🟢 低'}[action.priority] || action.priority;
         const safeId = _nextCardId('bug_confirm');
@@ -8892,6 +9042,37 @@ async function saveChatBubbleToRepo(btn) {
     }
 }
 
+/** 用户确认"保存为项目文档"卡片 */
+async function doConfirmSaveDoc(cardId) {
+    const card = document.getElementById(cardId);
+    if (!card) return;
+    const projectId = card.dataset.projectId;
+    const filename  = card.dataset.filename;
+    const content   = card.dataset.content;
+    if (!projectId || !filename || !content) { showToast('数据不完整', 'error'); return; }
+
+    const btn = card.querySelector('.btn-primary');
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ 保存中...'; }
+
+    try {
+        const resp = await fetch(`${API}/projects/${projectId}/chat/save-to-repo`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ filename: `docs/${filename}`, content }),
+        });
+        if (!resp.ok) {
+            const err = await resp.json().catch(() => ({}));
+            throw new Error(err.detail || resp.statusText);
+        }
+        const result = await resp.json();
+        card.innerHTML = `<div class="action-title" style="color:var(--success);">✅ 已保存到 <code>${escapeHtml(result.path || 'docs/' + filename)}</code></div>`;
+        showToast(`文档已保存：docs/${filename}`, 'success');
+    } catch (e) {
+        showToast(`保存失败: ${e.message}`, 'error');
+        if (btn) { btn.disabled = false; btn.textContent = '💾 确认保存'; }
+    }
+}
+
 /** 简易图片查看器（点图片全屏预览） */
 function openChatImageViewer(src) {
     let overlay = document.getElementById('chatImgViewerOverlay');
@@ -9168,6 +9349,9 @@ function clearJobSelection() {
 function clearChatPanel() {
     if (chatMode === 'global') {
         chatHistory = [];
+        _globalChatHistory = [];
+        _globalChatDom = '';
+        localStorage.removeItem(_GLOBAL_CHAT_STORAGE_KEY);
         showChatWelcome();
     } else {
         clearJobSelection();

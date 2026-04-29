@@ -37,6 +37,8 @@ from actions.chat.propose_ue_framework import ProposeUEFrameworkAction
 from actions.chat.get_build_logs import GetBuildLogsAction     # v0.19.x 构建日志查询
 from actions.chat.search_knowledge import SearchKnowledgeAction        # 知识库全文搜索
 from actions.chat.search_ticket_history import SearchTicketHistoryAction  # 历史工单检索
+from actions.chat.fetch_url import FetchUrlAction                         # 访问外部 URL
+from actions.chat.confirm_save_doc import ConfirmSaveDocAction            # 保存对话内容为项目文档
 
 logger = logging.getLogger("agent.chat_assistant")
 
@@ -47,7 +49,7 @@ _INTERNAL_ONLY_ACTIONS = {"create_requirement"}
 # 全局聊天（项目列表页，无 project_id）下可用的工具白名单。
 # confirm_project：识别新建项目意图
 # search_knowledge / search_ticket_history：全局模式下搜全库（无 project_id 过滤）
-_GLOBAL_CHAT_TOOLS = {"confirm_project", "search_knowledge", "search_ticket_history"}
+_GLOBAL_CHAT_TOOLS = {"confirm_project", "search_knowledge", "search_ticket_history", "fetch_url", "confirm_save_doc"}
 
 
 class _ChatToolExecutor:
@@ -93,10 +95,11 @@ class _ChatToolExecutor:
     # 需要收集全量结果的类型（用户需要逐条确认）
     _COLLECT_ALL_TYPES = {"confirm_requirement", "confirm_bug"}
 
-    def __init__(self, agent: "ChatAssistantAgent", project_id: Optional[str] = None):
+    def __init__(self, agent: "ChatAssistantAgent", project_id: Optional[str] = None, session_id: Optional[str] = None):
         """project_id=None 表示全局聊天场景（项目列表页），此时 ctx 里不注入 project_id"""
         self.agent = agent
         self.project_id = project_id
+        self.session_id = session_id   # 全局聊天思考日志 SSE session
         self.primary_action_result: Optional[Dict[str, Any]] = None
         self._primary_tier: int = 99  # 越小越优先
         # 批量收集：confirm_requirement / confirm_bug 每次调用都保留，供前端渲染多张卡片
@@ -135,8 +138,17 @@ class _ChatToolExecutor:
         ctx = dict(tool_input)
         if self.project_id is not None:
             ctx["project_id"] = self.project_id
+
+        # 项目内聊天 或 全局聊天（有 session_id）：推 SSE 思考日志
+        if self.project_id or self.session_id:
+            await self._emit_thinking(tool_name, tool_input, step="start")
+
         result = await action.run(ctx)
         data = result.data or {}
+
+        if self.project_id or self.session_id:
+            summary = result.message or data.get("message") or ("成功" if result.success else result.error or "失败")
+            await self._emit_thinking(tool_name, tool_input, step="done", summary=summary)
 
         # 按优先级更新 primary_action_result
         current_type = data.get("type", "")
@@ -151,6 +163,32 @@ class _ChatToolExecutor:
 
         # 返回给 LLM 的是 JSON 字符串（chat_with_tools 规范）
         return json.dumps(data, ensure_ascii=False)
+
+    async def _emit_thinking(self, tool_name: str, tool_input: dict, step: str, summary: str = "") -> None:
+        """向 SSE 频道推送思考日志（项目内走 event_manager，全局聊天走 session queue）。失败静默。"""
+        try:
+            from events import event_manager
+            # 从 tool_input 提取关键参数摘要（截断避免过长）
+            _KEY = {
+                "search_knowledge": "query", "search_ticket_history": "query",
+                "fetch_url": "url", "git_read_file": "path",
+                "get_requirement_pipeline": "requirement_id",
+                "get_ticket_status": "ticket_id", "get_requirement_logs": "requirement_id",
+                "git_log": "branch", "git_switch_branch": "branch",
+                "generate_document": "filename", "confirm_save_doc": "filename",
+                "confirm_requirement": "title", "confirm_bug": "title",
+            }
+            key = _KEY.get(tool_name)
+            arg_val = str(tool_input.get(key, ""))[:60] if key else ""
+            args_hint = f"({key}: {arg_val})" if arg_val else ""
+            payload = {"step": step, "tool": tool_name, "args_hint": args_hint, "summary": summary[:120]}
+            if self.project_id:
+                await event_manager.publish_to_project(self.project_id, "chat_thinking_log", payload)
+            elif self.session_id:
+                from api.chat import get_thinking_queue
+                await get_thinking_queue(self.session_id).put(payload)
+        except Exception as e:
+            logger.warning("_emit_thinking failed: %s", e)
 
 
 class ChatAssistantAgent(BaseAgent):
@@ -176,9 +214,11 @@ class ChatAssistantAgent(BaseAgent):
         GetBuildLogsAction,            # v0.19.x — 查构建/编译日志让 AI 自动诊断
         SearchKnowledgeAction,         # 知识库全文搜索（FTS5）
         SearchTicketHistoryAction,     # 历史工单解决方案检索（FTS5）
+        FetchUrlAction,                # 访问外部 URL
+        ConfirmSaveDocAction,          # 保存对话内容为项目文档
     ]
     react_mode = ReactMode.REACT
-    max_react_loop = 3   # 聊天场景不需要太多轮
+    max_react_loop = 6   # 工具调用可能多轮（搜索+fetch），留足余量输出最终回答
 
     @property
     def agent_type(self) -> str:
@@ -301,6 +341,7 @@ class ChatAssistantAgent(BaseAgent):
         images: Optional[List[str]],
         history: Optional[List[Dict[str, str]]],
         projects_brief: List[Dict[str, Any]],
+        session_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         全局聊天：用户在项目列表页使用 AI 助手，可能要求新建项目或单纯聊天。
@@ -315,7 +356,7 @@ class ChatAssistantAgent(BaseAgent):
         messages = self._assemble_messages(history, user_message, images)
         tools = self._exposed_tool_schemas(scope="global")
 
-        executor = _ChatToolExecutor(self, project_id=None)
+        executor = _ChatToolExecutor(self, project_id=None, session_id=session_id)
 
         set_llm_context(
             agent_type=self.agent_type,
@@ -625,6 +666,7 @@ class ChatAssistantAgent(BaseAgent):
 - 查看项目 → git_log / git_list_branches / git_read_file
 - 切换/合并分支 → git_switch_branch / git_merge
 - 生成文档 → generate_document（直接写入 docs/ 并 commit+push）
+- 保存本次回复为文档 → generate_document（content 填当前回复内容，让用户确认文件名）
 - **诊断需求进度** → get_requirement_pipeline（"XX 卡在哪"）/
   get_ticket_status（工单详细状态）/ get_requirement_logs（最近活动 + 错误）
 
@@ -641,6 +683,7 @@ class ChatAssistantAgent(BaseAgent):
 - 用户**明确要求**新增/开发某功能（"帮我加…""做一个…""实现…功能"）→ 调 confirm_requirement
 - 用户描述已有功能的缺陷/报错/崩溃/白屏 → 调 confirm_bug（不是需求）
 - 用户单纯提问、描述现象、讨论方案 → 直接回答，不要调工具
+- 用户说"把这个/刚才的内容/总结保存成文档/存档/记录" → 调 generate_document，content 填本次回复的完整内容，filename 自动生成或询问用户
 - 信息已经在上面的上下文里可直接回答 → 不要调 git_* 工具，直接引用上下文作答
 
 ## 多步操作（重要）
@@ -732,7 +775,18 @@ class ChatAssistantAgent(BaseAgent):
 **3. search_ticket_history** — 搜索历史工单
 - 当用户询问某类问题**历史上有没有解决过**、或**查某个 bug 怎么处理的**时调用。
 
-**4. 读取用户上传的文件内容**
+**4. fetch_url** — 访问外部链接
+- 当用户粘贴了一个 URL（http/https）并想让你读取内容时调用。
+
+**5. confirm_save_doc** — 保存 AI 内容为项目文档
+- 当用户说"把这个总结/分析/方案保存到项目""存成文档""记录下来"时调用。
+- ⚠️ **必须在拿到文档内容的同一轮立即调用**，不要先问用户选哪个项目再分第二轮调用。
+  原因：对话历史会压缩，第二轮时 content 会被截断丢失。
+- 正确流程：拿到内容 → 从项目列表中挑最合适的 → 立即调用 confirm_save_doc（content 填完整内容）
+  → 产出确认卡片，用户在卡片上确认或取消即可，无需提前询问。
+- 若实在无法判断目标项目，选第一个项目作为默认值，卡片上会显示项目名让用户确认。
+
+**6. 读取用户上传的文件内容**
 - 当消息中包含 `【附件：xxx.md】` 时，文件内容已内联在消息里，直接阅读分析。
 - 典型用途：
   - 用户上传需求文档 → 帮助分析需求、识别项目类型和技术栈、推荐 traits / preset

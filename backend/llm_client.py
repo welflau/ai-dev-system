@@ -720,6 +720,12 @@ class LLMClient:
         try:
             logger.info("🔗 测试 LLM 连接: %s (%s)", self.base_url, self.api_format)
             result = await self.generate("Hello, respond with 'ok'.")
+            if result.startswith("[LLM_UNAVAILABLE]"):
+                logger.warning("🔗 LLM 连接测试失败：调用已降级（详见上方错误日志）")
+                return {
+                    "status": "error",
+                    "message": "LLM 调用失败（已降级到规则引擎）。常见原因：模型名 / API Key / 网络不可达。详见后端日志。",
+                }
             logger.info("🔗 LLM 连接测试通过")
             return {
                 "status": "ok",
