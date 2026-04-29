@@ -7424,6 +7424,8 @@ let chatHistory = [];               // 全局聊天历史 [{role, content}]
 let chatCurrentTicketId = null;     // Job 模式选中的工单 ID
 let chatCurrentTicketTitle = '';    // Job 模式选中的工单标题
 let chatSending = false;
+let _cardSeq = 0;  // 全局单调递增，保证所有 action 卡片 ID 唯一
+function _nextCardId(prefix) { return prefix + '_' + (++_cardSeq); }
 let chatPendingImages = [];         // 待发送的图片 base64 data URL 列表
 let chatPendingDocs = [];           // 待发送的文档 [{filename, text, chars}]
 
@@ -8242,11 +8244,20 @@ async function sendChatMessage() {
 
         // 文档保存确认卡片：项目内聊天 + 有附件时，AI 回复后追加
         if (currentProjectId && docs.length > 0) {
+            // 检测同名文件，给每个文件标记去重序号
+            const nameCount = {};
             for (const doc of docs) {
+                nameCount[doc.filename] = (nameCount[doc.filename] || 0) + 1;
+            }
+            const nameSeen = {};
+            for (const doc of docs) {
+                nameSeen[doc.filename] = (nameSeen[doc.filename] || 0) + 1;
+                const dupIdx = nameCount[doc.filename] > 1 ? nameSeen[doc.filename] : 1;
                 appendChatBubble('assistant', '', null, {
                     type: '_save_to_docs',
                     filename: doc.filename,
                     text: doc.text,
+                    _dupIdx: dupIdx,
                 });
             }
             scrollChatToBottom();
@@ -8279,7 +8290,7 @@ async function sendChatMessage() {
 /** 构建单张 confirm_requirement 卡片 HTML（供单张和批量场景复用） */
 function _buildConfirmCardHtml(action) {
     const priorityLabel = {'critical':'🔴 紧急','high':'🟠 高','medium':'🟡 中','low':'🟢 低'}[action.priority] || action.priority;
-    const safeId = 'req_confirm_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
+    const safeId = _nextCardId('req_confirm');
     const imagesJson = action.images && action.images.length ? escapeHtml(JSON.stringify(action.images)) : '';
     const imagesPreview = action.images && action.images.length
         ? `<div class="confirm-card-images">${action.images.map(u => `<img src="${escapeHtml(u)}" class="confirm-card-img" onclick="event.stopPropagation();window.open(this.src,'_blank')" title="点击查看大图">`).join('')}</div>`
@@ -8407,9 +8418,12 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
             </div>
         `;
     } else if (action && action.type === '_save_to_docs') {
-        const safeId = 'save_doc_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6);
-        const destPath = 'docs/' + action.filename;
-        // 暂存内容供按钮回调使用
+        const safeId = _nextCardId('save_doc');
+        // 同名文件加序号避免覆盖：docs/foo.md → docs/foo_2.md
+        const baseName = action.filename.replace(/\.md$/i, '');
+        const ext = action.filename.match(/\.md$/i) ? '.md' : ('.' + action.filename.split('.').pop());
+        const seq = _cardSeq;   // 每个卡片序号唯一，用于区分同名文件
+        const destPath = 'docs/' + baseName + (action._dupIdx > 1 ? `_${action._dupIdx}` : '') + ext;
         window._pendingDocSaves = window._pendingDocSaves || {};
         window._pendingDocSaves[safeId] = { filename: destPath, text: action.text };
         actionHtml = `
@@ -8439,7 +8453,7 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
     } else if (action && action.type === 'confirm_requirement') {
         actionHtml = _buildConfirmCardHtml(action);
     } else if (action && action.type === 'confirm_project') {
-        const safeId = 'proj_confirm_' + Date.now();
+        const safeId = _nextCardId('proj_confirm');
         const traitsArr = Array.isArray(action.traits) ? action.traits : [];
         const traitsJsonAttr = escapeHtml(JSON.stringify(traitsArr));
         const traitChips = traitsArr.length
@@ -8507,7 +8521,7 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
         actionHtml = renderCIBuildDiagnosisCard(action);
     } else if (action && action.type === 'confirm_bug') {
         const priorityLabel = {'critical':'🔴 紧急','high':'🟠 高','medium':'🟡 中','low':'🟢 低'}[action.priority] || action.priority;
-        const safeId = 'bug_confirm_' + Date.now();
+        const safeId = _nextCardId('bug_confirm');
         const imagesJson = action.images && action.images.length ? escapeHtml(JSON.stringify(action.images)) : '';
         const imagesPreview = action.images && action.images.length
             ? `<div class="confirm-card-images">${action.images.map(u => `<img src="${escapeHtml(u)}" class="confirm-card-img" onclick="event.stopPropagation();window.open(this.src,'_blank')" title="点击查看大图">`).join('')}</div>`
