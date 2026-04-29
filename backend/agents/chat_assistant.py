@@ -17,7 +17,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from agents.base import BaseAgent, ReactMode
-from actions.chat.confirm_requirement import ConfirmRequirementAction
+from actions.chat.confirm_requirement import ConfirmRequirementAction, ConfirmRequirementsBatchAction
 from actions.chat.confirm_bug import ConfirmBugAction
 from actions.chat.confirm_project import ConfirmProjectAction
 from actions.chat.create_requirement import CreateRequirementAction
@@ -72,6 +72,7 @@ class _ChatToolExecutor:
     _TYPE_PRIORITY = {
         # Tier 1 — 需要用户点击确认，必须让前端渲染
         "confirm_requirement": 1,
+        "confirm_requirements_batch": 1,
         "confirm_bug": 1,
         "confirm_project": 1,
         "propose_ue_framework": 1,   # v0.18 A.6
@@ -93,7 +94,7 @@ class _ChatToolExecutor:
     }
 
     # 需要收集全量结果的类型（用户需要逐条确认）
-    _COLLECT_ALL_TYPES = {"confirm_requirement", "confirm_bug"}
+    _COLLECT_ALL_TYPES = {"confirm_requirement", "confirm_requirements_batch", "confirm_bug"}
 
     def __init__(self, agent: "ChatAssistantAgent", project_id: Optional[str] = None, session_id: Optional[str] = None):
         """project_id=None 表示全局聊天场景（项目列表页），此时 ctx 里不注入 project_id"""
@@ -195,6 +196,7 @@ class ChatAssistantAgent(BaseAgent):
 
     action_classes = [
         ConfirmRequirementAction,
+        ConfirmRequirementsBatchAction,
         ConfirmBugAction,
         ConfirmProjectAction,          # 全局聊天用，暴露给 LLM
         CreateRequirementAction,       # 内部用，不暴露给 LLM
@@ -661,7 +663,8 @@ class ChatAssistantAgent(BaseAgent):
 {skills_section}
 ## 你的能力
 你配有一组工具（见 tools 参数），用于：
-- 识别新需求/BUG → 先用 confirm_requirement / confirm_bug 产草稿让用户确认（不要直接创建）
+- 识别单条新需求 → confirm_requirement；识别多条需求（≥2）→ confirm_requirements_batch（一张勾选卡）
+- 识别 BUG → confirm_bug 产草稿让用户确认（不要直接创建）
 - 管理需求状态 → pause / resume / close
 - 查看项目 → git_log / git_list_branches / git_read_file
 - 切换/合并分支 → git_switch_branch / git_merge
@@ -673,18 +676,21 @@ class ChatAssistantAgent(BaseAgent):
 ## 读取用户上传的文件
 当消息中包含 `【附件：xxx.md】` 或其他文件内容时：
 - 仔细阅读文件内容，结合项目上下文给出具体分析
-- 需求文档 / PRD → **从文档中提取所有独立需求点，每个需求调用一次 `confirm_requirement`**
-  （同一轮回复可连续调多次，前端会为每条需求渲染独立的确认卡片，用户逐条确认）
+- 需求文档 / PRD → **从文档中提取所有独立需求点，调用一次 `confirm_requirements_batch`**
+  （把所有需求打包进一个数组，前端渲染带勾选框的单张卡片，用户勾选后批量创建）
 - 设计文档 / 技术方案 → 讨论实现思路，指出潜在风险
 - 代码文件 → 审查逻辑，结合已有代码给出修改建议
 - **不要只复述文件内容**，要给出有价值的分析和下一步行动建议
 
 ## 判断准则
-- 用户**明确要求**新增/开发某功能（"帮我加…""做一个…""实现…功能"）→ 调 confirm_requirement
+- 用户**明确要求**新增/开发**单个**功能 → 调 confirm_requirement
+- 用户上传文档/让 AI 规划需求列表 → 提取所有独立需求点，调 **confirm_requirements_batch**（≥2 条时），不要逐条调 confirm_requirement
 - 用户描述已有功能的缺陷/报错/崩溃/白屏 → 调 confirm_bug（不是需求）
 - 用户单纯提问、描述现象、讨论方案 → 直接回答，不要调工具
 - 用户说"把这个/刚才的内容/总结保存成文档/存档/记录" → 调 generate_document，content 填本次回复的完整内容，filename 自动生成或询问用户
 - 信息已经在上面的上下文里可直接回答 → 不要调 git_* 工具，直接引用上下文作答
+- **"仓库里有什么文件" / "能看到哪些文档"** → 直接列举上面「项目文件树」里的内容，**不要调 git_read_file**
+- `git_read_file` 只在用户**明确要求查看某文件的具体内容**时才调用（如"帮我看看 README 写了什么"）
 
 ## 多步操作（重要）
 - 你可以在**同一轮回复里连续调多个工具**（Anthropic tool_use 原生支持 ReAct 循环）

@@ -107,11 +107,47 @@ body {
 .llm-status.connected .dot { background: var(--success); }
 .llm-status.disconnected .dot { background: var(--warning); }
 
+/* ==================== 系统指标条 ==================== */
+
+.metrics-bar {
+    position: fixed;
+    top: var(--topbar-height);
+    left: 0;
+    right: 0;
+    height: 26px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    gap: 4px;
+    z-index: 99;
+    font-size: 11px;
+    color: var(--text-muted);
+}
+.metric-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0 6px;
+    border-radius: 4px;
+    transition: background 0.2s;
+}
+.metric-icon { font-size: 11px; line-height: 1; }
+.metric-label { color: var(--text-muted); }
+.metric-value { font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text); }
+.metric-sep { width: 1px; height: 12px; background: var(--border); margin: 0 2px; }
+
+/* 阈值颜色 */
+.metric-warn .metric-value  { color: var(--warning, #f59e0b); }
+.metric-danger .metric-value { color: var(--danger, #ea4a5a); }
+.metric-ok .metric-value    { color: var(--success, #34d058); }
+
 /* ==================== 主布局 ==================== */
 
 .main-container {
-    margin-top: var(--topbar-height);
-    min-height: calc(100vh - var(--topbar-height));
+    margin-top: calc(var(--topbar-height) + 26px);
+    min-height: calc(100vh - var(--topbar-height) - 26px);
 }
 
 .page { display: none; padding: 24px; }

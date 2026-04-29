@@ -73,13 +73,14 @@ class CreateRequirementAction(ActionBase):
 
         req_id = generate_id("REQ")
         now = now_iso()
+        initial_status = "paused" if context.get("paused") else "submitted"
         req_data = {
             "id": req_id,
             "project_id": project_id,
             "title": title,
             "description": description,
             "priority": priority,
-            "status": "submitted",
+            "status": initial_status,
             "submitter": "chat_assistant",
             "prd_content": None,
             "module": None,
@@ -103,7 +104,7 @@ class CreateRequirementAction(ActionBase):
             "agent_type": "ChatAssistant",
             "action": "create",
             "from_status": None,
-            "to_status": "submitted",
+            "to_status": initial_status,
             "detail": detail_json,
             "level": "info",
             "created_at": now,

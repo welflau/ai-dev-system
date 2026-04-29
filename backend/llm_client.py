@@ -107,6 +107,7 @@ class LLMClient:
         self.timeout = settings.LLM_TIMEOUT
         self.max_retries = settings.LLM_MAX_RETRIES
         self.api_format = settings.LLM_API_FORMAT  # "anthropic" or "openai"
+        self._pending_requests: int = 0   # 当前在途 LLM 请求数（供 /api/metrics 读取）
 
     @property
     def is_configured(self) -> bool:
@@ -269,11 +270,14 @@ class LLMClient:
         logger.info("   📝 Prompt: %s", prompt_summary)
 
         start_time = time.time()
-
-        if self.api_format == "anthropic":
-            response_text, usage = await self._call_anthropic(messages, temperature, max_tokens)
-        else:
-            response_text, usage = await self._call_openai(messages, temperature, max_tokens)
+        self._pending_requests += 1
+        try:
+            if self.api_format == "anthropic":
+                response_text, usage = await self._call_anthropic(messages, temperature, max_tokens)
+            else:
+                response_text, usage = await self._call_openai(messages, temperature, max_tokens)
+        finally:
+            self._pending_requests -= 1
 
         duration_ms = int((time.time() - start_time) * 1000)
 

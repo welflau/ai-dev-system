@@ -456,6 +456,75 @@ async def llm_test():
     return result
 
 
+@app.get("/api/metrics")
+async def get_system_metrics():
+    """系统性能指标：用于顶栏实时监控"""
+    import asyncio as _asyncio
+    import os as _os
+    from pathlib import Path as _Path
+
+    # asyncio 活跃任务数
+    loop = _asyncio.get_event_loop()
+    active_tasks = sum(1 for t in _asyncio.all_tasks(loop) if not t.done())
+
+    # 内存占用（psutil 优先，不可用时 fallback 到 /proc 或 0）
+    mem_mb = 0
+    try:
+        import psutil as _psutil
+        proc = _psutil.Process(_os.getpid())
+        mem_mb = proc.memory_info().rss // (1024 * 1024)
+    except ImportError:
+        try:
+            with open(f"/proc/{_os.getpid()}/status") as f:
+                for line in f:
+                    if line.startswith("VmRSS:"):
+                        mem_mb = int(line.split()[1]) // 1024
+                        break
+        except Exception:
+            pass
+
+    # SQLite WAL 文件大小
+    from config import BASE_DIR
+    db_file = BASE_DIR / "ai_dev_system.db"
+    wal_file = BASE_DIR / "ai_dev_system.db-wal"
+    wal_kb = int(wal_file.stat().st_size / 1024) if wal_file.exists() else 0
+
+    # Orchestrator 处理中工单数
+    processing = 0
+    try:
+        from orchestrator import orchestrator
+        processing = len(orchestrator._processing)
+    except Exception:
+        pass
+
+    # LLM 在途请求数
+    llm_pending = 0
+    try:
+        from llm_client import llm_client
+        llm_pending = getattr(llm_client, "_pending_requests", 0)
+    except Exception:
+        pass
+
+    # DB 响应时间（简单探测）
+    db_ms = 0
+    try:
+        import time as _time
+        t0 = _time.monotonic()
+        await db.fetch_one("SELECT 1")
+        db_ms = round((_time.monotonic() - t0) * 1000, 1)
+    except Exception:
+        pass
+
+    return {
+        "processing": processing,
+        "asyncio_tasks": active_tasks,
+        "mem_mb": mem_mb,
+        "wal_kb": wal_kb,
+        "llm_pending": llm_pending,
+        "db_ms": db_ms,
+    }
+
+
 # ==================== Agent 技能系统开关 ====================
 
 @app.get("/api/settings/agent-tools")

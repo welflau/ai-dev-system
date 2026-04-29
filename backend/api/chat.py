@@ -456,6 +456,7 @@ class ConfirmRequirementRequest(BaseModel):
     description: str = ""
     priority: str = "medium"
     images: Optional[List[str]] = None  # 已保存的图片 URL 列表，如 ["/chat-images/..."]
+    paused: bool = False  # True 时创建为 paused 状态，不立即进入 Orchestrator 队列
 
 
 class ConfirmBugRequest(BaseModel):
@@ -531,6 +532,7 @@ async def confirm_create_requirement(project_id: str, req: ConfirmRequirementReq
         "title": req.title,
         "description": description,
         "priority": req.priority,
+        "paused": req.paused,
     })
     result = action_result.data
     if result.get("type") == "error":

@@ -74,7 +74,11 @@ class DecomposeAction(ActionBase):
 - 已有功能不要重复拆单
 - 如果只需要修改一个文件就能完成，只拆 1 个工单
 - 每个工单的 module 字段指定是 frontend/backend/design 等
-- subtasks 用字符串列表（如 ["修改背景色", "调整文字对比度"]）"""
+- subtasks 用字符串列表（如 ["修改背景色", "调整文字对比度"]）
+- **dependencies 必须填**：填当前工单依赖的前置工单索引列表（0-based int）
+  - 无前置 → []；工单1 依赖工单0 → [0]；工单2 同时依赖0和1 → [0,1]
+  - 复杂需求应形成有序链，避免所有工单平行开发互相冲突，示例：
+    [{{"title":"建数据模型","dependencies":[]}}, {{"title":"实现逻辑","dependencies":[0]}}, {{"title":"写UI","dependencies":[1]}}]"""
 
         # Self-Consistency 投票（opt-in via SOP config）：
         # 拆单是典型的主观发散任务（同一个需求不同拆法差异很大），开启后生成 N=3 候选
@@ -86,7 +90,7 @@ class DecomposeAction(ActionBase):
             return ActionNode(
                 key="decompose",
                 expected_type=DecomposeOutput,
-                instruction="作为产品经理，先判断需求复杂度（simple/medium/complex），再合理拆单。简单需求不要过度拆分。",
+                instruction="作为产品经理，先判断需求复杂度（simple/medium/complex），再合理拆单。简单需求不要过度拆分。每个工单必须填写 dependencies 字段（前置工单的0-based索引列表），确保工单形成有序的依赖链而非全部平行。",
             )
 
         vote_info = None

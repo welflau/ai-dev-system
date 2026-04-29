@@ -8703,6 +8703,48 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
                 ${imgsHtml || '<span style="color:var(--text-muted);font-size:11px;">无截图</span>'}
             </div>
         </div>`;
+    } else if (action && action.type === 'confirm_requirements_batch') {
+        const safeId = _nextCardId('req_batch');
+        const reqs = Array.isArray(action.requirements) ? action.requirements : [];
+        const priorityLabel = {'critical':'🔴 紧急','high':'🟠 高','medium':'🟡 中','low':'🟢 低'};
+        const rowsHtml = reqs.map((r, i) => `
+            <label class="req-batch-row" style="display:flex;align-items:flex-start;gap:8px;padding:6px 4px;border-bottom:1px solid var(--border);cursor:pointer;">
+                <input type="checkbox" checked data-idx="${i}"
+                       style="margin-top:3px;flex-shrink:0;accent-color:var(--primary);">
+                <div style="flex:1;min-width:0;">
+                    <div style="font-weight:600;font-size:12px;color:var(--text);">${escapeHtml(r.title)}</div>
+                    ${r.description ? `<div style="font-size:11px;color:var(--text-muted);margin-top:2px;white-space:pre-wrap;">${escapeHtml(r.description.slice(0, 120))}${r.description.length > 120 ? '…' : ''}</div>` : ''}
+                </div>
+                <span style="flex-shrink:0;font-size:11px;">${priorityLabel[r.priority] || r.priority || '🟡 中'}</span>
+            </label>`).join('');
+        const reqsJson = escapeHtml(JSON.stringify(reqs));
+        actionHtml = `
+            <div class="chat-action-card chat-confirm-card" id="${safeId}"
+                 data-requirements="${reqsJson}"
+                 style="border-left-color:var(--primary);">
+                <div class="action-title">📋 识别到 ${reqs.length} 条需求，勾选后批量创建${action.summary ? `：${escapeHtml(action.summary)}` : ''}</div>
+                <div class="action-detail" style="margin:8px 0;max-height:320px;overflow-y:auto;">
+                    ${rowsHtml}
+                </div>
+                <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">已勾选 <span id="${safeId}_count">${reqs.length}</span> / ${reqs.length} 条</div>
+                <div class="confirm-req-btns">
+                    <button class="btn btn-sm btn-primary" onclick="doConfirmRequirementsBatch('${safeId}')">⏸ 创建为暂停状态（手动开始）</button>
+                    <button class="btn btn-sm" onclick="doCancelRequirement('${safeId}')">✗ 取消</button>
+                </div>
+            </div>
+        `;
+        // 更新勾选计数
+        setTimeout(() => {
+            const card = document.getElementById(safeId);
+            if (!card) return;
+            card.querySelectorAll('input[type=checkbox]').forEach(cb => {
+                cb.addEventListener('change', () => {
+                    const checked = card.querySelectorAll('input[type=checkbox]:checked').length;
+                    const countEl = document.getElementById(`${safeId}_count`);
+                    if (countEl) countEl.textContent = checked;
+                });
+            });
+        }, 50);
     } else if (action && action.type === 'ci_build_diagnosis') {
         actionHtml = renderCIBuildDiagnosisCard(action);
     } else if (action && action.type === 'confirm_save_doc') {
@@ -8883,6 +8925,47 @@ async function doConfirmRequirement(cardId) {
         card.querySelector('.action-title').textContent = '⚠️ 创建失败';
         if (btns) btns.innerHTML = `<span style="color:var(--danger);font-size:12px">${escapeHtml(e.message)}</span>`;
     }
+}
+
+/** 批量需求卡片：确认创建勾选项 */
+async function doConfirmRequirementsBatch(cardId) {
+    const card = document.getElementById(cardId);
+    if (!card || !currentProjectId) return;
+
+    const reqs = JSON.parse(card.dataset.requirements || '[]');
+    const checked = [...card.querySelectorAll('input[type=checkbox]:checked')].map(cb => parseInt(cb.dataset.idx));
+    const toCreate = checked.map(i => reqs[i]).filter(Boolean);
+
+    if (toCreate.length === 0) { showToast('请至少勾选一条需求', 'warning'); return; }
+
+    const btns = card.querySelector('.confirm-req-btns');
+    if (btns) btns.innerHTML = `<span style="color:var(--text-muted);font-size:12px">⏳ 创建中 (0/${toCreate.length})...</span>`;
+    card.querySelectorAll('input[type=checkbox]').forEach(cb => cb.disabled = true);
+
+    let created = 0, failed = 0;
+    for (const req of toCreate) {
+        try {
+            await api(`/projects/${currentProjectId}/chat/confirm-create-requirement`, {
+                method: 'POST',
+                body: { title: req.title, description: req.description, priority: req.priority || 'medium', images: [], paused: true },
+            });
+            created++;
+            if (btns) btns.innerHTML = `<span style="color:var(--text-muted);font-size:12px">⏳ 创建中 (${created}/${toCreate.length})...</span>`;
+        } catch (e) {
+            failed++;
+        }
+    }
+
+    card.style.borderLeftColor = failed > 0 ? 'var(--warning)' : 'var(--success, #34d058)';
+    card.querySelector('.action-title').textContent = failed > 0
+        ? `⚠️ 已创建 ${created} 条，${failed} 条失败`
+        : `✅ 已创建 ${created} 条需求`;
+    if (btns) btns.innerHTML = `<span class="action-link" onclick="switchTab('requirements')">查看需求列表 →</span>`;
+    showToast(`已创建 ${created} 条需求${failed > 0 ? `，${failed} 条失败` : ''}`, failed > 0 ? 'warning' : 'success');
+    setTimeout(() => {
+        if (typeof loadRequirements === 'function') loadRequirements();
+        if (typeof refreshBoard === 'function') refreshBoard();
+    }, 500);
 }
 
 /** 用户取消创建需求 */
@@ -11409,3 +11492,56 @@ async function toggleAgentTools(enabled) {
         if (toggle) toggle.checked = !enabled;
     }
 }
+
+// ==================== 系统指标条 ====================
+
+function _setMetric(id, value, level) {
+    const el = document.getElementById('metric-' + id);
+    const valEl = document.getElementById('mv-' + id);
+    if (!el || !valEl) return;
+    valEl.textContent = value;
+    el.classList.remove('metric-ok', 'metric-warn', 'metric-danger');
+    if (level) el.classList.add('metric-' + level);
+}
+
+async function refreshMetrics() {
+    try {
+        const resp = await fetch('/api/metrics');
+        if (!resp.ok) return;
+        const d = await resp.json();
+
+        // 处理中工单
+        const proc = d.processing ?? 0;
+        _setMetric('processing', proc,
+            proc >= 10 ? 'danger' : proc >= 3 ? 'warn' : proc > 0 ? 'ok' : null);
+
+        // asyncio 任务
+        const tasks = d.asyncio_tasks ?? 0;
+        _setMetric('tasks', tasks,
+            tasks >= 50 ? 'danger' : tasks >= 20 ? 'warn' : null);
+
+        // LLM 并发
+        const llm = d.llm_pending ?? 0;
+        _setMetric('llm', llm,
+            llm >= 5 ? 'danger' : llm >= 3 ? 'warn' : llm > 0 ? 'ok' : null);
+
+        // 内存
+        const mem = d.mem_mb ?? 0;
+        _setMetric('mem', mem ? `${mem}MB` : '—',
+            mem >= 1500 ? 'danger' : mem >= 800 ? 'warn' : null);
+
+        // DB 响应
+        const db = d.db_ms ?? 0;
+        _setMetric('db', db ? `${db}ms` : '—',
+            db >= 100 ? 'danger' : db >= 30 ? 'warn' : db > 0 ? 'ok' : null);
+
+        // WAL
+        const wal = d.wal_kb ?? 0;
+        _setMetric('wal', wal >= 1024 ? `${(wal/1024).toFixed(1)}MB` : `${wal}KB`,
+            wal >= 5120 ? 'danger' : wal >= 1024 ? 'warn' : null);
+    } catch (_) {}
+}
+
+// 每 5 秒刷新一次，页面加载后启动
+setInterval(refreshMetrics, 5000);
+refreshMetrics();

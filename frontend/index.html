@@ -31,6 +31,45 @@
         </div>
     </header>
 
+    <!-- ==================== 系统指标条 ==================== -->
+    <div class="metrics-bar" id="metricsBar">
+        <div class="metric-item" id="metric-processing" title="Orchestrator 正在处理的工单数">
+            <span class="metric-icon">⚙️</span>
+            <span class="metric-label">处理中</span>
+            <span class="metric-value" id="mv-processing">—</span>
+        </div>
+        <div class="metric-sep"></div>
+        <div class="metric-item" id="metric-tasks" title="asyncio 活跃任务数（>50 表示负载高）">
+            <span class="metric-icon">🔄</span>
+            <span class="metric-label">异步任务</span>
+            <span class="metric-value" id="mv-tasks">—</span>
+        </div>
+        <div class="metric-sep"></div>
+        <div class="metric-item" id="metric-llm" title="当前在途 LLM 请求数">
+            <span class="metric-icon">🤖</span>
+            <span class="metric-label">LLM 并发</span>
+            <span class="metric-value" id="mv-llm">—</span>
+        </div>
+        <div class="metric-sep"></div>
+        <div class="metric-item" id="metric-mem" title="后端进程内存占用">
+            <span class="metric-icon">💾</span>
+            <span class="metric-label">内存</span>
+            <span class="metric-value" id="mv-mem">—</span>
+        </div>
+        <div class="metric-sep"></div>
+        <div class="metric-item" id="metric-db" title="SQLite 响应时间">
+            <span class="metric-icon">🗄️</span>
+            <span class="metric-label">DB</span>
+            <span class="metric-value" id="mv-db">—</span>
+        </div>
+        <div class="metric-sep"></div>
+        <div class="metric-item" id="metric-wal" title="SQLite WAL 文件大小（大则写压力重）">
+            <span class="metric-icon">📝</span>
+            <span class="metric-label">WAL</span>
+            <span class="metric-value" id="mv-wal">—</span>
+        </div>
+    </div>
+
     <!-- ==================== 主内容 ==================== -->
     <main class="main-container">
 

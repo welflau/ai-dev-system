@@ -39,6 +39,12 @@ class TicketOrchestrator:
         # 正在处理的工单（防止重复处理）
         self._processing: set = set()
 
+        # 每个项目的并发限制，防止大批需求同时涌入耗尽 LLM 配额
+        # 默认每项目最多 3 个工单并行；_poll_once 调度时直接限流，不多创建 asyncio task
+        self._MAX_CONCURRENT_PER_PROJECT = 3
+        # 每个项目当前活跃的工单集合（用于调度时判断是否有空位，超出则等下轮轮询）
+        self._project_active: Dict[str, set] = {}
+
         # Agent 实时状态追踪
         self._agent_status: Dict[str, Dict] = {
             name: {"status": "idle", "ticket_id": None, "ticket_title": None,
@@ -510,9 +516,17 @@ class TicketOrchestrator:
                     if not all_deps_done:
                         continue
 
-            # 标记为处理中，异步执行
+            # 检查项目并发槽位：已满则跳过，等下次轮询再补
+            active_set = self._project_active.setdefault(project_id, set())
+            if len(active_set) >= self._MAX_CONCURRENT_PER_PROJECT:
+                continue
+
+            # 标记为处理中并占用槽位，异步执行
             self._processing.add(ticket_id)
-            logger.info("🔄 轮询拾取工单: %s「%s」状态=%s", ticket_id[:12], t["title"][:20], status)
+            active_set.add(ticket_id)
+            logger.info("🔄 轮询拾取工单 [%d/%d]: %s「%s」",
+                        len(active_set), self._MAX_CONCURRENT_PER_PROJECT,
+                        ticket_id[:12], t["title"][:20])
             asyncio.create_task(self._poll_process(project_id, ticket_id))
 
         # ── 自动拾取 open BUG ──
@@ -563,11 +577,12 @@ class TicketOrchestrator:
             asyncio.create_task(self.run_bug_fix(project_id, bug_id))
 
     async def _poll_process(self, project_id: str, ticket_id: str):
-        """轮询触发的工单处理（带锁保护）"""
+        """轮询触发的工单处理（调度时已限流，此处直接执行）"""
         try:
             await self.process_ticket(project_id, ticket_id)
         finally:
             self._processing.discard(ticket_id)
+            self._project_active.get(project_id, set()).discard(ticket_id)
 
     # ==================== BUG 修复工作流 ====================
 
@@ -661,10 +676,14 @@ class TicketOrchestrator:
                 {"ticket_id": ticket_id, "title": f"[BUG] {bug['title']}", "type": "bug"},
             )
 
-        # ── 轮询器会自动拾取 architecture_done 状态的 ticket 并交给 DevAgent ──
-        # 这里只需触发一次立即处理（不用等下一个轮询周期）
-        self._processing.add(ticket_id)
-        asyncio.create_task(self._run_bug_ticket(project_id, ticket_id, bug_id))
+        # ── 立即触发处理（不等下一轮询周期）——同样受项目并发限制 ──
+        active_set = self._project_active.setdefault(project_id, set())
+        if len(active_set) < self._MAX_CONCURRENT_PER_PROJECT:
+            self._processing.add(ticket_id)
+            active_set.add(ticket_id)
+            asyncio.create_task(self._run_bug_ticket(project_id, ticket_id, bug_id))
+        else:
+            logger.info("🐛 BUG ticket 进入等待队列（项目并发已满）: %s", ticket_id[:12])
 
     async def _run_bug_ticket(self, project_id: str, ticket_id: str, bug_id: str):
         """执行 BUG ticket 流转，并在测试完成后同步更新 bugs 表状态"""
@@ -710,6 +729,7 @@ class TicketOrchestrator:
                 )
         finally:
             self._processing.discard(ticket_id)
+            self._project_active.get(project_id, set()).discard(ticket_id)
 
     async def _find_current_version(self, project_id: str) -> Optional[str]:
         """查找当前进行中的版本（milestone），用于 BUG 并入版本"""
