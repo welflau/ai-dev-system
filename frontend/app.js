@@ -7496,6 +7496,26 @@ function handleFileInputChange(e) {
     e.target.value = '';
 }
 
+function handleChatDragOver(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    e.currentTarget.classList.add('drag-over');
+}
+
+function handleChatDragLeave(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    e.currentTarget.classList.remove('drag-over');
+}
+
+function handleChatDrop(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    e.currentTarget.classList.remove('drag-over');
+    const files = e.dataTransfer?.files;
+    if (files && files.length > 0) handleFileAttachment(files);
+}
+
 async function handleFileAttachment(files) {
     for (const file of files) {
         const ext = file.name.split('.').pop().toLowerCase();
