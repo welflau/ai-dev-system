@@ -380,6 +380,9 @@ def sop_to_transition_rules(config: Dict[str, Any]) -> Dict[str, Dict]:
             rule["optional"] = True
         if stage.get("config"):
             rule["config"] = stage["config"]
+        if stage.get("mode"):
+            # 行为模式标签，注入到 sop_config 供 Agent prompt 读取
+            rule.setdefault("config", {})["mode"] = stage["mode"]
 
         rules[trigger] = rule
 

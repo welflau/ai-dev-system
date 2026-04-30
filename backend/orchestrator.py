@@ -78,6 +78,11 @@ class TicketOrchestrator:
         logger.info("📋 使用内置状态转换规则")
         return {
             TicketStatus.PENDING.value: {
+                "agent": "PlannerAgent",
+                "action": "write_prd",
+                "next_status": TicketStatus.PLANNING_IN_PROGRESS.value,
+            },
+            TicketStatus.PLANNING_DONE.value: {
                 "agent": "ArchitectAgent",
                 "action": "design_architecture",
                 "next_status": TicketStatus.ARCHITECTURE_IN_PROGRESS.value,
@@ -428,6 +433,7 @@ class TicketOrchestrator:
 
         # 2. 也扫描"进行中"但可能是僵尸的工单（被打回后卡住的）
         in_progress_statuses = [
+            TicketStatus.PLANNING_IN_PROGRESS.value,
             TicketStatus.ARCHITECTURE_IN_PROGRESS.value,
             TicketStatus.DEVELOPMENT_IN_PROGRESS.value,
             TicketStatus.TESTING_IN_PROGRESS.value,
@@ -484,6 +490,7 @@ class TicketOrchestrator:
                             ticket_id[:12], t["title"][:20], status, age)
                 # 僵尸工单：重置到对应的"完成"状态，让轮询器正常拾取
                 reset_map = {
+                    TicketStatus.PLANNING_IN_PROGRESS.value: TicketStatus.PLANNING_DONE.value,
                     TicketStatus.ARCHITECTURE_IN_PROGRESS.value: TicketStatus.ARCHITECTURE_DONE.value,
                     TicketStatus.DEVELOPMENT_IN_PROGRESS.value: TicketStatus.DEVELOPMENT_DONE.value,
                     TicketStatus.TESTING_IN_PROGRESS.value: TicketStatus.TESTING_DONE.value,
@@ -637,7 +644,7 @@ class TicketOrchestrator:
                 })
                 await db.update("bugs", {"requirement_id": req_id, "updated_at": now}, "id = ?", (bug_id,))
 
-            docs_prefix = f"docs/bugs/{bug_id[-6:]}/"
+            docs_prefix = f"docs/Reqs/bugs/{bug_id[-6:]}/"
             await db.insert("tickets", {
                 "id": ticket_id,
                 "requirement_id": req_id,
@@ -1263,8 +1270,8 @@ class TicketOrchestrator:
             except Exception as br_err:
                 logger.warning("切换分支异常(非致命): %s", br_err)
 
-            # 构建上下文
-            context = await self._build_context(ticket)
+            # 构建上下文（传入当前 Agent 名，供 KnowledgeLoader 差异化加载知识）
+            context = await self._build_context(ticket, agent_name=agent_name)
 
             # 注入 SOP 阶段配置到 context
             sop_config = rule.get("config", {})
@@ -1494,6 +1501,33 @@ class TicketOrchestrator:
             project_id, ticket_id, requirement_id,
             agent_name, action, result
         )
+
+        if agent_name == "PlannerAgent":
+            # 策划完成：保存 PRD 产物，写 knowledge_index（agent_scope=planner）
+            new_status = TicketStatus.PLANNING_DONE.value
+            await db.update("tickets", {
+                "status": new_status,
+                "result": result_json,
+                "updated_at": now_iso(),
+            }, "id = ?", (ticket_id,))
+            await db.insert("artifacts", {
+                "id": generate_id("ART"),
+                "project_id": project_id,
+                "requirement_id": requirement_id,
+                "ticket_id": ticket_id,
+                "type": "prd",
+                "name": f"PRD - {ticket['title']}",
+                "path": None,
+                "content": result.get("prd_content", result_json),
+                "metadata": None,
+                "created_at": now_iso(),
+            })
+            await self._log(
+                project_id, requirement_id, ticket_id, agent_name,
+                action, current_status, new_status,
+                f"PRD 已生成，验收标准：{len(result.get('acceptance_criteria',''))} 字符",
+            )
+            return
 
         if agent_name == "ArchitectAgent":
             # 架构完成
@@ -2005,12 +2039,13 @@ class TicketOrchestrator:
         if not files or not isinstance(files, dict):
             return None
 
-        # === 强制将中文文件名转为英文 ===
+        # === 强制将中文文件名转为英文（仅对非 docs/ 目录的代码文件）===
+        # docs/ 下的 Markdown 文档保留中文名，方便人工阅读和知识库索引
         import re
         sanitized_files = {}
         for path, content in files.items():
-            # 检测路径中是否有非 ASCII 字符
-            if any(ord(c) > 127 for c in path):
+            is_doc = path.startswith("docs/") and path.endswith(".md")
+            if not is_doc and any(ord(c) > 127 for c in path):
                 # 提取目录和扩展名
                 parts = path.rsplit("/", 1)
                 dir_part = parts[0] + "/" if len(parts) > 1 else ""
@@ -2512,7 +2547,7 @@ class TicketOrchestrator:
                 import asyncio
                 asyncio.create_task(self.process_ticket(project_id, pt["id"]))
 
-    async def _build_context(self, ticket: Dict) -> Dict:
+    async def _build_context(self, ticket: Dict, agent_name: str = "") -> Dict:
         """构建 Agent 执行上下文"""
         requirement = await db.fetch_one(
             "SELECT * FROM requirements WHERE id = ?", (ticket["requirement_id"],)
@@ -2534,8 +2569,8 @@ class TicketOrchestrator:
             "project_id": project_id,
             "requirement_description": requirement["description"] if requirement else "",
             "requirement_title": requirement["title"] if requirement else "",
-            # 文件路径前缀：docs/{需求短码}/{工单短码}/ — 避免不同需求/工单互相覆盖
-            "docs_prefix": f"docs/{ticket['requirement_id'][-6:]}/{ticket['id'][-6:]}/",
+            # 文件路径前缀：docs/Reqs/{需求短码}/{工单短码}/ — 需求文档统一归档到 Reqs/
+            "docs_prefix": f"docs/Reqs/{ticket['requirement_id'][-6:]}/{ticket['id'][-6:]}/",
             "src_prefix": f"src/{ticket.get('module', 'other')}/",
             "tests_prefix": f"tests/{ticket['requirement_id'][-6:]}/",
             # v0.19.x 工单面板进度区：让 UE 流式 actions 写心跳
@@ -2633,12 +2668,22 @@ class TicketOrchestrator:
         except Exception:
             context["sibling_tickets"] = []
 
-        # === 知识库上下文（全局 + 项目级）===
+        # === 知识库上下文（按 Agent 类型差异化加载）===
         try:
-            context["knowledge_docs"] = self._load_knowledge_docs(project_id)
+            from knowledge_loader import KnowledgeLoader
+            loader = KnowledgeLoader(agent_name, project_id, context.get("traits", []))
+            knowledge = await loader.load()
+            context["project_knowledge"]  = knowledge.get("project_knowledge", "")
+            context["domain_knowledge"]   = knowledge.get("domain_knowledge", "")
+            context["agent_spec"]         = knowledge.get("agent_spec", "")
+            # 向后兼容：合并到旧字段，防止使用旧字段的 Agent 读不到
+            context["knowledge_docs"] = "\n\n".join(
+                filter(None, [context["project_knowledge"], context["domain_knowledge"]])
+            ) or self._load_knowledge_docs(project_id)
         except Exception as e:
-            logger.warning("读取知识库失败: %s", e)
-            context["knowledge_docs"] = ""
+            logger.warning("KnowledgeLoader 失败，降级到旧逻辑: %s", e)
+            context["knowledge_docs"] = self._load_knowledge_docs(project_id)
+            context["project_knowledge"] = context["domain_knowledge"] = context["agent_spec"] = ""
 
         # === Insight 主动注入：编码前自动检索相关历史经验 ===
         try:

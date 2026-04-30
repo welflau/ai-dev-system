@@ -14,11 +14,19 @@ global:
 
 # 基础阶段。fragments 可通过 insert_after / insert_before 插入新阶段在这些之间。
 base_stages:
+  - id: planning
+    name: 策划设计
+    agent: PlannerAgent
+    action: write_prd
+    trigger_on: pending
+    success_status: planning_done
+    description: 为工单产出标准化 PRD（用户故事/验收标准/边界条件/资产线索）
+
   - id: architecture
     name: 架构设计
     agent: ArchitectAgent
     action: design_architecture
-    trigger_on: pending
+    trigger_on: planning_done
     success_status: architecture_done
     description: 分析需求，设计增量技术架构方案
     config:

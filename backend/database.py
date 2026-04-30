@@ -92,6 +92,8 @@ class Database:
             ("projects", "git_push_remote", "TEXT DEFAULT 'origin'"),  # 默认 push 目标 remote 名
             # 知识库扫描路径配置
             ("projects", "knowledge_scan_paths", "TEXT DEFAULT '[]'"),  # JSON: [{path, enabled}]
+            # v0.20+ Agent 知识库分层：agent_scope 标识文档适用的 Agent 类型
+            ("knowledge_index", "agent_scope", "TEXT DEFAULT NULL"),
         ]
         async with self._write_lock:
             for table, column, col_def in migrations:
@@ -473,12 +475,60 @@ CREATE INDEX IF NOT EXISTS idx_bugs_requirement ON bugs(requirement_id);
 -- 知识库全文索引（FTS5）
 -- ============================================================
 CREATE TABLE IF NOT EXISTS knowledge_index (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id TEXT,
-    filename   TEXT NOT NULL,
-    content    TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id  TEXT,
+    filename    TEXT NOT NULL,
+    content     TEXT NOT NULL,
+    updated_at  TEXT NOT NULL,
+    agent_scope TEXT DEFAULT NULL,  -- NULL/ALL/planner/ux/art/dev/arch/test/review
     UNIQUE(project_id, filename)
+);
+
+-- ============================================================
+-- 领域知识表（来自 G_DesignKnowledge/，全局共享）
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS planning_knowledge (
+    id          TEXT PRIMARY KEY,
+    filename    TEXT NOT NULL UNIQUE,   -- 相对于 G_DesignKnowledge/ 的路径
+    title       TEXT NOT NULL,
+    category    TEXT,                   -- games / apps / universal
+    subcategory TEXT,                   -- rpg / fps / ecommerce 等
+    tags        TEXT,                   -- JSON 数组
+    content     TEXT NOT NULL,
+    summary     TEXT,                   -- 200字摘要
+    updated_at  TEXT NOT NULL
+);
+CREATE VIRTUAL TABLE IF NOT EXISTS planning_knowledge_fts USING fts5(
+    title,
+    content,
+    content='planning_knowledge',
+    content_rowid='rowid',
+    tokenize='trigram'
+);
+
+CREATE TABLE IF NOT EXISTS ux_knowledge (
+    id TEXT PRIMARY KEY, filename TEXT NOT NULL UNIQUE, title TEXT NOT NULL,
+    category TEXT, tags TEXT, content TEXT NOT NULL, summary TEXT, updated_at TEXT NOT NULL
+);
+CREATE VIRTUAL TABLE IF NOT EXISTS ux_knowledge_fts USING fts5(
+    title, content, content='ux_knowledge', content_rowid='rowid', tokenize='trigram'
+);
+
+CREATE TABLE IF NOT EXISTS engineering_knowledge (
+    id TEXT PRIMARY KEY, filename TEXT NOT NULL UNIQUE, title TEXT NOT NULL,
+    category TEXT, tags TEXT, content TEXT NOT NULL, summary TEXT, updated_at TEXT NOT NULL
+);
+CREATE VIRTUAL TABLE IF NOT EXISTS engineering_knowledge_fts USING fts5(
+    title, content, content='engineering_knowledge', content_rowid='rowid', tokenize='trigram'
+);
+
+CREATE TABLE IF NOT EXISTS design_knowledge (
+    id TEXT PRIMARY KEY, filename TEXT NOT NULL UNIQUE, title TEXT NOT NULL,
+    category TEXT, tags TEXT, content TEXT NOT NULL, summary TEXT, updated_at TEXT NOT NULL
+);
+CREATE VIRTUAL TABLE IF NOT EXISTS design_knowledge_fts USING fts5(
+    title, content, content='design_knowledge', content_rowid='rowid', tokenize='trigram'
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(

@@ -36,6 +36,9 @@ class RequirementStatus(str, Enum):
 class TicketStatus(str, Enum):
     # 初始
     PENDING = "pending"                                    # 待启动
+    # 策划阶段（PlannerAgent）
+    PLANNING_IN_PROGRESS = "planning_in_progress"          # 策划中
+    PLANNING_DONE = "planning_done"                        # 策划完成
     # 架构阶段
     ARCHITECTURE_IN_PROGRESS = "architecture_in_progress"  # 架构中
     ARCHITECTURE_DONE = "architecture_done"                # 架构完成

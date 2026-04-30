@@ -61,11 +61,20 @@ class WriteCodeAction(ActionBase):
 {insights_block}{reflection_block}
 要求: 英文文件名 | 前端内联到 index.html | 增量修改不重写 | 只输出改动文件 | 完整可运行"""
 
+        # 行为模式标签（来自 SOP stage.mode 字段）
+        sop_config = context.get("sop_config") or {}
+        mode = sop_config.get("mode", "")
+        mode_prefix = {
+            "IMPLEMENT": "[MODE: IMPLEMENT] 专注实现，严格遵循架构设计，不擅自扩展范围。",
+            "REVIEW":    "[MODE: REVIEW] 以审查者视角审视代码，主动发现至少 3 个具体问题。",
+            "DEBUG":     "[MODE: DEBUG] 系统性排查，追踪根因，逐步验证假设。",
+        }.get(mode, "")
+
         # 使用 ActionNode 结构化输出
         node = ActionNode(
             key="write_code",
             expected_type=DevOutput,
-            instruction="根据架构实现功能，返回 files 字段包含完整文件内容。",
+            instruction=f"{mode_prefix}\n根据架构实现功能，返回 files 字段包含完整文件内容。".strip(),
         )
         await node.fill(req=req_context, llm=llm_client, max_tokens=16000)
 

@@ -71,6 +71,7 @@ def instantiate_agents() -> Dict[str, object]:
 def _register_builtin_agents():
     """注册内置 Agent"""
     from agents.product import ProductAgent
+    from agents.planner import PlannerAgent
     from agents.architect import ArchitectAgent
     from agents.dev import DevAgent
     from agents.test import TestAgent
@@ -80,6 +81,7 @@ def _register_builtin_agents():
 
     builtin = {
         "ProductAgent": ProductAgent,
+        "PlannerAgent": PlannerAgent,
         "ArchitectAgent": ArchitectAgent,
         "DevAgent": DevAgent,
         "TestAgent": TestAgent,

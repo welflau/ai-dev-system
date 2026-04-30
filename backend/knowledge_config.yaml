@@ -1,0 +1,108 @@
+# Agent 知识库配置
+# 每个 Agent 声明自己的知识来源：
+#   type: project   — 项目知识（knowledge_index，按 agent_scope 过滤）
+#   type: domain    — 领域知识（planning_knowledge 等专属表）
+#   type: spec      — 专属规范文件（G_DesignKnowledge 下的固定文件，始终注入）
+#   type: insight   — Insight 主动注入（现有 _fetch_prior_insights 逻辑）
+
+agents:
+
+  PlannerAgent:
+    knowledge_sources:
+      - type: project
+        scope: planner
+        char_limit: 3000
+      - type: domain
+        table: planning_knowledge
+        path_filter_by_traits:
+          "category:game,genre:rpg":        games/rpg
+          "category:game,genre:fps":        games/fps
+          "category:game,genre:roguelike":  games/roguelike
+          "category:game,genre:puzzle":     games/puzzle
+          "category:game,genre:moba":       games/moba
+          "category:game,genre:casual":     games/casual
+          "category:game":                  games
+          "platform:wechat":                apps/miniapp
+          "platform:web,category:app":      apps/ecommerce
+          default:                          universal
+        char_limit: 2000
+        result_count: 3
+      - type: spec
+        files:
+          - planning/universal/PRD模板.md
+          - planning/universal/验收标准写法规范.md
+
+  UXAgent:
+    knowledge_sources:
+      - type: project
+        scope: ux
+        char_limit: 2000
+      - type: domain
+        table: ux_knowledge
+        char_limit: 2000
+        result_count: 2
+      - type: spec
+        files:
+          - design/ux/交互状态检查清单.md
+
+  ArtAgent:
+    knowledge_sources:
+      - type: project
+        scope: art
+        char_limit: 2000
+      - type: domain
+        table: design_knowledge
+        char_limit: 1500
+        result_count: 2
+      - type: spec
+        files:
+          - design/art/资产规格模板.md
+
+  ArchitectAgent:
+    knowledge_sources:
+      - type: project
+        scope: arch
+        char_limit: 3000
+      - type: domain
+        table: engineering_knowledge
+        path_filter: architecture/
+        char_limit: 2000
+        result_count: 2
+
+  DevAgent:
+    knowledge_sources:
+      - type: project
+        scope: dev
+        char_limit: 3000
+      - type: domain
+        table: engineering_knowledge
+        char_limit: 2000
+        result_count: 3
+      - type: insight
+
+  TestAgent:
+    knowledge_sources:
+      - type: project
+        scope: test
+        char_limit: 2000
+      - type: spec
+        files:
+          - engineering/testing/测试策略模板.md
+
+  ReviewAgent:
+    knowledge_sources:
+      - type: project
+        scope: review
+        char_limit: 1500
+      - type: spec
+        files:
+          - engineering/review/代码审查清单.md
+
+  DeployAgent:
+    knowledge_sources:
+      - type: project
+        scope: deploy
+        char_limit: 1500
+      - type: spec
+        files:
+          - engineering/deploy/部署检查清单.md

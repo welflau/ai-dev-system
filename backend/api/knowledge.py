@@ -82,8 +82,33 @@ def _check_injection(content: str) -> Optional[str]:
 
 # ==================== FTS5 索引辅助 ====================
 
-async def _upsert_knowledge_index(project_id: Optional[str], filename: str, content: str):
+# 文件名 → agent_scope 映射（docs/ 下的 Agent 产出文档）
+_FILENAME_SCOPE_MAP = {
+    "PRD.md": "planner",
+    "UX设计.md": "ux",
+    "视觉规范.md": "art",
+    "asset_manifest.yaml": "art",
+    "架构设计.md": "arch",
+    "architecture.md": "arch",
+    "test-report.md": "test",
+    "code-review.md": "review",
+    "acceptance-review.md": "review",
+    "deploy.md": "deploy",
+    "dev-notes.md": "dev",
+}
+
+
+def _infer_agent_scope(filename: str) -> Optional[str]:
+    """从文件名推断 agent_scope，用于 knowledge_index 分类检索"""
+    import os
+    basename = os.path.basename(filename)
+    return _FILENAME_SCOPE_MAP.get(basename)
+
+
+async def _upsert_knowledge_index(project_id: Optional[str], filename: str, content: str,
+                                   agent_scope: Optional[str] = None):
     """写入/更新 knowledge_index（触发器自动维护 FTS5）"""
+    scope = agent_scope or _infer_agent_scope(filename)
     try:
         if project_id is None:
             # NULL 在 SQLite UNIQUE 约束里不生效，用 DELETE + INSERT 保证幂等
@@ -92,16 +117,17 @@ async def _upsert_knowledge_index(project_id: Optional[str], filename: str, cont
                 (filename,)
             )
             await db.execute(
-                "INSERT INTO knowledge_index (project_id, filename, content, updated_at) VALUES (NULL, ?, ?, ?)",
-                (filename, content, now_iso())
+                "INSERT INTO knowledge_index (project_id, filename, content, updated_at, agent_scope) VALUES (NULL, ?, ?, ?, ?)",
+                (filename, content, now_iso(), scope)
             )
         else:
             await db.execute("""
-                INSERT INTO knowledge_index (project_id, filename, content, updated_at)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO knowledge_index (project_id, filename, content, updated_at, agent_scope)
+                VALUES (?, ?, ?, ?, ?)
                 ON CONFLICT(project_id, filename) DO UPDATE SET
-                    content=excluded.content, updated_at=excluded.updated_at
-            """, (project_id, filename, content, now_iso()))
+                    content=excluded.content, updated_at=excluded.updated_at,
+                    agent_scope=excluded.agent_scope
+            """, (project_id, filename, content, now_iso(), scope))
     except Exception as e:
         logger.warning("knowledge_index 写入失败（忽略）: %s", e)
 

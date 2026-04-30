@@ -43,5 +43,15 @@ class Settings:
     # Frontend
     FRONTEND_DIR: str = str(BASE_DIR.parent / "frontend")
 
+    # 全局设计知识库（G_DesignKnowledge）
+    GLOBAL_KNOWLEDGE_REPO_URL: str = os.getenv("GLOBAL_KNOWLEDGE_REPO_URL", "")
+    GLOBAL_KNOWLEDGE_LOCAL_PATH: str = os.getenv("GLOBAL_KNOWLEDGE_LOCAL_PATH", "")
+    GLOBAL_KNOWLEDGE_AUTO_PUSH: bool = os.getenv("GLOBAL_KNOWLEDGE_AUTO_PUSH", "false").lower() in ("1", "true", "yes")
+
+    # 美术资产库（G_ArtRes）
+    ART_ASSETS_REPO_URL: str = os.getenv("ART_ASSETS_REPO_URL", "")
+    ART_ASSETS_LOCAL_PATH: str = os.getenv("ART_ASSETS_LOCAL_PATH", "")
+    ART_ASSETS_AUTO_PUSH: bool = os.getenv("ART_ASSETS_AUTO_PUSH", "false").lower() in ("1", "true", "yes")
+
 
 settings = Settings()
