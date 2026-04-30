@@ -39,6 +39,9 @@ class TicketStatus(str, Enum):
     # 策划阶段（PlannerAgent）
     PLANNING_IN_PROGRESS = "planning_in_progress"          # 策划中
     PLANNING_DONE = "planning_done"                        # 策划完成
+    # UX 设计阶段（UXAgent）
+    UX_DESIGN_IN_PROGRESS = "ux_design_in_progress"        # UX 设计中
+    UX_DESIGN_DONE = "ux_design_done"                      # UX 设计完成
     # 架构阶段
     ARCHITECTURE_IN_PROGRESS = "architecture_in_progress"  # 架构中
     ARCHITECTURE_DONE = "architecture_done"                # 架构完成

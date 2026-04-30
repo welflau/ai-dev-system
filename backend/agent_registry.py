@@ -72,6 +72,7 @@ def _register_builtin_agents():
     """注册内置 Agent"""
     from agents.product import ProductAgent
     from agents.planner import PlannerAgent
+    from agents.ux import UXAgent
     from agents.architect import ArchitectAgent
     from agents.dev import DevAgent
     from agents.test import TestAgent
@@ -82,6 +83,7 @@ def _register_builtin_agents():
     builtin = {
         "ProductAgent": ProductAgent,
         "PlannerAgent": PlannerAgent,
+        "UXAgent": UXAgent,
         "ArchitectAgent": ArchitectAgent,
         "DevAgent": DevAgent,
         "TestAgent": TestAgent,

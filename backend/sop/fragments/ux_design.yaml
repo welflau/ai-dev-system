@@ -1,0 +1,29 @@
+# UX 设计阶段 —— 有界面的项目在策划完成后进行交互设计
+# 适用：web / wechat / mobile / desktop / 游戏项目
+id: ux_design
+name: UX 交互设计
+insert_after: planning          # 插在 planning 阶段之后
+priority: 90                    # 高优先级，确保在 architecture 之前
+description: 产出交互流程/组件线框/状态定义/资产清单初稿，供架构和开发参考
+
+required_traits:
+  any_of:
+    - platform:web
+    - platform:wechat
+    - platform:mobile
+    - platform:desktop
+    - category:game
+
+stage:
+  agent: UXAgent
+  action: write_ux_design
+  trigger_on: planning_done
+  success_status: ux_design_done
+  description: UX Agent 产出交互设计文档
+
+pipeline_view_contrib:
+  group: design
+  create_if_missing:
+    name: 设计
+    icon: 🎨
+    insert_after: planning

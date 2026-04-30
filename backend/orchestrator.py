@@ -434,6 +434,7 @@ class TicketOrchestrator:
         # 2. 也扫描"进行中"但可能是僵尸的工单（被打回后卡住的）
         in_progress_statuses = [
             TicketStatus.PLANNING_IN_PROGRESS.value,
+            TicketStatus.UX_DESIGN_IN_PROGRESS.value,
             TicketStatus.ARCHITECTURE_IN_PROGRESS.value,
             TicketStatus.DEVELOPMENT_IN_PROGRESS.value,
             TicketStatus.TESTING_IN_PROGRESS.value,
@@ -491,6 +492,7 @@ class TicketOrchestrator:
                 # 僵尸工单：重置到对应的"完成"状态，让轮询器正常拾取
                 reset_map = {
                     TicketStatus.PLANNING_IN_PROGRESS.value: TicketStatus.PLANNING_DONE.value,
+                    TicketStatus.UX_DESIGN_IN_PROGRESS.value: TicketStatus.UX_DESIGN_DONE.value,
                     TicketStatus.ARCHITECTURE_IN_PROGRESS.value: TicketStatus.ARCHITECTURE_DONE.value,
                     TicketStatus.DEVELOPMENT_IN_PROGRESS.value: TicketStatus.DEVELOPMENT_DONE.value,
                     TicketStatus.TESTING_IN_PROGRESS.value: TicketStatus.TESTING_DONE.value,
@@ -1501,6 +1503,30 @@ class TicketOrchestrator:
             project_id, ticket_id, requirement_id,
             agent_name, action, result
         )
+
+        if agent_name == "UXAgent":
+            new_status = TicketStatus.UX_DESIGN_DONE.value
+            await db.update("tickets", {
+                "status": new_status, "result": result_json, "updated_at": now_iso(),
+            }, "id = ?", (ticket_id,))
+            await db.insert("artifacts", {
+                "id": generate_id("ART"),
+                "project_id": project_id,
+                "requirement_id": requirement_id,
+                "ticket_id": ticket_id,
+                "type": "ux_design",
+                "name": f"UX设计 - {ticket['title']}",
+                "path": None,
+                "content": result.get("ux_content", result_json),
+                "metadata": None,
+                "created_at": now_iso(),
+            })
+            await self._log(
+                project_id, requirement_id, ticket_id, agent_name,
+                action, current_status, new_status,
+                f"UX 设计完成：{len(result.get('component_wireframe',''))} 字符",
+            )
+            return
 
         if agent_name == "PlannerAgent":
             # 策划完成：保存 PRD 产物，写 knowledge_index（agent_scope=planner）
