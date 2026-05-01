@@ -1626,6 +1626,24 @@ class TicketOrchestrator:
                 },
             )
 
+            # 写入 Agent Memory（架构决策记录）
+            try:
+                arch_summary = str(result.get("architecture", ""))[:300]
+                if arch_summary:
+                    await self._write_memory(
+                        project_id=project_id,
+                        mem_type="decision",
+                        title=f"架构设计: {ticket['title'][:40]}",
+                        content=json.dumps({"summary": arch_summary, "ticket_id": ticket_id,
+                                            "estimated_hours": est_hours}, ensure_ascii=False),
+                        agent_type="ArchitectAgent",
+                        requirement_id=requirement_id,
+                        ticket_id=ticket_id,
+                        tags=["architecture", "decision"],
+                    )
+            except Exception:
+                pass
+
             # 保存架构产物
             await db.insert("artifacts", {
                 "id": generate_id("ART"),
@@ -2290,6 +2308,19 @@ class TicketOrchestrator:
             except Exception as rpt_err:
                 logger.warning("生成需求报告失败(非致命): %s", rpt_err)
 
+            # 写入 Agent Memory（需求完成记录）
+            try:
+                await self._write_memory(
+                    project_id=project_id,
+                    mem_type="project_status",
+                    title=f"需求完成: {requirement.get('title','') if (requirement := await db.fetch_one('SELECT title FROM requirements WHERE id=?',(requirement_id,))) else requirement_id}",
+                    content=f'{{"requirement_id":"{requirement_id}","ticket_count":{len(tickets)},"status":"completed"}}',
+                    agent_type="Orchestrator",
+                    requirement_id=requirement_id,
+                )
+            except Exception:
+                pass
+
             # === 规范合并：先拉 develop 最新到 feat → 确认无冲突 → 再合入 develop ===
             try:
                 req_data = await db.fetch_one("SELECT branch_name FROM requirements WHERE id = ?", (requirement_id,))
@@ -2565,6 +2596,28 @@ class TicketOrchestrator:
             f"需求完成报告已生成: {report_path}"
         )
 
+        # P5-3 三级内省：需求完成后写入知识库（供后续 Insight 检索）
+        try:
+            rework_count = sum(1 for l in logs if l.get("action") in ("rework", "fix_issues"))
+            block_count  = sum(1 for l in logs if l.get("to_status") == "blocked")
+            total_ms     = (llm_stats["total_ms"] or 0) if llm_stats else 0
+            insight_content = (
+                f"需求「{req['title']}」完成复盘：\n"
+                f"- 工单数: {len(tickets)}，产物数: {len(artifacts)}\n"
+                f"- 返工次数: {rework_count}，Blocked 次数: {block_count}\n"
+                f"- LLM 总耗时: {total_ms//1000}s\n"
+                f"{'- 注意: 有较多返工，说明需求描述或架构设计需要改进' if rework_count > 2 else ''}"
+            )
+            from api.knowledge import _upsert_knowledge_index
+            fname = f"insight__req_{req_short}_retrospective.md"
+            await _upsert_knowledge_index(
+                project_id, fname, insight_content,
+                agent_scope="dev",
+            )
+            logger.info("📝 需求级内省已写入知识库: %s", fname)
+        except Exception as intro_err:
+            logger.debug("内省写入失败（非致命）: %s", intro_err)
+
     async def _trigger_dependents(self, project_id: str, completed_ticket_id: str):
         """工单完成后，触发依赖它的后续工单流转"""
         # 查找同项目下所有 pending 且 dependencies 包含此工单 ID 的工单
@@ -2772,21 +2825,37 @@ class TicketOrchestrator:
 
         parts = []
 
-        # --- 1. 知识库命中 ---
+        # --- 1. 知识库命中（含置信度标注）---
         try:
             rows = await db.fetch_all("""
-                SELECT ki.filename,
+                SELECT ki.filename, ki.confidence, ki.used_count,
                        snippet(knowledge_fts, 0, '', '', '...', 40) AS snippet
                 FROM knowledge_fts
                 JOIN knowledge_index ki ON knowledge_fts.rowid = ki.id
                 WHERE knowledge_fts MATCH ?
                   AND (ki.project_id = ? OR ki.project_id IS NULL)
                 ORDER BY rank
-                LIMIT 3
+                LIMIT 5
             """, (fts_query, project_id))
             if rows:
-                lines = [f"- [{r['filename']}] {r['snippet']}" for r in rows]
-                parts.append("## 相关知识库条目\n" + "\n".join(lines))
+                high_conf, others = [], []
+                for r in rows:
+                    conf = r.get("confidence") or "medium"
+                    label = "⭐ [高置信，建议直接应用]" if conf == "high" else ""
+                    line = f"- [{r['filename']}] {r['snippet']} {label}"
+                    if conf == "high":
+                        high_conf.append(line)
+                    else:
+                        others.append(line)
+                # 高置信度排前面，自动应用
+                all_lines = high_conf + others
+                parts.append("## 相关知识库条目\n" + "\n".join(all_lines[:4]))
+                # 更新 used_count
+                for r in rows[:4]:
+                    await db.execute(
+                        "UPDATE knowledge_index SET used_count = used_count + 1 WHERE id = ?",
+                        (r["id"],)
+                    )
         except Exception as e:
             logger.debug("prior_insights 知识库查询失败: %s", e)
 
@@ -3038,6 +3107,35 @@ class TicketOrchestrator:
                 "🩺 诊断后台任务失败 ticket=%s: %s",
                 ticket_id[:12], e, exc_info=True,
             )
+
+    async def _write_memory(
+        self,
+        project_id: str,
+        mem_type: str,
+        title: str,
+        content: str,
+        agent_type: str = "",
+        requirement_id: str = None,
+        ticket_id: str = None,
+        tags: list = None,
+    ) -> None:
+        """写入 Agent Memory（决策/交接/项目状态/经验）"""
+        try:
+            mem_id = generate_id("MEM")
+            await db.insert("agent_memory", {
+                "id": mem_id,
+                "project_id": project_id,
+                "type": mem_type,
+                "agent_type": agent_type,
+                "title": title[:200],
+                "content": content,
+                "tags": json.dumps(tags or [], ensure_ascii=False),
+                "requirement_id": requirement_id,
+                "ticket_id": ticket_id,
+                "created_at": now_iso(),
+            })
+        except Exception as e:
+            logger.debug("_write_memory 失败（忽略）: %s", e)
 
     async def _log(
         self,

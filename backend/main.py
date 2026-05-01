@@ -288,6 +288,7 @@ from api.ue_engines import router as ue_engines_router
 from api.ue_framework import router as ue_framework_router
 from api.image_gen import router as image_gen_router
 from api.art_assets import router as art_assets_router
+from api.efficiency import router as efficiency_router
 
 app.include_router(projects_router)
 app.include_router(requirements_router)
@@ -307,6 +308,7 @@ app.include_router(ue_engines_router)
 app.include_router(ue_framework_router)
 app.include_router(image_gen_router)
 app.include_router(art_assets_router)
+app.include_router(efficiency_router)
 
 
 # ==================== 系统端点 ====================

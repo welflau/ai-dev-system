@@ -94,6 +94,9 @@ class Database:
             ("projects", "knowledge_scan_paths", "TEXT DEFAULT '[]'"),  # JSON: [{path, enabled}]
             # v0.20+ Agent 知识库分层：agent_scope 标识文档适用的 Agent 类型
             ("knowledge_index", "agent_scope", "TEXT DEFAULT NULL"),
+            # v0.20+ Insight 置信度：高置信度经验自动应用
+            ("knowledge_index", "confidence", "TEXT DEFAULT NULL"),
+            ("knowledge_index", "used_count", "INTEGER DEFAULT 0"),
         ]
         async with self._write_lock:
             for table, column, col_def in migrations:
@@ -481,6 +484,8 @@ CREATE TABLE IF NOT EXISTS knowledge_index (
     content     TEXT NOT NULL,
     updated_at  TEXT NOT NULL,
     agent_scope TEXT DEFAULT NULL,  -- NULL/ALL/planner/ux/art/dev/arch/test/review
+    confidence  TEXT DEFAULT NULL,  -- high/medium/low（高置信经验自动应用）
+    used_count  INTEGER DEFAULT 0,  -- 被引用次数
     UNIQUE(project_id, filename)
 );
 
@@ -563,6 +568,24 @@ CREATE VIRTUAL TABLE IF NOT EXISTS tickets_fts USING fts5(
     project_id UNINDEXED,
     tokenize="trigram"
 );
+
+-- ============================================================
+-- Agent Memory（跨会话持久化记忆）
+-- ============================================================
+CREATE TABLE IF NOT EXISTS agent_memory (
+    id           TEXT PRIMARY KEY,
+    project_id   TEXT NOT NULL,
+    type         TEXT NOT NULL,      -- decision / handoff / project_status / insight
+    agent_type   TEXT,               -- 产生记忆的 Agent
+    title        TEXT NOT NULL,      -- 简短标题（供检索展示）
+    content      TEXT NOT NULL,      -- JSON 详情
+    tags         TEXT DEFAULT '[]',  -- JSON 数组，用于检索
+    requirement_id TEXT,             -- 关联需求
+    ticket_id    TEXT,               -- 关联工单
+    created_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_memory_project ON agent_memory(project_id);
+CREATE INDEX IF NOT EXISTS idx_agent_memory_type    ON agent_memory(project_id, type);
 
 -- ============================================================
 -- 美术资产库（G_ArtRes manifest 同步，全局共享）
