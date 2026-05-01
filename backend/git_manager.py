@@ -814,20 +814,37 @@ Thumbs.db
             "children": _scan_dir(repo_dir),
         }
 
-    async def get_file_content(self, project_id: str, file_path: str) -> Optional[str]:
-        """读取仓库中的文件内容"""
+    async def get_file_content(self, project_id: str, file_path: str,
+                               branch: str = None) -> Optional[str]:
+        """读取仓库中的文件内容。
+        branch 不为空时用 git show branch:path，不依赖工作目录当前分支。
+        """
         repo_dir = self._repo_path(project_id)
-        target = repo_dir / file_path
 
+        # 优先用 git show 读取指定分支（不受工作目录当前分支影响）
+        if branch:
+            rc, out, _ = await self._run_git(
+                str(repo_dir), "show", f"{branch}:{file_path}"
+            )
+            if rc == 0:
+                return out
+            # 分支读取失败，降级到工作目录
+        else:
+            # 没有指定分支时，先尝试 git show HEAD:path（读已提交内容）
+            rc, out, _ = await self._run_git(
+                str(repo_dir), "show", f"HEAD:{file_path}"
+            )
+            if rc == 0:
+                return out
+
+        # 最终降级：直接读工作目录文件（兼容未提交的文件）
+        target = repo_dir / file_path
         if not target.exists() or not target.is_file():
             return None
-
-        # security: prevent path traversal
         try:
             target.resolve().relative_to(repo_dir.resolve())
         except ValueError:
             return None
-
         try:
             return target.read_text(encoding="utf-8")
         except Exception:

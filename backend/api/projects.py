@@ -784,14 +784,14 @@ async def get_git_commit_detail(project_id: str, sha: str):
 
 
 @router.get("/{project_id}/git/file")
-async def get_git_file(project_id: str, path: str):
-    """读取仓库中的文件内容"""
+async def get_git_file(project_id: str, path: str, branch: str = None):
+    """读取仓库中的文件内容（branch 参数指定从哪个分支读，不影响工作目录）"""
     project = await db.fetch_one("SELECT * FROM projects WHERE id = ?", (project_id,))
     if not project:
         raise HTTPException(404, "项目不存在")
 
     _ensure_git_path(project)
-    content = await git_manager.get_file_content(project_id, path)
+    content = await git_manager.get_file_content(project_id, path, branch=branch)
     if content is None:
         raise HTTPException(404, "文件不存在")
 

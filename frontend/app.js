@@ -7068,7 +7068,10 @@ async function viewRepoFile(path, itemEl) {
     }
 
     try {
-        const data = await api(`/projects/${currentProjectId}/git/file?path=${encodeURIComponent(path)}`);
+        // 传入当前文件浏览器选中的分支（从分支下拉选择器读取）
+        const repoBranch = document.getElementById('repoBranchSelect')?.value || '';
+        const branchParam = repoBranch ? `&branch=${encodeURIComponent(repoBranch)}` : '';
+        const data = await api(`/projects/${currentProjectId}/git/file?path=${encodeURIComponent(path)}${branchParam}`);
         const content = data.content || '';
         const size = data.size ? formatFileSize(data.size) : '';
         const lines = content.split('\n');
@@ -7281,24 +7284,30 @@ function copyFileContent() {
  * 从产出文件点击文件链接 → 切换分支 → 跳转到仓库文件页并打开预览
  */
 async function openArtifactFile(filePath, branch) {
-    // 不关闭抽屉 —— 用户希望属性面板原地保留，只切左侧主内容到仓库文件视图。
-    // Dock 模式下 drawer 和 repo tab 并排；浮动模式下 drawer 仍盖在上方也没问题。
+    // 切换到仓库文件 tab
+    switchTab('repo');
 
-    // 如果有分支名，先切换分支
-    if (branch && currentProjectId) {
-        try {
-            await api(`/projects/${currentProjectId}/git/switch-branch`, {
-                method: 'POST', body: { branch }
-            });
-        } catch (e) {
-            console.warn('切换分支失败:', e.message);
+    // 如果有分支名，同步选中分支选择器（不做实际 switch-branch，由 viewRepoFile 带 branch 参数读取）
+    if (branch) {
+        const sel = document.getElementById('repoBranchSelect');
+        if (sel) {
+            // 如果选项已存在则直接选中，否则等 tab 加载完再处理
+            const opt = Array.from(sel.options).find(o => o.value === branch);
+            if (opt) sel.value = branch;
         }
     }
 
-    // 切换到仓库文件 tab（会重新加载文件树和分支选择器）
-    switchTab('repo');
-    // 等待 tab 渲染后打开文件预览
-    setTimeout(() => viewRepoFile(filePath, null), 400);
+    // 等待 tab 渲染后打开文件预览（带分支参数，不依赖工作目录）
+    setTimeout(() => viewRepoFileWithBranch(filePath, branch, null), 400);
+}
+
+async function viewRepoFileWithBranch(path, branch, itemEl) {
+    // 临时设置分支选择器的值，再调用 viewRepoFile
+    if (branch) {
+        const sel = document.getElementById('repoBranchSelect');
+        if (sel) sel.value = branch;
+    }
+    await viewRepoFile(path, itemEl);
 }
 
 async function toggleGitLogPanel() {
