@@ -565,6 +565,31 @@ CREATE VIRTUAL TABLE IF NOT EXISTS tickets_fts USING fts5(
 );
 
 -- ============================================================
+-- 美术资产库（G_ArtRes manifest 同步，全局共享）
+-- ============================================================
+CREATE TABLE IF NOT EXISTS art_assets (
+    id           TEXT PRIMARY KEY,
+    name         TEXT NOT NULL,
+    description  TEXT DEFAULT '',
+    tags         TEXT NOT NULL DEFAULT '[]',  -- JSON 数组
+    type         TEXT NOT NULL,               -- icon/illustration/photo/sprite/tileset/audio
+    style        TEXT DEFAULT '',             -- flat/outline/filled/realistic/pixel
+    format       TEXT NOT NULL DEFAULT 'svg', -- svg/png/jpg/mp3/ogg
+    width        INTEGER,
+    height       INTEGER,
+    file_path    TEXT NOT NULL DEFAULT '',    -- 相对于 G_ArtRes 根目录
+    source       TEXT DEFAULT '',             -- iconify/kenney/pexels/ai_generated/manual
+    source_ref   TEXT DEFAULT '',             -- 来源库 ID（如 "lucide:home"）
+    source_url   TEXT DEFAULT '',
+    project_scope TEXT DEFAULT 'global',      -- global 或 project_id
+    used_count   INTEGER DEFAULT 0,
+    last_used_at TEXT,
+    added_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_art_assets_type   ON art_assets(type);
+CREATE INDEX IF NOT EXISTS idx_art_assets_source ON art_assets(source);
+
+-- ============================================================
 -- 图片生成请求队列（ImageAgent 异步处理）
 -- ============================================================
 CREATE TABLE IF NOT EXISTS image_requests (

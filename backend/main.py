@@ -171,6 +171,32 @@ async def lifespan(app: FastAPI):
         logger.warning("工单历史 FTS5 补录失败（忽略）: %s", e)
     # tickets_fts 无需 rebuild（internal content，INSERT 后直接可搜）
 
+    # 同步美术资产库（G_ArtRes → art_assets 表）
+    try:
+        from scripts.sync_art_assets import sync_art_assets_from_manifest
+        art_path = settings.ART_ASSETS_LOCAL_PATH
+        if art_path:
+            n = await sync_art_assets_from_manifest(art_path)
+            if n:
+                logger.info("美术资产库同步完成: %d 条", n)
+        else:
+            logger.debug("ART_ASSETS_LOCAL_PATH 未配置，跳过美术资产库同步")
+    except Exception as e:
+        logger.warning("美术资产库同步失败（忽略）: %s", e)
+
+    # 同步策划知识库（G_DesignKnowledge → planning_knowledge 等表）
+    try:
+        from scripts.sync_design_knowledge import sync_design_knowledge
+        kb_path = settings.GLOBAL_KNOWLEDGE_LOCAL_PATH
+        if kb_path:
+            n = await sync_design_knowledge(kb_path)
+            if n:
+                logger.info("策划知识库同步完成: %d 篇", n)
+        else:
+            logger.debug("GLOBAL_KNOWLEDGE_LOCAL_PATH 未配置，跳过知识库同步")
+    except Exception as e:
+        logger.warning("策划知识库同步失败（忽略）: %s", e)
+
     # 启动工单轮询调度器
     from orchestrator import orchestrator
     # 启动内部事件总线（事件驱动，主调度方式）
@@ -261,6 +287,7 @@ from api.traits import router as traits_router
 from api.ue_engines import router as ue_engines_router
 from api.ue_framework import router as ue_framework_router
 from api.image_gen import router as image_gen_router
+from api.art_assets import router as art_assets_router
 
 app.include_router(projects_router)
 app.include_router(requirements_router)
@@ -279,6 +306,7 @@ app.include_router(traits_router)
 app.include_router(ue_engines_router)
 app.include_router(ue_framework_router)
 app.include_router(image_gen_router)
+app.include_router(art_assets_router)
 
 
 # ==================== 系统端点 ====================
