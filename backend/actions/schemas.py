@@ -34,10 +34,14 @@ class ReviewOutput(BaseModel):
 
 
 class TestReviewOutput(BaseModel):
-    """代码审查输出（TestAgent 内部）"""
+    """代码审查输出（对抗性三级分类）"""
     score: int = 6
+    # 对抗性审查三级分类（每级至少找1个）
+    critical_issues: List[str] = []   # 🔴 严重：必须修复才能通过（安全漏洞/逻辑错误/崩溃风险）
+    warnings: List[str] = []          # 🟡 警告：建议修复（性能问题/可维护性/边界条件）
+    suggestions: List[str] = []       # 🟢 建议：可选优化（代码风格/命名/注释）
+    # 向后兼容
     issues: List[str] = []
-    suggestions: List[str] = []
 
 
 class DecomposeOutput(BaseModel):

@@ -87,46 +87,71 @@ class CodeReviewAction(ActionBase):
                 message="无代码可审查",
             )
 
-        req_context = f"""## 审查任务: {ticket_title}
+        req_context = f"""## 对抗性代码审查任务: {ticket_title}
 
 ## 代码内容
 {code_snippets}
 
-## 审查要点
-1. 命名规范（变量/函数/文件是否清晰）
-2. 代码安全（XSS/注入/硬编码密钥）
-3. 逻辑正确性（边界条件/空值处理）
-4. 代码风格（缩进/注释/一致性）
-5. 可维护性（函数长度/复杂度/重复代码）"""
+## 审查维度
+1. 🔴 严重问题（安全漏洞/逻辑错误/空指针崩溃/数据丢失风险）
+2. 🟡 警告（性能问题/边界条件未处理/可维护性差/硬编码魔法值）
+3. 🟢 建议（命名优化/注释缺失/重复代码/代码风格）"""
 
         node = ActionNode(
             key="code_review",
             expected_type=TestReviewOutput,
-            instruction="审查以上代码，给出评分和具体问题。评分 1-10，7 分及以上为良好。",
+            instruction=(
+                "[MODE: REVIEW] 你是严苛的代码审查者，必须主动找出代码问题。\n"
+                "⚠️ 禁止输出「代码质量良好」「暂无问题」等敷衍结论。\n"
+                "每个级别（critical/warning/suggestion）至少找出 1 个具体问题。\n"
+                "critical_issues 填严重问题，warnings 填警告，suggestions 填建议。\n"
+                "评分规则：有 critical→ ≤5 分；只有 warning→6-7 分；只有 suggestion→8-9 分；完美→10 分。"
+            ),
         )
-        await node.fill(req=req_context, llm=llm_client, max_tokens=1500)
+        await node.fill(req=req_context, llm=llm_client, max_tokens=2000)
 
         review = node.instruct_content
-        score = review.score if review else 7
+        score = review.score if review else 6
+
+        # 向后兼容：合并 critical + warnings 到旧 issues 字段
+        all_issues = (review.critical_issues or []) + (review.warnings or [])
+        if review:
+            review.issues = all_issues
+
+        # 判断是否有严重问题（需要阻断流转）
+        has_critical = bool(review.critical_issues) if review else False
 
         review_md = f"""# 代码审查 — {ticket_title}
 
-## 评分: {score}/10 {'✅' if score >= 7 else '⚠️'}
+## 评分: {score}/10 {'✅ 通过' if score >= 7 and not has_critical else '🚫 需修复' if has_critical else '⚠️ 有警告'}
 
-## 问题
-{chr(10).join(f'- ❌ {i}' for i in (review.issues if review else [])) or '无'}
+## 🔴 严重问题（必须修复）
+{chr(10).join(f'- {i}' for i in (review.critical_issues if review else [])) or '无'}
 
-## 建议
-{chr(10).join(f'- 💡 {s}' for s in (review.suggestions if review else [])) or '无'}
+## 🟡 警告（建议修复）
+{chr(10).join(f'- {i}' for i in (review.warnings if review else [])) or '无'}
+
+## 🟢 建议（可选优化）
+{chr(10).join(f'- {s}' for s in (review.suggestions if review else [])) or '无'}
 
 ## 审查的代码
 {chr(10).join(f'- {fp}' for fp in (dev_result.get('files', {}).keys() if isinstance(dev_result, dict) else []))}
 """
 
-        logger.info("🔍 代码审查: %s → %d/10", ticket_title[:20], score)
+        logger.info("🔍 对抗性代码审查: %s → %d/10 (critical=%d, warn=%d)",
+                    ticket_title[:20], score,
+                    len(review.critical_issues) if review else 0,
+                    len(review.warnings) if review else 0)
 
         return ActionResult(
             success=True,
-            data={"score": score, "issues": review.issues if review else [], "suggestions": review.suggestions if review else []},
+            data={
+                "score": score,
+                "has_critical": has_critical,
+                "critical_issues": review.critical_issues if review else [],
+                "warnings": review.warnings if review else [],
+                "issues": all_issues,
+                "suggestions": review.suggestions if review else [],
+            },
             files={f"{docs_prefix}code-review.md": review_md},
         )

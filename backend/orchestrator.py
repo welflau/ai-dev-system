@@ -883,11 +883,19 @@ class TicketOrchestrator:
                 now = now_iso()
                 idx_to_id[idx] = ticket_id
 
-                # 简单需求跳过架构设计，直接进开发
+                # 需求规模自适应：按复杂度跳过不必要的阶段
                 complexity = result.get("complexity", "medium")
+                ticket_count = len(result.get("tickets", []))
                 initial_status = TicketStatus.PENDING.value
-                if complexity == "simple":
+
+                if complexity == "simple" or ticket_count <= 1:
+                    # XS：改颜色/改文案/小 Bug 修复 → 跳过 Planner + Architect，直接开发
                     initial_status = TicketStatus.ARCHITECTURE_DONE.value
+                    logger.info("规模 XS：跳过策划+架构阶段 → 直接开发 (%s)", tk["title"][:20])
+                elif complexity == "medium" and ticket_count <= 2:
+                    # S：小功能 → 跳过 Planner（策划已在需求层面做），直接架构
+                    initial_status = TicketStatus.PLANNING_DONE.value
+                    logger.info("规模 S：跳过策划阶段 → 直接架构 (%s)", tk["title"][:20])
 
                 ticket = {
                     "id": ticket_id,
