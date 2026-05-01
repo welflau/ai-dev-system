@@ -163,6 +163,9 @@
                             <a class="nav-item nav-sub-item" data-tab="settings-knowledge" onclick="switchTab('settings-knowledge')">
                                 <span class="nav-item-icon">📚</span> 知识库
                             </a>
+                            <a class="nav-item nav-sub-item" data-tab="settings-assets" onclick="switchTab('settings-assets')">
+                                <span class="nav-item-icon">🖼️</span> 资产库
+                            </a>
                             <a class="nav-item nav-sub-item" data-tab="settings-danger" onclick="switchTab('settings-danger')">
                                 <span class="nav-item-icon">⚠️</span> 高级设置
                             </a>
@@ -210,6 +213,13 @@
                                     <span class="column-count" id="count-pending">0</span>
                                 </div>
                                 <div class="column-body" id="col-pending"></div>
+                            </div>
+                            <div class="board-column" data-status="design">
+                                <div class="column-header">
+                                    <span class="column-title">🎨 设计中</span>
+                                    <span class="column-count" id="count-design">0</span>
+                                </div>
+                                <div class="column-body" id="col-design"></div>
                             </div>
                             <div class="board-column" data-status="architecture">
                                 <div class="column-header">
@@ -978,6 +988,41 @@
                                     <button class="btn btn-sm btn-primary" onclick="showKnowledgeEditor('project', currentProjectId)">+ 新建文档</button>
                                 </div>
                                 <div id="projectDocsList"><div class="empty-state-sm">加载中...</div></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tab: 资产库 -->
+                    <div id="tab-settings-assets" class="tab-content">
+                        <div class="settings-page">
+                            <div class="settings-header">
+                                <h2>🖼️ 美术资产库</h2>
+                                <p style="color:var(--text-muted);font-size:13px;">全局共享资产，来自 G_ArtRes（图标/插画/游戏资源等）。Agent 生成 PRD/视觉规范时自动调用。</p>
+                            </div>
+                            <div class="settings-card">
+                                <div style="display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap;">
+                                    <input type="text" id="assetSearchQ" placeholder="搜索名称/标签..." style="flex:1; min-width:160px; padding:6px 10px; background:var(--bg); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text);" oninput="searchArtAssets()">
+                                    <select id="assetTypeFilter" onchange="searchArtAssets()" style="padding:6px 8px; background:var(--bg); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text);">
+                                        <option value="">全部类型</option>
+                                        <option value="icon">图标</option>
+                                        <option value="illustration">插画</option>
+                                        <option value="photo">图片</option>
+                                        <option value="sprite">精灵图</option>
+                                        <option value="model">3D模型</option>
+                                        <option value="animation">动画</option>
+                                        <option value="audio">音频</option>
+                                    </select>
+                                    <select id="assetSourceFilter" onchange="searchArtAssets()" style="padding:6px 8px; background:var(--bg); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text);">
+                                        <option value="">全部来源</option>
+                                        <option value="iconify">Iconify</option>
+                                        <option value="kenney">Kenney</option>
+                                        <option value="pexels">Pexels</option>
+                                        <option value="ai_generated">AI生成</option>
+                                    </select>
+                                </div>
+                                <div id="assetStatsBar" style="font-size:12px; color:var(--text-muted); margin-bottom:10px;"></div>
+                                <div id="assetListGrid" style="display:grid; grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); gap:8px; max-height:500px; overflow-y:auto;"></div>
+                                <div id="assetListPager" style="margin-top:10px; text-align:center; font-size:12px; color:var(--text-muted);"></div>
                             </div>
                         </div>
                     </div>

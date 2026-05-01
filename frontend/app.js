@@ -654,6 +654,79 @@ function switchTab(tab) {
         loadSkillsList();
     }
     if (tab === 'settings-knowledge') loadSettingsKnowledge();
+    if (tab === 'settings-assets') { loadArtAssetsStats(); searchArtAssets(); }
+}
+
+// ==================== 资产库 ====================
+let _assetOffset = 0;
+const _assetPageSize = 40;
+
+async function loadArtAssetsStats() {
+    try {
+        const d = await fetch(`${API}/art-assets/stats`).then(r => r.json());
+        const bar = document.getElementById('assetStatsBar');
+        if (!bar) return;
+        const byType = (d.by_type || []).map(t => `${t.type} ${t.cnt}`).join(' · ');
+        bar.textContent = `共 ${d.total || 0} 条资产  |  ${byType}`;
+    } catch {}
+}
+
+async function searchArtAssets(reset = true) {
+    if (reset) _assetOffset = 0;
+    const q      = document.getElementById('assetSearchQ')?.value.trim() || '';
+    const type   = document.getElementById('assetTypeFilter')?.value || '';
+    const source = document.getElementById('assetSourceFilter')?.value || '';
+    const grid   = document.getElementById('assetListGrid');
+    const pager  = document.getElementById('assetListPager');
+    if (!grid) return;
+
+    try {
+        let url = `${API}/art-assets?limit=${_assetPageSize}&offset=${_assetOffset}`;
+        if (q)      url += `&q=${encodeURIComponent(q)}`;
+        if (type)   url += `&type=${encodeURIComponent(type)}`;
+        if (source) url += `&source=${encodeURIComponent(source)}`;
+        const d = await fetch(url).then(r => r.json());
+        const assets = d.assets || [];
+        const total  = d.total || 0;
+
+        if (_assetOffset === 0) grid.innerHTML = '';
+
+        if (assets.length === 0 && _assetOffset === 0) {
+            grid.innerHTML = '<div style="grid-column:1/-1;text-align:center;color:var(--text-muted);padding:24px;">未找到资产</div>';
+        } else {
+            grid.insertAdjacentHTML('beforeend', assets.map(a => {
+                const ext = (a.file_path || '').split('.').pop().toLowerCase();
+                const preview = ext === 'svg' && a.file_path
+                    ? `<img src="${encodeURI((window.artAssetsBase||'')+a.file_path)}" style="width:48px;height:48px;object-fit:contain;" onerror="this.style.display='none'">`
+                    : `<span style="font-size:28px;">${{icon:'🔷',illustration:'🖼️',photo:'📷',sprite:'🎮',model:'📦',audio:'🎵',animation:'🎞️'}[a.type]||'📁'}</span>`;
+                const tags = (a.tags||[]).slice(0,2).join(' ');
+                return `<div style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:6px;padding:8px;cursor:pointer;text-align:center;" onclick="copyArtAssetPath('${escHtml(a.file_path||'')}','${escHtml(a.id)}')" title="${escHtml(a.name)}">
+                    <div style="height:52px;display:flex;align-items:center;justify-content:center;">${preview}</div>
+                    <div style="font-size:11px;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text);">${escHtml(a.name)}</div>
+                    <div style="font-size:10px;color:var(--text-muted);">${escHtml(a.source||'')} ${escHtml(tags)}</div>
+                </div>`;
+            }).join(''));
+        }
+
+        if (pager) {
+            const shown = Math.min(_assetOffset + _assetPageSize, total);
+            pager.innerHTML = total > shown
+                ? `显示 ${shown}/${total} 条 <button class="btn btn-sm" onclick="_assetOffset+=${_assetPageSize};searchArtAssets(false)">加载更多</button>`
+                : `共 ${total} 条`;
+        }
+    } catch (e) {
+        if (grid) grid.innerHTML = `<div style="grid-column:1/-1;color:var(--danger);padding:12px;">加载失败: ${escHtml(e.message)}</div>`;
+    }
+}
+
+async function copyArtAssetPath(path, id) {
+    if (!path) return;
+    try {
+        await navigator.clipboard.writeText(path);
+        showToast(`已复制路径: ${path.split('/').pop()}`, 'success');
+        // 标记使用
+        fetch(`${API}/art-assets/${id}/use`, { method: 'POST' }).catch(() => {});
+    } catch { showToast('复制失败', 'error'); }
 }
 
 // ==================== Agent 配置页内部 Tab 切换 ====================
@@ -2592,7 +2665,7 @@ async function refreshBoard() {
         const data = await api(url);
         const board = data.board || {};
 
-        const columns = ['pending', 'architecture', 'development', 'testing', 'done', 'deployed'];
+        const columns = ['pending', 'design', 'architecture', 'development', 'testing', 'done', 'deployed'];
         columns.forEach(col => {
             const tickets = board[col] || [];
             const body = document.getElementById(`col-${col}`);
@@ -2628,10 +2701,16 @@ function renderTicketCard(t) {
         ? ' <span class="ticket-status-badge error" title="工单已卡住，点进去看诊断">🚧</span>'
         : '';
 
-    // 所有工单状态选项
+    // 所有工单状态选项（含新 Agent 阶段）
     const allStatuses = [
         { value: 'pending', label: '待启动' },
-        { value: 'architecture_in_progress', label: '架构中' },
+        { value: 'planning_in_progress', label: '📋 策划中' },
+        { value: 'planning_done', label: '策划完成' },
+        { value: 'ux_design_in_progress', label: '🎨 UX设计中' },
+        { value: 'ux_design_done', label: 'UX设计完成' },
+        { value: 'art_design_in_progress', label: '🖼️ 美术设计中' },
+        { value: 'art_design_done', label: '美术设计完成' },
+        { value: 'architecture_in_progress', label: '🏗️ 架构中' },
         { value: 'architecture_done', label: '架构完成' },
         { value: 'development_in_progress', label: '开发中' },
         { value: 'development_done', label: '开发完成' },
@@ -2852,6 +2931,38 @@ async function openTicketDrawer(ticketId) {
         }
 
         // 产物
+        // Smart Probe 评分（策划阶段产出）
+        const smartProbeScore = (() => {
+            const prdArt = (data.artifacts || []).find(a => a.type === 'prd');
+            if (!prdArt) return null;
+            try { const d = JSON.parse(prdArt.content || '{}'); return d.smart_probe_score ?? null; } catch { return null; }
+        })();
+        if (smartProbeScore !== null) {
+            const color = smartProbeScore >= 20 ? 'var(--success)' : smartProbeScore >= 15 ? 'var(--warning)' : 'var(--danger)';
+            const label = smartProbeScore >= 20 ? '需求清晰 ✅' : smartProbeScore >= 15 ? '已补假设 🟡' : '信息不足 🔴';
+            html += `<div class="drawer-section" style="padding:8px 12px; background:${color}15; border-left:3px solid ${color}; border-radius:4px; margin-bottom:8px;">
+                <span style="font-size:12px; color:${color}; font-weight:600;">📊 Smart Probe ${label}</span>
+                <span style="font-size:11px; color:var(--text-muted); margin-left:8px;">清晰度 ${smartProbeScore}/25</span>
+            </div>`;
+        }
+
+        // 代码审查三级结果（快速预览）
+        const reviewArt = (data.artifacts || []).find(a => a.type === 'code_review' || a.name?.includes('审查'));
+        if (reviewArt) {
+            try {
+                const rd = JSON.parse(reviewArt.content || '{}');
+                const critical = rd.critical_issues || [];
+                const warnings = rd.warnings || [];
+                if (critical.length > 0 || warnings.length > 0) {
+                    html += `<div class="drawer-section" style="padding:8px 12px; background:var(--bg); border:1px solid var(--border); border-radius:4px; margin-bottom:8px;">
+                        <div style="font-size:12px; font-weight:600; margin-bottom:6px;">🔍 代码审查摘要</div>
+                        ${critical.map(i => `<div style="font-size:11px; color:var(--danger); margin:2px 0;">🔴 ${escHtml(i)}</div>`).join('')}
+                        ${warnings.slice(0,2).map(w => `<div style="font-size:11px; color:var(--warning); margin:2px 0;">🟡 ${escHtml(w)}</div>`).join('')}
+                    </div>`;
+                }
+            } catch {}
+        }
+
         const artifacts = data.artifacts || [];
         const ticketBranch = data.branch_name || '';
         if (artifacts.length > 0) {
@@ -6655,15 +6766,20 @@ function formatTime(iso) {
 function pad(n) { return n.toString().padStart(2, '0'); }
 
 const STATUS_LABELS = {
-    pending: '待启动', architecture_in_progress: '架构中', architecture_done: '架构完成',
-    development_in_progress: '开发中', development_done: '开发完成',
-    review_in_progress: '审查中', review_passed: '审查通过',
-    acceptance_passed: '验收通过', acceptance_rejected: '验收不通过',
-    testing_in_progress: '测试中', testing_done: '测试通过', testing_failed: '测试不通过',
-    deploying: '部署中', deployed: '已部署', cancelled: '已取消',
+    // 新 Agent 阶段
+    planning_in_progress: '📋 策划中', planning_done: '策划完成',
+    ux_design_in_progress: '🎨 UX设计中', ux_design_done: 'UX设计完成',
+    art_design_in_progress: '🖼️ 美术设计中', art_design_done: '美术设计完成',
+    // 原有阶段
+    pending: '待启动', architecture_in_progress: '🏗️ 架构中', architecture_done: '架构完成',
+    development_in_progress: '💻 开发中', development_done: '开发完成',
+    review_in_progress: '🔍 审查中', review_passed: '审查通过',
+    acceptance_passed: '✅ 验收通过', acceptance_rejected: '❌ 验收不通过',
+    testing_in_progress: '🧪 测试中', testing_done: '测试通过', testing_failed: '测试不通过',
+    deploying: '🚀 部署中', deployed: '已部署', cancelled: '已取消',
     blocked: '🚧 已卡住',
     submitted: '已提交', analyzing: '分析中', decomposed: '已拆单',
-    in_progress: '进行中', paused: '已暂停', completed: '已完成', cancelled: '已取消',
+    in_progress: '进行中', paused: '⏸️ 已暂停', completed: '已完成',
 };
 
 function getStatusLabel(status) {
@@ -6672,16 +6788,17 @@ function getStatusLabel(status) {
 
 function getStatusColor(status) {
     if (status === 'blocked') return 'var(--error)';
-    if (status.includes('deployed') || status === 'completed' || status === 'testing_done' || status === 'acceptance_passed') return 'var(--success)';
-    if (status.includes('_in_progress') || status === 'deploying' || status === 'analyzing' || status === 'in_progress') return 'var(--info)';
+    if (['deployed','completed','testing_done','acceptance_passed','planning_done','ux_design_done','art_design_done','architecture_done','development_done','review_passed'].includes(status)) return 'var(--success)';
+    if (status.includes('_in_progress') || ['deploying','analyzing','in_progress'].includes(status)) return 'var(--info)';
     if (status.includes('rejected') || status.includes('failed') || status === 'cancelled') return 'var(--error)';
-    if (status === 'pending' || status === 'submitted') return 'var(--text-muted)';
+    if (['pending','submitted','paused'].includes(status)) return 'var(--text-muted)';
     return 'var(--primary)';
 }
 
 function getArtifactIcon(type) {
     const icons = {
-        prd: '📄', architecture: '🏗️', code: '💻', test: '🧪', deploy_config: '🚀', screenshot: '🖼️',
+        prd: '📋', architecture: '🏗️', code: '💻', test: '🧪', deploy_config: '🚀', screenshot: '🖼️',
+        ux_design: '🎨', art_design: '🖼️', design_tokens: '🎨',
     };
     return icons[type] || '📦';
 }

@@ -344,6 +344,12 @@ class MilestoneUpdate(BaseModel):
 # 工单看板的 5 列对应的状态
 BOARD_COLUMNS = {
     "pending": [TicketStatus.PENDING],
+    # 设计阶段列（策划 + UX + 美术）
+    "design": [
+        TicketStatus.PLANNING_IN_PROGRESS, TicketStatus.PLANNING_DONE,
+        TicketStatus.UX_DESIGN_IN_PROGRESS, TicketStatus.UX_DESIGN_DONE,
+        TicketStatus.ART_DESIGN_IN_PROGRESS, TicketStatus.ART_DESIGN_DONE,
+    ],
     "architecture": [TicketStatus.ARCHITECTURE_IN_PROGRESS, TicketStatus.ARCHITECTURE_DONE],
     "development": [
         TicketStatus.DEVELOPMENT_IN_PROGRESS,
@@ -363,6 +369,13 @@ BOARD_COLUMNS = {
 
 # 状态 → 中文展示名
 STATUS_LABELS = {
+    # 工单状态 — 新 Agent 阶段
+    "planning_in_progress": "策划中",
+    "planning_done": "策划完成",
+    "ux_design_in_progress": "UX设计中",
+    "ux_design_done": "UX设计完成",
+    "art_design_in_progress": "美术设计中",
+    "art_design_done": "美术设计完成",
     # 工单状态
     "pending": "待启动",
     "architecture_in_progress": "架构中",
