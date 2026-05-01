@@ -1505,6 +1505,20 @@
                     </div>
                 </div>
                 <div id="lightaiTestResult" style="display:none; padding:10px; border-radius:var(--radius-sm); font-size:13px; margin-top:8px;"></div>
+
+                <!-- 资产网络搜索 -->
+                <hr style="border:none; border-top:1px solid var(--border); margin:20px 0 16px;">
+                <p style="font-size:13px; font-weight:600; color:var(--text); margin-bottom:8px;">🔍 资产网络搜索</p>
+                <p style="font-size:12px; color:var(--text-muted); margin-bottom:12px;">
+                    配置后美术 Agent 可从网络搜索图片/插画入库。unDraw / Poly Haven 无需密钥始终可用。
+                </p>
+                <div class="form-group">
+                    <label>Pexels API Key（图片/摄影）</label>
+                    <div style="position:relative;">
+                        <input type="password" id="pexelsApiKey" placeholder="pexels-..." style="padding-right:40px;">
+                        <button class="btn-icon" onclick="togglePasswordVisibility('pexelsApiKey', this)" style="position:absolute; right:8px; top:50%; transform:translateY(-50%); font-size:14px;" title="显示/隐藏">👁</button>
+                    </div>
+                </div>
             </div>
             <div class="modal-footer" style="justify-content:space-between; flex-wrap:wrap; gap:8px;">
                 <div style="display:flex; gap:8px;">

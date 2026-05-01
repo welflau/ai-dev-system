@@ -471,6 +471,11 @@ async def llm_config(body: dict):
     env_lines["LLM_TIMEOUT"] = str(llm_client.timeout)
     env_lines["LLM_MAX_RETRIES"] = str(llm_client.max_retries)
 
+    # Pexels API Key（资产网络搜索）
+    if "pexels_api_key" in body and body["pexels_api_key"]:
+        settings.PEXELS_API_KEY = body["pexels_api_key"]
+        env_lines["PEXELS_API_KEY"] = body["pexels_api_key"]
+
     # LightAI 配置（可选）
     if "lightai_api_key" in body and body["lightai_api_key"]:
         settings.LIGHTAI_API_KEY = body["lightai_api_key"]

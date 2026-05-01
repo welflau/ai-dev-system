@@ -1,7 +1,8 @@
 """美术资产库 API"""
 import json
 from fastapi import APIRouter, Query
-from typing import Optional
+from pydantic import BaseModel
+from typing import Optional, List
 from database import db
 
 router = APIRouter(prefix="/api/art-assets", tags=["art-assets"])
@@ -106,3 +107,18 @@ async def mark_asset_used(asset_id: str):
         (now_iso(), asset_id),
     )
     return {"ok": True}
+
+
+class SearchWebRequest(BaseModel):
+    query: str
+    asset_type: str = "photo"   # photo / illustration / texture
+    limit: int = 5
+
+
+@router.post("/search-web")
+async def search_web_and_store(req: SearchWebRequest):
+    """从网络搜索资产并入库（Pexels / unDraw / Poly Haven）"""
+    from art_asset_searcher import search_and_store
+    ids = await search_and_store(req.query, req.asset_type, req.limit)
+    return {"stored": len(ids), "asset_ids": ids,
+            "message": f"已入库 {len(ids)} 条资产" if ids else "未找到匹配资产（检查 API Key 配置）"}

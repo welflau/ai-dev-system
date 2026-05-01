@@ -383,6 +383,10 @@ async function saveLLMConfig() {
     if (base_url) payload.base_url = base_url;
     if (api_key) payload.api_key = api_key;
 
+    // 保存 Pexels API Key
+    const pexelsKey = document.getElementById('pexelsApiKey')?.value.trim();
+    if (pexelsKey) payload.pexels_api_key = pexelsKey;
+
     // 同时保存 LightAI 配置
     const lightaiKey     = document.getElementById('lightaiApiKey').value.trim();
     const lightaiBase    = document.getElementById('lightaiBaseUrl').value.trim();

@@ -261,7 +261,7 @@ async def process_image_request(req_id: str) -> None:
         await _finish_with_ascii(req)
         return
 
-    # 下载图片到资产库
+    # 下载图片到资产库 + 自动入库
     art_assets_path = Path(settings.ART_ASSETS_LOCAL_PATH) if settings.ART_ASSETS_LOCAL_PATH else None
     result_path = None
     if art_assets_path and art_assets_path.exists():
@@ -269,6 +269,10 @@ async def process_image_request(req_id: str) -> None:
         filename = f"{req_id}.{ext}"
         save_dir = art_assets_path / "2d" / "generated"
         result_path = await _download_image(image_url, save_dir, filename)
+
+        # P3-4：自动写入 art_assets 表（AI 生图结果入库）
+        if result_path:
+            await _store_generated_image(req_id, dict(req), result_path, image_url)
 
     # 替换文档占位符
     if req.get("callback_doc") and req.get("callback_tag") and req.get("project_id"):
@@ -354,6 +358,47 @@ async def image_processor_loop(interval: int = 10) -> None:
         except Exception as e:
             logger.warning("图片处理调度异常: %s", e)
         await asyncio.sleep(interval)
+
+
+async def _store_generated_image(req_id: str, req: dict, file_path: str, source_url: str) -> None:
+    """将 AI 生成的图片写入 art_assets 表和 manifest.json"""
+    try:
+        import json as _json
+        prompt = req.get("prompt", "")[:80]
+        style = req.get("style", "illustration") or "illustration"
+        rel_path = file_path.replace(str(settings.ART_ASSETS_LOCAL_PATH), "").lstrip("/\\").replace("\\", "/")
+        ext = rel_path.split(".")[-1].lower() if "." in rel_path else "jpg"
+        tags = _json.dumps(["ai_generated", style] + prompt.split()[:3], ensure_ascii=False)
+
+        await db.execute("""
+            INSERT INTO art_assets
+            (id, name, description, tags, type, style, format, width, height,
+             file_path, source, source_ref, source_url, project_scope, used_count, added_at)
+            VALUES (?,?,?,?,?,?,?,0,0,?,'ai_generated',?,?,'global',0,?)
+            ON CONFLICT(id) DO UPDATE SET file_path=excluded.file_path
+        """, (req_id, prompt, prompt, tags, style, style, ext,
+              rel_path, f"lightai:{req_id}", source_url, now_iso()))
+
+        # 更新 manifest.json
+        base = Path(settings.ART_ASSETS_LOCAL_PATH)
+        mf = base / "manifest.json"
+        if mf.exists():
+            data = _json.loads(mf.read_text(encoding="utf-8"))
+            assets = data.get("assets", [])
+            if not any(a["id"] == req_id for a in assets):
+                assets.append({
+                    "id": req_id, "name": prompt, "path": rel_path,
+                    "type": style, "style": "ai_generated", "format": ext,
+                    "tags": ["ai_generated", style], "source": "ai_generated",
+                    "source_ref": f"lightai:{req_id}", "source_url": source_url,
+                    "added_at": now_iso(), "used_count": 0,
+                })
+                data["assets"] = assets
+                mf.write_text(_json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        logger.info("AI生图已入库: %s → %s", req_id, rel_path)
+    except Exception as e:
+        logger.warning("AI生图入库失败: %s", e)
 
 
 # ── 公开的请求接口 ────────────────────────────────────────

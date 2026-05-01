@@ -53,6 +53,11 @@ class Settings:
     ART_ASSETS_LOCAL_PATH: str = os.getenv("ART_ASSETS_LOCAL_PATH", "")
     ART_ASSETS_AUTO_PUSH: bool = os.getenv("ART_ASSETS_AUTO_PUSH", "false").lower() in ("1", "true", "yes")
 
+    # 资产网络搜索 API（未配置则跳过该来源）
+    PEXELS_API_KEY: str = os.getenv("PEXELS_API_KEY", "")
+    PIXABAY_API_KEY: str = os.getenv("PIXABAY_API_KEY", "")
+    # unDraw / Poly Haven 无需密钥，始终可用
+
     # LightAI 图片生成（ai.lightai.woa.com）
     LIGHTAI_API_BASE: str = os.getenv("LIGHTAI_API_BASE", "https://api.lightai.woa.com")
     LIGHTAI_API_KEY: str = os.getenv("LIGHTAI_API_KEY", "")
