@@ -346,17 +346,29 @@ async function showLLMConfigModal() {
         document.getElementById('llmTimeout').value = data.timeout || 60;
         document.getElementById('llmMaxRetries').value = data.max_retries || 3;
     } catch {
-        // 使用空值
         document.getElementById('llmBaseUrl').value = '';
         document.getElementById('llmApiKey').value = '';
         document.getElementById('llmModel').value = 'gpt-4';
         document.getElementById('llmTimeout').value = 60;
         document.getElementById('llmMaxRetries').value = 3;
     }
-    // 清除之前的测试结果
-    const resultEl = document.getElementById('llmTestResult');
-    resultEl.style.display = 'none';
-    resultEl.textContent = '';
+    // 加载 LightAI 配置
+    try {
+        const lai = await fetch(`${API}/image-gen/config/status`).then(r => r.json());
+        document.getElementById('lightaiBaseUrl').value = lai.api_base || 'https://api.lightai.woa.com';
+        document.getElementById('lightaiApiKey').value = '';
+        document.getElementById('lightaiEngine').value = lai.engine || 'gemini';
+        document.getElementById('lightaiTimeout').value = lai.timeout || 300;
+    } catch {
+        document.getElementById('lightaiBaseUrl').value = 'https://api.lightai.woa.com';
+        document.getElementById('lightaiEngine').value = 'gemini';
+        document.getElementById('lightaiTimeout').value = 300;
+    }
+    // 清除测试结果
+    ['llmTestResult', 'lightaiTestResult'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) { el.style.display = 'none'; el.textContent = ''; }
+    });
     openModal('llmConfigModal');
 }
 
@@ -367,22 +379,62 @@ async function saveLLMConfig() {
     const timeout = parseInt(document.getElementById('llmTimeout').value) || 60;
     const max_retries = parseInt(document.getElementById('llmMaxRetries').value) || 3;
 
-    // 构建 payload（只发送非空字段，api_key 为空时不覆盖已有 key）
     const payload = { model, timeout, max_retries };
     if (base_url) payload.base_url = base_url;
     if (api_key) payload.api_key = api_key;
 
+    // 同时保存 LightAI 配置
+    const lightaiKey     = document.getElementById('lightaiApiKey').value.trim();
+    const lightaiBase    = document.getElementById('lightaiBaseUrl').value.trim();
+    const lightaiEngine  = document.getElementById('lightaiEngine').value;
+    const lightaiTimeout = parseInt(document.getElementById('lightaiTimeout').value) || 300;
+    if (lightaiKey || lightaiBase) {
+        payload.lightai_api_key    = lightaiKey || undefined;
+        payload.lightai_api_base   = lightaiBase || undefined;
+        payload.lightai_engine     = lightaiEngine;
+        payload.lightai_timeout    = lightaiTimeout;
+    }
+
     try {
-        const data = await api('/llm/config', {
-            method: 'POST',
-            body: payload,
-        });
-        showToast('LLM 配置已保存', 'success');
+        await api('/llm/config', { method: 'POST', body: payload });
+        showToast('配置已保存', 'success');
         closeModal('llmConfigModal');
-        // 刷新顶栏状态
         await checkLLMStatus();
     } catch (e) {
         showToast(`保存失败: ${e.message}`, 'error');
+    }
+}
+
+async function testLightAIConnection() {
+    const resultEl = document.getElementById('lightaiTestResult');
+    const btn = document.getElementById('lightaiTestBtn');
+    if (!resultEl || !btn) return;
+
+    btn.disabled = true; btn.textContent = '测试中...';
+    resultEl.style.display = 'none';
+
+    try {
+        const data = await fetch(`${API}/image-gen/config/test`, { method: 'POST' }).then(r => r.json());
+        resultEl.style.display = 'block';
+        if (data.status === 'ok') {
+            resultEl.style.background = 'rgba(52,211,153,0.1)';
+            resultEl.style.color = 'var(--success)';
+            resultEl.textContent = `✅ ${data.message}`;
+        } else if (data.status === 'not_configured') {
+            resultEl.style.background = 'rgba(251,191,36,0.1)';
+            resultEl.style.color = 'var(--warning)';
+            resultEl.textContent = `⚠️ ${data.message}`;
+        } else {
+            resultEl.style.background = 'rgba(255,90,90,0.1)';
+            resultEl.style.color = 'var(--error)';
+            resultEl.textContent = `❌ ${data.message}`;
+        }
+    } catch (e) {
+        resultEl.style.display = 'block';
+        resultEl.style.color = 'var(--error)';
+        resultEl.textContent = `❌ 请求失败: ${e.message}`;
+    } finally {
+        btn.disabled = false; btn.textContent = '🖼️ 测试 LightAI';
     }
 }
 

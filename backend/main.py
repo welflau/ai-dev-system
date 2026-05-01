@@ -186,6 +186,11 @@ async def lifespan(app: FastAPI):
     ci_task = asyncio.create_task(ci_pipeline.start_scheduler())
     logger.info("CI/CD Pipeline 调度器已启动")
 
+    # 启动图片生成调度器（LightAI 异步处理队列）
+    from image_processor import image_processor_loop
+    asyncio.create_task(image_processor_loop(interval=10))
+    logger.info("🖼️ 图片生成调度器已启动 (10s 轮询)")
+
     # 启动 MCP 客户端（可选：只启动 mcp_servers.json 里 enabled=true 的 server）
     try:
         from mcp_client import mcp_client
@@ -255,6 +260,7 @@ from api.skills import router as skills_router
 from api.traits import router as traits_router
 from api.ue_engines import router as ue_engines_router
 from api.ue_framework import router as ue_framework_router
+from api.image_gen import router as image_gen_router
 
 app.include_router(projects_router)
 app.include_router(requirements_router)
@@ -272,6 +278,7 @@ app.include_router(skills_router)
 app.include_router(traits_router)
 app.include_router(ue_engines_router)
 app.include_router(ue_framework_router)
+app.include_router(image_gen_router)
 
 
 # ==================== 系统端点 ====================
@@ -436,6 +443,20 @@ async def llm_config(body: dict):
     env_lines["LLM_TIMEOUT"] = str(llm_client.timeout)
     env_lines["LLM_MAX_RETRIES"] = str(llm_client.max_retries)
 
+    # LightAI 配置（可选）
+    if "lightai_api_key" in body and body["lightai_api_key"]:
+        settings.LIGHTAI_API_KEY = body["lightai_api_key"]
+        env_lines["LIGHTAI_API_KEY"] = body["lightai_api_key"]
+    if "lightai_api_base" in body and body["lightai_api_base"]:
+        settings.LIGHTAI_API_BASE = body["lightai_api_base"]
+        env_lines["LIGHTAI_API_BASE"] = body["lightai_api_base"]
+    if "lightai_engine" in body:
+        settings.LIGHTAI_IMAGE_ENGINE = body["lightai_engine"] or "gemini"
+        env_lines["LIGHTAI_IMAGE_ENGINE"] = settings.LIGHTAI_IMAGE_ENGINE
+    if "lightai_timeout" in body:
+        settings.LIGHTAI_IMAGE_TIMEOUT = int(body["lightai_timeout"] or 300)
+        env_lines["LIGHTAI_IMAGE_TIMEOUT"] = str(settings.LIGHTAI_IMAGE_TIMEOUT)
+
     env_path.write_text(
         "\n".join(f"{k}={v}" for k, v in env_lines.items()) + "\n",
         encoding="utf-8",
@@ -445,6 +466,7 @@ async def llm_config(body: dict):
         "status": "ok",
         "configured": llm_client.is_configured,
         "model": llm_client.model,
+        "lightai_configured": bool(settings.LIGHTAI_API_KEY),
     }
 
 

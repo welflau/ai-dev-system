@@ -1426,9 +1426,46 @@
                     </div>
                 </div>
                 <div id="llmTestResult" style="display:none; padding:10px; border-radius:var(--radius-sm); font-size:13px; margin-top:8px;"></div>
+
+                <!-- LightAI 图片生成配置 -->
+                <hr style="border:none; border-top:1px solid var(--border); margin:20px 0 16px;">
+                <p style="font-size:13px; font-weight:600; color:var(--text); margin-bottom:12px;">🖼️ LightAI 图片生成</p>
+                <p style="font-size:12px; color:var(--text-muted); margin-bottom:12px;">
+                    配置 LightAI API，用于 AI 自动生成图片资产（背景图/插画/游戏资源等）。未配置时自动降级为 ASCII 占位图。
+                </p>
+                <div class="form-group">
+                    <label>LightAI API Base URL</label>
+                    <input type="text" id="lightaiBaseUrl" placeholder="https://api.lightai.woa.com">
+                </div>
+                <div class="form-group">
+                    <label>LightAI API Key</label>
+                    <div style="position:relative;">
+                        <input type="password" id="lightaiApiKey" placeholder="sk-..." style="padding-right:40px;">
+                        <button class="btn-icon" onclick="togglePasswordVisibility('lightaiApiKey', this)" style="position:absolute; right:8px; top:50%; transform:translateY(-50%); font-size:14px;" title="显示/隐藏">👁</button>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>默认生图引擎</label>
+                        <select id="lightaiEngine" style="width:100%; padding:8px; background:var(--bg); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text);">
+                            <option value="gemini">nano-banana pro（推荐）</option>
+                            <option value="gemini2">nano-banana2（更快）</option>
+                            <option value="jimeng">即梦</option>
+                            <option value="midjourney">Midjourney</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>超时时间（秒）</label>
+                        <input type="number" id="lightaiTimeout" placeholder="300" min="60" max="900" value="300">
+                    </div>
+                </div>
+                <div id="lightaiTestResult" style="display:none; padding:10px; border-radius:var(--radius-sm); font-size:13px; margin-top:8px;"></div>
             </div>
-            <div class="modal-footer" style="justify-content:space-between;">
-                <button class="btn" onclick="testLLMConnection()" id="llmTestBtn">🔗 测试连接</button>
+            <div class="modal-footer" style="justify-content:space-between; flex-wrap:wrap; gap:8px;">
+                <div style="display:flex; gap:8px;">
+                    <button class="btn" onclick="testLLMConnection()" id="llmTestBtn">🔗 测试 LLM</button>
+                    <button class="btn" onclick="testLightAIConnection()" id="lightaiTestBtn">🖼️ 测试 LightAI</button>
+                </div>
                 <div>
                     <button class="btn" onclick="closeModal('llmConfigModal')">取消</button>
                     <button class="btn btn-primary" onclick="saveLLMConfig()">保存配置</button>

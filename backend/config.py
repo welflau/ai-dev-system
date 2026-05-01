@@ -53,5 +53,11 @@ class Settings:
     ART_ASSETS_LOCAL_PATH: str = os.getenv("ART_ASSETS_LOCAL_PATH", "")
     ART_ASSETS_AUTO_PUSH: bool = os.getenv("ART_ASSETS_AUTO_PUSH", "false").lower() in ("1", "true", "yes")
 
+    # LightAI 图片生成（ai.lightai.woa.com）
+    LIGHTAI_API_BASE: str = os.getenv("LIGHTAI_API_BASE", "https://api.lightai.woa.com")
+    LIGHTAI_API_KEY: str = os.getenv("LIGHTAI_API_KEY", "")
+    LIGHTAI_IMAGE_ENGINE: str = os.getenv("LIGHTAI_IMAGE_ENGINE", "gemini")   # gemini/gemini2/jimeng/midjourney
+    LIGHTAI_IMAGE_TIMEOUT: int = int(os.getenv("LIGHTAI_IMAGE_TIMEOUT", "300"))  # 轮询最大等待秒
+
 
 settings = Settings()

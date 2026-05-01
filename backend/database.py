@@ -563,6 +563,32 @@ CREATE VIRTUAL TABLE IF NOT EXISTS tickets_fts USING fts5(
     project_id UNINDEXED,
     tokenize="trigram"
 );
+
+-- ============================================================
+-- 图片生成请求队列（ImageAgent 异步处理）
+-- ============================================================
+CREATE TABLE IF NOT EXISTS image_requests (
+    id              TEXT PRIMARY KEY,           -- IMG-xxxxxxxx
+    project_id      TEXT,
+    ticket_id       TEXT,
+    requester       TEXT,                       -- 请求方 Agent 类型
+    prompt          TEXT NOT NULL,              -- 生图描述
+    engine          TEXT DEFAULT 'gemini',      -- gemini / gemini2 / jimeng / midjourney
+    style           TEXT,                       -- illustration / photo / icon / ui-mockup
+    aspect_ratio    TEXT DEFAULT '1:1',         -- 16:9 / 1:1 / 9:16 等
+    image_size      TEXT DEFAULT '2K',
+    callback_doc    TEXT,                       -- 需要替换占位符的文档路径（相对仓库根）
+    callback_tag    TEXT,                       -- [IMG_PENDING:id] 占位符
+    status          TEXT DEFAULT 'pending',     -- pending / processing / done / failed / ascii_fallback
+    lightai_task_id TEXT,                       -- LightAI 异步任务 ID
+    result_url      TEXT,                       -- 生成图片的 URL（临时）
+    result_path     TEXT,                       -- 下载后本地路径（相对资产库根）
+    error_msg       TEXT,
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_image_requests_status ON image_requests(status);
+CREATE INDEX IF NOT EXISTS idx_image_requests_project ON image_requests(project_id);
 """
 
 
