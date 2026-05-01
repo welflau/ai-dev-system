@@ -73,6 +73,7 @@ def _register_builtin_agents():
     from agents.product import ProductAgent
     from agents.planner import PlannerAgent
     from agents.ux import UXAgent
+    from agents.art import ArtAgent
     from agents.architect import ArchitectAgent
     from agents.dev import DevAgent
     from agents.test import TestAgent
@@ -84,6 +85,7 @@ def _register_builtin_agents():
         "ProductAgent": ProductAgent,
         "PlannerAgent": PlannerAgent,
         "UXAgent": UXAgent,
+        "ArtAgent": ArtAgent,
         "ArchitectAgent": ArchitectAgent,
         "DevAgent": DevAgent,
         "TestAgent": TestAgent,

@@ -42,6 +42,9 @@ class TicketStatus(str, Enum):
     # UX 设计阶段（UXAgent）
     UX_DESIGN_IN_PROGRESS = "ux_design_in_progress"        # UX 设计中
     UX_DESIGN_DONE = "ux_design_done"                      # UX 设计完成
+    # 美术设计阶段（ArtAgent）
+    ART_DESIGN_IN_PROGRESS = "art_design_in_progress"      # 美术设计中
+    ART_DESIGN_DONE = "art_design_done"                    # 美术设计完成
     # 架构阶段
     ARCHITECTURE_IN_PROGRESS = "architecture_in_progress"  # 架构中
     ARCHITECTURE_DONE = "architecture_done"                # 架构完成

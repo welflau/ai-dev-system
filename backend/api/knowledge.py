@@ -88,6 +88,7 @@ _FILENAME_SCOPE_MAP = {
     "UX设计.md": "ux",
     "视觉规范.md": "art",
     "asset_manifest.yaml": "art",
+    "design_tokens.json": "art",
     "架构设计.md": "arch",
     "architecture.md": "arch",
     "test-report.md": "test",

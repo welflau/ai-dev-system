@@ -1,0 +1,25 @@
+# 美术设计阶段 —— UX 完成后进行视觉规范设计
+# 产出：Design Token / 组件视觉规范 / 完整 asset_manifest.yaml
+id: art_design
+name: 美术视觉设计
+insert_after: ux_design          # 插在 UX 阶段之后
+priority: 88                     # 低于 ux_design(90)，确保在 UX 之后
+description: 产出 Design Token / 组件视觉规范 / 完整资产清单，技美并行的设计基础
+
+required_traits:
+  any_of:
+    - platform:web
+    - platform:wechat
+    - platform:mobile
+    - platform:desktop
+    - category:game
+
+stage:
+  agent: ArtAgent
+  action: write_art_design
+  trigger_on: ux_design_done
+  success_status: art_design_done
+  description: ArtAgent 产出视觉规范和资产清单
+
+pipeline_view_contrib:
+  group: design

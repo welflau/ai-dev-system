@@ -435,6 +435,7 @@ class TicketOrchestrator:
         in_progress_statuses = [
             TicketStatus.PLANNING_IN_PROGRESS.value,
             TicketStatus.UX_DESIGN_IN_PROGRESS.value,
+            TicketStatus.ART_DESIGN_IN_PROGRESS.value,
             TicketStatus.ARCHITECTURE_IN_PROGRESS.value,
             TicketStatus.DEVELOPMENT_IN_PROGRESS.value,
             TicketStatus.TESTING_IN_PROGRESS.value,
@@ -493,6 +494,7 @@ class TicketOrchestrator:
                 reset_map = {
                     TicketStatus.PLANNING_IN_PROGRESS.value: TicketStatus.PLANNING_DONE.value,
                     TicketStatus.UX_DESIGN_IN_PROGRESS.value: TicketStatus.UX_DESIGN_DONE.value,
+                    TicketStatus.ART_DESIGN_IN_PROGRESS.value: TicketStatus.ART_DESIGN_DONE.value,
                     TicketStatus.ARCHITECTURE_IN_PROGRESS.value: TicketStatus.ARCHITECTURE_DONE.value,
                     TicketStatus.DEVELOPMENT_IN_PROGRESS.value: TicketStatus.DEVELOPMENT_DONE.value,
                     TicketStatus.TESTING_IN_PROGRESS.value: TicketStatus.TESTING_DONE.value,
@@ -1503,6 +1505,30 @@ class TicketOrchestrator:
             project_id, ticket_id, requirement_id,
             agent_name, action, result
         )
+
+        if agent_name == "ArtAgent":
+            new_status = TicketStatus.ART_DESIGN_DONE.value
+            await db.update("tickets", {
+                "status": new_status, "result": result_json, "updated_at": now_iso(),
+            }, "id = ?", (ticket_id,))
+            await db.insert("artifacts", {
+                "id": generate_id("ART"),
+                "project_id": project_id,
+                "requirement_id": requirement_id,
+                "ticket_id": ticket_id,
+                "type": "art_design",
+                "name": f"视觉规范 - {ticket['title']}",
+                "path": None,
+                "content": result.get("art_content", result_json),
+                "metadata": json.dumps({"tokens": result.get("design_tokens", {})}) if result.get("design_tokens") else None,
+                "created_at": now_iso(),
+            })
+            await self._log(
+                project_id, requirement_id, ticket_id, agent_name,
+                action, current_status, new_status,
+                f"视觉规范完成，资产清单已生成",
+            )
+            return
 
         if agent_name == "UXAgent":
             new_status = TicketStatus.UX_DESIGN_DONE.value
