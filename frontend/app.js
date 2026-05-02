@@ -8019,6 +8019,16 @@ function _loadGlobalChatFromStorage() {
         const container = document.getElementById('chatMessages');
         if (container) {
             container.innerHTML = data.dom;
+            // 恢复后禁用所有历史确认卡片的按钮（防止用户误点旧卡再次创建）
+            container.querySelectorAll('.chat-confirm-card').forEach(card => {
+                if (!card.dataset.confirming) {
+                    card.dataset.confirming = '1';
+                    const btns = card.querySelector('.confirm-req-btns');
+                    if (btns) {
+                        btns.innerHTML = '<span style="font-size:11px;color:var(--text-muted);">（历史记录，已失效）</span>';
+                    }
+                }
+            });
             scrollChatToBottom();
         }
         return true;
