@@ -9085,6 +9085,8 @@ async function doSaveDocToRepo(cardId) {
 async function doConfirmRequirement(cardId) {
     const card = document.getElementById(cardId);
     if (!card || !currentProjectId) return;
+    if (card.dataset.confirming === '1') return;
+    card.dataset.confirming = '1';
     const title = card.dataset.title || '';
     const description = card.dataset.description || '';
     const priority = card.dataset.priority || 'medium';
@@ -9118,6 +9120,8 @@ async function doConfirmRequirement(cardId) {
 async function doConfirmRequirementsBatch(cardId) {
     const card = document.getElementById(cardId);
     if (!card || !currentProjectId) return;
+    if (card.dataset.confirming === '1') return;
+    card.dataset.confirming = '1';
 
     const reqs = JSON.parse(card.dataset.requirements || '[]');
     const checked = [...card.querySelectorAll('input[type=checkbox]:checked')].map(cb => parseInt(cb.dataset.idx));
@@ -9213,6 +9217,9 @@ async function loadProjectAssemblyPreview(cardId, traits) {
 async function doConfirmProject(cardId) {
     const card = document.getElementById(cardId);
     if (!card) return;
+    // 防止重复点击：标记后立即禁用所有按钮
+    if (card.dataset.confirming === '1') return;
+    card.dataset.confirming = '1';
     const name = card.dataset.name || '';
     const description = card.dataset.description || '';
     const tech_stack = card.dataset.techStack || '';
