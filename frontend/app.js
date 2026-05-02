@@ -7672,8 +7672,10 @@ let chatHistory = [];               // 全局聊天历史 [{role, content}]
 let chatCurrentTicketId = null;     // Job 模式选中的工单 ID
 let chatCurrentTicketTitle = '';    // Job 模式选中的工单标题
 let chatSending = false;
-let _cardSeq = 0;  // 全局单调递增，保证所有 action 卡片 ID 唯一
-function _nextCardId(prefix) { return prefix + '_' + (++_cardSeq); }
+let _cardSeq = 0;
+// session 前缀：每次页面加载唯一，防止 localStorage 恢复的旧卡片 ID 与新卡片冲突
+const _SESSION_PREFIX = Date.now().toString(36);
+function _nextCardId(prefix) { return `${_SESSION_PREFIX}_${prefix}_${++_cardSeq}`; }
 let chatPendingImages = [];         // 待发送的图片 base64 data URL 列表
 let chatPendingDocs = [];           // 待发送的文档 [{filename, text, chars}]
 
