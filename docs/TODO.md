@@ -1,6 +1,40 @@
 # AI Dev System — 待办清单
 
-> 最后更新: 2026-04-28
+> 最后更新: 2026-05-02
+
+---
+
+## 🎯 新增待办
+
+### F. AI 助手多会话管理（~2 天，P1）
+
+**来源**：用户需求，参考 CodeBuddy/Cursor 的对话历史 UI 设计。
+
+**问题**：全局 AI 助手和项目内 AI 助手只有单一会话，无法新建对话、查看历史记录。
+
+**方案**：
+
+**UI 交互**（参考截图）：
+- 顶栏右侧加两个按钮：`+`（新建对话）和 `🕐`（历史记录）
+- 点 `+` → 清空当前对话，开始新会话
+- 点 `🕐` → 打开历史对话面板（侧拉或展开），按时间分组（今天/本周/更早）
+- 每条历史对话显示首条消息摘要，可点击切换，支持删除/全部删除
+- 适用范围：**全局 AI 助手** 和**项目内 AI 助手**均支持
+
+**后端变更**：
+- 新增 `chat_sessions` 表（id / project_id / title / created_at / updated_at）
+- `chat_messages` 加 `session_id` 列，关联所属会话
+- 新增 API：
+  - `GET  /api/chat/sessions?project_id=`（列出会话）
+  - `POST /api/chat/sessions`（新建会话）
+  - `DELETE /api/chat/sessions/{id}`（删除会话）
+  - `GET  /api/chat/sessions/{id}/messages`（获取会话消息）
+- 现有 `chat_messages` 默认 `session_id=default`（向后兼容）
+
+**前端变更**：
+- AI 助手面板顶栏加 `+` 和历史图标按钮
+- 历史记录面板（类 CodeBuddy 样式）：按日期分组、首条消息作标题、支持单条删除和全部清空
+- 全局聊天 localStorage 改为按 session_id 分别存储
 
 ---
 
