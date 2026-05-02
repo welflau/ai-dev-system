@@ -3309,7 +3309,11 @@ function renderActionStateSummary(action) {
         const atStr = result.at ? `（${escapeHtml(_ueFwRelTime(result.at))}）` : '';
         summary = `模板 <code>${tmpl}</code> → <code>${pname}</code> · commit <code>${commit}</code>${atStr}`;
     } else if (action.type === 'confirm_project' && isExec) {
-        summary = `项目 <strong>${escapeHtml(action.name || '?')}</strong> 已创建`;
+        const pid = result.project_id || action._result?.project_id || '';
+        const pname = escapeHtml(result.name || action.name || '?');
+        const atStr = result.at ? ` · ${escapeHtml(result.at.slice(0,16).replace('T',' '))}` : '';
+        summary = `项目 <strong>${pname}</strong> 已创建${atStr}`
+            + (pid ? ` &nbsp;<span class="action-link" style="font-size:12px;" onclick="showProjectDetail('${escapeHtml(pid)}')">进入项目 →</span>` : '');
     } else if (action.type === 'confirm_requirement' && isExec) {
         summary = `需求 <strong>${escapeHtml(action.title || '?')}</strong> 已创建`;
     } else if (action.type === 'confirm_bug' && isExec) {
@@ -9230,6 +9234,17 @@ async function doConfirmProject(cardId) {
             btns.innerHTML = `<span class="action-link" onclick="showProjectDetail('${escapeHtml(result.project_id || '')}')">进入项目 →</span>`;
         }
         showToast(`项目「${result.name || name}」已创建`, 'success');
+
+        // 持久化 action_state（刷新后仍显示「进入项目」链接）
+        const msgId = card.dataset.messageId || '';
+        if (msgId) {
+            patchActionState(msgId, 'executed', {
+                project_id: result.project_id || '',
+                name: result.name || name,
+                at: new Date().toISOString(),
+            });
+        }
+
         // 刷新项目列表 + 延迟跳转详情
         if (typeof loadProjects === 'function') loadProjects();
         setTimeout(() => {
