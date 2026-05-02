@@ -7997,7 +7997,23 @@ const _GLOBAL_CHAT_STORAGE_KEY = 'ai_dev_global_chat_v1';
 
 function _saveGlobalChatToStorage() {
     if (currentProjectId) return;
-    const dom = document.getElementById('chatMessages')?.innerHTML || '';
+    // 保存前：把尚未使用的确认卡片标记为 stale，恢复后禁用其按钮
+    const container = document.getElementById('chatMessages');
+    if (container) {
+        container.querySelectorAll('.chat-confirm-card').forEach(card => {
+            // confirming=1 表示已点击（执行中/已执行），不标记；其余的标记为 stale
+            if (card.dataset.confirming !== '1') {
+                card.dataset.stale = '1';
+            }
+        });
+    }
+    const dom = container?.innerHTML || '';
+    // 保存后把 stale 标记清掉，不影响当前页面
+    if (container) {
+        container.querySelectorAll('.chat-confirm-card[data-stale="1"]').forEach(card => {
+            card.removeAttribute('data-stale');
+        });
+    }
     try {
         localStorage.setItem(_GLOBAL_CHAT_STORAGE_KEY, JSON.stringify({
             history: chatHistory,
@@ -8019,15 +8035,11 @@ function _loadGlobalChatFromStorage() {
         const container = document.getElementById('chatMessages');
         if (container) {
             container.innerHTML = data.dom;
-            // 恢复后禁用所有历史确认卡片的按钮（防止用户误点旧卡再次创建）
-            container.querySelectorAll('.chat-confirm-card').forEach(card => {
-                if (!card.dataset.confirming) {
-                    card.dataset.confirming = '1';
-                    const btns = card.querySelector('.confirm-req-btns');
-                    if (btns) {
-                        btns.innerHTML = '<span style="font-size:11px;color:var(--text-muted);">（历史记录，已失效）</span>';
-                    }
-                }
+            // 恢复时，已标记为 stale 的确认卡片显示失效提示（在保存时已处理）
+            container.querySelectorAll('.chat-confirm-card[data-stale="1"]').forEach(card => {
+                card.dataset.confirming = '1';
+                const btns = card.querySelector('.confirm-req-btns');
+                if (btns) btns.innerHTML = '<span style="font-size:11px;color:var(--text-muted);">（刷新后已失效，如需重建请重新告诉 AI）</span>';
             });
             scrollChatToBottom();
         }
