@@ -1,0 +1,43 @@
+# HTML 原型验证阶段 —— 进引擎开发前先用 HTML 验证核心循环
+# 适用：游戏项目 / 复杂 UI 功能
+#
+# 流程：
+#   planning_done → HTML原型开发(DevAgent) → SelfTest验证 → architecture_done(进引擎)
+#   验证失败 → fix_issues 修 HTML → 重新验证
+#
+# 价值：1-2天 HTML 原型验证，避免在引擎里做出错误方向后浪费 1-2 周
+
+id: html_prototype
+name: HTML 原型验证
+insert_after: planning       # 策划完成后，在 UX 设计之前先验证核心循环
+priority: 92                 # 高于 ux_design(90)，先验证再做交互设计
+description: 生成 HTML 单文件原型，浏览器验证核心玩法/交互循环，通过后进入 UX+美术+架构
+
+required_traits:
+  any_of:
+    - category:game
+    - prototype:html           # 非游戏但需要原型验证的项目可手动加此 trait
+
+stage:
+  agent: DevAgent
+  action: write_html_prototype
+  trigger_on: planning_done
+  success_status: html_prototype_done
+  reject_status: html_prototype_failed
+  reject_goto: html_prototype_fix
+  description: DevAgent 生成 HTML 单文件原型，验证核心循环
+  config:
+    read_existing_code: false   # 原型阶段不看已有代码，保持思路清晰
+    max_tokens: 6000
+
+pipeline_view_contrib:
+  group: prototype
+  create_if_missing:
+    name: 原型验证
+    icon: 🌐
+    insert_after: planning
+
+# 原型修复分支（HTML 验证失败时）
+stage_overrides:
+  - id: html_prototype_fix
+    branch_only: true

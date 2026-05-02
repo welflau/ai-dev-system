@@ -6803,6 +6803,7 @@ function getArtifactIcon(type) {
     const icons = {
         prd: '📋', architecture: '🏗️', code: '💻', test: '🧪', deploy_config: '🚀', screenshot: '🖼️',
         ux_design: '🎨', art_design: '🖼️', design_tokens: '🎨',
+        html_prototype: '🌐', report: '📊',
     };
     return icons[type] || '📦';
 }

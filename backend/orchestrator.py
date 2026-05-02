@@ -433,6 +433,7 @@ class TicketOrchestrator:
 
         # 2. 也扫描"进行中"但可能是僵尸的工单（被打回后卡住的）
         in_progress_statuses = [
+            TicketStatus.HTML_PROTOTYPE_IN_PROGRESS.value,
             TicketStatus.PLANNING_IN_PROGRESS.value,
             TicketStatus.UX_DESIGN_IN_PROGRESS.value,
             TicketStatus.ART_DESIGN_IN_PROGRESS.value,
@@ -492,6 +493,7 @@ class TicketOrchestrator:
                             ticket_id[:12], t["title"][:20], status, age)
                 # 僵尸工单：重置到对应的"完成"状态，让轮询器正常拾取
                 reset_map = {
+                    TicketStatus.HTML_PROTOTYPE_IN_PROGRESS.value: TicketStatus.HTML_PROTOTYPE_DONE.value,
                     TicketStatus.PLANNING_IN_PROGRESS.value: TicketStatus.PLANNING_DONE.value,
                     TicketStatus.UX_DESIGN_IN_PROGRESS.value: TicketStatus.UX_DESIGN_DONE.value,
                     TicketStatus.ART_DESIGN_IN_PROGRESS.value: TicketStatus.ART_DESIGN_DONE.value,
@@ -1513,6 +1515,26 @@ class TicketOrchestrator:
             project_id, ticket_id, requirement_id,
             agent_name, action, result
         )
+
+        if agent_name == "DevAgent" and action == "write_html_prototype":
+            new_status = TicketStatus.HTML_PROTOTYPE_DONE.value
+            await db.update("tickets", {
+                "status": new_status, "result": result_json, "updated_at": now_iso(),
+            }, "id = ?", (ticket_id,))
+            await db.insert("artifacts", {
+                "id": generate_id("ART"),
+                "project_id": project_id, "requirement_id": requirement_id,
+                "ticket_id": ticket_id, "type": "html_prototype",
+                "name": f"HTML原型 - {ticket['title']}",
+                "path": None, "content": result.get("html_content", result_json)[:2000],
+                "metadata": None, "created_at": now_iso(),
+            })
+            await self._log(
+                project_id, requirement_id, ticket_id, agent_name,
+                action, current_status, new_status,
+                f"HTML 原型已生成，核心循环：{result.get('core_mechanics','')[:80]}",
+            )
+            return
 
         if agent_name == "ArtAgent":
             new_status = TicketStatus.ART_DESIGN_DONE.value

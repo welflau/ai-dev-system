@@ -36,6 +36,10 @@ class RequirementStatus(str, Enum):
 class TicketStatus(str, Enum):
     # 初始
     PENDING = "pending"                                    # 待启动
+    # HTML 原型阶段
+    HTML_PROTOTYPE_IN_PROGRESS = "html_prototype_in_progress"  # HTML原型开发中
+    HTML_PROTOTYPE_DONE = "html_prototype_done"                # HTML原型完成
+    HTML_PROTOTYPE_FAILED = "html_prototype_failed"            # HTML原型验证失败
     # 策划阶段（PlannerAgent）
     PLANNING_IN_PROGRESS = "planning_in_progress"          # 策划中
     PLANNING_DONE = "planning_done"                        # 策划完成
@@ -369,6 +373,10 @@ BOARD_COLUMNS = {
 
 # 状态 → 中文展示名
 STATUS_LABELS = {
+    # 工单状态 — HTML 原型阶段
+    "html_prototype_in_progress": "🌐 HTML原型开发中",
+    "html_prototype_done": "HTML原型完成",
+    "html_prototype_failed": "HTML原型失败",
     # 工单状态 — 新 Agent 阶段
     "planning_in_progress": "策划中",
     "planning_done": "策划完成",
