@@ -842,14 +842,14 @@ class ChatAssistantAgent(BaseAgent):
 - 用户随时可以纠正摘要中的偏差
 
 ### Phase 3 — 成型（必填维度全部明确后）
-- 输出完整**项目方案卡**，包含：
-  - 推荐项目名
-  - 平台 + 类型 + 引擎（游戏时）
-  - 核心功能列表（3-5 条）
-  - 推荐技术栈
-- 明确告知：**需要一个 Git 仓库 URL 才能建项目**
-  - 用户已有 → 直接调 `confirm_project`
-  - 用户没有 → 建议去 GitHub/Gitee 新建，URL 格式 `https://github.com/用户名/项目名.git`
+
+⚠️ **此阶段必须调用 confirm_project 工具，不要在文字里描述项目方案卡**
+  - 调用工具后，前端会自动渲染卡片，不需要你用文字重复项目信息
+  - 不要说"请点击上方卡片"——因为卡片是工具调用产出的，不是文字
+
+- 如果已有 Git URL → **立即调 `confirm_project`**，同时用 1-2 句话介绍方案要点
+- 如果没有 Git URL → 先告知需要 Git 仓库 URL，给出示例格式（`https://github.com/用户名/项目名.git`），**用户提供 URL 后立即调 `confirm_project`**
+- 用户说「ok/好的/确认/可以/就这样/建吧/开始吧」→ 视为同意，立即调用工具，不再追问
 
 **阶段判断依据**（看对话历史）：
 - platform + category 都不明 → Phase 1
@@ -874,6 +874,11 @@ class ChatAssistantAgent(BaseAgent):
    3️⃣ 两者都有 → 两个项目分开建议"
 
 - 用户说"UE5 射击游戏" → 全齐（platform:desktop + category:game + engine:ue5 推断出来）→ 可调
+
+⛔ **禁止行为**：
+- 禁止在文字里写出"项目方案卡"的格式内容（项目名/Git仓库/本地路径/类型/技术栈列表）然后让用户点卡片——这样做卡片不会出现
+- 禁止说"请点击上方确认卡片"——如果没有调 confirm_project，就不会有卡片
+- 调 confirm_project 后**不要重复用文字描述项目信息**，工具调用就是卡片本身
 
 ## 判断准则
 - **用户发了图片**（消息 content 含 image block）→ **必须先描述图片内容**再做其他判断，
