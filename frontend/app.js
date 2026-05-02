@@ -7997,27 +7997,21 @@ const _GLOBAL_CHAT_STORAGE_KEY = 'ai_dev_global_chat_v1';
 
 function _saveGlobalChatToStorage() {
     if (currentProjectId) return;
-    // 保存前：把尚未使用的确认卡片标记为 stale，恢复后禁用其按钮
     const container = document.getElementById('chatMessages');
-    if (container) {
-        container.querySelectorAll('.chat-confirm-card').forEach(card => {
-            // confirming=1 表示已点击（执行中/已执行），不标记；其余的标记为 stale
-            if (card.dataset.confirming !== '1') {
-                card.dataset.stale = '1';
-            }
-        });
-    }
-    const dom = container?.innerHTML || '';
-    // 保存后把 stale 标记清掉，不影响当前页面
-    if (container) {
-        container.querySelectorAll('.chat-confirm-card[data-stale="1"]').forEach(card => {
-            card.removeAttribute('data-stale');
-        });
-    }
+    if (!container) return;
+    // clone DOM，移除未执行的确认卡片按钮（不修改真实DOM）
+    const clone = container.cloneNode(true);
+    clone.querySelectorAll('.chat-confirm-card').forEach(card => {
+        if (card.dataset.confirming !== '1') {
+            // 未使用的卡片：保留卡片内容供查阅，但移除按钮避免误点
+            const btns = card.querySelector('.confirm-req-btns');
+            if (btns) btns.innerHTML = '<span style="font-size:11px;color:var(--text-muted);">（刷新后已失效，如需重建请重新告诉 AI）</span>';
+        }
+    });
     try {
         localStorage.setItem(_GLOBAL_CHAT_STORAGE_KEY, JSON.stringify({
             history: chatHistory,
-            dom,
+            dom: clone.innerHTML,
             savedAt: Date.now(),
         }));
     } catch (_) {}
@@ -8035,12 +8029,7 @@ function _loadGlobalChatFromStorage() {
         const container = document.getElementById('chatMessages');
         if (container) {
             container.innerHTML = data.dom;
-            // 恢复时，已标记为 stale 的确认卡片显示失效提示（在保存时已处理）
-            container.querySelectorAll('.chat-confirm-card[data-stale="1"]').forEach(card => {
-                card.dataset.confirming = '1';
-                const btns = card.querySelector('.confirm-req-btns');
-                if (btns) btns.innerHTML = '<span style="font-size:11px;color:var(--text-muted);">（刷新后已失效，如需重建请重新告诉 AI）</span>';
-            });
+            // 恢复的卡片按钮已在保存时替换为失效提示，此处无需额外处理
             scrollChatToBottom();
         }
         return true;
