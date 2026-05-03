@@ -156,9 +156,7 @@ class UECIStrategy(CIStrategy):
         self, build_id: str, project_id: str, build_type: str, kwargs: Dict
     ):
         """在后台异步跑构建 + 更新 ci_builds 状态"""
-        import sys, time, json, pathlib
-        _dbg = pathlib.Path(__file__).parent.parent.parent / "run_build_called.txt"
-        _dbg.write_text(f"called: build_id={build_id} build_type={build_type}\nfile={__file__}\n", encoding="utf-8")
+        import time, json
         from models import CIBuildStatus
         from database import db
         from utils import now_iso
@@ -263,7 +261,11 @@ class UECIStrategy(CIStrategy):
             )
             err_msgs = data.get("errors") or []
             # 末尾 8KB stdout 存进 raw_output_tail，供前端"详情"弹窗显示
-            raw_tail = (data.get("raw_tail") or data.get("partial_output") or "")[-8192:]
+            _tail_raw = (data.get("raw_tail") or data.get("partial_output") or "")[-8192:]
+            # 在行边界截断，避免显示时末行被切断
+            if len(_tail_raw) == 8192 and "\n" in _tail_raw:
+                _tail_raw = _tail_raw[_tail_raw.index("\n") + 1:]
+            raw_tail = _tail_raw
             raw_head = (data.get("raw_head") or "")[:2048]
             raw_output = (raw_head + "\n...\n" + raw_tail).strip() if raw_head and raw_tail else (raw_head or raw_tail)
             # error_message：优先编译错误列表，fallback 到 action message（如"游戏模块未编译"）
@@ -281,14 +283,6 @@ class UECIStrategy(CIStrategy):
                     saved_err_msg = f"SAVE_ERR:{type(_se).__name__}:{_se}"[:500]
             else:
                 saved_err_msg = None
-            # debug: 把诊断信息写进 build_log
-            logs.append({"_debug": {
-                "result_message": getattr(result, 'message', 'NO_RESULT'),
-                "saved_err_msg": saved_err_msg,
-                "data_status": data.get("status"),
-                "err_msgs_len": len(err_msgs),
-                "ci_status": status,
-            }})
             await db.update("ci_builds", {
                 "status": status,
                 "build_log": json.dumps(logs, ensure_ascii=False),

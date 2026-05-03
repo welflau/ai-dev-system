@@ -220,7 +220,6 @@ class UEPlaytestAction(ActionBase):
         return "调 UnrealEditor-Cmd.exe 跑 Automation Framework 测试，产出结构化测试结果"
 
     async def run(self, context: Dict[str, Any]) -> ActionResult:
-        logger.info("[MARKER_V3_POPEN] ue_playtest run() entered, file=%s", __file__)
         sop_cfg = context.get("sop_config") or {}
         timeout_seconds = int(
             context.get("timeout_seconds")
