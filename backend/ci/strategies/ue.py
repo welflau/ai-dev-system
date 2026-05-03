@@ -156,8 +156,9 @@ class UECIStrategy(CIStrategy):
         self, build_id: str, project_id: str, build_type: str, kwargs: Dict
     ):
         """在后台异步跑构建 + 更新 ci_builds 状态"""
-        import time
-        import json
+        import sys, time, json, pathlib
+        _dbg = pathlib.Path(__file__).parent.parent.parent / "run_build_called.txt"
+        _dbg.write_text(f"called: build_id={build_id} build_type={build_type}\nfile={__file__}\n", encoding="utf-8")
         from models import CIBuildStatus
         from database import db
         from utils import now_iso
@@ -220,7 +221,7 @@ class UECIStrategy(CIStrategy):
                     **kwargs,
                 })
                 data = result.data or {}
-                logs.append({"step": "playtest", "passed": data.get("status") == "success"})
+                logs.append({"step": "playtest", "passed": data.get("status") == "success", "v": "v2"})
 
             elif build_type == "take_screenshot":
                 from actions.ue_screenshot import UEScreenshotAction
@@ -265,13 +266,33 @@ class UECIStrategy(CIStrategy):
             raw_tail = (data.get("raw_tail") or data.get("partial_output") or "")[-8192:]
             raw_head = (data.get("raw_head") or "")[:2048]
             raw_output = (raw_head + "\n...\n" + raw_tail).strip() if raw_head and raw_tail else (raw_head or raw_tail)
+            # error_message：优先编译错误列表，fallback 到 action message（如"游戏模块未编译"）
+            if err_msgs:
+                saved_err_msg = "; ".join(
+                    f"{(e.get('file') or '?').split(chr(92))[-1]}:{e.get('line', '?')} {e.get('code', '')} {(e.get('msg') or '')[:80]}"
+                    for e in err_msgs[:3]
+                )[:500]
+            elif status == CIBuildStatus.FAILED.value:
+                try:
+                    _msg = result.message if hasattr(result, 'message') else ""
+                    _fb  = f"status={data.get('status')} exit={data.get('exit_code')}"
+                    saved_err_msg = (_msg or _fb)[:500]
+                except Exception as _se:
+                    saved_err_msg = f"SAVE_ERR:{type(_se).__name__}:{_se}"[:500]
+            else:
+                saved_err_msg = None
+            # debug: 把诊断信息写进 build_log
+            logs.append({"_debug": {
+                "result_message": getattr(result, 'message', 'NO_RESULT'),
+                "saved_err_msg": saved_err_msg,
+                "data_status": data.get("status"),
+                "err_msgs_len": len(err_msgs),
+                "ci_status": status,
+            }})
             await db.update("ci_builds", {
                 "status": status,
                 "build_log": json.dumps(logs, ensure_ascii=False),
-                "error_message": "; ".join(
-                    f"{(e.get('file') or '?').split(chr(92))[-1]}:{e.get('line', '?')} {e.get('code', '')} {(e.get('msg') or '')[:80]}"
-                    for e in err_msgs[:3]
-                )[:500] if status == CIBuildStatus.FAILED.value else None,
+                "error_message": saved_err_msg,
                 "raw_output_tail": raw_output[:10240] if raw_output else None,
                 "completed_at": now_iso(),
             }, "id = ?", (build_id,))

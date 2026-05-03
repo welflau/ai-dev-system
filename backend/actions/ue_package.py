@@ -227,53 +227,79 @@ class UEPackageAction(ActionBase):
         cmd_str = " ".join(f'"{c}"' if " " in c else c for c in cmd)
         await _log(f"[package] cmd: {cmd_str}")
 
-        # 执行
+        # 执行（subprocess.Popen + 线程队列，与 ue_compile_check 保持一致）
+        import subprocess as _subprocess
+        import threading as _threading
+
+        progress_cb = context.get("_ticket_progress_cb")
         t0 = time.time()
+        collected: List[str] = []
+        _sentinel = object()
+
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
+            proc = _subprocess.Popen(
+                cmd,
+                stdin=_subprocess.DEVNULL,
+                stdout=_subprocess.PIPE,
+                stderr=_subprocess.STDOUT,
+                encoding="utf-8",
+                errors="replace",
             )
-            await _log(f"[package] subprocess pid={proc.pid}, 开始读 stdout...")
         except FileNotFoundError:
             return await _err_log(f"启动 RunUAT 失败: {run_uat} 不存在或权限不足")
         except Exception as e:
-            return await _err_log(f"启动 RunUAT 异常: {e}")
+            logger.error("Package Popen Exception type=%s repr=%r", type(e).__name__, e, exc_info=True)
+            return await _err_log(f"启动 RunUAT 异常: {type(e).__name__}: {e!r}")
 
-        collected: List[str] = []
-        # v0.19.x 工单面板进度区：orchestrator 注入的心跳 callback（可空）
-        progress_cb = context.get("_ticket_progress_cb")
+        await _log(f"[package] subprocess pid={proc.pid}, 开始读 stdout (thread mode)...")
 
-        async def _pump():
-            assert proc.stdout is not None
+        loop = asyncio.get_event_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+
+        def _reader_thread():
+            try:
+                assert proc.stdout is not None
+                for raw_line in proc.stdout:
+                    line = raw_line.rstrip("\r\n")
+                    loop.call_soon_threadsafe(queue.put_nowait, line)
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, _sentinel)
+
+        reader = _threading.Thread(target=_reader_thread, daemon=True)
+        reader.start()
+
+        timed_out = False
+        try:
+            deadline = t0 + timeout_seconds
             while True:
-                raw = await proc.stdout.readline()
-                if not raw:
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    timed_out = True
                     break
-                line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
-                collected.append(line)
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=min(remaining, 5.0))
+                except asyncio.TimeoutError:
+                    continue
+                if item is _sentinel:
+                    break
+                collected.append(item)
                 if log_cb is not None:
                     try:
-                        await log_cb(line)
+                        await log_cb(item)
                     except Exception:
                         pass
                 if progress_cb is not None:
                     try:
-                        await progress_cb(line)
+                        await progress_cb(item)
                     except Exception:
                         pass
+        finally:
+            reader.join(timeout=2)
 
-        try:
-            await asyncio.wait_for(
-                asyncio.gather(_pump(), proc.wait()),
-                timeout=timeout_seconds,
-            )
-        except asyncio.TimeoutError:
+        if timed_out:
             try:
                 proc.kill()
-                await proc.wait()
+                proc.wait(timeout=5)
             except Exception:
                 pass
             duration_ms = int((time.time() - t0) * 1000)
@@ -287,6 +313,7 @@ class UEPackageAction(ActionBase):
                 },
             )
 
+        proc.wait(timeout=5)
         duration_ms = int((time.time() - t0) * 1000)
         text = "\n".join(collected)
         exit_code = proc.returncode if proc.returncode is not None else -1

@@ -719,5 +719,6 @@ if __name__ == "__main__":
         port=settings.PORT,
         reload=settings.DEBUG,
         reload_dirs=[str(Path(__file__).parent)],
+        reload_includes=["**/*.py"],
     )
 

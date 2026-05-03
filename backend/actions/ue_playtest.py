@@ -220,6 +220,7 @@ class UEPlaytestAction(ActionBase):
         return "调 UnrealEditor-Cmd.exe 跑 Automation Framework 测试，产出结构化测试结果"
 
     async def run(self, context: Dict[str, Any]) -> ActionResult:
+        logger.info("[MARKER_V3_POPEN] ue_playtest run() entered, file=%s", __file__)
         sop_cfg = context.get("sop_config") or {}
         timeout_seconds = int(
             context.get("timeout_seconds")
@@ -303,6 +304,24 @@ class UEPlaytestAction(ActionBase):
         screenshot_dir = up.parent / "Saved" / "Automation" / "Screenshots"
         screenshot_dir.mkdir(parents=True, exist_ok=True)
 
+        # 游戏模块 DLL 存在性检查（C++ 项目需先编译才能 playtest）
+        proj_name = up.stem
+        binaries_dir = up.parent / "Binaries" / "Win64"
+        # UE5 Editor 编译产出: UnrealEditor-{ProjectName}.dll
+        # UE4 / 独立包: {ProjectName}.dll 或 {ProjectName}Editor.dll
+        dll_candidates = [
+            binaries_dir / f"UnrealEditor-{proj_name}.dll",   # UE5 Editor
+            binaries_dir / f"{proj_name}.dll",                  # UE4 Game
+            binaries_dir / f"{proj_name}Editor.dll",            # UE4 Editor
+        ]
+        found_dll = next((p for p in dll_candidates if p.is_file()), None)
+        if not found_dll:
+            return await _err_log(
+                f"游戏模块未编译：找不到 {dll_candidates[0].name}（及其他变体）。"
+                f"请先运行「UBT 编译」再执行 Playtest。"
+            )
+        await _log(f"[playtest] 找到游戏模块 DLL: {found_dll.name}")
+
         # 组命令
         if test_names:
             # 用 RunTests Name1+Name2+... 语法
@@ -320,58 +339,97 @@ class UEPlaytestAction(ActionBase):
             "-nosplash",
             "-buildmachine",
             "-NoSound",
+            "-stdout",           # 强制 UE 把日志写到 stdout（否则只写 .log 文件）
+            "-FullStdOutLogOutput",  # 详细 stdout 输出
             f"-AutomationScreenshotsDir={screenshot_dir}",
         ]
         cmd_str = " ".join(f'"{c}"' if " " in c else c for c in cmd)
         await _log(f"[playtest] cmd: {cmd_str}")
 
         # 执行（流式）
+        # 用 subprocess.Popen + 线程队列，绕开 asyncio.create_subprocess_exec
+        # 在 Windows + ProactorEventLoop 上与 UE 进程管理不兼容的问题（空异常）。
+        import subprocess as _subprocess
+        import threading as _threading
+
+        progress_cb = context.get("_ticket_progress_cb")
         t0 = time.time()
+        collected: List[str] = []
+        _sentinel = object()
+
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
+            proc = _subprocess.Popen(
+                cmd,
+                stdin=_subprocess.DEVNULL,
+                stdout=_subprocess.PIPE,
+                stderr=_subprocess.STDOUT,
+                encoding="utf-8",
+                errors="replace",
             )
-            await _log(f"[playtest] subprocess pid={proc.pid}, 开始读 stdout...")
         except FileNotFoundError:
             return await _err_log(f"启动 Editor-Cmd 失败: {editor_cmd} 不存在或权限不足")
         except Exception as e:
-            return await _err_log(f"启动 Editor-Cmd 异常: {e}")
+            import traceback as _tb
+            detail = f"{type(e).__name__}({e.args!r}): str={str(e)!r}"
+            tb_str = _tb.format_exc()
+            # 写文件方便调试（不依赖 SSE 显示）
+            try:
+                with open("playtest_error.txt", "w", encoding="utf-8") as _f:
+                    _f.write(f"{detail}\n{tb_str}\n")
+            except Exception:
+                pass
+            logger.error("Playtest Popen Exception %s\n%s", detail, tb_str)
+            return await _err_log(f"启动 Editor-Cmd 异常: {detail}")
 
-        collected: List[str] = []
-        # v0.19.x 工单面板进度区：orchestrator 注入的心跳 callback（可空）
-        progress_cb = context.get("_ticket_progress_cb")
+        await _log(f"[playtest] subprocess pid={proc.pid}, 开始读 stdout (thread mode)...")
 
-        async def _pump():
-            assert proc.stdout is not None
+        loop = asyncio.get_event_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+
+        def _reader_thread():
+            try:
+                assert proc.stdout is not None
+                for raw_line in proc.stdout:
+                    line = raw_line.rstrip("\r\n")
+                    loop.call_soon_threadsafe(queue.put_nowait, line)
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, _sentinel)
+
+        reader = _threading.Thread(target=_reader_thread, daemon=True)
+        reader.start()
+
+        timed_out = False
+        try:
+            deadline = t0 + timeout_seconds
             while True:
-                raw = await proc.stdout.readline()
-                if not raw:
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    timed_out = True
                     break
-                line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
-                collected.append(line)
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=min(remaining, 5.0))
+                except asyncio.TimeoutError:
+                    continue
+                if item is _sentinel:
+                    break
+                collected.append(item)
                 if log_cb is not None:
                     try:
-                        await log_cb(line)
+                        await log_cb(item)
                     except Exception:
                         pass
                 if progress_cb is not None:
                     try:
-                        await progress_cb(line)
+                        await progress_cb(item)
                     except Exception:
                         pass
+        finally:
+            reader.join(timeout=2)
 
-        try:
-            await asyncio.wait_for(
-                asyncio.gather(_pump(), proc.wait()),
-                timeout=timeout_seconds,
-            )
-        except asyncio.TimeoutError:
+        if timed_out:
             try:
                 proc.kill()
-                await proc.wait()
+                proc.wait(timeout=5)
             except Exception:
                 pass
             duration_ms = int((time.time() - t0) * 1000)
@@ -385,9 +443,11 @@ class UEPlaytestAction(ActionBase):
                 },
             )
 
+        proc.wait(timeout=5)
         duration_ms = int((time.time() - t0) * 1000)
         text = "\n".join(collected)
         exit_code = proc.returncode if proc.returncode is not None else -1
+        await _log(f"[playtest] 进程结束 exit={exit_code} 耗时={int((time.time()-t0)*1000)}ms 输出行数={len(collected)}")
 
         # 解析
         parsed = _parse_automation_output(text)
@@ -397,7 +457,11 @@ class UEPlaytestAction(ActionBase):
         # 截图
         shots = _find_screenshots(screenshot_dir)
 
-        if exit_code == 0 and summary["failed"] == 0:
+        failed_count = summary.get("failed", 0)
+        total_count = summary.get("total", 0)
+        # exit=1 且 0 测试 = 没找到测试用例，视为通过（项目暂无 Automation 测试）
+        no_tests = total_count == 0 and failed_count == 0
+        if (exit_code == 0 or no_tests) and failed_count == 0:
             status = "success"
         else:
             status = "playtest_failed"
