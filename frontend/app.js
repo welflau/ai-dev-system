@@ -15,6 +15,9 @@ let eventSource = null;
 let _globalChatHistory = [];
 let _globalChatDom = '';
 
+// v0.20 多会话管理
+let _currentChatSessionId = null;   // 当前会话 ID，null 表示未初始化
+
 // ==================== 工具函数 ====================
 
 /**
@@ -562,6 +565,11 @@ function _updateChatPanelForContext() {
             _thinkingESrc.close(); _thinkingESrc = null;
         }
     }
+
+    // v0.20：切换 context 时重置当前会话（新 context 会懒加载最近会话）
+    _currentChatSessionId = null;
+    const histPanel = document.getElementById('chatHistoryPanel');
+    if (histPanel) histPanel.style.display = 'none';
 
     if (currentProjectId) {
         // 进入项目：把全局聊天状态存起来（确保不含 typing 气泡）
@@ -8038,18 +8046,191 @@ function _loadGlobalChatFromStorage() {
     } catch (_) { return false; }
 }
 
+// ==================== v0.20 多会话管理 ====================
+
+/** 获取当前 session API 前缀 */
+function _sessionApiBase() {
+    return currentProjectId
+        ? `/projects/${currentProjectId}/chat`
+        : `/chat`;
+}
+
+/** 新建会话并切换到它 */
+async function newChatSession() {
+    try {
+        const data = await api(`${_sessionApiBase()}/sessions`, { method: 'POST', body: {} });
+        _currentChatSessionId = data.id;
+        chatHistory = [];
+        const container = document.getElementById('chatMessages');
+        if (container) container.innerHTML = '';
+        showChatWelcome();
+        // 关闭历史面板
+        const panel = document.getElementById('chatHistoryPanel');
+        if (panel) panel.style.display = 'none';
+    } catch (e) {
+        console.warn('[session] 新建会话失败', e);
+    }
+}
+
+/** 打开/关闭历史对话面板 */
+async function toggleChatHistory() {
+    const panel = document.getElementById('chatHistoryPanel');
+    if (!panel) return;
+    if (panel.style.display === 'none') {
+        panel.style.display = 'flex';
+        await loadChatSessions();
+    } else {
+        panel.style.display = 'none';
+    }
+}
+
+/** 加载并渲染历史会话列表 */
+async function loadChatSessions() {
+    const listEl = document.getElementById('chatHistoryList');
+    if (!listEl) return;
+    listEl.innerHTML = '<div style="padding:12px;color:var(--text-muted);font-size:12px;">加载中...</div>';
+    try {
+        const data = await api(`${_sessionApiBase()}/sessions`);
+        const sessions = data.sessions || [];
+        if (!sessions.length) {
+            listEl.innerHTML = '<div style="padding:12px;color:var(--text-muted);font-size:12px;">暂无历史对话</div>';
+            return;
+        }
+        // 按日期分组
+        const groups = { '今天': [], '本周': [], '更早': [] };
+        const now = new Date();
+        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const weekStart = new Date(todayStart); weekStart.setDate(todayStart.getDate() - 7);
+        for (const s of sessions) {
+            const d = new Date(s.updated_at || s.created_at);
+            if (d >= todayStart) groups['今天'].push(s);
+            else if (d >= weekStart) groups['本周'].push(s);
+            else groups['更早'].push(s);
+        }
+        let html = '';
+        for (const [label, items] of Object.entries(groups)) {
+            if (!items.length) continue;
+            html += `<div class="chat-history-group">${label}</div>`;
+            for (const s of items) {
+                const active = s.id === _currentChatSessionId ? ' active' : '';
+                html += `<div class="chat-history-item${active}" onclick="switchChatSession('${escHtml(s.id)}')">
+                    <span class="hi-icon">💬</span>
+                    <span class="hi-title" title="${escHtml(s.title)}">${escHtml(s.title)}</span>
+                    <span class="hi-meta">${s.message_count || 0}条</span>
+                    <button class="hi-del btn-icon" onclick="event.stopPropagation();deleteChatSession('${escHtml(s.id)}')" title="删除">✕</button>
+                </div>`;
+            }
+        }
+        listEl.innerHTML = html;
+    } catch (e) {
+        listEl.innerHTML = '<div style="padding:12px;color:var(--text-muted);font-size:12px;">加载失败</div>';
+    }
+}
+
+/** 切换到指定会话 */
+async function switchChatSession(sessionId) {
+    _currentChatSessionId = sessionId;
+    const panel = document.getElementById('chatHistoryPanel');
+    if (panel) panel.style.display = 'none';
+    const container = document.getElementById('chatMessages');
+    if (!container) return;
+    container.innerHTML = '';
+    try {
+        const data = await api(`${_sessionApiBase()}/sessions/${sessionId}/messages`);
+        const messages = data.messages || [];
+        chatHistory = messages.map(m => ({ role: m.role, content: m.content }));
+        if (!messages.length) { showChatWelcome(); return; }
+        for (const msg of messages) {
+            let actionObj = null;
+            if (msg.action_data) {
+                try { actionObj = typeof msg.action_data === 'string' ? JSON.parse(msg.action_data) : msg.action_data; }
+                catch { actionObj = null; }
+            }
+            if (actionObj) {
+                actionObj._message_id = msg.id;
+                actionObj._state = msg.action_state || 'pending';
+                actionObj._result = msg.action_result || null;
+            }
+            appendChatBubble(msg.role, msg.content, msg.created_at, actionObj, msg.images || []);
+        }
+        scrollChatToBottom();
+    } catch (e) {
+        console.warn('[session] 切换会话失败', e);
+        showChatWelcome();
+    }
+}
+
+/** 删除单个会话 */
+async function deleteChatSession(sessionId) {
+    if (!confirm('删除此对话？')) return;
+    try {
+        await api(`${_sessionApiBase()}/sessions/${sessionId}`, { method: 'DELETE' });
+        if (_currentChatSessionId === sessionId) {
+            _currentChatSessionId = null;
+            chatHistory = [];
+            const container = document.getElementById('chatMessages');
+            if (container) container.innerHTML = '';
+            showChatWelcome();
+        }
+        await loadChatSessions();
+    } catch (e) {
+        showToast('删除失败', 'error');
+    }
+}
+
+/** 清空全部会话 */
+async function deleteAllChatSessions() {
+    if (!confirm('清空全部历史对话？此操作不可恢复。')) return;
+    try {
+        await api(`${_sessionApiBase()}/sessions/all`, { method: 'DELETE' });
+        _currentChatSessionId = null;
+        chatHistory = [];
+        const container = document.getElementById('chatMessages');
+        if (container) container.innerHTML = '';
+        showChatWelcome();
+        await loadChatSessions();
+    } catch (e) {
+        showToast('清空失败', 'error');
+    }
+}
+
+/** 确保有当前会话，没有则自动新建 */
+async function _ensureChatSession() {
+    if (_currentChatSessionId) return _currentChatSessionId;
+    try {
+        const data = await api(`${_sessionApiBase()}/sessions`, { method: 'POST', body: {} });
+        _currentChatSessionId = data.id;
+    } catch (e) {
+        _currentChatSessionId = 'default';
+    }
+    return _currentChatSessionId;
+}
+
 /**
  * 加载全局聊天历史
  */
 async function loadChatHistory() {
     if (!currentProjectId) {
-        // 优先从内存恢复，其次从 localStorage，均无则显示欢迎语
-        if (_globalChatDom) {
+        // v0.20：优先从最近 session 加载（DB），保证和历史面板一致
+        // 若有内存快照（短暂切换项目又回来）直接用，避免多余 API 调用
+        if (_globalChatDom && _currentChatSessionId) {
             chatHistory = [..._globalChatHistory];
             const container = document.getElementById('chatMessages');
             if (container) { container.innerHTML = _globalChatDom; scrollChatToBottom(); }
-        } else if (!_loadGlobalChatFromStorage()) {
-            showChatWelcome();
+            return;
+        }
+        try {
+            const data = await api('/chat/sessions?limit=1');
+            const latest = (data.sessions || [])[0];
+            if (latest) {
+                _currentChatSessionId = latest.id;
+                await switchChatSession(latest.id);
+            } else {
+                showChatWelcome();
+            }
+        } catch (_) {
+            // fallback: localStorage
+            if (!_loadGlobalChatFromStorage()) showChatWelcome();
         }
         return;
     }
@@ -8057,8 +8238,24 @@ async function loadChatHistory() {
     const container = document.getElementById('chatMessages');
 
     try {
-        const resp = await originalApi(`/projects/${currentProjectId}/chat/history?limit=50`);
-        const messages = resp.messages || [];
+        // v0.20：优先从当前 session 加载，无 session 则取最近一条
+        let sessionToLoad = _currentChatSessionId;
+        if (!sessionToLoad) {
+            const sessData = await api(`/projects/${currentProjectId}/chat/sessions?limit=1`);
+            const latest = (sessData.sessions || [])[0];
+            sessionToLoad = latest ? latest.id : null;
+            _currentChatSessionId = sessionToLoad;
+        }
+        let messages = [];
+        if (sessionToLoad) {
+            const sessResp = await api(`/projects/${currentProjectId}/chat/sessions/${sessionToLoad}/messages`);
+            messages = sessResp.messages || [];
+        }
+        // fallback: 如果 session 为空或不存在，用旧的全量历史 API
+        if (!messages.length) {
+            const resp = await originalApi(`/projects/${currentProjectId}/chat/history?limit=50`);
+            messages = resp.messages || [];
+        }
         chatHistory = messages.map(m => ({ role: m.role, content: m.content }));
 
         if (messages.length === 0) {
@@ -8507,6 +8704,7 @@ async function sendChatMessage() {
             }
         } else if (currentProjectId) {
             // 项目内聊天 — 走原有 API
+            const _sid = await _ensureChatSession();
             resp = await originalApi(`/projects/${currentProjectId}/chat`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -8514,10 +8712,12 @@ async function sendChatMessage() {
                     message: fullMessage,
                     history: historyToSend,
                     images: images.length > 0 ? images : undefined,
+                    chat_session_id: _sid,
                 }),
             });
         } else {
             // 全局聊天（无项目）— 走全局 API
+            const _sid = await _ensureChatSession();
             resp = await originalApi(`/chat`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -8526,6 +8726,7 @@ async function sendChatMessage() {
                     history: historyToSend,
                     images: images.length > 0 ? images : undefined,
                     session_id: _thinkingSessionId || undefined,
+                    chat_session_id: _sid,
                 }),
             });
         }
@@ -9649,11 +9850,8 @@ function clearJobSelection() {
  */
 function clearChatPanel() {
     if (chatMode === 'global') {
-        chatHistory = [];
-        _globalChatHistory = [];
-        _globalChatDom = '';
-        localStorage.removeItem(_GLOBAL_CHAT_STORAGE_KEY);
-        showChatWelcome();
+        // v0.20：清空 = 新建会话（保留历史可查）
+        newChatSession();
     } else {
         clearJobSelection();
     }

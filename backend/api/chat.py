@@ -51,6 +51,7 @@ class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, description="用户消息")
     history: Optional[List[ChatMessage]] = Field(default=None, description="历史消息（可选）")
     images: Optional[List[str]] = Field(default=None, description="图片列表，base64 data URL，如 data:image/png;base64,...")
+    chat_session_id: Optional[str] = Field(default=None, description="v0.20 会话 ID")
 
 
 class ChatResponse(BaseModel):
@@ -380,11 +381,12 @@ async def _chat_via_legacy(
             else:
                 clean_reply = "操作已完成。"
 
+        _sid = req.chat_session_id or "default"
         if saved_image_urls is not None:
-            await _save_chat_message(project_id, "user", req.message, saved_urls=saved_image_urls)
+            await _save_chat_message(project_id, "user", req.message, saved_urls=saved_image_urls, session_id=_sid)
         else:
-            await _save_chat_message(project_id, "user", req.message, images=req.images)
-        await _save_chat_message(project_id, "assistant", clean_reply, action=action_result)
+            await _save_chat_message(project_id, "user", req.message, images=req.images, session_id=_sid)
+        await _save_chat_message(project_id, "assistant", clean_reply, action=action_result, session_id=_sid)
 
         return ChatResponse(reply=clean_reply, action=action_result)
 
@@ -437,11 +439,12 @@ async def _chat_via_agent(
         if saved_image_urls:
             action_result["images"] = saved_image_urls
 
+    _sid = req.chat_session_id or "default"
     if saved_image_urls is not None:
-        await _save_chat_message(project_id, "user", req.message, saved_urls=saved_image_urls)
+        await _save_chat_message(project_id, "user", req.message, saved_urls=saved_image_urls, session_id=_sid)
     else:
-        await _save_chat_message(project_id, "user", req.message, images=req.images)
-    await _save_chat_message(project_id, "assistant", reply, action=action_result)
+        await _save_chat_message(project_id, "user", req.message, images=req.images, session_id=_sid)
+    await _save_chat_message(project_id, "assistant", reply, action=action_result, session_id=_sid)
 
     return ChatResponse(reply=reply, action=action_result)
 
@@ -607,6 +610,108 @@ async def patch_message_action_state(
 
     await db.update("chat_messages", update, "id = ?", (message_id,))
     return {"ok": True, "message_id": message_id, "state": req.state}
+
+
+# ==================== v0.20 多会话管理 ====================
+
+class SessionCreateRequest(BaseModel):
+    title: Optional[str] = Field(default=None, description="会话标题，不传则后续由首条消息自动设置")
+
+
+async def _ensure_session_exists(session_id: str, project_id: Optional[str], title: str = "新对话") -> None:
+    """确保 session 记录存在，不存在则创建"""
+    existing = await db.fetch_one("SELECT id FROM chat_sessions WHERE id = ?", (session_id,))
+    if not existing:
+        now = now_iso()
+        await db.insert("chat_sessions", {
+            "id": session_id, "project_id": project_id,
+            "title": title, "created_at": now, "updated_at": now,
+        })
+
+
+async def _update_session_title_if_needed(session_id: str, first_message: str) -> None:
+    """若会话标题仍是默认值，用首条用户消息前30字更新"""
+    row = await db.fetch_one("SELECT title FROM chat_sessions WHERE id = ?", (session_id,))
+    if row and row["title"] in ("新对话", "历史对话"):
+        title = first_message[:30] + ("…" if len(first_message) > 30 else "")
+        await db.update("chat_sessions", {"title": title, "updated_at": now_iso()}, "id = ?", (session_id,))
+
+
+@router.get("/sessions")
+async def list_sessions(project_id: str, limit: int = 50):
+    """列出项目的会话列表（按最新活跃倒序）"""
+    rows = await db.fetch_all(
+        """SELECT s.id, s.title, s.created_at, s.updated_at,
+                  COUNT(m.id) as message_count
+           FROM chat_sessions s
+           LEFT JOIN chat_messages m ON m.session_id = s.id
+           WHERE s.project_id = ?
+           GROUP BY s.id
+           ORDER BY s.updated_at DESC
+           LIMIT ?""",
+        (project_id, limit),
+    )
+    return {"sessions": [dict(r) for r in rows]}
+
+
+@router.post("/sessions")
+async def create_session(project_id: str, req: SessionCreateRequest):
+    """新建会话"""
+    session_id = generate_id("sess-")
+    title = req.title or "新对话"
+    now = now_iso()
+    await db.insert("chat_sessions", {
+        "id": session_id, "project_id": project_id,
+        "title": title, "created_at": now, "updated_at": now,
+    })
+    return {"id": session_id, "title": title, "created_at": now}
+
+
+@router.delete("/sessions/all")
+async def delete_all_sessions(project_id: str):
+    """清空项目所有会话（消息也一并删除）"""
+    rows = await db.fetch_all("SELECT id FROM chat_sessions WHERE project_id = ?", (project_id,))
+    session_ids = [r["id"] for r in rows]
+    deleted = 0
+    for sid in session_ids:
+        await db.delete("chat_messages", "session_id = ? AND project_id = ?", (sid, project_id))
+        await db.delete("chat_sessions", "id = ?", (sid,))
+        deleted += 1
+    return {"deleted": deleted}
+
+
+@router.delete("/sessions/{session_id}")
+async def delete_session(project_id: str, session_id: str):
+    """删除单个会话及其消息"""
+    row = await db.fetch_one("SELECT id FROM chat_sessions WHERE id = ? AND project_id = ?", (session_id, project_id))
+    if not row:
+        raise HTTPException(404, "会话不存在")
+    await db.delete("chat_messages", "session_id = ? AND project_id = ?", (session_id, project_id))
+    await db.delete("chat_sessions", "id = ?", (session_id,))
+    return {"ok": True}
+
+
+@router.get("/sessions/{session_id}/messages")
+async def get_session_messages(project_id: str, session_id: str, limit: int = 200):
+    """获取指定会话的消息列表"""
+    rows = await db.fetch_all(
+        """SELECT * FROM chat_messages
+           WHERE project_id = ? AND session_id = ?
+           ORDER BY created_at ASC LIMIT ?""",
+        (project_id, session_id, limit),
+    )
+    messages = []
+    for row in rows:
+        msg = dict(row)
+        msg["images"] = json.loads(msg.pop("images_json", None) or "[]")
+        raw_ar = msg.get("action_result")
+        if isinstance(raw_ar, str) and raw_ar:
+            try:
+                msg["action_result"] = json.loads(raw_ar)
+            except Exception:
+                pass
+        messages.append(msg)
+    return {"messages": messages, "session_id": session_id}
 
 
 @router.get("/history")
@@ -1454,6 +1559,7 @@ async def _save_chat_message(
     action: dict = None,
     images: list = None,       # base64 data URL 列表（原始图片）
     saved_urls: list = None,   # 已保存的图片 URL 列表（优先使用，避免重复保存）
+    session_id: str = "default",  # v0.20 多会话
 ):
     """保存聊天消息到数据库，图片保存为文件"""
     msg_id = generate_id("MSG")
@@ -1464,6 +1570,14 @@ async def _save_chat_message(
     else:
         image_urls = await _save_images(project_id, images) if images else []
 
+    # 确保 session 存在；若是首条用户消息则更新会话标题
+    eff_session = session_id or "default"
+    # 全局聊天用 __global__ 做消息 project_id，但 session 本身 project_id=None
+    session_project_id = None if project_id == "__global__" else project_id
+    await _ensure_session_exists(eff_session, session_project_id)
+    if role == "user":
+        await _update_session_title_if_needed(eff_session, content)
+
     await db.insert("chat_messages", {
         "id": msg_id,
         "project_id": project_id,
@@ -1472,8 +1586,11 @@ async def _save_chat_message(
         "action_type": action.get("type") if action else None,
         "action_data": json.dumps(action, ensure_ascii=False) if action else None,
         "images_json": json.dumps(image_urls, ensure_ascii=False) if image_urls else None,
+        "session_id": eff_session,
         "created_at": now_iso(),
     })
+    # 更新会话的 updated_at
+    await db.update("chat_sessions", {"updated_at": now_iso()}, "id = ?", (eff_session,))
 
 
 # ==================== 全局聊天 API（无需 project_id）====================
@@ -1484,6 +1601,7 @@ class GlobalChatRequest(BaseModel):
     history: Optional[List[ChatMessage]] = Field(default=None, description="历史消息（可选）")
     images: Optional[List[str]] = Field(default=None, description="图片列表，base64 data URL")
     session_id: Optional[str] = Field(default=None, description="思考日志 SSE session ID（可选）")
+    chat_session_id: Optional[str] = Field(default=None, description="v0.20 多会话 session ID")
 
 
 class GlobalChatResponse(BaseModel):
@@ -1495,7 +1613,22 @@ class GlobalChatResponse(BaseModel):
 @global_chat_router.post("", response_model=GlobalChatResponse)
 async def global_chat_with_ai(req: GlobalChatRequest):
     """全局聊天（项目列表页）— ChatAssistantAgent + tool_use"""
-    return await _global_chat_via_agent(req)
+    result = await _global_chat_via_agent(req)
+    # v0.20 保存全局聊天消息到 DB（project_id='__global__'，session 关联）
+    if req.chat_session_id:
+        try:
+            await _save_chat_message(
+                "__global__", "user", req.message,
+                images=req.images, session_id=req.chat_session_id,
+            )
+            action = result.action or (result.actions[0] if result.actions else None)
+            await _save_chat_message(
+                "__global__", "assistant", result.reply,
+                action=action, session_id=req.chat_session_id,
+            )
+        except Exception as _e:
+            logger.warning("全局聊天消息保存失败: %s", _e)
+    return result
 
 
 async def _global_chat_via_agent(req: GlobalChatRequest) -> GlobalChatResponse:
@@ -1512,7 +1645,7 @@ async def _global_chat_via_agent(req: GlobalChatRequest) -> GlobalChatResponse:
     agent = agent_cls()
 
     projects = await db.fetch_all(
-        "SELECT id, name, status, tech_stack, description, created_at FROM projects ORDER BY created_at DESC LIMIT 20"
+        "SELECT id, name, status, tech_stack, description, created_at FROM projects WHERE id != '__global__' ORDER BY created_at DESC LIMIT 20"
     )
 
     history = [{"role": m.role, "content": m.content} for m in (req.history or [])]
@@ -1530,6 +1663,83 @@ async def _global_chat_via_agent(req: GlobalChatRequest) -> GlobalChatResponse:
         if q:
             await q.put(None)  # None = 结束信号
     return GlobalChatResponse(reply=result["reply"], action=result.get("action"), actions=result.get("actions"))
+
+
+# ---- 全局会话管理端点 ----
+
+@global_chat_router.get("/sessions")
+async def list_global_sessions(limit: int = 50):
+    """列出全局会话（project_id IS NULL）"""
+    rows = await db.fetch_all(
+        """SELECT s.id, s.title, s.created_at, s.updated_at,
+                  COUNT(m.id) as message_count
+           FROM chat_sessions s
+           LEFT JOIN chat_messages m ON m.session_id = s.id AND m.project_id = '__global__'
+           WHERE s.project_id IS NULL
+           GROUP BY s.id
+           ORDER BY s.updated_at DESC LIMIT ?""",
+        (limit,),
+    )
+    return {"sessions": [dict(r) for r in rows]}
+
+
+@global_chat_router.post("/sessions")
+async def create_global_session(req: SessionCreateRequest):
+    """新建全局会话"""
+    session_id = generate_id("sess-")
+    title = req.title or "新对话"
+    now = now_iso()
+    await db.insert("chat_sessions", {
+        "id": session_id, "project_id": None,
+        "title": title, "created_at": now, "updated_at": now,
+    })
+    return {"id": session_id, "title": title, "created_at": now}
+
+
+@global_chat_router.delete("/sessions/all")
+async def delete_all_global_sessions():
+    """清空全部全局会话"""
+    rows = await db.fetch_all("SELECT id FROM chat_sessions WHERE project_id IS NULL")
+    deleted = 0
+    for r in rows:
+        await db.delete("chat_messages", "session_id = ? AND project_id = '__global__'", (r["id"],))
+        await db.delete("chat_sessions", "id = ?", (r["id"],))
+        deleted += 1
+    return {"deleted": deleted}
+
+
+@global_chat_router.delete("/sessions/{session_id}")
+async def delete_global_session(session_id: str):
+    """删除单个全局会话"""
+    row = await db.fetch_one("SELECT id FROM chat_sessions WHERE id = ? AND project_id IS NULL", (session_id,))
+    if not row:
+        raise HTTPException(404, "会话不存在")
+    await db.delete("chat_messages", "session_id = ? AND project_id = '__global__'", (session_id,))
+    await db.delete("chat_sessions", "id = ?", (session_id,))
+    return {"ok": True}
+
+
+@global_chat_router.get("/sessions/{session_id}/messages")
+async def get_global_session_messages(session_id: str, limit: int = 200):
+    """获取全局会话消息"""
+    rows = await db.fetch_all(
+        """SELECT * FROM chat_messages
+           WHERE session_id = ? AND project_id = '__global__'
+           ORDER BY created_at ASC LIMIT ?""",
+        (session_id, limit),
+    )
+    messages = []
+    for row in rows:
+        msg = dict(row)
+        msg["images"] = json.loads(msg.pop("images_json", None) or "[]")
+        raw_ar = msg.get("action_result")
+        if isinstance(raw_ar, str) and raw_ar:
+            try:
+                msg["action_result"] = json.loads(raw_ar)
+            except Exception:
+                pass
+        messages.append(msg)
+    return {"messages": messages, "session_id": session_id}
 
 
 # ---- 确认创建项目端点 ----
@@ -1584,7 +1794,7 @@ async def confirm_create_project(req: ConfirmCreateProjectRequest):
 async def get_projects_brief():
     """获取项目简要列表（用于 AI 聊天上下文）"""
     projects = await db.fetch_all(
-        "SELECT id, name, status, tech_stack, description, created_at FROM projects ORDER BY created_at DESC LIMIT 20"
+        "SELECT id, name, status, tech_stack, description, created_at FROM projects WHERE id != '__global__' ORDER BY created_at DESC LIMIT 20"
     )
     return {"projects": projects, "total": len(projects)}
 

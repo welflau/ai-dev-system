@@ -1114,9 +1114,21 @@
                 <button class="btn-icon chat-panel-btn" id="chatModeBtn" onclick="toggleChatMode()" title="切换模式">
                     🔄
                 </button>
-                <button class="btn-icon chat-panel-btn" onclick="clearChatPanel()" title="清空聊天">🗑️</button>
+                <button class="btn-icon chat-panel-btn" onclick="newChatSession()" title="新建对话" id="newChatBtn">＋</button>
+                <button class="btn-icon chat-panel-btn" onclick="toggleChatHistory()" title="历史对话" id="chatHistoryBtn">🕐</button>
                 <button class="btn-icon chat-panel-btn" onclick="toggleChatPanel()" title="收起面板">✕</button>
             </div>
+        </div>
+        <!-- v0.20 历史对话面板 -->
+        <div id="chatHistoryPanel" class="chat-history-panel" style="display:none;">
+            <div class="chat-history-panel-header">
+                <span>历史对话</span>
+                <div style="display:flex;gap:6px;align-items:center;">
+                    <button class="btn-sm" onclick="deleteAllChatSessions()" style="font-size:11px;color:var(--text-muted);">清空全部</button>
+                    <button class="btn-icon chat-panel-btn" onclick="toggleChatHistory()" title="关闭" style="font-size:14px;">✕</button>
+                </div>
+            </div>
+            <div id="chatHistoryList" class="chat-history-list"></div>
         </div>
         <div class="chat-panel-mode-bar" id="chatModeBar">
             <button class="chat-mode-tab active" id="chatModeGlobal" onclick="setChatMode('global')">

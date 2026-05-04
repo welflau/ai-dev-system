@@ -97,6 +97,8 @@ class Database:
             # v0.20+ Insight 置信度：高置信度经验自动应用
             ("knowledge_index", "confidence", "TEXT DEFAULT NULL"),
             ("knowledge_index", "used_count", "INTEGER DEFAULT 0"),
+            # v0.20 多会话管理
+            ("chat_messages", "session_id", "TEXT DEFAULT 'default'"),  # 关联 chat_sessions.id
         ]
         async with self._write_lock:
             for table, column, col_def in migrations:
@@ -108,6 +110,55 @@ class Database:
                     )
                     logger.info("数据库迁移: 已添加列 %s.%s (%s)", table, column, col_def)
             await self._db.commit()
+
+        # v0.20 多会话：为现有消息补建 default session 记录
+        await self._ensure_default_sessions()
+        # v0.20 全局聊天消息占位 project（绕开 FK 约束）
+        await self._ensure_global_project()
+
+    async def _ensure_default_sessions(self):
+        """为每个 project_id 的历史消息创建 default 会话（向后兼容）"""
+        from utils import now_iso
+        cursor = await self._db.execute(
+            "SELECT DISTINCT project_id FROM chat_messages WHERE session_id = 'default' OR session_id IS NULL"
+        )
+        project_ids = [r[0] for r in await cursor.fetchall()]
+        async with self._write_lock:
+            for pid in project_ids:
+                existing = await self._db.execute(
+                    "SELECT id FROM chat_sessions WHERE id = 'default' AND (project_id = ? OR project_id IS NULL)",
+                    (pid,)
+                )
+                if not await existing.fetchone():
+                    now = now_iso()
+                    await self._db.execute(
+                        "INSERT OR IGNORE INTO chat_sessions (id, project_id, title, created_at, updated_at) VALUES (?,?,?,?,?)",
+                        (f"default_{pid}", pid, "历史对话", now, now)
+                    )
+            # 全局会话（project_id IS NULL）的 default session
+            existing = await self._db.execute(
+                "SELECT id FROM chat_sessions WHERE id = 'default_global'"
+            )
+            if not await existing.fetchone():
+                now = now_iso()
+                await self._db.execute(
+                    "INSERT OR IGNORE INTO chat_sessions (id, project_id, title, created_at, updated_at) VALUES (?,?,?,?,?)",
+                    ("default_global", None, "历史对话", now, now)
+                )
+            await self._db.commit()
+
+    async def _ensure_global_project(self):
+        """为全局聊天消息创建占位 project（id='__global__'），满足 FK 约束"""
+        from utils import now_iso
+        existing = await self._db.execute("SELECT id FROM projects WHERE id = '__global__'")
+        if not await existing.fetchone():
+            now = now_iso()
+            async with self._write_lock:
+                await self._db.execute(
+                    "INSERT OR IGNORE INTO projects (id, name, description, status, tech_stack, config, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
+                    ("__global__", "__global__", "全局聊天占位（系统内部用）", "hidden", "", "{}", now, now)
+                )
+                await self._db.commit()
 
     # ==================== 通用 CRUD ====================
 
@@ -343,6 +394,18 @@ CREATE TABLE IF NOT EXISTS milestones (
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL
 );
+
+-- ============================================================
+-- 聊天会话表（多会话管理 v0.20）
+-- ============================================================
+CREATE TABLE IF NOT EXISTS chat_sessions (
+    id          TEXT PRIMARY KEY,
+    project_id  TEXT,                    -- NULL = 全局会话（项目列表页）
+    title       TEXT NOT NULL,           -- 首条用户消息前 30 字，自动生成
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_chat_sessions_project ON chat_sessions(project_id);
 
 -- ============================================================
 -- 聊天消息表（全局聊天历史）

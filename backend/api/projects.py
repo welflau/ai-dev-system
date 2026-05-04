@@ -345,7 +345,7 @@ async def upload_docs_to_project(project_id: str, files: List[UploadFile] = File
 async def list_projects():
     """获取项目列表"""
     projects = await db.fetch_all(
-        "SELECT * FROM projects ORDER BY created_at DESC"
+        "SELECT * FROM projects WHERE id != '__global__' ORDER BY created_at DESC"
     )
     return {"projects": projects, "total": len(projects)}
 

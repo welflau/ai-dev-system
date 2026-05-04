@@ -7634,3 +7634,74 @@ body.chat-open .chat-panel {
     text-align: right;
 }
 
+
+/* ==================== v0.20 多会话历史面板 ==================== */
+.chat-history-panel {
+    position: absolute;
+    top: 48px; left: 0; right: 0; bottom: 0;  /* 从 header 下方开始，不遮挡顶栏按钮 */
+    background: var(--bg-secondary, #1a1f2e);
+    z-index: 20;
+    flex-direction: column;
+    overflow: hidden;
+    border-top: 1px solid var(--border, #2d3748);
+}
+.chat-history-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border, #2d3748);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary, #e2e8f0);
+    flex-shrink: 0;
+}
+.chat-history-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 4px 0;
+}
+.chat-history-group {
+    padding: 8px 14px 3px;
+    font-size: 11px;
+    color: var(--text-muted, #718096);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+.chat-history-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    margin: 1px 6px;
+    cursor: pointer;
+    border-radius: 6px;
+    transition: background 0.15s;
+}
+.chat-history-item:hover { background: var(--bg-hover, rgba(255,255,255,0.06)); }
+.chat-history-item.active { background: var(--primary-bg, rgba(99,102,241,0.15)); }
+.chat-history-item .hi-icon { font-size: 14px; flex-shrink: 0; opacity: 0.7; }
+.chat-history-item .hi-title {
+    flex: 1;
+    font-size: 13px;
+    color: var(--text-secondary, #a0aec0);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.chat-history-item.active .hi-title { color: var(--text-primary, #e2e8f0); }
+.chat-history-item .hi-meta {
+    font-size: 11px;
+    color: var(--text-muted, #718096);
+    flex-shrink: 0;
+}
+.chat-history-item .hi-del {
+    opacity: 0;
+    font-size: 11px;
+    padding: 2px 4px;
+    color: var(--text-muted, #718096);
+    transition: opacity 0.15s;
+    flex-shrink: 0;
+}
+.chat-history-item:hover .hi-del { opacity: 1; }
+.chat-history-item .hi-del:hover { color: var(--danger, #fc8181); }
