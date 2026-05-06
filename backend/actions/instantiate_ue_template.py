@@ -449,6 +449,21 @@ class InstantiateUETemplateAction(ActionBase):
 
         await _log(f"[done] 模板实例化完成: {template_name} → {project_name} ({files_created} 文件)")
 
+        # v0.20 UCP：若用户选择启用编辑态 AI 控制，复制 UCP 插件到 Plugins/
+        ucp_installed = False
+        if context.get("install_ucp"):
+            ucp_src = Path(__file__).parent.parent / "ue_plugins" / "UnrealClientProtocol"
+            if ucp_src.is_dir():
+                import shutil as _shutil
+                ucp_dst = target / "Plugins" / "UnrealClientProtocol"
+                ucp_dst.parent.mkdir(parents=True, exist_ok=True)
+                _shutil.copytree(str(ucp_src), str(ucp_dst), dirs_exist_ok=True)
+                ucp_installed = True
+                notes.append("UCP 插件已复制到 Plugins/UnrealClientProtocol（请重启 Editor 完成编译）")
+                await _log("[ucp] UnrealClientProtocol 插件已复制到 Plugins/")
+            else:
+                await _log("[ucp] 警告：ue_plugins/UnrealClientProtocol 快照不存在，跳过安装")
+
         return ActionResult(
             success=True,
             data={
@@ -463,6 +478,7 @@ class InstantiateUETemplateAction(ActionBase):
                 "files": files_map,
                 "uproject_path": str(uproject_abs),
                 "notes": notes,
+                "ucp_installed": ucp_installed,  # v0.20
             },
             message=f"已基于 {template_name} 实例化 {project_name}（{files_created} 文件）",
         )

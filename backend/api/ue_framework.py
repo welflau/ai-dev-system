@@ -364,3 +364,35 @@ async def run_playtest(project_id: str, req: PlaytestRequest):
 
     asyncio.create_task(_run_bg())
     return {"status": "started", "message": "Playtest 已在后台启动，请看实时日志"}
+
+
+# ==================== v0.20 UCP 编辑态 MCP ====================
+
+@router.get("/editor-status")
+async def get_editor_status(project_id: str):
+    """探测 UE Editor 是否运行 + UCP 插件是否可达（9876 端口）"""
+    from actions.ue_editor_control import probe_ucp
+    host, port = "127.0.0.1", 9876
+    connected = await probe_ucp(host, port, timeout=2.0)
+    return {
+        "connected": connected,
+        "host": host,
+        "port": port,
+        "hint": (
+            "UE Editor 已连接，编辑态 AI 控制可用"
+            if connected
+            else "Editor 未开启或 UCP 插件未启用 —— 请打开 UE Editor 并确认 UnrealClientProtocol 插件已加载"
+        ),
+    }
+
+
+@router.post("/editor-control")
+async def editor_control(project_id: str, body: Dict[str, Any]):
+    """直接调用 UCP 操作（调试 / ChatAssistant 工具调用入口）"""
+    from actions.ue_editor_control import UEEditorControlAction
+    project = await db.fetch_one("SELECT id FROM projects WHERE id = ?", (project_id,))
+    if not project:
+        raise HTTPException(404, "项目不存在")
+    ctx = {"project_id": project_id, **body}
+    result = await UEEditorControlAction().run(ctx)
+    return {"success": result.success, "data": result.data, "message": result.message}

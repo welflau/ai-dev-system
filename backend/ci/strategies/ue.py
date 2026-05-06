@@ -503,10 +503,17 @@ class UECIStrategy(CIStrategy):
         from database import db
 
         if env_name == "editor_live":
-            # Phase C 占位：v0.20 UCP 接入后查 9876 端口判定 editor 是否开
+            # v0.20 UCP：探测 9876 端口判定 Editor 是否在线
+            from actions.ue_editor_control import probe_ucp
+            connected = await probe_ucp(timeout=2.0)
             return {
-                "status": "unknown",
-                "hint": "UE Editor 进程状态检测需要 v0.20 UCP 插件集成",
+                "status": "active" if connected else "inactive",
+                "connected": connected,
+                "hint": (
+                    "UE Editor 已连接（UCP 9876 端口可达），编辑态 AI 控制可用"
+                    if connected
+                    else "UE Editor 未开启或 UCP 插件未启用"
+                ),
             }
 
         if env_name in ("packaged_win64", "dedicated_server"):

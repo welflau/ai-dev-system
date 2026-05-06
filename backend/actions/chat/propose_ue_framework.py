@@ -227,6 +227,11 @@ class ProposeUEFrameworkAction(ActionBase):
         elif not any(e["has_ubt"] for e in engines_dict):
             warnings.append("检测到引擎但无一具备 UBT（可能都没完成 setup），请先在 UE 里 GenerateProjectFiles")
 
+        # v0.20 UCP：检查插件快照是否可用
+        from pathlib import Path as _Path
+        _ucp_snapshot = _Path(__file__).parent.parent.parent / "ue_plugins" / "UnrealClientProtocol"
+        install_ucp_available = _ucp_snapshot.is_dir()
+
         return ActionResult(
             success=True,
             data={
@@ -243,5 +248,6 @@ class ProposeUEFrameworkAction(ActionBase):
                 "target_dir": target_dir,
                 "repo_is_empty": repo_is_empty,
                 "warnings": warnings,
+                "install_ucp_available": install_ucp_available,  # v0.20
             },
         )

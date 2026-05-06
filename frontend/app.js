@@ -3557,6 +3557,10 @@ function renderUEFrameworkCard(action) {
                     <input id="${safeId}_assets" type="checkbox" checked />
                     拷贝 Content/ 资产（.uasset）
                 </label>
+                ${action.install_ucp_available ? `<label class="ue-fw-checkbox" title="安装 UnrealClientProtocol 插件，让 AI 能直接操控运行中的 UE Editor（读写 Actor/属性/蓝图）">
+                    <input id="${safeId}_ucp" type="checkbox" />
+                    🤖 启用编辑态 AI 控制（UCP 插件）
+                </label>` : ''}
             </div>
             ${warningsHtml}
         </div>
@@ -3578,6 +3582,7 @@ async function doInstantiateUEFramework(cardId) {
     const projectName = (document.getElementById(`${cardId}_name`)?.value || '').trim();
     const allowOverwrite = document.getElementById(`${cardId}_overwrite`)?.checked;
     const copyAssets = document.getElementById(`${cardId}_assets`)?.checked;
+    const installUcp = document.getElementById(`${cardId}_ucp`)?.checked || false;
 
     if (!engine || !template || !projectName) {
         showToast('引擎/模板/项目名不能为空', 'error'); return;
@@ -3598,6 +3603,7 @@ async function doInstantiateUEFramework(cardId) {
                 project_name: projectName,
                 allow_overwrite: !!allowOverwrite,
                 copy_content_assets: !!copyAssets,
+                install_ucp: !!installUcp,
             }),
         });
         if (!r.ok) {

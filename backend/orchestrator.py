@@ -2829,6 +2829,18 @@ class TicketOrchestrator:
             logger.warning("Insight 注入失败（非致命）: %s", e)
             context["prior_insights"] = ""
 
+        # === v0.20 UCP：探测 Editor 是否可用，注入到 context ===
+        traits = context.get("project_traits") or []
+        is_ue_project = any(t in traits for t in ("engine:ue5", "engine:ue4"))
+        if is_ue_project:
+            try:
+                from actions.ue_editor_control import probe_ucp
+                context["ucp_available"] = await probe_ucp(timeout=1.0)
+            except Exception:
+                context["ucp_available"] = False
+        else:
+            context["ucp_available"] = False
+
         return context
 
     async def _fetch_prior_insights(self, ticket_title: str, project_id: str) -> str:

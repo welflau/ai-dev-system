@@ -178,6 +178,24 @@ class DevAgent(BaseAgent):
                     except Exception as e:
                         logger.warning("解析 playtest 失败 detail 异常: %s", e)
 
+                # v0.20 UCP：若 Editor 可用，查当前关卡 Actor 列表辅助 Reflexion
+                if context.get("ucp_available"):
+                    try:
+                        from actions.ue_editor_control import UEEditorControlAction
+                        ucp_result = await UEEditorControlAction().run({
+                            "op": "get_actors",
+                            "project_id": context.get("project_id"),
+                        })
+                        if ucp_result.success:
+                            actors = ucp_result.data.get("result", [])
+                            context["editor_state"] = {
+                                "actors": actors[:50],  # 最多50个
+                                "actor_count": len(actors),
+                            }
+                            logger.info("🎮 UCP editor_state 注入: %d actors", len(actors))
+                    except Exception as e:
+                        logger.debug("UCP editor_state 查询失败（非致命）: %s", e)
+
         context["failure_type"] = failure_type
         return await self._do_retry_with_reflection(context)
 
