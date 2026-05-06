@@ -24,12 +24,14 @@ async def get_efficiency(project_id: str):
     completed_reqs = [r for r in req_stats if r["status"] == "completed" and r["completed_at"]]
     avg_days = (sum(r["days"] for r in completed_reqs) / len(completed_reqs)) if completed_reqs else None
 
-    # 2. Agent 耗时占比（按 agent_type 统计 LLM 调用时长）
+    # 2. Agent 耗时占比 + Token 消耗（按 agent_type 统计）
     agent_time = await db.fetch_all("""
         SELECT agent_type,
                COUNT(*) as calls,
                SUM(duration_ms) as total_ms,
-               AVG(duration_ms) as avg_ms
+               AVG(duration_ms) as avg_ms,
+               SUM(COALESCE(input_tokens, 0))  as total_input_tokens,
+               SUM(COALESCE(output_tokens, 0)) as total_output_tokens
         FROM llm_conversations
         WHERE project_id = ?
         GROUP BY agent_type
@@ -88,7 +90,9 @@ async def get_efficiency(project_id: str):
         "agent_time": [
             {"agent": r["agent_type"], "calls": r["calls"],
              "total_seconds": round((r["total_ms"] or 0) / 1000, 1),
-             "avg_seconds": round((r["avg_ms"] or 0) / 1000, 1)}
+             "avg_seconds": round((r["avg_ms"] or 0) / 1000, 1),
+             "input_tokens": r["total_input_tokens"] or 0,
+             "output_tokens": r["total_output_tokens"] or 0}
             for r in agent_time
         ],
         "rework": {

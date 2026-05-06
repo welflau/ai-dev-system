@@ -5709,8 +5709,119 @@ async function loadStats() {
         }
 
         grid.innerHTML = html;
+
+        // ── 效率统计（异步追加，不阻塞基础统计渲染）──
+        _loadEfficiencyStats(grid);
     } catch (e) {
         grid.innerHTML = `<div class="empty-state" style="grid-column:1/-1;"><p>加载失败: ${escHtml(e.message)}</p></div>`;
+    }
+}
+
+async function _loadEfficiencyStats(grid) {
+    if (!currentProjectId) return;
+    try {
+        const ef = await api(`/projects/${currentProjectId}/efficiency`);
+        let html = '';
+
+        // ── 交付周期 ──
+        const delivery = ef.delivery || {};
+        const avgDays = delivery.avg_delivery_days;
+        const completedReqs = delivery.completed_requirements || 0;
+        html += `<div class="stat-section eff-section" style="grid-column:1/-1;">
+            <h3>📦 需求交付效率</h3>
+            <div class="eff-summary-row">
+                <div class="eff-kpi">
+                    <div class="eff-kpi-val">${avgDays != null ? avgDays.toFixed(1) + ' 天' : '--'}</div>
+                    <div class="eff-kpi-label">平均交付周期</div>
+                </div>
+                <div class="eff-kpi">
+                    <div class="eff-kpi-val" style="color:var(--success);">${completedReqs}</div>
+                    <div class="eff-kpi-label">已完成需求</div>
+                </div>`;
+        const probe = ef.smart_probe || {};
+        if (probe.avg_score != null) {
+            html += `<div class="eff-kpi">
+                <div class="eff-kpi-val" style="color:var(--accent);">${probe.avg_score.toFixed(1)} <span style="font-size:13px;font-weight:400;">/ 25</span></div>
+                <div class="eff-kpi-label">Smart Probe 清晰度均分（${probe.sample_count} 条）</div>
+            </div>`;
+        }
+        html += `</div>`;
+        // 最近需求交付列表
+        const recentReqs = (delivery.recent_requirements || []).slice(0, 8);
+        if (recentReqs.length) {
+            html += `<table class="eff-table"><thead><tr><th>需求</th><th>耗时</th><th>状态</th></tr></thead><tbody>`;
+            for (const r of recentReqs) {
+                const days = r.days != null ? r.days + ' 天' : '--';
+                const statusColor = r.completed ? 'var(--success)' : 'var(--text-muted)';
+                html += `<tr><td class="eff-table-title">${escHtml(r.title)}</td><td>${days}</td><td style="color:${statusColor};">${r.completed ? '✅ 完成' : '🔄 进行中'}</td></tr>`;
+            }
+            html += `</tbody></table>`;
+        }
+        html += `</div>`;
+
+        // ── Agent LLM 耗时 + Token 消耗 ──
+        const agentTime = ef.agent_time || [];
+        if (agentTime.length) {
+            const maxSec = Math.max(...agentTime.map(a => a.total_seconds), 1);
+            const totalIn  = agentTime.reduce((s, a) => s + (a.input_tokens  || 0), 0);
+            const totalOut = agentTime.reduce((s, a) => s + (a.output_tokens || 0), 0);
+            const fmtK = n => n >= 1000 ? (n / 1000).toFixed(1) + 'K' : String(n);
+            html += `<div class="stat-section eff-section" style="grid-column:1/-1;">
+                <h3>⏱️ Agent LLM 耗时 &amp; Token 消耗</h3>
+                <div style="font-size:11px;color:var(--text-muted);margin-bottom:10px;">
+                    合计 Input ${fmtK(totalIn)} · Output ${fmtK(totalOut)} tokens
+                </div>
+                <table class="eff-table"><thead><tr>
+                    <th>Agent</th><th>调用次数</th><th>总耗时</th><th>均耗时</th>
+                    <th>Input Token</th><th>Output Token</th>
+                </tr></thead><tbody>`;
+            for (const a of agentTime) {
+                const pct  = Math.round(a.total_seconds / maxSec * 100);
+                const mins = (a.total_seconds / 60).toFixed(1);
+                html += `<tr>
+                    <td style="font-weight:500;">${escHtml(a.agent)}</td>
+                    <td>${a.calls}</td>
+                    <td>
+                        <div style="display:flex;align-items:center;gap:6px;">
+                            <div style="width:60px;height:5px;border-radius:3px;background:var(--bg);">
+                                <div style="width:${pct}%;height:100%;border-radius:3px;background:var(--accent);"></div>
+                            </div>
+                            <span>${mins} 分</span>
+                        </div>
+                    </td>
+                    <td style="color:var(--text-muted);">${a.avg_seconds}s</td>
+                    <td style="color:var(--primary-light,#a5b4fc);">${fmtK(a.input_tokens || 0)}</td>
+                    <td style="color:var(--success,#34d058);">${fmtK(a.output_tokens || 0)}</td>
+                </tr>`;
+            }
+            html += `</tbody></table></div>`;
+        }
+
+        // ── Reflexion 返工排行 ──
+        const rework = (ef.rework || {}).top_tickets || [];
+        if (rework.length) {
+            html += `<div class="stat-section eff-section" style="grid-column:1/-1;"><h3>🔁 Reflexion 返工排行</h3>
+                <table class="eff-table"><thead><tr><th>工单</th><th>返工次数</th></tr></thead><tbody>`;
+            for (const t of rework.slice(0, 8)) {
+                const barW = Math.round(t.rework_count / (rework[0].rework_count || 1) * 100);
+                html += `<tr><td class="eff-table-title">${escHtml(t.title)}</td>
+                    <td><div style="display:flex;align-items:center;gap:8px;">
+                        <div style="flex:1;height:6px;border-radius:3px;background:var(--bg);">
+                            <div style="width:${barW}%;height:100%;border-radius:3px;background:var(--warning);"></div>
+                        </div>
+                        <span style="color:var(--warning);font-weight:600;">${t.rework_count}</span>
+                    </div></td></tr>`;
+            }
+            html += `</tbody></table></div>`;
+        }
+
+        // 追加到 grid
+        const div = document.createElement('div');
+        div.style.cssText = 'display:contents;';
+        div.innerHTML = html;
+        grid.appendChild(div);
+    } catch (e) {
+        console.warn('[efficiency] 加载失败', e);
     }
 }
 

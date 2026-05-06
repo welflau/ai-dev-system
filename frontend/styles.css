@@ -7705,3 +7705,32 @@ body.chat-open .chat-panel {
 }
 .chat-history-item:hover .hi-del { opacity: 1; }
 .chat-history-item .hi-del:hover { color: var(--danger, #fc8181); }
+
+/* ==================== C. 研发效率统计 ==================== */
+.eff-section { border-top: 1px solid var(--border, #2d3748); padding-top: 12px; }
+.eff-summary-row {
+    display: flex; gap: 24px; flex-wrap: wrap; margin-bottom: 14px;
+}
+.eff-kpi {
+    min-width: 120px;
+    background: var(--bg, #0d1117);
+    border: 1px solid var(--border, #2d3748);
+    border-radius: 8px;
+    padding: 10px 16px;
+}
+.eff-kpi-val { font-size: 22px; font-weight: 700; color: var(--text-primary, #e2e8f0); }
+.eff-kpi-label { font-size: 11px; color: var(--text-muted, #718096); margin-top: 2px; }
+.eff-table {
+    width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 4px;
+}
+.eff-table th {
+    text-align: left; padding: 6px 10px;
+    color: var(--text-muted, #718096); font-weight: 500;
+    border-bottom: 1px solid var(--border, #2d3748); font-size: 11px;
+}
+.eff-table td { padding: 7px 10px; border-bottom: 1px solid var(--border-light, #1e2433); }
+.eff-table tr:last-child td { border-bottom: none; }
+.eff-table-title {
+    max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: var(--text-secondary, #a0aec0);
+}
