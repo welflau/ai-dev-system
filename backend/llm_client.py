@@ -413,6 +413,51 @@ class LLMClient:
                 },
             )
 
+    async def _save_tools_conversation(
+        self,
+        messages: List[Dict[str, Any]],
+        input_tokens: int,
+        output_tokens: int,
+        duration_ms: int,
+    ):
+        """保存 chat_with_tools 的汇总调用记录（一次对话多轮合并为一条）"""
+        try:
+            from database import db
+            from utils import generate_id, now_iso
+            import json as _json
+            # 只取最后一条 assistant 回复作为 response 摘要
+            last_assistant = next(
+                (m for m in reversed(messages) if m.get("role") == "assistant"), None
+            )
+            response_text = ""
+            if last_assistant:
+                c = last_assistant.get("content", "")
+                if isinstance(c, str):
+                    response_text = c
+                elif isinstance(c, list):
+                    parts = [b.get("text", "") for b in c if isinstance(b, dict) and b.get("type") == "text"]
+                    response_text = " ".join(parts)
+
+            await db.insert("llm_conversations", {
+                "id": generate_id("LLM"),
+                "ticket_id": _llm_ctx.ticket_id,
+                "requirement_id": _llm_ctx.requirement_id,
+                "project_id": _llm_ctx.project_id,
+                "agent_type": _llm_ctx.agent_type,
+                "action": _llm_ctx.action,
+                "messages": _json.dumps(messages[-4:], ensure_ascii=False),  # 只存最后4条节省空间
+                "response": response_text[:2000],
+                "model": self.model,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "duration_ms": duration_ms,
+                "status": "success",
+                "error": None,
+                "created_at": now_iso(),
+            })
+        except Exception as e:
+            logger.warning("[tool-use] 保存会话记录失败: %s", e)
+
     async def generate(self, prompt: str, **kwargs) -> str:
         """简便方法：单次生成"""
         messages = [{"role": "user", "content": prompt}]
@@ -488,6 +533,9 @@ class LLMClient:
             return {"messages": messages, "rounds": 0, "finished": False}
 
         history = list(messages)  # 不修改原始列表
+        _total_input_tokens = 0
+        _total_output_tokens = 0
+        _t0 = time.time()
 
         for round_no in range(max_rounds):
             logger.info("🔄 [%s] Tool-use 第 %d 轮", ctx, round_no + 1)
@@ -504,6 +552,11 @@ class LLMClient:
             if response is None:
                 logger.error("[%s] Tool-use 第 %d 轮 LLM 调用失败", ctx, round_no + 1)
                 break
+
+            # 累计 token 消耗
+            _usage = response.get("usage", {})
+            _total_input_tokens  += _usage.get("input_tokens", 0) or 0
+            _total_output_tokens += _usage.get("output_tokens", 0) or 0
 
             stop_reason = response.get("stop_reason") or response.get("finish_reason", "")
             content = response.get("content", [])
@@ -528,6 +581,7 @@ class LLMClient:
             if not tool_calls:
                 # 没有 tool_use block —— 模型直接给出最终回复
                 logger.info("✅ [%s] Tool-use 完成（无工具调用），%d 轮", ctx, round_no + 1)
+                await self._save_tools_conversation(history, _total_input_tokens, _total_output_tokens, int((time.time()-_t0)*1000))
                 return {"messages": history, "rounds": round_no + 1, "finished": True}
 
             # 执行所有工具调用，收集结果
@@ -558,9 +612,11 @@ class LLMClient:
 
             if should_finish:
                 logger.info("✅ [%s] finish 工具调用，结束循环", ctx)
+                await self._save_tools_conversation(history, _total_input_tokens, _total_output_tokens, int((time.time()-_t0)*1000))
                 return {"messages": history, "rounds": round_no + 1, "finished": True}
 
         logger.warning("[%s] Tool-use 达到最大轮数 %d，强制结束", ctx, max_rounds)
+        await self._save_tools_conversation(history, _total_input_tokens, _total_output_tokens, int((time.time()-_t0)*1000))
         return {"messages": history, "rounds": max_rounds, "finished": False}
 
     async def _call_anthropic_tools(
@@ -605,9 +661,11 @@ class LLMClient:
                 )
                 resp.raise_for_status()
                 data = resp.json()
+                usage = data.get("usage", {})
                 return {
                     "stop_reason": data.get("stop_reason", ""),
                     "content": data.get("content", []),
+                    "usage": usage,
                 }
         except Exception as e:
             logger.error("Anthropic tool-use 调用失败: %s", e)
