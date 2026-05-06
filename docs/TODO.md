@@ -1,6 +1,15 @@
 # AI Dev System — 待办清单
 
-> 最后更新: 2026-05-02
+> 最后更新: 2026-05-06
+
+---
+
+## ✅ 已完成（2026-05-04 ~ 05-06）
+
+- **F. AI 助手多会话管理**（2026-05-04）：＋新建对话 / 🕐历史面板，全局+项目内均支持，消息写入 DB
+- **A. Memory 持久化系统**（已完成，今日确认）：`agent_memory` 表 + `GetMemoryAction` + Orchestrator 写入
+- **B. Insight 主动注入**（已完成，今日确认）：`_fetch_prior_insights` FTS5 查知识库+工单，注入 DevAgent context
+- **C. 研发效率统计前端**（2026-05-06）：交付周期 / Agent LLM 耗时+Token / Reflexion 返工排行；顺带修复 `chat_with_tools` token 未记录 bug
 
 ---
 
@@ -38,29 +47,20 @@
 
 ---
 
-## 🎯 下一主线推荐（三条，按优先级）
+## ✅ 下一主线（已全部完成，2026-05-06）
 
-### A. Memory 持久化系统（~1.5 天，P1）
+### ✅ A. Memory 持久化系统（已完成）
 
-**来源**：对标 `ai_multi_agent_dev` 的结构化交接物设计，同时解决我方已知技术债。详见 `docs/20260428_02_ai_multi_agent_dev对比分析与借鉴方案.md`。
+`agent_memory` 表 + `_write_memory()` + `GetMemoryAction`，ChatAssistant 可回答"当初为什么这样设计"。
 
-**问题**：`cause_by` 关系链存内存重启丢失；Orchestrator 传递上下文靠函数参数，跨进程无法查询历史；ChatAssistant 无法回答"当初为什么这样设计"。
+### ✅ B. Insight 主动注入（已完成）
 
-**方案**：新增 `agent_memory` 表（4 种类型：decision / handoff / project_status / active_worker），Orchestrator 在关键节点自动写入，ChatAssistant 新增 `GetMemoryAction` 查询。
+`orchestrator._fetch_prior_insights()` FTS5 查知识库+历史工单，注入 DevAgent context 的 `prior_insights` 字段。
 
-### B. Insight 主动注入（~0.5 天，P1）
+### ✅ C. 研发效率统计（已完成，2026-05-06）
 
-**来源**：腾讯 KM《如何让 AI 分工帮我做游戏（三）》vibecli insight 系统。详见 `docs/20260428_02_ai_multi_agent_dev对比分析与借鉴方案.md §3.3`。
-
-**问题**：DevAgent 编码时从不查知识库，过去踩的坑不会自动被规避。
-
-**方案**：在 `orchestrator._build_context()` 里，用任务标题 + traits 自动调 `SearchKnowledgeAction` + `SearchTicketHistoryAction` 各一次，结果注入 DevAgent context 的 `prior_insights` 字段。FTS5 基础设施已有，零新增依赖。
-
-### C. 研发效率统计（~1.5 天，P2）
-
-**来源**：对标 `ai_multi_agent_dev` 的 `dev-efficiency-tracker`，基于我方现有 `ticket_logs` 数据补聚合层。
-
-**方案**：新增 `GET /api/projects/{id}/efficiency` 端点 + 前端效率看板（需求交付周期 / Agent 耗时占比 / Reflexion 重试排行）。
+`GET /api/projects/{id}/efficiency` + 前端看板（交付周期 / Agent LLM 耗时+Token / Reflexion 返工排行）。
+顺带修复：`chat_with_tools` token 未记录到 `llm_conversations` 的 bug。
 
 ### D. Unity HTML 原型管线（~5 天，P2，前置：engine:unity 基础完善）
 
