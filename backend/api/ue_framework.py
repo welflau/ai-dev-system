@@ -347,10 +347,12 @@ async def editor_control(project_id: str, body: Dict[str, Any]):
 
 @router.post("/editor-launch")
 async def editor_launch(project_id: str):
-    """启动 UE Editor（后台进程，不阻塞）"""
+    """启动 UE Editor（后台进程，不阻塞）+ SSE 推启动进度"""
     import asyncio, subprocess as _sp
     from engines.ue_resolver import resolve_project_engine
     from git_manager import git_manager
+    from events import event_manager
+    from utils import now_iso
 
     project = await db.fetch_one("SELECT id, ue_engine_path FROM projects WHERE id = ?", (project_id,))
     if not project:
@@ -377,6 +379,19 @@ async def editor_launch(project_id: str):
     if not editor_exe.is_file():
         raise HTTPException(400, f"找不到 UnrealEditor.exe: {editor_exe}")
 
+    async def _push_log(msg: str):
+        try:
+            await event_manager.publish_to_project(project_id, "log_added", {
+                "id": f"ue-editor-{now_iso()}",
+                "agent_type": "UE-Editor",
+                "action": "editor_launch",
+                "level": "info",
+                "detail": msg,
+                "created_at": now_iso(),
+            })
+        except Exception:
+            pass
+
     # 后台启动，不等待返回（Editor 是长驻进程）
     try:
         _sp.Popen(
@@ -386,9 +401,42 @@ async def editor_launch(project_id: str):
     except Exception as e:
         raise HTTPException(500, f"启动 Editor 失败: {e}")
 
+    await _push_log(f"[editor] 正在启动 UE Editor: {editor_exe.name} {_P(uproject).name}")
+    await _push_log(f"[editor] 引擎版本: UE {engine_info.version} [{engine_info.type}]")
+    await _push_log("[editor] 首次加载约 30-120 秒（shader 编译），请耐心等待…")
+
+    # 后台轮询 UCP，连上后推通知
+    asyncio.create_task(_poll_ucp_ready(project_id, _push_log))
+
     return {
         "status": "launching",
         "uproject": uproject,
         "engine": engine_info.path,
-        "hint": "UE Editor 正在启动，首次加载约 30-60 秒，UCP 插件就绪后 Editor 进程卡片将变绿",
+        "hint": "UE Editor 正在启动，首次加载约 30-120 秒，日志面板会实时更新状态",
     }
+
+
+async def _poll_ucp_ready(project_id: str, push_log):
+    """后台轮询 UCP 9876 端口，就绪后推通知并刷新环境状态"""
+    import asyncio
+    from actions.ue_editor_control import probe_ucp
+    from events import event_manager
+
+    await asyncio.sleep(10)  # 等 Editor 初始化
+    for i in range(24):  # 最多等 2 分钟（24 × 5s）
+        await asyncio.sleep(5)
+        if await probe_ucp(timeout=2.0):
+            await push_log("✅ [editor] UE Editor 已就绪！UCP 插件已连接（9876），编辑态 AI 控制可用")
+            try:
+                await event_manager.publish_to_project(project_id, "ue_editor_connected", {
+                    "connected": True,
+                    "hint": "UE Editor 已就绪，UCP 编辑态控制可用",
+                })
+            except Exception:
+                pass
+            return
+        if i % 3 == 2:  # 每 15 秒报一次进度
+            elapsed = (i + 1) * 5 + 10
+            await push_log(f"[editor] 等待 Editor 加载… ({elapsed}s)")
+
+    await push_log("⚠️ [editor] 超时未检测到 UCP 连接（2 分钟），请确认 UnrealClientProtocol 插件已启用")

@@ -6042,6 +6042,20 @@ function connectSSE(projectId) {
             });
         });
 
+        // v0.20 Editor 启动就绪通知
+        eventSource.addEventListener('ue_editor_connected', (e) => {
+            try {
+                const data = JSON.parse(e.data);
+                if (data.connected) {
+                    showToast('✅ UE Editor 已就绪，编辑态 AI 控制可用', 'success');
+                    // 刷新「交付 & 环境」页面
+                    if (document.getElementById('tab-delivery')?.style.display !== 'none') {
+                        loadDeliveryPage();
+                    }
+                }
+            } catch {}
+        });
+
         // v0.18 基线编译：启动 + 流式 log + 最终结果
         eventSource.addEventListener('ue_compile_started', (e) => {
             const data = JSON.parse(e.data);
