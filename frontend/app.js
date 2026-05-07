@@ -9765,7 +9765,9 @@ function formatChatContent(content) {
             const looksLikeMarkdown = !lang && /^(#{1,3} |[*-] )/m.test(code);
             result += looksLikeMarkdown ? _renderMarkdownText(code) : buildCodeFileCard(lang, code);
         } else {
-            result += _renderMarkdownText(part);
+            // 去掉代码块相邻的多余空行（避免代码卡前后大量空白）
+            const trimmed = part.replace(/(<br\s*\/?>){2,}/g, '<br>').replace(/^(<br\s*\/?>)+/, '').replace(/(<br\s*\/?>)+$/, '');
+            result += _renderMarkdownText(part.replace(/\n{3,}/g, '\n\n'));
         }
     }
     return result;
@@ -9809,9 +9811,9 @@ function _renderMarkdownText(text) {
             continue;
         }
 
-        // 空行
+        // 空行（连续空行只加一个 br，避免大量空白）
         if (!raw.trim()) {
-            html += '<br>';
+            if (!html.endsWith('<br>')) html += '<br>';
             continue;
         }
 
@@ -9833,6 +9835,8 @@ function _inlineFormat(text) {
 
 /** 生成可折叠的代码文件卡片 */
 function buildCodeFileCard(lang, code) {
+    // 去掉前后空行，避免代码卡顶部/底部出现多余空白
+    code = code.replace(/^\n+/, '').replace(/\n+$/, '');
     const lines = code.split('\n');
     const lineCount = lines.length;
     const cardId = 'cfc_' + Math.random().toString(36).slice(2, 9);

@@ -5564,12 +5564,14 @@ body.chat-open .chat-panel {
 }
 
 .code-file-card {
-    margin: 8px 0;
+    margin: 4px 0;
     border: 1px solid var(--border);
     border-radius: 8px;
     overflow: hidden;
     background: var(--bg);
     transition: border-color 0.15s;
+    display: flex;
+    flex-direction: column;
 }
 
 .code-file-card:hover,
@@ -5679,11 +5681,12 @@ body.chat-open .chat-panel {
 .code-card-preview {
     border-top: 1px solid var(--border);
     position: relative;
+    flex: 1;
 }
 
 .code-card-pre {
     margin: 0;
-    padding: 10px 14px;
+    padding: 8px 12px;
     font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
     font-size: 12px;
     line-height: 1.6;
