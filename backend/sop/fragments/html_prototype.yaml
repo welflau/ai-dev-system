@@ -17,6 +17,9 @@ required_traits:
   any_of:
     - category:game
     - prototype:html           # 非游戏但需要原型验证的项目可手动加此 trait
+  none_of:
+    - platform:web             # web/HTML5 游戏本身已是 HTML，不需要"HTML 原型"阶段
+    - platform:wechat
 
 stage:
   agent: DevAgent
