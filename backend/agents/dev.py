@@ -17,13 +17,15 @@ from actions.write_code import WriteCodeAction
 from actions.plan_code_change import PlanCodeChangeAction
 from actions.self_test import SelfTestAction
 from actions.reflection import ReflectionAction
+from actions.write_html_prototype import WriteHtmlPrototypeAction
 
 logger = logging.getLogger("dev_agent")
 
 
 class DevAgent(BaseAgent):
 
-    action_classes = [WriteCodeAction, PlanCodeChangeAction, SelfTestAction, ReflectionAction]
+    action_classes = [WriteCodeAction, PlanCodeChangeAction, SelfTestAction, ReflectionAction,
+                      WriteHtmlPrototypeAction]
     react_mode = ReactMode.SINGLE  # 自己控制流程，不用 BY_ORDER
     watch_actions = {"design_architecture"}
 
