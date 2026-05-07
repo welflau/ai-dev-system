@@ -42,7 +42,18 @@ class DevAgent(BaseAgent):
             return await self._do_fix_issues(context)
         elif task_name == "run_engine_compile":
             return await self._do_run_engine_compile(context)
+        elif task_name == "write_html_prototype":
+            return await self._do_write_html_prototype(context)
         return {"status": "error", "message": f"未知任务: {task_name}"}
+
+    async def _do_write_html_prototype(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """HTML 原型验证阶段：生成单文件 HTML 原型验证核心玩法循环。"""
+        from actions.write_html_prototype import WriteHtmlPrototypeAction
+        action = WriteHtmlPrototypeAction()
+        result = await action.run(context)
+        if result.success:
+            return result.data or {"status": "success"}
+        return {"status": "error", "message": result.message or "HTML 原型生成失败"}
 
     async def _do_run_engine_compile(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """UE 引擎编译验证（v0.18 Phase A）—— 调 UnrealBuildTool 编译项目。
