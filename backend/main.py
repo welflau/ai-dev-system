@@ -712,7 +712,10 @@ async def serve_frontend(path: str = ""):
 # ==================== 启动入口 ====================
 
 if __name__ == "__main__":
-    import uvicorn
+    import uvicorn, shutil as _sh
+    # 每次启动清除 __pycache__，防止旧 .pyc 导致代码更改不生效
+    for _pc in Path(__file__).parent.rglob("__pycache__"):
+        _sh.rmtree(_pc, ignore_errors=True)
     uvicorn.run(
         "main:app",
         host=settings.HOST,
