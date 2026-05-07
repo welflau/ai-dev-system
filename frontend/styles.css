@@ -5703,11 +5703,15 @@ body.chat-open .chat-panel {
     font-style: italic;
 }
 
-/* 展开态 */
+/* 展开态（隐藏时不占任何空间） */
 .code-card-full {
+    display: none;
     border-top: 1px solid var(--border);
     max-height: 480px;
     overflow-y: auto;
+}
+.code-card-full.visible {
+    display: block;
 }
 
 .code-card-full .code-card-pre {

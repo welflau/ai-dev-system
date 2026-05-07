@@ -9756,18 +9756,24 @@ function formatChatContent(content) {
     // 按代码块分割，逐段处理
     const parts = content.split(/(```[\w]*\n[\s\S]*?```)/g);
 
-    for (const part of parts) {
+    for (let pi = 0; pi < parts.length; pi++) {
+        const part = parts[pi];
         const codeBlockMatch = part.match(/^```([\w]*)\n([\s\S]*?)```$/);
         if (codeBlockMatch) {
             const lang = codeBlockMatch[1] || '';
             const code = codeBlockMatch[2];
-            // 无语言标注且内容像 Markdown（含 ## 或 - ）时，直接当普通文本渲染
             const looksLikeMarkdown = !lang && /^(#{1,3} |[*-] )/m.test(code);
             result += looksLikeMarkdown ? _renderMarkdownText(code) : buildCodeFileCard(lang, code);
         } else {
-            // 去掉代码块相邻的多余空行（避免代码卡前后大量空白）
-            const trimmed = part.replace(/(<br\s*\/?>){2,}/g, '<br>').replace(/^(<br\s*\/?>)+/, '').replace(/(<br\s*\/?>)+$/, '');
-            result += _renderMarkdownText(part.replace(/\n{3,}/g, '\n\n'));
+            // 代码块相邻的文本部分：去掉首尾多余换行，避免代码卡前后大量空白
+            let txt = part;
+            const prevIsCode = pi > 0 && parts[pi-1].startsWith('```');
+            const nextIsCode = pi < parts.length-1 && parts[pi+1].startsWith('```');
+            if (prevIsCode) txt = txt.replace(/^\n+/, '');
+            if (nextIsCode) txt = txt.replace(/\n+$/, '');
+            // 连续 3+ 换行压成 2 个
+            txt = txt.replace(/\n{3,}/g, '\n\n');
+            result += _renderMarkdownText(txt);
         }
     }
     return result;
@@ -9860,8 +9866,7 @@ function buildCodeFileCard(lang, code) {
         ? `<button class="code-card-repo-btn" onclick="openRepoFileFromChat('${escapeHtml(guessedFile)}')" title="在仓库中打开">📂 仓库</button>`
         : '';
 
-    return `
-<div class="code-file-card" id="${cardId}">
+    return `<div class="code-file-card" id="${cardId}">
     <div class="code-card-header" onclick="toggleCodeCard('${cardId}')">
         <div class="code-card-left">
             <span class="code-card-arrow" id="${cardId}_arrow">▶</span>
@@ -9879,7 +9884,7 @@ function buildCodeFileCard(lang, code) {
         <pre class="code-card-pre">${previewEscaped}</pre>
         ${lineCount > 3 ? `<div class="code-card-more">…还有 ${lineCount - 3} 行，点击展开</div>` : ''}
     </div>
-    <div class="code-card-full" id="${cardId}_full" style="display:none;">
+    <div class="code-card-full" id="${cardId}_full">
         <pre class="code-card-pre" data-raw="${fullEscaped}">${fullEscaped}</pre>
     </div>
 </div>`;
@@ -9918,15 +9923,15 @@ function toggleCodeCard(cardId) {
     const card = document.getElementById(cardId);
     if (!preview || !full) return;
 
-    const isExpanded = full.style.display !== 'none';
+    const isExpanded = full.classList.contains('visible');
     if (isExpanded) {
-        full.style.display = 'none';
+        full.classList.remove('visible');
         preview.style.display = 'block';
         arrow.textContent = '▶';
         card.classList.remove('expanded');
     } else {
         preview.style.display = 'none';
-        full.style.display = 'block';
+        full.classList.add('visible');
         arrow.textContent = '▼';
         card.classList.add('expanded');
         // 展开时对代码块做语法高亮
