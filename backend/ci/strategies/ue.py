@@ -283,11 +283,28 @@ class UECIStrategy(CIStrategy):
                     saved_err_msg = f"SAVE_ERR:{type(_se).__name__}:{_se}"[:500]
             else:
                 saved_err_msg = None
+            # 完整 stdout 写文件（供历史查询）
+            log_file_path = None
+            full_text = (data.get("raw_head") or "") + (data.get("raw_tail") or "")
+            if not full_text:
+                full_text = "\n".join(_live_lines)
+            if full_text:
+                try:
+                    from pathlib import Path as _Path
+                    log_dir = _Path(__file__).parent.parent.parent / "data" / "build_logs"
+                    log_dir.mkdir(parents=True, exist_ok=True)
+                    log_file = log_dir / f"{build_id}.log"
+                    log_file.write_text(full_text, encoding="utf-8", errors="replace")
+                    log_file_path = str(log_file)
+                except Exception as _le:
+                    logger.warning("写 build log 文件失败: %s", _le)
+
             await db.update("ci_builds", {
                 "status": status,
                 "build_log": json.dumps(logs, ensure_ascii=False),
                 "error_message": saved_err_msg,
                 "raw_output_tail": raw_output[:10240] if raw_output else None,
+                "log_file_path": log_file_path,
                 "completed_at": now_iso(),
             }, "id = ?", (build_id,))
 

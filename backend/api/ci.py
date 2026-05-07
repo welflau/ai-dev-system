@@ -97,6 +97,30 @@ async def trigger_build(project_id: str, body: CIBuildTrigger):
     return result
 
 
+@router.get("/builds/{build_id}/log")
+async def get_build_full_log(project_id: str, build_id: str):
+    """获取构建完整日志文件内容"""
+    from fastapi.responses import PlainTextResponse
+    row = await db.fetch_one(
+        "SELECT log_file_path, raw_output_tail FROM ci_builds WHERE id = ? AND project_id = ?",
+        (build_id, project_id),
+    )
+    if not row:
+        raise HTTPException(404, "构建记录不存在")
+
+    # 优先返回完整文件内容
+    log_path = row.get("log_file_path")
+    if log_path:
+        from pathlib import Path
+        p = Path(log_path)
+        if p.is_file():
+            return PlainTextResponse(p.read_text(encoding="utf-8", errors="replace"))
+
+    # fallback：返回 raw_output_tail
+    tail = row.get("raw_output_tail") or "(暂无日志)"
+    return PlainTextResponse(tail)
+
+
 @router.post("/builds/{build_id}/cancel")
 async def cancel_build(project_id: str, build_id: str):
     """取消构建"""

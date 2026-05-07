@@ -3686,9 +3686,10 @@ async function doBaselineCompile(projectId, enginePath, projectName) {
             const err = await r.json().catch(() => ({detail: r.statusText}));
             throw new Error(err.detail || r.statusText);
         }
-        // 立即返回 {status:"started"} — 真实结果通过 SSE ue_compile_started / ue_compile_log /
-        // ue_baseline_compile_result 推到"操作日志"面板与 toast
-        showToast('🔧 UBT 已在后台启动，日志会实时推到"操作日志"面板', 'info');
+        // 触发后走 CI 策略，在「最近构建」留记录，可点详情查日志
+        showToast('🔧 UBT 编译已触发，可在「交付 & 环境 → 最近构建」查看进度和日志', 'info');
+        // 若当前在「交付 & 环境」页则刷新构建列表
+        setTimeout(() => { if (document.getElementById('tab-delivery')?.style.display !== 'none') loadDeliveryPage(); }, 2000);
     } catch (e) {
         showToast(`编译触发失败：${e.message}`, 'error');
     }
@@ -11201,10 +11202,23 @@ async function openCIBuildDetail(buildId, buildType, buildStatus) {
             } catch {}
         }
         if (d.error_message) { lines.push(''); lines.push('─── Error ───'); lines.push(d.error_message); }
-        if (d.raw_output_tail) { lines.push(''); lines.push('─── Stdout (last 8KB) ───'); lines.push(d.raw_output_tail); }
+        if (d.raw_output_tail) { lines.push(''); lines.push('─── Stdout (最后 8KB，完整日志见下方链接) ───'); lines.push(d.raw_output_tail); }
         if (!lines.length) lines.push('(无输出记录)');
         body.textContent = lines.join('\n');
         body.scrollTop = body.scrollHeight;
+
+        // 完整日志链接（若有 log_file_path 则显示）
+        const logLinkId = 'ciBuildFullLogBtn';
+        document.getElementById(logLinkId)?.remove();
+        if (d.log_file_path || d.status === 'success' || d.status === 'failed') {
+            const logBtn = document.createElement('a');
+            logBtn.id = logLinkId;
+            logBtn.href = `${API}/projects/${currentProjectId}/ci/builds/${buildId}/log`;
+            logBtn.target = '_blank';
+            logBtn.textContent = '📄 完整日志';
+            logBtn.style.cssText = 'display:block;margin:6px 0 2px;font-size:12px;color:var(--primary-light,#a5b4fc);';
+            body.parentElement?.appendChild(logBtn);
+        }
     };
 
     // 首次拉数据
