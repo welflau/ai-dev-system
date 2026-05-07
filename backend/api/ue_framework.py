@@ -394,7 +394,7 @@ async def editor_launch(project_id: str):
 
     # 后台启动，不等待返回（Editor 是长驻进程）
     try:
-        _sp.Popen(
+        proc = _sp.Popen(
             [str(editor_exe), uproject],
             creationflags=_sp.CREATE_NEW_PROCESS_GROUP if hasattr(_sp, 'CREATE_NEW_PROCESS_GROUP') else 0,
         )
@@ -405,8 +405,9 @@ async def editor_launch(project_id: str):
     await _push_log(f"[editor] 引擎版本: UE {engine_info.version} [{engine_info.type}]")
     await _push_log("[editor] 首次加载约 30-120 秒（shader 编译），请耐心等待…")
 
-    # 后台轮询 UCP，连上后推通知
-    asyncio.create_task(_poll_ucp_ready(project_id, _push_log))
+    # 后台轮询 UCP，传入进程句柄和 log 路径用于崩溃检测
+    log_path = str(_P(uproject).parent / "Saved" / "Logs" / f"{_P(uproject).stem}.log")
+    asyncio.create_task(_poll_ucp_ready(project_id, _push_log, proc, log_path))
 
     return {
         "status": "launching",
@@ -416,15 +417,52 @@ async def editor_launch(project_id: str):
     }
 
 
-async def _poll_ucp_ready(project_id: str, push_log):
-    """后台轮询 UCP 9876 端口，就绪后推通知并刷新环境状态"""
+async def _poll_ucp_ready(project_id: str, push_log, proc=None, log_path: str = ""):
+    """后台轮询 UCP 9876 端口；进程早退时自动读 UE log 解析错误原因"""
     import asyncio
     from actions.ue_editor_control import probe_ucp
     from events import event_manager
+    from pathlib import Path as _P
 
-    await asyncio.sleep(10)  # 等 Editor 初始化
-    for i in range(24):  # 最多等 2 分钟（24 × 5s）
+    # 已知错误模式 → 友好提示
+    _ERROR_HINTS = [
+        ("module.*could not be loaded",
+         "游戏模块加载失败——请先点「编译」重新构建，或检查 .uproject 的 Plugins 声明是否完整"),
+        ("plugin.*has not been turned on",
+         ".uproject 缺少插件声明——系统已记录此问题，下次生成项目时会自动修复"),
+        ("failed to compile",
+         "编译失败——请先点「编译」按钮，查看编译日志排查错误"),
+        ("out of memory",
+         "内存不足——请关闭其他程序后重试"),
+        ("access.*denied|permission.*denied",
+         "权限不足——请以管理员身份运行，或检查文件占用"),
+    ]
+
+    def _parse_ue_log(log_file: str) -> list:
+        """读取 UE log 文件，提取 Error/Warning 关键行"""
+        import re
+        errors = []
+        try:
+            p = _P(log_file)
+            if not p.is_file():
+                return errors
+            text = p.read_text(encoding="utf-8", errors="replace")
+            for line in text.splitlines()[-200:]:  # 只看最后 200 行
+                if any(kw in line for kw in ["Error:", "error:", "could not be loaded",
+                                              "has not been turned on", "Failed to compile"]):
+                    clean = line.strip()
+                    if clean and len(clean) < 300:
+                        errors.append(clean)
+        except Exception:
+            pass
+        return errors[:10]
+
+    await asyncio.sleep(8)  # 等 Editor 初始化
+
+    for i in range(24):  # 最多等 2 分钟
         await asyncio.sleep(5)
+
+        # 检测 UCP 是否已就绪
         if await probe_ucp(timeout=2.0):
             await push_log("✅ [editor] UE Editor 已就绪！UCP 插件已连接（9876），编辑态 AI 控制可用")
             try:
@@ -435,8 +473,40 @@ async def _poll_ucp_ready(project_id: str, push_log):
             except Exception:
                 pass
             return
+
+        # 检测进程是否已提前退出（崩溃/报错）
+        if proc is not None and proc.poll() is not None:
+            exit_code = proc.returncode
+            await push_log(f"❌ [editor] Editor 进程已退出（exit={exit_code}），正在分析日志…")
+
+            # 读 UE log 文件
+            errors = _parse_ue_log(log_path)
+            if errors:
+                await push_log(f"[editor] 捕获到 {len(errors)} 条错误：")
+                for err in errors:
+                    await push_log(f"  ▷ {err}")
+
+                # 匹配已知错误给出友好提示
+                import re
+                all_text = " ".join(errors).lower()
+                for pattern, hint in _ERROR_HINTS:
+                    if re.search(pattern, all_text, re.IGNORECASE):
+                        await push_log(f"💡 [editor] 诊断：{hint}")
+                        break
+            else:
+                await push_log(f"[editor] 未找到 UE log 文件（路径: {log_path}），请手动检查错误")
+
+            try:
+                await event_manager.publish_to_project(project_id, "ue_editor_connected", {
+                    "connected": False,
+                    "hint": "Editor 已退出，请查看实时日志了解错误原因",
+                })
+            except Exception:
+                pass
+            return
+
         if i % 3 == 2:  # 每 15 秒报一次进度
-            elapsed = (i + 1) * 5 + 10
+            elapsed = (i + 1) * 5 + 8
             await push_log(f"[editor] 等待 Editor 加载… ({elapsed}s)")
 
     await push_log("⚠️ [editor] 超时未检测到 UCP 连接（2 分钟），请确认 UnrealClientProtocol 插件已启用")
