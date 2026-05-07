@@ -7734,3 +7734,30 @@ body.chat-open .chat-panel {
     max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     color: var(--text-secondary, #a0aec0);
 }
+
+/* ==================== 聊天 Markdown 渲染 ==================== */
+.chat-md-h1, .chat-md-h2, .chat-md-h3 {
+    margin: 8px 0 4px;
+    font-weight: 600;
+    color: var(--text-primary, #e2e8f0);
+    line-height: 1.4;
+}
+.chat-md-h1 { font-size: 15px; }
+.chat-md-h2 { font-size: 14px; }
+.chat-md-h3 { font-size: 13px; color: var(--text-secondary, #a0aec0); }
+.chat-md-list {
+    margin: 4px 0 4px 12px;
+    padding: 0;
+    list-style: disc;
+}
+.chat-md-list li {
+    margin: 2px 0;
+    font-size: 13px;
+    color: var(--text-secondary, #a0aec0);
+    line-height: 1.5;
+}
+.chat-md-hr {
+    border: none;
+    border-top: 1px solid var(--border, #2d3748);
+    margin: 8px 0;
+}

@@ -9761,20 +9761,74 @@ function formatChatContent(content) {
         if (codeBlockMatch) {
             const lang = codeBlockMatch[1] || '';
             const code = codeBlockMatch[2];
-            result += buildCodeFileCard(lang, code);
+            // 无语言标注且内容像 Markdown（含 ## 或 - ）时，直接当普通文本渲染
+            const looksLikeMarkdown = !lang && /^(#{1,3} |[*-] )/m.test(code);
+            result += looksLikeMarkdown ? _renderMarkdownText(code) : buildCodeFileCard(lang, code);
         } else {
-            // 普通文本：转义后做简单 Markdown 处理
-            let text = escapeHtml(part);
-            // 行内代码
-            text = text.replace(/`([^`\n]+)`/g, '<code class="chat-inline-code">$1</code>');
-            // 加粗
-            text = text.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-            // 换行
-            text = text.replace(/\n/g, '<br>');
-            result += text;
+            result += _renderMarkdownText(part);
         }
     }
     return result;
+}
+
+/** 将 Markdown 文本渲染成 HTML（支持标题/列表/加粗/行内代码/分割线） */
+function _renderMarkdownText(text) {
+    const lines = text.split('\n');
+    let html = '';
+    let inList = false;
+
+    for (let i = 0; i < lines.length; i++) {
+        const raw = lines[i];
+        const escaped = escapeHtml(raw);
+
+        // 标题 ###
+        const headMatch = raw.match(/^(#{1,3})\s+(.+)/);
+        if (headMatch) {
+            if (inList) { html += '</ul>'; inList = false; }
+            const level = headMatch[1].length + 2; // # → h3, ## → h4（避免太大）
+            const hTag = `h${Math.min(level, 5)}`;
+            const hContent = _inlineFormat(escapeHtml(headMatch[2]));
+            html += `<${hTag} class="chat-md-h${headMatch[1].length}">${hContent}</${hTag}>`;
+            continue;
+        }
+
+        // 列表项 - / * / 数字.
+        const listMatch = raw.match(/^(\s*)[*\-]\s+(.+)/) || raw.match(/^(\s*)\d+\.\s+(.+)/);
+        if (listMatch) {
+            if (!inList) { html += '<ul class="chat-md-list">'; inList = true; }
+            html += `<li>${_inlineFormat(escapeHtml(listMatch[2]))}</li>`;
+            continue;
+        }
+
+        // 非列表行
+        if (inList) { html += '</ul>'; inList = false; }
+
+        // 分割线
+        if (/^[-*_]{3,}$/.test(raw.trim())) {
+            html += '<hr class="chat-md-hr">';
+            continue;
+        }
+
+        // 空行
+        if (!raw.trim()) {
+            html += '<br>';
+            continue;
+        }
+
+        // 普通文本行
+        html += _inlineFormat(escaped) + '<br>';
+    }
+
+    if (inList) html += '</ul>';
+    return html;
+}
+
+/** 行内格式：加粗 / 斜体 / 行内代码 */
+function _inlineFormat(text) {
+    return text
+        .replace(/`([^`\n]+)`/g, '<code class="chat-inline-code">$1</code>')
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.+?)\*/g, '<em>$1</em>');
 }
 
 /** 生成可折叠的代码文件卡片 */
