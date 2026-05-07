@@ -1905,6 +1905,19 @@ async function deployEnv(envName) {
     }
 }
 
+async function launchUEEditor() {
+    if (!currentProjectId) return;
+    try {
+        showToast('正在启动 UE Editor…', 'info');
+        const r = await api(`/projects/${currentProjectId}/ue-framework/editor-launch`, { method: 'POST' });
+        showToast(r.hint || 'UE Editor 启动中', 'success');
+        // 15 秒后刷新环境状态（等 Editor 加载完）
+        setTimeout(() => loadDeliveryPage(), 15000);
+    } catch (e) {
+        showToast(`启动失败: ${e.message}`, 'error');
+    }
+}
+
 async function stopEnv(envName) {
     if (!currentProjectId) return;
     try {
@@ -10965,12 +10978,16 @@ function renderDeliveryEnvironments(envs) {
                 ${running && env.url ? `<div class="env-info-row"><span class="env-info-label">预览</span><a class="env-preview-link" href="${env.url}" target="_blank">${escapeHtml(env.url)}</a></div>` : ''}
             </div>
             <div class="env-card-actions">
-                ${running && canStop
-                    ? `<button class="btn btn-sm btn-danger" onclick="stopEnv('${escapeHtml(envName)}')">停止</button>
-                       ${env.url ? `<a class="btn btn-sm btn-primary" href="${env.url}" target="_blank">打开预览</a>` : ''}`
-                    : (canDeploy
-                        ? `<button class="btn btn-sm btn-primary" onclick="deployEnv('${escapeHtml(envName)}')">部署</button>`
-                        : '<span style="font-size:11px; color:var(--text-muted);">本环境不支持手动部署</span>')
+                ${envName === 'editor_live'
+                    ? (env.connected
+                        ? `<span style="font-size:11px;color:var(--success);">● 已连接（UCP 9876）</span>`
+                        : `<button class="btn btn-sm btn-primary" onclick="launchUEEditor()" title="启动 UE Editor">▶ 启动 Editor</button>`)
+                    : (running && canStop
+                        ? `<button class="btn btn-sm btn-danger" onclick="stopEnv('${escapeHtml(envName)}')">停止</button>
+                           ${env.url ? `<a class="btn btn-sm btn-primary" href="${env.url}" target="_blank">打开预览</a>` : ''}`
+                        : (canDeploy
+                            ? `<button class="btn btn-sm btn-primary" onclick="deployEnv('${escapeHtml(envName)}')">部署</button>`
+                            : '<span style="font-size:11px; color:var(--text-muted);">本环境不支持手动部署</span>'))
                 }
             </div>
             <div class="env-desc">${escapeHtml(desc)}</div>

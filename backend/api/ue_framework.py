@@ -37,6 +37,7 @@ class InstantiateRequest(BaseModel):
     project_name: str = Field(..., description="目标项目名（rename 用），首字母+字母数字下划线")
     allow_overwrite: bool = Field(False, description="目标目录非空时是否覆盖")
     copy_content_assets: bool = Field(True, description="是否拷贝 Content/ 下的 .uasset 资产")
+    install_ucp: bool = Field(False, description="v0.20 是否安装 UnrealClientProtocol 插件")
     commit_message: Optional[str] = Field(
         None, description="Git commit 消息，默认 'feat: 基于 {template} 生成 UE 项目框架'"
     )
@@ -132,6 +133,7 @@ async def instantiate(project_id: str, req: InstantiateRequest):
         "project_name": req.project_name,
         "allow_overwrite": req.allow_overwrite,
         "copy_content_assets": req.copy_content_assets,
+        "install_ucp": req.install_ucp,
         "log_callback": _push_log,
     }
     result = await action.run(context)
@@ -195,91 +197,36 @@ async def instantiate(project_id: str, req: InstantiateRequest):
 async def baseline_compile(project_id: str, req: BaselineCompileRequest):
     """对刚生成的骨架跑一次 UnrealBuildTool 验证基线。
 
-    **异步模式**：立即返回 {status: "started"}，UBT 在后台跑。过程通过 SSE 推：
-      - ue_compile_log     每行 UBT 输出（流式）
-      - ue_compile_started 启动事件（含命令）
-      - ue_baseline_compile_result 最终结果
-    前端订阅这三个事件即可实现实时日志流 + 最终结果展示。
+    v0.20 改造：委托给 CI 策略 trigger_build("ubt_compile")，
+    使基线编译和手动点「UBT 编译」按钮行为完全一致：
+      - 在「最近构建」留一条 ci_builds 记录（可看详情/日志）
+      - 通过 SSE 实时推日志
     """
-    import asyncio
-    from events import event_manager
+    from ci.loader import ci_loader
 
-    async def _log_cb(line: str):
-        try:
-            await event_manager.publish_to_project(
-                project_id,
-                "ue_compile_log",
-                {"line": line},
-            )
-        except Exception:
-            pass
+    project = await db.fetch_one("SELECT id FROM projects WHERE id = ?", (project_id,))
+    if not project:
+        raise HTTPException(404, "项目不存在")
 
-    async def _run_compile_bg():
-        from actions.ue_compile_check import UECompileCheckAction
-        action = UECompileCheckAction()
-        context: Dict[str, Any] = {
-            "project_id": project_id,
-            "target_platform": req.target_platform,
-            "target_config": req.target_config,
-            "timeout_seconds": req.timeout_seconds,
-            "log_callback": _log_cb,
-        }
-        if req.engine_path:
-            context["engine_path"] = req.engine_path
-        if req.target_name:
-            context["target_name"] = req.target_name
+    strategy = await ci_loader.pick_for_project(project_id)
+    valid_ids = {bt.id for bt in strategy.build_types()}
+    if "ubt_compile" not in valid_ids:
+        raise HTTPException(400, f"策略 {strategy.name} 不支持 ubt_compile")
 
-        # 启动事件（给前端清空日志区做准备）
-        try:
-            await event_manager.publish_to_project(
-                project_id,
-                "ue_compile_started",
-                {"target": req.target_name or "", "platform": req.target_platform,
-                 "config": req.target_config},
-            )
-        except Exception:
-            pass
+    kwargs: Dict[str, Any] = {}
+    if req.engine_path:
+        kwargs["engine_path"] = req.engine_path
+    if req.target_name:
+        kwargs["target_name"] = req.target_name
 
-        try:
-            result = await action.run(context)
-            data = result.data or {}
-
-            # 执行的 UBT 命令也推一条 log（让"执行了什么"可追溯）
-            cmd_str = data.get("command")
-            if cmd_str:
-                await _log_cb(f"[ubt] cmd: {cmd_str}")
-                await _log_cb(f"[ubt] exit={data.get('exit_code')} duration={data.get('duration_ms', 0)}ms")
-        except Exception as e:
-            logger.exception("baseline-compile 后台异常")
-            data = {
-                "status": "error",
-                "message": f"Action 异常: {e}",
-                "errors": [],
-                "warnings": [],
-            }
-
-        # 广播最终结果
-        try:
-            await event_manager.publish_to_project(
-                project_id,
-                "ue_baseline_compile_result",
-                {
-                    "status": data.get("status"),
-                    "exit_code": data.get("exit_code"),
-                    "duration_ms": data.get("duration_ms"),
-                    "errors_count": len(data.get("errors") or []),
-                    "warnings_count": len(data.get("warnings") or []),
-                    "errors": (data.get("errors") or [])[:10],   # 前 10 条详细展示
-                    "message": data.get("message"),
-                    "products": data.get("products"),
-                    "command": data.get("command"),
-                },
-            )
-        except Exception:
-            pass
-
-    asyncio.create_task(_run_compile_bg())
-    return {"status": "started", "message": "基线编译已在后台启动，请看实时日志"}
+    result = await strategy.trigger_build(
+        project_id, "ubt_compile", trigger="baseline", **kwargs
+    )
+    return {
+        "status": "started",
+        "build_id": result.get("build_id"),
+        "message": "基线编译已触发，可在「最近构建」查看进度和日志",
+    }
 
 
 @router.post("/run-playtest")
@@ -396,3 +343,52 @@ async def editor_control(project_id: str, body: Dict[str, Any]):
     ctx = {"project_id": project_id, **body}
     result = await UEEditorControlAction().run(ctx)
     return {"success": result.success, "data": result.data, "message": result.message}
+
+
+@router.post("/editor-launch")
+async def editor_launch(project_id: str):
+    """启动 UE Editor（后台进程，不阻塞）"""
+    import asyncio, subprocess as _sp
+    from engines.ue_resolver import resolve_project_engine
+    from git_manager import git_manager
+
+    project = await db.fetch_one("SELECT id, ue_engine_path FROM projects WHERE id = ?", (project_id,))
+    if not project:
+        raise HTTPException(404, "项目不存在")
+
+    # 找 .uproject 路径
+    repo_path = git_manager._repo_path(project_id)
+    uproject = None
+    if repo_path:
+        from pathlib import Path as _P
+        found = sorted(_P(repo_path).glob("*.uproject"))
+        if found:
+            uproject = str(found[0])
+    if not uproject:
+        raise HTTPException(400, "找不到 .uproject 文件，请先生成 UE 框架")
+
+    # 解析引擎
+    engine_info = resolve_project_engine(uproject)
+    if not engine_info or not engine_info.path:
+        raise HTTPException(400, "找不到 UE 引擎，请在项目设置里配置 ue_engine_path")
+
+    from pathlib import Path as _P
+    editor_exe = _P(engine_info.path) / "Engine" / "Binaries" / "Win64" / "UnrealEditor.exe"
+    if not editor_exe.is_file():
+        raise HTTPException(400, f"找不到 UnrealEditor.exe: {editor_exe}")
+
+    # 后台启动，不等待返回（Editor 是长驻进程）
+    try:
+        _sp.Popen(
+            [str(editor_exe), uproject],
+            creationflags=_sp.CREATE_NEW_PROCESS_GROUP if hasattr(_sp, 'CREATE_NEW_PROCESS_GROUP') else 0,
+        )
+    except Exception as e:
+        raise HTTPException(500, f"启动 Editor 失败: {e}")
+
+    return {
+        "status": "launching",
+        "uproject": uproject,
+        "engine": engine_info.path,
+        "hint": "UE Editor 正在启动，首次加载约 30-60 秒，UCP 插件就绪后 Editor 进程卡片将变绿",
+    }
