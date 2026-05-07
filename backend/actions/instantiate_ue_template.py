@@ -530,6 +530,12 @@ def _write_uproject(target: Path, project_name: str, engine_assoc: str) -> Path:
                 "AdditionalDependencies": ["Engine"],
             }
         ],
+        # UE5 官方模板常用的插件依赖，需显式启用否则 Editor 加载 DLL 时报模块未开启
+        "Plugins": [
+            {"Name": "EnhancedInput",    "Enabled": True},
+            {"Name": "StateTree",        "Enabled": True},
+            {"Name": "GameplayStateTree","Enabled": True},
+        ],
     }
     up_abs.write_text(json.dumps(obj, indent=2, ensure_ascii=False), encoding="utf-8")
     return up_abs

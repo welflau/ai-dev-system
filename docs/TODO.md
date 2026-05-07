@@ -1,15 +1,34 @@
 # AI Dev System — 待办清单
 
-> 最后更新: 2026-05-06
+> 最后更新: 2026-05-07
 
 ---
 
-## ✅ 已完成（2026-05-04 ~ 05-06）
+## 🎯 新增待办
+
+### G. Reflexion UE uproject 自愈（P2）
+
+**问题**：当 Playtest 因"game module could not be loaded"失败时，当前 Reflexion 只会改 C++ 代码，不会识别是 `.uproject` 缺插件声明导致的。
+
+**方案**：
+- Reflexion 分析 play_test_failed log，检测 "module could not be loaded" 关键词
+- 自动扫描 Build.cs 的 `PublicDependencyModuleNames`，把模块名映射到插件名（StateTreeModule→StateTree 等）
+- 自动补写 `.uproject` 的 `Plugins` 段
+- 重触发编译 + 重测
+
+**价值**：AI 全自动运行需求时，`.uproject` 配置不完整会卡住整个工单流程，自愈后无需人工介入。
+
+**前置**：v0.20 UE MCP Phase 1-5 已完成（2026-05-07）
+
+---
+
+## ✅ 已完成（2026-05-04 ~ 05-07）
 
 - **F. AI 助手多会话管理**（2026-05-04）：＋新建对话 / 🕐历史面板，全局+项目内均支持，消息写入 DB
 - **A. Memory 持久化系统**（已完成，今日确认）：`agent_memory` 表 + `GetMemoryAction` + Orchestrator 写入
 - **B. Insight 主动注入**（已完成，今日确认）：`_fetch_prior_insights` FTS5 查知识库+工单，注入 DevAgent context
 - **C. 研发效率统计前端**（2026-05-06）：交付周期 / Agent LLM 耗时+Token / Reflexion 返工排行；顺带修复 `chat_with_tools` token 未记录 bug
+- **v0.20 UE MCP Phase 1-5**（2026-05-06~07）：UCP TCP 客户端 / Skill Pack / 模板集成 / Reflexion 增强 / Editor 双按钮 / 启动日志 / 构建日志持久化；顺带修复 `_write_uproject` 缺插件声明 bug
 
 ---
 
