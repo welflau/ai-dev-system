@@ -520,16 +520,31 @@ class UECIStrategy(CIStrategy):
         from database import db
 
         if env_name == "editor_live":
-            # v0.20 UCP：探测 9876 端口判定 Editor 是否在线
+            # v0.20 UCP：探测 9876 端口 + 检查游戏模块 DLL 是否存在
             from actions.ue_editor_control import probe_ucp
+            from git_manager import git_manager
+            from pathlib import Path as _P
+
             connected = await probe_ucp(timeout=2.0)
+
+            # 检测游戏模块 DLL（编译产物）
+            dll_exists = False
+            repo_path = git_manager._repo_path(project_id)
+            if repo_path:
+                binaries = _P(repo_path) / "Binaries" / "Win64"
+                # 搜索 UnrealEditor-*.dll（UE5 Editor 目标）
+                dlls = list(binaries.glob("UnrealEditor-*.dll")) if binaries.is_dir() else []
+                dll_exists = len(dlls) > 0
+
             return {
                 "status": "active" if connected else "inactive",
                 "connected": connected,
+                "dll_exists": dll_exists,
                 "hint": (
                     "UE Editor 已连接（UCP 9876 端口可达），编辑态 AI 控制可用"
                     if connected
-                    else "UE Editor 未开启或 UCP 插件未启用"
+                    else ("游戏模块已编译，可启动 Editor" if dll_exists
+                          else "请先编译项目，再启动 Editor")
                 ),
             }
 

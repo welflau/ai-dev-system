@@ -10995,7 +10995,12 @@ function renderDeliveryEnvironments(envs) {
                 ${envName === 'editor_live'
                     ? (env.connected
                         ? `<span style="font-size:11px;color:var(--success);">● 已连接（UCP 9876）</span>`
-                        : `<button class="btn btn-sm btn-primary" onclick="launchUEEditor()" title="启动 UE Editor">▶ 启动 Editor</button>`)
+                        : `<div style="display:flex;gap:6px;flex-wrap:wrap;">
+                             <button class="btn btn-sm" onclick="triggerCIBuild('ubt_compile')" title="编译项目（UBT）">🔨 编译</button>
+                             <button class="btn btn-sm btn-primary" onclick="launchUEEditor()"
+                               ${env.dll_exists ? '' : 'disabled title="请先编译项目"'}
+                               style="${env.dll_exists ? '' : 'opacity:0.5;cursor:not-allowed;'}">▶ 启动 Editor</button>
+                           </div>`)
                     : (running && canStop
                         ? `<button class="btn btn-sm btn-danger" onclick="stopEnv('${escapeHtml(envName)}')">停止</button>
                            ${env.url ? `<a class="btn btn-sm btn-primary" href="${env.url}" target="_blank">打开预览</a>` : ''}`
