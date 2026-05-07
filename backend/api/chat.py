@@ -1626,9 +1626,63 @@ async def global_chat_with_ai(req: GlobalChatRequest):
                 "__global__", "assistant", result.reply,
                 action=action, session_id=req.chat_session_id,
             )
+            # v0.20：若本轮创建了新项目，把全局 session 的消息复制到新项目
+            new_pid = None
+            if action and action.get("type") == "project_created":
+                new_pid = action.get("project_id")
+            if not new_pid and result.actions:
+                for a in result.actions:
+                    if isinstance(a, dict) and a.get("type") == "project_created":
+                        new_pid = a.get("project_id")
+                        break
+            if new_pid and req.chat_session_id:
+                try:
+                    await _copy_global_session_to_project(req.chat_session_id, new_pid)
+                except Exception as _ce:
+                    logger.warning("复制全局 session 到项目失败: %s", _ce)
         except Exception as _e:
             logger.warning("全局聊天消息保存失败: %s", _e)
     return result
+
+
+async def _copy_global_session_to_project(global_session_id: str, project_id: str) -> None:
+    """把全局 chat session 的消息复制一份到新建项目，作为「项目创建记录」"""
+    # 取全局 session 的所有消息
+    msgs = await db.fetch_all(
+        """SELECT role, content, action_type, action_data, images_json, created_at
+           FROM chat_messages
+           WHERE session_id = ? AND project_id = '__global__'
+           ORDER BY created_at ASC""",
+        (global_session_id,),
+    )
+    if not msgs:
+        return
+
+    # 在新项目下创建一个"📌 创建记录"session
+    session_id = generate_id("sess-")
+    now = now_iso()
+    await db.insert("chat_sessions", {
+        "id": session_id,
+        "project_id": project_id,
+        "title": "📌 项目创建对话",
+        "created_at": now,
+        "updated_at": now,
+    })
+
+    # 复制消息到新 session
+    for msg in msgs:
+        await db.insert("chat_messages", {
+            "id": generate_id("MSG"),
+            "project_id": project_id,
+            "role": msg["role"],
+            "content": msg["content"],
+            "action_type": msg.get("action_type"),
+            "action_data": msg.get("action_data"),
+            "images_json": msg.get("images_json"),
+            "session_id": session_id,
+            "created_at": msg["created_at"],
+        })
+    logger.info("✅ 全局创建对话已复制到项目 %s（%d 条消息）", project_id[:8], len(msgs))
 
 
 async def _global_chat_via_agent(req: GlobalChatRequest) -> GlobalChatResponse:
