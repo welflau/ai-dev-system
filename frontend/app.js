@@ -9847,12 +9847,15 @@ function buildCodeFileCard(lang, code) {
     const lineCount = lines.length;
     const cardId = 'cfc_' + Math.random().toString(36).slice(2, 9);
 
-    // 尝试从代码第一行注释或内容推断文件名
-    const guessedFile = guessFileName(code, lang);
+    // 尝试从代码注释里提取真实文件路径（不含 lang 兜底）
+    const detectedFile = guessFileName(code, null);   // 传 null 跳过 lang 兜底
 
     // 语言标签
     const langLabel = lang ? lang.toUpperCase() : 'CODE';
     const langIcon = getFileIcon(lang);
+
+    // 显示名：有真实文件名就用，否则用"代码片段"
+    const displayName = detectedFile || '代码片段';
 
     // 预览：前 3 行
     const previewLines = lines.slice(0, 3).join('\n');
@@ -9861,9 +9864,9 @@ function buildCodeFileCard(lang, code) {
     // 完整代码（转义）
     const fullEscaped = escapeHtml(code);
 
-    // 是否有对应的仓库文件链接
-    const repoLinkHtml = guessedFile
-        ? `<button class="code-card-repo-btn" onclick="openRepoFileFromChat('${escapeHtml(guessedFile)}')" title="在仓库中打开">📂 仓库</button>`
+    // 仓库按钮：只在检测到真实文件路径时显示
+    const repoLinkHtml = detectedFile
+        ? `<button class="code-card-repo-btn" onclick="openRepoFileFromChat('${escapeHtml(detectedFile)}')" title="在仓库中打开">📂 仓库</button>`
         : '';
 
     return `<div class="code-file-card" id="${cardId}">
@@ -9871,7 +9874,7 @@ function buildCodeFileCard(lang, code) {
         <div class="code-card-left">
             <span class="code-card-arrow" id="${cardId}_arrow">▶</span>
             <span class="code-card-icon">${langIcon}</span>
-            <span class="code-card-filename">${escapeHtml(guessedFile || '代码片段')}</span>
+            <span class="code-card-filename">${escapeHtml(displayName)}</span>
             <span class="code-card-badge">${langLabel}</span>
             <span class="code-card-lines">${lineCount} 行</span>
         </div>
