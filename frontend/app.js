@@ -9857,9 +9857,11 @@ function buildCodeFileCard(lang, code) {
     // 显示名：有真实文件名就用，否则用"代码片段"
     const displayName = detectedFile || '代码片段';
 
-    // 预览：前 3 行
-    const previewLines = lines.slice(0, 3).join('\n');
+    // 预览：取前 3 条非空行（跳过空行，避免代码顶部/底部出现大块空白）
+    const nonEmptyLines = lines.filter(l => l.trim() !== '');
+    const previewLines = nonEmptyLines.slice(0, 3).join('\n');
     const previewEscaped = escapeHtml(previewLines);
+    const hiddenCount = lineCount - Math.min(3, nonEmptyLines.length);
 
     // 完整代码（转义）
     const fullEscaped = escapeHtml(code);
@@ -9885,7 +9887,7 @@ function buildCodeFileCard(lang, code) {
     </div>
     <div class="code-card-preview" id="${cardId}_preview">
         <pre class="code-card-pre">${previewEscaped}</pre>
-        ${lineCount > 3 ? `<div class="code-card-more">…还有 ${lineCount - 3} 行，点击展开</div>` : ''}
+        ${hiddenCount > 0 ? `<div class="code-card-more">…还有 ${hiddenCount} 行，点击展开</div>` : ''}
     </div>
     <div class="code-card-full" id="${cardId}_full">
         <pre class="code-card-pre" data-raw="${fullEscaped}">${fullEscaped}</pre>

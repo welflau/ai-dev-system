@@ -5686,7 +5686,7 @@ body.chat-open .chat-panel {
 
 .code-card-pre {
     margin: 0;
-    padding: 8px 12px;
+    padding: 6px 12px;
     font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
     font-size: 12px;
     line-height: 1.6;
@@ -5697,7 +5697,7 @@ body.chat-open .chat-panel {
 }
 
 .code-card-more {
-    padding: 4px 14px 8px;
+    padding: 2px 12px 4px;
     font-size: 11px;
     color: var(--text-muted);
     font-style: italic;
