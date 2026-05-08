@@ -9255,6 +9255,23 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
     } else if (action && action.type === 'confirm_requirement') {
         actionHtml = _buildConfirmCardHtml(action);
     } else if (action && action.type === 'confirm_project') {
+        // v0.20：历史对话里 action_state 可能未保存，但项目已存在
+        // 如果当前正在项目内查看（从「项目创建对话」history 进来），视为已创建
+        if (!action._state || action._state === 'pending') {
+            const matchedPid = action._result?.project_id
+                || (currentProjectId && action.git_remote_url ? currentProjectId : null);
+            if (matchedPid) {
+                // 伪造 executed 状态，渲染摘要卡
+                action._state = 'executed';
+                action._result = action._result || {
+                    project_id: matchedPid,
+                    name: action.name || '',
+                };
+            }
+        }
+        if (action._state && action._state !== 'pending') {
+            actionHtml = renderActionStateSummary(action);
+        } else {
         const safeId = _nextCardId('proj_confirm');
         const traitsArr = Array.isArray(action.traits) ? action.traits : [];
         const traitsJsonAttr = escapeHtml(JSON.stringify(traitsArr));
@@ -9301,6 +9318,7 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
         `;
         // 卡片插入 DOM 后异步加载 preview
         setTimeout(() => loadProjectAssemblyPreview(safeId, traitsArr), 50);
+        } // end else (not executed)
     } else if (action && action.type === 'propose_ue_framework') {
         actionHtml = renderUEFrameworkCard(action);
     } else if (action && action.type === 'ue_screenshot_result') {
