@@ -664,7 +664,7 @@ function switchTab(tab) {
         loadAgentList();
         loadAgentToolsStatus();
         loadMCPStatus();
-        loadSkillsList();
+        loadProjectSkills();
     }
     if (tab === 'settings-knowledge') loadSettingsKnowledge();
     if (tab === 'settings-assets') { loadArtAssetsStats(); searchArtAssets(); }
@@ -754,7 +754,7 @@ function switchAgentConfigTab(inner) {
     });
     // 切换时懒加载一次（数据可能已在 switchTab 里加载过，这里做兜底）
     if (inner === 'mcp') loadMCPStatus();
-    if (inner === 'skills') loadSkillsList();
+    if (inner === 'skills') loadProjectSkills();
     // traits 已移到「系统设置」modal（showSystemSettingsModal('traits')）
 }
 
@@ -811,53 +811,128 @@ async function loadMCPStatus() {
 
 // ==================== Skills 列表（Agent 配置页 → Skills Tab） ====================
 
-async function loadSkillsList() {
-    const container = document.getElementById('skillsList');
-    if (!container) return;
-    container.innerHTML = '<div class="empty-state-sm">加载中...</div>';
+async function loadProjectSkills() {
+    const sysContainer = document.getElementById('projectSkillsList');
+    const customContainer = document.getElementById('customSkillsList');
+    if (!sysContainer) return;
+
+    sysContainer.innerHTML = '<div class="empty-state-sm">加载中...</div>';
+
+    const url = currentProjectId
+        ? `/api/projects/${currentProjectId}/skills`
+        : '/api/skills';
+
     try {
-        const resp = await fetch('/api/skills');
+        const resp = await fetch(url);
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const data = await resp.json();
         const skills = data.skills || [];
-        if (skills.length === 0) {
-            container.innerHTML = '<div class="empty-state-sm">暂无 Skill（检查 backend/skills/skills.json）</div>';
-            return;
+
+        const globalSkills = skills.filter(s => s.source === 'global');
+        const customSkills = skills.filter(s => s.source === 'custom');
+
+        // 系统 Skills
+        if (globalSkills.length === 0) {
+            sysContainer.innerHTML = '<div class="empty-state-sm">暂无全局 Skill（检查 backend/skills/skills.json）</div>';
+        } else {
+            sysContainer.innerHTML = globalSkills.map(sk => {
+                const canToggle = !!currentProjectId;
+                const toggleHtml = canToggle ? `
+                    <label class="toggle-switch" title="${sk.enabled ? '点击禁用' : '点击启用'}">
+                        <input type="checkbox" ${sk.enabled ? 'checked' : ''} onchange="toggleProjectSkill('${escapeHtml(sk.id)}', this.checked)">
+                        <span class="toggle-slider"></span>
+                    </label>` : '';
+                const dimClass = sk.enabled ? '' : ' style="opacity:0.5"';
+                return `
+                <div class="skill-row"${dimClass}>
+                    <div class="skill-row-info">
+                        <span class="skill-row-name">🎓 ${escapeHtml(sk.name)}</span>
+                        <span class="skill-row-id">${escapeHtml(sk.id)}</span>
+                        ${sk.description ? `<span class="skill-row-desc">${escapeHtml(sk.description)}</span>` : ''}
+                    </div>
+                    <div class="skill-row-actions">
+                        ${sk.overridden ? `<button class="btn btn-xs btn-ghost" onclick="resetProjectSkill('${escapeHtml(sk.id)}')" title="恢复默认">↩</button>` : ''}
+                        ${toggleHtml}
+                    </div>
+                </div>`;
+            }).join('');
         }
 
-        const priorityLabel = { high: '高', medium: '中', low: '低' };
-        const priorityClass = { high: 'danger', medium: 'warning', low: 'muted' };
-
-        container.innerHTML = skills.map(sk => {
-            const ok = sk.enabled && sk.prompt_exists;
-            const statusClass = ok ? 'success' : (sk.enabled ? 'danger' : 'muted');
-            const statusLabel = !sk.enabled
-                ? '⚪ 未启用'
-                : (sk.prompt_exists ? '✅ 已启用' : '❌ Prompt 缺失');
-
-            const injectChips = (sk.inject_to || []).length
-                ? sk.inject_to.map(a => `<code class="mcp-tool-tag">${escapeHtml(a)}</code>`).join('')
-                : '<span class="mcp-tools-empty">(未挂到任何 Agent)</span>';
-
-            const pClass = priorityClass[sk.priority] || 'muted';
-            const pLabel = priorityLabel[sk.priority] || sk.priority;
-
-            return `
-            <div class="mcp-server-card mcp-status-${statusClass}">
-                <div class="mcp-server-header">
-                    <span class="mcp-server-name">🎓 ${escapeHtml(sk.name)} <span style="color:var(--text-muted); font-weight:400; font-size:12px;">(${escapeHtml(sk.id)})</span></span>
-                    <span class="mcp-server-status mcp-badge-${statusClass}">${statusLabel}</span>
-                </div>
-                <div class="mcp-server-desc">${escapeHtml(sk.description || '(无描述)')}</div>
-                <div class="mcp-tools">
-                    <div class="mcp-tools-label">注入到</div>
-                    ${injectChips}
-                    <span class="mcp-server-status mcp-badge-${pClass}" style="margin-left:auto;">优先级：${pLabel}</span>
-                </div>
-            </div>`;
-        }).join('');
+        // 自定义 Skills
+        if (customContainer) {
+            if (customSkills.length === 0) {
+                customContainer.innerHTML = '<div class="empty-state-sm" style="margin-bottom:8px;">暂无自定义 Skill</div>';
+            } else {
+                customContainer.innerHTML = customSkills.map(sk => `
+                <div class="skill-row">
+                    <div class="skill-row-info">
+                        <span class="skill-row-name">📄 ${escapeHtml(sk.name)}</span>
+                        <span class="skill-row-id">${escapeHtml(sk.id)}</span>
+                    </div>
+                    <div class="skill-row-actions">
+                        <button class="btn btn-xs btn-danger-ghost" onclick="deleteCustomSkill('${escapeHtml(sk.id)}', '${escapeHtml(sk.name)}')" title="删除">🗑</button>
+                    </div>
+                </div>`).join('');
+            }
+        }
     } catch (e) {
-        container.innerHTML = `<div class="empty-state-sm">加载失败: ${escapeHtml(e.message)}</div>`;
+        sysContainer.innerHTML = `<div class="empty-state-sm">加载失败: ${escapeHtml(e.message)}</div>`;
+    }
+}
+
+async function toggleProjectSkill(skillId, enabled) {
+    if (!currentProjectId) return;
+    const action = enabled ? 'enable' : 'disable';
+    try {
+        const resp = await fetch(`/api/projects/${currentProjectId}/skills/${skillId}/${action}`, { method: 'POST' });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    } catch (e) {
+        showToast(`操作失败: ${e.message}`, 'error');
+        loadProjectSkills();
+    }
+}
+
+async function resetProjectSkill(skillId) {
+    if (!currentProjectId) return;
+    try {
+        await fetch(`/api/projects/${currentProjectId}/skills/${skillId}`, { method: 'DELETE' });
+        loadProjectSkills();
+    } catch (e) {
+        showToast(`重置失败: ${e.message}`, 'error');
+    }
+}
+
+async function uploadCustomSkill(input) {
+    if (!currentProjectId) { showToast('请先进入项目', 'warning'); return; }
+    const file = input.files[0];
+    if (!file) return;
+    input.value = '';
+
+    const formData = new FormData();
+    formData.append('file', file);
+    try {
+        const resp = await fetch(`/api/projects/${currentProjectId}/skills/upload`, {
+            method: 'POST', body: formData,
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
+        showToast(`Skill「${data.name}」上传成功`, 'success');
+        loadProjectSkills();
+    } catch (e) {
+        showToast(`上传失败: ${e.message}`, 'error');
+    }
+}
+
+async function deleteCustomSkill(skillId, name) {
+    if (!currentProjectId) return;
+    if (!confirm(`确认删除自定义 Skill「${name}」？`)) return;
+    try {
+        const resp = await fetch(`/api/projects/${currentProjectId}/skills/custom/${skillId}`, { method: 'DELETE' });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        showToast('已删除', 'success');
+        loadProjectSkills();
+    } catch (e) {
+        showToast(`删除失败: ${e.message}`, 'error');
     }
 }
 

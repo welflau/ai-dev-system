@@ -1,14 +1,32 @@
 """
-Skills 状态 API —— 只读返回 skills.json 中所有 Skill 的状态，供前端 Agent 配置页展示
+Skills API
+  GET    /api/skills                                         — 全局 Skill 状态（只读）
+  GET    /api/projects/{project_id}/skills                   — 项目可用 Skill 列表（全局 + 自定义，含启用状态）
+  POST   /api/projects/{project_id}/skills/{skill_id}/enable  — 启用某 Skill
+  POST   /api/projects/{project_id}/skills/{skill_id}/disable — 禁用某 Skill
+  DELETE /api/projects/{project_id}/skills/{skill_id}         — 删除项目自定义配置（恢复默认）
+  POST   /api/projects/{project_id}/skills/upload             — 上传自定义 Skill (.md)
+  DELETE /api/projects/{project_id}/skills/custom/{skill_id}  — 删除自定义 Skill 文件 + 数据库记录
 """
-from fastapi import APIRouter
+import logging
+import re
+from pathlib import Path
+from fastapi import APIRouter, HTTPException, UploadFile, File
+from database import db
+from utils import generate_id, now_iso
 
-router = APIRouter(prefix="/api/skills", tags=["skills"])
+_CUSTOM_SKILLS_DIR = Path(__file__).parent.parent / "data" / "project_skills"
+
+logger = logging.getLogger("api.skills")
+
+router = APIRouter(tags=["skills"])
 
 
-@router.get("")
-async def list_skills():
-    """返回所有 Skill 的状态（名字、描述、注入到哪些 Agent、优先级、prompt 是否存在）"""
+# ── 全局 Skill 状态（只读）──────────────────────────────────────────────────
+
+@router.get("/api/skills")
+async def list_global_skills():
+    """返回 skills.json 中所有 Skill 的状态（供调试 / 全局配置页）"""
     from skills import skill_loader
 
     status = skill_loader.get_all_skills_status()
@@ -21,7 +39,216 @@ async def list_skills():
             "inject_to": info["inject_to"],
             "priority": info["priority"],
             "prompt_exists": info["prompt_exists"],
+            "traits_match": info["traits_match"],
+            "group": info["group"],
         }
         for sid, info in status.items()
     ]
     return {"skills": skills, "total": len(skills)}
+
+
+# ── 项目级 Skill 管理 ────────────────────────────────────────────────────────
+
+@router.get("/api/projects/{project_id}/skills")
+async def list_project_skills(project_id: str):
+    """
+    返回该项目可用的 Skill 列表，含每个 Skill 的启用状态。
+    全局 Skill（来自 skills.json）+ 项目自定义 Skill 合并返回。
+    """
+    from skills import skill_loader
+
+    # 全局 Skill 基础列表
+    global_status = skill_loader.get_all_skills_status()
+
+    # 读取项目覆盖配置
+    rows = await db.fetch_all(
+        "SELECT skill_id, source, enabled, custom_name, custom_path FROM project_skills WHERE project_id=?",
+        (project_id,),
+    )
+    project_map = {r["skill_id"]: r for r in rows}
+
+    result = []
+    # 全局 Skill
+    for sid, info in global_status.items():
+        override = project_map.get(sid)
+        enabled = bool(override["enabled"]) if override else info["enabled"]
+        result.append({
+            "id": sid,
+            "name": info["name"],
+            "description": info["description"],
+            "source": "global",
+            "enabled": enabled,
+            "priority": info["priority"],
+            "inject_to": info["inject_to"],
+            "traits_match": info["traits_match"],
+            "prompt_exists": info["prompt_exists"],
+            "overridden": override is not None,
+        })
+
+    # 项目自定义 Skill（source='custom'）
+    for row in rows:
+        if row["source"] == "custom":
+            result.append({
+                "id": row["skill_id"],
+                "name": row["custom_name"] or row["skill_id"],
+                "description": "",
+                "source": "custom",
+                "enabled": bool(row["enabled"]),
+                "priority": "medium",
+                "inject_to": ["ChatAssistant"],
+                "traits_match": {},
+                "prompt_exists": True,
+                "overridden": False,
+            })
+
+    return {"skills": result, "project_id": project_id}
+
+
+@router.post("/api/projects/{project_id}/skills/{skill_id}/enable")
+async def enable_project_skill(project_id: str, skill_id: str):
+    """为该项目启用某个 Skill（覆盖全局默认）"""
+    await _upsert_skill_enabled(project_id, skill_id, True)
+    logger.info("project=%s skill=%s → enabled", project_id, skill_id)
+    return {"ok": True, "project_id": project_id, "skill_id": skill_id, "enabled": True}
+
+
+@router.post("/api/projects/{project_id}/skills/{skill_id}/disable")
+async def disable_project_skill(project_id: str, skill_id: str):
+    """为该项目禁用某个 Skill"""
+    await _upsert_skill_enabled(project_id, skill_id, False)
+    logger.info("project=%s skill=%s → disabled", project_id, skill_id)
+    return {"ok": True, "project_id": project_id, "skill_id": skill_id, "enabled": False}
+
+
+@router.delete("/api/projects/{project_id}/skills/{skill_id}")
+async def reset_project_skill(project_id: str, skill_id: str):
+    """删除项目对该 Skill 的覆盖配置，恢复为全局默认"""
+    await db.execute(
+        "DELETE FROM project_skills WHERE project_id=? AND skill_id=? AND source='global'",
+        (project_id, skill_id),
+    )
+    return {"ok": True, "project_id": project_id, "skill_id": skill_id, "reset": True}
+
+
+# ── 自定义 Skill 上传 / 删除 ─────────────────────────────────────────────────
+
+@router.post("/api/projects/{project_id}/skills/upload")
+async def upload_custom_skill(project_id: str, file: UploadFile = File(...)):
+    """
+    上传自定义 Skill .md 文件，自动注册到 project_skills 表。
+    skill_id 由文件名（去掉 .md 后缀）生成，与全局 Skill ID 空间独立（加 `custom.` 前缀）。
+    """
+    if not (file.filename or "").lower().endswith(".md"):
+        raise HTTPException(400, "只支持 .md 文件")
+
+    raw_content = await file.read()
+    try:
+        content = raw_content.decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(400, "文件编码必须是 UTF-8")
+
+    if not content.strip():
+        raise HTTPException(400, "文件内容不能为空")
+
+    # 文件名 → skill_id（去后缀 + 安全化）
+    stem = Path(file.filename).stem
+    safe_stem = re.sub(r"[^\w\-]", "-", stem).strip("-") or "custom"
+    skill_id = f"custom.{safe_stem}"
+
+    # 存文件
+    skill_dir = _CUSTOM_SKILLS_DIR / project_id
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    skill_file = skill_dir / f"{safe_stem}.md"
+    skill_file.write_text(content, encoding="utf-8")
+    relative_path = f"{project_id}/{safe_stem}.md"
+
+    # 提取文件第一行非空文本作为 custom_name（若 frontmatter 有 name 字段则用之）
+    custom_name = _extract_skill_name(content) or safe_stem
+
+    # 写入 project_skills 表
+    existing = await db.fetch_one(
+        "SELECT id FROM project_skills WHERE project_id=? AND skill_id=?",
+        (project_id, skill_id),
+    )
+    if existing:
+        await db.execute(
+            "UPDATE project_skills SET enabled=1, custom_name=?, custom_path=? WHERE project_id=? AND skill_id=?",
+            (custom_name, relative_path, project_id, skill_id),
+        )
+    else:
+        await db.execute(
+            """INSERT INTO project_skills (id, project_id, skill_id, source, enabled, custom_name, custom_path, created_at)
+               VALUES (?, ?, ?, 'custom', 1, ?, ?, ?)""",
+            (generate_id("psk"), project_id, skill_id, custom_name, relative_path, now_iso()),
+        )
+
+    logger.info("自定义 Skill 上传: project=%s skill_id=%s file=%s", project_id, skill_id, relative_path)
+    return {
+        "ok": True,
+        "skill_id": skill_id,
+        "name": custom_name,
+        "path": relative_path,
+        "project_id": project_id,
+    }
+
+
+@router.delete("/api/projects/{project_id}/skills/custom/{skill_id:path}")
+async def delete_custom_skill(project_id: str, skill_id: str):
+    """删除项目自定义 Skill（文件 + 数据库记录）"""
+    row = await db.fetch_one(
+        "SELECT custom_path FROM project_skills WHERE project_id=? AND skill_id=? AND source='custom'",
+        (project_id, skill_id),
+    )
+    if not row:
+        raise HTTPException(404, f"自定义 Skill `{skill_id}` 不存在")
+
+    # 删文件
+    if row["custom_path"]:
+        skill_file = _CUSTOM_SKILLS_DIR / row["custom_path"]
+        if skill_file.exists():
+            skill_file.unlink()
+
+    # 删数据库记录
+    await db.execute(
+        "DELETE FROM project_skills WHERE project_id=? AND skill_id=? AND source='custom'",
+        (project_id, skill_id),
+    )
+    logger.info("自定义 Skill 删除: project=%s skill_id=%s", project_id, skill_id)
+    return {"ok": True, "skill_id": skill_id, "project_id": project_id}
+
+
+# ── helper ───────────────────────────────────────────────────────────────────
+
+def _extract_skill_name(content: str) -> str:
+    """从 .md 内容提取 Skill 显示名：优先 frontmatter name 字段，其次第一个 # 标题"""
+    # frontmatter
+    fm_match = re.match(r"^---\s*\n(.*?)\n---\s*\n", content, re.DOTALL)
+    if fm_match:
+        for line in fm_match.group(1).splitlines():
+            m = re.match(r"^\s*name\s*:\s*(.+)", line)
+            if m:
+                return m.group(1).strip().strip('"\'')
+    # 第一个 # 标题
+    for line in content.splitlines():
+        line = line.strip()
+        if line.startswith("# "):
+            return line[2:].strip()
+    return ""
+
+
+async def _upsert_skill_enabled(project_id: str, skill_id: str, enabled: bool) -> None:
+    existing = await db.fetch_one(
+        "SELECT id FROM project_skills WHERE project_id=? AND skill_id=?",
+        (project_id, skill_id),
+    )
+    if existing:
+        await db.execute(
+            "UPDATE project_skills SET enabled=? WHERE project_id=? AND skill_id=?",
+            (1 if enabled else 0, project_id, skill_id),
+        )
+    else:
+        await db.execute(
+            """INSERT INTO project_skills (id, project_id, skill_id, source, enabled, created_at)
+               VALUES (?, ?, ?, 'global', ?, ?)""",
+            (generate_id("psk"), project_id, skill_id, 1 if enabled else 0, now_iso()),
+        )

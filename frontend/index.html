@@ -924,16 +924,28 @@
 
                             <!-- 面板：Skills -->
                             <div class="inner-tab-panel" id="inner-panel-skills">
+                                <!-- 系统推荐 Skill -->
                                 <div class="settings-card">
-                                    <p class="settings-description" style="margin-bottom:14px;">
-                                        Skill 包是注入到 Agent system prompt 的专业领域知识（React、FastAPI、Git 工作流等）。
-                                        配置在 <code>backend/skills/skills.json</code>，Prompt 正文在 <code>backend/skills/packs/</code> 下。
-                                    </p>
-                                    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:12px;">
-                                        <h3 class="settings-card-title" style="margin:0;">已注册的 Skill</h3>
-                                        <button class="btn btn-sm btn-ghost" onclick="loadSkillsList()">🔄 刷新</button>
+                                    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:4px;">
+                                        <h3 class="settings-card-title" style="margin:0;">系统 Skills（按需加载）</h3>
+                                        <button class="btn btn-sm btn-ghost" onclick="loadProjectSkills()">🔄 刷新</button>
                                     </div>
-                                    <div id="skillsList"><div class="empty-state-sm">加载中...</div></div>
+                                    <p class="settings-description" style="margin-bottom:12px;">
+                                        AI 助手在需要时会主动调用 <code>load_skill</code> 工具加载对应文档。可按项目启用或禁用某个 Skill。
+                                    </p>
+                                    <div id="projectSkillsList"><div class="empty-state-sm">加载中...</div></div>
+                                </div>
+                                <!-- 自定义 Skill -->
+                                <div class="settings-card" style="margin-top:16px;">
+                                    <h3 class="settings-card-title" style="margin-bottom:8px;">自定义 Skills</h3>
+                                    <p class="settings-description" style="margin-bottom:12px;">
+                                        上传 <code>.md</code> 文件作为项目专属 Skill。AI 助手按需加载，文件第一行 <code># 标题</code> 作为 Skill 名称。
+                                    </p>
+                                    <div id="customSkillsList" style="margin-bottom:12px;"></div>
+                                    <label class="btn btn-sm btn-secondary" style="cursor:pointer;">
+                                        ＋ 上传自定义 Skill (.md)
+                                        <input type="file" accept=".md" style="display:none;" onchange="uploadCustomSkill(this)">
+                                    </label>
                                 </div>
                             </div>
 

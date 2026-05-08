@@ -701,6 +701,19 @@ CREATE TABLE IF NOT EXISTS image_requests (
 );
 CREATE INDEX IF NOT EXISTS idx_image_requests_status ON image_requests(status);
 CREATE INDEX IF NOT EXISTS idx_image_requests_project ON image_requests(project_id);
+
+CREATE TABLE IF NOT EXISTS project_skills (
+    id           TEXT PRIMARY KEY,
+    project_id   TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    skill_id     TEXT NOT NULL,        -- "unreal-cpp-dev" 或自定义 ID
+    source       TEXT DEFAULT 'global', -- 'global' | 'custom'
+    enabled      INTEGER DEFAULT 1,
+    custom_name  TEXT,                 -- 自定义 Skill 显示名
+    custom_path  TEXT,                 -- 自定义 Skill 文件路径（相对 data/project_skills/）
+    created_at   TEXT NOT NULL,
+    UNIQUE(project_id, skill_id)
+);
+CREATE INDEX IF NOT EXISTS idx_project_skills_project ON project_skills(project_id);
 """
 
 

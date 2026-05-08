@@ -7895,3 +7895,18 @@ body.chat-open .chat-panel {
 .at-running { color: var(--warning, #f6c90e); }
 .at-hint { padding: 6px 12px 8px; font-size: 11px; color: var(--text-muted, #718096); }
 .at-hint code { background: var(--bg, #0d1117); padding: 1px 4px; border-radius: 3px; }
+
+/* ── Skill Row (Settings > Agent / Skills) ───────────────────────────────── */
+.skill-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 10px; border-radius: 6px; margin-bottom: 4px;
+    background: var(--bg-secondary, rgba(255,255,255,0.03));
+    border: 1px solid var(--border, rgba(255,255,255,0.08));
+    transition: background 0.15s;
+}
+.skill-row:hover { background: var(--bg-hover, rgba(255,255,255,0.06)); }
+.skill-row-info { display: flex; align-items: baseline; gap: 8px; flex: 1; min-width: 0; }
+.skill-row-name { font-size: 13px; font-weight: 500; white-space: nowrap; }
+.skill-row-id { font-size: 11px; color: var(--text-muted); font-family: monospace; }
+.skill-row-desc { font-size: 12px; color: var(--text-secondary, #9ca3af); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 240px; }
+.skill-row-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }

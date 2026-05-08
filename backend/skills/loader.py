@@ -241,11 +241,48 @@ class SkillLoader:
         )
         return prompt
 
+    def build_index_for_agent(
+        self,
+        agent_type: str,
+        traits: Optional[Iterable[str]] = None,
+    ) -> str:
+        """生成 Skill 索引表（只含名称+描述+触发场景，不含全文）。
+
+        用于主动触发架构：system prompt 只注入索引，AI 按需调用 load_skill 加载全文。
+        返回空字符串表示无可用 Skill。
+        """
+        skill_ids = self.get_skills_for_agent(agent_type, traits)
+        if not skill_ids:
+            return ""
+
+        rows = []
+        for sid in skill_ids:
+            cfg = self.skills.get(sid, {})
+            if not cfg.get("enabled", True):
+                continue
+            name = cfg.get("name", sid)
+            desc = cfg.get("description", "")
+            rows.append(f"| `{sid}` | {name} | {desc} |")
+
+        if not rows:
+            return ""
+
+        header = "| Skill ID | 名称 | 适用场景 |\n|---|---|---|"
+        return header + "\n" + "\n".join(rows)
+
     def get_skill_prompt(self, skill_id: str) -> Optional[str]:
-        """读取单个 skill 的 prompt.md 内容；禁用 / 文件缺失时返回 None"""
+        """读取单个 skill 的 prompt 内容；禁用 / 文件缺失时返回 None。
+
+        支持两种类型：
+        - prompt_file（默认）：读取指定 .md 文件
+        - type: "scan_dir"  ：扫描目录下所有 SKILL.md，生成技能索引表
+        """
         config = self.skills.get(skill_id)
         if not config or not config.get("enabled", False):
             return None
+
+        if config.get("type") == "scan_dir":
+            return self._build_scan_dir_prompt(skill_id, config)
 
         prompt_rel = config.get("prompt_file")
         if not prompt_rel:
@@ -262,6 +299,66 @@ class SkillLoader:
         except Exception as e:
             logger.warning("读取 Skill '%s' 失败: %s", skill_id, e)
             return None
+
+    def _build_scan_dir_prompt(self, skill_id: str, config: dict) -> Optional[str]:
+        """scan_dir 类型：扫描目录下的 SKILL.md，生成技能索引 + 使用说明。
+
+        每个子目录下的 SKILL.md frontmatter 里需有 name 和 description 字段。
+        生成的 prompt 告诉 AI：有哪些 skill 可用、路径是什么、如何按需加载。
+        """
+        scan_rel = config.get("scan_dir")
+        if not scan_rel:
+            logger.warning("Skill '%s' scan_dir 未配置", skill_id)
+            return None
+
+        scan_dir = (self.base_dir / scan_rel).resolve()
+        if not scan_dir.exists():
+            logger.warning("Skill '%s' scan_dir 不存在: %s", skill_id, scan_dir)
+            return None
+
+        header = config.get("header", "")
+        rows: List[str] = []
+
+        for skill_md in sorted(scan_dir.glob("*/SKILL.md")):
+            try:
+                text = skill_md.read_text(encoding="utf-8")
+            except Exception:
+                continue
+            fm, _ = _parse_frontmatter(text)
+            name = fm.get("name") or skill_md.parent.name
+            desc = fm.get("description") or ""
+            # 截断过长描述
+            if len(desc) > 120:
+                desc = desc[:117] + "..."
+            rows.append(f"| `{name}` | {desc} | `{skill_md}` |")
+
+        if not rows:
+            logger.warning("Skill '%s' scan_dir 下未找到任何 SKILL.md", skill_id)
+            return None
+
+        lines = []
+        if header:
+            lines.append(header.strip())
+            lines.append("")
+
+        lines += [
+            "## 可用 Skill 列表",
+            "",
+            "| Skill 名称 | 用途描述 | SKILL.md 路径 |",
+            "|-----------|---------|--------------|",
+        ] + rows + [
+            "",
+            "## 使用方式",
+            "",
+            "1. 根据用户意图从上表选择合适的 Skill",
+            "2. 调用 `read_local_file` 工具传入对应路径，读取 SKILL.md 完整内容",
+            "3. 按 SKILL.md 中的 API 说明，调用 `ue_call` 工具执行操作",
+            "",
+            "> 无需用户指定路径，AI 根据意图自主选择并加载对应 Skill。",
+        ]
+
+        logger.info("Skill '%s' scan_dir: 发现 %d 个 skill", skill_id, len(rows))
+        return "\n".join(lines)
 
     # ==================== 调试 / 查询 ====================
 

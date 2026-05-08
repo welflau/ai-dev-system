@@ -77,5 +77,18 @@
     "traits_match": {
       "any_of": ["engine:ue5", "engine:ue4"]
     }
+  },
+  "unreal-ucp-skills": {
+    "name": "UE Editor Skill 索引（UCP）",
+    "description": "自动扫描 UCP Skills 目录，生成可用 Skill 索引表，供 ChatAssistant 按需加载",
+    "type": "scan_dir",
+    "scan_dir": "../ue_plugins/UnrealClientProtocol/Skills",
+    "header": "# UE Editor 可用 Skill（通过 UCP 控制运行中的 Editor）\n\n当用户要求操控 UE Editor（管理 Actor、编辑蓝图、修改材质、控制 PIE 等）时：\n先从下表找到对应 Skill，再用 `read_local_file` 读取 SKILL.md，最后用 `ue_call` 执行。",
+    "inject_to": ["ChatAssistant"],
+    "priority": "high",
+    "enabled": true,
+    "traits_match": {
+      "any_of": ["engine:ue5", "engine:ue4"]
+    }
   }
 }
