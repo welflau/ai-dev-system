@@ -514,6 +514,24 @@ async def confirm_create_bug(project_id: str, req: ConfirmBugRequest):
     }
 
 
+class ConfirmCloseRequirementRequest(BaseModel):
+    requirement_id: str
+    reason: str = "用户通过聊天助手关闭"
+
+
+@router.post("/confirm-close-requirement")
+async def confirm_close_requirement(project_id: str, req: ConfirmCloseRequirementRequest):
+    """用户在确认卡片上点「确认关闭」后执行真正的关闭"""
+    project = await db.fetch_one("SELECT id FROM projects WHERE id = ?", (project_id,))
+    if not project:
+        raise HTTPException(404, "项目不存在")
+    from actions.chat.close_requirement import CloseRequirementAction
+    result = await CloseRequirementAction.execute_close(project_id, req.requirement_id, req.reason)
+    if not result.success:
+        raise HTTPException(400, (result.data or {}).get("message", "关闭失败"))
+    return result.data
+
+
 @router.post("/confirm-create-requirement")
 async def confirm_create_requirement(project_id: str, req: ConfirmRequirementRequest):
     """用户确认后真正创建需求"""

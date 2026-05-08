@@ -9179,6 +9179,28 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
                 <span class="action-link" onclick="switchTab('requirements')">查看需求列表 →</span>
             </div>
         `;
+    } else if (action && action.type === 'confirm_close_requirement') {
+        // 关闭需求确认卡片（v0.20：不再直接执行，先让用户确认）
+        const safeId = _nextCardId('close_req');
+        actionHtml = `
+            <div class="chat-action-card chat-confirm-card" id="${safeId}"
+                 data-req-id="${escapeHtml(action.requirement_id || '')}"
+                 data-reason="${escapeHtml(action.reason || '')}"
+                 data-message-id="${escapeHtml(action._message_id || '')}"
+                 style="border-left-color: var(--danger, #ea4a5a);">
+                <div class="action-title">⚠️ 确认关闭需求？</div>
+                <div class="action-detail">
+                    <div class="confirm-req-title">${escapeHtml(action.title || '')}</div>
+                    ${action.pending_tickets > 0
+                        ? `<div class="confirm-req-meta" style="color:var(--warning);">将同时取消 <strong>${action.pending_tickets}</strong> 个未完成工单</div>`
+                        : ''}
+                    ${action.reason ? `<div class="confirm-req-meta">原因：${escapeHtml(action.reason)}</div>` : ''}
+                </div>
+                <div class="confirm-req-btns">
+                    <button class="btn btn-sm btn-danger" onclick="doConfirmCloseRequirement('${safeId}')">🚫 确认关闭</button>
+                    <button class="btn btn-sm" onclick="doCancelCloseRequirement('${safeId}')">✗ 取消</button>
+                </div>
+            </div>`;
     } else if (action && action.type === 'requirement_closed') {
         actionHtml = `
             <div class="chat-action-card" style="border-left-color: var(--danger, #ea4a5a);">
@@ -9530,6 +9552,40 @@ async function doSaveDocToRepo(cardId) {
 }
 
 /** 用户确认创建需求 */
+/** v0.20 关闭需求确认 */
+async function doConfirmCloseRequirement(cardId) {
+    const card = document.getElementById(cardId);
+    if (!card || card.dataset.confirming === '1') return;
+    card.dataset.confirming = '1';
+    const reqId = card.dataset.reqId;
+    const reason = card.dataset.reason || '用户通过聊天助手关闭';
+    card.querySelectorAll('button').forEach(b => b.disabled = true);
+    try {
+        const r = await api(`/projects/${currentProjectId}/chat/confirm-close-requirement`, {
+            method: 'POST',
+            body: { requirement_id: reqId, reason },
+        });
+        card.outerHTML = `<div class="chat-action-card" style="border-left-color:var(--danger);">
+            <div class="action-title">🚫 需求已关闭</div>
+            <div class="action-detail">${escHtml(r.message || '操作完成')}</div>
+            <span class="action-link" onclick="switchTab('requirements')">查看需求列表 →</span>
+        </div>`;
+        showToast('需求已关闭', 'warning');
+        setTimeout(() => { if (typeof loadRequirements === 'function') loadRequirements(); }, 500);
+    } catch (e) {
+        card.dataset.confirming = '0';
+        card.querySelectorAll('button').forEach(b => b.disabled = false);
+        showToast(`关闭失败: ${e.message}`, 'error');
+    }
+}
+
+function doCancelCloseRequirement(cardId) {
+    const card = document.getElementById(cardId);
+    if (card) card.outerHTML = `<div class="chat-action-card" style="border-left-color:var(--text-muted);opacity:0.6;">
+        <div class="action-title">✗ 已取消关闭操作</div>
+    </div>`;
+}
+
 async function doConfirmRequirement(cardId) {
     const card = document.getElementById(cardId);
     if (!card || !currentProjectId) return;
