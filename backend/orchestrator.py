@@ -1782,6 +1782,21 @@ class TicketOrchestrator:
 
             new_status = TicketStatus.DEVELOPMENT_DONE.value
 
+            # 写入前重新读一次最新状态，防止 force_pass / 外部修改被覆盖
+            latest = await db.fetch_one("SELECT status FROM tickets WHERE id = ?", (ticket_id,))
+            latest_status = (latest or {}).get("status", current_status)
+            _TERMINAL_STATUSES = {
+                TicketStatus.TESTING_DONE.value,
+                TicketStatus.DEPLOYED.value,
+                "cancelled",
+            }
+            if latest_status in _TERMINAL_STATUSES:
+                logger.info(
+                    "⏭ 工单 %s 当前状态 %s 已超过 development_done，跳过写入（防止 force_pass 被覆盖）",
+                    ticket_id[:12], latest_status,
+                )
+                return
+
             await db.update("tickets", {
                 "status": new_status,
                 "result": result_json,
