@@ -14,6 +14,10 @@ required_traits:
     - platform:desktop
     - category:game
 
+required_ticket_type:
+  none_of:
+    - bug    # BUG 工单不走 UX 设计阶段，直接进架构→开发
+
 stage:
   agent: UXAgent
   action: write_ux_design
