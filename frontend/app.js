@@ -645,6 +645,7 @@ function switchTab(tab) {
     if (tab === 'ticket-graph') loadTicketGraph();
     if (tab === 'pipeline' && currentPipelineReqId) loadPipeline(currentPipelineReqId);
     if (tab === 'repo') loadRepoTree();
+    if (tab === 'flow') loadFlowPage();
     if (tab === 'roadmap') loadRoadmap();
     if (tab === 'stats') loadStats();
     if (tab === 'agents') startAgentMonitor();
@@ -5651,6 +5652,76 @@ async function loadAgentMonitor() {
 }
 
 // ==================== 统计面板 ====================
+
+// ==================== 项目流程页 ====================
+
+async function loadFlowPage() {
+    if (!currentProjectId) return;
+    const container = document.getElementById('flowContent');
+    if (!container) return;
+    container.innerHTML = '<div style="color:var(--text-muted);padding:20px;">加载中…</div>';
+
+    try {
+        const d = await api(`/projects/${currentProjectId}/flow`);
+        const stages = d.stages || [];
+        const totalTickets = d.total_tickets || 0;
+        const fragments = d.active_fragments || [];
+
+        let html = `
+        <div class="flow-summary">
+            <div class="flow-kpi">
+                <div class="eff-kpi-val">${d.total_requirements || 0}</div>
+                <div class="eff-kpi-label">需求总数</div>
+            </div>
+            <div class="flow-kpi">
+                <div class="eff-kpi-val">${totalTickets}</div>
+                <div class="eff-kpi-label">工单总数</div>
+            </div>
+            <div class="flow-kpi" style="flex:2;min-width:200px;">
+                <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">激活 fragments</div>
+                <div style="display:flex;flex-wrap:wrap;gap:4px;">
+                    ${fragments.map(f => `<span class="req-branch-tag" style="font-size:10px;">${escHtml(f)}</span>`).join('') || '<span style="color:var(--text-muted);font-size:11px;">仅基础 SOP</span>'}
+                </div>
+            </div>
+        </div>
+        <div class="flow-stages-list">`;
+
+        for (let i = 0; i < stages.length; i++) {
+            const s = stages[i];
+            const pct = totalTickets > 0 ? Math.round((s.ticket_count / totalTickets) * 100) : 0;
+            const isLast = i === stages.length - 1;
+            html += `
+            <div class="flow-stage-row">
+                <div class="flow-stage-icon">${escHtml(s.icon || '⚙️')}</div>
+                <div class="flow-stage-info">
+                    <div class="flow-stage-name">${escHtml(s.name)}</div>
+                    ${s.description ? `<div class="flow-stage-desc">${escHtml(s.description)}</div>` : ''}
+                </div>
+                <div class="flow-stage-bar-wrap">
+                    <div class="flow-stage-bar">
+                        <div class="flow-stage-bar-fill ${s.ticket_count > 0 ? 'active' : ''}"
+                             style="width:${pct}%"></div>
+                    </div>
+                </div>
+                <div class="flow-stage-count ${s.ticket_count > 0 ? 'has-tickets' : ''}">
+                    ${s.ticket_count > 0 ? `<span>${s.ticket_count} 个工单</span>` : '<span style="color:var(--text-muted);">-</span>'}
+                </div>
+                ${!isLast ? '<div class="flow-stage-arrow">→</div>' : '<div class="flow-stage-arrow"></div>'}
+            </div>`;
+        }
+        html += '</div>';
+
+        // 底部说明
+        html += `<div style="margin-top:16px;padding:10px 12px;background:var(--bg);border-radius:6px;font-size:11px;color:var(--text-muted);">
+            💡 流程由 <strong>基础 SOP</strong>（设置 → 流程配置）+ 按项目 Traits 注入的 <strong>Fragment</strong> 组合而成。
+            修改 Traits 后刷新此页即可看到最新流程。
+        </div>`;
+
+        container.innerHTML = html;
+    } catch (e) {
+        container.innerHTML = `<div class="empty-state"><p>加载失败: ${escHtml(e.message)}</p></div>`;
+    }
+}
 
 async function loadStats() {
     if (!currentProjectId) return;

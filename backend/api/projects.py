@@ -1474,3 +1474,64 @@ async def preview_assembly(req: PreviewAssemblyRequest):
         "warnings": warnings,
         "suggestions": suggestions,
     }
+
+
+@router.get("/{project_id}/flow")
+async def get_project_flow(project_id: str):
+    """项目流程页：返回组合后的完整 SOP 阶段 + 各阶段工单/需求分布"""
+    project = await db.fetch_one("SELECT * FROM projects WHERE id = ?", (project_id,))
+    if not project:
+        raise HTTPException(404, "项目不存在")
+
+    import json
+    from sop.loader import build_pipeline_stages, compose_sop
+
+    # 解析 traits
+    traits_raw = project.get("traits") or "[]"
+    traits = json.loads(traits_raw) if isinstance(traits_raw, str) else (traits_raw or [])
+
+    # 组合 SOP（按项目 traits）
+    sop_cfg = compose_sop(traits)
+    pipeline = build_pipeline_stages(sop_cfg)
+
+    # 各阶段工单数统计
+    ticket_rows = await db.fetch_all(
+        "SELECT status, COUNT(*) as cnt FROM tickets WHERE project_id = ? GROUP BY status",
+        (project_id,),
+    )
+    status_count = {r["status"]: r["cnt"] for r in ticket_rows}
+
+    # 需求总数
+    req_count = await db.fetch_one(
+        "SELECT COUNT(*) as cnt FROM requirements WHERE project_id = ?", (project_id,)
+    )
+    total_requirements = (req_count or {}).get("cnt", 0)
+
+    # 组装返回结构
+    stages = []
+    for stage_def in pipeline.get("defs", []):
+        in_statuses = stage_def.get("in_statuses") or []
+        ticket_cnt = sum(status_count.get(s, 0) for s in in_statuses)
+        stages.append({
+            "key":         stage_def.get("key", ""),
+            "name":        stage_def.get("name", ""),
+            "icon":        stage_def.get("icon", ""),
+            "description": stage_def.get("description", ""),
+            "ticket_count": ticket_cnt,
+            "in_statuses": in_statuses,
+            "sop_stages":  stage_def.get("sop_stages", []),
+        })
+
+    # 激活的 fragments（compose_sop 存在 composed_from_fragments 字段）
+    fragments = sop_cfg.get("composed_from_fragments") or [] if isinstance(sop_cfg, dict) else []
+
+    return {
+        "project_id": project_id,
+        "project_name": project.get("name", ""),
+        "traits": traits,
+        "total_requirements": total_requirements,
+        "total_tickets": sum(status_count.values()),
+        "stages": stages,
+        "active_fragments": fragments,
+        "sop_name": sop_cfg.get("name", "") if isinstance(sop_cfg, dict) else "",
+    }

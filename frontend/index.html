@@ -117,6 +117,9 @@
                                 </a>
                             </div>
                         </div>
+                        <a class="nav-item" data-tab="flow" onclick="switchTab('flow')">
+                            🔄 流程
+                        </a>
                         <a class="nav-item" data-tab="roadmap" onclick="switchTab('roadmap')">
                             🗺️ Roadmap
                         </a>
@@ -330,6 +333,15 @@
                     </div>
 
                     <!-- Tab: Roadmap 甘特图 -->
+                    <!-- 项目流程页 -->
+                    <div id="tab-flow" class="tab-content">
+                        <div class="page-header">
+                            <h2>🔄 项目流程</h2>
+                            <div style="font-size:12px;color:var(--text-muted);">当前项目按 Traits 组合后的完整 SOP 阶段 · 工单分布</div>
+                        </div>
+                        <div id="flowContent" style="padding:0 4px;"></div>
+                    </div>
+
                     <div id="tab-roadmap" class="tab-content">
                         <div class="page-header">
                             <h2>🗺️ Roadmap</h2>
