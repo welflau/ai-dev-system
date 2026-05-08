@@ -7810,3 +7810,59 @@ body.chat-open .chat-panel {
 .flow-stage-count { width: 80px; flex-shrink: 0; font-size: 12px; text-align: right; }
 .flow-stage-count.has-tickets { color: var(--primary-light, #a5b4fc); font-weight: 500; }
 .flow-stage-arrow { width: 24px; flex-shrink: 0; color: var(--text-muted); font-size: 12px; text-align: center; }
+
+/* ==================== AI 思考面板 ==================== */
+.chat-thinking-panel {
+    margin: 0 0 6px 36px;   /* 左对齐到 AI 头像右侧 */
+    font-size: 12px;
+    border-left: 2px solid var(--border, #2d3748);
+    border-radius: 0 6px 6px 0;
+    overflow: hidden;
+    transition: border-color 0.2s;
+}
+.chat-thinking-panel:hover { border-color: rgba(163,113,247,0.5); }
+
+/* 标题栏 */
+.ctp-header {
+    display: flex; align-items: center; gap: 6px;
+    padding: 5px 10px;
+    cursor: pointer;
+    user-select: none;
+    color: var(--text-muted, #718096);
+    transition: color 0.15s;
+}
+.ctp-header:hover { color: var(--text-secondary, #a0aec0); }
+.ctp-icon { font-size: 11px; color: rgba(163,113,247,0.8); }
+.ctp-title { flex: 1; font-size: 11px; letter-spacing: 0.02em; }
+.ctp-toggle { font-size: 10px; transition: transform 0.2s; }
+.ctp-expanded .ctp-toggle { transform: rotate(180deg); }
+
+/* 步骤列表（折叠时隐藏） */
+.ctp-body {
+    max-height: 0; overflow: hidden;
+    transition: max-height 0.25s ease-out;
+}
+.ctp-expanded .ctp-body {
+    max-height: 240px; overflow-y: auto;
+}
+
+/* 单个步骤 */
+.ctp-step {
+    display: flex; align-items: baseline; gap: 6px;
+    padding: 3px 10px 3px 14px;
+    line-height: 1.5;
+}
+.ctp-step-dot {
+    width: 5px; height: 5px; border-radius: 50%;
+    flex-shrink: 0; margin-top: 5px;
+    background: var(--border, #2d3748);
+    transition: background 0.2s;
+}
+.ctp-step-running .ctp-step-dot { background: var(--primary, #6366f1); animation: ctp-pulse 1s infinite; }
+.ctp-step-done .ctp-step-dot { background: var(--success, #34d058); }
+@keyframes ctp-pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+.ctp-step-label { color: var(--text-secondary, #a0aec0); font-size: 11px; }
+.ctp-step-hint { color: var(--text-muted, #718096); font-size: 10px; font-family: monospace; }
+.ctp-step-status { color: var(--text-muted, #718096); font-size: 10px; margin-left: auto; flex-shrink: 0; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ctp-step-done .ctp-step-status { color: var(--success, #34d058); }

@@ -6469,31 +6469,10 @@ function connectSSE(projectId) {
             }
         });
 
-        // AI 助手思考日志：工具调用前后推送，显示在 chatTyping 气泡下方
+        // AI 助手思考日志：工具调用前后推送，渲染到独立思考面板
         eventSource.addEventListener('chat_thinking_log', (e) => {
             const data = JSON.parse(e.data);
-            const logEl = document.getElementById('chatThinkingLog');
-            if (!logEl) return;
-            logEl.style.display = 'block';
-            const toolLabel = {
-                search_knowledge: '🔍 搜索知识库', search_ticket_history: '🗂 检索历史工单',
-                fetch_url: '🌐 访问链接', git_log: '📜 查提交历史', git_read_file: '📄 读取文件',
-                generate_document: '📝 生成文档', confirm_save_doc: '💾 准备保存文档',
-                confirm_requirement: '📋 识别需求', confirm_bug: '🐛 识别 BUG',
-                get_requirement_pipeline: '🔍 查需求进度', get_ticket_status: '📊 查工单状态',
-                get_requirement_logs: '📋 查工单日志', get_build_logs: '🔧 查构建日志',
-                confirm_project: '🏗 识别新建项目',
-            }[data.tool] || `🔧 ${data.tool}`;
-            const line = document.createElement('div');
-            if (data.step === 'start') {
-                line.textContent = `${toolLabel}${data.args_hint ? ' ' + data.args_hint : ''}…`;
-                line.style.color = 'var(--primary-light, #a5b4fc)';
-            } else {
-                line.textContent = `  ↩ ${data.summary || '完成'}`;
-                line.style.color = 'var(--text-muted)';
-            }
-            logEl.appendChild(line);
-            logEl.scrollTop = logEl.scrollHeight;
+            _chatThinkingAppend(data);
         });
 
         eventSource.onerror = () => {
@@ -8756,6 +8735,102 @@ function appendToTicketFeed(logData) {
     }
 }
 
+// ==================== 思考面板 ====================
+
+const _TOOL_LABELS = {
+    search_knowledge: '🔍 搜索知识库',
+    search_ticket_history: '🗂 检索历史工单',
+    fetch_url: '🌐 访问链接',
+    git_log: '📜 查提交历史',
+    git_read_file: '📄 读取文件',
+    git_list_branches: '🌿 列出分支',
+    git_switch_branch: '🔀 切换分支',
+    git_merge: '🔀 合并分支',
+    generate_document: '📝 生成文档',
+    confirm_save_doc: '💾 准备保存文档',
+    confirm_requirement: '📋 识别需求',
+    confirm_requirements_batch: '📋 识别多个需求',
+    confirm_bug: '🐛 识别 BUG',
+    confirm_project: '🏗 识别新建项目',
+    close_requirement: '🚫 关闭需求',
+    pause_requirement: '⏸ 暂停需求',
+    resume_requirement: '▶ 恢复需求',
+    get_requirement_pipeline: '🔍 查需求进度',
+    get_ticket_status: '📊 查工单状态',
+    get_requirement_logs: '📋 查工单日志',
+    get_build_logs: '🔧 查构建日志',
+    get_memory: '🧠 查 Agent 记忆',
+    competitor_analysis: '🔎 竞品分析',
+};
+
+let _currentThinkingPanel = null;  // 当前正在写入的思考面板元素
+let _currentThinkingSteps = [];    // 当前轮次的步骤记录
+
+/** 开始一个新的思考面板（发消息时调用） */
+function _chatThinkingBegin() {
+    _currentThinkingPanel = null;
+    _currentThinkingSteps = [];
+}
+
+/** 追加思考步骤（SSE 事件驱动） */
+function _chatThinkingAppend(data) {
+    // 若面板还未创建，立即在 chatTyping 前插入
+    if (!_currentThinkingPanel) {
+        const typing = document.getElementById('chatTyping');
+        if (!typing) return;
+        const panel = document.createElement('div');
+        panel.className = 'chat-thinking-panel';
+        panel.innerHTML = `
+            <div class="ctp-header" onclick="this.closest('.chat-thinking-panel').classList.toggle('ctp-expanded')">
+                <span class="ctp-icon">✦</span>
+                <span class="ctp-title">思考中…</span>
+                <span class="ctp-toggle">∨</span>
+            </div>
+            <div class="ctp-body"></div>`;
+        typing.parentNode.insertBefore(panel, typing);
+        _currentThinkingPanel = panel;
+        panel.classList.add('ctp-expanded');
+    }
+
+    const body = _currentThinkingPanel.querySelector('.ctp-body');
+    const toolLabel = _TOOL_LABELS[data.tool] || `🔧 ${data.tool}`;
+
+    if (data.step === 'start') {
+        // 新建一个步骤条目
+        const step = document.createElement('div');
+        step.className = 'ctp-step ctp-step-running';
+        step.dataset.tool = data.tool;
+        step.innerHTML = `
+            <span class="ctp-step-dot"></span>
+            <span class="ctp-step-label">${escHtml(toolLabel)}</span>
+            ${data.args_hint ? `<span class="ctp-step-hint">${escHtml(data.args_hint)}</span>` : ''}
+            <span class="ctp-step-status">…</span>`;
+        body.appendChild(step);
+        _currentThinkingSteps.push({ tool: data.tool, el: step });
+    } else {
+        // 找到对应的 start 步骤并更新状态
+        const existing = [..._currentThinkingSteps].reverse().find(s => s.tool === data.tool);
+        if (existing && existing.el) {
+            existing.el.classList.remove('ctp-step-running');
+            existing.el.classList.add('ctp-step-done');
+            const statusEl = existing.el.querySelector('.ctp-step-status');
+            if (statusEl) statusEl.textContent = data.summary ? `✓ ${data.summary.slice(0, 60)}` : '✓';
+        }
+    }
+    body.scrollTop = body.scrollHeight;
+}
+
+/** 思考完成，折叠面板并更新标题 */
+function _chatThinkingFinish() {
+    if (!_currentThinkingPanel) return;
+    const stepCount = _currentThinkingSteps.length;
+    const title = _currentThinkingPanel.querySelector('.ctp-title');
+    if (title) title.textContent = `思考了 ${stepCount} 步`;
+    _currentThinkingPanel.classList.remove('ctp-expanded');
+    _currentThinkingPanel = null;
+    _currentThinkingSteps = [];
+}
+
 /**
  * 发送聊天消息
  */
@@ -8806,6 +8881,9 @@ async function sendChatMessage() {
     const bubbleMessage = message + (docs.length > 0 ? '\n' + docs.map(d => `📎 ${d.filename}`).join(' ') : '');
     appendChatBubble('user', bubbleMessage, null, null, images);
     scrollChatToBottom();
+
+    // 重置思考面板（每次发消息前清空）
+    _chatThinkingBegin();
 
     // 添加加载动画（根据模式放入正确容器）
     const typingEl = document.createElement('div');
@@ -8948,6 +9026,8 @@ async function sendChatMessage() {
         }
 
         if (chatMode !== 'group') {
+        // 思考完成，折叠面板
+        _chatThinkingFinish();
         // 移除加载动画
         document.getElementById('chatTyping')?.remove();
 
