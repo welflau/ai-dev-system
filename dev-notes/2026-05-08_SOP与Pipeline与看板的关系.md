@@ -4,6 +4,26 @@
 
 ---
 
+## 四张截图
+
+**Image #80 — 生效配置预览**（设置 → 基本信息 → Traits 下方）
+
+![生效配置预览](screenshots/2026-05-08_sop_80.png)
+
+**Image #81 — 需求 Pipeline**（需求详情页）
+
+![需求 Pipeline](screenshots/2026-05-08_sop_81.png)
+
+**Image #82 — 工单看板**（工单 → 看板）
+
+![工单看板](screenshots/2026-05-08_sop_82.png)
+
+**Image #83 — 流程配置（SOP 骨架）**（设置 → 流程配置）
+
+![流程配置](screenshots/2026-05-08_sop_83.png)
+
+---
+
 ## 一张图说明关系
 
 ```
