@@ -999,18 +999,22 @@ class TicketOrchestrator:
             for idx, tk in enumerate(tickets_data):
                 raw_deps = tk.get("dependencies", [])
                 if raw_deps:
+                    current_tk_id = idx_to_id[idx]
                     dep_ids = []
                     for d in raw_deps:
                         if isinstance(d, int) and d in idx_to_id:
-                            dep_ids.append(idx_to_id[d])
+                            dep_id = idx_to_id[d]
+                            if dep_id != current_tk_id:  # 过滤自引用
+                                dep_ids.append(dep_id)
                         elif isinstance(d, str) and d.startswith("TK-"):
-                            dep_ids.append(d)  # 已经是 TK-ID
+                            if d != current_tk_id:  # 过滤自引用
+                                dep_ids.append(d)
                     if dep_ids:
                         await db.update(
                             "tickets",
                             {"dependencies": json.dumps(dep_ids), "updated_at": now_iso()},
                             "id = ?",
-                            (idx_to_id[idx],),
+                            (current_tk_id,),
                         )
 
             # 更新需求状态为已拆单
@@ -1181,6 +1185,9 @@ class TicketOrchestrator:
                 dep_ids = json.loads(deps_json) if deps_json else []
             except (json.JSONDecodeError, TypeError):
                 dep_ids = []
+
+            # 过滤自引用（工单依赖自身会导致死循环）
+            dep_ids = [d for d in dep_ids if d != ticket_id]
 
             if dep_ids and ticket["status"] == TicketStatus.PENDING.value:
                 # 查询所有依赖工单的状态（testing_done 或 deployed 都算完成）
