@@ -10303,9 +10303,112 @@ let _chatInputDraft = '';        // 用户正在编辑的草稿，上键前保�
 /**
  * 处理键盘事件
  */
+// ==================== /test 斜杠命令 ====================
+
+const _AGENT_TEST_LIST = [
+    { id: 'ChatAssistant', label: '💬 ChatAssistant', desc: '项目内 AI 助手对话' },
+    { id: 'ProductAgent',  label: '📋 ProductAgent',  desc: '需求分析 + 拆单' },
+    { id: 'ArchitectAgent',label: '🏗 ArchitectAgent', desc: '架构设计文档' },
+    { id: 'DevAgent',      label: '👨‍💻 DevAgent',      desc: '代码开发 + 自测' },
+    { id: 'ReviewAgent',   label: '🔍 ReviewAgent',    desc: '代码审查' },
+    { id: 'TestAgent',     label: '🧪 TestAgent',      desc: '验收测试' },
+    { id: 'ImageProcessor',label: '🎨 ImageProcessor', desc: 'LightAI 生图 API' },
+];
+
+function _handleSlashTest(cmd) {
+    if (!currentProjectId) { showToast('请先进入项目', 'info'); return; }
+    const parts = cmd.split(/\s+/);
+    const target = parts[1] || '';  // '' = 展示面板, 'all' = 全测, 'DevAgent' = 单测
+
+    // 找或创建测试面板
+    let panelEl = document.getElementById('agentTestPanel');
+    if (!panelEl) {
+        panelEl = document.createElement('div');
+        panelEl.id = 'agentTestPanel';
+        panelEl.className = 'agent-test-panel';
+        const container = document.getElementById('chatMessages');
+        if (container) container.appendChild(panelEl);
+    }
+    _renderAgentTestPanel(panelEl, {});
+
+    if (target === 'all') {
+        _runAgentTests(panelEl, _AGENT_TEST_LIST.map(a => a.id));
+    } else if (target) {
+        _runAgentTests(panelEl, [target]);
+    }
+    scrollChatToBottom();
+}
+
+function _renderAgentTestPanel(el, results) {
+    const rows = _AGENT_TEST_LIST.map(a => {
+        const r = results[a.id];
+        let statusHtml = '<span style="color:var(--text-muted)">–</span>';
+        if (r) {
+            if (r._running) statusHtml = `<span class="at-running">⏳ 测试中</span>`;
+            else if (r.passed) statusHtml = `<span class="at-pass">✅ 通过 <small>${r.elapsed_ms}ms</small></span>`;
+            else if (r.type === 'timeout') statusHtml = `<span class="at-fail">⏰ 超时</span>`;
+            else statusHtml = `<span class="at-fail">❌ ${escHtml((r.error || '失败').slice(0, 50))}</span>`;
+        }
+        return `<tr>
+            <td class="at-agent-name">${a.label}</td>
+            <td class="at-desc">${a.desc}</td>
+            <td class="at-status">${statusHtml}</td>
+            <td><button class="btn btn-xs at-run-btn" onclick="_runAgentTests(document.getElementById('agentTestPanel'),'${a.id}')" ${r?._running?'disabled':''}>测试</button></td>
+        </tr>`;
+    }).join('');
+
+    el.innerHTML = `
+    <div class="at-header">
+        <span>🧪 Agent 健康检测</span>
+        <div style="display:flex;gap:6px;">
+            <button class="btn btn-xs btn-primary" onclick="_runAgentTests(document.getElementById('agentTestPanel'),null)">▶ 全部测试</button>
+            <button class="btn btn-xs" onclick="_resetAgentTests()">⟳ 重置</button>
+            <button class="btn btn-xs" onclick="document.getElementById('agentTestPanel').remove()">✕</button>
+        </div>
+    </div>
+    <table class="at-table"><tbody>${rows}</tbody></table>
+    <div class="at-hint">提示：在聊天框输入 <code>/test</code>、<code>/test all</code>、<code>/test DevAgent</code> 触发</div>`;
+}
+
+let _atResults = {};
+
+async function _runAgentTests(el, agents) {
+    if (!currentProjectId || !el) return;
+    const targets = agents === null ? _AGENT_TEST_LIST.map(a => a.id)
+                  : Array.isArray(agents) ? agents : [agents];
+
+    for (const id of targets) {
+        _atResults[id] = { _running: true };
+        _renderAgentTestPanel(el, _atResults);
+        scrollChatToBottom();
+        try {
+            const d = await api(`/projects/${currentProjectId}/agent-test/${id}`, { method: 'POST' });
+            _atResults[id] = { ...d, _running: false };
+        } catch (e) {
+            _atResults[id] = { passed: false, error: e.message, elapsed_ms: 0, _running: false };
+        }
+        _renderAgentTestPanel(el, _atResults);
+    }
+    scrollChatToBottom();
+}
+
+function _resetAgentTests() {
+    _atResults = {};
+    const el = document.getElementById('agentTestPanel');
+    if (el) _renderAgentTestPanel(el, {});
+}
+
 function handleChatKeydown(e) {
     if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
+        // 斜杠命令拦截
+        const input = document.getElementById('chatInput');
+        const val = (input?.value || '').trim();
+        if (val.startsWith('/test')) {
+            _handleSlashTest(val);
+            if (input) input.value = '';
+            return;
+        }
         sendChatMessage();
         return;
     }

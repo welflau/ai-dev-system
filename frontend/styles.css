@@ -7866,3 +7866,32 @@ body.chat-open .chat-panel {
 .ctp-step-hint { color: var(--text-muted, #718096); font-size: 10px; font-family: monospace; }
 .ctp-step-status { color: var(--text-muted, #718096); font-size: 10px; margin-left: auto; flex-shrink: 0; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ctp-step-done .ctp-step-status { color: var(--success, #34d058); }
+
+/* ==================== Agent 测试面板 ==================== */
+.agent-test-panel {
+    margin: 8px 0;
+    border: 1px solid var(--border, #2d3748);
+    border-radius: 8px;
+    overflow: hidden;
+    background: var(--bg-secondary, #1a1f2e);
+}
+.at-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 12px;
+    background: var(--bg-elevated, #252d3d);
+    font-size: 13px; font-weight: 600;
+    color: var(--text-primary, #e2e8f0);
+    border-bottom: 1px solid var(--border, #2d3748);
+}
+.at-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.at-table td { padding: 7px 10px; border-bottom: 1px solid var(--border-light, #1e2433); }
+.at-table tr:last-child td { border-bottom: none; }
+.at-agent-name { font-weight: 500; color: var(--text-secondary, #a0aec0); width: 160px; }
+.at-desc { color: var(--text-muted, #718096); }
+.at-status { width: 160px; }
+.at-run-btn { font-size: 11px; padding: 2px 8px; }
+.at-pass { color: var(--success, #34d058); }
+.at-fail { color: var(--danger, #fc8181); }
+.at-running { color: var(--warning, #f6c90e); }
+.at-hint { padding: 6px 12px 8px; font-size: 11px; color: var(--text-muted, #718096); }
+.at-hint code { background: var(--bg, #0d1117); padding: 1px 4px; border-radius: 3px; }
