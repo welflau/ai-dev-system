@@ -157,7 +157,7 @@
                                 <span class="nav-item-icon">📂</span> 仓库配置
                             </a>
                             <a class="nav-item nav-sub-item" data-tab="settings-sop" onclick="switchTab('settings-sop')">
-                                <span class="nav-item-icon">🔄</span> 流程配置
+                                <span class="nav-item-icon">🔧</span> 基础 SOP 模板
                             </a>
                             <!-- v0.19.x: 「环境管理」已合并到「🚀 交付 & 环境」主入口，这里撤下 -->
                             <a class="nav-item nav-sub-item" data-tab="settings-agents" onclick="switchTab('settings-agents')">
@@ -751,11 +751,11 @@
                     </div>
 
                     <!-- Tab: 设置 - 环境管理 -->
-                    <!-- Tab: 设置 - 流程配置 -->
+                    <!-- Tab: 设置 - 基础 SOP 模板 -->
                     <div id="tab-settings-sop" class="tab-content">
                         <div class="settings-page">
                             <div class="settings-page-header">
-                                <h2>🔄 流程配置 (SOP)</h2>
+                                <h2>🔧 基础 SOP 模板</h2>
                                 <div class="sop-header-actions">
                                     <button class="btn btn-sm" id="sopBtnReload" onclick="reloadSOP()">🔄 重载配置</button>
                                     <button class="btn btn-sm" id="sopBtnEdit" onclick="toggleSOPEditMode()">✏️ 编辑</button>
@@ -763,6 +763,14 @@
                                     <button class="btn btn-sm" id="sopBtnDiscard" onclick="discardSOPChanges()" style="display:none;">↻ 放弃修改</button>
                                     <button class="btn btn-sm btn-primary" id="sopBtnSave" onclick="saveSOPConfig()" style="display:none;">💾 保存并重载</button>
                                 </div>
+                            </div>
+                            <!-- 说明横幅 -->
+                            <div style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:10px 14px;margin-bottom:16px;font-size:12px;color:var(--text-muted);line-height:1.6;">
+                                🔧 <strong style="color:var(--text-secondary);">这是所有项目共用的基础流程骨架</strong>，包含通用阶段和状态转换规则。<br>
+                                实际运行的流程 = 基础模板 + 按项目 Traits 动态注入的 Fragment。<br>
+                                <span style="color:var(--primary-light,#a5b4fc);cursor:pointer;" onclick="if(currentProjectId){switchTab('flow')}else{showToast('请先进入项目','info')}">
+                                    → 查看当前项目的完整运行流程
+                                </span>
                             </div>
                             <div id="sopInfo" style="margin-bottom:16px;"></div>
                             <div class="sop-flow-container" id="sopFlowChart"></div>
