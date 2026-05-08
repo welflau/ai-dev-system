@@ -23,3 +23,7 @@ stage:
 
 pipeline_view_contrib:
   group: design
+  create_if_missing:
+    name: 设计
+    icon: 🎨
+    insert_after: requirement_analysis

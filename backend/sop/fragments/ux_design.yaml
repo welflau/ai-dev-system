@@ -2,7 +2,7 @@
 # 适用：web / wechat / mobile / desktop / 游戏项目
 id: ux_design
 name: UX 交互设计
-insert_after: planning          # 插在 planning 阶段之后
+insert_after: requirement_analysis          # 插在 planning 阶段之后
 priority: 90                    # 高优先级，确保在 architecture 之前
 description: 产出交互流程/组件线框/状态定义/资产清单初稿，供架构和开发参考
 
@@ -26,4 +26,4 @@ pipeline_view_contrib:
   create_if_missing:
     name: 设计
     icon: 🎨
-    insert_after: planning
+    insert_after: requirement_analysis
