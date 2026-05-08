@@ -290,7 +290,7 @@ from api.image_gen import router as image_gen_router
 from api.art_assets import router as art_assets_router
 from api.efficiency import router as efficiency_router
 from api.competitor import router as competitor_router
-from api.agent_test import router as agent_test_router
+from api.agent_test import router as agent_test_router, global_router as agent_test_global_router
 
 app.include_router(projects_router)
 app.include_router(requirements_router)
@@ -313,6 +313,7 @@ app.include_router(art_assets_router)
 app.include_router(efficiency_router)
 app.include_router(competitor_router)
 app.include_router(agent_test_router)
+app.include_router(agent_test_global_router)
 
 
 # ==================== 系统端点 ====================

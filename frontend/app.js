@@ -10316,7 +10316,6 @@ const _AGENT_TEST_LIST = [
 ];
 
 function _handleSlashTest(cmd) {
-    if (!currentProjectId) { showToast('请先进入项目', 'info'); return; }
     const parts = cmd.split(/\s+/);
     const target = parts[1] || '';  // '' = 展示面板, 'all' = 全测, 'DevAgent' = 单测
 
@@ -10357,9 +10356,11 @@ function _renderAgentTestPanel(el, results) {
         </tr>`;
     }).join('');
 
+    const ctxNote = currentProjectId ? '' :
+        ' <small style="color:var(--text-muted);font-weight:400;">（自动借用已有项目运行）</small>';
     el.innerHTML = `
     <div class="at-header">
-        <span>🧪 Agent 健康检测</span>
+        <span>🧪 Agent 健康检测${ctxNote}</span>
         <div style="display:flex;gap:6px;">
             <button class="btn btn-xs btn-primary" onclick="_runAgentTests(document.getElementById('agentTestPanel'),null)">▶ 全部测试</button>
             <button class="btn btn-xs" onclick="_resetAgentTests()">⟳ 重置</button>
@@ -10373,16 +10374,20 @@ function _renderAgentTestPanel(el, results) {
 let _atResults = {};
 
 async function _runAgentTests(el, agents) {
-    if (!currentProjectId || !el) return;
+    if (!el) return;
     const targets = agents === null ? _AGENT_TEST_LIST.map(a => a.id)
                   : Array.isArray(agents) ? agents : [agents];
+    // 全局模式用 /api/agent-test，项目内用 /api/projects/{id}/agent-test
+    const baseUrl = currentProjectId
+        ? `/projects/${currentProjectId}/agent-test`
+        : `/agent-test`;
 
     for (const id of targets) {
         _atResults[id] = { _running: true };
         _renderAgentTestPanel(el, _atResults);
         scrollChatToBottom();
         try {
-            const d = await api(`/projects/${currentProjectId}/agent-test/${id}`, { method: 'POST' });
+            const d = await api(`${baseUrl}/${id}`, { method: 'POST' });
             _atResults[id] = { ...d, _running: false };
         } catch (e) {
             _atResults[id] = { passed: false, error: e.message, elapsed_ms: 0, _running: false };

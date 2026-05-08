@@ -14,6 +14,7 @@ from database import db
 logger = logging.getLogger("api.agent_test")
 
 router = APIRouter(prefix="/api/projects/{project_id}/agent-test", tags=["agent-test"])
+global_router = APIRouter(prefix="/api/agent-test", tags=["agent-test"])
 
 
 async def _run_with_timeout(coro, timeout: float = 10.0):
@@ -200,4 +201,43 @@ async def test_agent(project_id: str, agent_name: str):
 @router.get("")
 async def list_agents(project_id: str):
     """列出可测试的 Agent 列表"""
+    return {"agents": AVAILABLE_AGENTS}
+
+
+# ==================== 全局端点（无 project_id，自动借第一个项目）====================
+
+async def _get_any_project_id() -> str:
+    """获取任意一个可用项目 ID，用于全局测试"""
+    row = await db.fetch_one(
+        "SELECT id FROM projects WHERE id != '__global__' ORDER BY created_at DESC LIMIT 1"
+    )
+    if row:
+        return row["id"]
+    raise HTTPException(400, "没有可用项目，请先创建一个项目再运行 Agent 测试")
+
+
+@global_router.post("/{agent_name}")
+async def test_agent_global(agent_name: str):
+    """全局 Agent 测试（不需要 project_id，自动借第一个可用项目）"""
+    project_id = await _get_any_project_id()
+
+    if agent_name == "all":
+        results = {}
+        for name, fn in _AGENT_TESTS.items():
+            ok, result, ms = await _run_with_timeout(fn(project_id))
+            results[name] = {"passed": ok, "elapsed_ms": ms, **result}
+        return {"results": results, "project_id_used": project_id}
+
+    fn = _AGENT_TESTS.get(agent_name)
+    if not fn:
+        raise HTTPException(400, f"未知 Agent：{agent_name}，可选：{AVAILABLE_AGENTS}")
+
+    ok, result, ms = await _run_with_timeout(fn(project_id))
+    return {"agent": agent_name, "passed": ok, "elapsed_ms": ms,
+            "project_id_used": project_id, **result}
+
+
+@global_router.get("")
+async def list_agents_global():
+    """列出可测试的 Agent 列表（全局）"""
     return {"agents": AVAILABLE_AGENTS}
