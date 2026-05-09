@@ -8996,26 +8996,7 @@ async function sendChatMessage() {
         _thinkingESrc = new EventSource(`${API}/chat/thinking-stream?session_id=${_thinkingSessionId}`);
         _thinkingESrc.addEventListener('chat_thinking_log', (e) => {
             const data = JSON.parse(e.data);
-            const logEl = document.getElementById('chatThinkingLog');
-            if (!logEl) return;
-            logEl.style.display = 'block';
-            const toolLabel = {
-                search_knowledge: '🔍 搜索知识库', search_ticket_history: '🗂 检索历史工单',
-                fetch_url: '🌐 访问链接', git_read_file: '📄 读取文件',
-                generate_document: '📝 生成文档', confirm_save_doc: '💾 准备保存文档',
-                confirm_requirement: '📋 识别需求', confirm_bug: '🐛 识别 BUG',
-                confirm_project: '🏗 识别新建项目',
-            }[data.tool] || `🔧 ${data.tool}`;
-            const line = document.createElement('div');
-            if (data.step === 'start') {
-                line.textContent = `${toolLabel}${data.args_hint ? ' ' + data.args_hint : ''}…`;
-                line.style.color = 'var(--primary-light, #a5b4fc)';
-            } else {
-                line.textContent = `  ↩ ${data.summary || '完成'}`;
-                line.style.color = 'var(--text-muted)';
-            }
-            logEl.appendChild(line);
-            logEl.scrollTop = logEl.scrollHeight;
+            _chatThinkingAppend(data);  // 统一用新思考面板
         });
     }
 

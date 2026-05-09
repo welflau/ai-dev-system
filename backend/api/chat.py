@@ -1636,7 +1636,7 @@ class GlobalChatResponse(BaseModel):
 @global_chat_router.post("", response_model=GlobalChatResponse)
 async def global_chat_with_ai(req: GlobalChatRequest):
     """全局聊天（项目列表页）— ChatAssistantAgent + tool_use"""
-    result = await _global_chat_via_agent(req)
+    result, _thinking_steps = await _global_chat_via_agent(req)
     # v0.20 保存全局聊天消息到 DB（project_id='__global__'，session 关联）
     if req.chat_session_id:
         try:
@@ -1647,7 +1647,7 @@ async def global_chat_with_ai(req: GlobalChatRequest):
             action = result.action or (result.actions[0] if result.actions else None)
             await _save_chat_message(
                 "__global__", "assistant", result.reply,
-                action=action, session_id=req.chat_session_id,
+                action=action, session_id=req.chat_session_id, thinking=_thinking_steps,
             )
             # v0.20：若本轮创建了新项目，把全局 session 的消息复制到新项目
             new_pid = None
@@ -1739,7 +1739,7 @@ async def _global_chat_via_agent(req: GlobalChatRequest) -> GlobalChatResponse:
         q = _THINKING_QUEUES.get(req.session_id)
         if q:
             await q.put(None)  # None = 结束信号
-    return GlobalChatResponse(reply=result["reply"], action=result.get("action"), actions=result.get("actions"))
+    return GlobalChatResponse(reply=result["reply"], action=result.get("action"), actions=result.get("actions")), result.get("thinking_steps")  # noqa: E501
 
 
 # ---- 全局会话管理端点 ----
