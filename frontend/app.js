@@ -8484,7 +8484,8 @@ async function _ensureChatSession() {
  * 返回与非流式路径兼容的 {reply, action, actions} 对象。
  */
 async function _sendChatStreaming(url, body) {
-    // 创建空 assistant 气泡，立即插入 DOM
+    // 移除 chatTyping，创建流式气泡取代它
+    document.getElementById('chatTyping')?.remove();
     const container = document.getElementById('chatMessages');
     const bubbleWrapper = document.createElement('div');
     bubbleWrapper.className = 'chat-msg assistant _streaming';
@@ -8494,16 +8495,28 @@ async function _sendChatStreaming(url, body) {
             <div class="chat-msg-bubble _stream-bubble"></div>
             <div class="chat-msg-time"></div>
         </div>`;
-    // 在 chatTyping 前插入
-    const typing = document.getElementById('chatTyping');
-    if (typing) container.insertBefore(bubbleWrapper, typing);
-    else container.appendChild(bubbleWrapper);
+    container.appendChild(bubbleWrapper);
 
     const bubbleEl = bubbleWrapper.querySelector('._stream-bubble');
 
     let fullText = '';
     let finalAction = null;
     let finalActions = [];
+
+    // 节流 Markdown 渲染：每 300ms 或每 200 字渲染一次，减少闪烁
+    let _lastRenderLen = 0;
+    let _renderTimer = null;
+    const _scheduleRender = () => {
+        if (_renderTimer) return;
+        _renderTimer = setTimeout(() => {
+            _renderTimer = null;
+            if (fullText.length - _lastRenderLen > 10) {
+                bubbleEl.innerHTML = formatChatContent(fullText);
+                _lastRenderLen = fullText.length;
+                scrollChatToBottom();
+            }
+        }, 300);
+    };
 
     try {
         const fetchResp = await fetch(`${API}${url}`, {
@@ -8547,9 +8560,15 @@ async function _sendChatStreaming(url, body) {
 
                 if (eventName === 'text_delta') {
                     fullText += data.delta;
-                    // 文字阶段：直接 textContent（快，不解析 Markdown 防闪烁）
-                    bubbleEl.textContent = fullText;
-                    scrollChatToBottom();
+                    // 每 200 字或 300ms 做一次 Markdown 渲染
+                    if (fullText.length - _lastRenderLen >= 200) {
+                        if (_renderTimer) { clearTimeout(_renderTimer); _renderTimer = null; }
+                        bubbleEl.innerHTML = formatChatContent(fullText);
+                        _lastRenderLen = fullText.length;
+                        scrollChatToBottom();
+                    } else {
+                        _scheduleRender();
+                    }
 
                 } else if (eventName === 'tool_start') {
                     _chatThinkingAppend({ step: 'start', tool: data.tool, args_hint: data.label || '' });
@@ -8578,7 +8597,8 @@ async function _sendChatStreaming(url, body) {
         return await originalApi(url.replace('/stream', ''), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     }
 
-    // 流结束：完整 Markdown 渲染（处理代码块、表格等）
+    // 流结束：取消节流，完整 Markdown 渲染
+    if (_renderTimer) { clearTimeout(_renderTimer); _renderTimer = null; }
     bubbleEl.innerHTML = formatChatContent(fullText || '操作已完成。');
     bubbleWrapper.classList.remove('_streaming');
     _chatThinkingFinish();
@@ -9208,7 +9228,7 @@ async function sendChatMessage() {
         if (chatMode !== 'group') {
         // 思考完成，折叠面板（流式路径已在流中折叠，非流式才在此处折叠）
         if (!resp || !resp._streamed) _chatThinkingFinish();
-        // 移除加载动画
+        // 移除加载动画（流式路径已提前移除，此处为非流式兜底）
         document.getElementById('chatTyping')?.remove();
 
         // 若发送时和回调时 context 不同（用户已切换项目/返回全局），丢弃本次回复
