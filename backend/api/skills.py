@@ -106,6 +106,20 @@ _MARKETPLACE_DIR = Path(__file__).parent.parent / "skills" / "marketplace"
 _USE_SKILLS_DIR  = Path(__file__).parent.parent / "skills" / "use_skills"
 
 
+def _iter_marketplace_skills(base_dir: Path):
+    """递归扫描 marketplace 目录，返回所有包含 SKILL.md 的目录（支持多层子文件夹）。"""
+    for skill_md in sorted(base_dir.rglob("SKILL.md")):
+        yield skill_md.parent
+
+
+def _find_marketplace_skill(dir_name: str) -> Path | None:
+    """在 marketplace 目录中递归查找指定 dir_name 的 Skill 目录（跨子文件夹）。"""
+    for skill_dir in _iter_marketplace_skills(_MARKETPLACE_DIR):
+        if skill_dir.name == dir_name:
+            return skill_dir
+    return None
+
+
 def _parse_skill_meta(skill_md: Path) -> dict:
     """从 SKILL.md frontmatter 提取 name / description。"""
     try:
@@ -134,10 +148,8 @@ async def list_marketplace_skills():
         if _USE_SKILLS_DIR.exists() else set()
 
     skills = []
-    for skill_dir in sorted(_MARKETPLACE_DIR.iterdir()):
+    for skill_dir in _iter_marketplace_skills(_MARKETPLACE_DIR):
         skill_md = skill_dir / "SKILL.md"
-        if not skill_dir.is_dir() or not skill_md.exists():
-            continue
         meta = _parse_skill_meta(skill_md)
         skills.append({
             "dir_name": skill_dir.name,
@@ -155,8 +167,8 @@ async def install_marketplace_skill(dir_name: str):
     if not re.match(r'^[\w\-]+$', dir_name):
         raise HTTPException(400, "非法目录名")
 
-    src = _MARKETPLACE_DIR / dir_name
-    if not src.exists() or not (src / "SKILL.md").exists():
+    src = _find_marketplace_skill(dir_name)
+    if not src:
         raise HTTPException(404, f"marketplace 中不存在 Skill: {dir_name}")
 
     _USE_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
@@ -218,10 +230,8 @@ async def list_project_marketplace_skills(project_id: str):
         if agent_skills_dir.exists() else set()
 
     skills = []
-    for skill_dir in sorted(_MARKETPLACE_DIR.iterdir()):
+    for skill_dir in _iter_marketplace_skills(_MARKETPLACE_DIR):
         skill_md = skill_dir / "SKILL.md"
-        if not skill_dir.is_dir() or not skill_md.exists():
-            continue
         meta = _parse_skill_meta(skill_md)
         skills.append({
             "dir_name": skill_dir.name,
@@ -238,8 +248,8 @@ async def install_project_skill(project_id: str, dir_name: str):
     if not re.match(r'^[\w\-]+$', dir_name):
         raise HTTPException(400, "非法目录名")
 
-    src = _MARKETPLACE_DIR / dir_name
-    if not src.exists() or not (src / "SKILL.md").exists():
+    src = _find_marketplace_skill(dir_name)
+    if not src:
         raise HTTPException(404, f"marketplace 中不存在 Skill: {dir_name}")
 
     agent_skills_dir = await _get_project_agent_skills_dir(project_id)

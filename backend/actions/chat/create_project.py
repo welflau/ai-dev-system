@@ -306,8 +306,17 @@ async def _auto_install_skills(project_id: str, traits: list) -> None:
             dst = agent_dir / skill_name
             if dst.exists():
                 continue
+            # 支持子文件夹：递归查找
+            src = None
+            for skill_md in marketplace_dir.rglob("SKILL.md"):
+                if skill_md.parent.name == skill_name:
+                    src = skill_md.parent
+                    break
+            if not src:
+                logger.warning("auto-install: skill not found in marketplace: %s", skill_name)
+                continue
             try:
-                shutil.copytree(str(marketplace_dir / skill_name), str(dst))
+                shutil.copytree(str(src), str(dst))
                 installed.append(skill_name)
             except Exception as e:
                 logger.warning("auto-install skill %s failed: %s", skill_name, e)

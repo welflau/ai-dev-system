@@ -101,8 +101,13 @@ class InstallProjectSkillAction(ActionBase):
         from actions.chat.load_skill import _get_project_agent_skills_dir
 
         marketplace_dir = Path(__file__).parent.parent.parent / "skills" / "marketplace"
-        src = marketplace_dir / dir_name
-        if not src.exists() or not (src / "SKILL.md").exists():
+        # 支持子文件夹：递归查找 dir_name
+        src = None
+        for skill_md in marketplace_dir.rglob("SKILL.md"):
+            if skill_md.parent.name == dir_name:
+                src = skill_md.parent
+                break
+        if not src:
             return ActionResult(success=False, error=f"marketplace 中找不到 Skill: {dir_name}")
 
         agent_dir = await _get_project_agent_skills_dir(project_id)

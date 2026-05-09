@@ -293,7 +293,7 @@ class SkillLoader:
             inject_to = cfg.get("inject_to", ["ChatAssistant"])
             traits_match = cfg.get("traits_match") or {}
 
-            for skill_md in sorted(scan_dir.glob("*/SKILL.md")):
+            for skill_md in sorted(scan_dir.rglob("SKILL.md")):
                 try:
                     text = skill_md.read_text(encoding="utf-8")
                 except Exception:
