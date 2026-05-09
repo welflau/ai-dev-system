@@ -544,14 +544,24 @@ async def _chat_stream_generator(
                 # chat_stream 已把 executor 结果附在这里
                 thinking_steps = ev.get("thinking_steps") or thinking_steps
                 final_action = final_action or ev.get("action")
+                # 先保存消息再 yield done，防止前端关闭连接后 DB 写入被取消
+                if not full_text:
+                    full_text = "操作已完成。"
+                try:
+                    await _save_chat_message(project_id, "assistant", full_text,
+                                             action=final_action, session_id=_sid,
+                                             thinking=thinking_steps or None)
+                except Exception as _se:
+                    logger.warning("流式消息保存失败: %s", _se)
                 yield _sse("message_done", {"rounds": ev.get("rounds", 1)})
-                break
+                return  # generator 结束，不再执行后续保存
 
     except Exception as e:
         logger.error("流式聊天异常: %s", e)
         yield _sse("error", {"message": str(e)})
+        return
 
-    # 流结束后保存 assistant 消息
+    # 异常路径兜底保存（message_done 未收到时）
     if not full_text:
         full_text = "操作已完成。"
     try:
@@ -559,7 +569,7 @@ async def _chat_stream_generator(
                                  action=final_action, session_id=_sid,
                                  thinking=thinking_steps or None)
     except Exception as e:
-        logger.warning("流式消息保存失败: %s", e)
+        logger.warning("流式消息保存失败(兜底): %s", e)
 
 
 def _sse(event: str, data: dict) -> bytes:
