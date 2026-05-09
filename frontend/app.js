@@ -8997,10 +8997,11 @@ function _chatThinkingBegin() {
 
 /** 追加思考步骤（SSE 事件驱动） */
 function _chatThinkingAppend(data) {
-    // 若面板还未创建，立即在 chatTyping 前插入
+    // 若面板还未创建，插入到 chatTyping 前（非流式）或流式气泡的 content 内（流式）
     if (!_currentThinkingPanel) {
         const typing = document.getElementById('chatTyping');
-        if (!typing) return;
+        const streamBubble = document.querySelector('.chat-msg.assistant._streaming .chat-msg-content');
+        if (!typing && !streamBubble) return;
         const panel = document.createElement('div');
         panel.className = 'chat-thinking-panel';
         panel.innerHTML = `
@@ -9010,7 +9011,13 @@ function _chatThinkingAppend(data) {
                 <span class="ctp-toggle">∨</span>
             </div>
             <div class="ctp-body"></div>`;
-        typing.parentNode.insertBefore(panel, typing);
+        if (typing) {
+            typing.parentNode.insertBefore(panel, typing);
+        } else {
+            // 流式路径：插入到流式气泡的 bubble 之前
+            const bubble = streamBubble.querySelector('._stream-bubble');
+            streamBubble.insertBefore(panel, bubble);
+        }
         _currentThinkingPanel = panel;
         panel.classList.add('ctp-expanded');
     }
