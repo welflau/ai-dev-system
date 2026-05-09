@@ -79,11 +79,11 @@
     }
   },
   "marketplace-skills": {
-    "name": "Marketplace Skills（社区扩展）",
-    "description": "自动扫描 marketplace/ 目录，复制任意 SKILL.md 文件夹即可使用",
+    "name": "Marketplace Skills（已启用）",
+    "description": "来自市场、已添加到系统的 Skill。在系统设置 → Skills → 市场中挑选安装。",
     "type": "scan_dir",
-    "scan_dir": "marketplace",
-    "header": "# Marketplace Skills（社区扩展）\n\n以下 Skill 来自 marketplace/ 目录，复制任意 SKILL.md 文件夹即可自动注册。",
+    "scan_dir": "use_skills",
+    "header": "# 已安装的 Marketplace Skills\n\n以下 Skill 已从市场安装，AI 助手可按需加载。",
     "inject_to": ["ChatAssistant"],
     "priority": "medium",
     "enabled": true

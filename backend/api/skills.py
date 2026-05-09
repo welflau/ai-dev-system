@@ -100,6 +100,99 @@ async def reset_global_skill(skill_id: str):
     return {"ok": True, "skill_id": skill_id, "reset": True}
 
 
+# ── Marketplace API ──────────────────────────────────────────────────────────
+
+_MARKETPLACE_DIR = Path(__file__).parent.parent / "skills" / "marketplace"
+_USE_SKILLS_DIR  = Path(__file__).parent.parent / "skills" / "use_skills"
+
+
+def _parse_skill_meta(skill_md: Path) -> dict:
+    """从 SKILL.md frontmatter 提取 name / description。"""
+    try:
+        text = skill_md.read_text(encoding="utf-8")
+        import re as _re
+        m = _re.match(r"^---\s*\n(.*?)\n---\s*\n", text, _re.DOTALL)
+        if m:
+            import yaml as _yaml
+            fm = _yaml.safe_load(m.group(1)) or {}
+            return {
+                "name": fm.get("name") or skill_md.parent.name,
+                "description": (fm.get("description") or "")[:200],
+            }
+    except Exception:
+        pass
+    return {"name": skill_md.parent.name, "description": ""}
+
+
+@router.get("/api/skills/marketplace")
+async def list_marketplace_skills():
+    """列出 marketplace/ 目录下所有可用 Skill，并标记哪些已安装到 use_skills/。"""
+    if not _MARKETPLACE_DIR.exists():
+        return {"skills": []}
+
+    installed = {p.name for p in _USE_SKILLS_DIR.iterdir() if p.is_dir()} \
+        if _USE_SKILLS_DIR.exists() else set()
+
+    skills = []
+    for skill_dir in sorted(_MARKETPLACE_DIR.iterdir()):
+        skill_md = skill_dir / "SKILL.md"
+        if not skill_dir.is_dir() or not skill_md.exists():
+            continue
+        meta = _parse_skill_meta(skill_md)
+        skills.append({
+            "dir_name": skill_dir.name,
+            "name": meta["name"],
+            "description": meta["description"],
+            "installed": skill_dir.name in installed,
+        })
+    return {"skills": skills}
+
+
+@router.post("/api/skills/marketplace/{dir_name}/install")
+async def install_marketplace_skill(dir_name: str):
+    """将 marketplace/{dir_name} 复制到 use_skills/，并热重载 SkillLoader。"""
+    # 安全：只允许字母数字、连字符、下划线
+    if not re.match(r'^[\w\-]+$', dir_name):
+        raise HTTPException(400, "非法目录名")
+
+    src = _MARKETPLACE_DIR / dir_name
+    if not src.exists() or not (src / "SKILL.md").exists():
+        raise HTTPException(404, f"marketplace 中不存在 Skill: {dir_name}")
+
+    _USE_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+    dst = _USE_SKILLS_DIR / dir_name
+    if dst.exists():
+        return {"ok": True, "dir_name": dir_name, "already_installed": True}
+
+    import shutil
+    shutil.copytree(str(src), str(dst))
+
+    # 热重载
+    from skills import skill_loader
+    skill_loader.reload()
+    logger.info("marketplace skill installed: %s", dir_name)
+    return {"ok": True, "dir_name": dir_name, "installed": True}
+
+
+@router.delete("/api/skills/use/{dir_name}")
+async def uninstall_use_skill(dir_name: str):
+    """从 use_skills/ 删除已安装的 Skill，并热重载。"""
+    if not re.match(r'^[\w\-]+$', dir_name):
+        raise HTTPException(400, "非法目录名")
+
+    dst = _USE_SKILLS_DIR / dir_name
+    if not dst.exists():
+        raise HTTPException(404, f"use_skills 中不存在: {dir_name}")
+
+    import shutil
+    shutil.rmtree(str(dst))
+
+    from skills import skill_loader
+    skill_loader.reload()
+    logger.info("use_skill uninstalled: %s", dir_name)
+    return {"ok": True, "dir_name": dir_name, "uninstalled": True}
+
+
 # ── 项目级 Skill 管理 ────────────────────────────────────────────────────────
 
 @router.get("/api/projects/{project_id}/skills")

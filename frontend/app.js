@@ -12233,18 +12233,19 @@ async function showSystemSettingsModal(initialTab = 'knowledge') {
                                     设置各 Skill 的全局默认开关。项目可在「项目 Settings → Skills」中进一步覆盖。
                                 </p>
                             </div>
-                            <button class="btn btn-sm btn-ghost" onclick="loadGlobalSkills()">🔄 刷新</button>
-                        </div>
-                        <div style="font-size:12px;color:var(--text-muted);margin-bottom:10px;padding:8px 10px;background:var(--bg-elevated);border-radius:6px;">
-                            💡 <strong>Marketplace Skills</strong>：将任意含 <code>SKILL.md</code> 的文件夹复制到
-                            <code>backend/skills/marketplace/</code>，重启服务后自动出现在此列表。
+                            <div style="display:flex;gap:8px;">
+                                <button class="btn btn-sm btn-primary" onclick="showSkillMarketplace()">🛒 市场</button>
+                                <button class="btn btn-sm btn-ghost" onclick="loadGlobalSkills()">🔄 刷新</button>
+                            </div>
                         </div>
                         <!-- 内置 Skills -->
                         <div style="margin-bottom:6px;font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;">内置 Skills</div>
                         <div id="globalSkillsBuiltin" style="margin-bottom:16px;"><div class="empty-state-sm">加载中...</div></div>
-                        <!-- Marketplace Skills -->
-                        <div style="margin-bottom:6px;font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;">Marketplace Skills</div>
-                        <div id="globalSkillsMarketplace"><div class="empty-state-sm">暂无 Marketplace Skill，复制文件夹到 marketplace/ 目录后刷新</div></div>
+                        <!-- 已安装 Marketplace Skills -->
+                        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+                            <span style="font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;">已安装 Marketplace Skills</span>
+                        </div>
+                        <div id="globalSkillsMarketplace"><div class="empty-state-sm">暂未安装任何 Marketplace Skill，点击「🛒 市场」浏览安装</div></div>
                     </div>
 
                     <!-- Traits panel -->
@@ -12348,9 +12349,33 @@ async function loadGlobalSkills() {
             : '<div class="empty-state-sm">暂无内置 Skill</div>';
 
         if (marketEl) {
+            // 已安装的 marketplace skill：显示 Toggle + 卸载按钮
+            const renderMarketRow = (sk) => {
+                const overrideBadge = sk.overridden
+                    ? `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:rgba(99,102,241,.15);color:#818cf8;margin-left:6px;">已覆盖</span>`
+                    : '';
+                const resetBtn = sk.overridden
+                    ? `<button class="btn btn-xs btn-ghost" onclick="resetGlobalSkill('${sk.id}')" style="font-size:11px;padding:2px 6px;">↩</button>`
+                    : '';
+                return `<div class="skill-row" style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:1px solid var(--border);font-size:13px;">
+                    <label class="toggle-switch" style="flex-shrink:0;">
+                        <input type="checkbox" ${sk.enabled ? 'checked' : ''} onchange="toggleGlobalSkill('${sk.id}', this.checked)">
+                        <span class="toggle-slider"></span>
+                    </label>
+                    <div style="flex:1;min-width:0;">
+                        <div style="display:flex;align-items:center;gap:4px;">
+                            <span style="font-weight:500;">${escapeHtml(sk.name)}</span>
+                            ${overrideBadge}
+                        </div>
+                        <div style="font-size:11px;color:var(--text-muted);margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(sk.description || '')}</div>
+                    </div>
+                    ${resetBtn}
+                    <button class="btn btn-xs btn-ghost" onclick="uninstallMarketplaceSkill('${sk.id}')" title="从系统移除" style="font-size:11px;padding:2px 6px;color:var(--danger);">移除</button>
+                </div>`;
+            };
             marketEl.innerHTML = marketplace.length
-                ? marketplace.map(renderRow).join('')
-                : '<div class="empty-state-sm" style="font-size:12px;">暂无 Marketplace Skill，复制文件夹到 backend/skills/marketplace/ 后重启服务</div>';
+                ? marketplace.map(renderMarketRow).join('')
+                : '<div class="empty-state-sm" style="font-size:12px;">暂未安装任何 Marketplace Skill，点击「🛒 市场」浏览安装</div>';
         }
     } catch (e) {
         if (builtinEl) builtinEl.innerHTML = `<div class="empty-state-sm" style="color:var(--danger)">加载失败: ${e.message}</div>`;
@@ -12375,6 +12400,88 @@ async function resetGlobalSkill(skillId) {
         loadGlobalSkills();
     } catch (e) {
         showToast(`重置失败: ${e.message}`, 'error');
+    }
+}
+
+async function showSkillMarketplace() {
+    const modalId = 'skillMarketplaceModal';
+    let modal = document.getElementById(modalId);
+    if (modal) { modal.remove(); return; }
+
+    modal = document.createElement('div');
+    modal.id = modalId;
+    modal.className = 'modal-overlay active';
+    modal.innerHTML = `
+        <div class="modal modal-lg" style="max-width:780px;">
+            <div class="modal-header">
+                <h3>🛒 Skill 市场</h3>
+                <button class="btn-icon" onclick="document.getElementById('${modalId}').remove()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p style="font-size:12px;color:var(--text-muted);margin-bottom:14px;">
+                    将 Skill 文件夹放入 <code>backend/skills/marketplace/</code>，即可在此选择安装到系统。
+                    已安装的 Skill 会出现在 Skills 配置中供 AI 按需加载。
+                </p>
+                <div id="marketplaceSkillList"><div class="empty-state-sm">加载中...</div></div>
+            </div>
+            <div class="modal-footer" style="padding:12px 20px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;">
+                <button class="btn btn-ghost" onclick="document.getElementById('${modalId}').remove()">关闭</button>
+            </div>
+        </div>`;
+    document.body.appendChild(modal);
+    modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+    await _loadMarketplaceList();
+}
+
+async function _loadMarketplaceList() {
+    const listEl = document.getElementById('marketplaceSkillList');
+    if (!listEl) return;
+    try {
+        const data = await api('/skills/marketplace');
+        const skills = data.skills || [];
+        if (!skills.length) {
+            listEl.innerHTML = '<div class="empty-state-sm">marketplace/ 目录下暂无 Skill，复制 Skill 文件夹后刷新</div>';
+            return;
+        }
+        listEl.innerHTML = skills.map(sk => `
+            <div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border);">
+                <div style="flex:1;min-width:0;">
+                    <div style="font-weight:500;font-size:13px;">${escapeHtml(sk.name)}</div>
+                    <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">${escapeHtml(sk.description || sk.dir_name)}</div>
+                </div>
+                ${sk.installed
+                    ? `<span style="font-size:11px;padding:2px 8px;border-radius:4px;background:rgba(52,211,88,.15);color:#34d058;">✓ 已安装</span>
+                       <button class="btn btn-xs btn-ghost" onclick="uninstallMarketplaceSkill('${sk.dir_name}', true)" style="font-size:11px;color:var(--danger);">移除</button>`
+                    : `<button class="btn btn-sm btn-primary" onclick="installMarketplaceSkill('${sk.dir_name}', this)" style="font-size:12px;">+ 添加到系统</button>`
+                }
+            </div>`).join('');
+    } catch (e) {
+        listEl.innerHTML = `<div class="empty-state-sm" style="color:var(--danger)">加载失败: ${e.message}</div>`;
+    }
+}
+
+async function installMarketplaceSkill(dirName, btn) {
+    if (btn) { btn.disabled = true; btn.textContent = '安装中…'; }
+    try {
+        await api(`/skills/marketplace/${encodeURIComponent(dirName)}/install`, { method: 'POST' });
+        showToast(`已安装 Skill: ${dirName}`, 'success');
+        await _loadMarketplaceList();
+        loadGlobalSkills();
+    } catch (e) {
+        showToast(`安装失败: ${e.message}`, 'error');
+        if (btn) { btn.disabled = false; btn.textContent = '+ 添加到系统'; }
+    }
+}
+
+async function uninstallMarketplaceSkill(dirName, fromMarketPanel = false) {
+    if (!confirm(`确认从系统移除 Skill「${dirName}」？`)) return;
+    try {
+        await api(`/skills/use/${encodeURIComponent(dirName)}`, { method: 'DELETE' });
+        showToast(`已移除 Skill: ${dirName}`, 'success');
+        if (fromMarketPanel) await _loadMarketplaceList();
+        loadGlobalSkills();
+    } catch (e) {
+        showToast(`移除失败: ${e.message}`, 'error');
     }
 }
 
