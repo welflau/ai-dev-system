@@ -7910,3 +7910,28 @@ body.chat-open .chat-panel {
 .skill-row-id { font-size: 11px; color: var(--text-muted); font-family: monospace; }
 .skill-row-desc { font-size: 12px; color: var(--text-secondary, #9ca3af); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 240px; }
 .skill-row-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+
+/* ── chatTyping 状态文字 ─────────────────────────────────────────────────── */
+.chat-typing-text {
+    font-size: 13px;
+    color: var(--text-muted, #718096);
+    font-style: italic;
+    animation: typing-pulse 1.5s ease-in-out infinite;
+}
+@keyframes typing-pulse {
+    0%, 100% { opacity: 0.5; }
+    50% { opacity: 1; }
+}
+
+/* ── 思考面板双行步骤 ─────────────────────────────────────────────────────── */
+.ctp-step-row1 {
+    display: flex; align-items: center; gap: 6px;
+}
+.ctp-step-row2 {
+    padding-left: 22px;
+    font-size: 11px;
+    color: var(--text-muted, #718096);
+    margin-top: 1px;
+    margin-bottom: 4px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}

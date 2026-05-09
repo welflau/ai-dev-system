@@ -8484,11 +8484,18 @@ async function _ensureChatSession() {
  * 返回与非流式路径兼容的 {reply, action, actions} 对象。
  */
 async function _sendChatStreaming(url, body) {
-    // 移除 chatTyping，创建流式气泡取代它
-    document.getElementById('chatTyping')?.remove();
+    // 保留 chatTyping 显示状态文字，等第一个 text_delta 再移除
+    const _typingEl = document.getElementById('chatTyping');
+    const _typingBubble = _typingEl?.querySelector('.chat-msg-bubble');
+    if (_typingBubble) {
+        _typingBubble.innerHTML = `<span class="chat-typing-text">正在思考…</span>`;
+    }
+
+    // 流式气泡先隐藏，等第一个 text_delta 才显示
     const container = document.getElementById('chatMessages');
     const bubbleWrapper = document.createElement('div');
     bubbleWrapper.className = 'chat-msg assistant _streaming';
+    bubbleWrapper.style.display = 'none';
     bubbleWrapper.innerHTML = `
         <div class="chat-msg-avatar">🤖</div>
         <div class="chat-msg-content">
@@ -8559,6 +8566,11 @@ async function _sendChatStreaming(url, body) {
                 try { data = JSON.parse(line.slice(6)); } catch { continue; }
 
                 if (eventName === 'text_delta') {
+                    // 第一个 text_delta：移除 chatTyping，显示流式气泡
+                    if (bubbleWrapper.style.display === 'none') {
+                        document.getElementById('chatTyping')?.remove();
+                        bubbleWrapper.style.display = '';
+                    }
                     fullText += data.delta;
                     // 每 200 字或 300ms 做一次 Markdown 渲染
                     if (fullText.length - _lastRenderLen >= 200) {
@@ -8571,10 +8583,14 @@ async function _sendChatStreaming(url, body) {
                     }
 
                 } else if (eventName === 'tool_start') {
+                    // 状态文字：正在调用工具
+                    if (_typingBubble) _typingBubble.innerHTML = `<span class="chat-typing-text">正在调用工具…</span>`;
                     _chatThinkingAppend({ step: 'start', tool: data.tool, args_hint: data.label || '' });
 
                 } else if (eventName === 'tool_done') {
                     _chatThinkingAppend({ step: 'done', tool: data.tool, summary: data.summary || '' });
+                    // 状态文字：最后一个工具完成后切换
+                    if (_typingBubble) _typingBubble.innerHTML = `<span class="chat-typing-text">正在生成答案…</span>`;
 
                 } else if (eventName === 'action') {
                     finalAction = data;
@@ -8990,9 +9006,12 @@ let _currentThinkingPanel = null;  // 当前正在写入的思考面板元素
 let _currentThinkingSteps = [];    // 当前轮次的步骤记录
 
 /** 开始一个新的思考面板（发消息时调用） */
+let _thinkingStartTime = 0;
+
 function _chatThinkingBegin() {
     _currentThinkingPanel = null;
     _currentThinkingSteps = [];
+    _thinkingStartTime = Date.now();
 }
 
 /** 追加思考步骤（SSE 事件驱动） */
@@ -9026,25 +9045,26 @@ function _chatThinkingAppend(data) {
     const toolLabel = _TOOL_LABELS[data.tool] || `🔧 ${data.tool}`;
 
     if (data.step === 'start') {
-        // 新建一个步骤条目
         const step = document.createElement('div');
         step.className = 'ctp-step ctp-step-running';
         step.dataset.tool = data.tool;
+        // 双行展示：工具名（第一行）+ 参数（第二行，可选）
         step.innerHTML = `
-            <span class="ctp-step-dot"></span>
-            <span class="ctp-step-label">${escHtml(toolLabel)}</span>
-            ${data.args_hint ? `<span class="ctp-step-hint">${escHtml(data.args_hint)}</span>` : ''}
-            <span class="ctp-step-status">…</span>`;
+            <div class="ctp-step-row1">
+                <span class="ctp-step-dot"></span>
+                <span class="ctp-step-label">${escHtml(toolLabel)}</span>
+                <span class="ctp-step-status">…</span>
+            </div>
+            ${data.args_hint ? `<div class="ctp-step-row2">${escHtml(data.args_hint)}</div>` : ''}`;
         body.appendChild(step);
         _currentThinkingSteps.push({ tool: data.tool, el: step });
     } else {
-        // 找到对应的 start 步骤并更新状态
         const existing = [..._currentThinkingSteps].reverse().find(s => s.tool === data.tool);
         if (existing && existing.el) {
             existing.el.classList.remove('ctp-step-running');
             existing.el.classList.add('ctp-step-done');
             const statusEl = existing.el.querySelector('.ctp-step-status');
-            if (statusEl) statusEl.textContent = data.summary ? `✓ ${data.summary.slice(0, 60)}` : '✓';
+            if (statusEl) statusEl.textContent = data.summary ? `✓ ${data.summary.slice(0, 80)}` : '✓';
         }
     }
     body.scrollTop = body.scrollHeight;
@@ -9054,8 +9074,11 @@ function _chatThinkingAppend(data) {
 function _chatThinkingFinish() {
     if (!_currentThinkingPanel) return;
     const stepCount = _currentThinkingSteps.length;
+    const elapsed = _thinkingStartTime ? ((Date.now() - _thinkingStartTime) / 1000).toFixed(1) + 's' : '';
     const title = _currentThinkingPanel.querySelector('.ctp-title');
-    if (title) title.textContent = `思考了 ${stepCount} 步`;
+    if (title) title.textContent = stepCount > 0
+        ? `思考了 ${stepCount} 步${elapsed ? ' · ' + elapsed : ''}`
+        : '思考中';
     _currentThinkingPanel.classList.remove('ctp-expanded');
     _currentThinkingPanel = null;
     _currentThinkingSteps = [];
@@ -9775,8 +9798,11 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
         const steps = thinking.map(s => {
             const label = _TOOL_LABELS[s.tool] || `🔧 ${s.tool}`;
             const hint = s.args_hint ? `<span class="ctp-step-hint">${escapeHtml(s.args_hint)}</span>` : '';
-            const summary = s.summary ? `<span class="ctp-step-summary">${escapeHtml(s.summary)}</span>` : '';
-            return `<div class="ctp-step ctp-step-done"><span class="ctp-step-icon">✓</span><span class="ctp-step-label">${escapeHtml(label)}</span>${hint}${summary}</div>`;
+            const summaryText = s.summary ? `✓ ${s.summary.slice(0, 80)}` : '✓';
+            return `<div class="ctp-step ctp-step-done">
+                <div class="ctp-step-row1"><span class="ctp-step-dot"></span><span class="ctp-step-label">${escapeHtml(label)}</span><span class="ctp-step-status">${escapeHtml(summaryText)}</span></div>
+                ${s.args_hint ? `<div class="ctp-step-row2">${escapeHtml(s.args_hint)}</div>` : ''}
+            </div>`;
         }).join('');
         thinkingHtml = `
         <div class="chat-thinking-panel ctp-history">
