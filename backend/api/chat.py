@@ -12,6 +12,7 @@ import logging
 import uuid
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, UploadFile, File, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any, Union
 from database import db
@@ -448,6 +449,122 @@ async def _chat_via_agent(
     await _save_chat_message(project_id, "assistant", reply, action=action_result, session_id=_sid, thinking=_thinking)
 
     return ChatResponse(reply=reply, action=action_result)
+
+
+# ==================== 流式聊天端点 ====================
+
+@router.post("/stream")
+async def chat_stream(project_id: str, req: ChatRequest):
+    """
+    流式聊天：返回 text/event-stream，逐 token 推送。
+    前端用 fetch + ReadableStream 消费。
+    """
+    project = await db.fetch_one("SELECT * FROM projects WHERE id = ?", (project_id,))
+    if not project:
+        raise HTTPException(404, "项目不存在")
+
+    project_context = await _build_project_context(project_id, dict(project))
+
+    return StreamingResponse(
+        _chat_stream_generator(project_id, dict(project), project_context, req),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",  # 禁止 nginx 缓冲
+        },
+    )
+
+
+async def _chat_stream_generator(
+    project_id: str,
+    project: dict,
+    project_context: dict,
+    req: ChatRequest,
+):
+    """
+    流式生成器：yield SSE 格式的字节串。
+    事件：text_delta / tool_start / tool_done / action / error / message_done
+    """
+    from agents.chat_assistant import _TOOL_LABELS_PY
+    import agent_registry as _ar
+
+    registry = _ar.get_registry()
+    if not registry:
+        _ar.discover_agents()
+        registry = _ar.get_registry()
+
+    agent_cls = registry.get("ChatAssistant")
+    if not agent_cls:
+        yield _sse("error", {"message": "ChatAssistant agent 未注册"})
+        return
+
+    agent = agent_cls()
+    history_list = [{"role": m.role, "content": m.content} for m in (req.history or [])]
+    _sid = req.chat_session_id or "default"
+    full_text = ""
+    final_action = None
+    thinking_steps = []
+
+    # 保存用户消息
+    await _save_chat_message(project_id, "user", req.message,
+                             images=req.images, session_id=_sid)
+
+    try:
+        async for ev in agent.chat_stream(
+            user_message=req.message,
+            images=req.images,
+            history=history_list,
+            project=project,
+            project_context=project_context,
+        ):
+            etype = ev.get("type", "")
+
+            if etype == "text_delta":
+                full_text += ev["delta"]
+                yield _sse("text_delta", {"delta": ev["delta"]})
+
+            elif etype == "tool_start":
+                label = _TOOL_LABELS_PY.get(ev["tool"], f"🔧 {ev['tool']}")
+                yield _sse("tool_start", {"tool": ev["tool"], "label": label})
+
+            elif etype == "tool_done":
+                summary = ev.get("summary", "")
+                thinking_steps.append({"tool": ev["tool"], "args_hint": "", "summary": summary})
+                yield _sse("tool_done", {"tool": ev["tool"], "summary": summary})
+
+            elif etype == "action":
+                final_action = {k: v for k, v in ev.items() if k != "type"}
+                yield _sse("action", final_action)
+
+            elif etype == "error":
+                yield _sse("error", {"message": ev.get("message", "未知错误")})
+                return
+
+            elif etype == "message_done":
+                # chat_stream 已把 executor 结果附在这里
+                thinking_steps = ev.get("thinking_steps") or thinking_steps
+                final_action = final_action or ev.get("action")
+                yield _sse("message_done", {"rounds": ev.get("rounds", 1)})
+                break
+
+    except Exception as e:
+        logger.error("流式聊天异常: %s", e)
+        yield _sse("error", {"message": str(e)})
+
+    # 流结束后保存 assistant 消息
+    if not full_text:
+        full_text = "操作已完成。"
+    try:
+        await _save_chat_message(project_id, "assistant", full_text,
+                                 action=final_action, session_id=_sid,
+                                 thinking=thinking_steps or None)
+    except Exception as e:
+        logger.warning("流式消息保存失败: %s", e)
+
+
+def _sse(event: str, data: dict) -> bytes:
+    """格式化一条 SSE 消息"""
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode("utf-8")
 
 
 class SaveToRepoRequest(BaseModel):

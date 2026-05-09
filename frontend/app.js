@@ -8479,6 +8479,133 @@ async function _ensureChatSession() {
 /**
  * 加载全局聊天历史
  */
+/**
+ * 流式聊天：fetch + ReadableStream，逐 token 渲染到气泡。
+ * 返回与非流式路径兼容的 {reply, action, actions} 对象。
+ */
+async function _sendChatStreaming(url, body) {
+    // 创建空 assistant 气泡，立即插入 DOM
+    const container = document.getElementById('chatMessages');
+    const bubbleWrapper = document.createElement('div');
+    bubbleWrapper.className = 'chat-msg assistant _streaming';
+    bubbleWrapper.innerHTML = `
+        <div class="chat-msg-avatar">🤖</div>
+        <div class="chat-msg-content">
+            <div class="chat-msg-bubble _stream-bubble"></div>
+            <div class="chat-msg-time"></div>
+        </div>`;
+    // 在 chatTyping 前插入
+    const typing = document.getElementById('chatTyping');
+    if (typing) container.insertBefore(bubbleWrapper, typing);
+    else container.appendChild(bubbleWrapper);
+
+    const bubbleEl = bubbleWrapper.querySelector('._stream-bubble');
+
+    let fullText = '';
+    let finalAction = null;
+    let finalActions = [];
+
+    try {
+        const fetchResp = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+
+        if (!fetchResp.ok || !fetchResp.body) {
+            // fallback 到非流式
+            bubbleWrapper.remove();
+            return await originalApi(url.replace('/stream', ''), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+        }
+
+        const reader = fetchResp.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        let eventName = '';
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buf += decoder.decode(value, { stream: true });
+            const lines = buf.split('\n');
+            buf = lines.pop(); // 未完成的行留在 buf
+
+            for (const line of lines) {
+                if (line.startsWith('event: ')) {
+                    eventName = line.slice(7).trim();
+                    continue;
+                }
+                if (!line.startsWith('data: ')) continue;
+
+                let data;
+                try { data = JSON.parse(line.slice(6)); } catch { continue; }
+
+                if (eventName === 'text_delta') {
+                    fullText += data.delta;
+                    // 文字阶段：直接 textContent（快，不解析 Markdown 防闪烁）
+                    bubbleEl.textContent = fullText;
+                    scrollChatToBottom();
+
+                } else if (eventName === 'tool_start') {
+                    _chatThinkingAppend({ step: 'start', tool: data.tool, args_hint: data.label || '' });
+
+                } else if (eventName === 'tool_done') {
+                    _chatThinkingAppend({ step: 'done', tool: data.tool, summary: data.summary || '' });
+
+                } else if (eventName === 'action') {
+                    finalAction = data;
+
+                } else if (eventName === 'error') {
+                    bubbleEl.textContent = `⚠️ ${data.message}`;
+                    return { reply: data.message, action: null, actions: [] };
+
+                } else if (eventName === 'message_done') {
+                    break;
+                }
+                eventName = '';
+            }
+        }
+
+    } catch (e) {
+        console.error('[stream] 流式请求失败:', e);
+        // fallback 到非流式
+        bubbleWrapper.remove();
+        return await originalApi(url.replace('/stream', ''), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+    }
+
+    // 流结束：完整 Markdown 渲染（处理代码块、表格等）
+    bubbleEl.innerHTML = formatChatContent(fullText || '操作已完成。');
+    bubbleWrapper.classList.remove('_streaming');
+    _chatThinkingFinish();
+
+    // 追加工具栏和时间戳
+    const contentEl = bubbleWrapper.querySelector('.chat-msg-content');
+    const timeEl = contentEl.querySelector('.chat-msg-time');
+    timeEl.textContent = formatTime(new Date().toISOString());
+
+    // 追加 action 卡片（若有）
+    if (finalAction) {
+        const cardHtml = _buildConfirmCardHtml ? _buildConfirmCardHtml(finalAction) : '';
+        if (cardHtml) {
+            const cardEl = document.createElement('div');
+            cardEl.innerHTML = cardHtml;
+            contentEl.insertBefore(cardEl.firstElementChild, timeEl);
+        }
+    }
+
+    scrollChatToBottom();
+    return { reply: fullText, action: finalAction, actions: finalActions, _streamed: true };
+}
+
 async function loadChatHistory() {
     if (!currentProjectId) {
         // v0.20：优先从最近 session 加载（DB），保证和历史面板一致
@@ -9058,18 +9185,14 @@ async function sendChatMessage() {
                 }
             }
         } else if (currentProjectId) {
-            // 项目内聊天 — 走原有 API
+            // 项目内聊天 — 流式 API
             const _sid = await _ensureChatSession();
-            resp = await originalApi(`/projects/${currentProjectId}/chat`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    message: fullMessage,
-                    history: historyToSend,
-                    images: images.length > 0 ? images : undefined,
-                    chat_session_id: _sid,
-                }),
-            });
+            resp = await _sendChatStreaming(
+                `/projects/${currentProjectId}/chat/stream`,
+                { message: fullMessage, history: historyToSend,
+                  images: images.length > 0 ? images : undefined,
+                  chat_session_id: _sid }
+            );
         } else {
             // 全局聊天（无项目）— 走全局 API
             const _sid = await _ensureChatSession();
@@ -9087,8 +9210,8 @@ async function sendChatMessage() {
         }
 
         if (chatMode !== 'group') {
-        // 思考完成，折叠面板
-        _chatThinkingFinish();
+        // 思考完成，折叠面板（流式路径已在流中折叠，非流式才在此处折叠）
+        if (!resp || !resp._streamed) _chatThinkingFinish();
         // 移除加载动画
         document.getElementById('chatTyping')?.remove();
 
@@ -9105,8 +9228,10 @@ async function sendChatMessage() {
         chatHistory.push({ role: 'user', content: _buildUserHistoryContent(fullMessage, images) });
         chatHistory.push({ role: 'assistant', content: reply });
 
-        // 添加回复气泡（actions 有多条时渲染批量确认卡片）
-        appendChatBubble('assistant', reply, null, action, [], actions);
+        // 流式路径气泡已在流中渲染，非流式才调 appendChatBubble
+        if (!resp._streamed) {
+            appendChatBubble('assistant', reply, null, action, [], actions);
+        }
         scrollChatToBottom();
 
         // 全局聊天持久化到 localStorage（刷新后可恢复）

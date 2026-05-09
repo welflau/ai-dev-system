@@ -51,6 +51,36 @@ logger = logging.getLogger("agent.chat_assistant")
 # 不对 LLM 暴露为 tool 的 Action 名（只能由后端内部调用）
 _INTERNAL_ONLY_ACTIONS = {"create_requirement"}
 
+# 工具显示名（流式端点用，与前端 _TOOL_LABELS 保持一致）
+_TOOL_LABELS_PY: dict = {
+    "search_knowledge": "🔍 搜索知识库",
+    "search_ticket_history": "🗂 检索历史工单",
+    "fetch_url": "🌐 访问链接",
+    "git_log": "📜 查提交历史",
+    "git_read_file": "📄 读取文件",
+    "git_list_branches": "🌿 列出分支",
+    "git_switch_branch": "🔀 切换分支",
+    "git_merge": "🔀 合并分支",
+    "generate_document": "📝 生成文档",
+    "confirm_save_doc": "💾 准备保存文档",
+    "confirm_requirement": "📋 识别需求",
+    "confirm_requirements_batch": "📋 识别多个需求",
+    "confirm_bug": "🐛 识别 BUG",
+    "confirm_project": "🏗 识别新建项目",
+    "close_requirement": "🚫 关闭需求",
+    "pause_requirement": "⏸ 暂停需求",
+    "resume_requirement": "▶ 恢复需求",
+    "get_requirement_pipeline": "🔍 查需求进度",
+    "get_ticket_status": "📊 查工单状态",
+    "get_requirement_logs": "📋 查工单日志",
+    "get_build_logs": "🔧 查构建日志",
+    "get_memory": "🧠 查 Agent 记忆",
+    "competitor_analysis": "🔎 竞品分析",
+    "load_skill": "📚 加载 Skill",
+    "read_local_file": "📂 读取本地文件",
+    "ue_call": "🎮 UE Editor 操作",
+}
+
 # 全局聊天（项目列表页，无 project_id）下可用的工具白名单。
 # confirm_project：识别新建项目意图
 # search_knowledge / search_ticket_history：全局模式下搜全库（无 project_id 过滤）
@@ -362,6 +392,56 @@ class ChatAssistantAgent(BaseAgent):
             "actions": actions,
             "thinking_steps": executor.thinking_steps or None,
         }
+
+    async def chat_stream(
+        self,
+        user_message: str,
+        images: Optional[List[str]],
+        history: Optional[List[Dict[str, str]]],
+        project: Dict[str, Any],
+        project_context: Dict[str, Any],
+    ):
+        """
+        流式对话：逐步 yield SSE 事件 dict，由上层端点包装为 text/event-stream。
+        事件类型：text_delta / tool_start / tool_done / action / error / message_done
+        """
+        from llm_client import llm_client, set_llm_context, clear_llm_context
+
+        system_prompt = await self._build_system_prompt(project, project_context)
+        messages = self._assemble_messages(history, user_message, images)
+
+        project_traits = []
+        try:
+            import json as _json
+            traits_raw = project.get("traits") or "[]"
+            project_traits = _json.loads(traits_raw) if isinstance(traits_raw, str) else list(traits_raw)
+            if not isinstance(project_traits, list):
+                project_traits = []
+        except Exception:
+            project_traits = []
+
+        tools = self._exposed_tool_schemas(scope="project", traits=project_traits)
+        executor = _ChatToolExecutor(self, project["id"])
+
+        set_llm_context(project_id=project["id"], agent_type=self.agent_type, action="chat_stream")
+        try:
+            async for ev in llm_client.chat_with_tools_stream(
+                messages=messages,
+                tools=tools,
+                tool_executor=executor,
+                max_rounds=self.max_react_loop,
+                temperature=0.7,
+                max_tokens=4000,
+                system=system_prompt,
+            ):
+                # 在 message_done 里附上 executor 的结果供调用层保存
+                if ev.get("type") == "message_done":
+                    ev["thinking_steps"] = executor.thinking_steps or []
+                    ev["action"] = executor.primary_action_result
+                    ev["actions"] = executor.all_confirm_results if len(executor.all_confirm_results) > 1 else None
+                yield ev
+        finally:
+            clear_llm_context()
 
     # ==================== 全局聊天入口（项目列表页，无 project_id） ====================
 

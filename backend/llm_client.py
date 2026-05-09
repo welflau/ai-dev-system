@@ -7,7 +7,7 @@ import json
 import logging
 import time
 import httpx
-from typing import Any, Dict, List, Optional
+from typing import Any, AsyncGenerator, Dict, List, Optional
 from config import settings
 
 logger = logging.getLogger("llm")
@@ -670,6 +670,243 @@ class LLMClient:
         except Exception as e:
             logger.error("Anthropic tool-use 调用失败: %s", e)
             return None
+
+    async def _call_anthropic_tools_stream(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: List[Dict[str, Any]],
+        system: str,
+        temperature: float,
+        max_tokens: int,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """
+        流式 Anthropic tool_use 调用。
+        yield 事件：
+          {"type": "text_delta",    "delta": "..."}
+          {"type": "tool_use_block","id": "...", "name": "...", "input": {...}}
+          {"type": "stop",          "stop_reason": "end_turn"|"tool_use", "usage": {...}}
+          {"type": "error",         "message": "..."}
+        """
+        url = f"{self.base_url}/v1/messages"
+
+        sys_parts = [system] if system else []
+        user_messages = []
+        for msg in messages:
+            if msg["role"] == "system":
+                c = msg["content"]
+                sys_parts.append(c if isinstance(c, str) else str(c))
+            else:
+                user_messages.append(msg)
+        if not user_messages:
+            user_messages = [{"role": "user", "content": "请开始工作。"}]
+
+        payload: Dict[str, Any] = {
+            "model": self.model,
+            "messages": user_messages,
+            "max_tokens": max_tokens,
+            "tools": tools,
+            "stream": True,
+        }
+        if temperature is not None:
+            payload["temperature"] = temperature
+        if sys_parts:
+            payload["system"] = "\n".join(sys_parts).strip()
+
+        # 用于拼装 tool_use block 的 input JSON（流式时分片传来）
+        _blocks: Dict[int, Dict] = {}  # index -> block
+        _input_buf: Dict[int, str] = {}  # index -> partial json string
+        _stop_reason = "end_turn"
+        _usage: Dict = {}
+
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                async with client.stream(
+                    "POST", url, headers=self._anthropic_headers(), json=payload
+                ) as resp:
+                    if resp.status_code != 200:
+                        body = await resp.aread()
+                        yield {"type": "error", "message": f"HTTP {resp.status_code}: {body[:200]}"}
+                        return
+
+                    async for raw_line in resp.aiter_lines():
+                        if not raw_line.startswith("data: "):
+                            continue
+                        data_str = raw_line[6:].strip()
+                        if not data_str or data_str == "[DONE]":
+                            continue
+                        try:
+                            ev = json.loads(data_str)
+                        except Exception:
+                            continue
+
+                        etype = ev.get("type", "")
+
+                        if etype == "content_block_start":
+                            idx = ev["index"]
+                            blk = ev.get("content_block", {})
+                            _blocks[idx] = dict(blk)
+                            if blk.get("type") == "tool_use":
+                                _input_buf[idx] = ""
+
+                        elif etype == "content_block_delta":
+                            idx = ev["index"]
+                            delta = ev.get("delta", {})
+                            dtype = delta.get("type", "")
+                            if dtype == "text_delta":
+                                yield {"type": "text_delta", "delta": delta.get("text", "")}
+                            elif dtype == "input_json_delta":
+                                _input_buf[idx] = _input_buf.get(idx, "") + delta.get("partial_json", "")
+
+                        elif etype == "content_block_stop":
+                            idx = ev["index"]
+                            blk = _blocks.get(idx, {})
+                            if blk.get("type") == "tool_use":
+                                try:
+                                    parsed_input = json.loads(_input_buf.get(idx, "{}") or "{}")
+                                except Exception:
+                                    parsed_input = {}
+                                if not isinstance(parsed_input, dict):
+                                    parsed_input = {}
+                                yield {
+                                    "type": "tool_use_block",
+                                    "id": blk.get("id", f"tu_{idx}"),
+                                    "name": blk.get("name", ""),
+                                    "input": parsed_input,
+                                }
+
+                        elif etype == "message_delta":
+                            _stop_reason = ev.get("delta", {}).get("stop_reason", "end_turn") or "end_turn"
+                            _usage = ev.get("usage", {})
+
+                        elif etype == "message_stop":
+                            yield {"type": "stop", "stop_reason": _stop_reason, "usage": _usage}
+
+        except Exception as e:
+            logger.error("Anthropic 流式 tool-use 异常: %s", e)
+            yield {"type": "error", "message": str(e)}
+
+    async def chat_with_tools_stream(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: List[Dict[str, Any]],
+        tool_executor,
+        max_rounds: int = 10,
+        temperature: float = 0.3,
+        max_tokens: int = 16000,
+        system: str = "",
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """
+        带工具的 ReAct 流式循环。
+        yield 事件（前端直接消费）：
+          text_delta / tool_start / tool_done / action / error / round_done / message_done
+        """
+        ctx = _ctx_label()
+
+        if not self.is_configured:
+            yield {"type": "text_delta", "delta": "[LLM 未配置，无法回复]"}
+            yield {"type": "message_done", "rounds": 0}
+            return
+
+        history = list(messages)
+        _total_input = 0
+        _total_output = 0
+        _t0 = time.time()
+
+        for round_no in range(max_rounds):
+            logger.info("🔄 [%s] 流式 Tool-use 第 %d 轮", ctx, round_no + 1)
+
+            current_text = ""
+            tool_use_blocks: List[Dict] = []
+            stop_reason = "end_turn"
+
+            async for ev in self._call_anthropic_tools_stream(
+                history, tools, system, temperature, max_tokens
+            ):
+                etype = ev["type"]
+
+                if etype == "text_delta":
+                    current_text += ev["delta"]
+                    yield ev  # 直接透传给前端
+
+                elif etype == "tool_use_block":
+                    tool_use_blocks.append(ev)
+
+                elif etype == "stop":
+                    stop_reason = ev.get("stop_reason", "end_turn")
+                    usage = ev.get("usage", {})
+                    _total_input += usage.get("input_tokens", 0) or 0
+                    _total_output += usage.get("output_tokens", 0) or 0
+
+                elif etype == "error":
+                    yield ev
+                    return
+
+            # 把 assistant 回复存入历史（重建 content blocks 格式）
+            assistant_content: List[Dict] = []
+            if current_text:
+                assistant_content.append({"type": "text", "text": current_text})
+            for tb in tool_use_blocks:
+                assistant_content.append({
+                    "type": "tool_use",
+                    "id": tb["id"],
+                    "name": tb["name"],
+                    "input": tb["input"],
+                })
+            history.append({"role": "assistant", "content": assistant_content})
+
+            # 没有工具调用 → 对话结束
+            if stop_reason != "tool_use" or not tool_use_blocks:
+                logger.info("✅ [%s] 流式 Tool-use 完成（%d 轮）", ctx, round_no + 1)
+                await self._save_tools_conversation(
+                    history, _total_input, _total_output, int((time.time() - _t0) * 1000)
+                )
+                yield {"type": "message_done", "rounds": round_no + 1}
+                return
+
+            # 执行工具，推 tool_start / tool_done 事件
+            tool_results = []
+            for tb in tool_use_blocks:
+                tool_name = tb["name"]
+                tool_input = tb["input"]
+                tool_use_id = tb["id"]
+
+                logger.info("🔧 [%s] 流式调用工具: %s", ctx, tool_name)
+                yield {"type": "tool_start", "tool": tool_name, "tool_use_id": tool_use_id}
+
+                result_text = await tool_executor.execute(tool_name, tool_input)
+
+                # 从 executor 取最新的 summary（tool_done 已推送过了，这里同步 yield）
+                summary = ""
+                if tool_executor.thinking_steps:
+                    summary = tool_executor.thinking_steps[-1].get("summary", "")
+                yield {"type": "tool_done", "tool": tool_name, "summary": summary}
+
+                # 检查是否有 action 卡片需要推
+                current_action = tool_executor.primary_action_result
+                if current_action and current_action.get("type") not in ("error",):
+                    yield {"type": "action", **current_action}
+
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tool_use_id,
+                    "content": result_text,
+                })
+
+                if tool_name == "finish":
+                    history.append({"role": "user", "content": tool_results})
+                    await self._save_tools_conversation(
+                        history, _total_input, _total_output, int((time.time() - _t0) * 1000)
+                    )
+                    yield {"type": "message_done", "rounds": round_no + 1}
+                    return
+
+            history.append({"role": "user", "content": tool_results})
+
+        logger.warning("[%s] 流式 Tool-use 达到最大轮数 %d", ctx, max_rounds)
+        await self._save_tools_conversation(
+            history, _total_input, _total_output, int((time.time() - _t0) * 1000)
+        )
+        yield {"type": "message_done", "rounds": max_rounds}
 
     async def _call_openai_tools(
         self,
