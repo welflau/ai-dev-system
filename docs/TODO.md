@@ -1,10 +1,37 @@
 # AI Dev System — 待办清单
 
-> 最后更新: 2026-05-07
+> 最后更新: 2026-05-09
 
 ---
 
 ## 🎯 新增待办
+
+### H. 系统自进化：成功经验自动沉淀为 Skill（P2）
+
+**问题**：当前自进化闭环（Reflexion → FailureLibrary → Skill注入）中，Skills 内容需人工维护，成功案例无法自动提炼为新 Skill。系统会"记住失败"但不会"总结成功"。
+
+**方案**：工单验收通过后，系统自动分析本次开发轨迹，提取可复用的技术模式，生成 Skill 草案写入 DB，等人工确认后合入 skills.json。
+
+**核心链路**：
+```
+工单验收通过（acceptance_passed）
+    ↓
+SkillExtractorAgent 分析工单全轨迹（PRD + 架构 + 代码 + Reflection）
+    ↓
+提取：解决了什么问题 / 用了什么技术模式 / 适用于什么项目类型
+    ↓
+生成 Skill 草案（pending_skills 表，status=draft）
+    ↓
+AI 助手对话中展示草案，人工确认 → 自动写入 skills.json + 热重载
+```
+
+**价值**：把"人工总结 → AI 执行"升级为"AI 草稿 → 人工确认"，把自进化从 L2 推向 L3。
+
+**详细方案**：`docs/20260509_系统自进化_Skill自动沉淀方案.md`
+
+**前置**：Failure Library 已完成，Skills 三层过滤已完成（2026-05-08）
+
+---
 
 ### G. Reflexion UE uproject 自愈（P2）
 

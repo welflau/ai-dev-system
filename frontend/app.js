@@ -8421,7 +8421,7 @@ async function switchChatSession(sessionId) {
                 actionObj._state = msg.action_state || 'pending';
                 actionObj._result = msg.action_result || null;
             }
-            appendChatBubble(msg.role, msg.content, msg.created_at, actionObj, msg.images || []);
+            appendChatBubble(msg.role, msg.content, msg.created_at, actionObj, msg.images || [], [], msg.thinking || []);
         }
         scrollChatToBottom();
     } catch (e) {
