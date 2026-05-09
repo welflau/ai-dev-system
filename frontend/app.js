@@ -12403,6 +12403,90 @@ async function resetGlobalSkill(skillId) {
     }
 }
 
+async function showProjectSkillMarketplace() {
+    if (!currentProjectId) { showToast('请先进入项目', 'error'); return; }
+    const modalId = 'projectSkillMarketplaceModal';
+    let modal = document.getElementById(modalId);
+    if (modal) { modal.remove(); return; }
+
+    modal = document.createElement('div');
+    modal.id = modalId;
+    modal.className = 'modal-overlay active';
+    modal.innerHTML = `
+        <div class="modal modal-lg" style="max-width:780px;">
+            <div class="modal-header">
+                <h3>🛒 项目 Skill 市场</h3>
+                <button class="btn-icon" onclick="document.getElementById('${modalId}').remove()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p style="font-size:12px;color:var(--text-muted);margin-bottom:14px;">
+                    选择 Skill 安装到项目 <code>.Agent/skills/</code> 目录。
+                    AI 助手对话时可自动加载，也可通过对话说「帮我安装 xxx」来管理。
+                </p>
+                <div id="projectMarketplaceSkillList"><div class="empty-state-sm">加载中...</div></div>
+            </div>
+            <div class="modal-footer" style="padding:12px 20px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;">
+                <button class="btn btn-ghost" onclick="document.getElementById('${modalId}').remove()">关闭</button>
+            </div>
+        </div>`;
+    document.body.appendChild(modal);
+    modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+    await _loadProjectMarketplaceList();
+}
+
+async function _loadProjectMarketplaceList() {
+    const listEl = document.getElementById('projectMarketplaceSkillList');
+    if (!listEl || !currentProjectId) return;
+    try {
+        const data = await api(`/projects/${currentProjectId}/skills/marketplace`);
+        const skills = data.skills || [];
+        if (!skills.length) {
+            listEl.innerHTML = '<div class="empty-state-sm">marketplace/ 目录下暂无 Skill，复制 Skill 文件夹后刷新</div>';
+            return;
+        }
+        listEl.innerHTML = skills.map(sk => `
+            <div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border);">
+                <div style="flex:1;min-width:0;">
+                    <div style="font-weight:500;font-size:13px;">${escapeHtml(sk.name)}</div>
+                    <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">${escapeHtml(sk.description || sk.dir_name)}</div>
+                </div>
+                ${sk.installed
+                    ? `<span style="font-size:11px;padding:2px 8px;border-radius:4px;background:rgba(52,211,88,.15);color:#34d058;">✓ 已安装</span>
+                       <button class="btn btn-xs btn-ghost" onclick="uninstallProjectMarketplaceSkill('${sk.dir_name}')" style="font-size:11px;color:var(--danger);">移除</button>`
+                    : `<button class="btn btn-sm btn-primary" onclick="installProjectMarketplaceSkill('${sk.dir_name}', this)" style="font-size:12px;">+ 添加到项目</button>`
+                }
+            </div>`).join('');
+    } catch (e) {
+        listEl.innerHTML = `<div class="empty-state-sm" style="color:var(--danger)">加载失败: ${e.message}</div>`;
+    }
+}
+
+async function installProjectMarketplaceSkill(dirName, btn) {
+    if (!currentProjectId) return;
+    if (btn) { btn.disabled = true; btn.textContent = '安装中…'; }
+    try {
+        await api(`/projects/${currentProjectId}/skills/marketplace/${encodeURIComponent(dirName)}/install`, { method: 'POST' });
+        showToast(`已为项目安装 Skill: ${dirName}`, 'success');
+        await _loadProjectMarketplaceList();
+        loadProjectSkills();
+    } catch (e) {
+        showToast(`安装失败: ${e.message}`, 'error');
+        if (btn) { btn.disabled = false; btn.textContent = '+ 添加到项目'; }
+    }
+}
+
+async function uninstallProjectMarketplaceSkill(dirName) {
+    if (!currentProjectId || !confirm(`确认从项目移除 Skill「${dirName}」？`)) return;
+    try {
+        await api(`/projects/${currentProjectId}/skills/use/${encodeURIComponent(dirName)}`, { method: 'DELETE' });
+        showToast(`已移除 Skill: ${dirName}`, 'success');
+        await _loadProjectMarketplaceList();
+        loadProjectSkills();
+    } catch (e) {
+        showToast(`移除失败: ${e.message}`, 'error');
+    }
+}
+
 async function showSkillMarketplace() {
     const modalId = 'skillMarketplaceModal';
     let modal = document.getElementById(modalId);

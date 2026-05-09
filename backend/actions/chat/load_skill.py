@@ -78,9 +78,11 @@ class LoadSkillAction(ActionBase):
                 error=f"Skill `{skill_id}` 不在可用列表中",
             )
 
-        # 加载 Skill 全文（自定义 Skill 从文件系统读取，全局 Skill 走 skill_loader）
+        # 加载 Skill 全文
         if skill_id.startswith("custom.") and project_id:
             content, name = await _load_custom_skill(skill_id, project_id)
+        elif skill_id.startswith("agent.") and project_id:
+            content, name = await _load_agent_skill(skill_id, project_id)
         else:
             content = skill_loader.get_skill_prompt(skill_id)
             cfg = skill_loader.skills.get(skill_id, {})
@@ -110,32 +112,28 @@ class LoadSkillAction(ActionBase):
 
 
 async def _get_available_skill_ids(project_id: str = None) -> list:
-    """三层优先级获取可用 Skill ID 列表。
+    """四层优先级获取可用 Skill ID 列表。
 
     Layer 1（基础）：skills.json enabled 字段
-    Layer 2（全局覆盖）：global_skill_settings 表（系统设置全局开关）
+    Layer 2（全局覆盖）：global_skill_settings 表
     Layer 3（项目覆盖）：project_skills 表（项目级开关 + 自定义 Skill）
+    Layer 4（项目本地）：{project_path}/.Agent/skills/ 目录（agent.* 前缀）
     """
     from skills import skill_loader
     from database import db
 
-    # Layer 1: skills.json 基础状态（dict: skill_id → bool）
     enabled_map: dict = {
         sid: bool(cfg.get("enabled", True))
         for sid, cfg in skill_loader.skills.items()
     }
 
-    # Layer 2: global_skill_settings 覆盖
     try:
-        global_rows = await db.fetch_all(
-            "SELECT skill_id, enabled FROM global_skill_settings"
-        )
+        global_rows = await db.fetch_all("SELECT skill_id, enabled FROM global_skill_settings")
         for r in global_rows:
             enabled_map[r["skill_id"]] = bool(r["enabled"])
     except Exception:
-        pass  # 表不存在时跳过
+        pass
 
-    # Layer 3: 项目级覆盖
     if project_id:
         try:
             proj_rows = await db.fetch_all(
@@ -147,7 +145,53 @@ async def _get_available_skill_ids(project_id: str = None) -> list:
         except Exception:
             pass
 
+        # Layer 4: 项目 .Agent/skills/ 目录
+        agent_dir = await _get_project_agent_skills_dir(project_id)
+        if agent_dir.exists():
+            for skill_dir in agent_dir.iterdir():
+                if skill_dir.is_dir() and (skill_dir / "SKILL.md").exists():
+                    enabled_map[f"agent.{skill_dir.name}"] = True
+
     return [sid for sid, enabled in enabled_map.items() if enabled]
+
+
+async def _get_project_agent_skills_dir(project_id: str):
+    """返回项目 .Agent/skills/ 目录路径（与 api/skills.py 同逻辑）。"""
+    from pathlib import Path
+    from database import db
+    try:
+        row = await db.fetch_one("SELECT git_repo_path FROM projects WHERE id=?", (project_id,))
+        if row and row.get("git_repo_path"):
+            return Path(row["git_repo_path"]) / ".Agent" / "skills"
+    except Exception:
+        pass
+    return Path(__file__).parent.parent.parent / "data" / "project_skills" / project_id / ".Agent" / "skills"
+
+
+async def _load_agent_skill(skill_id: str, project_id: str):
+    """加载项目 .Agent/skills/{dir_name}/SKILL.md 内容。返回 (content, name)。"""
+    dir_name = skill_id.removeprefix("agent.")
+    agent_dir = await _get_project_agent_skills_dir(project_id)
+    skill_md = agent_dir / dir_name / "SKILL.md"
+    if not skill_md.exists():
+        return None, skill_id
+    try:
+        content = skill_md.read_text(encoding="utf-8").strip()
+        # 从 frontmatter 取 name
+        import re as _re
+        m = _re.match(r"^---\s*\n(.*?)\n---\s*\n", content, _re.DOTALL)
+        name = dir_name
+        if m:
+            try:
+                import yaml as _yaml
+                fm = _yaml.safe_load(m.group(1)) or {}
+                name = fm.get("name", dir_name)
+            except Exception:
+                pass
+        return content, name
+    except Exception as e:
+        logger.warning("load agent skill %s failed: %s", skill_id, e)
+        return None, skill_id
 
 
 async def _load_custom_skill(skill_id: str, project_id: str):

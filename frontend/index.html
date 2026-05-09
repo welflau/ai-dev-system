@@ -928,7 +928,10 @@
                                 <div class="settings-card">
                                     <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:4px;">
                                         <h3 class="settings-card-title" style="margin:0;">系统 Skills（按需加载）</h3>
-                                        <button class="btn btn-sm btn-ghost" onclick="loadProjectSkills()">🔄 刷新</button>
+                                        <div style="display:flex;gap:6px;">
+                                            <button class="btn btn-sm btn-primary" onclick="showProjectSkillMarketplace()">🛒 市场</button>
+                                            <button class="btn btn-sm btn-ghost" onclick="loadProjectSkills()">🔄 刷新</button>
+                                        </div>
                                     </div>
                                     <p class="settings-description" style="margin-bottom:12px;">
                                         AI 助手在需要时会主动调用 <code>load_skill</code> 工具加载对应文档。可按项目启用或禁用某个 Skill。

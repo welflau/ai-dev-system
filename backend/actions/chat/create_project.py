@@ -199,6 +199,9 @@ class CreateProjectAction(ActionBase):
             from api.milestones import generate_roadmap_for_project
             asyncio.create_task(generate_roadmap_for_project(project_id, name, description))
 
+            # 自动安装 marketplace Skill（基于 traits 规则匹配，fire-and-forget）
+            asyncio.create_task(_auto_install_skills(project_id, traits))
+
             # v0.19.1 对话一键流：UE 项目自动弹 propose 方案卡，持久化到项目聊天
             # 前端跳转到项目详情后，loadChatHistory 自然能拿到这条消息，无需前端再串 API。
             auto_next: Optional[Dict[str, Any]] = None
@@ -259,3 +262,57 @@ class CreateProjectAction(ActionBase):
                 success=False,
                 data={"type": "error", "message": f"创建项目失败: {str(e)}"},
             )
+
+
+# traits → marketplace skill 映射规则
+_TRAIT_SKILL_MAP = {
+    "engine:ue5":        ["unreal-cpp-dev", "unreal-editor-control"],
+    "engine:ue4":        ["unreal-cpp-dev"],
+    "framework:react":   ["react-dev"],
+    "framework:fastapi": ["fastapi-dev"],
+    "platform:web":      ["multi-search-engine"],
+    "platform:wechat":   ["multi-search-engine"],
+    "vcs:git":           ["git-workflow"],
+}
+
+
+async def _auto_install_skills(project_id: str, traits: list) -> None:
+    """根据 traits 自动把匹配的 marketplace Skill 安装到项目 .Agent/skills/。"""
+    import shutil
+    from pathlib import Path
+
+    marketplace_dir = Path(__file__).parent.parent.parent / "skills" / "marketplace"
+    if not marketplace_dir.exists():
+        return
+
+    # 收集需要安装的 skill dir_names（去重）
+    to_install: set = set()
+    for trait in (traits or []):
+        for skill_name in _TRAIT_SKILL_MAP.get(trait, []):
+            src = marketplace_dir / skill_name
+            if src.exists() and (src / "SKILL.md").exists():
+                to_install.add(skill_name)
+
+    if not to_install:
+        return
+
+    try:
+        from actions.chat.load_skill import _get_project_agent_skills_dir
+        agent_dir = await _get_project_agent_skills_dir(project_id)
+        agent_dir.mkdir(parents=True, exist_ok=True)
+
+        installed = []
+        for skill_name in sorted(to_install):
+            dst = agent_dir / skill_name
+            if dst.exists():
+                continue
+            try:
+                shutil.copytree(str(marketplace_dir / skill_name), str(dst))
+                installed.append(skill_name)
+            except Exception as e:
+                logger.warning("auto-install skill %s failed: %s", skill_name, e)
+
+        if installed:
+            logger.info("project=%s auto-installed skills: %s", project_id, installed)
+    except Exception as e:
+        logger.warning("_auto_install_skills failed for %s: %s", project_id, e)

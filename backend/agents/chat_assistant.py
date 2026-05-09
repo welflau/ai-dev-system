@@ -44,6 +44,7 @@ from actions.chat.get_memory import GetMemoryAction                       # 查�
 from actions.chat.competitor_analysis import CompetitorAnalysisAction     # 竞品反拆
 from actions.chat.read_local_file import ReadLocalFileAction               # 读本地文件（Skill 文档等）
 from actions.chat.ue_call import UECallAction                              # UE Editor UCP 控制
+from actions.chat.install_project_skill import InstallProjectSkillAction   # 项目 Skill 安装/卸载
 
 logger = logging.getLogger("agent.chat_assistant")
 
@@ -268,6 +269,7 @@ class ChatAssistantAgent(BaseAgent):
         CompetitorAnalysisAction,      # 竞品反拆分析
         ReadLocalFileAction,           # 读本地文件（动态加载 Skill 文档）
         UECallAction,                  # UE Editor UCP 控制（仅 engine:ue5/ue4）
+        InstallProjectSkillAction,     # 对话中为项目安装/卸载 Marketplace Skill
         LoadSkillAction,               # v0.20 主动触发：按需加载 Skill 全文
     ]
     react_mode = ReactMode.REACT
@@ -741,6 +743,19 @@ class ChatAssistantAgent(BaseAgent):
             )
             for _r in _custom_rows:
                 _skills_index += f"\n| `{_r['skill_id']}` | {_r['custom_name'] or _r['skill_id']} | 项目自定义 Skill |"
+        except Exception:
+            pass
+        # 追加项目 .Agent/skills/ 目录下的 Skill（agent.* 系列）
+        try:
+            from actions.chat.load_skill import _get_project_agent_skills_dir, _load_agent_skill
+            _agent_dir = await _get_project_agent_skills_dir(project.get("id", ""))
+            if _agent_dir.exists():
+                for _skill_dir in sorted(_agent_dir.iterdir()):
+                    if _skill_dir.is_dir() and (_skill_dir / "SKILL.md").exists():
+                        _, _skill_name = await _load_agent_skill(
+                            f"agent.{_skill_dir.name}", project.get("id", "")
+                        )
+                        _skills_index += f"\n| `agent.{_skill_dir.name}` | {_skill_name} | 项目本地 Skill |"
         except Exception:
             pass
         skills_section = f"""

@@ -193,6 +193,84 @@ async def uninstall_use_skill(dir_name: str):
     return {"ok": True, "dir_name": dir_name, "uninstalled": True}
 
 
+# ── 项目 .Agent/skills 目录助手 ─────────────────────────────────────────────
+
+async def _get_project_agent_skills_dir(project_id: str) -> Path:
+    """返回项目 .Agent/skills/ 目录路径。
+    优先用 git_repo_path，不存在时降级到 data/project_skills/{id}/.Agent/skills/。
+    """
+    row = await db.fetch_one("SELECT git_repo_path FROM projects WHERE id=?", (project_id,))
+    if row and row.get("git_repo_path"):
+        base = Path(row["git_repo_path"])
+        return base / ".Agent" / "skills"
+    fallback = Path(__file__).parent.parent / "data" / "project_skills" / project_id / ".Agent" / "skills"
+    return fallback
+
+
+@router.get("/api/projects/{project_id}/skills/marketplace")
+async def list_project_marketplace_skills(project_id: str):
+    """列出 marketplace/ 的所有 Skill，标记哪些已安装到该项目的 .Agent/skills/。"""
+    if not _MARKETPLACE_DIR.exists():
+        return {"skills": []}
+
+    agent_skills_dir = await _get_project_agent_skills_dir(project_id)
+    installed = {p.name for p in agent_skills_dir.iterdir() if p.is_dir()} \
+        if agent_skills_dir.exists() else set()
+
+    skills = []
+    for skill_dir in sorted(_MARKETPLACE_DIR.iterdir()):
+        skill_md = skill_dir / "SKILL.md"
+        if not skill_dir.is_dir() or not skill_md.exists():
+            continue
+        meta = _parse_skill_meta(skill_md)
+        skills.append({
+            "dir_name": skill_dir.name,
+            "name": meta["name"],
+            "description": meta["description"],
+            "installed": skill_dir.name in installed,
+        })
+    return {"skills": skills, "project_id": project_id}
+
+
+@router.post("/api/projects/{project_id}/skills/marketplace/{dir_name}/install")
+async def install_project_skill(project_id: str, dir_name: str):
+    """将 marketplace/{dir_name} 复制到项目 .Agent/skills/。"""
+    if not re.match(r'^[\w\-]+$', dir_name):
+        raise HTTPException(400, "非法目录名")
+
+    src = _MARKETPLACE_DIR / dir_name
+    if not src.exists() or not (src / "SKILL.md").exists():
+        raise HTTPException(404, f"marketplace 中不存在 Skill: {dir_name}")
+
+    agent_skills_dir = await _get_project_agent_skills_dir(project_id)
+    agent_skills_dir.mkdir(parents=True, exist_ok=True)
+    dst = agent_skills_dir / dir_name
+    if dst.exists():
+        return {"ok": True, "dir_name": dir_name, "already_installed": True}
+
+    import shutil
+    shutil.copytree(str(src), str(dst))
+    logger.info("project=%s skill installed: %s → %s", project_id, dir_name, dst)
+    return {"ok": True, "dir_name": dir_name, "installed": True, "path": str(dst)}
+
+
+@router.delete("/api/projects/{project_id}/skills/use/{dir_name}")
+async def uninstall_project_skill(project_id: str, dir_name: str):
+    """从项目 .Agent/skills/ 删除已安装的 Skill。"""
+    if not re.match(r'^[\w\-]+$', dir_name):
+        raise HTTPException(400, "非法目录名")
+
+    agent_skills_dir = await _get_project_agent_skills_dir(project_id)
+    dst = agent_skills_dir / dir_name
+    if not dst.exists():
+        raise HTTPException(404, f"项目 Skills 中不存在: {dir_name}")
+
+    import shutil
+    shutil.rmtree(str(dst))
+    logger.info("project=%s skill uninstalled: %s", project_id, dir_name)
+    return {"ok": True, "dir_name": dir_name, "uninstalled": True}
+
+
 # ── 项目级 Skill 管理 ────────────────────────────────────────────────────────
 
 @router.get("/api/projects/{project_id}/skills")
