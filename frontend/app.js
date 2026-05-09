@@ -9778,14 +9778,18 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
           ).join('')}</div>`
         : '';
 
-    // assistant 消息底部工具栏（复制 + 保存到文件）
+    // assistant 消息底部工具栏（复制 + 保存为文件 + 保存到仓库）
     const toolbarHtml = (role === 'assistant' && content && content.trim())
         ? `<div class="chat-bubble-toolbar">
             <button class="chat-bubble-tool-btn" onclick="copyChatBubble(this)" title="复制内容">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
                 复制
             </button>
-            ${currentProjectId ? `<button class="chat-bubble-tool-btn" onclick="saveChatBubbleToRepo(this)" title="保存为 Markdown 文件到仓库">
+            <button class="chat-bubble-tool-btn" onclick="saveChatBubbleToFile(this)" title="下载为本地 Markdown 文件">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                保存为文件
+            </button>
+            ${currentProjectId ? `<button class="chat-bubble-tool-btn" onclick="saveChatBubbleToRepo(this)" title="保存为 Markdown 文件到项目仓库">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
                 保存到仓库
             </button>` : ''}
@@ -10133,6 +10137,29 @@ function copyChatBubble(btn) {
 }
 
 /** 保存气泡内容为 Markdown 文件到项目仓库 */
+function saveChatBubbleToFile(btn) {
+    const bubble = btn.closest('.chat-msg-content').querySelector('.chat-msg-bubble');
+    const text = bubble ? (bubble.innerText || bubble.textContent) : '';
+    if (!text.trim()) return;
+
+    const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const filename = `chat-export-${ts}.md`;
+    const mdContent = `# AI 对话导出\n\n> 导出时间：${new Date().toLocaleString()}\n\n---\n\n${text.trim()}`;
+
+    const blob = new Blob([mdContent], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+
+    const orig = btn.innerHTML;
+    btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg> 已下载';
+    btn.style.color = 'var(--success, #34d058)';
+    setTimeout(() => { btn.innerHTML = orig; btn.style.color = ''; }, 2000);
+}
+
 async function saveChatBubbleToRepo(btn) {
     if (!currentProjectId) return;
     const bubble = btn.closest('.chat-msg-content').querySelector('.chat-msg-bubble');
