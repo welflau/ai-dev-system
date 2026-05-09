@@ -9014,9 +9014,9 @@ function _chatThinkingAppend(data) {
         if (typing) {
             typing.parentNode.insertBefore(panel, typing);
         } else {
-            // 流式路径：插入到流式气泡的 bubble 之前
-            const bubble = streamBubble.querySelector('._stream-bubble');
-            streamBubble.insertBefore(panel, bubble);
+            // 流式路径：插入到流式气泡 .chat-msg 之前（同级，不缩进）
+            const streamMsg = document.querySelector('.chat-msg.assistant._streaming');
+            streamMsg.parentNode.insertBefore(panel, streamMsg);
         }
         _currentThinkingPanel = panel;
         panel.classList.add('ctp-expanded');
