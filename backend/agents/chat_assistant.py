@@ -183,6 +183,7 @@ class _ChatToolExecutor:
                 "git_log": "branch", "git_switch_branch": "branch",
                 "generate_document": "filename", "confirm_save_doc": "filename",
                 "confirm_requirement": "title", "confirm_bug": "title",
+                "load_skill": "skill_id", "read_local_file": "path", "ue_call": "command",
             }
             key = _KEY.get(tool_name)
             arg_val = str(tool_input.get(key, ""))[:60] if key else ""

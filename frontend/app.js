@@ -8836,6 +8836,9 @@ const _TOOL_LABELS = {
     get_build_logs: '🔧 查构建日志',
     get_memory: '🧠 查 Agent 记忆',
     competitor_analysis: '🔎 竞品分析',
+    load_skill: '📚 加载 Skill',
+    read_local_file: '📂 读取本地文件',
+    ue_call: '🎮 UE Editor 操作',
 };
 
 let _currentThinkingPanel = null;  // 当前正在写入的思考面板元素
