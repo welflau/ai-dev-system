@@ -37,7 +37,7 @@
     "name": "Git 工程化",
     "description": "feat/develop/main 分支策略、提交消息规范、PR 流程",
     "prompt_file": "packs/git_workflow/prompt.md",
-    "inject_to": ["DevAgent", "DeployAgent"],
+    "inject_to": ["DevAgent", "DeployAgent", "ChatAssistant"],
     "priority": "medium",
     "enabled": true,
     "traits_match": {
@@ -48,7 +48,7 @@
     "name": "Unreal Engine C++ 开发",
     "description": "UE C++ 规范：UCLASS/UPROPERTY/UFUNCTION 宏、类型系统、Build.cs 依赖、UHT 常见坑",
     "prompt_file": "packs/unreal_cpp_dev/prompt.md",
-    "inject_to": ["DevAgent"],
+    "inject_to": ["DevAgent", "ChatAssistant"],
     "priority": "high",
     "enabled": true,
     "traits_match": {
@@ -60,7 +60,7 @@
     "name": "UE 编辑态控制（UCP）",
     "description": "通过 UnrealClientProtocol TCP 桥接操控运行中的 UE Editor：读写 Actor/属性/蓝图、生成测试场景",
     "prompt_file": "packs/unreal_editor_control/prompt.md",
-    "inject_to": ["DevAgent", "TestAgent"],
+    "inject_to": ["DevAgent", "TestAgent", "ChatAssistant"],
     "priority": "high",
     "enabled": true,
     "traits_match": {
@@ -71,7 +71,7 @@
     "name": "Unreal Engine 项目结构",
     "description": "UE 项目布局（Source/Content/Config）、模块划分、.uproject/Target.cs 配置、修改原则",
     "prompt_file": "packs/unreal_project/prompt.md",
-    "inject_to": ["DevAgent", "ArchitectAgent"],
+    "inject_to": ["DevAgent", "ArchitectAgent", "ChatAssistant"],
     "priority": "medium",
     "enabled": true,
     "traits_match": {
