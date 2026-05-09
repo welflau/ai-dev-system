@@ -8506,7 +8506,7 @@ async function _sendChatStreaming(url, body) {
     let finalActions = [];
 
     try {
-        const fetchResp = await fetch(url, {
+        const fetchResp = await fetch(`${API}${url}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
@@ -8575,11 +8575,7 @@ async function _sendChatStreaming(url, body) {
         console.error('[stream] 流式请求失败:', e);
         // fallback 到非流式
         bubbleWrapper.remove();
-        return await originalApi(url.replace('/stream', ''), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-        });
+        return await originalApi(url.replace('/stream', ''), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     }
 
     // 流结束：完整 Markdown 渲染（处理代码块、表格等）
