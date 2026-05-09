@@ -110,38 +110,44 @@ class LoadSkillAction(ActionBase):
 
 
 async def _get_available_skill_ids(project_id: str = None) -> list:
-    """获取项目可用的 Skill ID 列表（全局库 + 项目自定义配置）"""
+    """三层优先级获取可用 Skill ID 列表。
+
+    Layer 1（基础）：skills.json enabled 字段
+    Layer 2（全局覆盖）：global_skill_settings 表（系统设置全局开关）
+    Layer 3（项目覆盖）：project_skills 表（项目级开关 + 自定义 Skill）
+    """
     from skills import skill_loader
+    from database import db
 
-    # 基础：全局库里所有启用的 Skill
-    base_ids = [sid for sid, cfg in skill_loader.skills.items() if cfg.get("enabled", True)]
+    # Layer 1: skills.json 基础状态（dict: skill_id → bool）
+    enabled_map: dict = {
+        sid: bool(cfg.get("enabled", True))
+        for sid, cfg in skill_loader.skills.items()
+    }
 
-    if not project_id:
-        return base_ids
-
-    # 从 project_skills 表读取项目覆盖配置；表不存在时降级为全局默认
+    # Layer 2: global_skill_settings 覆盖
     try:
-        from database import db
-        rows = await db.fetch_all(
-            "SELECT skill_id, enabled FROM project_skills WHERE project_id=?",
-            (project_id,),
+        global_rows = await db.fetch_all(
+            "SELECT skill_id, enabled FROM global_skill_settings"
         )
-        if rows:
-            # 已有项目配置：用项目配置覆盖
-            project_map = {r["skill_id"]: bool(r["enabled"]) for r in rows}
-            result = []
-            for sid in base_ids:
-                if project_map.get(sid, True):  # 默认启用
-                    result.append(sid)
-            # 加入项目自定义 Skill
-            for sid, enabled in project_map.items():
-                if enabled and sid not in result:
-                    result.append(sid)
-            return result
+        for r in global_rows:
+            enabled_map[r["skill_id"]] = bool(r["enabled"])
     except Exception:
-        pass  # project_skills 表还不存在时降级
+        pass  # 表不存在时跳过
 
-    return base_ids
+    # Layer 3: 项目级覆盖
+    if project_id:
+        try:
+            proj_rows = await db.fetch_all(
+                "SELECT skill_id, enabled FROM project_skills WHERE project_id=?",
+                (project_id,),
+            )
+            for r in proj_rows:
+                enabled_map[r["skill_id"]] = bool(r["enabled"])
+        except Exception:
+            pass
+
+    return [sid for sid, enabled in enabled_map.items() if enabled]
 
 
 async def _load_custom_skill(skill_id: str, project_id: str):

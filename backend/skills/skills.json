@@ -78,6 +78,16 @@
       "any_of": ["engine:ue5", "engine:ue4"]
     }
   },
+  "marketplace-skills": {
+    "name": "Marketplace Skills（社区扩展）",
+    "description": "自动扫描 marketplace/ 目录，复制任意 SKILL.md 文件夹即可使用",
+    "type": "scan_dir",
+    "scan_dir": "marketplace",
+    "header": "# Marketplace Skills（社区扩展）\n\n以下 Skill 来自 marketplace/ 目录，复制任意 SKILL.md 文件夹即可自动注册。",
+    "inject_to": ["ChatAssistant"],
+    "priority": "medium",
+    "enabled": true
+  },
   "unreal-ucp-skills": {
     "name": "UE Editor Skill 索引（UCP）",
     "description": "自动扫描 UCP Skills 目录，生成可用 Skill 索引表，供 ChatAssistant 按需加载",

@@ -716,6 +716,12 @@ CREATE TABLE IF NOT EXISTS project_skills (
     UNIQUE(project_id, skill_id)
 );
 CREATE INDEX IF NOT EXISTS idx_project_skills_project ON project_skills(project_id);
+
+CREATE TABLE IF NOT EXISTS global_skill_settings (
+    skill_id    TEXT PRIMARY KEY,
+    enabled     INTEGER DEFAULT 1,   -- 1=开启, 0=关闭（覆盖 skills.json 默认值）
+    updated_at  TEXT NOT NULL
+);
 """
 
 

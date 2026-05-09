@@ -843,15 +843,28 @@ async function loadProjectSkills() {
                         <span class="toggle-slider"></span>
                     </label>` : '';
                 const dimClass = sk.enabled ? '' : ' style="opacity:0.5"';
+                // 全局默认标签
+                const globalDefault = sk.enabled_global !== undefined
+                    ? (sk.enabled_global ? '全局默认开' : '全局默认关')
+                    : (sk.enabled ? '全局默认开' : '全局默认关');
+                const defaultBadge = !sk.overridden
+                    ? `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:var(--bg-elevated);color:var(--text-muted);margin-left:4px;">${globalDefault}</span>`
+                    : `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:rgba(99,102,241,.15);color:#818cf8;margin-left:4px;">项目覆盖</span>`;
+                const resetBtn = sk.overridden
+                    ? `<button class="btn btn-xs btn-ghost" onclick="resetProjectSkill('${escapeHtml(sk.id)}')" title="恢复为全局默认" style="font-size:11px;">↩ 重置</button>`
+                    : '';
                 return `
                 <div class="skill-row"${dimClass}>
                     <div class="skill-row-info">
-                        <span class="skill-row-name">🎓 ${escapeHtml(sk.name)}</span>
+                        <div style="display:flex;align-items:center;flex-wrap:wrap;gap:2px;">
+                            <span class="skill-row-name">🎓 ${escapeHtml(sk.name)}</span>
+                            ${defaultBadge}
+                        </div>
                         <span class="skill-row-id">${escapeHtml(sk.id)}</span>
                         ${sk.description ? `<span class="skill-row-desc">${escapeHtml(sk.description)}</span>` : ''}
                     </div>
                     <div class="skill-row-actions">
-                        ${sk.overridden ? `<button class="btn btn-xs btn-ghost" onclick="resetProjectSkill('${escapeHtml(sk.id)}')" title="恢复默认">↩</button>` : ''}
+                        ${resetBtn}
                         ${toggleHtml}
                     </div>
                 </div>`;
@@ -12182,6 +12195,9 @@ async function showSystemSettingsModal(initialTab = 'knowledge') {
                     <button class="inner-tab" data-sys-tab="knowledge" onclick="switchSysSettingsTab('knowledge')">
                         📚 全局知识库
                     </button>
+                    <button class="inner-tab" data-sys-tab="skills" onclick="switchSysSettingsTab('skills')">
+                        🎓 Skills
+                    </button>
                     <button class="inner-tab" data-sys-tab="traits" onclick="switchSysSettingsTab('traits')">
                         🏷 Traits 配置
                     </button>
@@ -12206,6 +12222,29 @@ async function showSystemSettingsModal(initialTab = 'knowledge') {
                             <p style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">所有项目共享，适合放编码规范、技术栈说明、安全规则等。（上限 2000 字符/次注入）</p>
                             <div id="globalKnowledgeModalList"><div class="empty-state-sm">加载中...</div></div>
                         </div>
+                    </div>
+
+                    <!-- Skills 全局配置 panel -->
+                    <div class="sys-settings-panel" id="sys-panel-skills" style="display:none;">
+                        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+                            <div>
+                                <span style="font-size:14px;font-weight:600;">🎓 全局 Skills 配置</span>
+                                <p style="font-size:12px;color:var(--text-muted);margin:2px 0 0;">
+                                    设置各 Skill 的全局默认开关。项目可在「项目 Settings → Skills」中进一步覆盖。
+                                </p>
+                            </div>
+                            <button class="btn btn-sm btn-ghost" onclick="loadGlobalSkills()">🔄 刷新</button>
+                        </div>
+                        <div style="font-size:12px;color:var(--text-muted);margin-bottom:10px;padding:8px 10px;background:var(--bg-elevated);border-radius:6px;">
+                            💡 <strong>Marketplace Skills</strong>：将任意含 <code>SKILL.md</code> 的文件夹复制到
+                            <code>backend/skills/marketplace/</code>，重启服务后自动出现在此列表。
+                        </div>
+                        <!-- 内置 Skills -->
+                        <div style="margin-bottom:6px;font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;">内置 Skills</div>
+                        <div id="globalSkillsBuiltin" style="margin-bottom:16px;"><div class="empty-state-sm">加载中...</div></div>
+                        <!-- Marketplace Skills -->
+                        <div style="margin-bottom:6px;font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;">Marketplace Skills</div>
+                        <div id="globalSkillsMarketplace"><div class="empty-state-sm">暂无 Marketplace Skill，复制文件夹到 marketplace/ 目录后刷新</div></div>
                     </div>
 
                     <!-- Traits panel -->
@@ -12261,6 +12300,82 @@ function switchSysSettingsTab(tab) {
     // 懒加载对应 tab 的数据
     if (tab === 'knowledge') _loadGlobalKnowledgeIntoModal();
     if (tab === 'traits') loadTraitsView();
+    if (tab === 'skills') loadGlobalSkills();
+}
+
+// ==================== 全局 Skills 管理 ====================
+
+async function loadGlobalSkills() {
+    const builtinEl = document.getElementById('globalSkillsBuiltin');
+    const marketEl  = document.getElementById('globalSkillsMarketplace');
+    if (!builtinEl) return;
+
+    try {
+        const data = await api('/skills');
+        const skills = data.skills || [];
+        const builtin    = skills.filter(s => s.source !== 'marketplace');
+        const marketplace = skills.filter(s => s.source === 'marketplace');
+
+        const renderRow = (sk) => {
+            const traits = sk.traits_match && Object.keys(sk.traits_match).length
+                ? `<span style="font-size:10px;color:var(--text-muted);margin-left:6px;">${JSON.stringify(sk.traits_match)}</span>`
+                : '';
+            const overrideBadge = sk.overridden
+                ? `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:rgba(99,102,241,.15);color:#818cf8;margin-left:6px;">已覆盖</span>`
+                : '';
+            const resetBtn = sk.overridden
+                ? `<button class="btn btn-xs btn-ghost" onclick="resetGlobalSkill('${sk.id}')" title="恢复 skills.json 默认值" style="font-size:11px;padding:2px 6px;">↩ 重置</button>`
+                : '';
+            return `<div class="skill-row" style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:1px solid var(--border);font-size:13px;">
+                <label class="toggle-switch" style="flex-shrink:0;">
+                    <input type="checkbox" ${sk.enabled ? 'checked' : ''} onchange="toggleGlobalSkill('${sk.id}', this.checked)">
+                    <span class="toggle-slider"></span>
+                </label>
+                <div style="flex:1;min-width:0;">
+                    <div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;">
+                        <span style="font-weight:500;">${escapeHtml(sk.name)}</span>
+                        ${overrideBadge}${traits}
+                    </div>
+                    <div style="font-size:11px;color:var(--text-muted);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(sk.description || '')}</div>
+                </div>
+                <div style="flex-shrink:0;font-size:11px;color:var(--text-muted);">${(sk.inject_to || []).join(', ')}</div>
+                ${resetBtn}
+            </div>`;
+        };
+
+        builtinEl.innerHTML = builtin.length
+            ? builtin.map(renderRow).join('')
+            : '<div class="empty-state-sm">暂无内置 Skill</div>';
+
+        if (marketEl) {
+            marketEl.innerHTML = marketplace.length
+                ? marketplace.map(renderRow).join('')
+                : '<div class="empty-state-sm" style="font-size:12px;">暂无 Marketplace Skill，复制文件夹到 backend/skills/marketplace/ 后重启服务</div>';
+        }
+    } catch (e) {
+        if (builtinEl) builtinEl.innerHTML = `<div class="empty-state-sm" style="color:var(--danger)">加载失败: ${e.message}</div>`;
+    }
+}
+
+async function toggleGlobalSkill(skillId, enabled) {
+    try {
+        await api(`/skills/${encodeURIComponent(skillId)}/${enabled ? 'enable' : 'disable'}`, { method: 'POST' });
+        showToast(`${enabled ? '已全局开启' : '已全局关闭'} Skill: ${skillId}`, 'success');
+        loadGlobalSkills();
+    } catch (e) {
+        showToast(`操作失败: ${e.message}`, 'error');
+        loadGlobalSkills(); // 回滚 UI
+    }
+}
+
+async function resetGlobalSkill(skillId) {
+    try {
+        await api(`/skills/${encodeURIComponent(skillId)}/override`, { method: 'DELETE' });
+        showToast(`已重置为 skills.json 默认值`, 'success');
+        loadGlobalSkills();
+    } catch (e) {
+        showToast(`重置失败: ${e.message}`, 'error');
+    }
 }
 
 // ==================== 知识库管理 ====================

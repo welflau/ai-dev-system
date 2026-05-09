@@ -43,11 +43,14 @@ class SkillLoader:
         self.skills: Dict[str, dict] = {}
         # rules: {rule_id -> {content, alwaysApply, traits_match, paths, priority}}
         self.rules: Dict[str, dict] = {}
+        # marketplace_index: skill_id → SKILL.md 绝对路径（scan_dir 扫描时填充）
+        self._marketplace_index: Dict[str, Path] = {}
 
         # 缓存 (agent_type, traits_hash, current_file) -> 拼接后的 prompt
         self._agent_prompt_cache: Dict[Tuple[str, tuple, str], str] = {}
         self._load_config()
         self._load_rules()
+        self._scan_marketplace_dirs()
 
     def _load_config(self) -> None:
         """从 skills.json 读取配置；文件不存在时静默跳过"""
@@ -270,19 +273,90 @@ class SkillLoader:
         header = "| Skill ID | 名称 | 适用场景 |\n|---|---|---|"
         return header + "\n" + "\n".join(rows)
 
+    def _scan_marketplace_dirs(self) -> None:
+        """扫描所有 scan_dir 条目，将每个 SKILL.md 注册到 _marketplace_index。
+
+        index key = frontmatter 中的 name 字段（或目录名），供 load_skill 按 ID 加载。
+        同时把每个 marketplace skill 作为虚拟条目注入 self.skills，
+        参与三层过滤和 build_index_for_agent 索引生成。
+        """
+        for entry_id, cfg in list(self.skills.items()):
+            if cfg.get("type") != "scan_dir":
+                continue
+            scan_rel = cfg.get("scan_dir")
+            if not scan_rel:
+                continue
+            scan_dir = (self.base_dir / scan_rel).resolve()
+            if not scan_dir.exists():
+                continue
+
+            inject_to = cfg.get("inject_to", ["ChatAssistant"])
+            traits_match = cfg.get("traits_match") or {}
+
+            for skill_md in sorted(scan_dir.glob("*/SKILL.md")):
+                try:
+                    text = skill_md.read_text(encoding="utf-8")
+                except Exception:
+                    continue
+                fm, _ = _parse_frontmatter(text)
+                skill_name = fm.get("name") or skill_md.parent.name
+                desc = fm.get("description") or ""
+
+                # 注册到 _marketplace_index（供 get_skill_prompt 单独加载）
+                self._marketplace_index[skill_name] = skill_md
+
+                # 注入 self.skills 作为虚拟条目（参与索引生成和三层过滤）
+                if skill_name not in self.skills:
+                    self.skills[skill_name] = {
+                        "name": skill_name,
+                        "description": desc[:200],
+                        "type": "marketplace_item",
+                        "file_path": str(skill_md),
+                        "inject_to": inject_to,
+                        "traits_match": traits_match,
+                        "priority": cfg.get("priority", "medium"),
+                        "enabled": cfg.get("enabled", True),
+                        "prompt_file": None,
+                        "paths": [],
+                        "group": None,
+                    }
+
+        if self._marketplace_index:
+            logger.info("📦 Marketplace Skills: %d 个已注册 (%s)",
+                        len(self._marketplace_index),
+                        ", ".join(list(self._marketplace_index.keys())[:5]))
+
     def get_skill_prompt(self, skill_id: str) -> Optional[str]:
         """读取单个 skill 的 prompt 内容；禁用 / 文件缺失时返回 None。
 
-        支持两种类型：
+        支持三种类型：
         - prompt_file（默认）：读取指定 .md 文件
         - type: "scan_dir"  ：扫描目录下所有 SKILL.md，生成技能索引表
+        - type: "marketplace_item"：直接读取 SKILL.md 全文（供 load_skill 按需加载）
         """
         config = self.skills.get(skill_id)
         if not config or not config.get("enabled", False):
+            # 再查 marketplace_index（不受 skills.json enabled 限制的直接加载）
+            if skill_id in self._marketplace_index:
+                path = self._marketplace_index[skill_id]
+                try:
+                    return path.read_text(encoding="utf-8").strip()
+                except Exception as e:
+                    logger.warning("读取 marketplace Skill '%s' 失败: %s", skill_id, e)
             return None
 
         if config.get("type") == "scan_dir":
             return self._build_scan_dir_prompt(skill_id, config)
+
+        if config.get("type") == "marketplace_item":
+            file_path = config.get("file_path")
+            if not file_path:
+                return None
+            try:
+                return Path(file_path).read_text(encoding="utf-8").strip()
+            except Exception as e:
+                logger.warning("读取 marketplace_item '%s' 失败: %s", skill_id, e)
+                return None
 
         prompt_rel = config.get("prompt_file")
         if not prompt_rel:
@@ -370,28 +444,40 @@ class SkillLoader:
         """每个 Skill 的状态（enabled / prompt 文件存在 / inject_to 列表 / traits_match / group）"""
         status = {}
         for sid, cfg in self.skills.items():
-            prompt_rel = cfg.get("prompt_file", "")
-            prompt_file = self.base_dir / prompt_rel if prompt_rel else None
+            skill_type = cfg.get("type", "")
+            if skill_type == "marketplace_item":
+                file_path = cfg.get("file_path")
+                prompt_exists = bool(file_path and Path(file_path).exists())
+            elif skill_type == "scan_dir":
+                prompt_exists = True  # scan_dir 本身不是文件，视为有效
+            else:
+                prompt_rel = cfg.get("prompt_file", "")
+                prompt_file = self.base_dir / prompt_rel if prompt_rel else None
+                prompt_exists = bool(prompt_file and prompt_file.exists())
+
             status[sid] = {
                 "name": cfg.get("name", sid),
                 "description": cfg.get("description", ""),
                 "enabled": cfg.get("enabled", False),
                 "inject_to": cfg.get("inject_to", []),
                 "priority": cfg.get("priority", "medium"),
-                "prompt_exists": bool(prompt_file and prompt_file.exists()),
+                "prompt_exists": prompt_exists,
                 "traits_match": cfg.get("traits_match") or {},
                 "paths": cfg.get("paths") or [],
                 "group": cfg.get("group"),
+                "source": "marketplace" if skill_type == "marketplace_item" else "builtin",
             }
         return status
 
     def reload(self) -> None:
-        """重新加载 skills.json + rules/*.md（供热更新）"""
+        """重新加载 skills.json + rules/*.md + marketplace（供热更新）"""
         self.skills = {}
         self.rules = {}
+        self._marketplace_index = {}
         self._agent_prompt_cache.clear()
         self._load_config()
         self._load_rules()
+        self._scan_marketplace_dirs()
 
 
 # ==================== helper ====================

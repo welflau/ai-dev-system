@@ -1,12 +1,15 @@
 """
 Skills API
-  GET    /api/skills                                         — 全局 Skill 状态（只读）
-  GET    /api/projects/{project_id}/skills                   — 项目可用 Skill 列表（全局 + 自定义，含启用状态）
-  POST   /api/projects/{project_id}/skills/{skill_id}/enable  — 启用某 Skill
-  POST   /api/projects/{project_id}/skills/{skill_id}/disable — 禁用某 Skill
-  DELETE /api/projects/{project_id}/skills/{skill_id}         — 删除项目自定义配置（恢复默认）
+  GET    /api/skills                                          — 全局 Skill 列表（含 DB 覆盖后的状态）
+  POST   /api/skills/{skill_id}/enable                        — 全局开启某 Skill
+  POST   /api/skills/{skill_id}/disable                       — 全局关闭某 Skill
+  DELETE /api/skills/{skill_id}/override                      — 删除全局覆盖，恢复 skills.json 默认值
+  GET    /api/projects/{project_id}/skills                    — 项目可用 Skill 列表（全局 + 自定义，含启用状态）
+  POST   /api/projects/{project_id}/skills/{skill_id}/enable  — 项目级启用
+  POST   /api/projects/{project_id}/skills/{skill_id}/disable — 项目级禁用
+  DELETE /api/projects/{project_id}/skills/{skill_id}         — 删除项目覆盖，恢复全局默认
   POST   /api/projects/{project_id}/skills/upload             — 上传自定义 Skill (.md)
-  DELETE /api/projects/{project_id}/skills/custom/{skill_id}  — 删除自定义 Skill 文件 + 数据库记录
+  DELETE /api/projects/{project_id}/skills/custom/{skill_id}  — 删除自定义 Skill
 """
 import logging
 import re
@@ -22,29 +25,79 @@ logger = logging.getLogger("api.skills")
 router = APIRouter(tags=["skills"])
 
 
-# ── 全局 Skill 状态（只读）──────────────────────────────────────────────────
+# ── 全局 Skill 配置 ──────────────────────────────────────────────────────────
 
 @router.get("/api/skills")
 async def list_global_skills():
-    """返回 skills.json 中所有 Skill 的状态（供调试 / 全局配置页）"""
+    """返回所有 Skill 的状态（skills.json + global_skill_settings DB 覆盖后的最终值）"""
     from skills import skill_loader
 
+    # 读取 global_skill_settings 覆盖
+    global_overrides: dict = {}
+    try:
+        rows = await db.fetch_all("SELECT skill_id, enabled FROM global_skill_settings")
+        global_overrides = {r["skill_id"]: bool(r["enabled"]) for r in rows}
+    except Exception:
+        pass  # 表不存在时忽略
+
     status = skill_loader.get_all_skills_status()
-    skills = [
-        {
+    skills = []
+    for sid, info in status.items():
+        # scan_dir 聚合条目不出现在全局配置里（它的子项已展开为 marketplace_item）
+        if info.get("source") != "marketplace" and sid in [
+            k for k, v in skill_loader.skills.items() if v.get("type") == "scan_dir"
+        ]:
+            continue
+        enabled_default = info["enabled"]
+        enabled_global = global_overrides.get(sid, enabled_default)
+        skills.append({
             "id": sid,
             "name": info["name"],
             "description": info["description"],
-            "enabled": info["enabled"],
+            "enabled": enabled_global,
+            "enabled_default": enabled_default,  # skills.json 原始值
+            "overridden": sid in global_overrides,
+            "source": info.get("source", "builtin"),
             "inject_to": info["inject_to"],
             "priority": info["priority"],
             "prompt_exists": info["prompt_exists"],
             "traits_match": info["traits_match"],
             "group": info["group"],
-        }
-        for sid, info in status.items()
-    ]
+        })
     return {"skills": skills, "total": len(skills)}
+
+
+@router.post("/api/skills/{skill_id}/enable")
+async def global_enable_skill(skill_id: str):
+    """全局开启某 Skill（写 global_skill_settings，覆盖 skills.json 默认值）"""
+    await db.execute(
+        """INSERT INTO global_skill_settings (skill_id, enabled, updated_at)
+           VALUES (?, 1, ?)
+           ON CONFLICT(skill_id) DO UPDATE SET enabled=1, updated_at=excluded.updated_at""",
+        (skill_id, now_iso()),
+    )
+    logger.info("global skill=%s → enabled", skill_id)
+    return {"ok": True, "skill_id": skill_id, "enabled": True}
+
+
+@router.post("/api/skills/{skill_id}/disable")
+async def global_disable_skill(skill_id: str):
+    """全局关闭某 Skill"""
+    await db.execute(
+        """INSERT INTO global_skill_settings (skill_id, enabled, updated_at)
+           VALUES (?, 0, ?)
+           ON CONFLICT(skill_id) DO UPDATE SET enabled=0, updated_at=excluded.updated_at""",
+        (skill_id, now_iso()),
+    )
+    logger.info("global skill=%s → disabled", skill_id)
+    return {"ok": True, "skill_id": skill_id, "enabled": False}
+
+
+@router.delete("/api/skills/{skill_id}/override")
+async def reset_global_skill(skill_id: str):
+    """删除全局覆盖，恢复 skills.json 默认值"""
+    await db.execute("DELETE FROM global_skill_settings WHERE skill_id=?", (skill_id,))
+    return {"ok": True, "skill_id": skill_id, "reset": True}
 
 
 # ── 项目级 Skill 管理 ────────────────────────────────────────────────────────
@@ -67,17 +120,29 @@ async def list_project_skills(project_id: str):
     )
     project_map = {r["skill_id"]: r for r in rows}
 
+    # 读取全局 DB 覆盖（用于计算 enabled_global）
+    global_overrides: dict = {}
+    try:
+        global_rows = await db.fetch_all("SELECT skill_id, enabled FROM global_skill_settings")
+        global_overrides = {r["skill_id"]: bool(r["enabled"]) for r in global_rows}
+    except Exception:
+        pass
+
     result = []
     # 全局 Skill
     for sid, info in global_status.items():
         override = project_map.get(sid)
-        enabled = bool(override["enabled"]) if override else info["enabled"]
+        # 全局默认值（skills.json + global_skill_settings）
+        enabled_global = global_overrides.get(sid, info["enabled"])
+        # 项目级最终值
+        enabled = bool(override["enabled"]) if override else enabled_global
         result.append({
             "id": sid,
             "name": info["name"],
             "description": info["description"],
             "source": "global",
             "enabled": enabled,
+            "enabled_global": enabled_global,   # 全局默认（供「全局默认开/关」标签使用）
             "priority": info["priority"],
             "inject_to": info["inject_to"],
             "traits_match": info["traits_match"],
