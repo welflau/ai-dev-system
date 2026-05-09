@@ -297,7 +297,7 @@ class ChatAssistantAgent(BaseAgent):
         """
         from llm_client import llm_client, set_llm_context, clear_llm_context
 
-        system_prompt = self._build_system_prompt(project, project_context)
+        system_prompt = await self._build_system_prompt(project, project_context)
         messages = self._assemble_messages(history, user_message, images)
 
         # v0.17 Phase F：把项目 traits 传给 _exposed_tool_schemas，按 traits 过滤 MCP
@@ -594,7 +594,7 @@ class ChatAssistantAgent(BaseAgent):
 
     # ==================== System prompt ====================
 
-    def _build_system_prompt(self, project: dict, context: dict) -> str:
+    async def _build_system_prompt(self, project: dict, context: dict) -> str:
         """
         精简版系统提示词 —— 不再列 [ACTION:XXX] 格式，
         因为能力通过 Anthropic 原生 tools 字段提供给 LLM，与 prompt 正交。
