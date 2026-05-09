@@ -100,6 +100,8 @@ class Database:
             ("knowledge_index", "used_count", "INTEGER DEFAULT 0"),
             # v0.20 多会话管理
             ("chat_messages", "session_id", "TEXT DEFAULT 'default'"),  # 关联 chat_sessions.id
+            # v0.20 思考步骤持久化：AI 调工具时的思考日志，刷新后可恢复
+            ("chat_messages", "thinking_json", "TEXT"),  # JSON array: [{tool, args_hint, summary, step}, ...]
         ]
         async with self._write_lock:
             for table, column, col_def in migrations:

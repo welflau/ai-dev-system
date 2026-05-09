@@ -110,6 +110,8 @@ class _ChatToolExecutor:
         self._primary_tier: int = 99  # 越小越优先
         # 批量收集：confirm_requirement / confirm_bug 每次调用都保留，供前端渲染多张卡片
         self.all_confirm_results: List[Dict[str, Any]] = []
+        # 思考步骤：done 阶段的步骤列表，保存到 DB 后刷新可恢复
+        self.thinking_steps: List[Dict[str, Any]] = []
 
     # 向后兼容：保留 first_action_result 的读属性
     @property
@@ -194,6 +196,13 @@ class _ChatToolExecutor:
             elif self.session_id:
                 from api.chat import get_thinking_queue
                 await get_thinking_queue(self.session_id).put(payload)
+            # 持久化：只保存 done 阶段（start 只是开始标记，done 包含摘要）
+            if step == "done":
+                self.thinking_steps.append({
+                    "tool": tool_name,
+                    "args_hint": args_hint,
+                    "summary": summary[:120],
+                })
         except Exception as e:
             logger.warning("_emit_thinking failed: %s", e)
 
@@ -351,6 +360,7 @@ class ChatAssistantAgent(BaseAgent):
             "reply": reply,
             "action": action,
             "actions": actions,
+            "thinking_steps": executor.thinking_steps or None,
         }
 
     # ==================== 全局聊天入口（项目列表页，无 project_id） ====================
@@ -405,7 +415,12 @@ class ChatAssistantAgent(BaseAgent):
             else:
                 reply = "有什么可以帮你的？"
 
-        return {"reply": reply, "action": action, "actions": actions}
+        return {
+            "reply": reply,
+            "action": action,
+            "actions": actions,
+            "thinking_steps": executor.thinking_steps or None,
+        }
 
     # ==================== 内部工具 ====================
 

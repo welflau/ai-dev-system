@@ -440,11 +440,12 @@ async def _chat_via_agent(
             action_result["images"] = saved_image_urls
 
     _sid = req.chat_session_id or "default"
+    _thinking = agent_result.get("thinking_steps") if isinstance(agent_result, dict) else None
     if saved_image_urls is not None:
         await _save_chat_message(project_id, "user", req.message, saved_urls=saved_image_urls, session_id=_sid)
     else:
         await _save_chat_message(project_id, "user", req.message, images=req.images, session_id=_sid)
-    await _save_chat_message(project_id, "assistant", reply, action=action_result, session_id=_sid)
+    await _save_chat_message(project_id, "assistant", reply, action=action_result, session_id=_sid, thinking=_thinking)
 
     return ChatResponse(reply=reply, action=action_result)
 
@@ -722,6 +723,7 @@ async def get_session_messages(project_id: str, session_id: str, limit: int = 20
     for row in rows:
         msg = dict(row)
         msg["images"] = json.loads(msg.pop("images_json", None) or "[]")
+        msg["thinking"] = json.loads(msg.pop("thinking_json", None) or "null") or []
         raw_ar = msg.get("action_result")
         if isinstance(raw_ar, str) and raw_ar:
             try:
@@ -754,6 +756,7 @@ async def get_chat_history(project_id: str, limit: int = 50):
     for row in rows:
         msg = dict(row)
         msg["images"] = json.loads(msg.pop("images_json", None) or "[]")
+        msg["thinking"] = json.loads(msg.pop("thinking_json", None) or "null") or []
         # v0.19.1 action_result JSON → dict 给前端直接用
         raw_ar = msg.get("action_result")
         if isinstance(raw_ar, str) and raw_ar:
@@ -1578,6 +1581,7 @@ async def _save_chat_message(
     images: list = None,       # base64 data URL 列表（原始图片）
     saved_urls: list = None,   # 已保存的图片 URL 列表（优先使用，避免重复保存）
     session_id: str = "default",  # v0.20 多会话
+    thinking: list = None,     # v0.20 思考步骤 [{tool, args_hint, summary}, ...]
 ):
     """保存聊天消息到数据库，图片保存为文件"""
     msg_id = generate_id("MSG")
@@ -1604,6 +1608,7 @@ async def _save_chat_message(
         "action_type": action.get("type") if action else None,
         "action_data": json.dumps(action, ensure_ascii=False) if action else None,
         "images_json": json.dumps(image_urls, ensure_ascii=False) if image_urls else None,
+        "thinking_json": json.dumps(thinking, ensure_ascii=False) if thinking else None,
         "session_id": eff_session,
         "created_at": now_iso(),
     })

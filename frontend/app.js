@@ -8551,7 +8551,9 @@ async function loadChatHistory() {
                 msg.content,
                 msg.created_at,
                 actionObj,
-                msg.images || []
+                msg.images || [],
+                [],
+                msg.thinking || []
             );
         }
         scrollChatToBottom();
@@ -9277,7 +9279,7 @@ function _buildConfirmCardHtml(action) {
         </div>`;
 }
 
-function appendChatBubble(role, content, timestamp = null, action = null, images = [], actions = []) {
+function appendChatBubble(role, content, timestamp = null, action = null, images = [], actions = [], thinking = []) {
     const container = chatMode === 'group'
         ? (document.getElementById('groupChatMessages') || document.getElementById('chatMessages'))
         : document.getElementById('chatMessages');
@@ -9638,9 +9640,30 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
            </div>`
         : '';
 
+    // 思考面板（assistant 且有历史思考步骤时，在气泡前插入）
+    let thinkingHtml = '';
+    if (role === 'assistant' && thinking && thinking.length > 0) {
+        const steps = thinking.map(s => {
+            const label = _TOOL_LABELS[s.tool] || `🔧 ${s.tool}`;
+            const hint = s.args_hint ? `<span class="ctp-step-hint">${escapeHtml(s.args_hint)}</span>` : '';
+            const summary = s.summary ? `<span class="ctp-step-summary">${escapeHtml(s.summary)}</span>` : '';
+            return `<div class="ctp-step ctp-step-done"><span class="ctp-step-icon">✓</span><span class="ctp-step-label">${escapeHtml(label)}</span>${hint}${summary}</div>`;
+        }).join('');
+        thinkingHtml = `
+        <div class="chat-thinking-panel ctp-history">
+            <div class="ctp-header" onclick="this.closest('.chat-thinking-panel').classList.toggle('ctp-expanded')">
+                <span class="ctp-icon">✦</span>
+                <span class="ctp-title">思考了 ${thinking.length} 步</span>
+                <span class="ctp-toggle">∨</span>
+            </div>
+            <div class="ctp-body">${steps}</div>
+        </div>`;
+    }
+
     msgEl.innerHTML = `
         <div class="chat-msg-avatar">${avatar}</div>
         <div class="chat-msg-content">
+            ${thinkingHtml}
             ${imagesHtml}
             <div class="chat-msg-bubble">${formatChatContent(content)}</div>
             ${actionHtml}
