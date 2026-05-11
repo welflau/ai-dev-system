@@ -8451,11 +8451,12 @@ async function _splitPaneHistory(paneId) {
             html += `<div class="chat-history-group">${label}</div>`;
             for (const s of items) {
                 const active = s.id === pane.sessionId ? ' active' : '';
+                const dt = _sessionDisplayTitle(s);
                 html += `<div class="chat-history-item${active}"
                     onclick="_loadSplitPaneSession('${paneId}','${escHtml(s.id)}');
                              document.getElementById('splitHistoryPicker').remove();">
                     <span class="hi-icon">💬</span>
-                    <span class="hi-title" title="${escHtml(s.title)}">${escHtml(s.title)}</span>
+                    <span class="hi-title" title="${escHtml(dt)}">${escHtml(dt)}</span>
                     <span class="hi-meta">${s.message_count || 0}条</span>
                 </div>`;
             }
@@ -8707,6 +8708,18 @@ async function toggleChatHistory() {
 }
 
 /** 加载并渲染历史会话列表 */
+/** session title 显示文字（过滤掉 session-id 格式的 title，回退到日期） */
+function _sessionDisplayTitle(s) {
+    const t = s.title || '';
+    // 如果 title 看起来是 session id（sess-开头 或 全是十六进制+短横线），用日期替代
+    if (!t || t.startsWith('sess-') || /^[0-9a-f\-]{8,}$/i.test(t) || t === '新对话') {
+        const d = s.updated_at || s.created_at || '';
+        const cnt = s.message_count || 0;
+        return cnt > 0 ? `对话（${d.slice(0,10)}，${cnt}条）` : `新对话（${d.slice(0,10)}）`;
+    }
+    return t;
+}
+
 async function loadChatSessions() {
     const listEl = document.getElementById('chatHistoryList');
     if (!listEl) return;
@@ -8735,9 +8748,10 @@ async function loadChatSessions() {
             html += `<div class="chat-history-group">${label}</div>`;
             for (const s of items) {
                 const active = s.id === _currentChatSessionId ? ' active' : '';
+                const displayTitle = _sessionDisplayTitle(s);
                 html += `<div class="chat-history-item${active}" onclick="switchChatSession('${escHtml(s.id)}')">
                     <span class="hi-icon">💬</span>
-                    <span class="hi-title" title="${escHtml(s.title)}">${escHtml(s.title)}</span>
+                    <span class="hi-title" title="${escHtml(displayTitle)}">${escHtml(displayTitle)}</span>
                     <span class="hi-meta">${s.message_count || 0}条</span>
                     <button class="hi-del btn-icon" onclick="event.stopPropagation();deleteChatSession('${escHtml(s.id)}')" title="删除">✕</button>
                 </div>`;
