@@ -8337,7 +8337,7 @@ function _splitPaneKeydown(e, paneId) {
     }
 }
 
-function addChatSplitPane() {
+async function addChatSplitPane() {
     if (!_chatFullscreen) return;
     if (_chatSplitPanes.length >= 3) {
         showToast('最多支持 3 个分屏', 'warning');
