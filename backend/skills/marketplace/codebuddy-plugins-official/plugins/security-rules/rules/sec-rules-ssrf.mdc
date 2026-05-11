@@ -1,0 +1,77 @@
+---
+description: Server-side Request Forgery Protection Rules for AI Code Generation
+globs: **/*
+alwaysApply: true
+enabled: true
+---
+
+# SSRF Protection
+
+## Core Principle
+**Parse URL → Resolve to IP → Validate IP → Send Request**
+
+Apply this validation to every URL, including all redirect targets.
+
+## Validation Steps
+
+### 1. Protocol Check
+Only allow http/https schemes.
+
+### 2. DNS Resolution
+Resolve hostname to all IP addresses (both IPv4 and IPv6).
+
+### 3. IP Validation
+Check every resolved IP address against:
+- Loopback addresses (127.0.0.0/8, ::1)
+- Link-local addresses (169.254.0.0/16, fe80::/10)
+- Private addresses (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, fc00::/7)
+- Reserved ranges (0.0.0.0/8, 224.0.0.0/4, 240.0.0.0/4, etc.)
+
+Use standard IP checking methods: isLoopbackAddress(), isLinkLocalAddress(), isSiteLocalAddress()
+
+### 4. Send Request
+Only after all validation passes.
+
+## Redirect Handling
+
+**Critical:** Apply the same validation to redirect targets.
+
+Attack example: `external.com → 302 → 127.0.0.1`
+
+### Requirements
+- Disable HTTP client automatic redirect following
+- Manually handle 3xx responses
+- Extract Location header → validate → request
+- Repeat for each redirect in the chain
+
+## Common Attack Patterns
+- Direct internal access
+- Encoded IP addresses (decimal, hex)
+- Redirect chains to internal IPs
+- URL manipulation tricks
+
+## Prohibited Approaches
+
+1. **Making requests without IP validation**
+   - Never send request before resolving and validating IP
+
+2. **Using auto-redirect HTTP APIs**
+   - Do not use convenience methods that automatically follow redirects
+   - These bypass redirect target validation
+
+3. **Validating only the initial URL**
+   - Redirect targets must be re-validated with full checks
+
+4. **String-based hostname checks only**
+   - Must resolve to IP and check IP ranges
+
+5. **Checking only IPv4**
+   - Must handle both IPv4 and IPv6
+
+## Implementation Checklist
+- [ ] Validation function: URL parse → DNS resolve → IP check all addresses
+- [ ] IP check uses standard methods (isLoopback, isLinkLocal, isSiteLocal)
+- [ ] Both IPv4 and IPv6 ranges covered
+- [ ] HTTP client configured to not auto-follow redirects
+- [ ] Redirect handling: extract Location → validate → request (repeat)
+- [ ] Maximum redirect limit enforced

@@ -1,0 +1,91 @@
+# D5: 防御指标检测模式表
+# 引用方: vuln-scan / logic-scan / red-team
+# 用途: 检测已知的防御模式，输出为 defenseIndicators 供验证阶段防御检查使用
+
+defense_types:
+  - type: 参数化查询
+    patterns:
+      - 'PreparedStatement'
+      - 'cursor\.execute\(.*%s'
+      - 'db\.QueryRow\(.*\?'
+
+  - type: 白名单验证
+    patterns:
+      - 'allowList'
+      - 'whitelist'
+      - 'ALLOWED_'
+      - 'valid_values'
+
+  - type: 编码/转义
+    patterns:
+      - 'HtmlUtils\.htmlEscape'
+      - 'encodeURIComponent'
+      - 'html\.escape'
+
+  - type: CSRF 令牌
+    patterns:
+      - 'csrf_token'
+      - '_token'
+      - 'X-CSRF-Token'
+
+  - type: 密码安全哈希
+    patterns:
+      - 'BCryptPasswordEncoder'
+      - 'bcrypt\.hashpw'
+      - 'bcrypt\.hash'
+      - 'argon2\.hash'
+      - 'Pbkdf2PasswordEncoder'
+      - 'make_password'
+      - 'generate_password_hash'
+      - 'password_hash.*PASSWORD_BCRYPT'
+
+  - type: Session 重新生成
+    patterns:
+      - 'request\.changeSessionId'
+      - 'session\.invalidate'
+      - 'session\.regenerate'
+      - 'request\.session\.cycle_key'
+      - 'session_regenerate_id'
+
+  - type: JWT 安全配置
+    patterns:
+      - 'setSigningKey'
+      - 'algorithms.*RS256'
+      - 'tokenBlacklist'
+      - 'revokedTokens'
+
+  - type: 速率限制
+    patterns:
+      - 'rateLimit'
+      - 'rateLimiter'
+      - 'throttle'
+      - '@RateLimit'
+      - 'express-rate-limit'
+      - 'bucket4j'
+
+  - type: 日志安全
+    patterns:
+      - 'mask\('
+      - 'desensitize\('
+      - 'redact\('
+      - 'StringEscapeUtils\.escapeJava'
+
+  - type: XML 安全解析
+    patterns:
+      - 'disallow-doctype-decl'
+      - 'defusedxml'
+      - 'setExpandEntityReferences.*false'
+      - 'FEATURE_SECURE_PROCESSING'
+
+  - type: PostMessage 来源验证
+    patterns:
+      - 'event\.origin\s*==='
+      - 'allowedOrigins\.includes'
+
+  - type: 依赖锁定
+    patterns:
+      - 'package-lock\.json'
+      - 'yarn\.lock'
+      - 'pnpm-lock\.yaml'
+      - 'poetry\.lock'
+      - 'go\.sum'

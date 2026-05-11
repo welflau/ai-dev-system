@@ -1,0 +1,98 @@
+# Sink 风险优先级排序策略
+# 引用方：agents/vuln-scan.md（步骤 1 完成后按需 Read）
+#
+# 步骤 1 发现 Sink 后，按本表排序，高优先级 Sink 优先进入步骤 2 追踪。
+# 预算耗尽时未分析的 Sink 标记 analysisDepth: "queued"，供续扫使用。
+
+severity_levels:
+
+  S1_critical:
+    label: "必须分析"
+    severity_level: 1
+    description: "可直接造成入侵（RCE / 远程代码执行）"
+    sink_types:
+      - "command-injection"
+      - "code-execution"
+      - "insecure-deserialization"
+      - "expression-injection"
+      - "jndi-injection"
+      - "ssti"
+    boost_conditions:
+      - condition: "无认证入口可达"
+        boost: "+1 level"
+      - condition: "多 Agent 交叉确认"
+        boost: "+0.5 level"
+
+  S2_high:
+    label: "优先分析"
+    severity_level: 2
+    description: "可直接入侵或造成大量数据泄漏"
+    sink_types:
+      - "sql-injection"
+      - "nosql-injection"
+      - "auth-bypass"
+      - "hardcoded-secret"
+      - "malicious-package"
+
+  S3_medium:
+    label: "标准分析"
+    severity_level: 3
+    description: "需要上下文或链式利用，不可直接入侵/大量泄漏"
+    sink_types:
+      - "ssrf"
+      - "path-traversal"
+      - "xxe"
+      - "ldap-injection"
+      - "access-control"
+      - "plaintext-password"
+      - "jwt-algorithm-confusion"
+      - "xss"
+      - "csrf"
+      - "idor"
+      - "file-upload"
+      - "open-redirect"
+      - "crlf-injection"
+      - "mass-assignment"
+      - "prototype-pollution"
+      - "session-fixation"
+      - "insecure-cookie"
+      - "jwt-weak-key"
+      - "log-injection"
+      - "postmessage-origin-bypass"
+      - "websocket-hijacking"
+      - "cors-misconfiguration"
+      - "redos"
+      - "xml-bomb"
+      - "dependency-confusion"
+
+  S4_low:
+    label: "预算充裕时分析"
+    severity_level: 4
+    description: "信息泄露 / 配置问题 / 辅助性风险"
+    sink_types:
+      - "information-leak"
+      - "insecure-config"
+      - "weak-crypto"
+      - "missing-security-headers"
+      - "denial-of-service"
+      - "csv-injection"
+      - "weak-password-hash"
+      - "sensitive-data-logging"
+      - "missing-security-audit"
+      - "brute-force-unprotected"
+      - "client-side-bypass"
+      - "resource-exhaustion"
+      - "missing-lockfile"
+
+# 排序规则（步骤 1 完成后执行）：
+# 1. 按 severity_level 分组（S1 > S2 > S3 > S4）
+# 2. 同 severity_level 内按以下信号排序：
+#    a. 无认证端点可达 > 认证后可达 > 内部可达
+#    b. 多 Agent 交叉确认 > 仅模式匹配发现
+#    c. 用户直接输入可控 > 间接输入
+# 3. 步骤 2 按排序后的列表顺序处理
+
+# 预算耗尽处理：
+# - 已分析 Sink: analysisDepth = "full"
+# - 分析中断 Sink: analysisDepth = "partial"，记录已完成步骤
+# - 未开始 Sink: analysisDepth = "queued"，记录到 earlyTermination.pendingSinks[]

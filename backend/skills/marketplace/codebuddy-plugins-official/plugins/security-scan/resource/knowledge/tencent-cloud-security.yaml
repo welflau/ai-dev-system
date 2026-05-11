@@ -1,0 +1,310 @@
+# ==========================================================================
+# 腾讯云安全检测模式 (Tencent Cloud Security Patterns)
+# ==========================================================================
+# 引用方: logic-scan (C7.6 云安全) / vuln-scan (SSRF→IMDS) / red-team
+# 用途: 检测腾讯云环境下的安全配置缺陷、凭证泄露、策略过宽等问题
+# ==========================================================================
+
+# ============================================================================
+# 一、CAM（访问管理）策略检测
+# ============================================================================
+# 腾讯云 CAM 对应 AWS IAM，使用 JSON 策略语法
+# 文档：https://cloud.tencent.com/document/product/598
+
+cam_policy_audit:
+  description: "检测 CAM 策略中的过度授权和危险配置"
+
+  overprivilege_patterns:
+    - category: 全量权限授予
+      patterns:
+        - '"action"\s*:\s*"\*"'                       # 所有操作权限
+        - '"resource"\s*:\s*"\*"'                      # 所有资源权限
+        - '"action"\s*:\s*\[\s*"\*"\s*\]'              # 数组形式的全量权限
+        - '"resource"\s*:\s*\[\s*"\*"\s*\]'
+      severity: high
+      note: "CAM 策略授予了 Action:* 或 Resource:*，违反最小权限原则"
+
+    - category: 高危服务全量授权
+      patterns:
+        - '"action"\s*:\s*"cam:\*"'                    # CAM 全部操作（可提权）
+        - '"action"\s*:\s*"cvm:\*"'                    # CVM 全部操作
+        - '"action"\s*:\s*"cos:\*"'                    # COS 全部操作
+        - '"action"\s*:\s*"cdb:\*"'                    # CDB（MySQL）全部操作
+        - '"action"\s*:\s*"vpc:\*"'                    # VPC 全部操作
+        - '"action"\s*:\s*"cfs:\*"'                    # CFS 文件存储全部操作
+        - '"action"\s*:\s*"scf:\*"'                    # SCF 云函数全部操作
+        - '"action"\s*:\s*"tke:\*"'                    # TKE 容器服务全部操作
+        - '"action"\s*:\s*"tat:\*"'                    # TAT 自动化助手（可远程执行命令）
+      severity: medium
+      note: "对单个高危服务授予全量权限，建议细化到具体 API"
+
+    - category: 危险操作未限制
+      patterns:
+        - '"action"\s*:\s*"cam:CreatePolicy"'          # 可创建新策略（提权风险）
+        - '"action"\s*:\s*"cam:AttachUserPolicy"'      # 可绑定策略到用户
+        - '"action"\s*:\s*"cam:CreateRole"'             # 可创建角色
+        - '"action"\s*:\s*"cam:PassRole"'               # 可传递角色（角色链式提权）
+        - '"action"\s*:\s*"tat:InvokeCommand"'          # 可远程执行命令
+        - '"action"\s*:\s*"tat:RunCommand"'             # 可远程运行命令
+        - '"action"\s*:\s*"scf:Invoke"'                 # 可调用云函数
+      severity: high
+      note: "这些 CAM 操作可导致权限提升或远程代码执行"
+
+  policy_condition_check:
+    description: "检查策略是否缺少条件约束"
+    missing_conditions:
+      - absence_of: '"condition"'
+        with_action: '"effect"\s*:\s*"allow"'
+        note: "allow 策略未设置 condition 约束（IP/MFA/时间），任意来源可调用"
+      - absence_of: '"qcs::cam::uin/'
+        note: "未限定操作主体（principal），可能被非预期账号使用"
+
+  arn_patterns:
+    description: "腾讯云资源 ARN 格式检测"
+    format: "qcs::<service>::uin/<ownerUin>:<resourceType>/<resourceId>"
+    examples:
+      - 'qcs::cos:.*:uid/\d+:.*'                      # COS 资源
+      - 'qcs::cvm:.*:instance/ins-\w+'                # CVM 实例
+      - 'qcs::cam::uin/\d+:roleName/\w+'              # CAM 角色
+
+# ============================================================================
+# 二、COS（对象存储）安全检测
+# ============================================================================
+
+cos_security:
+  description: "检测腾讯云 COS 存储桶的安全配置缺陷"
+
+  public_access_patterns:
+    - category: Bucket ACL 公开
+      patterns:
+        - 'put_bucket_acl.*public-read'
+        - 'PutBucketACL.*public-read'
+        - '"x-cos-acl"\s*:\s*"public-read"'
+        - '"x-cos-acl"\s*:\s*"public-read-write"'
+        - 'ACL\s*[:=]\s*[''"]public-read[''"]'
+        - 'ACL\s*[:=]\s*[''"]public-read-write[''"]'
+      severity: high
+      note: "COS Bucket ACL 设置为公开读/公开读写"
+
+    - category: Bucket Policy 公开
+      patterns:
+        - '"principal"\s*:\s*"\*"'                      # 允许任意主体访问
+        - '"principal"\s*:\s*\{\s*"qcs"\s*:\s*\[\s*"\*"'
+      severity: high
+      note: "COS Bucket Policy 允许任意主体（principal:*）访问"
+
+    - category: CORS 配置过宽
+      patterns:
+        - '"AllowedOrigin"\s*:\s*\[\s*"\*"'
+        - 'AllowedOrigins.*\*'
+      severity: medium
+      note: "COS CORS 允许任意来源，可能导致跨域数据泄露"
+
+  cos_url_patterns:
+    description: "COS 存储桶 URL 识别"
+    patterns:
+      - '\.cos\.[a-z0-9-]+\.myqcloud\.com'            # 标准域名
+      - 'cos\.[a-z0-9-]+\.myqcloud\.com/[^\s]+'       # 带路径
+      - '\.file\.myqcloud\.com'                        # 老版域名（仍有使用）
+      - '\.cosgz\.myqcloud\.com'                       # 老版区域域名
+      - '\.costj\.myqcloud\.com'
+      - '\.cossh\.myqcloud\.com'
+    note: "发现 COS URL 后需进一步检查 ACL/Policy 配置"
+
+  presigned_url_risk:
+    description: "预签名 URL 安全检查"
+    patterns:
+      - 'get_presigned_url.*expiration\s*[:=]\s*\d{6,}'     # 超长有效期（>= 100000 秒）
+      - 'getPresignedUrl.*Expires\s*[:=]\s*\d{6,}'
+      - 'generatePresignedUrl.*expiration'
+    note: "COS 预签名 URL 有效期过长，可能导致持久化未授权访问"
+
+# ============================================================================
+# 三、IMDS / 元数据服务检测
+# ============================================================================
+
+tencent_imds:
+  description: "腾讯云 CVM 元数据服务（IMDS）检测"
+
+  endpoints:
+    - url: "http://metadata.tencentyun.com/latest/meta-data/"
+      description: "腾讯云 CVM 元数据入口"
+    - url: "http://metadata.tencentyun.com/latest/meta-data/cam/security-credentials/"
+      description: "腾讯云临时凭证（CAM 角色）— 最高危"
+    - url: "http://metadata.tencentyun.com/latest/meta-data/instance-id"
+      description: "实例 ID"
+    - url: "http://metadata.tencentyun.com/latest/meta-data/placement/region"
+      description: "实例所在区域"
+    - url: "http://metadata.tencentyun.com/latest/meta-data/network/interfaces/"
+      description: "网络接口信息"
+    - url: "http://metadata.tencentyun.com/latest/user-data"
+      description: "用户自定义数据（可能含初始化脚本/密钥）"
+
+  detection_patterns:
+    - 'metadata\.tencentyun\.com'
+    - 'metadata\.tencentyun\.com/latest/meta-data/cam/security-credentials'
+
+  ssrf_impact: |
+    若 SSRF 可达腾讯云 IMDS（metadata.tencentyun.com），攻击者可：
+    1. 获取 CVM 绑定的 CAM 角色临时凭证（SecretId + SecretKey + Token）
+    2. 利用临时凭证调用腾讯云 API（COS/CDB/CVM 等），权限取决于角色策略
+    3. 获取 user-data 中的初始化脚本，可能含硬编码密钥或 Bootstrap 逻辑
+    severity: critical（SSRF + IMDS = 云凭证泄露）
+
+# ============================================================================
+# 四、CVM（云服务器）安全组检测
+# ============================================================================
+
+cvm_security_group:
+  description: "检测安全组规则中的过度开放"
+
+  dangerous_patterns:
+    - category: 入站规则全开放
+      patterns:
+        - '"CidrBlock"\s*:\s*"0\.0\.0\.0/0"'
+        - '"Ipv6CidrBlock"\s*:\s*"::/0"'
+        - 'cidr_block\s*[:=]\s*[''"]0\.0\.0\.0/0[''"]'
+      severity: high
+      note: "安全组入站规则对 0.0.0.0/0 开放"
+
+    - category: 高危端口对外暴露
+      grep_patterns:
+        - '"PortRange"\s*:\s*"22".*"CidrBlock"\s*:\s*"0\.0\.0\.0/0"'      # SSH
+        - '"PortRange"\s*:\s*"3389".*"CidrBlock"\s*:\s*"0\.0\.0\.0/0"'    # RDP
+        - '"PortRange"\s*:\s*"3306".*"CidrBlock"\s*:\s*"0\.0\.0\.0/0"'    # MySQL
+        - '"PortRange"\s*:\s*"6379".*"CidrBlock"\s*:\s*"0\.0\.0\.0/0"'    # Redis
+        - '"PortRange"\s*:\s*"27017".*"CidrBlock"\s*:\s*"0\.0\.0\.0/0"'   # MongoDB
+        - '"PortRange"\s*:\s*"9200".*"CidrBlock"\s*:\s*"0\.0\.0\.0/0"'    # Elasticsearch
+      severity: critical
+      note: "高危端口（SSH/RDP/DB）对公网开放"
+
+    - category: 全端口开放
+      patterns:
+        - '"PortRange"\s*:\s*"ALL"'
+        - '"PortRange"\s*:\s*"1-65535"'
+      severity: high
+      note: "安全组规则开放全部端口"
+
+# ============================================================================
+# 五、SCF（云函数）安全检测
+# ============================================================================
+
+scf_security:
+  description: "检测腾讯云 SCF 云函数的安全配置"
+
+  patterns:
+    - category: 云函数无认证触发
+      patterns:
+        - '"isIntegratedResponse"\s*:\s*true'
+        - '"authType"\s*:\s*"NONE"'                    # API 网关触发器无认证
+        - '"enableCORS"\s*:\s*true'
+      severity: medium
+      note: "SCF 云函数通过 API 网关触发且未配置认证"
+
+    - category: 环境变量含密钥
+      patterns:
+        - 'Environment.*Variables.*[Ss]ecret'
+        - 'Environment.*Variables.*[Pp]assword'
+        - 'Environment.*Variables.*AKID'
+      severity: high
+      note: "SCF 环境变量中硬编码了敏感凭证"
+
+    - category: VPC 配置缺失
+      absence_of: '"VpcConfig"'
+      note: "SCF 未配置 VPC，运行在公共网络环境中"
+
+# ============================================================================
+# 六、TKE（容器服务）安全检测
+# ============================================================================
+
+tke_security:
+  description: "检测 TKE 容器集群的安全配置"
+
+  patterns:
+    - category: API Server 公网暴露
+      patterns:
+        - '"ClusterExternalEndpoint"\s*:\s*"https?://'
+        - '"ClusterIntranet"\s*:\s*false'
+      severity: high
+      note: "TKE API Server 暴露在公网"
+
+    - category: 特权容器
+      patterns:
+        - '"privileged"\s*:\s*true'
+        - 'securityContext.*privileged.*true'
+      severity: high
+      note: "Pod 以特权模式运行（适用于所有 K8s 环境，TKE 同样适用）"
+
+    - category: ServiceAccount Token 自动挂载
+      absence_of: 'automountServiceAccountToken\s*:\s*false'
+      note: "未禁用 ServiceAccount Token 自动挂载，容器被入侵后可通过 Token 调用 K8s API"
+
+# ============================================================================
+# 七、CDB（云数据库 MySQL）安全检测
+# ============================================================================
+
+cdb_security:
+  description: "检测腾讯云 CDB 数据库的安全配置"
+
+  patterns:
+    - category: 公网访问已开启
+      patterns:
+        - '"WanStatus"\s*:\s*1'
+        - '"WanDomain"\s*:\s*"[^"]*\.sql\.tencentcdb\.com"'
+      severity: high
+      note: "CDB 实例开启了公网访问"
+
+    - category: 数据库连接串泄露
+      patterns:
+        - '\.sql\.tencentcdb\.com'
+        - 'cdb-\w+\.gz\.tencentcdb\.com'
+        - 'cdb-\w+\.bj\.tencentcdb\.com'
+        - 'cdb-\w+\.sh\.tencentcdb\.com'
+      severity: medium
+      note: "代码中硬编码了腾讯云 CDB 连接地址"
+
+# ============================================================================
+# 八、腾讯云凭证检测（补充）
+# ============================================================================
+
+credential_patterns:
+  description: "腾讯云 API 凭证泄露检测"
+
+  patterns:
+    - category: SecretId（AK）
+      patterns:
+        - 'AKID[0-9A-Za-z]{13,20}'
+      severity: critical
+      note: "腾讯云 SecretId 硬编码（前缀 AKID）"
+
+    - category: SecretKey 赋值
+      patterns:
+        - '[Ss]ecret[Kk]ey\s*[:=]\s*[''"][0-9A-Za-z]{32,}[''"]'
+        - 'TENCENTCLOUD_SECRET_KEY\s*[:=]\s*[''"][^''"]+[''"]'
+        - 'SecretKey\s*[:=]\s*[''"][0-9A-Za-z]{32,}[''"]'
+      severity: critical
+      note: "腾讯云 SecretKey 硬编码"
+
+    - category: 临时凭证 Token
+      patterns:
+        - 'TENCENTCLOUD_TOKEN\s*[:=]\s*[''"][^''"]+[''"]'
+        - '[Ss]ession[Tt]oken\s*[:=]\s*[''"][A-Za-z0-9+/=]{50,}[''"]'
+      severity: high
+      note: "腾讯云临时凭证 Token 硬编码"
+
+    - category: SDK 凭证初始化
+      patterns:
+        - 'Credential\s*\(\s*[''"]AKID'                # Python/Go SDK
+        - 'new\s+Credential\s*\(\s*"AKID'             # Java SDK
+        - 'tencentcloud.*Credential.*AKID'
+      severity: critical
+      note: "腾讯云 SDK 直接使用硬编码凭证初始化"
+
+  exclusion_rules:
+    - description: 环境变量引用
+      patterns:
+        - 'os\.environ.*TENCENTCLOUD'
+        - 'process\.env\.TENCENTCLOUD'
+        - 'System\.getenv.*TENCENTCLOUD'
+    - description: 配置占位符
+      values: ['your-secret-key-here', 'xxx', 'placeholder', 'AKID_EXAMPLE']

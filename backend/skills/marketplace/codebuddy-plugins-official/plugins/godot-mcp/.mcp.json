@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "godot-mcp": {
+      "command": "node",
+      "args": ["${CODEBUDDY_PLUGIN_ROOT}/server/dist/index.js"],
+      "env": {
+        "MCP_TRANSPORT": "stdio",
+        "GODOT_WS_PORT": "9080"
+      }
+    }
+  }
+}

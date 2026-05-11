@@ -1,0 +1,14 @@
+---
+description: Sandbox Protection Rules for AI Code Generation
+globs: **/*
+alwaysApply: true
+enabled: true
+---
+
+It is prohibited to use any form of sandbox disabling options in Chromium / Chrome / Headless Browser launch arguments,
+including but not limited to:
+--no-sandbox
+--disable-setuid-sandbox
+
+If running in restricted environments such as containers or CI, the issue must be resolved through proper user permissions, container configuration, or official dependency methods.
+Disabling the sandbox as a workaround is not permitted.

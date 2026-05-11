@@ -1,0 +1,101 @@
+---
+description: SQL Injection Protection Rules for AI Code Generation
+globs: **/*
+alwaysApply: true
+enabled: true
+---
+
+# 高优先级安全编码规范
+本规范包含**强制性**关键安全规则，涵盖最常见和最严重的安全漏洞。违反这些规则可能导致严重的安全事故。
+
+---
+
+## 规则 1：SQL 注入防护（关键）
+
+### 核心原则
+
+**100% 使用参数化查询。永远不要将用户输入拼接到 SQL 语句中。**
+
+### 正确做法：参数化查询
+
+#### Java (JDBC PreparedStatement)
+```java
+// 正确：使用 PreparedStatement
+String customerName = request.getParameter("customerName");
+String query = "SELECT account_balance FROM user_data WHERE user_name = ?";
+PreparedStatement pstmt = connection.prepareStatement(query);
+pstmt.setString(1, customerName);  // 参数绑定
+ResultSet results = pstmt.executeQuery();
+```
+
+#### Go (database/sql)
+```go
+// 正确：使用占位符
+customerName := r.URL.Query().Get("customerName")
+row := db.QueryRow(
+    "SELECT account_balance FROM user_data WHERE user_name = ?",
+    customerName,  // 参数绑定
+)
+```
+
+### 错误做法：字符串拼接
+
+```java
+// 危险：字符串拼接
+String customerName = request.getParameter("customerName");
+String query = "SELECT * FROM users WHERE name = '" + customerName + "'";
+Statement stmt = connection.createStatement();
+ResultSet rs = stmt.executeQuery(query);
+// 攻击者输入: ' OR '1'='1' -- 
+// 结果: SELECT * FROM users WHERE name = '' OR '1'='1' --'
+```
+
+```python
+# 危险：字符串格式化
+customer_name = request.GET.get('customerName')
+query = f"SELECT * FROM users WHERE name = '{customer_name}'"
+cursor.execute(query)
+# 攻击者输入: '; DROP TABLE users; --
+```
+
+### 处理动态表名/列名/Group BY/Order BY
+
+** 触发条件**：参数名为 `orderBy`/`sortBy`/`sortDirection`/`groupBy`/`groupByField` 或注释中提到"动态SQL"/"order by"/"group by" → **必须在调用 mapper/执行 SQL 前使用白名单验证**。
+
+```java
+// 正确：白名单验证
+private static final Set<String> ALLOWED_COLUMNS = Set.of("id", "username", "email", "create_time");
+private static final Set<String> ALLOWED_DIRECTIONS = Set.of("ASC", "DESC");
+
+public List<User> getUsersByOrder(String orderBy, String sortDirection) {
+    if (orderBy == null || !ALLOWED_COLUMNS.contains(orderBy)) {
+        throw new IllegalArgumentException("Invalid column: " + orderBy);
+    }
+    if (sortDirection == null || !ALLOWED_DIRECTIONS.contains(sortDirection.toUpperCase())) {
+        throw new IllegalArgumentException("Invalid direction: " + sortDirection);
+    }
+    return mapper.getUsersByOrder(orderBy, sortDirection.toUpperCase());
+}
+```
+
+### ORM 框架注意事项
+
+ORM 无法完全防止 SQL 注入，特别是在使用原生 SQL 或动态查询时：
+
+```java
+// 危险：JPA 原生查询拼接
+String username = request.getParameter("username");
+Query query = entityManager.createNativeQuery(
+    "SELECT * FROM users WHERE username = '" + username + "'"
+);
+
+// 正确：JPA 参数绑定
+String username = request.getParameter("username");
+Query query = entityManager.createNativeQuery(
+    "SELECT * FROM users WHERE username = :username"
+);
+query.setParameter("username", username);
+```
+---
+
+**请记住**：这些规则是最低安全基线，不是可选项。违反任何一条都可能导致严重的安全事故。在代码审查中，违反这些规则应被视为阻塞性问题。🛡️

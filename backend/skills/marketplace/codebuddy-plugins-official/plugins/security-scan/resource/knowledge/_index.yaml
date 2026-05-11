@@ -1,0 +1,144 @@
+# knowledge 索引文件
+# Agent 可一次 Read 此索引，根据技术栈和场景精准选择需要加载的知识文件。
+# load_strategy: always = 扫描流程总是加载 | conditional = 按需加载
+
+# ============================================================================
+# 安全漏洞知识（漏洞类型 + 检测模式 + 安全/不安全写法）
+# ============================================================================
+
+vulnerability_knowledge:
+  - file: session-cookie-patterns.yaml
+    load_strategy: conditional
+    tech_stack: ["*"]
+    description: 会话/Cookie/JWT 安全检测模式（Session 固定、SameSite、JWT 审计）
+    lines: 172
+    inline_candidate: false
+
+  - file: password-security-patterns.yaml
+    load_strategy: conditional
+    tech_stack: ["*"]
+    description: 密码存储/策略/重置流程安全检测模式
+    lines: 165
+    inline_candidate: false
+
+  - file: log-security-patterns.yaml
+    load_strategy: conditional
+    tech_stack: ["*"]
+    description: 日志注入/敏感数据脱敏/安全事件审计检测模式
+    lines: 148
+    inline_candidate: false
+
+  - file: dos-patterns.yaml
+    load_strategy: conditional
+    tech_stack: ["*"]
+    description: ReDoS/XML解析炸弹/资源耗尽/Zip炸弹 DoS 检测模式
+    lines: 190
+    inline_candidate: false
+
+  - file: frontend-security-patterns.yaml
+    load_strategy: conditional
+    tech_stack: ["javascript", "typescript", "nodejs-*"]
+    description: PostMessage/DOM Clobbering/WebSocket/CORS/客户端绕过检测模式
+    lines: 178
+    inline_candidate: false
+
+  - file: supply-chain-patterns.yaml
+    load_strategy: conditional
+    tech_stack: ["*"]
+    description: 依赖混淆/恶意包/Typosquatting/废弃依赖 供应链安全检测模式
+    lines: 166
+    inline_candidate: false
+
+  - file: ssrf.yaml
+    load_strategy: conditional
+    tech_stack: ["*"]  # 存在 SSRF 攻击面时加载
+    description: SSRF 绕过技术参考数据
+    lines: 23
+    inline_candidate: true  # 小文件，可内联
+
+  - file: auth-basic.yaml
+    load_strategy: conditional
+    tech_stack: ["*"]  # 通用鉴权检测
+    description: 鉴权/越权基础检测模式
+    lines: 64
+    inline_candidate: false
+
+  - file: tencent-cloud-security.yaml
+    load_strategy: conditional
+    tech_stack: ["*"]  # 使用腾讯云服务时加载
+    description: 腾讯云安全检测模式（CAM 策略/COS 存储桶/IMDS 元数据/CVM 安全组/SCF 云函数/TKE 容器/CDB 数据库）
+    lines: 233
+    inline_candidate: false
+
+# ============================================================================
+# 框架专属知识（特定框架/技术栈的 Sink、防御、绕过技术）
+# ============================================================================
+
+framework_knowledge:
+  - file: spring-security.yaml
+    load_strategy: conditional
+    tech_stack: ["java-spring"]
+    description: Spring Security 配置模式
+    lines: 96
+    inline_candidate: false
+
+  - file: mybatis-injection.yaml
+    load_strategy: conditional
+    tech_stack: ["java-mybatis"]
+    description: MyBatis 注入模式（${} vs #{}）
+    lines: 59
+    inline_candidate: false
+
+  - file: actuator-exposure.yaml
+    load_strategy: conditional
+    tech_stack: ["java-spring"]
+    description: Actuator/管理端点暴露检测模式
+    lines: 321
+    inline_candidate: false  # 大文件，务必按需 Read
+
+  - file: nodejs-web.yaml
+    load_strategy: conditional
+    tech_stack: ["nodejs-express", "nodejs-koa", "nodejs-nestjs"]
+    description: Node.js Web 安全模式
+    lines: 96
+    inline_candidate: false
+
+  - file: python-web.yaml
+    load_strategy: conditional
+    tech_stack: ["python-flask", "python-django", "python-fastapi"]
+    description: Python Web 安全模式
+    lines: 95
+    inline_candidate: false
+
+  - file: go-web.yaml
+    load_strategy: conditional
+    tech_stack: ["go-gin", "go-echo", "go-fiber"]
+    description: Go Web 安全模式
+    lines: 82
+    inline_candidate: false
+
+# ============================================================================
+# 业务逻辑审计知识（鉴权绕过、业务反模式、支付逻辑）
+# ============================================================================
+
+logic_audit_knowledge:
+  - file: authentication-bypass.yaml
+    load_strategy: conditional
+    tech_stack: ["*"]
+    description: 鉴权风险置信度评估与模式引用
+    lines: 120
+    inline_candidate: false
+
+  - file: business-logic-rules.yaml
+    load_strategy: conditional
+    tech_stack: ["*"]
+    description: 业务逻辑缺陷规则（已知反模式 + 推理维度）
+    lines: 150
+    inline_candidate: false
+
+  - file: payment-logic-rules.yaml
+    load_strategy: conditional
+    tech_stack: ["*"]
+    description: 支付逻辑审计规则（支付反模式列表）
+    lines: 100
+    inline_candidate: false

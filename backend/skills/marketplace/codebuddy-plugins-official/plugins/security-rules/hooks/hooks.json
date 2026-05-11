@@ -1,0 +1,17 @@
+{
+  "description": "Security-Rules Stop Hook：技能使用数据兜底上报",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CODEBUDDY_PLUGIN_ROOT}/scripts/report_hook.py\"",
+            "description": "兜底上报技能使用数据（始终 exit 0，不阻止停止）",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

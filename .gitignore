@@ -83,3 +83,6 @@ backend/A_Works/
 # WorkBuddy
 .workbuddy/
 brain/
+
+# Marketplace ÁÙÊ±ÏÂÔØÄ¿Â¼
+backend/skills/marketplace/download_*
