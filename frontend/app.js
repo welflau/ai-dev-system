@@ -8481,7 +8481,15 @@ function _closeSplitPane(id) {
     const pane = _chatSplitPanes[idx];
     pane.el.remove();
     _chatSplitPanes.splice(idx, 1);
-    // 恢复分屏按钮
+
+    // 只剩 ≤1 格时退出分屏模式，恢复主面板
+    if (_chatSplitPanes.length <= 1) {
+        _destroyAllSplitPanes();   // 清空容器 + 移除 body.chat-split
+        loadChatHistory();         // 恢复主面板消息
+        return;
+    }
+
+    // 还有多格，恢复分屏按钮
     const splitBtn = document.getElementById('chatSplitBtn');
     if (splitBtn) splitBtn.style.display = '';
 }
