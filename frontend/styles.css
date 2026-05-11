@@ -5311,8 +5311,10 @@ body.chat-fullscreen.chat-split .chat-panel > #chatHistoryPanel {
 
 body.chat-fullscreen.chat-split #chatSplitContainer {
     display: flex !important;
-    flex: 1;
+    flex: 1 1 0;
+    min-height: 0;
     overflow: hidden;
+    /* 高度由 JS _setSplitContainerHeight() 精确设置 */
 }
 
 /* 分屏容器布局 */
@@ -5322,12 +5324,26 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
 }
 
 #chatSplitContainer .chat-split-pane {
-    flex: 1;
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 0;      /* 关键：允许子元素缩小 */
     display: flex;
     flex-direction: column;
     border-right: 1px solid var(--border);
-    min-width: 0;
     overflow: hidden;
+}
+
+/* 分屏格内的消息区撑满高度 */
+#chatSplitContainer .chat-split-pane .chat-messages {
+    flex: 1 1 0;
+    min-height: 0;
+    overflow-y: auto;
+}
+
+/* 分屏格内输入区固定在底部 */
+#chatSplitContainer .chat-split-pane .chat-panel-input {
+    flex-shrink: 0;
+    border-top: 1px solid var(--border);
 }
 
 #chatSplitContainer .chat-split-pane:last-child {

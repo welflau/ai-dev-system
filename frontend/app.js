@@ -8187,13 +8187,24 @@ function _initChatSplitContainer() {
     if (!container) return;
     container.innerHTML = '';
     _chatSplitPanes = [];
-    // 激活分屏 CSS
     document.body.classList.add('chat-split');
 
-    // 第一格：复制主会话历史
     const mainPane = _createSplitPane('main', _currentChatSessionId, true);
     container.appendChild(mainPane.el);
     _chatSplitPanes.push(mainPane);
+
+    // 等 DOM 渲染后精确设置高度
+    requestAnimationFrame(_setSplitContainerHeight);
+}
+
+function _setSplitContainerHeight() {
+    const panel = document.getElementById('chatPanel');
+    const header = panel?.querySelector('.chat-panel-header');
+    const container = document.getElementById('chatSplitContainer');
+    if (!panel || !header || !container) return;
+    const h = panel.clientHeight - header.offsetHeight;
+    container.style.height = h + 'px';
+    container.style.flex = 'none';
 }
 
 function _createSplitPane(id, sessionId, isMain = false) {
@@ -8330,6 +8341,8 @@ function addChatSplitPane() {
     const pane = _createSplitPane(id, null, false);
     container.appendChild(pane.el);
     _chatSplitPanes.push(pane);
+
+    requestAnimationFrame(_setSplitContainerHeight);
 
     if (_chatSplitPanes.length >= 3) {
         const btn = document.getElementById('chatSplitBtn');
