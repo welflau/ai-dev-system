@@ -5373,6 +5373,16 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
 
 .chat-split-pane-close:hover { opacity: 1; color: var(--danger); }
 
+/* 分屏格聚焦指示（由 JS 设置 border-top） */
+.chat-split-pane {
+    transition: border-top-color 0.15s;
+}
+
+.chat-split-pane-header {
+    cursor: pointer;
+    user-select: none;
+}
+
 .chat-panel-header {
     display: flex;
     align-items: center;

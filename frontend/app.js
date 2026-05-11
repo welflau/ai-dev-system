@@ -8160,6 +8160,7 @@ function removeChatDoc(index) {
 
 let _chatFullscreen = false;
 let _chatSplitPanes = [];   // [{id, sessionId, el}] 额外分屏面板
+let _chatActivePaneId = null; // 当前聚焦的分屏格 id
 
 function toggleChatFullscreen() {
     _chatFullscreen = !_chatFullscreen;
@@ -8187,13 +8188,22 @@ function _initChatSplitContainer() {
     if (!container) return;
     container.innerHTML = '';
     _chatSplitPanes = [];
+    _chatActivePaneId = null;
     document.body.classList.add('chat-split');
 
     const mainPane = _createSplitPane('main', _currentChatSessionId, true);
-    container.appendChild(mainPane.el);
+    container.appendChild(mainPane.el);  // 先进 DOM
     _chatSplitPanes.push(mainPane);
+    _focusSplitPane('main');
 
-    // 等 DOM 渲染后精确设置高度
+    // 进 DOM 后再加载历史
+    if (mainPane.sessionId) {
+        _loadSplitPaneHistory(mainPane.msgId, mainPane.sessionId);
+    } else {
+        const el = document.getElementById(mainPane.msgId);
+        if (el) el.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-muted);font-size:13px;">暂无消息</div>';
+    }
+
     requestAnimationFrame(_setSplitContainerHeight);
 }
 
@@ -8218,14 +8228,18 @@ function _createSplitPane(id, sessionId, isMain = false) {
 
     const sessionLabel = isMain ? '主会话' : `分屏 ${_chatSplitPanes.length + 1}`;
     el.innerHTML = `
-        <div class="chat-split-pane-header">
+        <div class="chat-split-pane-header" onclick="_focusSplitPane('${id}')">
             <span style="font-weight:500;color:var(--text);">💬 ${sessionLabel}</span>
-            ${!isMain ? `<span class="chat-split-pane-close" onclick="_closeSplitPane('${id}')" title="关闭">✕</span>` : ''}
+            <div style="display:flex;align-items:center;gap:4px;">
+                <button class="btn-icon chat-panel-btn" onclick="event.stopPropagation();_splitPaneHistory('${id}')" title="历史对话" style="font-size:12px;padding:2px 5px;">🕐</button>
+                ${!isMain ? `<span class="chat-split-pane-close" onclick="event.stopPropagation();_closeSplitPane('${id}')" title="关闭">✕</span>` : ''}
+            </div>
         </div>
-        <div class="chat-messages" id="${msgId}" style="flex:1;overflow-y:auto;"></div>
-        <div class="chat-panel-input" id="${inputId}" style="flex-shrink:0;">
+        <div class="chat-messages" id="${msgId}"></div>
+        <div class="chat-panel-input" id="${inputId}">
             <div class="chat-input-wrap">
                 <textarea class="chat-input" placeholder="输入消息…" rows="1"
+                    onfocus="_focusSplitPane('${id}')"
                     onkeydown="_splitPaneKeydown(event,'${id}')"
                     oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,120)+'px'"></textarea>
                 <button class="chat-send-btn" onclick="_splitPaneSend('${id}')">
@@ -8236,15 +8250,8 @@ function _createSplitPane(id, sessionId, isMain = false) {
             </div>
         </div>`;
 
-    // 加载历史消息
+    // 注意：历史加载在 el 进入 DOM 之后才调用（由调用方负责）
     const sid = sessionId || _currentChatSessionId;
-    if (sid) {
-        _loadSplitPaneHistory(msgId, sid);
-    } else {
-        document.getElementById(msgId).innerHTML =
-            '<div class="chat-welcome" style="padding:24px;text-align:center;color:var(--text-muted);">新对话</div>';
-    }
-
     return { id, sessionId: sid, el, msgId, inputId, isMain };
 }
 
@@ -8339,8 +8346,12 @@ function addChatSplitPane() {
     // 再追加一个新会话格
     const id = `extra-${Date.now()}`;
     const pane = _createSplitPane(id, null, false);
-    container.appendChild(pane.el);
+    container.appendChild(pane.el);  // 先进 DOM
     _chatSplitPanes.push(pane);
+    _focusSplitPane(id);
+    // 新格没有 session，显示欢迎语
+    const msgEl = document.getElementById(pane.msgId);
+    if (msgEl) msgEl.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-muted);font-size:13px;">💬 新对话<br><small>输入消息开始聊天</small></div>';
 
     requestAnimationFrame(_setSplitContainerHeight);
 
@@ -8348,6 +8359,66 @@ function addChatSplitPane() {
         const btn = document.getElementById('chatSplitBtn');
         if (btn) btn.style.display = 'none';
     }
+}
+
+function _focusSplitPane(id) {
+    _chatActivePaneId = id;
+    // 更新所有格的 active 样式
+    document.querySelectorAll('.chat-split-pane').forEach(el => {
+        el.style.borderTop = el.id === `split-pane-${id}`
+            ? '2px solid var(--primary)'
+            : '2px solid transparent';
+    });
+}
+
+async function _splitPaneHistory(paneId) {
+    const pane = _chatSplitPanes.find(p => p.id === paneId);
+    if (!pane) return;
+
+    // 简单弹出会话列表，用户选择后加载
+    try {
+        const base = currentProjectId ? `/projects/${currentProjectId}` : '';
+        const data = await api(`${base}/chat/sessions?limit=20`);
+        const sessions = data.sessions || [];
+        if (!sessions.length) { showToast('暂无历史对话', 'info'); return; }
+
+        // 创建简单浮层选择器
+        const existingPicker = document.getElementById('splitHistoryPicker');
+        if (existingPicker) existingPicker.remove();
+
+        const paneEl = document.getElementById(`split-pane-${paneId}`);
+        const picker = document.createElement('div');
+        picker.id = 'splitHistoryPicker';
+        picker.style.cssText = `position:absolute;z-index:9999;background:var(--bg-card);border:1px solid var(--border);
+            border-radius:8px;box-shadow:0 4px 20px rgba(0,0,0,.3);min-width:260px;max-height:320px;overflow-y:auto;
+            top:${paneEl?.getBoundingClientRect().top + 40}px;left:${paneEl?.getBoundingClientRect().left + 8}px;`;
+        picker.innerHTML = `
+            <div style="padding:8px 12px;font-size:12px;font-weight:600;color:var(--text-muted);border-bottom:1px solid var(--border);">
+                选择历史对话
+                <span onclick="document.getElementById('splitHistoryPicker').remove()" style="float:right;cursor:pointer;">✕</span>
+            </div>
+            ${sessions.map(s => `
+                <div onclick="_loadSplitPaneSession('${paneId}','${s.id}');document.getElementById('splitHistoryPicker').remove();"
+                    style="padding:8px 12px;cursor:pointer;font-size:12px;border-bottom:1px solid var(--border-light);"
+                    onmouseover="this.style.background='var(--bg-elevated)'"
+                    onmouseout="this.style.background=''">
+                    ${escapeHtml((s.preview || s.id).slice(0, 40))}
+                    <div style="font-size:10px;color:var(--text-muted);margin-top:2px;">${s.updated_at ? s.updated_at.slice(0,16) : ''}</div>
+                </div>`).join('')}`;
+        document.body.appendChild(picker);
+        setTimeout(() => document.addEventListener('click', function h(e) {
+            if (!picker.contains(e.target)) { picker.remove(); document.removeEventListener('click', h); }
+        }), 100);
+    } catch (e) {
+        showToast(`加载历史失败: ${e.message}`, 'error');
+    }
+}
+
+async function _loadSplitPaneSession(paneId, sessionId) {
+    const pane = _chatSplitPanes.find(p => p.id === paneId);
+    if (!pane) return;
+    pane.sessionId = sessionId;
+    await _loadSplitPaneHistory(pane.msgId, sessionId);
 }
 
 function _closeSplitPane(id) {
