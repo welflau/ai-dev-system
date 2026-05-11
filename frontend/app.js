@@ -8320,14 +8320,20 @@ function addChatSplitPane() {
     const container = document.getElementById('chatSplitContainer');
     if (!container) return;
 
+    // 第一次点分屏：先初始化主面板（加载当前会话历史到左格）
+    if (_chatSplitPanes.length === 0) {
+        _initChatSplitContainer();  // 创建主格 + 激活 body.chat-split
+    }
+
+    // 再追加一个新会话格
     const id = `extra-${Date.now()}`;
     const pane = _createSplitPane(id, null, false);
     container.appendChild(pane.el);
     _chatSplitPanes.push(pane);
 
-    // 超过 3 个隐藏分屏按钮
     if (_chatSplitPanes.length >= 3) {
-        document.getElementById('chatSplitBtn').style.display = 'none';
+        const btn = document.getElementById('chatSplitBtn');
+        if (btn) btn.style.display = 'none';
     }
 }
 
