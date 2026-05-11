@@ -79,26 +79,13 @@
     }
   },
   "marketplace-skills": {
-    "name": "Marketplace Skills（已启用）",
-    "description": "来自市场、已添加到系统的 Skill。在系统设置 → Skills → 市场中挑选安装。",
+    "name": "已安装 Skills（市场 + UCP）",
+    "description": "从市场安装或系统内置的 Skill，统一存放在 use_skills/ 目录，AI 助手按需加载。",
     "type": "scan_dir",
     "scan_dir": "use_skills",
-    "header": "# 已安装的 Marketplace Skills\n\n以下 Skill 已从市场安装，AI 助手可按需加载。",
-    "inject_to": ["ChatAssistant"],
-    "priority": "medium",
-    "enabled": true
-  },
-  "unreal-ucp-skills": {
-    "name": "UE Editor Skill 索引（UCP）",
-    "description": "自动扫描 UCP Skills 目录，生成可用 Skill 索引表，供 ChatAssistant 按需加载",
-    "type": "scan_dir",
-    "scan_dir": "../ue_plugins/UnrealClientProtocol/Skills",
-    "header": "# UE Editor 可用 Skill（通过 UCP 控制运行中的 Editor）\n\n当用户要求操控 UE Editor（管理 Actor、编辑蓝图、修改材质、控制 PIE 等）时：\n先从下表找到对应 Skill，再用 `read_local_file` 读取 SKILL.md，最后用 `ue_call` 执行。",
+    "header": "# 已安装的 Skills\n\n以下 Skill 可供 AI 助手按需加载。先调 load_skill 读取对应 Skill，再执行操作。",
     "inject_to": ["ChatAssistant"],
     "priority": "high",
-    "enabled": true,
-    "traits_match": {
-      "any_of": ["engine:ue5", "engine:ue4"]
-    }
+    "enabled": true
   }
 }
