@@ -8424,7 +8424,8 @@ async function _splitPaneHistory(paneId) {
     // 加载会话列表，复用主面板的分组 + 样式
     try {
         const data = await api(`${_sessionApiBase()}/sessions`);
-        const sessions = data.sessions || [];
+        // 过滤掉空会话（0条消息）
+        const sessions = (data.sessions || []).filter(s => (s.message_count || 0) > 0);
         const listEl = document.getElementById('splitHistoryPickerList');
         if (!listEl) return;
 
@@ -8482,6 +8483,11 @@ function _closeSplitPane(id) {
     pane.el.remove();
     _chatSplitPanes.splice(idx, 1);
 
+    // 关闭时若该格没发过消息，静默删除空 session
+    if (pane.sessionId && !pane.isMain) {
+        api(`${_sessionApiBase()}/sessions/${pane.sessionId}`, { method: 'DELETE' }).catch(() => {});
+    }
+
     // 只剩 ≤1 格时退出分屏模式，恢复主面板
     if (_chatSplitPanes.length <= 1) {
         _destroyAllSplitPanes();   // 清空容器 + 移除 body.chat-split
@@ -8495,6 +8501,12 @@ function _closeSplitPane(id) {
 }
 
 function _destroyAllSplitPanes() {
+    // 退出前清理非主格的空 session
+    for (const pane of _chatSplitPanes) {
+        if (pane.sessionId && !pane.isMain) {
+            api(`${_sessionApiBase()}/sessions/${pane.sessionId}`, { method: 'DELETE' }).catch(() => {});
+        }
+    }
     const container = document.getElementById('chatSplitContainer');
     if (container) container.innerHTML = '';
     _chatSplitPanes = [];
@@ -8734,7 +8746,8 @@ async function loadChatSessions() {
     listEl.innerHTML = '<div style="padding:12px;color:var(--text-muted);font-size:12px;">加载中...</div>';
     try {
         const data = await api(`${_sessionApiBase()}/sessions`);
-        const sessions = data.sessions || [];
+        // 过滤掉空会话（0条消息）
+        const sessions = (data.sessions || []).filter(s => (s.message_count || 0) > 0);
         if (!sessions.length) {
             listEl.innerHTML = '<div style="padding:12px;color:var(--text-muted);font-size:12px;">暂无历史对话</div>';
             return;
