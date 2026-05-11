@@ -8391,42 +8391,79 @@ async function _splitPaneHistory(paneId) {
     const pane = _chatSplitPanes.find(p => p.id === paneId);
     if (!pane) return;
 
-    // 简单弹出会话列表，用户选择后加载
+    const existingPicker = document.getElementById('splitHistoryPicker');
+    if (existingPicker) { existingPicker.remove(); return; }
+
+    const paneEl = document.getElementById(`split-pane-${paneId}`);
+    const rect = paneEl?.getBoundingClientRect();
+
+    // 创建与主面板相同风格的历史面板
+    const picker = document.createElement('div');
+    picker.id = 'splitHistoryPicker';
+    picker.style.cssText = `position:fixed;z-index:9999;background:var(--bg-card);
+        border:1px solid var(--border);border-radius:10px;
+        box-shadow:0 6px 24px rgba(0,0,0,.35);
+        width:320px;max-height:480px;display:flex;flex-direction:column;
+        top:${(rect?.top || 60) + 36}px;left:${rect?.left || 10}px;`;
+    picker.innerHTML = `
+        <div style="display:flex;align-items:center;justify-content:space-between;
+            padding:10px 14px;border-bottom:1px solid var(--border);flex-shrink:0;">
+            <span style="font-weight:600;font-size:13px;">历史对话</span>
+            <button class="btn-icon" onclick="document.getElementById('splitHistoryPicker').remove()" style="font-size:14px;">✕</button>
+        </div>
+        <div id="splitHistoryPickerList" style="overflow-y:auto;flex:1;padding:4px 0;">
+            <div style="padding:12px;color:var(--text-muted);font-size:12px;">加载中...</div>
+        </div>`;
+    document.body.appendChild(picker);
+
+    // 点外部关闭
+    setTimeout(() => document.addEventListener('click', function h(e) {
+        if (!picker.contains(e.target)) { picker.remove(); document.removeEventListener('click', h); }
+    }), 100);
+
+    // 加载会话列表，复用主面板的分组 + 样式
     try {
-        const base = currentProjectId ? `/projects/${currentProjectId}` : '';
-        const data = await api(`${base}/chat/sessions?limit=20`);
+        const data = await api(`${_sessionApiBase()}/sessions`);
         const sessions = data.sessions || [];
-        if (!sessions.length) { showToast('暂无历史对话', 'info'); return; }
+        const listEl = document.getElementById('splitHistoryPickerList');
+        if (!listEl) return;
 
-        // 创建简单浮层选择器
-        const existingPicker = document.getElementById('splitHistoryPicker');
-        if (existingPicker) existingPicker.remove();
+        if (!sessions.length) {
+            listEl.innerHTML = '<div style="padding:12px;color:var(--text-muted);font-size:12px;">暂无历史对话</div>';
+            return;
+        }
 
-        const paneEl = document.getElementById(`split-pane-${paneId}`);
-        const picker = document.createElement('div');
-        picker.id = 'splitHistoryPicker';
-        picker.style.cssText = `position:absolute;z-index:9999;background:var(--bg-card);border:1px solid var(--border);
-            border-radius:8px;box-shadow:0 4px 20px rgba(0,0,0,.3);min-width:260px;max-height:320px;overflow-y:auto;
-            top:${paneEl?.getBoundingClientRect().top + 40}px;left:${paneEl?.getBoundingClientRect().left + 8}px;`;
-        picker.innerHTML = `
-            <div style="padding:8px 12px;font-size:12px;font-weight:600;color:var(--text-muted);border-bottom:1px solid var(--border);">
-                选择历史对话
-                <span onclick="document.getElementById('splitHistoryPicker').remove()" style="float:right;cursor:pointer;">✕</span>
-            </div>
-            ${sessions.map(s => `
-                <div onclick="_loadSplitPaneSession('${paneId}','${s.id}');document.getElementById('splitHistoryPicker').remove();"
-                    style="padding:8px 12px;cursor:pointer;font-size:12px;border-bottom:1px solid var(--border-light);"
-                    onmouseover="this.style.background='var(--bg-elevated)'"
-                    onmouseout="this.style.background=''">
-                    ${escapeHtml((s.preview || s.id).slice(0, 40))}
-                    <div style="font-size:10px;color:var(--text-muted);margin-top:2px;">${s.updated_at ? s.updated_at.slice(0,16) : ''}</div>
-                </div>`).join('')}`;
-        document.body.appendChild(picker);
-        setTimeout(() => document.addEventListener('click', function h(e) {
-            if (!picker.contains(e.target)) { picker.remove(); document.removeEventListener('click', h); }
-        }), 100);
+        // 按日期分组（与主面板一致）
+        const groups = { '今天': [], '本周': [], '更早': [] };
+        const now = new Date();
+        const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const weekStart = new Date(todayStart); weekStart.setDate(todayStart.getDate() - 7);
+        for (const s of sessions) {
+            const d = new Date(s.updated_at || s.created_at);
+            if (d >= todayStart) groups['今天'].push(s);
+            else if (d >= weekStart) groups['本周'].push(s);
+            else groups['更早'].push(s);
+        }
+
+        let html = '';
+        for (const [label, items] of Object.entries(groups)) {
+            if (!items.length) continue;
+            html += `<div class="chat-history-group">${label}</div>`;
+            for (const s of items) {
+                const active = s.id === pane.sessionId ? ' active' : '';
+                html += `<div class="chat-history-item${active}"
+                    onclick="_loadSplitPaneSession('${paneId}','${escHtml(s.id)}');
+                             document.getElementById('splitHistoryPicker').remove();">
+                    <span class="hi-icon">💬</span>
+                    <span class="hi-title" title="${escHtml(s.title)}">${escHtml(s.title)}</span>
+                    <span class="hi-meta">${s.message_count || 0}条</span>
+                </div>`;
+            }
+        }
+        listEl.innerHTML = html;
     } catch (e) {
-        showToast(`加载历史失败: ${e.message}`, 'error');
+        const listEl = document.getElementById('splitHistoryPickerList');
+        if (listEl) listEl.innerHTML = `<div style="padding:12px;color:var(--danger);font-size:12px;">加载失败: ${escapeHtml(e.message)}</div>`;
     }
 }
 
