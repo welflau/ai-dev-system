@@ -12405,9 +12405,41 @@ async function resetGlobalSkill(skillId) {
 
 // ==================== Skill 市场（全页面版）====================
 
-let _marketplaceAllSkills = [];   // 全量缓存
-let _marketplaceScope = 'system'; // 'system' | 'project'
+let _marketplaceAllSkills = [];
+let _marketplaceScope = 'system';
 let _marketplaceActiveCategory = '全部';
+let _marketplaceActiveTag = '';   // 空字符串 = 不按 Tag 过滤
+
+// Tag（细粒度分类）→ 大分类 映射
+const _MKT_CATEGORY_MAP = {
+    // 金融投资
+    'a-share-analysis':'金融投资','equity-research':'金融投资','finance':'金融投资',
+    'finance-data':'金融投资','financial-analysis':'金融投资','investment-banking':'金融投资',
+    'private-equity':'金融投资','wealth-management':'金融投资','trading-agent':'金融投资',
+    'ai-hedge-fund':'金融投资','lseg':'金融投资','spglobal':'金融投资',
+    // 开发工具
+    'design-to-code':'开发工具','modern-webapp':'开发工具','webapp-testing':'开发工具',
+    'dockerfile-gen':'开发工具','agent-sdk-dev':'开发工具','cloudbase':'开发工具',
+    'codebuddy-chat-web':'开发工具','codebuddy-md-management':'开发工具',
+    'ardot-design-generator':'开发工具',
+    // 数据分析
+    'data':'数据分析','data-analysis':'数据分析','deep-research':'数据分析',
+    // 游戏引擎
+    'godot-mcp':'游戏引擎',
+    // 内容创作
+    'document-skills':'内容创作','ppt-implement':'内容创作','product-management':'内容创作',
+    'internal-comms':'内容创作','executing-marketing-campaigns':'内容创作',
+    'remotion-video-generator':'内容创作',
+    // AI智能
+    'general-skills':'AI智能','hot-skills':'AI智能','oh-my-codebuddy':'AI智能',
+    'codebuddy-plugins-official':'AI智能','cb_teams_marketplace':'AI智能',
+    'find-skills':'AI智能','skill-creator':'AI智能',
+};
+const _MKT_BROAD_CATS = ['全部','金融投资','开发工具','数据分析','AI智能','内容创作','游戏引擎','通用'];
+
+function _getBroadCategory(tag) {
+    return _MKT_CATEGORY_MAP[tag] || '通用';
+}
 
 function showSkillMarketplace() { _openSkillMarketplace('system'); }
 function showProjectSkillMarketplace() {
@@ -12418,6 +12450,7 @@ function showProjectSkillMarketplace() {
 async function _openSkillMarketplace(scope) {
     _marketplaceScope = scope;
     _marketplaceActiveCategory = '全部';
+    _marketplaceActiveTag = '';
 
     const pageId = 'skillMarketplacePage';
     let page = document.getElementById(pageId);
@@ -12434,17 +12467,19 @@ async function _openSkillMarketplace(scope) {
             </div>
             <button class="btn-icon" onclick="document.getElementById('skillMarketplacePage').remove()" style="font-size:20px;">&times;</button>
         </div>
-        <!-- 分类标签 -->
-        <div id="mkt-categories" style="display:flex;gap:8px;padding:12px 32px;border-bottom:1px solid var(--border);flex-shrink:0;overflow-x:auto;white-space:nowrap;">
+        <!-- 大分类（7-8 个） -->
+        <div id="mkt-categories" style="display:flex;gap:8px;padding:10px 32px;border-bottom:1px solid var(--border);flex-shrink:0;overflow-x:auto;white-space:nowrap;">
             <div class="empty-state-sm" style="font-size:12px;">加载中...</div>
         </div>
+        <!-- Tag 行（细粒度，可点击过滤） -->
+        <div id="mkt-tags" style="display:flex;flex-wrap:wrap;gap:6px;padding:8px 32px 10px;border-bottom:1px solid var(--border);flex-shrink:0;min-height:38px;"></div>
         <!-- 搜索框 -->
-        <div style="padding:12px 32px;flex-shrink:0;">
+        <div style="padding:10px 32px;flex-shrink:0;">
             <div style="position:relative;max-width:600px;">
                 <svg style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--text-muted);" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
                 <input id="mkt-search" type="text" placeholder="搜索 Skill 名称或描述..."
                     oninput="_filterMarketplace()"
-                    style="width:100%;padding:8px 12px 8px 32px;border:1px solid var(--border);border-radius:8px;background:var(--bg-elevated);color:var(--text);font-size:13px;box-sizing:border-box;">
+                    style="width:100%;padding:7px 12px 7px 32px;border:1px solid var(--border);border-radius:8px;background:var(--bg-elevated);color:var(--text);font-size:13px;box-sizing:border-box;">
             </div>
         </div>
         <!-- Skill 列表 -->
@@ -12468,32 +12503,63 @@ async function _openSkillMarketplace(scope) {
 function _renderMarketplace() {
     const allSkills = _marketplaceAllSkills;
     const search = (document.getElementById('mkt-search')?.value || '').toLowerCase();
-    const cat = _marketplaceActiveCategory;
+    const broadCat = _marketplaceActiveCategory;
+    const activeTag = _marketplaceActiveTag;
 
-    // 提取所有分类（去重，排序）
-    const cats = ['全部', ...new Set(allSkills.map(s => s.category || '通用').filter(Boolean)).values()].sort((a, b) => a === '全部' ? -1 : b === '全部' ? 1 : a.localeCompare(b));
-
-    // 渲染分类标签
+    // 大分类 Tab（固定 7-8 个 + 计数）
     const catEl = document.getElementById('mkt-categories');
     if (catEl) {
-        catEl.innerHTML = cats.map(c => `
-            <button onclick="_setMarketplaceCategory('${escapeHtml(c)}')"
-                style="padding:5px 14px;border-radius:20px;font-size:12px;cursor:pointer;white-space:nowrap;flex-shrink:0;
-                       border:1px solid ${c === cat ? 'var(--primary)' : 'var(--border)'};
-                       background:${c === cat ? 'var(--primary)' : 'var(--bg-elevated)'};
-                       color:${c === cat ? '#fff' : 'var(--text-muted)'};">
-                ${escapeHtml(c)}
-            </button>`).join('');
+        catEl.innerHTML = _MKT_BROAD_CATS.map(c => {
+            const cnt = c === '全部' ? allSkills.length
+                : allSkills.filter(s => _getBroadCategory(s.category || '通用') === c).length;
+            if (cnt === 0 && c !== '全部') return '';
+            const active = c === broadCat;
+            return `<button onclick="_setMarketplaceCategory('${escapeHtml(c)}')"
+                style="padding:5px 16px;border-radius:20px;font-size:12px;cursor:pointer;white-space:nowrap;flex-shrink:0;
+                       border:1px solid ${active ? 'var(--primary)' : 'var(--border)'};
+                       background:${active ? 'var(--primary)' : 'var(--bg-elevated)'};
+                       color:${active ? '#fff' : 'var(--text-muted)'};">
+                ${escapeHtml(c)}<span style="margin-left:4px;opacity:.7;font-size:10px;">${cnt}</span>
+            </button>`;
+        }).join('');
     }
 
-    // 过滤
+    // Tag 行 — 当前大分类下的细粒度 Tag（按出现次数排序）
+    const tagEl = document.getElementById('mkt-tags');
+    if (tagEl) {
+        const tagsInCat = allSkills
+            .filter(s => broadCat === '全部' || _getBroadCategory(s.category || '通用') === broadCat)
+            .map(s => s.category || '通用')
+            .filter(Boolean);
+        const tagCounts = {};
+        tagsInCat.forEach(t => { tagCounts[t] = (tagCounts[t] || 0) + 1; });
+        const sortedTags = Object.entries(tagCounts).sort((a, b) => b[1] - a[1]).map(e => e[0]);
+        if (sortedTags.length <= 1) {
+            tagEl.innerHTML = '';
+        } else {
+            tagEl.innerHTML = sortedTags.map(t => {
+                const isActive = t === activeTag;
+                return `<span onclick="_setMarketplaceTag('${escapeHtml(t)}')"
+                    style="padding:2px 10px;border-radius:10px;font-size:11px;cursor:pointer;
+                           border:1px solid ${isActive ? 'var(--primary)' : 'var(--border)'};
+                           background:${isActive ? 'rgba(99,102,241,.15)' : 'transparent'};
+                           color:${isActive ? 'var(--primary)' : 'var(--text-muted)'};">
+                    ${escapeHtml(t)}<span style="margin-left:3px;opacity:.6;">${tagCounts[t]}</span>
+                </span>`;
+            }).join('');
+        }
+    }
+
+    // 三重过滤：大分类 + Tag + 搜索
     const filtered = allSkills.filter(sk => {
-        const matchCat = cat === '全部' || (sk.category || '通用') === cat;
-        const matchSearch = !search ||
+        const tag = sk.category || '通用';
+        const broadCatMatch = broadCat === '全部' || _getBroadCategory(tag) === broadCat;
+        const tagMatch = !activeTag || tag === activeTag;
+        const searchMatch = !search ||
             (sk.name || '').toLowerCase().includes(search) ||
             (sk.description || '').toLowerCase().includes(search) ||
             (sk.dir_name || '').toLowerCase().includes(search);
-        return matchCat && matchSearch;
+        return broadCatMatch && tagMatch && searchMatch;
     });
 
     // 副标题
@@ -12508,23 +12574,26 @@ function _renderMarketplace() {
         return;
     }
 
+    const installLabel = _marketplaceScope === 'project' ? '添加到项目' : '添加到系统';
     listEl.innerHTML = filtered.map(sk => {
         const initial = (sk.name || sk.dir_name || '?')[0].toUpperCase();
         const colors = ['#6366f1','#8b5cf6','#06b6d4','#10b981','#f59e0b','#ef4444','#ec4899','#3b82f6'];
         const color = colors[(sk.dir_name || '').charCodeAt(0) % colors.length];
+        const tag = sk.category || '通用';
+        const tagHtml = `<span onclick="_setMarketplaceTag('${escapeHtml(tag)}')" style="font-size:10px;padding:1px 7px;border-radius:10px;cursor:pointer;background:var(--bg-elevated);color:var(--text-muted);border:1px solid var(--border);" title="按此 Tag 筛选">${escapeHtml(tag)}</span>`;
         const actionBtn = sk.installed
             ? `<span style="font-size:11px;padding:3px 10px;border-radius:4px;background:rgba(52,211,88,.15);color:#34d058;white-space:nowrap;">✓ 已安装</span>
                <button class="btn btn-xs btn-ghost" onclick="_mktUninstall('${escapeHtml(sk.dir_name)}')" style="color:var(--danger);font-size:11px;">移除</button>`
-            : `<button class="btn btn-sm btn-primary" onclick="_mktInstall('${escapeHtml(sk.dir_name)}', this)" style="font-size:12px;white-space:nowrap;">+ ${_marketplaceScope === 'project' ? '添加到项目' : '添加到系统'}</button>`;
+            : `<button class="btn btn-sm btn-primary" onclick="_mktInstall('${escapeHtml(sk.dir_name)}', this)" style="font-size:12px;white-space:nowrap;">+ ${installLabel}</button>`;
         return `
-        <div style="display:flex;align-items:center;gap:14px;padding:12px 0;border-bottom:1px solid var(--border);">
-            <div style="width:38px;height:38px;border-radius:8px;background:${color}22;color:${color};display:flex;align-items:center;justify-content:center;font-weight:700;font-size:16px;flex-shrink:0;">${initial}</div>
+        <div style="display:flex;align-items:center;gap:14px;padding:11px 0;border-bottom:1px solid var(--border);">
+            <div style="width:36px;height:36px;border-radius:8px;background:${color}22;color:${color};display:flex;align-items:center;justify-content:center;font-weight:700;font-size:15px;flex-shrink:0;">${initial}</div>
             <div style="flex:1;min-width:0;">
-                <div style="display:flex;align-items:center;gap:6px;">
+                <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
                     <span style="font-weight:500;font-size:13px;">${escapeHtml(sk.name || sk.dir_name)}</span>
-                    <span style="font-size:10px;padding:1px 6px;border-radius:3px;background:var(--bg-elevated);color:var(--text-muted);">${escapeHtml(sk.category || '通用')}</span>
+                    ${tagHtml}
                 </div>
-                <div style="font-size:12px;color:var(--text-muted);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:600px;">${escapeHtml((sk.description || sk.dir_name).slice(0, 120))}</div>
+                <div style="font-size:12px;color:var(--text-muted);margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml((sk.description || sk.dir_name).slice(0, 150))}</div>
             </div>
             <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">${actionBtn}</div>
         </div>`;
@@ -12533,6 +12602,12 @@ function _renderMarketplace() {
 
 function _setMarketplaceCategory(cat) {
     _marketplaceActiveCategory = cat;
+    _marketplaceActiveTag = '';  // 切换大分类时清空 Tag 筛选
+    _renderMarketplace();
+}
+
+function _setMarketplaceTag(tag) {
+    _marketplaceActiveTag = _marketplaceActiveTag === tag ? '' : tag;  // 再次点击取消
     _renderMarketplace();
 }
 
