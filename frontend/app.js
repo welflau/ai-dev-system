@@ -9548,17 +9548,7 @@ async function sendChatMessage() {
     typingContainer.appendChild(typingEl);
     scrollChatToBottom();
 
-    // 全局聊天（无项目）：生成 session_id，订阅思考日志 SSE
-    let _thinkingSessionId = null;
-    let _thinkingESrc = null;
-    if (!currentProjectId && chatMode === 'global') {
-        _thinkingSessionId = crypto.randomUUID();
-        _thinkingESrc = new EventSource(`${API}/chat/thinking-stream?session_id=${_thinkingSessionId}`);
-        _thinkingESrc.addEventListener('chat_thinking_log', (e) => {
-            const data = JSON.parse(e.data);
-            _chatThinkingAppend(data);  // 统一用新思考面板
-        });
-    }
+    // 全局聊天已改为流式（/chat/stream），无需单独的 thinking-stream SSE
 
     try {
         // 构建历史（只取最近 10 条）
@@ -9627,19 +9617,14 @@ async function sendChatMessage() {
                   chat_session_id: _sid }
             );
         } else {
-            // 全局聊天（无项目）— 走全局 API
+            // 全局聊天（无项目）— 走全局流式 API，与项目聊天体验一致
             const _sid = await _ensureChatSession();
-            resp = await originalApi(`/chat`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    message: fullMessage,
-                    history: historyToSend,
-                    images: images.length > 0 ? images : undefined,
-                    session_id: _thinkingSessionId || undefined,
-                    chat_session_id: _sid,
-                }),
-            });
+            resp = await _sendChatStreaming(
+                `/chat/stream`,
+                { message: fullMessage, history: historyToSend,
+                  images: images.length > 0 ? images : undefined,
+                  chat_session_id: _sid }
+            );
         }
 
         if (chatMode !== 'group') {

@@ -504,6 +504,42 @@ class ChatAssistantAgent(BaseAgent):
             "thinking_steps": executor.thinking_steps or None,
         }
 
+    async def chat_global_stream(
+        self,
+        user_message: str,
+        images: Optional[List[str]],
+        history: Optional[List[Dict[str, str]]],
+        projects_brief: List[Dict[str, Any]],
+        session_id: Optional[str] = None,
+    ):
+        """全局聊天流式版：逐步 yield SSE 事件，与 chat_stream 同格式。"""
+        from llm_client import llm_client, set_llm_context, clear_llm_context
+
+        preset_suggestions = self._match_preset_suggestions(user_message)
+        system_prompt = self._build_global_system_prompt(projects_brief, preset_suggestions)
+        messages = self._assemble_messages(history, user_message, images)
+        tools = self._exposed_tool_schemas(scope="global")
+        executor = _ChatToolExecutor(self, project_id=None, session_id=session_id)
+
+        set_llm_context(agent_type=self.agent_type, action="global_chat_stream")
+        try:
+            async for ev in llm_client.chat_with_tools_stream(
+                messages=messages,
+                tools=tools,
+                tool_executor=executor,
+                max_rounds=self.max_react_loop,
+                temperature=0.7,
+                max_tokens=4000,
+                system=system_prompt,
+            ):
+                if ev.get("type") == "message_done":
+                    ev["thinking_steps"] = executor.thinking_steps or []
+                    ev["action"] = executor.primary_action_result
+                    ev["actions"] = executor.all_confirm_results if len(executor.all_confirm_results) > 1 else None
+                yield ev
+        finally:
+            clear_llm_context()
+
     # ==================== 内部工具 ====================
 
     # ==================== 对话历史压缩（借鉴 MagicAI §6.4）====================

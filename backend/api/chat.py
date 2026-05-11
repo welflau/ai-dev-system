@@ -1760,6 +1760,107 @@ class GlobalChatResponse(BaseModel):
     actions: Optional[List[Dict[str, Any]]] = Field(default=None, description="批量操作卡片（文档分析等场景）")
 
 
+@global_chat_router.post("/stream")
+async def global_chat_stream(req: GlobalChatRequest):
+    """全局聊天流式版：text/event-stream，逐 token 推送，与项目聊天流式接口同格式。"""
+    return StreamingResponse(
+        _global_chat_stream_generator(req),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+async def _global_chat_stream_generator(req: GlobalChatRequest):
+    """全局聊天流式生成器。"""
+    from agents.chat_assistant import _TOOL_LABELS_PY
+    import agent_registry as _ar
+
+    registry = _ar.get_registry()
+    if not registry:
+        _ar.discover_agents()
+        registry = _ar.get_registry()
+
+    agent_cls = registry.get("ChatAssistant")
+    if not agent_cls:
+        yield _sse("error", {"message": "ChatAssistant agent 未注册"})
+        return
+
+    agent = agent_cls()
+    _sid = req.chat_session_id or "default"
+    history_list = [{"role": m.role, "content": m.content} for m in (req.history or [])]
+    full_text = ""
+    final_action = None
+    thinking_steps = []
+
+    projects = await db.fetch_all(
+        "SELECT id, name, status, tech_stack, description, created_at "
+        "FROM projects WHERE id != '__global__' ORDER BY created_at DESC LIMIT 20"
+    )
+
+    # 保存用户消息
+    await _save_chat_message("__global__", "user", req.message,
+                             images=req.images, session_id=_sid)
+
+    try:
+        async for ev in agent.chat_global_stream(
+            user_message=req.message,
+            images=req.images,
+            history=history_list,
+            projects_brief=projects,
+            session_id=None,
+        ):
+            etype = ev.get("type", "")
+
+            if etype == "text_delta":
+                full_text += ev["delta"]
+                yield _sse("text_delta", {"delta": ev["delta"]})
+
+            elif etype == "tool_start":
+                label = _TOOL_LABELS_PY.get(ev["tool"], f"🔧 {ev['tool']}")
+                yield _sse("tool_start", {"tool": ev["tool"], "label": label})
+
+            elif etype == "tool_done":
+                summary = ev.get("summary", "")
+                thinking_steps.append({"tool": ev["tool"], "args_hint": "", "summary": summary})
+                yield _sse("tool_done", {"tool": ev["tool"], "summary": summary})
+
+            elif etype == "action":
+                final_action = {k: v for k, v in ev.items() if k != "type"}
+                yield _sse("action", final_action)
+
+            elif etype == "error":
+                yield _sse("error", {"message": ev.get("message", "未知错误")})
+                return
+
+            elif etype == "message_done":
+                thinking_steps = ev.get("thinking_steps") or thinking_steps
+                final_action = final_action or ev.get("action")
+                if not full_text:
+                    full_text = "操作已完成。"
+                try:
+                    await _save_chat_message("__global__", "assistant", full_text,
+                                             action=final_action, session_id=_sid,
+                                             thinking=thinking_steps or None)
+                except Exception as _se:
+                    logger.warning("全局流式消息保存失败: %s", _se)
+                yield _sse("message_done", {"rounds": ev.get("rounds", 1)})
+                return
+
+    except Exception as e:
+        logger.error("全局流式聊天异常: %s", e)
+        yield _sse("error", {"message": str(e)})
+        return
+
+    if not full_text:
+        full_text = "操作已完成。"
+    try:
+        await _save_chat_message("__global__", "assistant", full_text,
+                                 action=final_action, session_id=_sid,
+                                 thinking=thinking_steps or None)
+    except Exception as e:
+        logger.warning("全局流式消息保存失败(兜底): %s", e)
+
+
 @global_chat_router.post("", response_model=GlobalChatResponse)
 async def global_chat_with_ai(req: GlobalChatRequest):
     """全局聊天（项目列表页）— ChatAssistantAgent + tool_use"""
