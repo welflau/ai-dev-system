@@ -1322,6 +1322,14 @@ class TicketOrchestrator:
             agent_start = time.time()
             # v0.19.x 工单面板进度区：写 current_action 字段
             await self._set_ticket_current_action(ticket_id, f"{agent_name}.{action}")
+
+            # 方案A：写 agent_start 思考日志
+            await self._log_agent_thought(
+                project_id, ticket.get("requirement_id"), ticket_id,
+                agent_name, action, "start",
+                title=ticket.get("title", ""),
+            )
+
             try:
                 result = await agent.execute(action, context)
             finally:
@@ -1332,6 +1340,13 @@ class TicketOrchestrator:
                 agent_name, action, agent_elapsed,
                 result.get("status", "?"),
                 len(result.get("files", {})),
+            )
+
+            # 方案A：写 agent_done 思考日志（含产出摘要）
+            await self._log_agent_thought(
+                project_id, ticket.get("requirement_id"), ticket_id,
+                agent_name, action, "done",
+                result=result, elapsed_ms=agent_elapsed,
             )
 
             clear_llm_context()
@@ -3192,6 +3207,56 @@ class TicketOrchestrator:
             })
         except Exception as e:
             logger.debug("_write_memory 失败（忽略）: %s", e)
+
+    async def _log_agent_thought(
+        self,
+        project_id: str,
+        requirement_id: Optional[str],
+        ticket_id: Optional[str],
+        agent_name: str,
+        action: str,
+        phase: str,  # "start" | "done"
+        title: str = "",
+        result: Optional[Dict] = None,
+        elapsed_ms: int = 0,
+    ):
+        """方案A：把 Agent 执行的开始/完成写入 ticket_logs，让操作日志可见思考过程。"""
+        try:
+            if phase == "start":
+                msg = f"[{agent_name}] 开始 {action}"
+                if title:
+                    msg += f"：{title[:60]}"
+            else:
+                # 从 result 提取产出摘要
+                status = (result or {}).get("status", "?")
+                files = (result or {}).get("files") or {}
+                file_list = list(files.keys())[:4]
+                file_summary = ", ".join(f.split("/")[-1] for f in file_list)
+                if len(files) > 4:
+                    file_summary += f" 等 {len(files)} 个文件"
+
+                notes = ""
+                dev_r = (result or {}).get("dev_result") or {}
+                if isinstance(dev_r, dict):
+                    notes = str(dev_r.get("notes") or "")[:60]
+                elif isinstance(result, dict):
+                    notes = str(result.get("notes") or "")[:60]
+
+                parts = [f"[{agent_name}] 完成 {action} ({elapsed_ms}ms) status={status}"]
+                if file_summary:
+                    parts.append(f"产出: {file_summary}")
+                if notes:
+                    parts.append(f"备注: {notes}")
+                msg = " | ".join(parts)
+
+            await self._log(
+                project_id, requirement_id, ticket_id,
+                agent_name, f"thought_{phase}",
+                None, None,
+                msg, "info",
+            )
+        except Exception as e:
+            logger.debug("_log_agent_thought 失败（忽略）: %s", e)
 
     async def _log(
         self,
