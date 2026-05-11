@@ -8167,18 +8167,17 @@ function toggleChatFullscreen() {
     const splitBtn = document.getElementById('chatSplitBtn');
 
     if (_chatFullscreen) {
-        // 确保聊天面板已打开
         if (!chatPanelOpen) toggleChatPanel();
         document.body.classList.add('chat-fullscreen');
         btn.textContent = '⊡';
         btn.title = '退出全屏';
-        splitBtn.style.display = '';
-        _initChatSplitContainer();
+        if (splitBtn) splitBtn.style.display = '';
     } else {
         document.body.classList.remove('chat-fullscreen');
+        document.body.classList.remove('chat-split');
         btn.textContent = '⛶';
         btn.title = '全屏';
-        splitBtn.style.display = 'none';
+        if (splitBtn) splitBtn.style.display = 'none';
         _destroyAllSplitPanes();
     }
 }
@@ -8188,8 +8187,10 @@ function _initChatSplitContainer() {
     if (!container) return;
     container.innerHTML = '';
     _chatSplitPanes = [];
+    // 激活分屏 CSS
+    document.body.classList.add('chat-split');
 
-    // 把主面板内容迁移到第一个分屏格
+    // 第一格：复制主会话历史
     const mainPane = _createSplitPane('main', _currentChatSessionId, true);
     container.appendChild(mainPane.el);
     _chatSplitPanes.push(mainPane);
@@ -8345,6 +8346,10 @@ function _destroyAllSplitPanes() {
     const container = document.getElementById('chatSplitContainer');
     if (container) container.innerHTML = '';
     _chatSplitPanes = [];
+    document.body.classList.remove('chat-split');
+    // 重新显示分屏按钮（下次进全屏可继续分屏）
+    const splitBtn = document.getElementById('chatSplitBtn');
+    if (splitBtn && _chatFullscreen) splitBtn.style.display = '';
 }
 
 function toggleChatPanel() {

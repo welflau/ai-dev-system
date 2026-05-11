@@ -5276,6 +5276,7 @@ body.chat-open .chat-panel {
 }
 
 /* ── 全屏模式 ────────────────────────────────────── */
+/* 隐藏其他区域，只留 chat-panel */
 body.chat-fullscreen .top-bar-left,
 body.chat-fullscreen .top-bar-nav,
 body.chat-fullscreen .top-bar-right .llm-status,
@@ -5283,11 +5284,6 @@ body.chat-fullscreen .top-bar-right .chat-toggle-btn,
 body.chat-fullscreen #projectPage > .project-layout,
 body.chat-fullscreen #projectListPage {
     display: none !important;
-}
-
-body.chat-fullscreen .top-bar {
-    padding: 0 12px;
-    min-height: var(--topbar-height);
 }
 
 body.chat-fullscreen .chat-panel {
@@ -5305,12 +5301,24 @@ body.chat-fullscreen .chat-panel-resize {
     display: none;
 }
 
-/* 全屏分屏容器 */
-#chatSplitContainer {
-    display: flex;
+/* ── 全屏分屏（chat-split 类激活后才生效） ── */
+body.chat-fullscreen.chat-split .chat-panel > .chat-panel-body,
+body.chat-fullscreen.chat-split .chat-panel > .chat-panel-input,
+body.chat-fullscreen.chat-split .chat-panel > .chat-panel-mode-bar,
+body.chat-fullscreen.chat-split .chat-panel > #chatHistoryPanel {
+    display: none !important;
+}
+
+body.chat-fullscreen.chat-split #chatSplitContainer {
+    display: flex !important;
     flex: 1;
     overflow: hidden;
-    gap: 0;
+}
+
+/* 分屏容器布局 */
+#chatSplitContainer {
+    display: none;
+    overflow: hidden;
 }
 
 #chatSplitContainer .chat-split-pane {
@@ -5348,20 +5356,6 @@ body.chat-fullscreen .chat-panel-resize {
 }
 
 .chat-split-pane-close:hover { opacity: 1; color: var(--danger); }
-
-/* 全屏时主面板隐藏头部内容区，由分屏容器接管 */
-body.chat-fullscreen .chat-panel > .chat-panel-header {
-    flex-shrink: 0;
-}
-body.chat-fullscreen .chat-panel > .chat-panel-body,
-body.chat-fullscreen .chat-panel > .chat-panel-input,
-body.chat-fullscreen .chat-panel > .chat-panel-mode-bar,
-body.chat-fullscreen .chat-panel > #chatHistoryPanel {
-    display: none !important;
-}
-body.chat-fullscreen .chat-panel > #chatSplitContainer {
-    display: flex;
-}
 
 .chat-panel-header {
     display: flex;
