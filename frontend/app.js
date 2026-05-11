@@ -12491,13 +12491,33 @@ async function _openSkillMarketplace(scope) {
         <div id="mkt-list" style="flex:1;overflow-y:auto;padding:0 32px 24px;"></div>`;
     document.body.appendChild(page);
 
-    // 加载数据
+    // 加载数据，并用已安装列表做兜底校正
     try {
         const url = scope === 'project'
             ? `/projects/${currentProjectId}/skills/marketplace`
             : '/skills/marketplace';
         const data = await api(url);
         _marketplaceAllSkills = data.skills || [];
+
+        // 兜底：再拉一次已安装列表，补正 installed 字段
+        try {
+            const installedUrl = scope === 'project'
+                ? `/projects/${currentProjectId}/skills`
+                : '/skills';
+            const installedData = await api(installedUrl);
+            const installedSkills = scope === 'project'
+                ? (installedData.skills || []).filter(s => s.source === 'custom' || s.source === 'global')
+                : (installedData.skills || []);
+            // use_skills 目录下的条目在全局列表里 source='marketplace' 或通过 id 匹配
+            const installedIds = new Set(
+                (installedData.skills || []).map(s => s.id)
+            );
+            // 同时，系统级已安装 = use_skills/ 里的（dir_name 和 skill id 相同）
+            _marketplaceAllSkills.forEach(sk => {
+                if (installedIds.has(sk.dir_name)) sk.installed = true;
+            });
+        } catch (_) { /* 兜底失败不影响主流程 */ }
+
         _renderMarketplace();
     } catch (e) {
         document.getElementById('mkt-list').innerHTML =
@@ -12587,8 +12607,10 @@ function _renderMarketplace() {
         const tag = sk.category || '通用';
         const tagHtml = `<span onclick="_setMarketplaceTag('${escapeHtml(tag)}')" style="font-size:10px;padding:1px 7px;border-radius:10px;cursor:pointer;background:var(--bg-elevated);color:var(--text-muted);border:1px solid var(--border);" title="按此 Tag 筛选">${escapeHtml(tag)}</span>`;
         const actionBtn = sk.installed
-            ? `<span style="font-size:11px;padding:3px 10px;border-radius:4px;background:rgba(52,211,88,.15);color:#34d058;white-space:nowrap;">✓ 已安装</span>
-               <button class="btn btn-xs btn-ghost" onclick="_mktUninstall('${escapeHtml(sk.dir_name)}')" style="color:var(--danger);font-size:11px;">移除</button>`
+            ? `<div style="display:flex;align-items:center;gap:6px;">
+                 <span style="font-size:12px;padding:4px 12px;border-radius:6px;background:rgba(52,211,88,.12);color:#34d058;border:1px solid rgba(52,211,88,.3);white-space:nowrap;font-weight:500;">✓ 已安装</span>
+                 <button class="btn btn-xs btn-ghost" onclick="_mktUninstall('${escapeHtml(sk.dir_name)}')" style="color:var(--text-muted);font-size:11px;" title="从系统移除">移除</button>
+               </div>`
             : `<button class="btn btn-sm btn-primary" onclick="_mktInstall('${escapeHtml(sk.dir_name)}', this)" style="font-size:12px;white-space:nowrap;">+ ${installLabel}</button>`;
         return `
         <div style="display:flex;align-items:center;gap:14px;padding:11px 0;border-bottom:1px solid var(--border);">
