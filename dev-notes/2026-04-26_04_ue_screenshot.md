@@ -145,7 +145,7 @@ _save_screenshot_to_chat()
 
 MyFPS `Lvl_FirstPerson` 关卡 Editor Viewport — 棋盘格地板 + 默认玩家角色：
 
-![HighresScreenshot](../backend/chat_images/ue_screenshots/PRJ-20260424-f650c9/HighresScreenshot00003.png)
+![HighresScreenshot](screenshots/20260426_ue_highres_screenshot.png)
 
 ### AI 助手聊天面板截图展示（功能完整效果）
 
