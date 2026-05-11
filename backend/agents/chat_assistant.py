@@ -86,8 +86,11 @@ _TOOL_LABELS_PY: dict = {
 # 全局聊天（项目列表页，无 project_id）下可用的工具白名单。
 # confirm_project：识别新建项目意图
 # search_knowledge / search_ticket_history：全局模式下搜全库（无 project_id 过滤）
-_GLOBAL_CHAT_TOOLS = {"confirm_project", "search_knowledge", "search_ticket_history", "fetch_url", "confirm_save_doc",
-                      "browse_marketplace"}  # 全局聊天也能浏览/安装市场 Skill
+# 仅全局聊天（项目列表页）可用的工具白名单
+_GLOBAL_CHAT_TOOLS = {"confirm_project", "search_knowledge", "search_ticket_history", "fetch_url", "confirm_save_doc"}
+
+# 全局 + 项目两个模式都可用的工具（不受 _GLOBAL_CHAT_TOOLS 排除逻辑影响）
+_CROSS_SCOPE_TOOLS = {"browse_marketplace"}
 
 
 class _ChatToolExecutor:
@@ -302,11 +305,13 @@ class ChatAssistantAgent(BaseAgent):
         for action in self._actions.values():
             if action.name in _INTERNAL_ONLY_ACTIONS:
                 continue
-            if scope == "global" and action.name not in _GLOBAL_CHAT_TOOLS:
-                continue
-            if scope == "project" and action.name in _GLOBAL_CHAT_TOOLS:
-                # confirm_project 不在项目内聊天里暴露——项目里不能再创项目
-                continue
+            # _CROSS_SCOPE_TOOLS：全局和项目都可用，跳过下面的 scope 过滤
+            if action.name not in _CROSS_SCOPE_TOOLS:
+                if scope == "global" and action.name not in _GLOBAL_CHAT_TOOLS:
+                    continue
+                if scope == "project" and action.name in _GLOBAL_CHAT_TOOLS:
+                    # confirm_project 不在项目内聊天里暴露——项目里不能再创项目
+                    continue
             # traits 过滤：action 声明了 available_for_traits 时，按项目 traits 决定是否暴露
             action_traits_cfg = getattr(action, "available_for_traits", None)
             if action_traits_cfg and traits is not None:
