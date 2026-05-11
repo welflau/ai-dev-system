@@ -8156,6 +8156,197 @@ function removeChatDoc(index) {
 /**
  * 切换聊天面板显示/隐藏
  */
+// ==================== 全屏 & 分屏 ====================
+
+let _chatFullscreen = false;
+let _chatSplitPanes = [];   // [{id, sessionId, el}] 额外分屏面板
+
+function toggleChatFullscreen() {
+    _chatFullscreen = !_chatFullscreen;
+    const btn = document.getElementById('chatFullscreenBtn');
+    const splitBtn = document.getElementById('chatSplitBtn');
+
+    if (_chatFullscreen) {
+        // 确保聊天面板已打开
+        if (!chatPanelOpen) toggleChatPanel();
+        document.body.classList.add('chat-fullscreen');
+        btn.textContent = '⊡';
+        btn.title = '退出全屏';
+        splitBtn.style.display = '';
+        _initChatSplitContainer();
+    } else {
+        document.body.classList.remove('chat-fullscreen');
+        btn.textContent = '⛶';
+        btn.title = '全屏';
+        splitBtn.style.display = 'none';
+        _destroyAllSplitPanes();
+    }
+}
+
+function _initChatSplitContainer() {
+    const container = document.getElementById('chatSplitContainer');
+    if (!container) return;
+    container.innerHTML = '';
+    _chatSplitPanes = [];
+
+    // 把主面板内容迁移到第一个分屏格
+    const mainPane = _createSplitPane('main', _currentChatSessionId, true);
+    container.appendChild(mainPane.el);
+    _chatSplitPanes.push(mainPane);
+}
+
+function _createSplitPane(id, sessionId, isMain = false) {
+    const paneId = `split-pane-${id}`;
+    const msgId  = `split-msg-${id}`;
+    const inputId = `split-input-${id}`;
+
+    const el = document.createElement('div');
+    el.className = 'chat-split-pane';
+    el.id = paneId;
+
+    const sessionLabel = isMain ? '主会话' : `分屏 ${_chatSplitPanes.length + 1}`;
+    el.innerHTML = `
+        <div class="chat-split-pane-header">
+            <span style="font-weight:500;color:var(--text);">💬 ${sessionLabel}</span>
+            ${!isMain ? `<span class="chat-split-pane-close" onclick="_closeSplitPane('${id}')" title="关闭">✕</span>` : ''}
+        </div>
+        <div class="chat-messages" id="${msgId}" style="flex:1;overflow-y:auto;"></div>
+        <div class="chat-panel-input" id="${inputId}" style="flex-shrink:0;">
+            <div class="chat-input-wrap">
+                <textarea class="chat-input" placeholder="输入消息…" rows="1"
+                    onkeydown="_splitPaneKeydown(event,'${id}')"
+                    oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,120)+'px'"></textarea>
+                <button class="chat-send-btn" onclick="_splitPaneSend('${id}')">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
+                    </svg>
+                </button>
+            </div>
+        </div>`;
+
+    // 加载历史消息
+    const sid = sessionId || _currentChatSessionId;
+    if (sid) {
+        _loadSplitPaneHistory(msgId, sid);
+    } else {
+        document.getElementById(msgId).innerHTML =
+            '<div class="chat-welcome" style="padding:24px;text-align:center;color:var(--text-muted);">新对话</div>';
+    }
+
+    return { id, sessionId: sid, el, msgId, inputId, isMain };
+}
+
+async function _loadSplitPaneHistory(msgId, sessionId) {
+    const container = document.getElementById(msgId);
+    if (!container) return;
+    container.innerHTML = '<div style="padding:12px;color:var(--text-muted);font-size:12px;">加载中...</div>';
+    try {
+        const base = currentProjectId ? `/projects/${currentProjectId}` : '';
+        const data = await api(`${base}/chat/sessions/${sessionId}/messages`);
+        const messages = data.messages || [];
+        container.innerHTML = '';
+        if (!messages.length) {
+            container.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-muted);font-size:13px;">暂无消息</div>';
+            return;
+        }
+        messages.forEach(msg => appendChatBubble(
+            msg.role, msg.content, msg.created_at,
+            null, msg.images || [], [], msg.thinking || [],
+            container
+        ));
+        container.scrollTop = container.scrollHeight;
+    } catch (e) {
+        container.innerHTML = `<div style="padding:12px;color:var(--danger);font-size:12px;">加载失败: ${escapeHtml(e.message)}</div>`;
+    }
+}
+
+async function _splitPaneSend(paneId) {
+    const pane = _chatSplitPanes.find(p => p.id === paneId);
+    if (!pane) return;
+    const input = pane.el.querySelector('textarea');
+    const text = input?.value.trim();
+    if (!text) return;
+    input.value = '';
+    input.style.height = 'auto';
+
+    const container = document.getElementById(pane.msgId);
+    // 追加用户消息
+    appendChatBubble('user', text, new Date().toISOString(), null, [], [], [], container);
+    container.scrollTop = container.scrollHeight;
+
+    // 追加 loading
+    const loadEl = document.createElement('div');
+    loadEl.style.cssText = 'padding:8px 12px;font-size:12px;color:var(--text-muted);';
+    loadEl.textContent = '思考中…';
+    container.appendChild(loadEl);
+    container.scrollTop = container.scrollHeight;
+
+    try {
+        const base = currentProjectId ? `/projects/${currentProjectId}` : '';
+        const sid = pane.sessionId || _currentChatSessionId;
+        // 重用全局 sendChatMessage 逻辑的简化版
+        const resp = await api(`${base}/chat`, {
+            method: 'POST',
+            body: {
+                message: text,
+                history: [],
+                chat_session_id: sid,
+                project_id: currentProjectId || undefined,
+            }
+        });
+        loadEl.remove();
+        appendChatBubble('assistant', resp.reply || '（无回复）',
+            new Date().toISOString(), null, [], [], [], container);
+        container.scrollTop = container.scrollHeight;
+    } catch (e) {
+        loadEl.textContent = `发送失败: ${e.message}`;
+    }
+}
+
+function _splitPaneKeydown(e, paneId) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        _splitPaneSend(paneId);
+    }
+}
+
+function addChatSplitPane() {
+    if (!_chatFullscreen) return;
+    if (_chatSplitPanes.length >= 3) {
+        showToast('最多支持 3 个分屏', 'warning');
+        return;
+    }
+    const container = document.getElementById('chatSplitContainer');
+    if (!container) return;
+
+    const id = `extra-${Date.now()}`;
+    const pane = _createSplitPane(id, null, false);
+    container.appendChild(pane.el);
+    _chatSplitPanes.push(pane);
+
+    // 超过 3 个隐藏分屏按钮
+    if (_chatSplitPanes.length >= 3) {
+        document.getElementById('chatSplitBtn').style.display = 'none';
+    }
+}
+
+function _closeSplitPane(id) {
+    const idx = _chatSplitPanes.findIndex(p => p.id === id);
+    if (idx === -1) return;
+    const pane = _chatSplitPanes[idx];
+    pane.el.remove();
+    _chatSplitPanes.splice(idx, 1);
+    // 恢复分屏按钮
+    const splitBtn = document.getElementById('chatSplitBtn');
+    if (splitBtn) splitBtn.style.display = '';
+}
+
+function _destroyAllSplitPanes() {
+    const container = document.getElementById('chatSplitContainer');
+    if (container) container.innerHTML = '';
+    _chatSplitPanes = [];
+}
+
 function toggleChatPanel() {
     chatPanelOpen = !chatPanelOpen;
     const panel = document.getElementById('chatPanel');
@@ -9444,10 +9635,10 @@ function _buildConfirmCardHtml(action) {
         </div>`;
 }
 
-function appendChatBubble(role, content, timestamp = null, action = null, images = [], actions = [], thinking = []) {
-    const container = chatMode === 'group'
+function appendChatBubble(role, content, timestamp = null, action = null, images = [], actions = [], thinking = [], _container = null) {
+    const container = _container || (chatMode === 'group'
         ? (document.getElementById('groupChatMessages') || document.getElementById('chatMessages'))
-        : document.getElementById('chatMessages');
+        : document.getElementById('chatMessages'));
     const msgEl = document.createElement('div');
     msgEl.className = `chat-msg ${role}`;
 

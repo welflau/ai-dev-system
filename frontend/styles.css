@@ -5275,6 +5275,94 @@ body.chat-open .chat-panel {
     display: flex;
 }
 
+/* ── 全屏模式 ────────────────────────────────────── */
+body.chat-fullscreen .top-bar-left,
+body.chat-fullscreen .top-bar-nav,
+body.chat-fullscreen .top-bar-right .llm-status,
+body.chat-fullscreen .top-bar-right .chat-toggle-btn,
+body.chat-fullscreen #projectPage > .project-layout,
+body.chat-fullscreen #projectListPage {
+    display: none !important;
+}
+
+body.chat-fullscreen .top-bar {
+    padding: 0 12px;
+    min-height: var(--topbar-height);
+}
+
+body.chat-fullscreen .chat-panel {
+    left: 0;
+    right: 0;
+    width: 100% !important;
+    max-width: 100% !important;
+    top: var(--topbar-height);
+    display: flex;
+    box-shadow: none;
+    border-left: none;
+}
+
+body.chat-fullscreen .chat-panel-resize {
+    display: none;
+}
+
+/* 全屏分屏容器 */
+#chatSplitContainer {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+    gap: 0;
+}
+
+#chatSplitContainer .chat-split-pane {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid var(--border);
+    min-width: 0;
+    overflow: hidden;
+}
+
+#chatSplitContainer .chat-split-pane:last-child {
+    border-right: none;
+}
+
+.chat-split-pane-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 12px;
+    background: var(--bg-elevated);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.chat-split-pane-close {
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 14px;
+    opacity: 0.6;
+    transition: opacity 0.15s;
+}
+
+.chat-split-pane-close:hover { opacity: 1; color: var(--danger); }
+
+/* 全屏时主面板隐藏头部内容区，由分屏容器接管 */
+body.chat-fullscreen .chat-panel > .chat-panel-header {
+    flex-shrink: 0;
+}
+body.chat-fullscreen .chat-panel > .chat-panel-body,
+body.chat-fullscreen .chat-panel > .chat-panel-input,
+body.chat-fullscreen .chat-panel > .chat-panel-mode-bar,
+body.chat-fullscreen .chat-panel > #chatHistoryPanel {
+    display: none !important;
+}
+body.chat-fullscreen .chat-panel > #chatSplitContainer {
+    display: flex;
+}
+
 .chat-panel-header {
     display: flex;
     align-items: center;
