@@ -5301,12 +5301,19 @@ body.chat-fullscreen .chat-panel-resize {
     display: none;
 }
 
-/* 全屏单屏：消息区和输入框限宽居中（用 padding 方案，兼容性最好）*/
-body.chat-fullscreen:not(.chat-split) .chat-panel-body,
-body.chat-fullscreen:not(.chat-split) .chat-panel-input {
+/* 全屏：始终给主面板 body 和 input 加限宽居中 padding */
+body.chat-fullscreen .chat-panel > .chat-panel-body,
+body.chat-fullscreen .chat-panel > .chat-panel-input {
     padding-left:  max(16px, calc((100% - 860px) / 2));
     padding-right: max(16px, calc((100% - 860px) / 2));
     box-sizing: border-box;
+}
+
+/* 分屏激活时取消 padding（body/input 被隐藏，但加上保险） */
+body.chat-fullscreen.chat-split .chat-panel > .chat-panel-body,
+body.chat-fullscreen.chat-split .chat-panel > .chat-panel-input {
+    padding-left: 0;
+    padding-right: 0;
 }
 
 /* ── 全屏分屏（chat-split 类激活后才生效） ── */
