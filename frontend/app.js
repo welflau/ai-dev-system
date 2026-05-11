@@ -12403,171 +12403,189 @@ async function resetGlobalSkill(skillId) {
     }
 }
 
-async function showProjectSkillMarketplace() {
+// ==================== Skill 市场（全页面版）====================
+
+let _marketplaceAllSkills = [];   // 全量缓存
+let _marketplaceScope = 'system'; // 'system' | 'project'
+let _marketplaceActiveCategory = '全部';
+
+function showSkillMarketplace() { _openSkillMarketplace('system'); }
+function showProjectSkillMarketplace() {
     if (!currentProjectId) { showToast('请先进入项目', 'error'); return; }
-    const modalId = 'projectSkillMarketplaceModal';
-    let modal = document.getElementById(modalId);
-    if (modal) { modal.remove(); return; }
-
-    modal = document.createElement('div');
-    modal.id = modalId;
-    modal.className = 'modal-overlay active';
-    modal.innerHTML = `
-        <div class="modal modal-lg" style="max-width:780px;">
-            <div class="modal-header">
-                <h3>🛒 项目 Skill 市场</h3>
-                <button class="btn-icon" onclick="document.getElementById('${modalId}').remove()">&times;</button>
-            </div>
-            <div class="modal-body">
-                <p style="font-size:12px;color:var(--text-muted);margin-bottom:14px;">
-                    选择 Skill 安装到项目 <code>.Agent/skills/</code> 目录。
-                    AI 助手对话时可自动加载，也可通过对话说「帮我安装 xxx」来管理。
-                </p>
-                <div id="projectMarketplaceSkillList"><div class="empty-state-sm">加载中...</div></div>
-            </div>
-            <div class="modal-footer" style="padding:12px 20px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;">
-                <button class="btn btn-ghost" onclick="document.getElementById('${modalId}').remove()">关闭</button>
-            </div>
-        </div>`;
-    document.body.appendChild(modal);
-    modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
-    await _loadProjectMarketplaceList();
+    _openSkillMarketplace('project');
 }
 
-async function _loadProjectMarketplaceList() {
-    const listEl = document.getElementById('projectMarketplaceSkillList');
-    if (!listEl || !currentProjectId) return;
+async function _openSkillMarketplace(scope) {
+    _marketplaceScope = scope;
+    _marketplaceActiveCategory = '全部';
+
+    const pageId = 'skillMarketplacePage';
+    let page = document.getElementById(pageId);
+    if (page) { page.remove(); return; }
+
+    page = document.createElement('div');
+    page.id = pageId;
+    page.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;z-index:10000;background:var(--bg);display:flex;flex-direction:column;overflow:hidden;';
+    page.innerHTML = `
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 32px;border-bottom:1px solid var(--border);flex-shrink:0;">
+            <div>
+                <h2 style="margin:0;font-size:20px;">🛒 Skill 市场</h2>
+                <p id="mkt-subtitle" style="margin:2px 0 0;font-size:12px;color:var(--text-muted);">加载中...</p>
+            </div>
+            <button class="btn-icon" onclick="document.getElementById('skillMarketplacePage').remove()" style="font-size:20px;">&times;</button>
+        </div>
+        <!-- 分类标签 -->
+        <div id="mkt-categories" style="display:flex;gap:8px;padding:12px 32px;border-bottom:1px solid var(--border);flex-shrink:0;overflow-x:auto;white-space:nowrap;">
+            <div class="empty-state-sm" style="font-size:12px;">加载中...</div>
+        </div>
+        <!-- 搜索框 -->
+        <div style="padding:12px 32px;flex-shrink:0;">
+            <div style="position:relative;max-width:600px;">
+                <svg style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--text-muted);" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                <input id="mkt-search" type="text" placeholder="搜索 Skill 名称或描述..."
+                    oninput="_filterMarketplace()"
+                    style="width:100%;padding:8px 12px 8px 32px;border:1px solid var(--border);border-radius:8px;background:var(--bg-elevated);color:var(--text);font-size:13px;box-sizing:border-box;">
+            </div>
+        </div>
+        <!-- Skill 列表 -->
+        <div id="mkt-list" style="flex:1;overflow-y:auto;padding:0 32px 24px;"></div>`;
+    document.body.appendChild(page);
+
+    // 加载数据
     try {
-        const data = await api(`/projects/${currentProjectId}/skills/marketplace`);
-        const skills = data.skills || [];
-        if (!skills.length) {
-            listEl.innerHTML = '<div class="empty-state-sm">marketplace/ 目录下暂无 Skill，复制 Skill 文件夹后刷新</div>';
-            return;
-        }
-        listEl.innerHTML = skills.map(sk => `
-            <div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border);">
-                <div style="flex:1;min-width:0;">
-                    <div style="font-weight:500;font-size:13px;">${escapeHtml(sk.name)}</div>
-                    <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">${escapeHtml(sk.description || sk.dir_name)}</div>
-                </div>
-                ${sk.installed
-                    ? `<span style="font-size:11px;padding:2px 8px;border-radius:4px;background:rgba(52,211,88,.15);color:#34d058;">✓ 已安装</span>
-                       <button class="btn btn-xs btn-ghost" onclick="uninstallProjectMarketplaceSkill('${sk.dir_name}')" style="font-size:11px;color:var(--danger);">移除</button>`
-                    : `<button class="btn btn-sm btn-primary" onclick="installProjectMarketplaceSkill('${sk.dir_name}', this)" style="font-size:12px;">+ 添加到项目</button>`
-                }
-            </div>`).join('');
+        const url = scope === 'project'
+            ? `/projects/${currentProjectId}/skills/marketplace`
+            : '/skills/marketplace';
+        const data = await api(url);
+        _marketplaceAllSkills = data.skills || [];
+        _renderMarketplace();
     } catch (e) {
-        listEl.innerHTML = `<div class="empty-state-sm" style="color:var(--danger)">加载失败: ${e.message}</div>`;
+        document.getElementById('mkt-list').innerHTML =
+            `<div class="empty-state-sm" style="color:var(--danger);padding:40px 0;">加载失败: ${escapeHtml(e.message)}</div>`;
     }
 }
 
-async function installProjectMarketplaceSkill(dirName, btn) {
-    if (!currentProjectId) return;
-    if (btn) { btn.disabled = true; btn.textContent = '安装中…'; }
-    try {
-        await api(`/projects/${currentProjectId}/skills/marketplace/${encodeURIComponent(dirName)}/install`, { method: 'POST' });
-        showToast(`已为项目安装 Skill: ${dirName}`, 'success');
-        await _loadProjectMarketplaceList();
-        loadProjectSkills();
-    } catch (e) {
-        showToast(`安装失败: ${e.message}`, 'error');
-        if (btn) { btn.disabled = false; btn.textContent = '+ 添加到项目'; }
+function _renderMarketplace() {
+    const allSkills = _marketplaceAllSkills;
+    const search = (document.getElementById('mkt-search')?.value || '').toLowerCase();
+    const cat = _marketplaceActiveCategory;
+
+    // 提取所有分类（去重，排序）
+    const cats = ['全部', ...new Set(allSkills.map(s => s.category || '通用').filter(Boolean)).values()].sort((a, b) => a === '全部' ? -1 : b === '全部' ? 1 : a.localeCompare(b));
+
+    // 渲染分类标签
+    const catEl = document.getElementById('mkt-categories');
+    if (catEl) {
+        catEl.innerHTML = cats.map(c => `
+            <button onclick="_setMarketplaceCategory('${escapeHtml(c)}')"
+                style="padding:5px 14px;border-radius:20px;font-size:12px;cursor:pointer;white-space:nowrap;flex-shrink:0;
+                       border:1px solid ${c === cat ? 'var(--primary)' : 'var(--border)'};
+                       background:${c === cat ? 'var(--primary)' : 'var(--bg-elevated)'};
+                       color:${c === cat ? '#fff' : 'var(--text-muted)'};">
+                ${escapeHtml(c)}
+            </button>`).join('');
     }
-}
 
-async function uninstallProjectMarketplaceSkill(dirName) {
-    if (!currentProjectId || !confirm(`确认从项目移除 Skill「${dirName}」？`)) return;
-    try {
-        await api(`/projects/${currentProjectId}/skills/use/${encodeURIComponent(dirName)}`, { method: 'DELETE' });
-        showToast(`已移除 Skill: ${dirName}`, 'success');
-        await _loadProjectMarketplaceList();
-        loadProjectSkills();
-    } catch (e) {
-        showToast(`移除失败: ${e.message}`, 'error');
-    }
-}
+    // 过滤
+    const filtered = allSkills.filter(sk => {
+        const matchCat = cat === '全部' || (sk.category || '通用') === cat;
+        const matchSearch = !search ||
+            (sk.name || '').toLowerCase().includes(search) ||
+            (sk.description || '').toLowerCase().includes(search) ||
+            (sk.dir_name || '').toLowerCase().includes(search);
+        return matchCat && matchSearch;
+    });
 
-async function showSkillMarketplace() {
-    const modalId = 'skillMarketplaceModal';
-    let modal = document.getElementById(modalId);
-    if (modal) { modal.remove(); return; }
+    // 副标题
+    const subtitle = document.getElementById('mkt-subtitle');
+    if (subtitle) subtitle.textContent = `共 ${allSkills.length} 个 Skill · 显示 ${filtered.length} 个${_marketplaceScope === 'project' ? ' · 安装到项目' : ' · 安装到系统'}`;
 
-    modal = document.createElement('div');
-    modal.id = modalId;
-    modal.className = 'modal-overlay active';
-    modal.innerHTML = `
-        <div class="modal modal-lg" style="max-width:780px;">
-            <div class="modal-header">
-                <h3>🛒 Skill 市场</h3>
-                <button class="btn-icon" onclick="document.getElementById('${modalId}').remove()">&times;</button>
-            </div>
-            <div class="modal-body">
-                <p style="font-size:12px;color:var(--text-muted);margin-bottom:14px;">
-                    将 Skill 文件夹放入 <code>backend/skills/marketplace/</code>，即可在此选择安装到系统。
-                    已安装的 Skill 会出现在 Skills 配置中供 AI 按需加载。
-                </p>
-                <div id="marketplaceSkillList"><div class="empty-state-sm">加载中...</div></div>
-            </div>
-            <div class="modal-footer" style="padding:12px 20px;border-top:1px solid var(--border);display:flex;justify-content:flex-end;">
-                <button class="btn btn-ghost" onclick="document.getElementById('${modalId}').remove()">关闭</button>
-            </div>
-        </div>`;
-    document.body.appendChild(modal);
-    modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
-    await _loadMarketplaceList();
-}
-
-async function _loadMarketplaceList() {
-    const listEl = document.getElementById('marketplaceSkillList');
+    // 渲染列表
+    const listEl = document.getElementById('mkt-list');
     if (!listEl) return;
-    try {
-        const data = await api('/skills/marketplace');
-        const skills = data.skills || [];
-        if (!skills.length) {
-            listEl.innerHTML = '<div class="empty-state-sm">marketplace/ 目录下暂无 Skill，复制 Skill 文件夹后刷新</div>';
-            return;
-        }
-        listEl.innerHTML = skills.map(sk => `
-            <div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border);">
-                <div style="flex:1;min-width:0;">
-                    <div style="font-weight:500;font-size:13px;">${escapeHtml(sk.name)}</div>
-                    <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">${escapeHtml(sk.description || sk.dir_name)}</div>
-                </div>
-                ${sk.installed
-                    ? `<span style="font-size:11px;padding:2px 8px;border-radius:4px;background:rgba(52,211,88,.15);color:#34d058;">✓ 已安装</span>
-                       <button class="btn btn-xs btn-ghost" onclick="uninstallMarketplaceSkill('${sk.dir_name}', true)" style="font-size:11px;color:var(--danger);">移除</button>`
-                    : `<button class="btn btn-sm btn-primary" onclick="installMarketplaceSkill('${sk.dir_name}', this)" style="font-size:12px;">+ 添加到系统</button>`
-                }
-            </div>`).join('');
-    } catch (e) {
-        listEl.innerHTML = `<div class="empty-state-sm" style="color:var(--danger)">加载失败: ${e.message}</div>`;
+    if (!filtered.length) {
+        listEl.innerHTML = '<div class="empty-state-sm" style="padding:40px 0;">没有匹配的 Skill</div>';
+        return;
     }
+
+    listEl.innerHTML = filtered.map(sk => {
+        const initial = (sk.name || sk.dir_name || '?')[0].toUpperCase();
+        const colors = ['#6366f1','#8b5cf6','#06b6d4','#10b981','#f59e0b','#ef4444','#ec4899','#3b82f6'];
+        const color = colors[(sk.dir_name || '').charCodeAt(0) % colors.length];
+        const actionBtn = sk.installed
+            ? `<span style="font-size:11px;padding:3px 10px;border-radius:4px;background:rgba(52,211,88,.15);color:#34d058;white-space:nowrap;">✓ 已安装</span>
+               <button class="btn btn-xs btn-ghost" onclick="_mktUninstall('${escapeHtml(sk.dir_name)}')" style="color:var(--danger);font-size:11px;">移除</button>`
+            : `<button class="btn btn-sm btn-primary" onclick="_mktInstall('${escapeHtml(sk.dir_name)}', this)" style="font-size:12px;white-space:nowrap;">+ ${_marketplaceScope === 'project' ? '添加到项目' : '添加到系统'}</button>`;
+        return `
+        <div style="display:flex;align-items:center;gap:14px;padding:12px 0;border-bottom:1px solid var(--border);">
+            <div style="width:38px;height:38px;border-radius:8px;background:${color}22;color:${color};display:flex;align-items:center;justify-content:center;font-weight:700;font-size:16px;flex-shrink:0;">${initial}</div>
+            <div style="flex:1;min-width:0;">
+                <div style="display:flex;align-items:center;gap:6px;">
+                    <span style="font-weight:500;font-size:13px;">${escapeHtml(sk.name || sk.dir_name)}</span>
+                    <span style="font-size:10px;padding:1px 6px;border-radius:3px;background:var(--bg-elevated);color:var(--text-muted);">${escapeHtml(sk.category || '通用')}</span>
+                </div>
+                <div style="font-size:12px;color:var(--text-muted);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:600px;">${escapeHtml((sk.description || sk.dir_name).slice(0, 120))}</div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">${actionBtn}</div>
+        </div>`;
+    }).join('');
 }
 
-async function installMarketplaceSkill(dirName, btn) {
+function _setMarketplaceCategory(cat) {
+    _marketplaceActiveCategory = cat;
+    _renderMarketplace();
+}
+
+function _filterMarketplace() {
+    _renderMarketplace();
+}
+
+async function _mktInstall(dirName, btn) {
     if (btn) { btn.disabled = true; btn.textContent = '安装中…'; }
     try {
-        await api(`/skills/marketplace/${encodeURIComponent(dirName)}/install`, { method: 'POST' });
-        showToast(`已安装 Skill: ${dirName}`, 'success');
-        await _loadMarketplaceList();
-        loadGlobalSkills();
+        if (_marketplaceScope === 'project' && currentProjectId) {
+            await api(`/projects/${currentProjectId}/skills/marketplace/${encodeURIComponent(dirName)}/install`, { method: 'POST' });
+            showToast(`已为项目安装 Skill: ${dirName}`, 'success');
+            loadProjectSkills();
+        } else {
+            await api(`/skills/marketplace/${encodeURIComponent(dirName)}/install`, { method: 'POST' });
+            showToast(`已安装 Skill: ${dirName}`, 'success');
+            loadGlobalSkills();
+        }
+        // 更新本地缓存
+        const sk = _marketplaceAllSkills.find(s => s.dir_name === dirName);
+        if (sk) sk.installed = true;
+        _renderMarketplace();
     } catch (e) {
         showToast(`安装失败: ${e.message}`, 'error');
-        if (btn) { btn.disabled = false; btn.textContent = '+ 添加到系统'; }
+        if (btn) { btn.disabled = false; btn.textContent = `+ ${_marketplaceScope === 'project' ? '添加到项目' : '添加到系统'}`; }
     }
 }
 
-async function uninstallMarketplaceSkill(dirName, fromMarketPanel = false) {
-    if (!confirm(`确认从系统移除 Skill「${dirName}」？`)) return;
+async function _mktUninstall(dirName) {
+    if (!confirm(`确认移除 Skill「${dirName}」？`)) return;
     try {
-        await api(`/skills/use/${encodeURIComponent(dirName)}`, { method: 'DELETE' });
+        if (_marketplaceScope === 'project' && currentProjectId) {
+            await api(`/projects/${currentProjectId}/skills/use/${encodeURIComponent(dirName)}`, { method: 'DELETE' });
+            loadProjectSkills();
+        } else {
+            await api(`/skills/use/${encodeURIComponent(dirName)}`, { method: 'DELETE' });
+            loadGlobalSkills();
+        }
         showToast(`已移除 Skill: ${dirName}`, 'success');
-        if (fromMarketPanel) await _loadMarketplaceList();
-        loadGlobalSkills();
+        const sk = _marketplaceAllSkills.find(s => s.dir_name === dirName);
+        if (sk) sk.installed = false;
+        _renderMarketplace();
     } catch (e) {
         showToast(`移除失败: ${e.message}`, 'error');
     }
 }
+
+// 兼容旧调用
+async function installMarketplaceSkill(dirName, btn) { await _mktInstall(dirName, btn); }
+async function uninstallMarketplaceSkill(dirName) { await _mktUninstall(dirName); }
+async function installProjectMarketplaceSkill(dirName, btn) { await _mktInstall(dirName, btn); }
+async function uninstallProjectMarketplaceSkill(dirName) { await _mktUninstall(dirName); }
 
 // ==================== 知识库管理 ====================
 

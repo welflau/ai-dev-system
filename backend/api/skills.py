@@ -27,6 +27,10 @@ router = APIRouter(tags=["skills"])
 
 # ── 全局 Skill 配置 ──────────────────────────────────────────────────────────
 
+@router.get("/api/skills/ping")
+async def skills_ping():
+    return {"pong": True, "has_marketplace": True}
+
 @router.get("/api/skills")
 async def list_global_skills():
     """返回所有 Skill 的状态（skills.json + global_skill_settings DB 覆盖后的最终值）"""
@@ -106,22 +110,51 @@ _MARKETPLACE_DIR = Path(__file__).parent.parent / "skills" / "marketplace"
 _USE_SKILLS_DIR  = Path(__file__).parent.parent / "skills" / "use_skills"
 
 
+_SKIP_DIR_PREFIXES = ("download_", ".")  # 过滤临时下载目录和隐藏目录
+
+
 def _iter_marketplace_skills(base_dir: Path):
-    """递归扫描 marketplace 目录，返回所有包含 SKILL.md 的目录（支持多层子文件夹）。"""
+    """递归扫描 marketplace 目录，返回所有包含 SKILL.md 的目录。
+    自动跳过 download_* 等临时目录。
+    """
     for skill_md in sorted(base_dir.rglob("SKILL.md")):
+        # 跳过路径中含临时目录的 Skill
+        parts = skill_md.relative_to(base_dir).parts
+        if any(p.startswith(_SKIP_DIR_PREFIXES) for p in parts):
+            continue
         yield skill_md.parent
 
 
 def _find_marketplace_skill(dir_name: str) -> Path | None:
-    """在 marketplace 目录中递归查找指定 dir_name 的 Skill 目录（跨子文件夹）。"""
+    """在 marketplace 目录中递归查找指定 dir_name 的 Skill 目录。"""
     for skill_dir in _iter_marketplace_skills(_MARKETPLACE_DIR):
         if skill_dir.name == dir_name:
             return skill_dir
     return None
 
 
+def _get_skill_category(skill_dir: Path, base_dir: Path) -> str:
+    """从目录结构推导 Skill 分类。
+    规则：
+    - {base}/cb_teams_marketplace/plugins/{plugin}/skills/{skill} → 分类 = plugin
+    - {base}/{category}/{skill} → 分类 = category
+    - {base}/{skill} → 分类 = "通用"
+    """
+    try:
+        parts = skill_dir.relative_to(base_dir).parts
+        if len(parts) >= 4 and "plugins" in parts:
+            idx = list(parts).index("plugins")
+            if idx + 1 < len(parts):
+                return parts[idx + 1]
+        if len(parts) >= 2:
+            return parts[0]
+    except Exception:
+        pass
+    return "通用"
+
+
 def _parse_skill_meta(skill_md: Path) -> dict:
-    """从 SKILL.md frontmatter 提取 name / description。"""
+    """从 SKILL.md frontmatter 提取 name / description / category。"""
     try:
         text = skill_md.read_text(encoding="utf-8")
         import re as _re
@@ -131,11 +164,12 @@ def _parse_skill_meta(skill_md: Path) -> dict:
             fm = _yaml.safe_load(m.group(1)) or {}
             return {
                 "name": fm.get("name") or skill_md.parent.name,
-                "description": (fm.get("description") or "")[:200],
+                "description": (fm.get("description") or "")[:300],
+                "category": fm.get("category", ""),
             }
     except Exception:
         pass
-    return {"name": skill_md.parent.name, "description": ""}
+    return {"name": skill_md.parent.name, "description": "", "category": ""}
 
 
 @router.get("/api/skills/marketplace")
@@ -151,10 +185,15 @@ async def list_marketplace_skills():
     for skill_dir in _iter_marketplace_skills(_MARKETPLACE_DIR):
         skill_md = skill_dir / "SKILL.md"
         meta = _parse_skill_meta(skill_md)
+        # 优先用目录结构推导分类，frontmatter category 作补充
+        category = _get_skill_category(skill_dir, _MARKETPLACE_DIR)
+        if not category or category == "通用":
+            category = meta.get("category") or "通用"
         skills.append({
             "dir_name": skill_dir.name,
             "name": meta["name"],
             "description": meta["description"],
+            "category": category,
             "installed": skill_dir.name in installed,
         })
     return {"skills": skills}
@@ -233,10 +272,14 @@ async def list_project_marketplace_skills(project_id: str):
     for skill_dir in _iter_marketplace_skills(_MARKETPLACE_DIR):
         skill_md = skill_dir / "SKILL.md"
         meta = _parse_skill_meta(skill_md)
+        category = _get_skill_category(skill_dir, _MARKETPLACE_DIR)
+        if not category or category == "通用":
+            category = meta.get("category") or "通用"
         skills.append({
             "dir_name": skill_dir.name,
             "name": meta["name"],
             "description": meta["description"],
+            "category": category,
             "installed": skill_dir.name in installed,
         })
     return {"skills": skills, "project_id": project_id}
