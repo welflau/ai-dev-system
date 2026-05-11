@@ -8305,21 +8305,22 @@ async function _splitPaneSend(paneId) {
 
     try {
         const base = currentProjectId ? `/projects/${currentProjectId}` : '';
-        // 非主格不继承主会话 session，各自独立（sid=null 时后端自动新建）
-        const sid = pane.sessionId || null;
+        // 若还没有 session（极端情况），临时创建一个
+        if (!pane.sessionId) {
+            try {
+                const s = await api(`${_sessionApiBase()}/sessions`, { method: 'POST', body: {} });
+                pane.sessionId = s.id;
+            } catch (_) {}
+        }
         const resp = await api(`${base}/chat`, {
             method: 'POST',
             body: {
                 message: text,
                 history: [],
-                ...(sid ? { chat_session_id: sid } : {}),
+                chat_session_id: pane.sessionId,
                 project_id: currentProjectId || undefined,
             }
         });
-        // 后端返回的 session_id 保存到 pane，保持会话连续
-        if (resp.session_id && !pane.sessionId) {
-            pane.sessionId = resp.session_id;
-        }
         loadEl.remove();
         appendChatBubble('assistant', resp.reply || '（无回复）',
             new Date().toISOString(), null, [], [], [], container);
@@ -8350,13 +8351,21 @@ function addChatSplitPane() {
         _initChatSplitContainer();  // 创建主格 + 激活 body.chat-split
     }
 
-    // 再追加一个新会话格
+    // 再追加一个新会话格，先创建独立 session
     const id = `extra-${Date.now()}`;
-    const pane = _createSplitPane(id, null, false);
-    container.appendChild(pane.el);  // 先进 DOM
+    let newSessionId = null;
+    try {
+        const data = await api(`${_sessionApiBase()}/sessions`, { method: 'POST', body: {} });
+        newSessionId = data.id;
+    } catch (e) {
+        console.warn('[split] 新建 session 失败:', e);
+    }
+
+    const pane = _createSplitPane(id, newSessionId, false);
+    container.appendChild(pane.el);
     _chatSplitPanes.push(pane);
     _focusSplitPane(id);
-    // 新格没有 session，显示欢迎语
+
     const msgEl = document.getElementById(pane.msgId);
     if (msgEl) msgEl.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-muted);font-size:13px;">💬 新对话<br><small>输入消息开始聊天</small></div>';
 
