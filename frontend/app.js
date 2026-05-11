@@ -8180,6 +8180,8 @@ function toggleChatFullscreen() {
         btn.title = '全屏';
         if (splitBtn) splitBtn.style.display = 'none';
         _destroyAllSplitPanes();
+        // 恢复主面板显示原来的会话（不受分屏影响）
+        setTimeout(() => loadChatHistory(), 100);
     }
 }
 
@@ -8251,7 +8253,8 @@ function _createSplitPane(id, sessionId, isMain = false) {
         </div>`;
 
     // 注意：历史加载在 el 进入 DOM 之后才调用（由调用方负责）
-    const sid = sessionId || _currentChatSessionId;
+    // 非主格（isMain=false）不继承主会话，sid 保持 null，各自独立
+    const sid = isMain ? (sessionId || _currentChatSessionId) : sessionId;
     return { id, sessionId: sid, el, msgId, inputId, isMain };
 }
 
@@ -8302,17 +8305,21 @@ async function _splitPaneSend(paneId) {
 
     try {
         const base = currentProjectId ? `/projects/${currentProjectId}` : '';
-        const sid = pane.sessionId || _currentChatSessionId;
-        // 重用全局 sendChatMessage 逻辑的简化版
+        // 非主格不继承主会话 session，各自独立（sid=null 时后端自动新建）
+        const sid = pane.sessionId || null;
         const resp = await api(`${base}/chat`, {
             method: 'POST',
             body: {
                 message: text,
                 history: [],
-                chat_session_id: sid,
+                ...(sid ? { chat_session_id: sid } : {}),
                 project_id: currentProjectId || undefined,
             }
         });
+        // 后端返回的 session_id 保存到 pane，保持会话连续
+        if (resp.session_id && !pane.sessionId) {
+            pane.sessionId = resp.session_id;
+        }
         loadEl.remove();
         appendChatBubble('assistant', resp.reply || '（无回复）',
             new Date().toISOString(), null, [], [], [], container);
