@@ -12410,7 +12410,7 @@ let _marketplaceScope = 'system';
 let _marketplaceActiveCategory = '全部';
 let _marketplaceActiveTag = '';   // 空字符串 = 不按 Tag 过滤
 
-// Tag（细粒度分类）→ 大分类 映射
+// Tag（细粒度分类）→ 大分类 映射（全量覆盖所有已知 Tag）
 const _MKT_CATEGORY_MAP = {
     // 金融投资
     'a-share-analysis':'金融投资','equity-research':'金融投资','finance':'金融投资',
@@ -12421,21 +12421,26 @@ const _MKT_CATEGORY_MAP = {
     'design-to-code':'开发工具','modern-webapp':'开发工具','webapp-testing':'开发工具',
     'dockerfile-gen':'开发工具','agent-sdk-dev':'开发工具','cloudbase':'开发工具',
     'codebuddy-chat-web':'开发工具','codebuddy-md-management':'开发工具',
-    'ardot-design-generator':'开发工具',
+    'ardot-design-generator':'开发工具','plugin-dev':'开发工具','testbuddy':'开发工具',
+    'playwright-cli':'开发工具','hookify':'开发工具','security-rules':'开发工具',
+    'skills-security-check':'开发工具','tmap-lbs-plugin':'开发工具','agent-browser':'开发工具',
     // 数据分析
     'data':'数据分析','data-analysis':'数据分析','deep-research':'数据分析',
-    // 游戏引擎
-    'godot-mcp':'游戏引擎',
+    // 游戏
+    'godot-mcp':'游戏',
     // 内容创作
-    'document-skills':'内容创作','ppt-implement':'内容创作','product-management':'内容创作',
+    'document-skills':'内容创作','ppt-implement':'内容创作','ppt-writer':'内容创作',
     'internal-comms':'内容创作','executing-marketing-campaigns':'内容创作',
-    'remotion-video-generator':'内容创作',
+    'remotion-video-generator':'内容创作','tencent-docs':'内容创作','pdf':'内容创作',
+    // 效率提升
+    'product-management':'效率提升','magicai-hub':'效率提升',
+    'lexiang-knowledge-plugins':'效率提升',
     // AI智能
     'general-skills':'AI智能','hot-skills':'AI智能','oh-my-codebuddy':'AI智能',
     'codebuddy-plugins-official':'AI智能','cb_teams_marketplace':'AI智能',
-    'find-skills':'AI智能','skill-creator':'AI智能',
+    'find-skills':'AI智能','skill-creator':'AI智能','plugin-finder':'AI智能',
 };
-const _MKT_BROAD_CATS = ['全部','金融投资','开发工具','数据分析','AI智能','内容创作','游戏引擎','通用'];
+const _MKT_BROAD_CATS = ['全部','AI智能','金融投资','开发工具','数据分析','内容创作','效率提升','游戏','通用'];
 
 function _getBroadCategory(tag) {
     return _MKT_CATEGORY_MAP[tag] || '通用';
@@ -12534,7 +12539,7 @@ function _renderMarketplace() {
         const tagCounts = {};
         tagsInCat.forEach(t => { tagCounts[t] = (tagCounts[t] || 0) + 1; });
         const sortedTags = Object.entries(tagCounts).sort((a, b) => b[1] - a[1]).map(e => e[0]);
-        if (sortedTags.length <= 1) {
+        if (sortedTags.length === 0) {
             tagEl.innerHTML = '';
         } else {
             tagEl.innerHTML = sortedTags.map(t => {
