@@ -8198,12 +8198,12 @@ function _initChatSplitContainer() {
     _chatSplitPanes.push(mainPane);
     _focusSplitPane('main');
 
-    // 进 DOM 后再加载历史
-    if (mainPane.sessionId) {
-        _loadSplitPaneHistory(mainPane.msgId, mainPane.sessionId);
-    } else {
-        const el = document.getElementById(mainPane.msgId);
-        if (el) el.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-muted);font-size:13px;">暂无消息</div>';
+    // 直接克隆现有主面板消息（不重新请求 API，保证内容一致）
+    const srcMessages = document.getElementById('chatMessages');
+    const dstMessages = document.getElementById(mainPane.msgId);
+    if (srcMessages && dstMessages) {
+        dstMessages.innerHTML = srcMessages.innerHTML;
+        requestAnimationFrame(() => { dstMessages.scrollTop = dstMessages.scrollHeight; });
     }
 
     requestAnimationFrame(_setSplitContainerHeight);
