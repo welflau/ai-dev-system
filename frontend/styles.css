@@ -5301,6 +5301,25 @@ body.chat-fullscreen .chat-panel-resize {
     display: none;
 }
 
+/* 全屏单屏：消息区限宽居中，适合阅读 */
+body.chat-fullscreen:not(.chat-split) .chat-panel-body {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    overflow-y: auto;
+}
+
+body.chat-fullscreen:not(.chat-split) .chat-messages {
+    width: 100%;
+    max-width: 860px;
+}
+
+body.chat-fullscreen:not(.chat-split) .chat-panel-input {
+    width: 100%;
+    max-width: 860px;
+    align-self: center;
+}
+
 /* ── 全屏分屏（chat-split 类激活后才生效） ── */
 body.chat-fullscreen.chat-split .chat-panel > .chat-panel-body,
 body.chat-fullscreen.chat-split .chat-panel > .chat-panel-input,
