@@ -8972,7 +8972,8 @@ async function _sendChatStreaming(url, body) {
                 } else if (eventName === 'tool_start') {
                     // 状态文字：正在调用工具
                     if (_typingBubble) _typingBubble.innerHTML = `<span class="chat-typing-text">正在调用工具…</span>`;
-                    _chatThinkingAppend({ step: 'start', tool: data.tool, args_hint: data.label || '' });
+                    const _hint = _extractArgsHint(data.tool, data.input);
+                    _chatThinkingAppend({ step: 'start', tool: data.tool, args_hint: _hint });
 
                 } else if (eventName === 'tool_done') {
                     _chatThinkingAppend({ step: 'done', tool: data.tool, summary: data.summary || '' });
@@ -9359,6 +9360,29 @@ function appendToTicketFeed(logData) {
 }
 
 // ==================== 思考面板 ====================
+
+// tool_input 中哪个字段最能代表「在做什么」
+const _TOOL_INPUT_KEY = {
+    search_knowledge: 'query', search_ticket_history: 'query',
+    fetch_url: 'url', git_read_file: 'path', git_log: 'branch',
+    git_switch_branch: 'branch', generate_document: 'filename',
+    confirm_save_doc: 'filename', confirm_requirement: 'title',
+    confirm_bug: 'title', load_skill: 'skill_id',
+    read_local_file: 'path', ue_call: 'function',
+    get_requirement_pipeline: 'requirement_id',
+    get_ticket_status: 'ticket_id',
+    get_requirement_logs: 'requirement_id',
+    install_project_skill: 'dir_name',
+};
+
+function _extractArgsHint(toolName, input) {
+    if (!input) return '';
+    const key = _TOOL_INPUT_KEY[toolName];
+    if (key && input[key]) return String(input[key]).slice(0, 60);
+    // fallback：取第一个非空字段值
+    const firstVal = Object.values(input).find(v => v !== null && v !== undefined && String(v).trim());
+    return firstVal ? String(firstVal).slice(0, 60) : '';
+}
 
 const _TOOL_LABELS = {
     search_knowledge: '🔍 搜索知识库',

@@ -871,7 +871,8 @@ class LLMClient:
                 tool_use_id = tb["id"]
 
                 logger.info("🔧 [%s] 流式调用工具: %s", ctx, tool_name)
-                yield {"type": "tool_start", "tool": tool_name, "tool_use_id": tool_use_id}
+                yield {"type": "tool_start", "tool": tool_name, "tool_use_id": tool_use_id,
+                       "input": {k: str(v)[:80] for k, v in (tool_input or {}).items()}}
 
                 result_text = await tool_executor.execute(tool_name, tool_input)
 
