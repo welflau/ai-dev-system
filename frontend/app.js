@@ -8297,10 +8297,16 @@ function _initChatSplitContainer() {
     const dstMessages = document.getElementById(mainPane.msgId);
     if (srcMessages && dstMessages) {
         dstMessages.innerHTML = '';
-        // 逐个克隆避免 innerHTML 序列化丢失事件/结构，深克隆保留所有子节点
         Array.from(srcMessages.childNodes).forEach(node => {
             dstMessages.appendChild(node.cloneNode(true));
         });
+        // 调试：打印克隆结果
+        const thinkingCount = dstMessages.querySelectorAll('.chat-thinking-panel').length;
+        const msgCount = dstMessages.querySelectorAll('.chat-msg').length;
+        console.log(`[split] 克隆完成: ${msgCount} 条消息, ${thinkingCount} 个思考面板`);
+        if (thinkingCount === 0 && srcMessages.querySelectorAll('.chat-thinking-panel').length > 0) {
+            console.warn('[split] 警告：源有思考面板但克隆没有！');
+        }
         requestAnimationFrame(() => { dstMessages.scrollTop = dstMessages.scrollHeight; });
     }
 
