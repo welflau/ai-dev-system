@@ -1,10 +1,27 @@
 # AI Dev System — 待办清单
 
-> 最后更新: 2026-05-09
+> 最后更新: 2026-05-13
 
 ---
 
 ## 🎯 新增待办
+
+### I. 分屏思考面板不显示（P1）
+
+**问题**：进入分屏模式后，主格（主会话）的思考面板不显示，非分屏正常显示。
+
+**调试结论**：克隆有效（Console 已确认 `[split] 克隆完成: 4 条消息, 1 个思考面板`），
+但思考面板在分屏容器内仍不可见——非 DOM 缺失问题，疑为渲染/CSS 问题。
+
+**已尝试**：
+- innerHTML 克隆 → 无效
+- cloneNode(true) 克隆 → 无效
+- 强制加 ctp-expanded → 无效
+- 改用 API 重新加载 → 无效（老消息 thinking_json=NULL）
+
+**下一步排查**：用 DevTools Elements 检查分屏格的 `.chat-thinking-panel` 元素实际的 computed style，确认是否有 `display:none`、`opacity:0`、`height:0` 等导致不可见的 CSS 规则。
+
+---
 
 ### H. 系统自进化：成功经验自动沉淀为 Skill（P2）
 
