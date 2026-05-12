@@ -8300,13 +8300,10 @@ function _initChatSplitContainer() {
         Array.from(srcMessages.childNodes).forEach(node => {
             dstMessages.appendChild(node.cloneNode(true));
         });
-        // 调试：打印克隆结果
-        const thinkingCount = dstMessages.querySelectorAll('.chat-thinking-panel').length;
-        const msgCount = dstMessages.querySelectorAll('.chat-msg').length;
-        console.log(`[split] 克隆完成: ${msgCount} 条消息, ${thinkingCount} 个思考面板`);
-        if (thinkingCount === 0 && srcMessages.querySelectorAll('.chat-thinking-panel').length > 0) {
-            console.warn('[split] 警告：源有思考面板但克隆没有！');
-        }
+        // 克隆后确保所有思考面板展开显示（接近的面板可能已被 finish() 折叠）
+        dstMessages.querySelectorAll('.chat-thinking-panel').forEach(p => {
+            p.classList.add('ctp-expanded');
+        });
         requestAnimationFrame(() => { dstMessages.scrollTop = dstMessages.scrollHeight; });
     }
 
