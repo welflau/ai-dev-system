@@ -207,16 +207,14 @@ class _ChatToolExecutor:
         if self.project_id is not None:
             ctx["project_id"] = self.project_id
 
-        # 项目内聊天 或 全局聊天（有 session_id）：推 SSE 思考日志
-        if self.project_id or self.session_id:
-            await self._emit_thinking(tool_name, tool_input, step="start")
+        # 推 SSE 思考日志（start 阶段：有 project_id 或 session_id 才发，否则只记录）
+        await self._emit_thinking(tool_name, tool_input, step="start")
 
         result = await action.run(ctx)
         data = result.data or {}
 
-        if self.project_id or self.session_id:
-            summary = result.message or data.get("message") or ("成功" if result.success else result.error or "失败")
-            await self._emit_thinking(tool_name, tool_input, step="done", summary=summary)
+        summary = result.message or data.get("message") or ("成功" if result.success else result.error or "失败")
+        await self._emit_thinking(tool_name, tool_input, step="done", summary=summary)
 
         # 按优先级更新 primary_action_result
         current_type = data.get("type", "")
@@ -233,10 +231,11 @@ class _ChatToolExecutor:
         return json.dumps(data, ensure_ascii=False)
 
     async def _emit_thinking(self, tool_name: str, tool_input: dict, step: str, summary: str = "") -> None:
-        """向 SSE 频道推送思考日志（项目内走 event_manager，全局聊天走 session queue）。失败静默。"""
+        """推送/记录思考日志。
+        - thinking_steps 收集：始终执行（所有聊天模式，用于持久化）
+        - SSE 推送：仅在有 project_id 或 session_id 时执行
+        """
         try:
-            from events import event_manager
-            # 从 tool_input 提取关键参数摘要（截断避免过长）
             _KEY = {
                 "search_knowledge": "query", "search_ticket_history": "query",
                 "fetch_url": "url", "git_read_file": "path",
@@ -246,7 +245,6 @@ class _ChatToolExecutor:
                 "generate_document": "filename", "confirm_save_doc": "filename",
                 "confirm_requirement": "title", "confirm_bug": "title",
                 "load_skill": "skill_id", "read_local_file": "path", "ue_call": "command",
-                # 新增工具
                 "glob": "pattern", "grep": "pattern", "list_directory": "path",
                 "shell": "command", "web_search": "query",
                 "save_memory": "title", "read_files": "paths",
@@ -256,18 +254,23 @@ class _ChatToolExecutor:
             arg_val = str(tool_input.get(key, ""))[:60] if key else ""
             args_hint = f"({key}: {arg_val})" if arg_val else ""
             payload = {"step": step, "tool": tool_name, "args_hint": args_hint, "summary": summary[:120]}
-            if self.project_id:
-                await event_manager.publish_to_project(self.project_id, "chat_thinking_log", payload)
-            elif self.session_id:
-                from api.chat import get_thinking_queue
-                await get_thinking_queue(self.session_id).put(payload)
-            # 持久化：只保存 done 阶段（start 只是开始标记，done 包含摘要）
+
+            # 持久化收集：始终执行（done 阶段），不依赖 project_id/session_id
             if step == "done":
                 self.thinking_steps.append({
                     "tool": tool_name,
                     "args_hint": args_hint,
                     "summary": summary[:120],
                 })
+
+            # SSE 推送：仅在有上下文时执行
+            if self.project_id or self.session_id:
+                from events import event_manager
+                if self.project_id:
+                    await event_manager.publish_to_project(self.project_id, "chat_thinking_log", payload)
+                elif self.session_id:
+                    from api.chat import get_thinking_queue
+                    await get_thinking_queue(self.session_id).put(payload)
         except Exception as e:
             logger.warning("_emit_thinking failed: %s", e)
 
