@@ -10515,7 +10515,6 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
     msgEl.innerHTML = `
         <div class="chat-msg-avatar">${avatar}</div>
         <div class="chat-msg-content">
-            ${thinkingHtml}
             ${imagesHtml}
             <div class="chat-msg-bubble">${formatChatContent(content)}</div>
             ${actionHtml}
@@ -10523,6 +10522,12 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
             <div class="chat-msg-time">${timeStr}</div>
         </div>
     `;
+    // 思考面板插入到消息气泡前面（作为兄弟节点），与实时流式路径保持一致
+    if (thinkingHtml) {
+        const thinkingEl = document.createElement('div');
+        thinkingEl.innerHTML = thinkingHtml;
+        container.appendChild(thinkingEl.firstElementChild);
+    }
     container.appendChild(msgEl);
 }
 
