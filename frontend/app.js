@@ -580,11 +580,21 @@ function _updateChatPanelForContext() {
 
         if (modeBar) modeBar.style.display = '';
         if (modeBtn) modeBtn.style.display = '';
+
+        // 标题显示项目名
+        const titleEl = document.getElementById('chatPanelTitle');
+        if (titleEl) {
+            const name = currentProject?.name || '';
+            titleEl.textContent = name ? `AI 助手 · ${name}` : 'AI 助手';
+        }
     } else {
-        // 返回列表：切回全局模式
+        // 返回列表：切回全局模式，标题恢复
         if (modeBar) modeBar.style.display = 'none';
         if (modeBtn) modeBtn.style.display = 'none';
         if (chatMode !== 'global') setChatMode('global');
+
+        const titleEl = document.getElementById('chatPanelTitle');
+        if (titleEl) titleEl.textContent = 'AI 助手';
     }
 
     // 重置当前聊天历史
@@ -8617,7 +8627,9 @@ function setChatMode(mode) {
     const inputArea = document.getElementById('chatPanelInput');
 
     if (mode === 'global') {
-        titleEl.textContent = 'AI 助手';
+        // 项目内显示项目名，全局列表页显示"AI 助手"
+        const projectName = currentProject?.name || '';
+        titleEl.textContent = projectName ? `AI 助手 · ${projectName}` : 'AI 助手';
         iconEl.textContent = '💬';
         inputArea.style.display = '';
         loadChatHistory();
