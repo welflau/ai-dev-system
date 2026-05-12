@@ -153,9 +153,17 @@ class BrowseMarketplaceAction(ActionBase):
 
         if dst.exists():
             scope = "项目" if project_id else "系统"
-            return ActionResult(success=True,
-                                data={"type": "skill_installed", "dir_name": dir_name, "already_installed": True},
-                                message=f"Skill「{dir_name}」已在{scope}中安装")
+            skill_content = ""
+            try:
+                skill_content = (dst / "SKILL.md").read_text(encoding="utf-8").strip()
+            except Exception:
+                pass
+            return ActionResult(
+                success=True,
+                data={"type": "skill_installed", "dir_name": dir_name, "already_installed": True,
+                      "skill_content": skill_content},
+                message=f"Skill「{dir_name}」已在{scope}中安装。以下是使用文档：",
+            )
 
         shutil.copytree(str(src), str(dst))
 
@@ -164,12 +172,21 @@ class BrowseMarketplaceAction(ActionBase):
             from skills import skill_loader
             skill_loader.reload()
 
+        # 安装后立即读取 SKILL.md 内容，让 AI 能马上使用
+        skill_content = ""
+        try:
+            skill_content = (dst / "SKILL.md").read_text(encoding="utf-8").strip()
+        except Exception:
+            pass
+
         scope = "项目" if project_id else "系统"
         logger.info("browse_marketplace install: %s → %s (%s)", dir_name, dst, scope)
+        msg = f"✅ 已安装 Skill「{dir_name}」到{scope}。以下是使用文档，请按文档说明操作："
         return ActionResult(
             success=True,
-            data={"type": "skill_installed", "dir_name": dir_name, "scope": scope},
-            message=f"✅ 已安装 Skill「{dir_name}」到{scope}",
+            data={"type": "skill_installed", "dir_name": dir_name, "scope": scope,
+                  "skill_content": skill_content},
+            message=msg,
         )
 
     # ── uninstall ─────────────────────────────────────────
