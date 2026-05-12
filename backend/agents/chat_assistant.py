@@ -46,6 +46,11 @@ from actions.chat.read_local_file import ReadLocalFileAction               # 读
 from actions.chat.ue_call import UECallAction                              # UE Editor UCP 控制
 from actions.chat.install_project_skill import InstallProjectSkillAction   # 项目 Skill 安装/卸载
 from actions.chat.browse_marketplace import BrowseMarketplaceAction        # 浏览/安装/卸载市场 Skill
+from actions.chat.glob_search import GlobAction, GrepAction, ListDirectoryAction  # 文件系统搜索
+from actions.chat.web_search import WebSearchAction                        # 联网搜索
+from actions.chat.shell_exec import ShellAction                            # Shell 执行
+from actions.chat.memory_write import MemoryWriteAction                    # 写入记忆
+from actions.chat.read_many_files import ReadManyFilesAction               # 批量读文件
 
 logger = logging.getLogger("agent.chat_assistant")
 
@@ -90,7 +95,12 @@ _TOOL_LABELS_PY: dict = {
 _GLOBAL_CHAT_TOOLS = {"confirm_project", "search_knowledge", "search_ticket_history", "fetch_url", "confirm_save_doc"}
 
 # 全局 + 项目两个模式都可用的工具（不受 _GLOBAL_CHAT_TOOLS 排除逻辑影响）
-_CROSS_SCOPE_TOOLS = {"browse_marketplace"}
+_CROSS_SCOPE_TOOLS = {
+    "browse_marketplace",   # 浏览/安装市场 Skill
+    "web_search",           # 联网搜索
+    "save_memory",          # 写入记忆
+    "read_files",           # 批量读文件
+}
 
 
 class _ChatToolExecutor:
@@ -222,6 +232,11 @@ class _ChatToolExecutor:
                 "generate_document": "filename", "confirm_save_doc": "filename",
                 "confirm_requirement": "title", "confirm_bug": "title",
                 "load_skill": "skill_id", "read_local_file": "path", "ue_call": "command",
+                # 新增工具
+                "glob": "pattern", "grep": "pattern", "list_directory": "path",
+                "shell": "command", "web_search": "query",
+                "save_memory": "title", "read_files": "paths",
+                "browse_marketplace": "dir_name", "install_project_skill": "dir_name",
             }
             key = _KEY.get(tool_name)
             arg_val = str(tool_input.get(key, ""))[:60] if key else ""
@@ -277,6 +292,14 @@ class ChatAssistantAgent(BaseAgent):
         InstallProjectSkillAction,     # 对话中为项目安装/卸载 Marketplace Skill
         BrowseMarketplaceAction,       # 浏览/安装/卸载市场 Skill（系统级+项目级）
         LoadSkillAction,               # v0.20 主动触发：按需加载 Skill 全文
+        # ── 新增工具（对标 Gemini CLI）──
+        GlobAction,                    # glob 通配搜索文件（仅项目）
+        GrepAction,                    # 正则搜索文件内容（仅项目）
+        ListDirectoryAction,           # 列目录树（仅项目）
+        ShellAction,                   # 执行 Shell 命令（仅项目）
+        WebSearchAction,               # 联网搜索（全局+项目）
+        MemoryWriteAction,             # 写入记忆（全局+项目）
+        ReadManyFilesAction,           # 批量读文件（全局+项目）
     ]
     react_mode = ReactMode.REACT
     max_react_loop = 6   # 工具调用可能多轮（搜索+fetch），留足余量输出最终回答
