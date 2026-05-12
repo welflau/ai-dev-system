@@ -8172,6 +8172,90 @@ let _chatFullscreen = false;
 let _chatSplitPanes = [];   // [{id, sessionId, el}] 额外分屏面板
 let _chatActivePaneId = null; // 当前聚焦的分屏格 id
 
+async function toggleProjectSwitcher() {
+    if (!_chatFullscreen) return;  // 仅全屏模式下有效
+
+    const existing = document.getElementById('projectSwitcherDropdown');
+    if (existing) { existing.remove(); return; }
+
+    const titleArea = document.getElementById('chatPanelTitleArea');
+    const rect = titleArea?.getBoundingClientRect();
+
+    const dropdown = document.createElement('div');
+    dropdown.id = 'projectSwitcherDropdown';
+    dropdown.style.cssText = `top:${(rect?.bottom || 48) + 4}px;left:${rect?.left || 12}px;`;
+    dropdown.innerHTML = `
+        <div class="ps-header">
+            切换项目
+            <button class="btn-icon" onclick="document.getElementById('projectSwitcherDropdown').remove()" style="font-size:13px;">✕</button>
+        </div>
+        <div class="ps-list" id="psSwitcherList"><div style="padding:12px;color:var(--text-muted);font-size:12px;">加载中...</div></div>
+        <div class="ps-global" onclick="_switchToGlobalChat()">💬 全局 AI 助手（无项目）</div>`;
+    document.body.appendChild(dropdown);
+
+    // 点外部关闭
+    setTimeout(() => document.addEventListener('click', function h(e) {
+        if (!dropdown.contains(e.target) && e.target !== titleArea) {
+            dropdown.remove(); document.removeEventListener('click', h);
+        }
+    }), 100);
+
+    // 加载项目列表
+    try {
+        const data = await api('/projects');
+        const projects = (data.projects || []).filter(p => p.id !== '__global__');
+        const listEl = document.getElementById('psSwitcherList');
+        if (!listEl) return;
+        if (!projects.length) {
+            listEl.innerHTML = '<div style="padding:12px;color:var(--text-muted);font-size:12px;">暂无项目</div>';
+            return;
+        }
+        const colors = ['#6366f1','#8b5cf6','#06b6d4','#10b981','#f59e0b','#ef4444'];
+        listEl.innerHTML = projects.map((p, i) => {
+            const active = p.id === currentProjectId ? ' active' : '';
+            const color = colors[i % colors.length];
+            const initial = (p.name || '?')[0].toUpperCase();
+            return `<div class="ps-item${active}" onclick="_switchProjectInFullscreen('${escapeHtml(p.id)}')">
+                <div class="ps-item-icon" style="background:${color}22;color:${color};">${initial}</div>
+                <div style="flex:1;min-width:0;">
+                    <div style="font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(p.name)}</div>
+                    <div style="font-size:11px;color:var(--text-muted);">${escapeHtml(p.tech_stack || p.description || '').slice(0,40)}</div>
+                </div>
+                ${p.id === currentProjectId ? '<span style="font-size:10px;color:var(--primary);">当前</span>' : ''}
+            </div>`;
+        }).join('');
+    } catch (e) {
+        const listEl = document.getElementById('psSwitcherList');
+        if (listEl) listEl.innerHTML = `<div style="padding:12px;color:var(--danger);font-size:12px;">加载失败: ${escapeHtml(e.message)}</div>`;
+    }
+}
+
+async function _switchProjectInFullscreen(projectId) {
+    document.getElementById('projectSwitcherDropdown')?.remove();
+    if (projectId === currentProjectId) return;
+    // 全屏状态下切项目：加载项目详情但保持全屏
+    try {
+        const data = await api(`/projects/${projectId}`);
+        currentProjectId = projectId;
+        currentProject = data.project || data;
+        _updateChatPanelForContext();
+        // 全屏状态不跳转页面，只更新聊天上下文
+        if (chatMode === 'global') {
+            loadChatHistory();
+        }
+    } catch (e) {
+        showToast(`切换项目失败: ${e.message}`, 'error');
+    }
+}
+
+function _switchToGlobalChat() {
+    document.getElementById('projectSwitcherDropdown')?.remove();
+    if (!currentProjectId) return;
+    currentProjectId = null;
+    currentProject = null;
+    _updateChatPanelForContext();
+}
+
 function toggleChatFullscreen() {
     _chatFullscreen = !_chatFullscreen;
     const btn = document.getElementById('chatFullscreenBtn');

@@ -1141,9 +1141,10 @@
     <div class="chat-panel" id="chatPanel">
         <div class="chat-panel-resize" id="chatPanelResize"></div>
         <div class="chat-panel-header">
-            <div class="chat-panel-title">
+            <div class="chat-panel-title" id="chatPanelTitleArea" onclick="toggleProjectSwitcher()" style="cursor:default;">
                 <span class="chat-panel-icon" id="chatPanelIcon">💬</span>
                 <span id="chatPanelTitle">AI 助手</span>
+                <span id="chatPanelSwitchArrow" style="display:none;font-size:10px;margin-left:4px;opacity:.6;">▾</span>
             </div>
             <div class="chat-panel-actions">
                 <button class="btn-icon chat-panel-btn" id="chatModeBtn" onclick="toggleChatMode()" title="切换模式">
