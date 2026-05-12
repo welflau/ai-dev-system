@@ -156,6 +156,14 @@ class BrowseMarketplaceAction(ActionBase):
             skill_content = ""
             try:
                 skill_content = (dst / "SKILL.md").read_text(encoding="utf-8").strip()
+                skill_content += (
+                    "\n\n---\n"
+                    "## 【系统适配说明】\n"
+                    "本系统工具名与文档中的不同，请按以下映射使用：\n"
+                    "- `web_fetch(url)` → 使用 `fetch_url` 工具，参数 `{\"url\": \"...\"}` \n"
+                    "- `fetch_url` 会返回页面内容，从中提取搜索结果\n"
+                    "- 全局聊天模式下 `fetch_url` 工具可用，可直接调用"
+                )
             except Exception:
                 pass
             return ActionResult(
@@ -176,6 +184,16 @@ class BrowseMarketplaceAction(ActionBase):
         skill_content = ""
         try:
             skill_content = (dst / "SKILL.md").read_text(encoding="utf-8").strip()
+            # 加系统适配说明：工具名映射（CodeBuddy → 本系统）
+            adapter_note = (
+                "\n\n---\n"
+                "## 【系统适配说明】\n"
+                "本系统工具名与文档中的不同，请按以下映射使用：\n"
+                "- `web_fetch(url)` → 使用 `fetch_url` 工具，参数 `{\"url\": \"...\"}` \n"
+                "- `fetch_url` 会返回页面内容，从中提取搜索结果\n"
+                "- 全局聊天模式下 `fetch_url` 工具可用，可直接调用"
+            )
+            skill_content += adapter_note
         except Exception:
             pass
 
