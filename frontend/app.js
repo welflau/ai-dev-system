@@ -8656,14 +8656,19 @@ async function _splitPaneHistory(paneId) {
             if (!items.length) continue;
             html += `<div class="chat-history-group">${label}</div>`;
             for (const s of items) {
-                const active = s.id === pane.sessionId ? ' active' : '';
+                const isCurrent = s.id === pane.sessionId;
+                const active = isCurrent ? ' active' : '';
                 const dt = _sessionDisplayTitle(s);
+                const currentBadge = isCurrent
+                    ? `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:rgba(99,102,241,.15);color:var(--primary);margin-left:3px;">当前</span>`
+                    : '';
                 html += `<div class="chat-history-item${active}"
                     onclick="_loadSplitPaneSession('${paneId}','${escHtml(s.id)}');
                              document.getElementById('splitHistoryPicker').remove();">
                     <span class="hi-icon">💬</span>
                     <span class="hi-title" title="${escHtml(dt)}">${escHtml(dt)}</span>
-                    <span class="hi-meta">${s.message_count || 0}条</span>
+                    ${currentBadge}
+                    <span class="hi-meta" style="margin-left:auto;">${s.message_count || 0}条</span>
                 </div>`;
             }
         }
@@ -8923,6 +8928,29 @@ async function newChatSession() {
 }
 
 /** 打开/关闭历史对话面板 */
+/** 历史面板已打开时，刷新 Running 状态徽章（不重新请求接口）*/
+function _refreshHistoryRunningState() {
+    const panel = document.getElementById('chatHistoryPanel');
+    if (!panel || panel.style.display === 'none') return;
+    // 轻量更新：只改 Running 徽章，不重建整个列表
+    panel.querySelectorAll('.chat-history-item').forEach(el => {
+        const sessionId = el.dataset.sessionId;
+        if (!sessionId) return;
+        let badge = el.querySelector('.hi-running');
+        if (sessionId === _currentChatSessionId && chatSending) {
+            if (!badge) {
+                badge = document.createElement('span');
+                badge.className = 'hi-running';
+                badge.style.cssText = 'font-size:10px;color:#34d058;margin-left:4px;white-space:nowrap;';
+                badge.textContent = '● Running';
+                el.querySelector('.hi-title')?.after(badge);
+            }
+        } else {
+            badge?.remove();
+        }
+    });
+}
+
 async function toggleChatHistory() {
     const panel = document.getElementById('chatHistoryPanel');
     if (!panel) return;
@@ -8975,12 +9003,24 @@ async function loadChatSessions() {
             if (!items.length) continue;
             html += `<div class="chat-history-group">${label}</div>`;
             for (const s of items) {
-                const active = s.id === _currentChatSessionId ? ' active' : '';
+                const isCurrent = s.id === _currentChatSessionId;
+                const active = isCurrent ? ' active' : '';
                 const displayTitle = _sessionDisplayTitle(s);
-                html += `<div class="chat-history-item${active}" onclick="switchChatSession('${escHtml(s.id)}')">
+                // 当前会话标签 + Running 状态
+                const currentBadge = isCurrent
+                    ? `<span style="font-size:10px;padding:1px 6px;border-radius:3px;
+                           background:rgba(99,102,241,.15);color:var(--primary);margin-left:4px;
+                           white-space:nowrap;">当前对话</span>`
+                    : '';
+                const runningBadge = (isCurrent && chatSending)
+                    ? `<span style="font-size:10px;color:#34d058;margin-left:4px;white-space:nowrap;">
+                           ● Running</span>`
+                    : '';
+                html += `<div class="chat-history-item${active}" data-session-id="${escHtml(s.id)}" onclick="switchChatSession('${escHtml(s.id)}')">
                     <span class="hi-icon">💬</span>
-                    <span class="hi-title" title="${escHtml(displayTitle)}">${escHtml(displayTitle)}</span>
-                    <span class="hi-meta">${s.message_count || 0}条</span>
+                    <span class="hi-title" title="${escHtml(displayTitle)}" style="min-width:0;overflow:hidden;text-overflow:ellipsis;">${escHtml(displayTitle)}</span>
+                    ${currentBadge}${runningBadge}
+                    <span class="hi-meta" style="margin-left:auto;">${s.message_count || 0}条</span>
                     <button class="hi-del btn-icon" onclick="event.stopPropagation();deleteChatSession('${escHtml(s.id)}')" title="删除">✕</button>
                 </div>`;
             }
@@ -9775,6 +9815,7 @@ async function sendChatMessage() {
     _chatInputDraft = '';
 
     chatSending = true;
+    _refreshHistoryRunningState();  // 历史面板若已打开，更新 Running 状态
     const sendBtn = document.getElementById('chatSendBtn');
     sendBtn.disabled = true;
     input.value = '';
@@ -10018,6 +10059,7 @@ async function sendChatMessage() {
         scrollChatToBottom();
     } finally {
         chatSending = false;
+        _refreshHistoryRunningState();  // 更新 Running → 消失
         sendBtn.disabled = false;
         input.focus();
         // 关闭全局聊天思考日志 SSE
