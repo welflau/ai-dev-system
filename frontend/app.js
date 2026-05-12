@@ -8292,17 +8292,16 @@ function _initChatSplitContainer() {
     _chatSplitPanes.push(mainPane);
     _focusSplitPane('main');
 
-    // 从 API 重新加载当前会话（确保思考面板等完整显示，不依赖 DOM 克隆）
-    if (mainPane.sessionId) {
-        _loadSplitPaneHistory(mainPane.msgId, mainPane.sessionId);
-    } else {
-        // 无会话时克隆 DOM
-        const srcMessages = document.getElementById('chatMessages');
-        const dstMessages = document.getElementById(mainPane.msgId);
-        if (srcMessages && dstMessages) {
-            dstMessages.innerHTML = srcMessages.innerHTML;
-            requestAnimationFrame(() => { dstMessages.scrollTop = dstMessages.scrollHeight; });
-        }
+    // 主格内容：直接从 #chatMessages 逐个克隆子节点（思考面板+消息气泡都保留）
+    const srcMessages = document.getElementById('chatMessages');
+    const dstMessages = document.getElementById(mainPane.msgId);
+    if (srcMessages && dstMessages) {
+        dstMessages.innerHTML = '';
+        // 逐个克隆避免 innerHTML 序列化丢失事件/结构，深克隆保留所有子节点
+        Array.from(srcMessages.childNodes).forEach(node => {
+            dstMessages.appendChild(node.cloneNode(true));
+        });
+        requestAnimationFrame(() => { dstMessages.scrollTop = dstMessages.scrollHeight; });
     }
 
     requestAnimationFrame(_setSplitContainerHeight);
