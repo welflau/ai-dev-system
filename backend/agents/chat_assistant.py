@@ -86,6 +86,16 @@ _TOOL_LABELS_PY: dict = {
     "load_skill": "📚 加载 Skill",
     "read_local_file": "📂 读取本地文件",
     "ue_call": "🎮 UE Editor 操作",
+    # 新增工具（对标 Gemini CLI）
+    "glob": "🔍 查找文件",
+    "grep": "🔎 搜索文件内容",
+    "list_directory": "📁 列出目录",
+    "shell": "⚡ 执行命令",
+    "web_search": "🌐 联网搜索",
+    "save_memory": "💡 保存记忆",
+    "read_files": "📄 批量读文件",
+    "browse_marketplace": "🛒 浏览技能市场",
+    "install_project_skill": "📦 安装 Skill",
 }
 
 # 全局聊天（项目列表页，无 project_id）下可用的工具白名单。
