@@ -1,102 +1,98 @@
 # AI 自动开发系统 (AI Dev System)
 
-[![Version](https://img.shields.io/badge/version-v0.14.7-blue.svg)](docs/)
+[![Version](https://img.shields.io/badge/version-v0.21-blue.svg)](docs/)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-> 基于 Harness 架构思想的多 Agent 自动化软件开发平台
-> 从自然语言需求到代码部署的全链路自动化，7 层工程约束确保 AI 产出可靠
+> 多 Agent 自动化软件开发平台 + 强大的 AI 开发助手
+> 从自然语言需求到代码部署的全链路自动化，内置 Skill 市场与联网搜索能力
 
-## 核心理念：Harness 模式
-
-**AI 不可靠，但工程可以驾驭它。**
-
-```
-用户需求 → [Prompt约束] → [上下文注入] → [Agent状态机] → [质量门禁]
-         → [Git分支隔离] → [CI/CD流水线] → [环境隔离] → 安全上线
-```
-
-7 层 Harness 将 AI 的不确定性转化为工程的确定性。每一层都有约束、验证和兜底机制。
+---
 
 ## 系统架构
 
 ```
-┌──────────────────────────────────────────────────────┐
-│                    Web UI (看板/聊天/监控)              │
-├──────────────────────────────────────────────────────┤
-│  SOP 配置引擎 (YAML)  │  事件总线 + 轮询兜底           │
-├──────────────────────────────────────────────────────┤
-│             Orchestrator 编排器                        │
-│  状态机 · 依赖检查 · 僵尸检测 · Agent 调度             │
-├──────────────────────────────────────────────────────┤
-│  Agent (Role + Action 组合，移植 MetaGPT 模式)         │
-│                                                       │
-│  ProductAgent → AcceptanceReviewAction (ActionNode)   │
-│  ArchitectAgent → DesignArchitectureAction (ActionNode)│
-│  DevAgent → WriteCodeAction + SelfTestAction (BY_ORDER)│
-│  TestAgent → 5层测试 (静态/审查/功能/用例/执行)          │
-│  ReviewAgent → 10条静态规则 + LLM 审查                  │
-│  DeployAgent → dev/test/prod 三环境部署                 │
-├──────────────────────────────────────────────────────┤
-│  ActionNode (结构化输出)  │  Agent Memory (cause_by索引) │
-├──────────────────────────────────────────────────────┤
-│  LLM Client (Anthropic/OpenAI) │ Git Manager │ SQLite │
-└──────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│               Web UI（看板 / AI助手 / 工单 / 监控）               │
+├───────────────────────────┬─────────────────────────────────────┤
+│   ChatAssistant AI 助手   │  Orchestrator 工单编排引擎            │
+│   · 流式输出 + 思考面板    │  · SOP YAML 驱动工作流               │
+│   · 全屏分屏对话           │  · Agent 调度 (6 个 Role)            │
+│   · Skills 市场           │  · Reflexion 反思 + 失败库            │
+│   · 联网搜索 / Shell / Git │  · Trait-First 动态技能注入           │
+├───────────────────────────┴─────────────────────────────────────┤
+│                     Skills 体系                                  │
+│  packs/(内置) │ use_skills/(已安装) │ marketplace/(市场)          │
+│  项目 .Agent/skills/ │ global_skill_settings │ 三层优先级          │
+├─────────────────────────────────────────────────────────────────┤
+│  LLM Client (Anthropic/OpenAI/Gemini) │ MCP Client │ SQLite      │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-## 功能列表
+![系统截图](Images/README/1778564605286960.png)
 
-### 需求管理
-- 自然语言提交需求，AI 自动拆解为工单
-- 需求优先级、里程碑关联
-- 需求可暂停/恢复/关闭/重新执行
+---
 
-### 6 个 AI Agent
+## 核心功能
 
-| Agent | 职责 | 模式 | Actions |
-|-------|------|------|---------|
-| **ProductAgent** | 需求拆单 + 产品验收 | SINGLE | `acceptance_review` (ActionNode) |
-| **ArchitectAgent** | 增量架构设计 | SINGLE | `design_architecture` (ActionNode) |
-| **DevAgent** | 代码开发 + 自测 | BY_ORDER | `write_code` → `self_test` |
-| **TestAgent** | 5层测试 + 报告 + 截图 | SINGLE | 静态/审查/功能/用例/执行 |
-| **ReviewAgent** | 代码审查 | SINGLE | 10条规则 + LLM |
-| **DeployAgent** | 环境部署 | SINGLE | dev/test/prod 隔离 |
+### 🤖 AI 开发助手（ChatAssistant）
 
-### SOP 可配置工作流
-- YAML 定义工单流转规则（`sop/default_sop.yaml`）
-- 修改 YAML 即改流程，无需改代码
-- 前端 SVG 流程图可视化
-- 热重载 API
+- **流式输出 + 思考面板**：逐字回答，实时显示工具调用步骤和耗时
+- **全屏模式**：一键隐藏其他面板，AI 助手铺满全屏
+- **分屏对话**：全屏下最多 3 格并排，各自独立 session
+- **历史对话**：多会话管理，今天/本周/更早分组
+- **全局 + 项目**：项目列表页和项目内均可使用
 
-### Git 原生集成
-- 每个需求自动创建 `feat/` 分支
-- 有意义的 commit message（含工单标题和文件名）
-- feat → develop → main 逐级合并
-- 仓库文件浏览器 + 分支选择器
+### 🛠️ AI 助手工具集（对标 Gemini CLI）
 
-### CI/CD + 三环境隔离
+| 工具 | 说明 | 可用范围 |
+|------|------|---------|
+| `web_search` | 联网搜索（腾讯元宝 / Bing 降级）| 全局+项目 |
+| `fetch_url` | 抓取指定 URL 内容 | 全局+项目 |
+| `glob` | glob 通配符查找文件 | 项目内 |
+| `grep` | 正则搜索文件内容 | 项目内 |
+| `list_directory` | 树形列出目录结构 | 项目内 |
+| `shell` | 执行 Shell 命令（含安全白名单）| 项目内 |
+| `read_files` | 批量读取多个文件 | 全局+项目 |
+| `save_memory` | 写入 Agent 记忆（跨会话）| 全局+项目 |
+| `search_knowledge` | 搜索项目知识库 | 项目内 |
+| `git_*` | Git 操作（查日志/读文件/切分支/合并）| 项目内 |
+| `ue_call` | 通过 UCP 控制 UE Editor | UE 项目 |
+| `browse_marketplace` | 浏览/安装 Skill 市场 | 全局+项目 |
 
-| 环境 | 分支 | 端口 | 触发 |
-|------|------|------|------|
-| dev | feat/* | base+0 | Agent 提交代码后 |
-| test | develop | base+100 | develop 构建通过后 |
-| prod | main | base+200 | master 构建通过后 |
+### 📦 Skills 市场体系
 
-### AI 聊天面板
-- 全局对话：自然语言操控项目（创建需求/Git 操作/生成文档）
-- 工单对话：查看所有工单的 Agent 对话记录
-- Git 能力：切换分支/查看日志/读文件/合并
+```
+marketplace/     ← 浏览目录，复制文件夹即可出现
+    ↓ 安装
+use_skills/      ← 系统已安装（AI 助手按需加载）
+.Agent/skills/   ← 项目已安装（项目内对话可用）
+packs/           ← 内置技术规范（随系统发布）
+```
 
-### 全链路可追溯
-- 7 张表审计链：从部署代码倒推到用户原始对话
-- 每次 LLM 调用的完整 prompt + response 记录
-- 操作日志 + 产物归档 + Git commit 关联
+- **三层优先级**：skills.json → global_skill_settings → project_skills
+- **Trait-First**：按项目类型（engine:ue5 / platform:web 等）自动注入匹配 Skill
+- **主动触发**：AI 通过 `load_skill` 按需加载，不全量注入 prompt
+- **系统设置 UI**：全局开关 + 项目级覆盖 + 市场面板
+
+### 🔄 自动化工单流水线
+
+- 自然语言 → AI 自动拆解工单（PRD → 架构 → 开发 → 测试 → 验收）
+- **SOP 可配置**：YAML 定义流转规则，热重载无需重启
+- **Reflexion 反思**：失败后自动诊断根因，策略迭代，跨工单经验积累
+- **Trait-First**：项目特征驱动工作流和技能差异化配置
+- **操作日志可见**：每个 Agent 执行过程写入 ticket_logs，实时查看
+
+### 🏗️ UE 项目深度集成
+
+- UCP 插件（UnrealClientProtocol）控制运行中的 Editor
+- Actor 管理 / 蓝图编辑 / 材质 / Niagara / PIE 控制
+- 自动触发 UBT 编译 + Playtest
+- UE Editor Viewport 截图（35s 稳定成功）
+
+---
 
 ## 快速开始
-
-### 前置要求
-- Python 3.10+
-- Git
 
 ### 安装
 
@@ -113,8 +109,8 @@ pip install -r requirements.txt
 cat > .env << EOF
 LLM_BASE_URL=https://api.anthropic.com
 LLM_API_KEY=your-api-key
-LLM_MODEL=claude-sonnet-4-20250514
-LLM_API_FORMAT=anthropic
+LLM_MODEL=claude-sonnet-4-5
+LLM_API_FORMAT=anthropic   # 或 openai
 EOF
 ```
 
@@ -127,100 +123,73 @@ python main.py
 
 访问 http://localhost:8000/app
 
-### 使用
+### 基本使用
 
-1. 创建项目（填 Git 远程仓库 URL）
-2. 点击"+ 提交需求"，输入需求描述
-3. 系统自动：拆单 → 架构 → 开发 → 验收 → 测试 → 部署
-4. 在看板实时查看进度，在 AI 聊天面板对话
+1. **创建项目**：填入 Git 仓库 URL，系统识别项目类型并自动安装匹配 Skill
+2. **提交需求**：自然语言描述，AI 自动拆单并执行完整流水线
+3. **AI 助手**：随时对话，可联网搜索、查看代码、执行命令
+4. **查看进度**：看板/工单列表/操作日志实时跟踪
+
+---
 
 ## 技术栈
 
 | 层级 | 技术 |
 |------|------|
 | 后端 | Python 3.10+ / FastAPI / Uvicorn |
-| 数据库 | SQLite + aiosqlite (WAL 模式, 13 张表) |
-| LLM | Claude Sonnet 4 (Anthropic API) / OpenAI 兼容 |
-| 实时通信 | SSE (Server-Sent Events) |
-| 前端 | 原生 HTML/CSS/JS (无框架, ~15000 行) |
+| 数据库 | SQLite + aiosqlite（WAL 模式，15+ 张表）|
+| LLM | Anthropic Claude / OpenAI 兼容 / 多模型路由 |
+| 实时通信 | SSE（流式输出 + 思考面板 + 工具调用）|
+| MCP | MCP Client（外部工具扩展）|
+| 前端 | 原生 HTML/CSS/JS（无框架）|
 | Git | 本地 Git CLI + GitHub 远程 |
-| 截图 | Playwright (可选) |
+
+---
 
 ## 项目结构
 
 ```
 ai-dev-system/
 ├── backend/
-│   ├── main.py              # FastAPI 入口
-│   ├── orchestrator.py      # 编排引擎 (2000+ 行)
-│   ├── llm_client.py        # LLM 集成 (Anthropic/OpenAI)
-│   ├── database.py          # SQLite (13 张表)
-│   ├── event_bus.py         # 内部事件总线
-│   ├── memory.py            # Agent Memory (cause_by 索引)
-│   ├── agent_registry.py    # Agent 注册中心
-│   ├── ci_pipeline.py       # CI/CD 流水线
-│   ├── git_manager.py       # Git 操作
-│   ├── sop/                 # SOP 工作流配置
-│   │   ├── default_sop.yaml # 默认开发流程
-│   │   └── loader.py        # YAML 解析引擎
-│   ├── actions/             # Action 能力层 (移植 MetaGPT)
-│   │   ├── action_node.py   # ActionNode 结构化输出
-│   │   ├── schemas.py       # Pydantic 输出 Schema
-│   │   ├── write_code.py    # 代码开发 Action
-│   │   ├── design_architecture.py
-│   │   ├── self_test.py
-│   │   └── acceptance_review.py
-│   ├── agents/              # Agent (Role) 定义
-│   │   ├── base.py          # BaseAgent + ReactMode + Watch
-│   │   ├── product.py       # ProductAgent
-│   │   ├── architect.py     # ArchitectAgent
-│   │   ├── dev.py           # DevAgent (BY_ORDER)
-│   │   ├── test.py          # TestAgent (5 层测试)
-│   │   ├── review.py        # ReviewAgent
-│   │   ├── deploy.py        # DeployAgent (三环境)
-│   │   └── custom/          # 自定义 Agent (自动加载)
-│   └── api/                 # API 端点 (68+ 接口)
+│   ├── main.py               # FastAPI 入口
+│   ├── orchestrator.py       # 工单编排引擎
+│   ├── llm_client.py         # LLM 集成（多模型）
+│   ├── agents/               # Agent 定义（6个 Role + ChatAssistant）
+│   ├── actions/              # Action 能力层
+│   │   └── chat/             # AI 助手工具（30+ 个 Action）
+│   ├── skills/               # Skills 体系
+│   │   ├── packs/            # 内置技术规范
+│   │   ├── marketplace/      # 市场目录（浏览用）
+│   │   ├── use_skills/       # 系统已安装
+│   │   └── rules/            # 全局编码规范
+│   ├── sop/                  # SOP 工作流配置（YAML）
+│   ├── api/                  # REST API（100+ 接口）
+│   ├── ue_plugins/           # UE 插件（UCP）
+│   └── knowledge_loader.py   # 知识库加载
 ├── frontend/
-│   ├── index.html           # 页面结构
-│   ├── app.js               # 应用逻辑 (~7800 行)
-│   └── styles.css           # 样式 (~6600 行)
-├── docs/                    # 项目文档
-├── dev-notes/               # 开发日志
-└── scripts/
-    └── daily-summary.py     # 每日日报自动生成
+│   ├── index.html            # 页面结构
+│   ├── app.js                # 应用逻辑（15000+ 行）
+│   └── styles.css            # 样式
+├── docs/                     # 设计文档 + 技术方案
+└── dev-notes/                # 开发日志（含截图）
 ```
 
-## API (68+ 接口)
+---
 
-- 项目管理: CRUD + Git + 环境
-- 需求管理: 创建/拆单/暂停/恢复/重新执行
-- 工单管理: 看板/状态/日志/依赖图
-- AI 聊天: 全局对话/工单对话/群聊/Git 操作
-- Agent: 状态监控/Actions/配置
-- CI/CD: 构建/部署/环境管理
-- SOP: 查询/热重载
-- 里程碑/Roadmap/Bug 追踪/知识库
+## 版本历史（近期）
 
-完整接口见 http://localhost:8000/docs
+| 版本 | 主要更新 |
+|------|---------|
+| v0.21 | AI 助手工具扩展（Shell/Glob/Grep/WebSearch 等 7 个工具）|
+| v0.20 | UE MCP Phase 1-5 / Skills 市场双目录 / AI 助手流式统一 |
+| v0.19 | UE 自动编译 + Playtest / UE Editor Viewport 截图 |
+| v0.17 | Trait-First 动态 Skill 注入 / 多会话管理 |
+| v0.16 | ChatAssistant 全面升级 / Skill 主动触发架构 |
+| v0.15 | MetaGPT 移植（ActionNode / 状态机 / REACT 模式）|
 
-## 开发路线
+详细变更见 [dev-notes/](dev-notes/) 目录。
 
-```
-✅ v0.13   SOP 配置化 + 事件驱动 + 流程查看器
-✅ v0.14   Agent 能力层重构 (Action/Memory/Registry)
-✅ v0.14.5 MetaGPT 移植 (ActionNode/状态机/Watch)
-⬜ v0.15   多 LLM 支持 / 并发调度 / 竞品分析
-⬜ v0.16   插件市场 / 多项目协作 / Data Interpreter
-```
-
-详细计划见 [docs/20260413_03_改进开发计划.md](docs/20260413_03_改进开发计划.md)
-
-## 文档
-
-- [系统技术架构](docs/20260413_01_系统技术架构文档.md) — 完整架构 + Harness 7 层 + 工作流回溯
-- [MetaGPT 对比分析](docs/20260413_02_MetaGPT对比分析与改进方向.md) — 7 维度对比
-- [改进开发计划](docs/20260413_03_改进开发计划.md) — v0.13~v0.16 路线图
-- [MetaGPT 移植方案](docs/20260414_01_MetaGPT移植方案与开发计划调整.md) — ActionNode/状态机/Watch
+---
 
 ## License
 
