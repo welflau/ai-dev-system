@@ -2037,6 +2037,8 @@ async def get_global_session_messages(session_id: str, limit: int = 200):
     for row in rows:
         msg = dict(row)
         msg["images"] = json.loads(msg.pop("images_json", None) or "[]")
+        # thinking_json → thinking（与项目聊天 API 保持一致）
+        msg["thinking"] = json.loads(msg.pop("thinking_json", None) or "null") or []
         raw_ar = msg.get("action_result")
         if isinstance(raw_ar, str) and raw_ar:
             try:
