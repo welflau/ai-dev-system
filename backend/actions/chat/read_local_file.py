@@ -34,9 +34,12 @@ def _build_allowed_roots() -> list[Path]:
     ]
 
 
-def _is_safe_path(path: Path) -> tuple[bool, str]:
-    """返回 (是否安全, 拒绝原因)"""
-    # 文件名黑名单
+def _is_safe_path(path: Path, user_provided: bool = False) -> tuple[bool, str]:
+    """返回 (是否安全, 拒绝原因)。
+    user_provided=True 时放宽目录白名单（用户显式提供路径即视为授权），
+    但凭证文件黑名单始终有效。
+    """
+    # 文件名黑名单（始终有效）
     name_lower = path.name.lower()
     if name_lower in _BLOCKED_NAMES:
         return False, f"禁止读取凭证/配置文件: {path.name}"
@@ -50,6 +53,10 @@ def _is_safe_path(path: Path) -> tuple[bool, str]:
         resolved = path.resolve()
     except Exception:
         return False, "无效路径"
+
+    # 用户显式提供路径时，只做黑名单拦截，不限制目录
+    if user_provided:
+        return True, ""
 
     allowed_roots = _build_allowed_roots()
     for root in allowed_roots:
@@ -99,8 +106,10 @@ class ReadLocalFileAction(ActionBase):
             return ActionResult(success=False, error="path 不能为空")
 
         path = Path(raw_path)
+        # 用户在 context 里显式提供路径时（非系统自动生成）视为已授权
+        user_provided = bool(context.get("_user_provided", True))
 
-        safe, reason = _is_safe_path(path)
+        safe, reason = _is_safe_path(path, user_provided=user_provided)
         if not safe:
             return ActionResult(success=False, error=reason)
 

@@ -110,6 +110,10 @@ _CROSS_SCOPE_TOOLS = {
     "web_search",           # 联网搜索
     "save_memory",          # 写入记忆
     "read_files",           # 批量读文件
+    "read_local_file",      # 读本地文件（用户提供路径时全局可用）
+    "list_directory",       # 列目录（绝对路径时全局可用）
+    "glob",                 # 文件搜索（绝对路径时全局可用）
+    "grep",                 # 内容搜索（绝对路径时全局可用）
 }
 
 

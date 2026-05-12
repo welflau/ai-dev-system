@@ -88,8 +88,16 @@ class GlobAction(ActionBase):
             return ActionResult(success=False, error="pattern 不能为空")
 
         base = await _get_project_base(project_id)
+
+        # 无项目时：若 base_dir 是绝对路径则直接使用
+        if (not base or not base.exists()) and base_rel:
+            abs_base = Path(base_rel)
+            if abs_base.is_absolute() and abs_base.exists():
+                base = abs_base
+                base_rel = ""
+
         if not base or not base.exists():
-            return ActionResult(success=False, error="未找到项目目录，请在项目内使用此工具")
+            return ActionResult(success=False, error="未找到目录，请提供绝对路径（base_dir）或在项目内使用")
 
         search_dir = (base / base_rel).resolve() if base_rel else base.resolve()
         if not _is_safe_path(search_dir, base):
@@ -184,8 +192,16 @@ class GrepAction(ActionBase):
             return ActionResult(success=False, error="pattern 不能为空")
 
         base = await _get_project_base(project_id)
+
+        # 无项目时：若 path 是绝对路径则直接使用
+        if (not base or not base.exists()) and path_rel:
+            abs_path = Path(path_rel)
+            if abs_path.is_absolute() and abs_path.exists():
+                base = abs_path.parent if abs_path.is_file() else abs_path
+                path_rel = ""
+
         if not base or not base.exists():
-            return ActionResult(success=False, error="未找到项目目录，请在项目内使用此工具")
+            return ActionResult(success=False, error="未找到目录，请提供绝对路径（path）或在项目内使用")
 
         search_path = (base / path_rel).resolve() if path_rel else base.resolve()
         if not _is_safe_path(search_path, base):
@@ -285,8 +301,16 @@ class ListDirectoryAction(ActionBase):
         depth      = min(int(context.get("depth") or 2), 4)
 
         base = await _get_project_base(project_id)
+
+        # 无项目时：若 path 是绝对路径则直接使用
+        if (not base or not base.exists()) and path_rel:
+            abs_path = Path(path_rel)
+            if abs_path.is_absolute() and abs_path.exists():
+                base = abs_path
+                path_rel = ""
+
         if not base or not base.exists():
-            return ActionResult(success=False, error="未找到项目目录，请在项目内使用此工具")
+            return ActionResult(success=False, error="未找到目录，请提供绝对路径（path）或在项目内使用")
 
         target = (base / path_rel).resolve() if path_rel else base.resolve()
         if not _is_safe_path(target, base):
