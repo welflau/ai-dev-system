@@ -8469,31 +8469,29 @@ async function _sendChatStreamingToContainer(url, body, msgContainer, thinkingCt
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
+    // 复用与 _sendChatStreaming 相同的 SSE 解析逻辑（event: 行 + data: 行）
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
-    let buffer = '';
+    let buf = '';
+    let curEvent = '';
 
     while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop();
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop();
 
         for (const line of lines) {
-            if (!line.startsWith('data:')) continue;
-            let data, eventName = 'message';
-            const eventMatch = buffer.match(/event: (\w+)/);
-            if (eventMatch) eventName = eventMatch[1];
+            if (line.startsWith('event: ')) {
+                curEvent = line.slice(7).trim();
+                continue;
+            }
+            if (!line.startsWith('data: ')) continue;
+            let data;
+            try { data = JSON.parse(line.slice(6)); } catch { curEvent = ''; continue; }
 
-            // 解析 event: 行
-            const prevLines = lines.slice(0, lines.indexOf(line));
-            const eventLine = prevLines.reverse().find(l => l.startsWith('event:'));
-            if (eventLine) eventName = eventLine.slice(6).trim();
-
-            try { data = JSON.parse(line.slice(5)); } catch { continue; }
-
-            if (data.type === 'text_delta') {
+            if (curEvent === 'text_delta') {
                 if (bubbleWrapper.style.display === 'none') {
                     typingEl?.remove();
                     bubbleWrapper.style.display = '';
@@ -8504,18 +8502,20 @@ async function _sendChatStreamingToContainer(url, body, msgContainer, thinkingCt
                     _lastRenderLen = fullText.length;
                     msgContainer.scrollTop = msgContainer.scrollHeight;
                 }
-            } else if (data.type === 'tool_start') {
+            } else if (curEvent === 'tool_start') {
                 const hint = _extractArgsHint(data.tool, data.input);
                 thinkingCtx?.append({ step: 'start', tool: data.tool, args_hint: hint });
-            } else if (data.type === 'tool_done') {
+            } else if (curEvent === 'tool_done') {
                 thinkingSteps.push({ tool: data.tool, args_hint: '', summary: data.summary || '' });
                 thinkingCtx?.append({ step: 'done', tool: data.tool, summary: data.summary || '' });
-            } else if (data.type === 'action') {
-                finalAction = data;
-            } else if (data.type === 'message_done') {
+            } else if (curEvent === 'action') {
+                finalAction = { ...data };
+            } else if (curEvent === 'message_done') {
                 thinkingSteps = data.thinking_steps || thinkingSteps;
+                curEvent = '';
                 break;
             }
+            curEvent = '';
         }
     }
 
@@ -9414,7 +9414,13 @@ async function loadTicketConversations(ticketId) {
                 `;
                 container.appendChild(msgEl);
             } else {
-                appendChatBubble(msg.role, msg.content, msg.created_at);
+                let actionObj = null;
+                if (msg.action_data) {
+                    try { actionObj = typeof msg.action_data === 'string' ? JSON.parse(msg.action_data) : msg.action_data; }
+                    catch { actionObj = null; }
+                }
+                appendChatBubble(msg.role, msg.content, msg.created_at, actionObj,
+                    msg.images || [], [], msg.thinking || []);
             }
         }
         scrollChatToBottom();
