@@ -8386,42 +8386,153 @@ async function _splitPaneSend(paneId) {
     input.style.height = 'auto';
 
     const container = document.getElementById(pane.msgId);
+
     // 追加用户消息
     appendChatBubble('user', text, new Date().toISOString(), null, [], [], [], container);
     container.scrollTop = container.scrollHeight;
 
-    // 追加 loading
-    const loadEl = document.createElement('div');
-    loadEl.style.cssText = 'padding:8px 12px;font-size:12px;color:var(--text-muted);';
-    loadEl.textContent = '思考中…';
-    container.appendChild(loadEl);
+    // 若还没有 session，先创建
+    if (!pane.sessionId) {
+        try {
+            const s = await api(`${_sessionApiBase()}/sessions`, { method: 'POST', body: {} });
+            pane.sessionId = s.id;
+        } catch (_) {}
+    }
+
+    // 每个分屏格使用独立的思考上下文（通用模块复用）
+    if (!pane.thinking) {
+        pane.thinking = createThinkingContext(container);
+    }
+    pane.thinking.begin();
+
+    // 使用流式端点（与主面板一致，可显示思考步骤）
+    const base = currentProjectId ? `/projects/${currentProjectId}` : '';
+    const streamUrl = currentProjectId ? `/projects/${currentProjectId}/chat/stream` : `/chat/stream`;
+
+    // 创建 chatTyping 元素（锚点）供思考面板插入
+    const typingEl = document.createElement('div');
+    typingEl.className = 'chat-msg assistant';
+    typingEl.id = `chatTyping_${paneId}`;
+    typingEl.innerHTML = `<div class="chat-msg-avatar">🤖</div>
+        <div class="chat-msg-content"><div class="chat-msg-bubble" style="display:inline-block;">
+        <div class="chat-typing"><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div></div>
+        </div></div>`;
+    container.appendChild(typingEl);
     container.scrollTop = container.scrollHeight;
 
     try {
-        const base = currentProjectId ? `/projects/${currentProjectId}` : '';
-        // 若还没有 session（极端情况），临时创建一个
-        if (!pane.sessionId) {
-            try {
-                const s = await api(`${_sessionApiBase()}/sessions`, { method: 'POST', body: {} });
-                pane.sessionId = s.id;
-            } catch (_) {}
-        }
-        const resp = await api(`${base}/chat`, {
-            method: 'POST',
-            body: {
-                message: text,
-                history: [],
-                chat_session_id: pane.sessionId,
-                project_id: currentProjectId || undefined,
-            }
-        });
-        loadEl.remove();
-        appendChatBubble('assistant', resp.reply || '（无回复）',
-            new Date().toISOString(), null, [], [], [], container);
+        const resp = await _sendChatStreamingToContainer(
+            streamUrl,
+            { message: text, history: [], chat_session_id: pane.sessionId,
+              project_id: currentProjectId || undefined },
+            container,
+            pane.thinking,
+            typingEl,
+        );
+        // 滚动到底部
         container.scrollTop = container.scrollHeight;
     } catch (e) {
-        loadEl.textContent = `发送失败: ${e.message}`;
+        typingEl.remove();
+        const errEl = document.createElement('div');
+        errEl.style.cssText = 'padding:8px 12px;font-size:12px;color:var(--danger);';
+        errEl.textContent = `发送失败: ${e.message}`;
+        container.appendChild(errEl);
     }
+}
+
+/**
+ * 通用流式发送：支持自定义容器 + 思考上下文
+ * 是 _sendChatStreaming 的容器化版本，用于分屏格。
+ */
+async function _sendChatStreamingToContainer(url, body, msgContainer, thinkingCtx, typingEl) {
+    const bubbleWrapper = document.createElement('div');
+    bubbleWrapper.className = 'chat-msg assistant _streaming';
+    bubbleWrapper.style.display = 'none';
+    bubbleWrapper.innerHTML = `
+        <div class="chat-msg-avatar">🤖</div>
+        <div class="chat-msg-content">
+            <div class="chat-msg-bubble"></div>
+            <div class="chat-msg-time">${formatTime(new Date().toISOString())}</div>
+        </div>`;
+    msgContainer.appendChild(bubbleWrapper);
+
+    const bubble = bubbleWrapper.querySelector('.chat-msg-bubble');
+    let fullText = '';
+    let finalAction = null;
+    let thinkingSteps = [];
+    let _lastRenderLen = 0;
+
+    const response = await fetch(`${API}${url}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+
+        for (const line of lines) {
+            if (!line.startsWith('data:')) continue;
+            let data, eventName = 'message';
+            const eventMatch = buffer.match(/event: (\w+)/);
+            if (eventMatch) eventName = eventMatch[1];
+
+            // 解析 event: 行
+            const prevLines = lines.slice(0, lines.indexOf(line));
+            const eventLine = prevLines.reverse().find(l => l.startsWith('event:'));
+            if (eventLine) eventName = eventLine.slice(6).trim();
+
+            try { data = JSON.parse(line.slice(5)); } catch { continue; }
+
+            if (data.type === 'text_delta') {
+                if (bubbleWrapper.style.display === 'none') {
+                    typingEl?.remove();
+                    bubbleWrapper.style.display = '';
+                }
+                fullText += data.delta;
+                if (fullText.length - _lastRenderLen >= 100) {
+                    bubble.innerHTML = formatChatContent(fullText);
+                    _lastRenderLen = fullText.length;
+                    msgContainer.scrollTop = msgContainer.scrollHeight;
+                }
+            } else if (data.type === 'tool_start') {
+                const hint = _extractArgsHint(data.tool, data.input);
+                thinkingCtx?.append({ step: 'start', tool: data.tool, args_hint: hint });
+            } else if (data.type === 'tool_done') {
+                thinkingSteps.push({ tool: data.tool, args_hint: '', summary: data.summary || '' });
+                thinkingCtx?.append({ step: 'done', tool: data.tool, summary: data.summary || '' });
+            } else if (data.type === 'action') {
+                finalAction = data;
+            } else if (data.type === 'message_done') {
+                thinkingSteps = data.thinking_steps || thinkingSteps;
+                break;
+            }
+        }
+    }
+
+    // 最终渲染
+    if (fullText) bubble.innerHTML = formatChatContent(fullText);
+    bubbleWrapper.classList.remove('_streaming');
+    thinkingCtx?.finish();
+    typingEl?.remove();
+
+    // 添加工具栏
+    const toolbarHtml = `<div class="chat-bubble-toolbar">
+        <button class="chat-bubble-tool-btn" onclick="copyChatBubble(this)" title="复制内容">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg> 复制
+        </button></div>`;
+    bubbleWrapper.querySelector('.chat-msg-content')?.insertAdjacentHTML('beforeend', toolbarHtml);
+
+    return { reply: fullText, action: finalAction };
 }
 
 function _splitPaneKeydown(e, paneId) {
@@ -9529,85 +9640,107 @@ const _TOOL_LABELS = {
     install_project_skill: '📦 安装 Skill',
 };
 
-let _currentThinkingPanel = null;  // 当前正在写入的思考面板元素
-let _currentThinkingSteps = [];    // 当前轮次的步骤记录
+// ==================== 思考面板（通用模块）====================
+/**
+ * createThinkingContext(msgContainer)
+ * 通用工厂：任何聊天容器（主面板/分屏格）都能创建自己的思考上下文，
+ * 不依赖全局 DOM 选择器，完全独立。
+ *
+ * 返回 { begin, append, finish } 三个方法，对应面板生命周期。
+ */
+function createThinkingContext(msgContainer) {
+    let panel = null;
+    let steps = [];
+    let startTime = 0;
 
-/** 开始一个新的思考面板（发消息时调用） */
-let _thinkingStartTime = 0;
+    return {
+        begin() {
+            panel = null;
+            steps = [];
+            startTime = Date.now();
+        },
 
-function _chatThinkingBegin() {
-    _currentThinkingPanel = null;
-    _currentThinkingSteps = [];
-    _thinkingStartTime = Date.now();
+        append(data) {
+            if (!panel) {
+                // 找锚点：优先 #chatTyping（在 msgContainer 内或其父），
+                // 其次 ._streaming 气泡（同容器内），
+                // 最后直接追加到 msgContainer 末尾
+                const scope = msgContainer || document.getElementById('chatMessages');
+                const typing = scope?.querySelector('#chatTyping')
+                             || document.getElementById('chatTyping');
+                const streamMsg = scope?.querySelector('.chat-msg.assistant._streaming')
+                                || document.querySelector('.chat-msg.assistant._streaming');
+
+                panel = document.createElement('div');
+                panel.className = 'chat-thinking-panel ctp-expanded';
+                panel.innerHTML = `
+                    <div class="ctp-header" onclick="this.closest('.chat-thinking-panel').classList.toggle('ctp-expanded')">
+                        <span class="ctp-icon">✦</span>
+                        <span class="ctp-title">思考中…</span>
+                        <span class="ctp-toggle">∨</span>
+                    </div>
+                    <div class="ctp-body"></div>`;
+
+                if (typing) {
+                    typing.parentNode.insertBefore(panel, typing);
+                } else if (streamMsg) {
+                    streamMsg.parentNode.insertBefore(panel, streamMsg);
+                } else if (scope) {
+                    scope.appendChild(panel);
+                } else {
+                    return; // 找不到容器，放弃
+                }
+            }
+
+            const body = panel.querySelector('.ctp-body');
+            const toolLabel = _TOOL_LABELS[data.tool] || `🔧 ${data.tool}`;
+
+            if (data.step === 'start') {
+                const step = document.createElement('div');
+                step.className = 'ctp-step ctp-step-running';
+                step.dataset.tool = data.tool;
+                step.innerHTML = `
+                    <div class="ctp-step-row1">
+                        <span class="ctp-step-dot"></span>
+                        <span class="ctp-step-label">${escHtml(toolLabel)}</span>
+                        <span class="ctp-step-status">…</span>
+                    </div>
+                    ${data.args_hint ? `<div class="ctp-step-row2">${escHtml(data.args_hint)}</div>` : ''}`;
+                body.appendChild(step);
+                steps.push({ tool: data.tool, el: step });
+            } else {
+                const existing = [...steps].reverse().find(s => s.tool === data.tool);
+                if (existing?.el) {
+                    existing.el.classList.remove('ctp-step-running');
+                    existing.el.classList.add('ctp-step-done');
+                    const statusEl = existing.el.querySelector('.ctp-step-status');
+                    if (statusEl) statusEl.textContent = data.summary ? `✓ ${data.summary.slice(0, 80)}` : '✓';
+                }
+            }
+            body.scrollTop = body.scrollHeight;
+        },
+
+        finish() {
+            if (!panel) return;
+            const stepCount = steps.length;
+            const elapsed = startTime ? ((Date.now() - startTime) / 1000).toFixed(1) + 's' : '';
+            const title = panel.querySelector('.ctp-title');
+            if (title) title.textContent = stepCount > 0
+                ? `思考了 ${stepCount} 步${elapsed ? ' · ' + elapsed : ''}`
+                : '思考中';
+            panel.classList.remove('ctp-expanded');
+            panel = null;
+            steps = [];
+        },
+    };
 }
 
-/** 追加思考步骤（SSE 事件驱动） */
-function _chatThinkingAppend(data) {
-    // 若面板还未创建，插入到 chatTyping 前（非流式）或流式气泡的 content 内（流式）
-    if (!_currentThinkingPanel) {
-        const typing = document.getElementById('chatTyping');
-        const streamBubble = document.querySelector('.chat-msg.assistant._streaming .chat-msg-content');
-        if (!typing && !streamBubble) return;
-        const panel = document.createElement('div');
-        panel.className = 'chat-thinking-panel';
-        panel.innerHTML = `
-            <div class="ctp-header" onclick="this.closest('.chat-thinking-panel').classList.toggle('ctp-expanded')">
-                <span class="ctp-icon">✦</span>
-                <span class="ctp-title">思考中…</span>
-                <span class="ctp-toggle">∨</span>
-            </div>
-            <div class="ctp-body"></div>`;
-        if (typing) {
-            typing.parentNode.insertBefore(panel, typing);
-        } else {
-            // 流式路径：插入到流式气泡 .chat-msg 之前（同级，不缩进）
-            const streamMsg = document.querySelector('.chat-msg.assistant._streaming');
-            streamMsg.parentNode.insertBefore(panel, streamMsg);
-        }
-        _currentThinkingPanel = panel;
-        panel.classList.add('ctp-expanded');
-    }
+// ── 全局默认实例（主面板使用，保持向后兼容）──────────────────────────
+const _globalThinking = createThinkingContext(null);
 
-    const body = _currentThinkingPanel.querySelector('.ctp-body');
-    const toolLabel = _TOOL_LABELS[data.tool] || `🔧 ${data.tool}`;
-
-    if (data.step === 'start') {
-        const step = document.createElement('div');
-        step.className = 'ctp-step ctp-step-running';
-        step.dataset.tool = data.tool;
-        // 双行展示：工具名（第一行）+ 参数（第二行，可选）
-        step.innerHTML = `
-            <div class="ctp-step-row1">
-                <span class="ctp-step-dot"></span>
-                <span class="ctp-step-label">${escHtml(toolLabel)}</span>
-                <span class="ctp-step-status">…</span>
-            </div>
-            ${data.args_hint ? `<div class="ctp-step-row2">${escHtml(data.args_hint)}</div>` : ''}`;
-        body.appendChild(step);
-        _currentThinkingSteps.push({ tool: data.tool, el: step });
-    } else {
-        const existing = [..._currentThinkingSteps].reverse().find(s => s.tool === data.tool);
-        if (existing && existing.el) {
-            existing.el.classList.remove('ctp-step-running');
-            existing.el.classList.add('ctp-step-done');
-            const statusEl = existing.el.querySelector('.ctp-step-status');
-            if (statusEl) statusEl.textContent = data.summary ? `✓ ${data.summary.slice(0, 80)}` : '✓';
-        }
-    }
-    body.scrollTop = body.scrollHeight;
-}
-
-/** 思考完成，折叠面板并更新标题 */
-function _chatThinkingFinish() {
-    if (!_currentThinkingPanel) return;
-    const stepCount = _currentThinkingSteps.length;
-    const elapsed = _thinkingStartTime ? ((Date.now() - _thinkingStartTime) / 1000).toFixed(1) + 's' : '';
-    const title = _currentThinkingPanel.querySelector('.ctp-title');
-    if (title) title.textContent = stepCount > 0
-        ? `思考了 ${stepCount} 步${elapsed ? ' · ' + elapsed : ''}`
-        : '思考中';
-    _currentThinkingPanel.classList.remove('ctp-expanded');
-    _currentThinkingPanel = null;
+function _chatThinkingBegin() { _globalThinking.begin(); }
+function _chatThinkingAppend(data) { _globalThinking.append(data); }
+function _chatThinkingFinish() { _globalThinking.finish();
     _currentThinkingSteps = [];
 }
 
