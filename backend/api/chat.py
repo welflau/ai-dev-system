@@ -525,7 +525,7 @@ async def _chat_stream_generator(
 
             elif etype == "tool_start":
                 label = _TOOL_LABELS_PY.get(ev["tool"], f"🔧 {ev['tool']}")
-                yield _sse("tool_start", {"tool": ev["tool"], "label": label})
+                yield _sse("tool_start", {"tool": ev["tool"], "label": label, "input": ev.get("input", {})})
 
             elif etype == "tool_done":
                 summary = ev.get("summary", "")
@@ -1817,7 +1817,7 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
 
             elif etype == "tool_start":
                 label = _TOOL_LABELS_PY.get(ev["tool"], f"🔧 {ev['tool']}")
-                yield _sse("tool_start", {"tool": ev["tool"], "label": label})
+                yield _sse("tool_start", {"tool": ev["tool"], "label": label, "input": ev.get("input", {})})
 
             elif etype == "tool_done":
                 summary = ev.get("summary", "")

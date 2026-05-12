@@ -9373,12 +9373,22 @@ const _TOOL_INPUT_KEY = {
     get_ticket_status: 'ticket_id',
     get_requirement_logs: 'requirement_id',
     install_project_skill: 'dir_name',
+    // 新增工具
+    web_search: 'query', grep: 'pattern', glob: 'pattern',
+    shell: 'command', list_directory: 'path',
+    save_memory: 'title', read_files: 'paths',
+    browse_marketplace: 'dir_name',
 };
 
 function _extractArgsHint(toolName, input) {
     if (!input) return '';
     const key = _TOOL_INPUT_KEY[toolName];
-    if (key && input[key]) return String(input[key]).slice(0, 60);
+    if (key && input[key]) {
+        const val = String(input[key]);
+        // 搜索类工具用引号包裹，更像 CodeBuddy 风格
+        const quoteTools = new Set(['web_search', 'search_knowledge', 'grep', 'glob', 'fetch_url']);
+        return quoteTools.has(toolName) ? `"${val.slice(0, 58)}"` : val.slice(0, 60);
+    }
     // fallback：取第一个非空字段值
     const firstVal = Object.values(input).find(v => v !== null && v !== undefined && String(v).trim());
     return firstVal ? String(firstVal).slice(0, 60) : '';
