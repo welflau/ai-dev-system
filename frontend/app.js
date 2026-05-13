@@ -8253,6 +8253,10 @@ function _switchToGlobalChat() {
     if (!currentProjectId) return;
     currentProjectId = null;
     currentProject = null;
+    // 先清空 _globalChatDom 缓存（可能被切项目操作覆盖成了项目内容），
+    // 再调 _updateChatPanelForContext 让其走 loadChatHistory 从 API 加载全局历史
+    _globalChatDom = '';
+    _globalChatHistory = [];
     _updateChatPanelForContext();
 }
 
