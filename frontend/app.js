@@ -7115,14 +7115,6 @@ function formatDate(iso) {
     } catch { return '-'; }
 }
 
-function formatDateTime(iso) {
-    if (!iso) return '-';
-    try {
-        const d = new Date(iso);
-        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-    } catch { return '-'; }
-}
-
 function pad(n) { return n.toString().padStart(2, '0'); }
 
 const STATUS_LABELS = {
@@ -7945,15 +7937,11 @@ function addLog(level, message) {
 
 function formatDateTime(input) {
     if (!input) return '-';
-    const date = (input instanceof Date) ? input : new Date(input);
-    if (isNaN(date.getTime())) return String(input);
-    const year = date.getFullYear();
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    const hours = String(date.getHours()).padStart(2, '0');
-    const minutes = String(date.getMinutes()).padStart(2, '0');
-    const seconds = String(date.getSeconds()).padStart(2, '0');
-    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+    const date = (input instanceof Date) ? input : new Date(
+        typeof input === 'string' ? input.replace(' ', 'T') : input
+    );
+    if (isNaN(date.getTime())) return String(input).slice(0, 16);
+    return `${pad(date.getMonth() + 1)}/${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 // 修改 checkLLMStatus 函数，添加日志记录
