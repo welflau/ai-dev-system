@@ -8274,7 +8274,13 @@ function toggleChatFullscreen() {
         btn.title = '全屏';
         if (splitBtn) splitBtn.style.display = 'none';
         _destroyAllSplitPanes();
-        // 恢复主面板显示原来的会话（不受分屏影响）
+        // 退出全屏：若当前有项目（全屏期间可能切换过），进入该项目页
+        if (currentProjectId) {
+            showProjectDetail(currentProjectId);
+        } else {
+            // 无项目则回到全局列表
+            showProjectList();
+        }
         setTimeout(() => loadChatHistory(), 100);
     }
 }
