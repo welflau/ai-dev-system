@@ -15,6 +15,9 @@ let eventSource = null;
 let _globalChatHistory = [];
 let _globalChatDom = '';
 
+// 全局聊天思考日志 SSE 连接
+let _thinkingESrc = null;
+
 // v0.20 多会话管理
 let _currentChatSessionId = null;   // 当前会话 ID，null 表示未初始化
 
