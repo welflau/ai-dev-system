@@ -7965,6 +7965,35 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
     border-top: 1px solid var(--border, #2d3748);
     margin: 8px 0;
 }
+.chat-md-table-wrap {
+    overflow-x: auto;
+    margin: 8px 0;
+    border-radius: 6px;
+    border: 1px solid var(--border, #2d3748);
+}
+.chat-md-table {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 12px;
+    min-width: 300px;
+}
+.chat-md-table th {
+    background: var(--bg-elevated, #2d3748);
+    color: var(--text-primary, #e2e8f0);
+    font-weight: 600;
+    padding: 6px 12px;
+    text-align: left;
+    border-bottom: 2px solid var(--border, #4a5568);
+    white-space: nowrap;
+}
+.chat-md-table td {
+    padding: 5px 12px;
+    color: var(--text-secondary, #a0aec0);
+    border-bottom: 1px solid var(--border, #2d3748);
+    line-height: 1.5;
+}
+.chat-md-table tr:last-child td { border-bottom: none; }
+.chat-md-table tr:hover td { background: var(--bg-elevated, #2d3748); }
 
 /* ==================== 项目流程页 ==================== */
 .flow-summary {

@@ -11061,7 +11061,7 @@ function formatChatContent(content) {
     return result;
 }
 
-/** 将 Markdown 文本渲染成 HTML（支持标题/列表/加粗/行内代码/分割线） */
+/** 将 Markdown 文本渲染成 HTML（支持标题/列表/加粗/行内代码/分割线/表格） */
 function _renderMarkdownText(text) {
     const lines = text.split('\n');
     let html = '';
@@ -11075,10 +11075,46 @@ function _renderMarkdownText(text) {
         const headMatch = raw.match(/^(#{1,3})\s+(.+)/);
         if (headMatch) {
             if (inList) { html += '</ul>'; inList = false; }
-            const level = headMatch[1].length + 2; // # → h3, ## → h4（避免太大）
+            const level = headMatch[1].length + 2;
             const hTag = `h${Math.min(level, 5)}`;
             const hContent = _inlineFormat(escapeHtml(headMatch[2]));
             html += `<${hTag} class="chat-md-h${headMatch[1].length}">${hContent}</${hTag}>`;
+            continue;
+        }
+
+        // Markdown 表格：以 | 开头，下一行是分隔行（|---|）
+        if (raw.trim().startsWith('|') && i + 1 < lines.length && /^\|[\s\-|:]+\|/.test(lines[i + 1])) {
+            if (inList) { html += '</ul>'; inList = false; }
+
+            // 收集连续的表格行
+            const tableLines = [];
+            while (i < lines.length && lines[i].trim().startsWith('|')) {
+                tableLines.push(lines[i]);
+                i++;
+            }
+            i--; // 回退一行（外层循环会 i++）
+
+            const parseRow = (line) =>
+                line.trim().replace(/^\||\|$/g, '').split('|').map(c => c.trim());
+
+            const headers = parseRow(tableLines[0]);
+            // tableLines[1] 是分隔行，跳过
+            const bodyRows = tableLines.slice(2);
+
+            let tHtml = '<div class="chat-md-table-wrap"><table class="chat-md-table"><thead><tr>';
+            headers.forEach(h => {
+                tHtml += `<th>${_inlineFormat(escapeHtml(h))}</th>`;
+            });
+            tHtml += '</tr></thead><tbody>';
+            bodyRows.forEach(rowLine => {
+                if (!rowLine.trim() || /^\|[\s\-|:]+\|/.test(rowLine)) return; // 跳过空行/分隔行
+                const cells = parseRow(rowLine);
+                tHtml += '<tr>';
+                cells.forEach(c => { tHtml += `<td>${_inlineFormat(escapeHtml(c))}</td>`; });
+                tHtml += '</tr>';
+            });
+            tHtml += '</tbody></table></div>';
+            html += tHtml;
             continue;
         }
 
