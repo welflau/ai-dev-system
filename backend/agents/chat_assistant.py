@@ -52,6 +52,7 @@ from actions.chat.shell_exec import ShellAction                            # She
 from actions.chat.memory_write import MemoryWriteAction                    # 写入记忆
 from actions.chat.read_many_files import ReadManyFilesAction               # 批量读文件
 from actions.chat.dispatch_subtask import DispatchSubtaskAction            # 子任务派发
+from actions.chat.manage_skill import ManageSkillAction                    # Skill 开关管理
 
 logger = logging.getLogger("agent.chat_assistant")
 
@@ -97,6 +98,7 @@ _TOOL_LABELS_PY: dict = {
     "read_files": "📄 批量读文件",
     "browse_marketplace": "🛒 浏览技能市场",
     "install_project_skill": "📦 安装 Skill",
+    "manage_skill": "🔧 管理 Skill",
 }
 
 # 全局聊天（项目列表页，无 project_id）下可用的工具白名单。
@@ -108,6 +110,7 @@ _GLOBAL_CHAT_TOOLS = {"confirm_project", "search_knowledge", "search_ticket_hist
 # 全局 + 项目两个模式都可用的工具（不受 _GLOBAL_CHAT_TOOLS 排除逻辑影响）
 _CROSS_SCOPE_TOOLS = {
     "browse_marketplace",   # 浏览/安装市场 Skill
+    "manage_skill",         # 启用/禁用 Skill（全局和项目都能管理）
     "web_search",           # 联网搜索
     "save_memory",          # 写入记忆
     "read_files",           # 批量读文件
@@ -250,6 +253,7 @@ class _ChatToolExecutor:
                 "shell": "command", "web_search": "query",
                 "save_memory": "title", "read_files": "paths",
                 "browse_marketplace": "dir_name", "install_project_skill": "dir_name",
+                "manage_skill": "action",
             }
             key = _KEY.get(tool_name)
             arg_val = str(tool_input.get(key, ""))[:60] if key else ""
@@ -319,6 +323,7 @@ class ChatAssistantAgent(BaseAgent):
         MemoryWriteAction,             # 写入记忆（全局+项目）
         ReadManyFilesAction,           # 批量读文件（全局+项目）
         DispatchSubtaskAction,         # Phase 4 子任务派发（仅项目）
+        ManageSkillAction,             # Skill 启用/禁用管理
     ]
     react_mode = ReactMode.REACT
     max_react_loop = 6   # 工具调用可能多轮（搜索+fetch），留足余量输出最终回答
