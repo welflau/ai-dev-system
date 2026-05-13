@@ -232,6 +232,22 @@ class QueryEngine:
                         })
                         continue
 
+                # 权限审批（高风险操作异步挂起等待用户确认）
+                try:
+                    from permissions.gate import permission_gate
+                    await permission_gate.check(tool_name, tool_input, context)
+                except Exception as perm_exc:
+                    yield ToolErrorEvent(
+                        tool=tool_name, error=str(perm_exc), duration_ms=0
+                    )
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tool_use_id,
+                        "content": f"操作被拒绝: {perm_exc}",
+                        "is_error": True,
+                    })
+                    continue
+
                 start_ts = time.monotonic()
                 try:
                     result_text, action_data = await self.executor.execute(

@@ -740,6 +740,25 @@ CREATE INDEX IF NOT EXISTS idx_tool_audit_log_tool    ON tool_audit_log(tool_nam
 CREATE INDEX IF NOT EXISTS idx_tool_audit_log_project ON tool_audit_log(project_id);
 CREATE INDEX IF NOT EXISTS idx_tool_audit_log_ticket  ON tool_audit_log(ticket_id);
 CREATE INDEX IF NOT EXISTS idx_tool_audit_log_created ON tool_audit_log(created_at);
+
+-- ============================================================
+-- 权限审批请求表（Phase 3 异步权限审批）
+-- ============================================================
+CREATE TABLE IF NOT EXISTS permission_requests (
+    id                TEXT PRIMARY KEY,
+    tool_name         TEXT NOT NULL,
+    tool_input_json   TEXT,
+    risk_label        TEXT NOT NULL,        -- 展示给用户的风险说明
+    project_id        TEXT,
+    ticket_id         TEXT,
+    agent_type        TEXT,
+    status            TEXT NOT NULL DEFAULT 'pending',   -- pending / approved / denied / timeout
+    created_at        TEXT NOT NULL,
+    resolved_at       TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_perm_req_status    ON permission_requests(status);
+CREATE INDEX IF NOT EXISTS idx_perm_req_project   ON permission_requests(project_id);
+CREATE INDEX IF NOT EXISTS idx_perm_req_created   ON permission_requests(created_at);
 """
 
 

@@ -69,6 +69,12 @@ async def lifespan(app: FastAPI):
     from hooks.builtin import register_builtin_hooks
     register_builtin_hooks()
 
+    # Phase 3 权限审批：初始化 PermissionGate（单例，热身一下确保导入正确）
+    from permissions.gate import permission_gate as _pg
+    logger.info("权限审批 PermissionGate 就绪（超时=%ds，高风险规则 %d 条）",
+                _pg.APPROVAL_TIMEOUT_SECONDS if hasattr(_pg, 'APPROVAL_TIMEOUT_SECONDS') else 300,
+                0)
+
     from llm_client import llm_client
     if llm_client.is_configured:
         logger.info("LLM 已配置: %s / %s (format=%s)", llm_client.base_url, llm_client.model, llm_client.api_format)
@@ -295,6 +301,7 @@ from api.art_assets import router as art_assets_router
 from api.efficiency import router as efficiency_router
 from api.competitor import router as competitor_router
 from api.agent_test import router as agent_test_router, global_router as agent_test_global_router
+from api.permissions import router as permissions_router
 
 app.include_router(projects_router)
 app.include_router(requirements_router)
@@ -318,6 +325,7 @@ app.include_router(efficiency_router)
 app.include_router(competitor_router)
 app.include_router(agent_test_router)
 app.include_router(agent_test_global_router)
+app.include_router(permissions_router)
 
 
 # ==================== 系统端点 ====================

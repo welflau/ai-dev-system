@@ -6573,6 +6573,13 @@ function connectSSE(projectId) {
             _chatThinkingAppend(data);
         });
 
+        // 权限审批通知
+        eventSource.addEventListener('permission_request', (e) => {
+            const data = JSON.parse(e.data);
+            console.log('[SSE] permission_request:', data);
+            _onPermissionRequest(data);
+        });
+
         eventSource.onerror = () => {
             console.warn('[SSE] 连接断开，30 秒后重连');
             disconnectSSE();
@@ -13940,3 +13947,111 @@ async function refreshMetrics() {
 // 每 5 秒刷新一次，页面加载后启动
 setInterval(refreshMetrics, 5000);
 refreshMetrics();
+
+// ==================== 权限审批 UI ====================
+
+let _permPendingCount = 0;
+
+function _onPermissionRequest(data) {
+    // SSE 推送到来：更新角标 + 自动弹窗
+    _permPendingCount++;
+    _updatePermBadge(_permPendingCount);
+    showToast(`🔒 AI 请求高风险操作审批：${data.risk_label}`, 'warning');
+    // 自动打开审批面板
+    showPermissionModal();
+}
+
+function _updatePermBadge(count) {
+    const btn = document.getElementById('permNotifyBtn');
+    const badge = document.getElementById('permBadge');
+    if (!btn || !badge) return;
+    if (count > 0) {
+        btn.style.display = '';
+        badge.textContent = count;
+    } else {
+        btn.style.display = 'none';
+    }
+}
+
+async function showPermissionModal() {
+    const modal = document.getElementById('permissionModal');
+    if (!modal) return;
+    modal.style.display = 'flex';
+    await _loadPermissionList();
+}
+
+function closePermissionModal() {
+    const modal = document.getElementById('permissionModal');
+    if (modal) modal.style.display = 'none';
+}
+
+async function _loadPermissionList() {
+    const listEl = document.getElementById('permList');
+    if (!listEl) return;
+    try {
+        const res = await fetch(`${API}/permissions/pending`);
+        const data = await res.json();
+        const items = data.items || [];
+        _permPendingCount = items.length;
+        _updatePermBadge(_permPendingCount);
+
+        if (items.length === 0) {
+            listEl.innerHTML = '<div class="perm-empty">暂无待审批请求</div>';
+            return;
+        }
+        listEl.innerHTML = items.map(item => `
+            <div class="perm-item" id="perm-item-${item.id}">
+                <div class="perm-item-header">
+                    <span class="perm-tool-badge">${item.tool_name}</span>
+                    <span class="perm-risk-label">⚠️ ${item.risk_label}</span>
+                    <span class="perm-time">${_relativeTime(item.created_at)}</span>
+                </div>
+                ${item.project_id ? `<div class="perm-meta">项目: ${item.project_id.slice(0,8)}${item.ticket_id ? ' | 工单: ' + item.ticket_id.slice(-6) : ''}</div>` : ''}
+                <div class="perm-actions">
+                    <button class="btn btn-sm btn-danger" onclick="resolvePermission('${item.id}', false)">拒绝</button>
+                    <button class="btn btn-sm btn-success" onclick="resolvePermission('${item.id}', true)">批准</button>
+                </div>
+            </div>
+        `).join('');
+    } catch (e) {
+        listEl.innerHTML = '<div class="perm-empty">加载失败</div>';
+    }
+}
+
+async function resolvePermission(requestId, approved) {
+    try {
+        const res = await fetch(`${API}/permissions/${requestId}/resolve`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ approved }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        const label = approved ? '已批准' : '已拒绝';
+        showToast(`${label}操作请求`, approved ? 'success' : 'info');
+        // 移除该条目
+        const itemEl = document.getElementById(`perm-item-${requestId}`);
+        if (itemEl) itemEl.remove();
+        // 刷新列表
+        await _loadPermissionList();
+    } catch (e) {
+        showToast(`操作失败: ${e.message}`, 'error');
+    }
+}
+
+function _relativeTime(isoStr) {
+    if (!isoStr) return '';
+    const diff = Math.round((Date.now() - new Date(isoStr).getTime()) / 1000);
+    if (diff < 60) return `${diff}秒前`;
+    if (diff < 3600) return `${Math.floor(diff/60)}分钟前`;
+    return `${Math.floor(diff/3600)}小时前`;
+}
+
+// 页面加载时轮询一次待审批（防止刷新后漏掉已 pending 的）
+(async function _initPermCheck() {
+    try {
+        const res = await fetch(`${API}/permissions/pending`);
+        const data = await res.json();
+        const count = (data.items || []).length;
+        if (count > 0) _updatePermBadge(count);
+    } catch (_) {}
+})();

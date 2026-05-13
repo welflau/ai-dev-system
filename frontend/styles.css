@@ -8128,3 +8128,75 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
     margin-bottom: 4px;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+
+/* ==================== 权限审批 UI ==================== */
+.perm-notify-btn {
+    background: #e53e3e;
+    color: #fff;
+    border: none;
+    font-size: 13px;
+    padding: 4px 10px;
+    border-radius: 6px;
+    cursor: pointer;
+    margin-right: 8px;
+}
+.perm-notify-btn:hover { background: #c53030; }
+.perm-badge {
+    position: absolute;
+    top: -6px; right: -6px;
+    background: #fff;
+    color: #e53e3e;
+    border-radius: 50%;
+    min-width: 18px; height: 18px;
+    font-size: 11px;
+    font-weight: 700;
+    display: flex; align-items: center; justify-content: center;
+    border: 2px solid #e53e3e;
+}
+.perm-modal-box {
+    width: 540px;
+    max-width: 96vw;
+    max-height: 80vh;
+    overflow-y: auto;
+}
+.perm-hint {
+    color: #718096;
+    font-size: 13px;
+    margin: 0 0 12px;
+}
+.perm-list { display: flex; flex-direction: column; gap: 12px; }
+.perm-empty { color: #a0aec0; font-size: 13px; text-align: center; padding: 24px; }
+.perm-item {
+    border: 1px solid #feb2b2;
+    border-radius: 8px;
+    padding: 12px 14px;
+    background: #fff5f5;
+}
+.perm-item-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+    flex-wrap: wrap;
+}
+.perm-tool-badge {
+    background: #e53e3e;
+    color: #fff;
+    border-radius: 4px;
+    padding: 2px 7px;
+    font-size: 12px;
+    font-weight: 600;
+}
+.perm-risk-label {
+    font-size: 13px;
+    font-weight: 600;
+    color: #c53030;
+    flex: 1;
+}
+.perm-time { font-size: 12px; color: #a0aec0; }
+.perm-meta { font-size: 12px; color: #718096; margin-bottom: 8px; }
+.perm-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.btn-danger  { background: #e53e3e; color: #fff; border: none; }
+.btn-danger:hover  { background: #c53030; }
+.btn-success { background: #38a169; color: #fff; border: none; }
+.btn-success:hover { background: #276749; }
