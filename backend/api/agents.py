@@ -126,20 +126,43 @@ async def list_agents():
             "error_count": status_info.get("error_count", 0),
         })
 
-    # ChatAssistant 单独加入（不在 orchestrator.agents 里）
-    agents.append({
-        "name": "ChatAssistant",
-        "icon": "💬",
-        "role": "AI 助手 — 聊天 + 工具调用",
-        "enabled": True,
-        "react_mode": "react",
-        "watch_actions": [],
-        "actions": [{"name": "（动态工具，见 prompt）", "description": "38+ 个 Chat Action", "schema": {"mode": "dynamic"}, "prompt_preview": ""}],
-        "status": "idle",
-        "completed_count": 0,
-        "error_count": 0,
-        "agent_prompt": _CHAT_ASSISTANT_PROMPT_SUMMARY,
-    })
+    # ChatAssistant：补充 agent_prompt 和正确的 Actions 信息
+    # （ChatAssistant 可能已在 orchestrator.agents 里，也可能不在——统一处理）
+    chat_entry = next((a for a in agents if a["name"] == "ChatAssistant"), None)
+    if chat_entry:
+        # 已在列表里，补充 agent_prompt 和图标
+        chat_entry["icon"] = "💬"
+        chat_entry["role"] = "AI 助手 — 聊天 + 工具调用"
+        chat_entry["agent_prompt"] = _CHAT_ASSISTANT_PROMPT_SUMMARY
+        # 用 ChatAssistantAgent 的真实 Actions 补全描述
+        try:
+            from agents.chat_assistant import ChatAssistantAgent
+            _ca = ChatAssistantAgent()
+            chat_entry["actions"] = [
+                {
+                    "name": act_name,
+                    "description": act_inst.description,
+                    "schema": {"mode": "chat"},
+                    "prompt_preview": "",
+                }
+                for act_name, act_inst in _ca._actions.items()
+            ]
+        except Exception:
+            pass
+    else:
+        agents.append({
+            "name": "ChatAssistant",
+            "icon": "💬",
+            "role": "AI 助手 — 聊天 + 工具调用",
+            "enabled": True,
+            "react_mode": "react",
+            "watch_actions": [],
+            "actions": [],
+            "status": "idle",
+            "completed_count": 0,
+            "error_count": 0,
+            "agent_prompt": _CHAT_ASSISTANT_PROMPT_SUMMARY,
+        })
 
     return {"agents": agents}
 
