@@ -116,7 +116,7 @@ class BaseAgent(ABC):
             return self._skills_prompt
 
     async def run_action(self, action_name: str, context: Dict[str, Any]) -> Dict[str, Any]:
-        """执行指定 Action（含 v0.17 动态 Skills 注入）
+        """执行指定 Action（含 v0.17 动态 Skills 注入 + Pre/Post Hooks）
 
         通过 ContextVar 在 action.run() 期间提供 skills_prompt，
         ActionNode._compile() 读取后自动 prepend 到 LLM prompt 开头。
@@ -127,10 +127,17 @@ class BaseAgent(ABC):
             return {"status": "error", "message": f"Agent {self.agent_type} 没有 Action: {action_name}"}
 
         from skills import _current_skills
+        from actions.executor import run_action_with_hooks
         skills_prompt = await self._resolve_skills_prompt(context)
         token = _current_skills.set(skills_prompt)
         try:
-            result = await action.run(context)
+            result = await run_action_with_hooks(
+                action,
+                context,
+                project_id=context.get("project_id"),
+                ticket_id=context.get("ticket_id"),
+                agent_type=self.agent_type,
+            )
         finally:
             _current_skills.reset(token)
         return result.to_dict()

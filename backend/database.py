@@ -722,6 +722,24 @@ CREATE TABLE IF NOT EXISTS global_skill_settings (
     enabled     INTEGER DEFAULT 1,   -- 1=开启, 0=关闭（覆盖 skills.json 默认值）
     updated_at  TEXT NOT NULL
 );
+
+-- ============================================================
+-- 工具调用审计日志（Phase 1 Hooks）
+-- ============================================================
+CREATE TABLE IF NOT EXISTS tool_audit_log (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    tool_name   TEXT NOT NULL,
+    project_id  TEXT,
+    ticket_id   TEXT,
+    agent_type  TEXT,
+    duration_ms REAL,
+    success     INTEGER NOT NULL DEFAULT 1,   -- 1=成功, 0=失败
+    created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tool_audit_log_tool    ON tool_audit_log(tool_name);
+CREATE INDEX IF NOT EXISTS idx_tool_audit_log_project ON tool_audit_log(project_id);
+CREATE INDEX IF NOT EXISTS idx_tool_audit_log_ticket  ON tool_audit_log(ticket_id);
+CREATE INDEX IF NOT EXISTS idx_tool_audit_log_created ON tool_audit_log(created_at);
 """
 
 

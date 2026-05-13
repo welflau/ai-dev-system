@@ -65,6 +65,10 @@ async def lifespan(app: FastAPI):
     await db.init_tables()
     logger.info("SQLite 数据库就绪")
 
+    # Phase 1 Hooks：注册内置审计/限流/失败追踪 Hook
+    from hooks.builtin import register_builtin_hooks
+    register_builtin_hooks()
+
     from llm_client import llm_client
     if llm_client.is_configured:
         logger.info("LLM 已配置: %s / %s (format=%s)", llm_client.base_url, llm_client.model, llm_client.api_format)
