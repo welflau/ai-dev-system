@@ -454,8 +454,18 @@ class ChatAssistantAgent(BaseAgent):
         """
         流式对话：逐步 yield SSE 事件 dict，由上层端点包装为 text/event-stream。
         事件类型：text_delta / tool_start / tool_done / action / error / message_done
+
+        内部使用 QueryEngine 统一循环（Phase 2）。
         """
         from llm_client import llm_client, set_llm_context, clear_llm_context
+        from query_engine import QueryEngine, Budget
+        from query_engine.events import (
+            TextDeltaEvent, ToolStartEvent, ToolDoneEvent, ToolErrorEvent,
+            ActionEvent, MessageDoneEvent, BudgetExceededEvent, ErrorEvent,
+        )
+        from query_engine.executor import ChatToolExecutorAdapter
+        from config import settings as _cfg
+        from hooks.registry import hook_registry
 
         system_prompt = await self._build_system_prompt(project, project_context)
         messages = self._assemble_messages(history, user_message, images)
@@ -471,33 +481,50 @@ class ChatAssistantAgent(BaseAgent):
             project_traits = []
 
         tools = self._exposed_tool_schemas(scope="project", traits=project_traits)
-        executor = _ChatToolExecutor(self, project["id"])
+        inner_executor = _ChatToolExecutor(self, project["id"])
+        executor = ChatToolExecutorAdapter(inner_executor)
 
-        from query_engine.budget import Budget
-        from config import settings as _cfg
-        chat_budget = Budget(
+        budget = Budget(
             max_tokens=_cfg.CHAT_MAX_TOKENS,
             max_turns=_cfg.CHAT_MAX_TURNS,
             max_seconds=_cfg.CHAT_MAX_SECONDS,
         )
+        context = {"project_id": project["id"], "agent_type": self.agent_type}
+        engine = QueryEngine(
+            llm_client=llm_client,
+            tool_executor=executor,
+            budget=budget,
+            hooks=hook_registry,
+            max_rounds=self.max_react_loop,
+        )
+
         set_llm_context(project_id=project["id"], agent_type=self.agent_type, action="chat_stream")
         try:
-            async for ev in llm_client.chat_with_tools_stream(
-                messages=messages,
-                tools=tools,
-                tool_executor=executor,
-                max_rounds=self.max_react_loop,
-                temperature=0.7,
-                max_tokens=4000,
-                system=system_prompt,
-                budget=chat_budget,
-            ):
-                # 在 message_done 里附上 executor 的结果供调用层保存
-                if ev.get("type") == "message_done":
-                    ev["thinking_steps"] = executor.thinking_steps or []
-                    ev["action"] = executor.primary_action_result
-                    ev["actions"] = executor.all_confirm_results if len(executor.all_confirm_results) > 1 else None
-                yield ev
+            async for event in engine.run(messages, system_prompt, tools, context):
+                if isinstance(event, TextDeltaEvent):
+                    yield {"type": "text_delta", "delta": event.delta}
+                elif isinstance(event, ToolStartEvent):
+                    yield {"type": "tool_start", "tool": event.tool,
+                           "tool_use_id": event.tool_use_id, "input": event.input}
+                elif isinstance(event, ToolDoneEvent):
+                    yield {"type": "tool_done", "tool": event.tool, "summary": event.summary}
+                elif isinstance(event, ToolErrorEvent):
+                    yield {"type": "tool_done", "tool": event.tool,
+                           "summary": f"错误: {event.error}"}
+                elif isinstance(event, ActionEvent):
+                    yield {"type": "action", **event.action_data}
+                elif isinstance(event, MessageDoneEvent):
+                    yield {
+                        "type": "message_done",
+                        "rounds": event.rounds,
+                        "thinking_steps": event.thinking_steps or [],
+                        "action": event.final_action,
+                        "actions": event.all_confirm_results if len(event.all_confirm_results) > 1 else None,
+                    }
+                elif isinstance(event, BudgetExceededEvent):
+                    yield {"type": "budget_exceeded", "reason": event.reason}
+                elif isinstance(event, ErrorEvent):
+                    yield {"type": "error", "message": event.message}
         finally:
             clear_llm_context()
 
@@ -568,39 +595,65 @@ class ChatAssistantAgent(BaseAgent):
         projects_brief: List[Dict[str, Any]],
         session_id: Optional[str] = None,
     ):
-        """全局聊天流式版：逐步 yield SSE 事件，与 chat_stream 同格式。"""
+        """全局聊天流式版：逐步 yield SSE 事件，与 chat_stream 同格式。内部使用 QueryEngine（Phase 2）。"""
         from llm_client import llm_client, set_llm_context, clear_llm_context
+        from query_engine import QueryEngine, Budget
+        from query_engine.events import (
+            TextDeltaEvent, ToolStartEvent, ToolDoneEvent, ToolErrorEvent,
+            ActionEvent, MessageDoneEvent, BudgetExceededEvent, ErrorEvent,
+        )
+        from query_engine.executor import ChatToolExecutorAdapter
+        from config import settings as _cfg
+        from hooks.registry import hook_registry
 
         preset_suggestions = self._match_preset_suggestions(user_message)
         system_prompt = self._build_global_system_prompt(projects_brief, preset_suggestions)
         messages = self._assemble_messages(history, user_message, images)
         tools = self._exposed_tool_schemas(scope="global")
-        executor = _ChatToolExecutor(self, project_id=None, session_id=session_id)
+        inner_executor = _ChatToolExecutor(self, project_id=None, session_id=session_id)
+        executor = ChatToolExecutorAdapter(inner_executor)
 
-        from query_engine.budget import Budget
-        from config import settings as _cfg
-        global_budget = Budget(
+        budget = Budget(
             max_tokens=_cfg.CHAT_MAX_TOKENS,
             max_turns=_cfg.CHAT_MAX_TURNS,
             max_seconds=_cfg.CHAT_MAX_SECONDS,
         )
+        context = {"agent_type": self.agent_type}
+        engine = QueryEngine(
+            llm_client=llm_client,
+            tool_executor=executor,
+            budget=budget,
+            hooks=hook_registry,
+            max_rounds=self.max_react_loop,
+        )
+
         set_llm_context(agent_type=self.agent_type, action="global_chat_stream")
         try:
-            async for ev in llm_client.chat_with_tools_stream(
-                messages=messages,
-                tools=tools,
-                tool_executor=executor,
-                max_rounds=self.max_react_loop,
-                temperature=0.7,
-                max_tokens=4000,
-                system=system_prompt,
-                budget=global_budget,
-            ):
-                if ev.get("type") == "message_done":
-                    ev["thinking_steps"] = executor.thinking_steps or []
-                    ev["action"] = executor.primary_action_result
-                    ev["actions"] = executor.all_confirm_results if len(executor.all_confirm_results) > 1 else None
-                yield ev
+            async for event in engine.run(messages, system_prompt, tools, context):
+                if isinstance(event, TextDeltaEvent):
+                    yield {"type": "text_delta", "delta": event.delta}
+                elif isinstance(event, ToolStartEvent):
+                    yield {"type": "tool_start", "tool": event.tool,
+                           "tool_use_id": event.tool_use_id, "input": event.input}
+                elif isinstance(event, ToolDoneEvent):
+                    yield {"type": "tool_done", "tool": event.tool, "summary": event.summary}
+                elif isinstance(event, ToolErrorEvent):
+                    yield {"type": "tool_done", "tool": event.tool,
+                           "summary": f"错误: {event.error}"}
+                elif isinstance(event, ActionEvent):
+                    yield {"type": "action", **event.action_data}
+                elif isinstance(event, MessageDoneEvent):
+                    yield {
+                        "type": "message_done",
+                        "rounds": event.rounds,
+                        "thinking_steps": event.thinking_steps or [],
+                        "action": event.final_action,
+                        "actions": event.all_confirm_results if len(event.all_confirm_results) > 1 else None,
+                    }
+                elif isinstance(event, BudgetExceededEvent):
+                    yield {"type": "budget_exceeded", "reason": event.reason}
+                elif isinstance(event, ErrorEvent):
+                    yield {"type": "error", "message": event.message}
         finally:
             clear_llm_context()
 

@@ -183,8 +183,42 @@ class BaseAgent(ABC):
         result["status"] = result.get("status", "success")
         return result
 
+    def get_tool_schemas(self) -> List[Dict]:
+        """返回所有 Action 的 Anthropic tool_use schema（供 QueryEngine / REACT 模式使用）。
+        优先用 Action 自身的 tool_schema()（如 Chat Action）；
+        否则自动生成简化 schema（Orchestrator Action 无需重写）。
+        """
+        schemas = []
+        for name, action in self._actions.items():
+            if hasattr(action, "tool_schema"):
+                schemas.append(action.tool_schema())
+            else:
+                # 自动生成简化 schema
+                schemas.append({
+                    "name": name,
+                    "description": action.description or f"执行 {name}",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": [],
+                    },
+                })
+        # 加一个 done 工具，让 LLM 可以主动结束循环
+        schemas.append({
+            "name": "done",
+            "description": "任务已完成，退出循环",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "summary": {"type": "string", "description": "完成摘要（可选）"},
+                },
+                "required": [],
+            },
+        })
+        return schemas
+
     async def _react_with_think(self, task_name: str, context: Dict[str, Any]) -> Dict[str, Any]:
-        """REACT 模式：LLM 动态选择下一步 Action"""
+        """REACT 模式：LLM 动态选择下一步 Action（内部使用 QueryEngine）"""
         from skills import _current_skills
         skills_prompt = await self._resolve_skills_prompt(context)
         token = _current_skills.set(skills_prompt)
@@ -194,41 +228,60 @@ class BaseAgent(ABC):
             _current_skills.reset(token)
 
     async def _react_with_think_inner(self, task_name: str, context: Dict[str, Any]) -> Dict[str, Any]:
+        """REACT 模式核心循环：使用 QueryEngine + tool_use 格式（替代旧文本协议）。"""
         from llm_client import llm_client
+        from query_engine import QueryEngine, Budget
+        from query_engine.events import (
+            MessageDoneEvent, BudgetExceededEvent, ToolDoneEvent, ErrorEvent,
+        )
+        from query_engine.executor import OrchestratorToolExecutorAdapter
+        from config import settings as _cfg
+        from hooks.registry import hook_registry
+
+        tools = self.get_tool_schemas()
+        executor = OrchestratorToolExecutorAdapter(self._actions, context)
+        budget = Budget(
+            max_tokens=_cfg.AGENT_MAX_TOKENS,
+            max_turns=_cfg.AGENT_MAX_TURNS,
+            max_seconds=_cfg.AGENT_MAX_SECONDS,
+        )
+        engine = QueryEngine(
+            llm_client=llm_client,
+            tool_executor=executor,
+            budget=budget,
+            hooks=hook_registry,
+            max_rounds=self.max_react_loop,
+        )
+
+        # 构建初始消息
+        action_names = list(self._actions.keys())
+        system = (
+            f"你是 {self.agent_type}，当前任务：{context.get('ticket_title', task_name)}\n"
+            f"可用工具：{', '.join(action_names)}，以及 done（完成时调用）\n"
+            f"请依次调用合适的工具完成任务，所有步骤完成后调用 done。"
+        )
+        messages = [{"role": "user", "content": f"请执行任务：{task_name}"}]
 
         result = {}
-        action_names = list(self._actions.keys())
+        logger.info("🧠 %s REACT（QueryEngine 路径）: task=%s", self.agent_type, task_name)
 
-        for i in range(self.max_react_loop):
-            # Think: LLM 决定下一步
-            next_action = await self._think(context, action_names, result)
-            if not next_action or next_action == "done":
-                logger.info("🧠 %s REACT: 第 %d 轮结束 (action=%s)", self.agent_type, i + 1, next_action)
-                break
+        async for event in engine.run(messages, system, tools, context):
+            if isinstance(event, ToolDoneEvent):
+                logger.info("🔧 %s REACT: %s 完成 (%dms)", self.agent_type, event.tool, event.duration_ms)
+            elif isinstance(event, MessageDoneEvent):
+                result = {
+                    "status": "success",
+                    "message": event.full_text,
+                    "thinking_steps": event.thinking_steps,
+                    "rounds": event.rounds,
+                }
+            elif isinstance(event, BudgetExceededEvent):
+                logger.warning("🧠 %s REACT 预算超限: %s", self.agent_type, event.reason)
+                result = {"status": "budget_exceeded", "reason": event.reason}
+            elif isinstance(event, ErrorEvent):
+                result = {"status": "error", "message": event.message}
 
-            if next_action not in self._actions:
-                logger.warning("🧠 %s REACT: 无效 Action '%s'，跳过", self.agent_type, next_action)
-                continue
-
-            # Act: 执行选中的 Action
-            logger.info("🧠 %s REACT [%d/%d]: %s", self.agent_type, i + 1, self.max_react_loop, next_action)
-            action_result = await self._actions[next_action].run(context)
-            step_dict = action_result.to_dict()
-
-            # 合并
-            if action_result.files:
-                result.setdefault("files", {}).update(action_result.files)
-            step_files = step_dict.pop("files", None)
-            result.update(step_dict)
-            if "files" not in result and step_files:
-                result["files"] = step_files
-
-            context.update(action_result.data)
-            if action_result.files:
-                context["_files"] = {**context.get("_files", {}), **action_result.files}
-
-        result["status"] = result.get("status", "success")
-        return result
+        return result or {"status": "success"}
 
     async def _think(self, context: Dict, action_names: list, current_result: Dict) -> str:
         """LLM 决定下一步执行哪个 Action"""
