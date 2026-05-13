@@ -8568,6 +8568,15 @@ async function _sendChatStreamingToContainer(url, body, msgContainer, thinkingCt
                 thinkingCtx?.append({ step: 'done', tool: data.tool, summary: data.summary || '' });
             } else if (curEvent === 'action') {
                 finalAction = { ...data };
+            } else if (curEvent === 'error' || curEvent === 'budget_exceeded') {
+                const errMsg = data.message || data.reason || '未知错误';
+                bubble.innerHTML = `<span style="color:var(--warning,#ed8936);">⚠️ ${escapeHtml(errMsg)}</span>`;
+                bubbleWrapper.style.display = '';
+                bubbleWrapper.classList.remove('_streaming');
+                thinkingCtx?.finish();
+                typingEl?.remove();
+                curEvent = '';
+                return { reply: errMsg, action: null };
             } else if (curEvent === 'message_done') {
                 thinkingSteps = data.thinking_steps || thinkingSteps;
                 curEvent = '';
@@ -9289,8 +9298,12 @@ async function _sendChatStreaming(url, body) {
                     finalAction = data;
 
                 } else if (eventName === 'error') {
-                    bubbleEl.textContent = `⚠️ ${data.message}`;
-                    return { reply: data.message, action: null, actions: [] };
+                    bubbleEl.innerHTML = `<span style="color:var(--warning,#ed8936);">⚠️ ${escapeHtml(data.message)}</span>`;
+                    bubbleWrapper.style.display = '';
+                    bubbleWrapper.classList.remove('_streaming');
+                    _chatThinkingFinish();
+                    // _streamed:true 防止外层 sendChatMessage 再 appendChatBubble 一次
+                    return { reply: data.message, action: null, actions: [], _streamed: true };
 
                 } else if (eventName === 'message_done') {
                     break;
