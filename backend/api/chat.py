@@ -536,6 +536,11 @@ async def _chat_stream_generator(
                 final_action = {k: v for k, v in ev.items() if k != "type"}
                 yield _sse("action", final_action)
 
+            elif etype == "budget_exceeded":
+                reason = ev.get("reason", "预算超限")
+                yield _sse("error", {"message": f"已达到对话限制：{reason}"})
+                return
+
             elif etype == "error":
                 yield _sse("error", {"message": ev.get("message", "未知错误")})
                 return
@@ -1827,6 +1832,11 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
             elif etype == "action":
                 final_action = {k: v for k, v in ev.items() if k != "type"}
                 yield _sse("action", final_action)
+
+            elif etype == "budget_exceeded":
+                reason = ev.get("reason", "预算超限")
+                yield _sse("error", {"message": f"已达到对话限制：{reason}"})
+                return
 
             elif etype == "error":
                 yield _sse("error", {"message": ev.get("message", "未知错误")})

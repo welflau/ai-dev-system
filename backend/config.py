@@ -64,5 +64,15 @@ class Settings:
     LIGHTAI_IMAGE_ENGINE: str = os.getenv("LIGHTAI_IMAGE_ENGINE", "gemini")   # gemini/gemini2/jimeng/midjourney
     LIGHTAI_IMAGE_TIMEOUT: int = int(os.getenv("LIGHTAI_IMAGE_TIMEOUT", "300"))  # 轮询最大等待秒
 
+    # ── Phase 1B：预算/配额约束（.env 可覆盖）──────────────────────────
+    # 工单 Agent：单次执行预算
+    AGENT_MAX_TOKENS:  int   = int(os.getenv("AGENT_MAX_TOKENS",  "200000"))
+    AGENT_MAX_TURNS:   int   = int(os.getenv("AGENT_MAX_TURNS",   "50"))
+    AGENT_MAX_SECONDS: float = float(os.getenv("AGENT_MAX_SECONDS", "600"))
+    # 聊天会话：单次对话预算
+    CHAT_MAX_TOKENS:   int   = int(os.getenv("CHAT_MAX_TOKENS",   "100000"))
+    CHAT_MAX_TURNS:    int   = int(os.getenv("CHAT_MAX_TURNS",    "30"))
+    CHAT_MAX_SECONDS:  float = float(os.getenv("CHAT_MAX_SECONDS",  "180"))
+
 
 settings = Settings()

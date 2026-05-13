@@ -473,6 +473,13 @@ class ChatAssistantAgent(BaseAgent):
         tools = self._exposed_tool_schemas(scope="project", traits=project_traits)
         executor = _ChatToolExecutor(self, project["id"])
 
+        from query_engine.budget import Budget
+        from config import settings as _cfg
+        chat_budget = Budget(
+            max_tokens=_cfg.CHAT_MAX_TOKENS,
+            max_turns=_cfg.CHAT_MAX_TURNS,
+            max_seconds=_cfg.CHAT_MAX_SECONDS,
+        )
         set_llm_context(project_id=project["id"], agent_type=self.agent_type, action="chat_stream")
         try:
             async for ev in llm_client.chat_with_tools_stream(
@@ -483,6 +490,7 @@ class ChatAssistantAgent(BaseAgent):
                 temperature=0.7,
                 max_tokens=4000,
                 system=system_prompt,
+                budget=chat_budget,
             ):
                 # 在 message_done 里附上 executor 的结果供调用层保存
                 if ev.get("type") == "message_done":
@@ -569,6 +577,13 @@ class ChatAssistantAgent(BaseAgent):
         tools = self._exposed_tool_schemas(scope="global")
         executor = _ChatToolExecutor(self, project_id=None, session_id=session_id)
 
+        from query_engine.budget import Budget
+        from config import settings as _cfg
+        global_budget = Budget(
+            max_tokens=_cfg.CHAT_MAX_TOKENS,
+            max_turns=_cfg.CHAT_MAX_TURNS,
+            max_seconds=_cfg.CHAT_MAX_SECONDS,
+        )
         set_llm_context(agent_type=self.agent_type, action="global_chat_stream")
         try:
             async for ev in llm_client.chat_with_tools_stream(
@@ -579,6 +594,7 @@ class ChatAssistantAgent(BaseAgent):
                 temperature=0.7,
                 max_tokens=4000,
                 system=system_prompt,
+                budget=global_budget,
             ):
                 if ev.get("type") == "message_done":
                     ev["thinking_steps"] = executor.thinking_steps or []

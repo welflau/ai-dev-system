@@ -794,11 +794,13 @@ class LLMClient:
         temperature: float = 0.3,
         max_tokens: int = 16000,
         system: str = "",
+        budget=None,   # Optional[query_engine.Budget]
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         带工具的 ReAct 流式循环。
         yield 事件（前端直接消费）：
           text_delta / tool_start / tool_done / action / error / round_done / message_done
+          budget_exceeded（预算超限时）
         """
         ctx = _ctx_label()
 
@@ -813,6 +815,13 @@ class LLMClient:
         _t0 = time.time()
 
         for round_no in range(max_rounds):
+            # 预算检查（每轮开始前）
+            if budget is not None:
+                if reason := budget.check():
+                    logger.warning("[%s] 预算超限，中断流式循环: %s", ctx, reason)
+                    yield {"type": "budget_exceeded", "reason": reason}
+                    yield {"type": "message_done", "rounds": round_no}
+                    return
             logger.info("🔄 [%s] 流式 Tool-use 第 %d 轮", ctx, round_no + 1)
 
             current_text = ""
@@ -834,8 +843,13 @@ class LLMClient:
                 elif etype == "stop":
                     stop_reason = ev.get("stop_reason", "end_turn")
                     usage = ev.get("usage", {})
-                    _total_input += usage.get("input_tokens", 0) or 0
-                    _total_output += usage.get("output_tokens", 0) or 0
+                    round_input  = usage.get("input_tokens",  0) or 0
+                    round_output = usage.get("output_tokens", 0) or 0
+                    _total_input  += round_input
+                    _total_output += round_output
+                    # 消耗预算（Token + 1 轮）
+                    if budget is not None:
+                        budget.consume(tokens=round_input + round_output, turns=1)
 
                 elif etype == "error":
                     yield ev
