@@ -51,6 +51,7 @@ from actions.chat.web_search import WebSearchAction                        # 联
 from actions.chat.shell_exec import ShellAction                            # Shell 执行
 from actions.chat.memory_write import MemoryWriteAction                    # 写入记忆
 from actions.chat.read_many_files import ReadManyFilesAction               # 批量读文件
+from actions.chat.dispatch_subtask import DispatchSubtaskAction            # 子任务派发
 
 logger = logging.getLogger("agent.chat_assistant")
 
@@ -317,6 +318,7 @@ class ChatAssistantAgent(BaseAgent):
         WebSearchAction,               # 联网搜索（全局+项目）
         MemoryWriteAction,             # 写入记忆（全局+项目）
         ReadManyFilesAction,           # 批量读文件（全局+项目）
+        DispatchSubtaskAction,         # Phase 4 子任务派发（仅项目）
     ]
     react_mode = ReactMode.REACT
     max_react_loop = 6   # 工具调用可能多轮（搜索+fetch），留足余量输出最终回答

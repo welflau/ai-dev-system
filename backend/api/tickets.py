@@ -600,6 +600,13 @@ async def get_board(project_id: str, requirement_id: str = None):
         if t["status"] == "cancelled"
     ]
 
+    # Phase 4：waiting_subtasks 单独放（前端合并到 pending 列显示）
+    board["waiting_subtasks"] = [
+        {**t, "status_label": "⏳ 等待子任务"}
+        for t in tickets
+        if t["status"] == "waiting_subtasks"
+    ]
+
     return {"board": board}
 
 

@@ -443,7 +443,11 @@ class TicketOrchestrator:
             TicketStatus.DEPLOYING.value,
         ]
 
-        all_statuses = list(set(actionable_statuses + in_progress_statuses))
+        # 3. Phase 4: 也扫 waiting_subtasks，用于检测子 Ticket 是否全部完成
+        from actions.chat.dispatch_subtask import WAITING_SUBTASKS_STATUS
+        waiting_statuses = [WAITING_SUBTASKS_STATUS]
+
+        all_statuses = list(set(actionable_statuses + in_progress_statuses + waiting_statuses))
         if not all_statuses:
             return
 
@@ -470,6 +474,11 @@ class TicketOrchestrator:
                 continue
 
             status = t["status"]
+
+            # Phase 4：waiting_subtasks 状态 — 检测子 Ticket 是否全部完成
+            if status == WAITING_SUBTASKS_STATUS:
+                await self._check_subtasks_complete(ticket_id, project_id, t)
+                continue
 
             # 对于"进行中"状态：检查是否僵尸（updated_at 超过 60 秒没更新）
             if status in in_progress_statuses:
@@ -588,6 +597,66 @@ class TicketOrchestrator:
 
             # 异步触发修复工作流
             asyncio.create_task(self.run_bug_fix(project_id, bug_id))
+
+    async def _check_subtasks_complete(self, parent_ticket_id: str, project_id: str, parent_row: dict):
+        """Phase 4：检查父 Ticket 的所有子 Ticket 是否全部完成。
+        全部完成 → 父 Ticket 恢复到 PENDING（让轮询器继续执行下一阶段）。
+        """
+        from actions.chat.dispatch_subtask import WAITING_SUBTASKS_STATUS
+        DONE_STATUSES = {TicketStatus.TESTING_DONE.value, TicketStatus.DEPLOYED.value}
+
+        sub_tickets = await db.fetch_all(
+            "SELECT id, title, status FROM tickets WHERE parent_ticket_id = ?",
+            (parent_ticket_id,),
+        )
+        if not sub_tickets:
+            # 没有子 Ticket（可能被删除），直接恢复
+            logger.warning("父 Ticket %s 无子任务记录，自动恢复到 pending", parent_ticket_id[:12])
+            await self._resume_parent_ticket(parent_ticket_id, project_id, parent_row)
+            return
+
+        pending = [s for s in sub_tickets if s["status"] not in DONE_STATUSES]
+        if pending:
+            names = ", ".join(f"#{s['id'][-6:]}({s['title'][:15]})" for s in pending[:3])
+            logger.debug("⏳ 父 Ticket %s 等待子任务完成: %s", parent_ticket_id[:12], names)
+            return
+
+        # 所有子 Ticket 完成 → 恢复父 Ticket
+        logger.info("✅ 所有子任务完成，恢复父 Ticket: %s", parent_ticket_id[:12])
+        await self._resume_parent_ticket(parent_ticket_id, project_id, parent_row)
+
+    async def _resume_parent_ticket(self, parent_ticket_id: str, project_id: str, parent_row: dict):
+        """恢复父 Ticket：从 waiting_subtasks 恢复到 PENDING，让轮询器正常拾取"""
+        now = now_iso()
+        requirement_id = parent_row.get("requirement_id")
+
+        await db.update("tickets", {
+            "status":     TicketStatus.PENDING.value,
+            "updated_at": now,
+        }, "id = ?", (parent_ticket_id,))
+
+        await db.insert("ticket_logs", {
+            "id":             generate_id("LOG"),
+            "ticket_id":      parent_ticket_id,
+            "project_id":     project_id,
+            "requirement_id": requirement_id,
+            "agent_type":     "Orchestrator",
+            "action":         "subtasks_complete",
+            "from_status":    "waiting_subtasks",
+            "to_status":      TicketStatus.PENDING.value,
+            "detail":         json.dumps({"message": "所有子任务完成，父任务恢复执行"}, ensure_ascii=False),
+            "level":          "info",
+            "created_at":     now,
+        })
+
+        try:
+            await event_manager.publish_to_project(project_id, "ticket_status_changed", {
+                "ticket_id": parent_ticket_id,
+                "from":      "waiting_subtasks",
+                "to":        TicketStatus.PENDING.value,
+            })
+        except Exception:
+            pass
 
     async def _poll_process(self, project_id: str, ticket_id: str):
         """轮询触发的工单处理（调度时已限流，此处直接执行）"""

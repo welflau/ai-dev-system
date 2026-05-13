@@ -2790,6 +2790,10 @@ async function refreshBoard() {
         const board = data.board || {};
 
         const columns = ['pending', 'design', 'architecture', 'development', 'testing', 'done', 'deployed'];
+        // Phase 4: waiting_subtasks 工单也加入 pending 列显示（附角标区分）
+        if (board['waiting_subtasks']) {
+            board['pending'] = [...(board['pending'] || []), ...board['waiting_subtasks']];
+        }
         columns.forEach(col => {
             const tickets = board[col] || [];
             const body = document.getElementById(`col-${col}`);
@@ -2816,6 +2820,7 @@ function renderTicketCard(t) {
     else if (t.status.includes('_in_progress') || t.status === 'deploying') cardClass += ' running';
     else if (t.status === 'deployed') cardClass += ' done';
     else if (t.status.includes('rejected') || t.status.includes('failed')) cardClass += ' rejected';
+    else if (t.status === 'waiting_subtasks') cardClass += ' waiting-subtasks';
 
     const priorityLabel = {1: 'P1', 2: 'P2', 3: 'P3', 4: 'P4', 5: 'P5'};
     const pLabel = priorityLabel[t.priority] || `P${t.priority}`;
@@ -2823,6 +2828,14 @@ function renderTicketCard(t) {
     // blocked 工单显示🚧 角标
     const blockedBadge = t.status === 'blocked'
         ? ' <span class="ticket-status-badge error" title="工单已卡住，点进去看诊断">🚧</span>'
+        : '';
+
+    // waiting_subtasks 显示⏳ 角标 + 父子标识
+    const waitingBadge = t.status === 'waiting_subtasks'
+        ? ' <span class="ticket-status-badge warning" title="等待子任务完成">⏳</span>'
+        : '';
+    const subtaskBadge = t.parent_ticket_id
+        ? ` <span class="ticket-status-badge subtask-badge" title="子任务，父: #${(t.parent_ticket_id||'').slice(-6)}">↳ 子任务</span>`
         : '';
 
     // 所有工单状态选项（含新 Agent 阶段）
@@ -2855,8 +2868,8 @@ function renderTicketCard(t) {
     ).join('');
 
     return `
-        <div class="${cardClass}${t.type === 'bug' ? ' bug-ticket' : ''}" style="cursor:pointer;" onclick="openTicketDrawer('${t.id}')">
-            <div class="ticket-title">${t.type === 'bug' ? '<span class="bug-label">BUG</span>' : ''}${escHtml(t.title)}${blockedBadge}${t.has_error ? ' <span class="ticket-status-badge error" title="测试失败或被拒绝">✗</span>' : t.has_warning ? ' <span class="ticket-status-badge warning" title="测试有警告">⚠</span>' : ''}</div>
+        <div class="${cardClass}${t.type === 'bug' ? ' bug-ticket' : ''}${t.parent_ticket_id ? ' child-ticket' : ''}" style="cursor:pointer;" onclick="openTicketDrawer('${t.id}')">
+            <div class="ticket-title">${t.type === 'bug' ? '<span class="bug-label">BUG</span>' : ''}${escHtml(t.title)}${blockedBadge}${waitingBadge}${subtaskBadge}${t.has_error ? ' <span class="ticket-status-badge error" title="测试失败或被拒绝">✗</span>' : t.has_warning ? ' <span class="ticket-status-badge warning" title="测试有警告">⚠</span>' : ''}</div>
             <div class="ticket-meta">
                 ${t.module ? `<span class="tag tag-module">${escHtml(t.module)}</span>` : ''}
                 <span class="tag tag-type${t.type === 'bug' ? ' tag-bug' : ''}">${escHtml(t.type || 'feature')}</span>
