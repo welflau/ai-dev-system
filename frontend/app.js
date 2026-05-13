@@ -7123,14 +7123,6 @@ function formatDateTime(iso) {
     } catch { return '-'; }
 }
 
-function formatTime(iso) {
-    if (!iso) return '';
-    try {
-        const d = new Date(iso);
-        return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
-    } catch { return ''; }
-}
-
 function pad(n) { return n.toString().padStart(2, '0'); }
 
 const STATUS_LABELS = {
@@ -7852,10 +7844,12 @@ function formatFileSize(bytes) {
 function formatTime(dateStr) {
     if (!dateStr) return '-';
     try {
-        const d = new Date(dateStr);
-        if (isNaN(d.getTime())) return dateStr;
-        return d.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-    } catch { return dateStr; }
+        // SQLite 时间 "YYYY-MM-DD HH:MM:SS" 需把空格换成 T 才能被所有浏览器正确解析
+        const normalized = typeof dateStr === 'string' ? dateStr.replace(' ', 'T') : dateStr;
+        const d = new Date(normalized);
+        if (isNaN(d.getTime())) return String(dateStr).slice(0, 16); // 兜底截断原始字符串
+        return `${pad(d.getMonth() + 1)}/${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    } catch { return String(dateStr).slice(0, 16); }
 }
 
 function escapeHtml(str) {
