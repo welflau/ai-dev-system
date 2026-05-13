@@ -977,6 +977,20 @@ class ChatAssistantAgent(BaseAgent):
 - **诊断需求进度** → get_requirement_pipeline（"XX 卡在哪"）/
   get_ticket_status（工单详细状态）/ get_requirement_logs（最近活动 + 错误）
 
+## 搜索工具使用规则（重要）
+
+**search_knowledge** — 搜索系统知识库（包含 docs/ dev-notes/ 文档）
+- 触发：用户询问「系统功能 / 某特性怎么实现的 / 最近做了什么 / 有没有 XX 相关文档」
+- 示例：「能搜索到 harness 相关信息吗」「QueryEngine 是怎么做的」「有 Skill 相关文档吗」
+- **先用 search_knowledge，找不到才考虑 grep 搜代码**；不要第一步就 grep
+
+**web_search** — 联网搜索
+- 触发：用户说「搜一下 XX」「网络搜索 XX」「联网查查」「网上找找」「搜索官方文档」
+- **⚠️ 用户明确说"联网/网络搜索"时，立即调用 web_search，不要询问搜什么**
+  直接用用户提到的关键词搜索，有了结果再跟用户确认是否需要深入
+
+**搜索优先级**：问系统/文档 → search_knowledge；问项目代码 → grep/glob；问外部知识 → web_search
+
 ## 读取用户上传的文件
 当消息中包含 `【附件：xxx.md】` 或其他文件内容时：
 - 仔细阅读文件内容，结合项目上下文给出具体分析
