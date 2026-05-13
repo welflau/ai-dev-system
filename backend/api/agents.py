@@ -1,9 +1,63 @@
 """
 Agent API — 返回 Agent 实时信息（从注册中心和 Action 池动态读取）
 """
+import re
+import inspect
 from fastapi import APIRouter
 
 router = APIRouter(prefix="/api/agents", tags=["agents"])
+
+
+def _extract_prompt_preview(action_inst) -> str:
+    """
+    从 Action.run() 源码里提取 instruction= 字符串（静态文字部分）。
+    返回最多 300 字符的预览；找不到则返回 action.description。
+    """
+    try:
+        source = inspect.getsource(action_inst.run)
+        # 提取所有 instruction= "..." 或 instruction= f"..." 的静态文字
+        matches = re.findall(
+            r'instruction\s*=\s*(?:f?)(?:"""(.*?)"""|\'\'\'(.*?)\'\'\'|"(.*?)"|\'(.*?)\')',
+            source, re.DOTALL,
+        )
+        parts = []
+        for m in matches:
+            text = next((t for t in m if t), "").strip()
+            if text and len(text) > 4:
+                # 去掉 f-string 中的变量插值部分，保留文字骨架
+                text = re.sub(r'\{[^}]+\}', '{…}', text)
+                parts.append(text)
+        if parts:
+            combined = "\n---\n".join(parts)
+            return combined[:400]
+    except Exception:
+        pass
+    return action_inst.description or ""
+
+
+# ChatAssistant 系统提示词的结构摘要（静态）
+_CHAT_ASSISTANT_PROMPT_SUMMARY = """## 身份
+AI 自动开发系统的智能助手，服务于当前项目的全流程开发。
+
+## 核心能力
+- **需求管理**：confirm_requirement / confirm_requirements_batch（识别单条/多条需求）
+- **BUG 管理**：confirm_bug（识别缺陷，不自动创建）
+- **需求状态**：pause / resume / close / pause_requirements_batch
+- **仓库操作**：git_log / git_list_branches / git_switch_branch / git_merge / git_read_file
+- **进度诊断**：get_requirement_pipeline / get_ticket_status / get_requirement_logs
+- **文件操作**：glob（通配搜索）/ grep（内容搜索）/ list_directory / read_files / shell
+- **知识检索**：search_knowledge（知识库）/ search_ticket_history（历史工单）/ web_search（联网）
+- **文档生成**：generate_document / confirm_save_doc
+- **Skill 管理**：load_skill / browse_marketplace / install_project_skill
+- **子任务派发**：dispatch_subtask（创建子 Ticket）
+
+## 搜索优先级
+问系统/文档 → search_knowledge；问代码 → grep/glob；问外部 → web_search（明确说联网时立即执行）
+
+## 判断准则
+- 用户询问 ≠ 要求执行；只有明确说"帮我创建/上报/关闭"才调用行动工具
+- 多步操作可在同一轮连续调用多个工具（ReAct 循环）
+- 信息已在上下文中 → 直接回答，不重复调工具""".strip()
 
 
 @router.get("")
@@ -51,6 +105,7 @@ async def list_agents():
                     "name": action_name,
                     "description": action_inst.description,
                     "schema": schema_info,
+                    "prompt_preview": _extract_prompt_preview(action_inst),
                 })
             else:
                 action_details.append({"name": action_name, "description": "", "schema": {"mode": "unknown"}})
@@ -70,6 +125,21 @@ async def list_agents():
             "completed_count": status_info.get("completed_count", 0),
             "error_count": status_info.get("error_count", 0),
         })
+
+    # ChatAssistant 单独加入（不在 orchestrator.agents 里）
+    agents.append({
+        "name": "ChatAssistant",
+        "icon": "💬",
+        "role": "AI 助手 — 聊天 + 工具调用",
+        "enabled": True,
+        "react_mode": "react",
+        "watch_actions": [],
+        "actions": [{"name": "（动态工具，见 prompt）", "description": "38+ 个 Chat Action", "schema": {"mode": "dynamic"}, "prompt_preview": ""}],
+        "status": "idle",
+        "completed_count": 0,
+        "error_count": 0,
+        "agent_prompt": _CHAT_ASSISTANT_PROMPT_SUMMARY,
+    })
 
     return {"agents": agents}
 

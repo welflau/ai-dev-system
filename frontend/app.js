@@ -6750,22 +6750,53 @@ function showAgentDetail(agentName) {
             const schemaMode = a.schema?.mode || 'unknown';
             const schemaType = a.schema?.type || '-';
             const isActionNode = schemaMode === 'ActionNode';
+            const isDynamic = schemaMode === 'dynamic';
+            const prompt = a.prompt_preview || '';
+            const hasPrompt = prompt.length > 0;
+            const promptId = 'prompt-' + Math.random().toString(36).slice(2);
             html += `
             <div style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:8px;">
-                <div style="display:flex;align-items:center;gap:8px;">
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                     <code style="font-size:13px;font-weight:600;color:var(--primary);">${escHtml(a.name)}</code>
-                    ${isActionNode ? '<span style="font-size:10px;background:var(--primary);color:white;padding:1px 5px;border-radius:8px;">ActionNode</span>' : '<span style="font-size:10px;background:var(--text-muted);color:white;padding:1px 5px;border-radius:8px;">legacy</span>'}
+                    ${isActionNode ? '<span style="font-size:10px;background:var(--primary);color:white;padding:1px 5px;border-radius:8px;">ActionNode</span>' : isDynamic ? '' : '<span style="font-size:10px;background:var(--text-muted);color:white;padding:1px 5px;border-radius:8px;">legacy</span>'}
+                    ${hasPrompt ? `<span class="prompt-toggle-btn" onclick="toggleBlock('${promptId}')">📋 查看 Prompt ▾</span>` : ''}
                 </div>
-                <p style="font-size:12px;color:var(--text-muted);margin:4px 0 0;">${escHtml(a.description)}</p>
+                ${a.description ? `<p style="font-size:12px;color:var(--text-muted);margin:4px 0 0;">${escHtml(a.description)}</p>` : ''}
                 ${isActionNode ? `<p style="font-size:11px;color:var(--text-muted);margin:2px 0 0;">Schema: <code>${escHtml(schemaType)}</code></p>` : ''}
+                ${hasPrompt ? `<pre id="${promptId}" class="agent-prompt-preview" style="display:none;">${escHtml(prompt)}</pre>` : ''}
             </div>`;
         });
     } else {
         html += `<div style="color:var(--text-muted);font-size:12px;padding:8px;">Legacy 模式（无独立 Action）</div>`;
     }
 
+    // Agent 整体 Prompt（ChatAssistant 等有 agent_prompt 字段的）
+    if (agent.agent_prompt) {
+        const apId = 'ap-' + Math.random().toString(36).slice(2);
+        html += `
+        <div style="margin-top:16px;">
+            <h4 style="font-size:13px;color:var(--text-muted);margin-bottom:8px;">
+                📝 系统提示词（摘要）
+                <span class="prompt-toggle-btn" onclick="toggleBlock('${apId}')" style="margin-left:8px;">展开 ▾</span>
+            </h4>
+            <pre id="${apId}" class="agent-prompt-preview" style="display:none;">${escHtml(agent.agent_prompt)}</pre>
+        </div>`;
+    }
+
     bodyEl.innerHTML = html;
     openModal('agentDetailModal');
+}
+
+function toggleBlock(id) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const isHidden = el.style.display === 'none';
+    el.style.display = isHidden ? 'block' : 'none';
+    // 切换按钮文字
+    const btn = el.previousElementSibling?.tagName === 'SPAN'
+        ? el.previousElementSibling
+        : el.closest('div')?.querySelector('.prompt-toggle-btn');
+    if (btn) btn.textContent = btn.textContent.replace(isHidden ? '▾' : '▴', isHidden ? '▴' : '▾');
 }
 
 /** 切换提示词展开/折叠 */
