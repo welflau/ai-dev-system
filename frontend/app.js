@@ -6057,6 +6057,11 @@ function renderLogItem(log) {
         detail = log.detail || '';
     }
 
+    // chat: 前缀的条目来自 AI 助手工具调用，加图标区分
+    if ((log.action || '').startsWith('chat:')) {
+        log = { ...log, _isChatTool: true };
+    }
+
     const PREVIEW_LIMIT = 160;
     const isLong = detail.length > PREVIEW_LIMIT;
     const logId = 'log-' + (log.id || Math.random().toString(36).slice(2));
@@ -6072,10 +6077,10 @@ function renderLogItem(log) {
     }
 
     return `
-        <div class="log-item ${log.level || 'info'}">
+        <div class="log-item ${log.level || 'info'}${log._isChatTool ? ' log-chat-tool' : ''}">
             <div class="log-header">
-                <span class="log-agent">${escHtml(log.agent_type || 'System')}</span>
-                <span class="log-action">${escHtml(log.action || '')}</span>
+                <span class="log-agent">${log._isChatTool ? '💬 ' : ''}${escHtml(log.agent_type || 'System')}</span>
+                <span class="log-action">${escHtml((log.action || '').replace(/^chat:/, '🔧 '))}</span>
                 ${log.from_status && log.to_status ? `
                     <span class="log-status-change">
                         ${getStatusLabel(log.from_status)} <span class="arrow">→</span> ${getStatusLabel(log.to_status)}

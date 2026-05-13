@@ -1146,6 +1146,10 @@ body.chat-open #projectListPage {
 .log-item.info::before { background: var(--info); }
 .log-item.warn::before { background: var(--warning); }
 .log-item.error::before { background: var(--error); }
+/* AI 聊天工具调用：浅色圆点 + 淡化样式，与 Agent 操作区分 */
+.log-item.log-chat-tool { opacity: 0.82; }
+.log-item.log-chat-tool::before { background: #805ad5; }
+.log-item.log-chat-tool .log-agent { color: #805ad5; }
 
 .log-header {
     display: flex;

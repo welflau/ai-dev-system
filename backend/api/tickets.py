@@ -634,15 +634,48 @@ async def get_board_by_module(project_id: str):
 
 @router.get("/api/projects/{project_id}/logs")
 async def get_project_logs(project_id: str, limit: int = 100, offset: int = 0):
-    """项目级日志"""
-    logs = await db.fetch_all(
-        "SELECT * FROM ticket_logs WHERE project_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
-        (project_id, limit, offset),
-    )
-    total = await db.fetch_one(
-        "SELECT COUNT(*) as count FROM ticket_logs WHERE project_id = ?",
-        (project_id,),
-    )
+    """项目级日志：ticket_logs（Agent 操作）+ tool_audit_log（AI 聊天工具调用）合并返回"""
+    # UNION：ticket_logs 保持原结构，tool_audit_log 适配同格式
+    sql = """
+        SELECT id, agent_type, action, from_status, to_status,
+               requirement_id, ticket_id, project_id, detail, level, created_at
+        FROM ticket_logs
+        WHERE project_id = ?
+
+        UNION ALL
+
+        SELECT
+            'tal-' || CAST(id AS TEXT) AS id,
+            COALESCE(agent_type, 'ChatAssistant')  AS agent_type,
+            'chat:' || tool_name                   AS action,
+            NULL AS from_status,
+            NULL AS to_status,
+            NULL AS requirement_id,
+            ticket_id,
+            project_id,
+            json_object('message',
+                tool_name ||
+                CASE WHEN duration_ms IS NOT NULL
+                     THEN ' (' || ROUND(duration_ms) || 'ms)'
+                     ELSE '' END
+            ) AS detail,
+            CASE WHEN success = 1 THEN 'info' ELSE 'error' END AS level,
+            created_at
+        FROM tool_audit_log
+        WHERE project_id = ?
+
+        ORDER BY created_at DESC
+        LIMIT ? OFFSET ?
+    """
+    logs = await db.fetch_all(sql, (project_id, project_id, limit, offset))
+
+    count_sql = """
+        SELECT (
+            (SELECT COUNT(*) FROM ticket_logs   WHERE project_id = ?) +
+            (SELECT COUNT(*) FROM tool_audit_log WHERE project_id = ?)
+        ) AS count
+    """
+    total = await db.fetch_one(count_sql, (project_id, project_id))
     return {"logs": logs, "total": total["count"] if total else 0}
 
 

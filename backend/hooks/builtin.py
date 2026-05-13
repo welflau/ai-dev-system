@@ -17,12 +17,16 @@ _SHELL_LIMIT_PER_TICKET = 50
 
 
 async def audit_log_hook(ctx: ToolHookContext) -> None:
-    """POST_TOOL_USE：记录工具调用到 tool_audit_log 表"""
+    """POST_TOOL_USE：记录工具调用到 tool_audit_log 表，并实时推 SSE log_added"""
     if ctx.event != HookEvent.POST_TOOL_USE:
         return
     try:
         from database import db
         from utils import now_iso
+        import json
+
+        now = now_iso()
+        duration_ms = round(ctx.duration_ms or 0, 2)
         await db.execute(
             "INSERT INTO tool_audit_log "
             "(tool_name, project_id, ticket_id, agent_type, duration_ms, success, created_at) "
@@ -32,11 +36,34 @@ async def audit_log_hook(ctx: ToolHookContext) -> None:
                 ctx.project_id,
                 ctx.ticket_id,
                 ctx.agent_type,
-                round(ctx.duration_ms or 0, 2),
+                duration_ms,
                 1,
-                now_iso(),
+                now,
             ),
         )
+
+        # 实时推送到操作日志面板（仅有 project_id 时推，全局聊天不推）
+        if ctx.project_id:
+            try:
+                from events import event_manager
+                log_entry = {
+                    "id":         f"tal-chat-{now}",
+                    "agent_type": ctx.agent_type or "ChatAssistant",
+                    "action":     f"chat:{ctx.tool_name}",
+                    "detail":     json.dumps(
+                        {"message": f"{ctx.tool_name} ({int(duration_ms)}ms)"},
+                        ensure_ascii=False,
+                    ),
+                    "level":      "info",
+                    "created_at": now,
+                    "ticket_id":  ctx.ticket_id,
+                }
+                await event_manager.publish_to_project(
+                    ctx.project_id, "log_added", log_entry
+                )
+            except Exception as sse_err:
+                logger.debug("audit_log_hook SSE 推送失败（非致命）: %s", sse_err)
+
     except Exception as e:
         logger.warning("audit_log_hook 写库失败: %s", e)
 
