@@ -169,6 +169,7 @@ class QueryEngine:
                 if hasattr(self.executor, 'all_confirm_results'):
                     all_confirm_results = self.executor.all_confirm_results
 
+                await self._emit_session_end(context, round_count, "done")
                 yield MessageDoneEvent(
                     full_text=full_text,
                     thinking_steps=thinking_steps,
@@ -341,6 +342,7 @@ class QueryEngine:
 
         # 达到最大轮数
         logger.warning("QueryEngine 达到最大轮数 %d", self.max_rounds)
+        await self._emit_session_end(context, round_count, "max_rounds")
         yield MessageDoneEvent(
             full_text=full_text,
             thinking_steps=thinking_steps,
@@ -349,3 +351,29 @@ class QueryEngine:
             total_tokens=self.budget.used_tokens,
             all_confirm_results=all_confirm_results,
         )
+
+    async def _emit_session_end(self, context: dict, rounds: int, reason: str) -> None:
+        """在 MessageDone 前 emit SESSION_END Hook，用于审计日志记录本次 QueryEngine 运行统计"""
+        if not self.hooks:
+            return
+        try:
+            from hooks.types import HookEvent, ToolHookContext
+            ctx = ToolHookContext(
+                event=HookEvent.SESSION_END,
+                tool_name="query_engine",
+                input={
+                    "rounds":       rounds,
+                    "total_tokens": self.budget.used_tokens,
+                    "elapsed_s":    round(self.budget.elapsed_seconds, 1),
+                    "reason":       reason,          # done / max_rounds
+                    "max_tokens":   self.budget.max_tokens,
+                    "max_turns":    self.budget.max_turns,
+                },
+                duration_ms=self.budget.elapsed_seconds * 1000,
+                project_id=context.get("project_id"),
+                ticket_id=context.get("ticket_id"),
+                agent_type=context.get("agent_type"),
+            )
+            await self.hooks.emit(ctx)
+        except Exception as e:
+            logger.debug("_emit_session_end 失败（非致命）: %s", e)

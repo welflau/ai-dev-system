@@ -61,8 +61,12 @@ _SHELL_LIMIT_PER_TICKET = 50
 
 
 async def audit_log_hook(ctx: ToolHookContext) -> None:
-    """POST_TOOL_USE + TOOL_ERROR：记录详细工具调用到 tool_audit_log，并推 SSE log_added"""
-    if ctx.event not in (HookEvent.POST_TOOL_USE, HookEvent.TOOL_ERROR):
+    """POST_TOOL_USE + TOOL_ERROR + SESSION_END：记录到 tool_audit_log，并推 SSE log_added"""
+    if ctx.event not in (HookEvent.POST_TOOL_USE, HookEvent.TOOL_ERROR, HookEvent.SESSION_END):
+        return
+
+    if ctx.event == HookEvent.SESSION_END:
+        await _handle_session_end(ctx)
         return
     try:
         from database import db
@@ -143,6 +147,67 @@ async def shell_rate_limit_hook(ctx: ToolHookContext) -> None:
         raise RuntimeError(
             f"Shell 调用次数超限（ticket={key}, count={count}, limit={_SHELL_LIMIT_PER_TICKET}）"
         )
+
+
+async def _handle_session_end(ctx: ToolHookContext) -> None:
+    """SESSION_END：记录 QueryEngine 运行统计到 tool_audit_log"""
+    try:
+        from database import db
+        from utils import now_iso
+        import json
+
+        inp    = ctx.input or {}
+        rounds = inp.get("rounds", 0)
+        tokens = inp.get("total_tokens", 0)
+        elapsed_s = inp.get("elapsed_s", 0)
+        reason = inp.get("reason", "done")
+        max_tokens = inp.get("max_tokens", 0)
+
+        token_pct = round(tokens / max_tokens * 100, 1) if max_tokens else 0
+        now = now_iso()
+
+        input_summary  = f"rounds:{rounds} tokens:{tokens}({token_pct}%) elapsed:{elapsed_s}s"
+        output_summary = f"reason:{reason}"
+
+        await db.execute(
+            "INSERT INTO tool_audit_log "
+            "(tool_name, project_id, ticket_id, agent_type, duration_ms, success, "
+            " input_summary, output_summary, error_msg, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                "query_engine:done",
+                ctx.project_id, ctx.ticket_id, ctx.agent_type,
+                round(elapsed_s * 1000, 1), 1,
+                input_summary, output_summary, "",
+                now,
+            ),
+        )
+
+        # SSE 推送到日志面板
+        if ctx.project_id:
+            try:
+                from events import event_manager
+                level = "warn" if reason != "done" else "info"
+                await event_manager.publish_to_project(
+                    ctx.project_id, "log_added", {
+                        "id":         f"qe-done-{now}",
+                        "agent_type": ctx.agent_type or "ChatAssistant",
+                        "action":     "query_engine:done",
+                        "detail":     json.dumps({
+                            "message":       f"QueryEngine 完成 | {input_summary}",
+                            "input_summary": input_summary,
+                            "output_summary": output_summary,
+                            "duration_ms":   round(elapsed_s * 1000, 1),
+                        }, ensure_ascii=False),
+                        "level":      level,
+                        "created_at": now,
+                        "ticket_id":  ctx.ticket_id,
+                    }
+                )
+            except Exception:
+                pass
+    except Exception as e:
+        logger.warning("_handle_session_end 写库失败: %s", e)
 
 
 async def failure_library_hook(ctx: ToolHookContext) -> None:
