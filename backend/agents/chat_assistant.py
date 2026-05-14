@@ -522,7 +522,7 @@ class ChatAssistantAgent(BaseAgent):
                     yield {"type": "tool_done", "tool": event.tool,
                            "summary": f"错误: {event.error}"}
                 elif isinstance(event, ActionEvent):
-                    yield {"type": "action", **event.action_data}
+                    yield {"type": "action", "payload": event.action_data}
                 elif isinstance(event, MessageDoneEvent):
                     yield {
                         "type": "message_done",
@@ -651,7 +651,7 @@ class ChatAssistantAgent(BaseAgent):
                     yield {"type": "tool_done", "tool": event.tool,
                            "summary": f"错误: {event.error}"}
                 elif isinstance(event, ActionEvent):
-                    yield {"type": "action", **event.action_data}
+                    yield {"type": "action", "payload": event.action_data}
                 elif isinstance(event, MessageDoneEvent):
                     yield {
                         "type": "message_done",

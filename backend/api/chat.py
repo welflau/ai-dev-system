@@ -533,7 +533,8 @@ async def _chat_stream_generator(
                 yield _sse("tool_done", {"tool": ev["tool"], "summary": summary})
 
             elif etype == "action":
-                final_action = {k: v for k, v in ev.items() if k != "type"}
+                # payload key 防止 action_data.type 覆盖事件 type（QueryEngine 路径）
+                final_action = ev.get("payload") or {k: v for k, v in ev.items() if k != "type"}
                 yield _sse("action", final_action)
 
             elif etype == "budget_exceeded":
@@ -1830,7 +1831,7 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
                 yield _sse("tool_done", {"tool": ev["tool"], "summary": summary})
 
             elif etype == "action":
-                final_action = {k: v for k, v in ev.items() if k != "type"}
+                final_action = ev.get("payload") or {k: v for k, v in ev.items() if k != "type"}
                 yield _sse("action", final_action)
 
             elif etype == "budget_exceeded":
