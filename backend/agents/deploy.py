@@ -180,14 +180,13 @@ class DeployAgent(BaseAgent):
 
             # 停掉旧的预览服务
             key = (project_id, env_type)
-            if key in cls._preview_servers:
-                old = cls._preview_servers[key]
+            old = cls._preview_servers.pop(key, None)  # pop 避免並發競態 KeyError
+            if old:
                 try:
                     old["process"].terminate()
                     await asyncio.sleep(0.5)
                 except Exception:
                     pass
-                del cls._preview_servers[key]
 
             # 启动 HTTP 预览服务
             proc = subprocess.Popen(
@@ -257,12 +256,12 @@ class DeployAgent(BaseAgent):
         from utils import now_iso
 
         key = (project_id, env_type)
-        if key in cls._preview_servers:
+        old = cls._preview_servers.pop(key, None)
+        if old:
             try:
-                cls._preview_servers[key]["process"].terminate()
+                old["process"].terminate()
             except Exception:
                 pass
-            del cls._preview_servers[key]
 
         await db.execute(
             "UPDATE project_environments SET status = 'inactive' WHERE project_id = ? AND env_type = ?",
