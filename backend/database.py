@@ -728,6 +728,15 @@ CREATE TABLE IF NOT EXISTS global_skill_settings (
 );
 
 -- ============================================================
+-- 系统全局设置（key-value）
+-- ============================================================
+CREATE TABLE IF NOT EXISTS system_settings (
+    key         TEXT PRIMARY KEY,
+    value       TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+
+-- ============================================================
 -- 工具调用审计日志（Phase 1 Hooks）
 -- ============================================================
 CREATE TABLE IF NOT EXISTS tool_audit_log (

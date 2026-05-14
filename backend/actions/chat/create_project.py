@@ -14,6 +14,7 @@ CreateProjectAction — 真正创建项目（clone/init Git + 写库 + 异步跑
 import asyncio
 import logging
 import os
+import re
 from typing import Any, Dict, Optional
 
 from actions.base import ActionBase, ActionResult
@@ -94,9 +95,20 @@ class CreateProjectAction(ActionBase):
             # 确定本地仓库路径
             if local_repo_path:
                 repo_path = os.path.abspath(local_repo_path)
-                git_manager.set_project_path(project_id, repo_path)
             else:
-                repo_path = str(git_manager._repo_path(project_id))
+                # 使用系统设置的默认项目目录（无则退回 backend/projects/）
+                try:
+                    from api.system_settings import get_setting
+                    default_dir = await get_setting("projects_default_dir")
+                except Exception:
+                    default_dir = ""
+                if default_dir:
+                    import pathlib
+                    safe_name = re.sub(r'[<>:"/\\|?*]', '-', name).strip()
+                    repo_path = str(pathlib.Path(default_dir) / safe_name)
+                else:
+                    repo_path = str(git_manager._repo_path(project_id))
+            git_manager.set_project_path(project_id, repo_path)
 
             logger.info("AI助手创建项目: %s, 仓库路径: %s", name, repo_path)
 

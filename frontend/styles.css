@@ -8381,6 +8381,34 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
 }
 .prompt-toggle-btn:hover { background: var(--bg-elevated); }
 
+/* ==================== 系统设置通用面板 ====================*/
+.sys-setting-group { margin-bottom: 20px; }
+.sys-setting-group-title {
+    font-size: 13px; font-weight: 700; color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: 0.5px;
+    margin: 0 0 12px;
+}
+.sys-setting-row {
+    display: flex; align-items: flex-start; gap: 16px;
+    margin-bottom: 12px; flex-wrap: wrap;
+}
+.sys-setting-label {
+    flex: 0 0 180px; font-size: 13px; font-weight: 500;
+    color: var(--text-primary); padding-top: 6px;
+}
+.sys-setting-hint {
+    display: block; font-size: 11px; color: var(--text-muted);
+    margin-top: 2px; font-weight: 400;
+}
+.sys-setting-ctrl { flex: 1; min-width: 220px; }
+.sys-setting-input {
+    width: 100%; background: var(--bg-elevated);
+    border: 1px solid var(--border); border-radius: 6px;
+    color: var(--text-primary); padding: 6px 10px;
+    font-size: 13px; font-family: monospace;
+}
+.sys-setting-input:focus { outline: none; border-color: var(--primary-light, #63b3ed); }
+
 /* ==================== 子任务看板样式 ==================== */
 .ticket-card.waiting-subtasks {
     border-left: 3px solid #d69e2e;

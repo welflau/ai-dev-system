@@ -10458,7 +10458,7 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
                         Git 仓库：<code>${escapeHtml(action.git_remote_url || '')}</code>
                     </div>
                     ${action.tech_stack ? `<div class="confirm-req-meta">技术栈：${escapeHtml(action.tech_stack)}</div>` : ''}
-                    ${action.local_repo_path ? `<div class="confirm-req-meta">本地路径：<code>${escapeHtml(action.local_repo_path)}</code></div>` : '<div class="confirm-req-meta" style="color:var(--text-muted);font-size:11px;">本地路径：留空，自动生成到 backend/projects/ 下</div>'}
+                    ${action.local_repo_path ? `<div class="confirm-req-meta">本地路径：<code>${escapeHtml(action.local_repo_path)}</code></div>` : `<div class="confirm-req-meta" style="color:var(--text-muted);font-size:11px;" id="confirmProjDefaultPath">本地路径：自动生成（加载中…）</div>`}
                     ${traitChips}
                     ${presetBadge}
                     <div id="preview_${safeId}" style="margin-top:10px; padding:10px; background:var(--bg); border-radius:6px; font-size:12px;">
@@ -10471,8 +10471,22 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
                 </div>
             </div>
         `;
-        // 卡片插入 DOM 后异步加载 preview
+        // 卡片插入 DOM 后异步加载 preview + 默认路径
         setTimeout(() => loadProjectAssemblyPreview(safeId, traitsArr), 50);
+        if (!action.local_repo_path) {
+            setTimeout(async () => {
+                const el = document.getElementById('confirmProjDefaultPath');
+                if (!el) return;
+                try {
+                    const d = await api('/system/settings/projects_default_dir');
+                    const dir = d.value || 'backend/projects/';
+                    const safeName = (action.name || '').replace(/[<>:"/\\|?*]/g, '-');
+                    el.innerHTML = `本地路径：<code>${escapeHtml(dir + '\\' + safeName)}</code>`;
+                } catch (_) {
+                    el.textContent = '本地路径：自动生成到 backend/projects/';
+                }
+            }, 100);
+        }
         } // end else (not executed)
     } else if (action && action.type === 'propose_ue_framework') {
         actionHtml = renderUEFrameworkCard(action);
@@ -13041,6 +13055,9 @@ async function showSystemSettingsModal(initialTab = 'knowledge') {
             </div>
             <div class="modal-body" style="padding:0; display:flex; flex-direction:column; max-height:80vh;">
                 <div class="inner-tabs" style="margin:16px 20px 0; flex-shrink:0;">
+                    <button class="inner-tab" data-sys-tab="general" onclick="switchSysSettingsTab('general')">
+                        ⚙️ 通用
+                    </button>
                     <button class="inner-tab" data-sys-tab="knowledge" onclick="switchSysSettingsTab('knowledge')">
                         📚 全局知识库
                     </button>
@@ -13052,6 +13069,37 @@ async function showSystemSettingsModal(initialTab = 'knowledge') {
                     </button>
                 </div>
                 <div style="flex:1; overflow-y:auto; padding:16px 20px;">
+                    <!-- 通用设置 panel -->
+                    <div class="sys-settings-panel" id="sys-panel-general" style="display:none;">
+                        <div class="sys-setting-group">
+                            <h4 class="sys-setting-group-title">📁 项目目录</h4>
+                            <div class="sys-setting-row">
+                                <label class="sys-setting-label">
+                                    默认本地路径
+                                    <span class="sys-setting-hint">新建项目时自动放到此目录下（按项目名创建子文件夹）</span>
+                                </label>
+                                <div class="sys-setting-ctrl">
+                                    <input type="text" id="sysDefaultProjectsDir" class="sys-setting-input"
+                                           placeholder="如 F:\\ADS_Projects">
+                                </div>
+                            </div>
+                            <div class="sys-setting-row">
+                                <label class="sys-setting-label">
+                                    GitHub 默认组织
+                                    <span class="sys-setting-hint">create_github_repo 时的默认 org</span>
+                                </label>
+                                <div class="sys-setting-ctrl">
+                                    <input type="text" id="sysGithubDefaultOrg" class="sys-setting-input"
+                                           placeholder="如 AiDS-Projects">
+                                </div>
+                            </div>
+                            <div style="margin-top:12px;">
+                                <button class="btn btn-primary btn-sm" onclick="saveGeneralSettings()">保存</button>
+                                <span id="sysGeneralSaveStatus" style="margin-left:8px;font-size:12px;color:var(--success);"></span>
+                            </div>
+                        </div>
+                    </div>
+
                     <!-- 全局知识库 panel -->
                     <div class="sys-settings-panel" id="sys-panel-knowledge">
                         <!-- 系统文档（只读） -->
@@ -13151,6 +13199,43 @@ function switchSysSettingsTab(tab) {
     if (tab === 'knowledge') _loadGlobalKnowledgeIntoModal();
     if (tab === 'traits') loadTraitsView();
     if (tab === 'skills') loadGlobalSkills();
+    if (tab === 'general') loadGeneralSettings();
+}
+
+async function loadGeneralSettings() {
+    try {
+        const data = await api('/system/settings');
+        const s = data.settings || {};
+        const dirEl = document.getElementById('sysDefaultProjectsDir');
+        const orgEl = document.getElementById('sysGithubDefaultOrg');
+        if (dirEl) dirEl.value = s.projects_default_dir || '';
+        if (orgEl) orgEl.value = s.github_default_org || '';
+    } catch (e) {
+        console.warn('加载通用设置失败:', e);
+    }
+}
+
+async function saveGeneralSettings() {
+    const dirEl = document.getElementById('sysDefaultProjectsDir');
+    const orgEl = document.getElementById('sysGithubDefaultOrg');
+    const statusEl = document.getElementById('sysGeneralSaveStatus');
+    try {
+        await api('/system/settings', {
+            method: 'POST',
+            body: {
+                settings: {
+                    projects_default_dir: dirEl?.value?.trim() || '',
+                    github_default_org:   orgEl?.value?.trim() || '',
+                }
+            }
+        });
+        if (statusEl) {
+            statusEl.textContent = '✓ 已保存';
+            setTimeout(() => { if (statusEl) statusEl.textContent = ''; }, 2000);
+        }
+    } catch (e) {
+        if (statusEl) statusEl.textContent = '保存失败: ' + e.message;
+    }
 }
 
 // ==================== 全局 Skills 管理 ====================
