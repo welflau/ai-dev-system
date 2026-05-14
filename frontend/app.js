@@ -7087,18 +7087,50 @@ function appendLogEntry(log) {
  * 日志面板筛选
  */
 function filterLogPanel() {
-    const levelFilter = document.getElementById('logLevelFilter')?.value || '';
-    const agentFilter = document.getElementById('logAgentFilter')?.value || '';
-    const entries = document.getElementById('logPanelEntries');
+    const levelFilter = (document.getElementById('logLevelFilter')?.value || '').toLowerCase();
+    const agentFilter =  document.getElementById('logAgentFilter')?.value || '';
+    const rawSearch   = (document.getElementById('logSearchInput')?.value || '').trim();
+    const entries     =  document.getElementById('logPanelEntries');
     if (!entries) return;
 
-    entries.querySelectorAll('.log-entry').forEach(el => {
-        const level = el.querySelector('.log-entry-level')?.textContent?.toLowerCase() || '';
-        const agent = el.querySelector('.log-entry-agent')?.textContent || '';
-        let show = true;
-        if (levelFilter && level !== levelFilter) show = false;
-        if (agentFilter && agent !== agentFilter) show = false;
-        el.style.display = show ? '' : 'none';
+    // 解析搜索语法：支持 tool:xxx  agent:xxx  error:  普通关键词
+    let kw = rawSearch, kwTool = '', kwAgent = '', kwOnlyError = false;
+    if (rawSearch) {
+        const toolM  = rawSearch.match(/\btool:(\S*)/i);
+        const agentM = rawSearch.match(/\bagent:(\S*)/i);
+        if (toolM)  { kwTool  = toolM[1].toLowerCase(); kw = kw.replace(toolM[0], '').trim(); }
+        if (agentM) { kwAgent = agentM[1].toLowerCase(); kw = kw.replace(agentM[0], '').trim(); }
+        if (/\berror:\b/i.test(rawSearch)) { kwOnlyError = true; kw = kw.replace(/error:/gi,'').trim(); }
+    }
+
+    const _matches = (el) => {
+        // 取文本内容用于关键词匹配
+        const text      = (el.textContent || '').toLowerCase();
+        const levelText = (el.querySelector('.log-entry-level, .log-action')?.textContent || '').toLowerCase();
+        const agentText =  el.querySelector('.log-entry-agent, .log-agent')?.textContent || '';
+
+        // 级别下拉
+        if (levelFilter) {
+            const elLevel = el.classList.contains('error') || levelText.includes('error') ? 'error'
+                          : el.classList.contains('warn')  || levelText.includes('warn')  ? 'warn'
+                          : 'info';
+            if (elLevel !== levelFilter) return false;
+        }
+        // Agent 下拉
+        if (agentFilter && !agentText.includes(agentFilter)) return false;
+
+        // 搜索框语法
+        if (kwOnlyError && !el.classList.contains('error') && !text.includes('error')) return false;
+        if (kwTool  && !text.includes(kwTool))  return false;
+        if (kwAgent && !agentText.toLowerCase().includes(kwAgent)) return false;
+        if (kw      && !text.includes(kw.toLowerCase())) return false;
+
+        return true;
+    };
+
+    // 同时过滤两种日志条目类型
+    entries.querySelectorAll('.log-entry, .log-item').forEach(el => {
+        el.style.display = _matches(el) ? '' : 'none';
     });
 }
 

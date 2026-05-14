@@ -1125,6 +1125,9 @@
                             <span class="log-panel-badge" id="logPanelBadge" style="display:none;">0</span>
                         </div>
                         <div class="log-panel-actions">
+                            <input id="logSearchInput" type="text" placeholder="搜索日志…"
+                                   oninput="filterLogPanel()"
+                                   class="log-search-input" title="关键词过滤（支持 tool: agent: error:）">
                             <select id="logLevelFilter" onchange="filterLogPanel()" title="日志级别">
                                 <option value="">全部级别</option>
                                 <option value="info">INFO</option>

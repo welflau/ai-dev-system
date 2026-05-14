@@ -967,6 +967,22 @@ body.chat-open #projectListPage {
     font-size: 11px;
     cursor: pointer;
 }
+.log-search-input {
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+    width: 160px;
+    outline: none;
+    transition: border-color 0.15s, width 0.2s;
+}
+.log-search-input:focus {
+    border-color: var(--primary-light, #63b3ed);
+    width: 220px;
+}
+.log-search-input::placeholder { color: var(--text-muted); }
 
 .log-panel-btn {
     font-size: 14px !important;
