@@ -1,8 +1,8 @@
 """
 内置 Hook 清单：
-  - audit_log_hook     : 每次工具调用写 tool_audit_log 表（POST_TOOL_USE）
+  - audit_log_hook     : 每次工具调用写 tool_audit_log 表（POST_TOOL_USE + TOOL_ERROR）
   - shell_rate_limit_hook : ShellAction 每 Ticket 调用超 50 次时 raise（PRE_TOOL_USE）
-  - failure_library_hook  : 工具报错自动写入 failure_library 表（TOOL_ERROR）
+  - failure_library_hook  : 工具报错写 ticket_logs（TOOL_ERROR，用于工单流程追踪）
 """
 import logging
 from collections import defaultdict
@@ -11,14 +11,58 @@ from hooks.types import HookEvent, ToolHookContext
 
 logger = logging.getLogger("hooks.builtin")
 
+# ── 工具 input 的主要参数 key 映射（与 QueryEngine 的 _ARGS_HINT_KEY 保持一致）─
+_INPUT_KEY: dict = {
+    "search_knowledge": "query", "search_ticket_history": "query",
+    "fetch_url": "url", "git_read_file": "path",
+    "get_requirement_pipeline": "requirement_id",
+    "get_ticket_status": "ticket_id", "get_requirement_logs": "requirement_id",
+    "git_log": "branch", "git_switch_branch": "branch",
+    "generate_document": "filename", "confirm_save_doc": "filename",
+    "confirm_requirement": "title", "confirm_bug": "title",
+    "load_skill": "skill_id", "read_local_file": "path", "ue_call": "command",
+    "glob": "pattern", "grep": "pattern", "list_directory": "path",
+    "shell": "command", "web_search": "query",
+    "save_memory": "title", "read_files": "paths",
+    "browse_marketplace": "dir_name", "install_project_skill": "dir_name",
+    "manage_skill": "action", "dispatch_subtask": "title",
+    "git_merge": "target_branch", "git_list_branches": "remote",
+    "competitor_analysis": "product_name", "get_build_logs": "ticket_id",
+    "ShellAction": "command",
+}
+
+
+def _extract_input_summary(tool_name: str, tool_input: dict) -> str:
+    """从 tool_input 提取最重要的一个参数值，限 120 字符"""
+    if not tool_input:
+        return ""
+    key = _INPUT_KEY.get(tool_name)
+    if key and key in tool_input:
+        val = str(tool_input[key])
+        return val[:120]
+    # fallback：取第一个非空值
+    for v in tool_input.values():
+        if v:
+            return str(v)[:120]
+    return ""
+
+
+def _extract_output_summary(output) -> str:
+    """截取输出的前 200 字符，去掉多余空白"""
+    if not output:
+        return ""
+    text = str(output)
+    text = " ".join(text.split())  # 压缩空白
+    return text[:200]
+
 # ── Shell 调用计数器（内存，进程级，ticket 粒度）──────────────────────────
 _shell_call_counts: dict = defaultdict(int)
 _SHELL_LIMIT_PER_TICKET = 50
 
 
 async def audit_log_hook(ctx: ToolHookContext) -> None:
-    """POST_TOOL_USE：记录工具调用到 tool_audit_log 表，并实时推 SSE log_added"""
-    if ctx.event != HookEvent.POST_TOOL_USE:
+    """POST_TOOL_USE + TOOL_ERROR：记录详细工具调用到 tool_audit_log，并推 SSE log_added"""
+    if ctx.event not in (HookEvent.POST_TOOL_USE, HookEvent.TOOL_ERROR):
         return
     try:
         from database import db
@@ -27,36 +71,52 @@ async def audit_log_hook(ctx: ToolHookContext) -> None:
 
         now = now_iso()
         duration_ms = round(ctx.duration_ms or 0, 2)
+        success = 0 if ctx.event == HookEvent.TOOL_ERROR else 1
+
+        input_summary  = _extract_input_summary(ctx.tool_name, ctx.input or {})
+        output_summary = _extract_output_summary(ctx.output) if success else ""
+        error_msg      = str(ctx.error)[:300] if ctx.error else ""
+
         await db.execute(
             "INSERT INTO tool_audit_log "
-            "(tool_name, project_id, ticket_id, agent_type, duration_ms, success, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "(tool_name, project_id, ticket_id, agent_type, duration_ms, success, "
+            " input_summary, output_summary, error_msg, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                ctx.tool_name,
-                ctx.project_id,
-                ctx.ticket_id,
-                ctx.agent_type,
-                duration_ms,
-                1,
+                ctx.tool_name, ctx.project_id, ctx.ticket_id, ctx.agent_type,
+                duration_ms, success,
+                input_summary, output_summary, error_msg,
                 now,
             ),
         )
 
-        # 实时推送到操作日志面板（仅有 project_id 时推，全局聊天不推）
+        # 实时推送到操作日志面板（仅有 project_id 时推）
         if ctx.project_id:
             try:
                 from events import event_manager
+                # 构建可读的详情：工具名 + 耗时 + 主参数 + 结果摘要
+                parts = [f"{ctx.tool_name} ({int(duration_ms)}ms)"]
+                if input_summary:
+                    parts.append(f"→ {input_summary[:60]}")
+                if error_msg:
+                    parts.append(f"❌ {error_msg[:80]}")
+                elif output_summary:
+                    parts.append(f"✓ {output_summary[:80]}")
+
                 log_entry = {
-                    "id":         f"tal-chat-{now}",
-                    "agent_type": ctx.agent_type or "ChatAssistant",
-                    "action":     f"chat:{ctx.tool_name}",
-                    "detail":     json.dumps(
-                        {"message": f"{ctx.tool_name} ({int(duration_ms)}ms)"},
-                        ensure_ascii=False,
-                    ),
-                    "level":      "info",
-                    "created_at": now,
-                    "ticket_id":  ctx.ticket_id,
+                    "id":            f"tal-chat-{now}",
+                    "agent_type":    ctx.agent_type or "ChatAssistant",
+                    "action":        f"chat:{ctx.tool_name}",
+                    "detail":        json.dumps({
+                        "message":        " | ".join(parts),
+                        "input_summary":  input_summary,
+                        "output_summary": output_summary,
+                        "error_msg":      error_msg,
+                        "duration_ms":    duration_ms,
+                    }, ensure_ascii=False),
+                    "level":         "error" if error_msg else "info",
+                    "created_at":    now,
+                    "ticket_id":     ctx.ticket_id,
                 }
                 await event_manager.publish_to_project(
                     ctx.project_id, "log_added", log_entry

@@ -6053,9 +6053,17 @@ async function loadLogs() {
 
 function renderLogItem(log) {
     let detail = '';
+    let inputSummary = '';
+    let outputSummary = '';
+    let errorMsg = '';
+    let durationMs = null;
     try {
         const parsed = JSON.parse(log.detail || '{}');
-        detail = parsed.message || '';
+        detail        = parsed.message || '';
+        inputSummary  = parsed.input_summary  || '';
+        outputSummary = parsed.output_summary || '';
+        errorMsg      = parsed.error_msg      || '';
+        durationMs    = parsed.duration_ms    ?? null;
     } catch {
         detail = log.detail || '';
     }
@@ -6079,8 +6087,18 @@ function renderLogItem(log) {
         messageHtml = `<div class="log-message">${escHtml(detail)}</div>`;
     }
 
+    // 构建展开详情块（输入参数 + 输出摘要）
+    const expandId = 'logx-' + Math.random().toString(36).slice(2);
+    const hasExpand = log._isChatTool && (inputSummary || outputSummary || errorMsg);
+    const expandHtml = hasExpand ? `
+        <div id="${expandId}" class="log-item-expand" style="display:none;">
+            ${inputSummary  ? `<div class="log-expand-row"><span class="log-expand-label">输入</span><span class="log-expand-val">${escHtml(inputSummary)}</span></div>`  : ''}
+            ${outputSummary ? `<div class="log-expand-row"><span class="log-expand-label">结果</span><span class="log-expand-val">${escHtml(outputSummary)}</span></div>` : ''}
+            ${errorMsg      ? `<div class="log-expand-row"><span class="log-expand-label log-expand-err">错误</span><span class="log-expand-val log-expand-err">${escHtml(errorMsg)}</span></div>` : ''}
+        </div>` : '';
+
     return `
-        <div class="log-item ${log.level || 'info'}${log._isChatTool ? ' log-chat-tool' : ''}">
+        <div class="log-item ${log.level || 'info'}${log._isChatTool ? ' log-chat-tool' : ''}"${hasExpand ? ` onclick="toggleBlock('${expandId}')" style="cursor:pointer;"` : ''}>
             <div class="log-header">
                 <span class="log-agent">${log._isChatTool ? '💬 ' : ''}${escHtml(log.agent_type || 'System')}</span>
                 <span class="log-action">${escHtml((log.action || '').replace(/^chat:/, '🔧 '))}</span>
@@ -6091,6 +6109,7 @@ function renderLogItem(log) {
                 <span class="log-time">${formatTime(log.created_at)}</span>
             </div>
             ${messageHtml}
+            ${expandHtml}
         </div>`;
 }
 

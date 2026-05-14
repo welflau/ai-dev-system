@@ -1150,6 +1150,33 @@ body.chat-open #projectListPage {
 .log-item.log-chat-tool { opacity: 0.82; }
 .log-item.log-chat-tool::before { background: #805ad5; }
 .log-item.log-chat-tool .log-agent { color: #805ad5; }
+/* 可展开详情块 */
+.log-item-expand {
+    margin-top: 6px;
+    padding: 6px 8px;
+    background: var(--bg, #1a202c);
+    border-radius: 4px;
+    border: 1px solid var(--border, #2d3748);
+    font-size: 11px;
+}
+.log-expand-row {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 3px;
+    align-items: flex-start;
+}
+.log-expand-label {
+    flex-shrink: 0;
+    font-weight: 600;
+    color: var(--text-muted, #718096);
+    min-width: 30px;
+}
+.log-expand-val {
+    color: var(--text-secondary, #a0aec0);
+    word-break: break-all;
+    line-height: 1.5;
+}
+.log-expand-err { color: var(--error, #fc8181) !important; }
 
 .log-header {
     display: flex;
