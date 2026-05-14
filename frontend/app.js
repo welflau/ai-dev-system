@@ -9412,11 +9412,15 @@ async function _sendChatStreaming(url, body) {
 
     // 追加 action 卡片（若有）
     if (finalAction) {
-        const cardHtml = _buildConfirmCardHtml ? _buildConfirmCardHtml(finalAction) : '';
+        // 根据 action type 选择正确的卡片渲染方式
+        // _buildConfirmCardHtml 只处理单条 confirm_requirement/confirm_bug，
+        // 批量和其他类型需要走 _buildAnyActionCardHtml
+        const cardHtml = _buildAnyActionCardHtml(finalAction);
         if (cardHtml) {
             const cardEl = document.createElement('div');
             cardEl.innerHTML = cardHtml;
-            contentEl.insertBefore(cardEl.firstElementChild, timeEl);
+            const child = cardEl.firstElementChild;
+            if (child) contentEl.insertBefore(child, timeEl);
         }
     }
 
@@ -10243,6 +10247,74 @@ function _buildUserHistoryContent(text, images) {
     }).filter(Boolean);
     if (text) blocks.push({ type: 'text', text });
     return blocks.length > 0 ? blocks : text;
+}
+
+/**
+ * 根据 action.type 路由到正确的卡片 HTML 构建器。
+ * _sendChatStreaming 流结束时使用此函数，避免所有 action type 都走单条需求卡片。
+ */
+function _buildAnyActionCardHtml(action) {
+    if (!action) return '';
+    const t = action.type;
+    if (t === 'confirm_requirement' || t === 'confirm_bug') {
+        return _buildConfirmCardHtml(action);
+    }
+    if (t === 'confirm_requirements_batch') {
+        return _buildBatchRequirementsCardHtml(action);
+    }
+    // confirm_project 走原有的 _buildConfirmCardHtml 入口
+    // (appendChatBubble 里的 confirm_project 分支已覆盖，这里简化处理)
+    if (t === 'confirm_project') {
+        // 复用 appendChatBubble 的 confirm_project 路径：通过临时容器插入
+        const tmp = document.createElement('div');
+        // 直接调用 appendChatBubble 的 action 渲染部分（传入 tmp 作为容器）
+        // 简化：对于流式结束，confirm_project 卡片已在 _sendChatStreaming 的特殊路径里处理
+        // 此处返回空，防止错误的单条需求卡片出现
+        return '';
+    }
+    // 其他类型：不渲染（历史加载时 appendChatBubble 会正确处理）
+    return '';
+}
+
+/** 构建批量需求卡片 HTML */
+function _buildBatchRequirementsCardHtml(action) {
+    const safeId = _nextCardId('req_batch');
+    const reqs = Array.isArray(action.requirements) ? action.requirements : [];
+    const priorityLabel = {'critical':'🔴 紧急','high':'🟠 高','medium':'🟡 中','low':'🟢 低'};
+    const rowsHtml = reqs.map((r, i) => `
+        <label class="req-batch-row" style="display:flex;align-items:flex-start;gap:8px;padding:6px 4px;border-bottom:1px solid var(--border);cursor:pointer;">
+            <input type="checkbox" checked data-idx="${i}"
+                   style="margin-top:3px;flex-shrink:0;accent-color:var(--primary);">
+            <div style="flex:1;min-width:0;">
+                <div style="font-weight:600;font-size:12px;color:var(--text);">${escapeHtml(r.title || '')}</div>
+                ${r.description ? `<div style="font-size:11px;color:var(--text-muted);margin-top:2px;">${escapeHtml(r.description.slice(0,120))}${r.description.length > 120 ? '…' : ''}</div>` : ''}
+            </div>
+            <span style="flex-shrink:0;font-size:11px;">${priorityLabel[r.priority] || r.priority || '🟡 中'}</span>
+        </label>`).join('');
+    const reqsJson = escapeHtml(JSON.stringify(reqs));
+    // setTimeout 注册 checkbox 监听（插入 DOM 后触发）
+    setTimeout(() => {
+        const card = document.getElementById(safeId);
+        if (!card) return;
+        card.querySelectorAll('input[type=checkbox]').forEach(cb => {
+            cb.addEventListener('change', () => {
+                const n = card.querySelectorAll('input[type=checkbox]:checked').length;
+                const el = document.getElementById(`${safeId}_count`);
+                if (el) el.textContent = n;
+            });
+        });
+    }, 50);
+    return `
+        <div class="chat-action-card chat-confirm-card" id="${safeId}"
+             data-requirements="${reqsJson}" style="border-left-color:var(--primary);">
+            <div class="action-title">📋 识别到 ${reqs.length} 条需求，勾选后批量创建${action.summary ? `：${escapeHtml(action.summary)}` : ''}</div>
+            <div class="action-detail" style="margin:8px 0;max-height:320px;overflow-y:auto;">${rowsHtml}</div>
+            <div style="font-size:11px;color:var(--text-muted);margin-bottom:6px;">已勾选 <span id="${safeId}_count">${reqs.length}</span> / ${reqs.length} 条</div>
+            <div class="confirm-req-btns">
+                <button class="btn btn-sm btn-primary" onclick="doConfirmRequirementsBatch('${safeId}')">⏸ 创建为暂停状态（手动开始）</button>
+                <button class="btn btn-sm" onclick="doCancelRequirement('${safeId}')">✗ 取消</button>
+            </div>
+        </div>`;
 }
 
 /** 构建单张 confirm_requirement 卡片 HTML（供单张和批量场景复用） */
