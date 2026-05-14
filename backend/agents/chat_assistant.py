@@ -53,6 +53,7 @@ from actions.chat.memory_write import MemoryWriteAction                    # 写
 from actions.chat.read_many_files import ReadManyFilesAction               # 批量读文件
 from actions.chat.dispatch_subtask import DispatchSubtaskAction            # 子任务派发
 from actions.chat.manage_skill import ManageSkillAction                    # Skill 开关管理
+from actions.chat.create_github_repo import CreateGithubRepoAction         # GitHub 建仓库
 
 logger = logging.getLogger("agent.chat_assistant")
 
@@ -99,6 +100,7 @@ _TOOL_LABELS_PY: dict = {
     "browse_marketplace": "🛒 浏览技能市场",
     "install_project_skill": "📦 安装 Skill",
     "manage_skill": "🔧 管理 Skill",
+    "create_github_repo": "🐙 创建 GitHub 仓库",
 }
 
 # 全局聊天（项目列表页，无 project_id）下可用的工具白名单。
@@ -324,6 +326,7 @@ class ChatAssistantAgent(BaseAgent):
         ReadManyFilesAction,           # 批量读文件（全局+项目）
         DispatchSubtaskAction,         # Phase 4 子任务派发（仅项目）
         ManageSkillAction,             # Skill 启用/禁用管理
+        CreateGithubRepoAction,        # GitHub 建仓库（AiDS-Projects 组织）
     ]
     react_mode = ReactMode.REACT
     max_react_loop = 6   # 工具调用可能多轮（搜索+fetch），留足余量输出最终回答
@@ -1200,7 +1203,8 @@ class ChatAssistantAgent(BaseAgent):
   - 不要说"请点击上方卡片"——因为卡片是工具调用产出的，不是文字
 
 - 如果已有 Git URL → **立即调 `confirm_project`**，同时用 1-2 句话介绍方案要点
-- 如果没有 Git URL → 先告知需要 Git 仓库 URL，给出示例格式（`https://github.com/用户名/项目名.git`），**用户提供 URL 后立即调 `confirm_project`**
+- 如果没有 Git URL → **先调 `create_github_repo`**（在 AiDS-Projects 组织下自动建仓库），
+  拿到 URL 后**同一轮**立即调 `confirm_project`，无需用户提供 URL、无需等待用户回复
 - 用户说「ok/好的/确认/可以/就这样/建吧/开始吧」→ 视为同意，立即调用工具，不再追问
 
 **阶段判断依据**（看对话历史）：
