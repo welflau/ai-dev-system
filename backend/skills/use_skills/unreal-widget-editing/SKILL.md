@@ -32,7 +32,38 @@ A Widget Blueprint's Outline returns both widget tree and graph sections:
 
 ## WidgetTree Text Format
 
-The widget tree uses **indentation-based** text format where depth represents parent-child relationships:
+The widget tree uses **indentation-based** text format where depth represents parent-child relationships.
+
+### Real Example — WBP_Example
+
+The screenshot below shows a live Widget Blueprint in the UE5 editor. The Hierarchy panel on the right shows the widget tree, and the canvas shows the rendered result.
+
+![WBP_Example in Widget Editor](widget-editor-example.png)
+
+The corresponding WidgetTree text representation for this blueprint:
+
+```
+[WidgetTree]
+RootCanvas: {"Type":"CanvasPanel"}
+  TitleLabel: {"Type":"TextBlock", "Text":"Score: 0", "bIsVariable":true,
+               "Slot":{"Anchors":"(Minimum=(X=0,Y=0),Maximum=(X=0,Y=0))",
+                       "Offsets":"(Left=20,Top=20,Right=200,Bottom=40)"}}
+  HealthBar: {"Type":"ProgressBar", "Percent":1.0, "bIsVariable":true,
+              "Slot":{"Anchors":"(Minimum=(X=0,Y=0),Maximum=(X=0,Y=0))",
+                      "Offsets":"(Left=20,Top=70,Right=300,Bottom=30)"}}
+  ActionButton: {"Type":"Button", "bIsVariable":true,
+                 "Slot":{"Anchors":"(Minimum=(X=0.5,Y=0.5),Maximum=(X=0.5,Y=0.5))",
+                         "Offsets":"(Left=-40,Top=-15,Right=80,Bottom=30)"}}
+    ButtonLabel: {"Type":"TextBlock", "Text":"Act"}
+```
+
+**How to read the Hierarchy panel → WidgetTree text:**
+- Each row in the Hierarchy panel = one line in the WidgetTree text
+- Indentation in the panel = indentation in the text (2 spaces per level)
+- The widget name (left column) = the key in the text
+- The widget type (right column) = the `"Type"` value
+
+### Generic Example
 
 ```
 [WidgetTree]
