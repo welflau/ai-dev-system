@@ -2360,6 +2360,32 @@ class TicketOrchestrator:
                     project_id, ticket_id, requirement_id, agent_name, action,
                     step, "git_push", "git push origin main", "success"
                 )
+            else:
+                # push 失败：写日志 + 推 SSE 错误通知（让用户在日志面板看到）
+                push_err_msg = (
+                    f"{agent_name}.{action} git push 失败，代码已 commit 但未推送到远端。"
+                    f" 工单: {ticket_id[-8:]} | 请检查仓库是否存在及网络连通性。"
+                )
+                logger.warning("⚠️ %s", push_err_msg)
+                await self._log(
+                    project_id, requirement_id, ticket_id, agent_name,
+                    "git_push_failed", None, None, push_err_msg, "warn",
+                )
+                # 推 SSE 到操作日志面板（让用户实时看到）
+                try:
+                    await event_manager.publish_to_project(
+                        project_id, "log_added", {
+                            "id":         f"git-push-fail-{now_iso()}",
+                            "agent_type": agent_name,
+                            "action":     "git_push_failed",
+                            "detail":     json.dumps({"message": push_err_msg}, ensure_ascii=False),
+                            "level":      "error",
+                            "created_at": now_iso(),
+                            "ticket_id":  ticket_id,
+                        }
+                    )
+                except Exception:
+                    pass
 
             # 自动部署 dev 环境（Agent 完成文件提交后）
             if agent_name in ("DevAgent", "ArchitectAgent"):
