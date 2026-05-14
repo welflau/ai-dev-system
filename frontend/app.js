@@ -2833,10 +2833,16 @@ function renderTicketCard(t) {
         ? ' <span class="ticket-status-badge error" title="工单已卡住，点进去看诊断">🚧</span>'
         : '';
 
-    // waiting_subtasks 显示⏳ 角标 + 父子标识
-    const waitingBadge = t.status === 'waiting_subtasks'
-        ? ' <span class="ticket-status-badge warning" title="等待子任务完成">⏳</span>'
-        : '';
+    // waiting_subtasks 显示⏳ 进度角标（done/total）
+    let waitingBadge = '';
+    if (t.status === 'waiting_subtasks') {
+        const total = t.child_total ?? 0;
+        const done  = t.child_done  ?? 0;
+        const prog  = total > 0 ? ` ${done}/${total}` : '';
+        const allDone = total > 0 && done === total;
+        waitingBadge = ` <span class="ticket-status-badge ${allDone ? 'success' : 'warning'}"
+            title="等待子任务：${done} 完成 / ${total} 总计">⏳${prog}</span>`;
+    }
     const subtaskBadge = t.parent_ticket_id
         ? ` <span class="ticket-status-badge subtask-badge" title="子任务，父: #${(t.parent_ticket_id||'').slice(-6)}">↳ 子任务</span>`
         : '';

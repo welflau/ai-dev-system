@@ -601,11 +601,21 @@ async def get_board(project_id: str, requirement_id: str = None):
     ]
 
     # Phase 4：waiting_subtasks 单独放（前端合并到 pending 列显示）
-    board["waiting_subtasks"] = [
-        {**t, "status_label": "⏳ 等待子任务"}
-        for t in tickets
-        if t["status"] == "waiting_subtasks"
-    ]
+    # 附上子工单进度（total / done）用于看板卡片显示 ⏳ 1/3
+    _done_statuses = {"testing_done", "deployed"}
+    waiting_list = []
+    for t in tickets:
+        if t["status"] != "waiting_subtasks":
+            continue
+        children = [c for c in tickets if c.get("parent_ticket_id") == t["id"]]
+        done_cnt  = sum(1 for c in children if c["status"] in _done_statuses)
+        waiting_list.append({
+            **t,
+            "status_label":       "⏳ 等待子任务",
+            "child_total":        len(children),
+            "child_done":         done_cnt,
+        })
+    board["waiting_subtasks"] = waiting_list
 
     return {"board": board}
 
