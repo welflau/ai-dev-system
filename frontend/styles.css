@@ -143,6 +143,82 @@ body {
 .metric-danger .metric-value { color: var(--danger, #ea4a5a); }
 .metric-ok .metric-value    { color: var(--success, #34d058); }
 
+/* 可点击指标块 */
+.metric-item-clickable { cursor: pointer; }
+.metric-item-clickable:hover { background: var(--bg-elevated); }
+
+/* ==================== Hook 可观测浮层 ==================== */
+.hooks-panel {
+    position: fixed;
+    z-index: 1200;
+    background: var(--bg-card, #1e2533);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+    width: 400px;
+    max-height: 520px;
+    overflow-y: auto;
+    font-size: 12px;
+}
+.hooks-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px 8px;
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    background: var(--bg-card, #1e2533);
+    z-index: 1;
+}
+.hooks-panel-title { font-weight: 600; font-size: 13px; }
+.hooks-panel-close {
+    background: none; border: none; color: var(--text-muted);
+    cursor: pointer; font-size: 14px; padding: 0 4px;
+}
+.hooks-panel-close:hover { color: var(--text); }
+.hooks-panel-body { padding: 10px 14px 14px; }
+.hooks-section-title {
+    font-size: 11px; font-weight: 700;
+    color: var(--text-muted); text-transform: uppercase;
+    letter-spacing: 0.5px; margin-bottom: 6px;
+}
+.hooks-empty { color: var(--text-muted); font-size: 12px; padding: 4px 0; }
+/* Hook 列表表格 */
+.hooks-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.hooks-table th {
+    color: var(--text-muted); font-weight: 600;
+    padding: 3px 6px; border-bottom: 1px solid var(--border);
+    text-align: left; white-space: nowrap;
+}
+.hooks-table td { padding: 4px 6px; border-bottom: 1px solid var(--border-light, #2d3748); }
+.hooks-table tr:last-child td { border-bottom: none; }
+/* Shell 限流进度条 */
+.hooks-limit-row {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 5px;
+}
+.hooks-limit-tid { color: var(--text-muted); font-family: monospace; min-width: 52px; }
+.hooks-limit-bar-wrap {
+    flex: 1; height: 6px; background: var(--bg, #1a202c);
+    border-radius: 3px; overflow: hidden;
+}
+.hooks-limit-bar { height: 100%; border-radius: 3px; transition: width 0.3s; }
+.hooks-limit-val { font-weight: 600; min-width: 60px; text-align: right; font-size: 11px; }
+/* 工具调用 TOP */
+.hooks-tool-list { display: flex; flex-direction: column; gap: 4px; }
+.hooks-tool-row { display: flex; align-items: center; gap: 8px; }
+.hooks-tool-name {
+    min-width: 110px; color: var(--primary-light, #63b3ed);
+    font-family: monospace; font-size: 11px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.hooks-tool-bar-wrap {
+    flex: 1; height: 5px; background: var(--bg, #1a202c);
+    border-radius: 3px; overflow: hidden;
+}
+.hooks-tool-bar { height: 100%; background: var(--primary, #4299e1); border-radius: 3px; }
+.hooks-tool-count { font-size: 11px; color: var(--text-muted); min-width: 80px; text-align: right; }
+
 /* ==================== 主布局 ==================== */
 
 .main-container {

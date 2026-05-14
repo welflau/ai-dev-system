@@ -14082,6 +14082,131 @@ async function refreshMetrics() {
 setInterval(refreshMetrics, 5000);
 refreshMetrics();
 
+// ==================== Hook 可观测性 ====================
+
+let _hooksPanelOpen = false;
+
+async function refreshHooksMetric() {
+    try {
+        const d = await fetch('/api/hooks/status').then(r => r.json());
+        const total  = d.today_calls  || 0;
+        const errors = d.today_errors || 0;
+        const count  = d.hook_count   || 0;
+        const hasErr = errors > 0;
+        _setMetric('hooks',
+            `${count} | ${total}次`,
+            hasErr ? 'warn' : count > 0 ? 'ok' : null
+        );
+        if (_hooksPanelOpen) _renderHooksPanel(d);
+    } catch (_) {}
+}
+
+function toggleHooksPanel() {
+    _hooksPanelOpen = !_hooksPanelOpen;
+    const panel = document.getElementById('hooksPanel');
+    if (!panel) return;
+    panel.style.display = _hooksPanelOpen ? '' : 'none';
+    if (_hooksPanelOpen) {
+        _loadHooksPanel();
+        // 定位到指标条下方
+        const anchor = document.getElementById('metric-hooks');
+        if (anchor) {
+            const rect = anchor.getBoundingClientRect();
+            panel.style.top  = (rect.bottom + 4) + 'px';
+            panel.style.right = (window.innerWidth - rect.right) + 'px';
+        }
+    }
+}
+
+async function _loadHooksPanel() {
+    try {
+        const [status, stats] = await Promise.all([
+            fetch('/api/hooks/status').then(r => r.json()),
+            fetch('/api/hooks/stats?hours=1').then(r => r.json()),
+        ]);
+        _renderHooksPanel(status, stats);
+    } catch (e) {
+        document.getElementById('hooksPanelBody').innerHTML =
+            `<div style="color:var(--error);padding:8px;font-size:12px;">加载失败: ${escHtml(e.message)}</div>`;
+    }
+}
+
+function _renderHooksPanel(status, stats) {
+    const body = document.getElementById('hooksPanelBody');
+    if (!body) return;
+
+    const hooks = status.hooks || [];
+    const shellLimits = status.shell_limits || {};
+    const byTool = (stats?.by_tool || []).slice(0, 8);
+
+    // ── Hook 列表 ──
+    let html = `<div class="hooks-section-title">⚡ 已注册 Hook（${hooks.length} 个）</div>`;
+    if (hooks.length === 0) {
+        html += `<div class="hooks-empty">暂无注册的 Hook</div>`;
+    } else {
+        html += `<table class="hooks-table">
+            <thead><tr><th>名称</th><th>调用</th><th>失败</th><th>均耗时</th><th>最后执行</th></tr></thead>
+            <tbody>`;
+        hooks.forEach(h => {
+            const errClass = h.errors > 0 ? ' style="color:var(--error)"' : '';
+            const statusIcon = h.errors > 0 ? '❌' : h.calls > 0 ? '✅' : '⬜';
+            html += `<tr>
+                <td>${statusIcon} <code>${escHtml(h.name)}</code></td>
+                <td>${h.calls}</td>
+                <td${errClass}>${h.errors}</td>
+                <td>${h.avg_ms ? h.avg_ms + 'ms' : '—'}</td>
+                <td>${h.last_at ? formatTime(h.last_at) : '—'}</td>
+            </tr>`;
+        });
+        html += `</tbody></table>`;
+    }
+
+    // ── Shell 限流 ──
+    const limitEntries = Object.entries(shellLimits);
+    if (limitEntries.length > 0) {
+        html += `<div class="hooks-section-title" style="margin-top:12px;">🛡️ Shell 限流计数（上限 ${Object.values(shellLimits)[0]?.limit || 50}/Ticket）</div>`;
+        limitEntries.forEach(([tid, info]) => {
+            const pct   = info.pct || 0;
+            const color = pct >= 90 ? 'var(--error)' : pct >= 60 ? 'var(--warning)' : 'var(--success)';
+            const warn  = pct >= 90 ? ' ⚠️' : '';
+            html += `<div class="hooks-limit-row">
+                <span class="hooks-limit-tid">#${tid.slice(-6)}</span>
+                <div class="hooks-limit-bar-wrap">
+                    <div class="hooks-limit-bar" style="width:${pct}%;background:${color};"></div>
+                </div>
+                <span class="hooks-limit-val" style="color:${color}">${info.count}/${info.limit}${warn}</span>
+            </div>`;
+        });
+    }
+
+    // ── 工具调用 TOP ──
+    if (byTool.length > 0) {
+        const maxCalls = byTool[0].calls || 1;
+        html += `<div class="hooks-section-title" style="margin-top:12px;">📊 近 1 小时工具调用</div>`;
+        html += `<div class="hooks-tool-list">`;
+        byTool.forEach(t => {
+            const pct   = Math.round(t.calls / maxCalls * 100);
+            const errBadge = t.errors > 0 ? `<span style="color:var(--error);margin-left:4px;">✗${t.errors}</span>` : '';
+            html += `<div class="hooks-tool-row">
+                <span class="hooks-tool-name">${escHtml(t.tool_name)}</span>
+                <div class="hooks-tool-bar-wrap">
+                    <div class="hooks-tool-bar" style="width:${pct}%;"></div>
+                </div>
+                <span class="hooks-tool-count">${t.calls}次 ${t.avg_ms}ms${errBadge}</span>
+            </div>`;
+        });
+        html += `</div>`;
+    } else {
+        html += `<div class="hooks-empty" style="margin-top:8px;">近 1 小时暂无工具调用记录</div>`;
+    }
+
+    body.innerHTML = html;
+}
+
+// Hooks 指标随 refreshMetrics 同频（每 5s）+ 单独启动
+setInterval(refreshHooksMetric, 5000);
+refreshHooksMetric();
+
 // ==================== 权限审批 UI ====================
 
 let _permPendingCount = 0;

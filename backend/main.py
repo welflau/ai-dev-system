@@ -302,6 +302,7 @@ from api.efficiency import router as efficiency_router
 from api.competitor import router as competitor_router
 from api.agent_test import router as agent_test_router, global_router as agent_test_global_router
 from api.permissions import router as permissions_router
+from api.hooks import router as hooks_router
 
 app.include_router(projects_router)
 app.include_router(requirements_router)
@@ -326,6 +327,7 @@ app.include_router(competitor_router)
 app.include_router(agent_test_router)
 app.include_router(agent_test_global_router)
 app.include_router(permissions_router)
+app.include_router(hooks_router)
 
 
 # ==================== 系统端点 ====================

@@ -91,6 +91,24 @@
             <span class="metric-label">WAL</span>
             <span class="metric-value" id="mv-wal">—</span>
         </div>
+        <div class="metric-sep"></div>
+        <div class="metric-item metric-item-clickable" id="metric-hooks"
+             onclick="toggleHooksPanel()" title="Hook 系统状态（点击展开详情）">
+            <span class="metric-icon">🔧</span>
+            <span class="metric-label">Hooks</span>
+            <span class="metric-value" id="mv-hooks">—</span>
+        </div>
+    </div>
+
+    <!-- ==================== Hook 可观测浮层 ==================== -->
+    <div id="hooksPanel" class="hooks-panel" style="display:none;">
+        <div class="hooks-panel-header">
+            <span class="hooks-panel-title">🔧 Hook 运行状态</span>
+            <button class="hooks-panel-close" onclick="toggleHooksPanel()">✕</button>
+        </div>
+        <div class="hooks-panel-body" id="hooksPanelBody">
+            <div style="color:var(--text-muted);font-size:12px;padding:8px;">加载中...</div>
+        </div>
     </div>
 
     <!-- ==================== 主内容 ==================== -->
