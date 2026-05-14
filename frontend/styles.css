@@ -8381,6 +8381,24 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
 }
 .prompt-toggle-btn:hover { background: var(--bg-elevated); }
 
+/* ==================== confirm_project 卡片 - 可编辑项目名 ====================*/
+.confirm-proj-name-row {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
+}
+.confirm-proj-name-label {
+    font-size: 12px; color: var(--text-muted); flex-shrink: 0; min-width: 52px;
+}
+.confirm-proj-name-input {
+    flex: 1; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 5px; color: var(--text-primary);
+    padding: 4px 8px; font-size: 14px; font-weight: 600;
+}
+.confirm-proj-name-input:focus { outline: none; border-color: var(--primary-light, #63b3ed); }
+.confirm-proj-repo-hint {
+    font-size: 11px; color: var(--text-muted);
+    margin-bottom: 6px; padding-left: 60px; font-family: monospace;
+}
+
 /* ==================== 系统设置通用面板 ====================*/
 .sys-setting-group { margin-bottom: 20px; }
 .sys-setting-group-title {

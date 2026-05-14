@@ -6815,6 +6815,29 @@ function showAgentDetail(agentName) {
     openModal('agentDetailModal');
 }
 
+function updateProjRepoName(cardId) {
+    const nameEl  = document.getElementById(`projName_${cardId}`);
+    const hintEl  = document.getElementById(`projRepoHint_${cardId}`);
+    const pathEl  = document.getElementById('confirmProjDefaultPath');
+    if (!nameEl || !hintEl) return;
+    const name = nameEl.value.trim();
+    // kebab-case repo name
+    const repoName = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    if (repoName) {
+        hintEl.textContent = `GitHub 仓库：AiDS-Projects/${repoName}`;
+        hintEl.style.display = '';
+    } else {
+        hintEl.style.display = 'none';
+    }
+    // 同步更新默认路径预览
+    if (pathEl && name) {
+        api('/system/settings/projects_default_dir').then(d => {
+            const dir = d.value || 'backend/projects/';
+            pathEl.innerHTML = `本地路径：<code>${escapeHtml(dir + '\\' + name)}</code>`;
+        }).catch(() => {});
+    }
+}
+
 function toggleBlock(id) {
     const el = document.getElementById(id);
     if (!el) return;
@@ -10452,7 +10475,14 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
                  style="border-left-color: var(--accent, #a371f7);">
                 <div class="action-title">📦 识别到新建项目意图，是否创建？</div>
                 <div class="action-detail">
-                    <div class="confirm-req-title">${escapeHtml(action.name || '')}</div>
+                    <div class="confirm-proj-name-row">
+                        <label class="confirm-proj-name-label">项目名称</label>
+                        <input type="text" class="confirm-proj-name-input" id="projName_${safeId}"
+                               value="${escapeHtml(action.name || '')}"
+                               placeholder="输入项目名称"
+                               oninput="updateProjRepoName('${safeId}')">
+                    </div>
+                    <div class="confirm-proj-repo-hint" id="projRepoHint_${safeId}"></div>
                     ${action.description ? `<div class="confirm-req-desc">${escapeHtml(action.description)}</div>` : ''}
                     <div class="confirm-req-meta">
                         Git 仓库：<code>${escapeHtml(action.git_remote_url || '')}</code>
@@ -10471,8 +10501,9 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
                 </div>
             </div>
         `;
-        // 卡片插入 DOM 后异步加载 preview + 默认路径
+        // 卡片插入 DOM 后：preview + 默认路径 + repo 名预览
         setTimeout(() => loadProjectAssemblyPreview(safeId, traitsArr), 50);
+        setTimeout(() => updateProjRepoName(safeId), 80);
         if (!action.local_repo_path) {
             setTimeout(async () => {
                 const el = document.getElementById('confirmProjDefaultPath');
@@ -10904,7 +10935,9 @@ async function doConfirmProject(cardId) {
     // 防止重复点击：标记后立即禁用所有按钮
     if (card.dataset.confirming === '1') return;
     card.dataset.confirming = '1';
-    const name = card.dataset.name || '';
+    // 优先读用户编辑后的 input 值
+    const nameInput = document.getElementById(`projName_${cardId}`);
+    const name = (nameInput ? nameInput.value.trim() : '') || card.dataset.name || '';
     const description = card.dataset.description || '';
     const tech_stack = card.dataset.techStack || '';
     const git_remote_url = card.dataset.gitRemoteUrl || '';

@@ -40,7 +40,12 @@ class ConfirmProjectAction(ActionBase):
                 "properties": {
                     "name": {
                         "type": "string",
-                        "description": "项目名称，简短明确",
+                        "description": (
+                            "项目名称，简短有辨识度（2-4个词）。"
+                            "若用户未指定，根据项目描述自动生成一个合适的名字，如"
+                            " 'JumpGame' / 'TaskBoard' / 'PixelRunner'。"
+                            "用户可以在确认卡片里修改。"
+                        ),
                     },
                     "git_remote_url": {
                         "type": "string",

@@ -1166,7 +1166,7 @@ class ChatAssistantAgent(BaseAgent):
 
 ## 调 confirm_project 必填字段（**全齐了才能调**）
 
-- **name**（必填）：项目名称
+- **name**（必填）：项目名称。用户未指定时**自动生成**一个简短有辨识度的名字（2-4词，如 JumpGame / TaskBoard），用户可在卡片里修改
 - **git_remote_url**（必填）：Git 远程仓库 URL
 - **traits**（必填）：项目特征标签数组，至少包含：
   - `platform:*` —— `web` / `wechat` / `desktop` / `mobile` / `server` / `cli` 任选
