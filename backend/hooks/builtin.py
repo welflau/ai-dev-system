@@ -250,6 +250,58 @@ async def failure_library_hook(ctx: ToolHookContext) -> None:
         logger.warning("failure_library_hook 写库失败: %s", e)
 
 
+async def chat_alert_hook(ctx: ToolHookContext) -> None:
+    """TOOL_ERROR：向 AI 聊天面板推送 agent_alert 通知，让用户实时感知关键错误。
+
+    只处理关键错误（git 操作失败、agent 执行报错），过滤掉普通工具调用失败。
+    """
+    if ctx.event != HookEvent.TOOL_ERROR:
+        return
+
+    tool = ctx.tool_name or ""
+    # 只关心 git 操作失败和 agent 执行失败（chat 工具错误由用户直接看到）
+    is_critical = tool.startswith("git:") or tool.startswith("agent:")
+    if not is_critical:
+        return
+
+    project_id = ctx.project_id
+    if not project_id:
+        return
+
+    error_msg = str(ctx.error) if ctx.error else "未知错误"
+    ticket_id  = ctx.ticket_id
+    agent_type = ctx.agent_type or "System"
+
+    # 构建友好提示
+    if tool.startswith("git:push"):
+        title = "⚠️ Git Push 失败"
+        body  = f"代码已提交但未推送到远端仓库。\n原因：{error_msg[:200]}"
+    elif tool.startswith("git:commit"):
+        title = "⚠️ Git Commit 失败"
+        body  = f"文件写入失败，代码未提交。\n原因：{error_msg[:200]}"
+    else:
+        title = f"⚠️ {agent_type} 执行失败"
+        body  = error_msg[:300]
+
+    if ticket_id:
+        body += f"\n\n工单 ID：`{ticket_id[-8:]}`，可发送「查看工单状态」了解详情。"
+
+    try:
+        from events import event_manager
+        from utils import now_iso
+        await event_manager.publish_to_project(project_id, "agent_alert", {
+            "title":      title,
+            "body":       body,
+            "level":      "error",
+            "tool":       tool,
+            "ticket_id":  ticket_id,
+            "agent_type": agent_type,
+            "created_at": now_iso(),
+        })
+    except Exception as e:
+        logger.debug("chat_alert_hook 推送失败: %s", e)
+
+
 def register_builtin_hooks(registry=None) -> None:
     """向 hook_registry 注册所有内置 Hook（在应用启动时调用）"""
     from hooks.registry import hook_registry as _default_registry
@@ -257,4 +309,5 @@ def register_builtin_hooks(registry=None) -> None:
     reg.register(audit_log_hook)
     reg.register(shell_rate_limit_hook)
     reg.register(failure_library_hook)
-    logger.info("内置 Hooks 已注册（audit_log / shell_rate_limit / failure_library）")
+    reg.register(chat_alert_hook)
+    logger.info("内置 Hooks 已注册（audit_log / shell_rate_limit / failure_library / chat_alert）")

@@ -1582,6 +1582,22 @@ class TicketOrchestrator:
                 ticket_id[:12], agent_name, action, err_msg[:120],
             )
 
+            # Hook emit：让 chat_alert_hook 把错误推到 AI 聊天面板
+            try:
+                from hooks.registry import hook_registry
+                from hooks.types import HookEvent, ToolHookContext
+                await hook_registry.emit(ToolHookContext(
+                    event=HookEvent.TOOL_ERROR,
+                    tool_name=f"agent:{agent_name}.{action}",
+                    input={},
+                    error=RuntimeError(err_msg[:300]),
+                    project_id=project_id,
+                    ticket_id=ticket_id,
+                    agent_type=agent_name,
+                ))
+            except Exception:
+                pass
+
             # fire-and-forget：后台跑 LLM 诊断，不阻塞主 poll 循环
             # 结果写回 tickets.diagnosis，SSE 推前端
             asyncio.create_task(self._diagnose_blocked_ticket(
@@ -2361,7 +2377,7 @@ class TicketOrchestrator:
                     step, "git_push", "git push origin main", "success"
                 )
             else:
-                # push 失败：写日志 + 推 SSE 错误通知（让用户在日志面板看到）
+                # push 失败：写日志 + 通过 HookRegistry emit TOOL_ERROR
                 push_err_msg = (
                     f"{agent_name}.{action} git push 失败，代码已 commit 但未推送到远端。"
                     f" 工单: {ticket_id[-8:]} | 请检查仓库是否存在及网络连通性。"
@@ -2371,19 +2387,18 @@ class TicketOrchestrator:
                     project_id, requirement_id, ticket_id, agent_name,
                     "git_push_failed", None, None, push_err_msg, "warn",
                 )
-                # 推 SSE 到操作日志面板（让用户实时看到）
                 try:
-                    await event_manager.publish_to_project(
-                        project_id, "log_added", {
-                            "id":         f"git-push-fail-{now_iso()}",
-                            "agent_type": agent_name,
-                            "action":     "git_push_failed",
-                            "detail":     json.dumps({"message": push_err_msg}, ensure_ascii=False),
-                            "level":      "error",
-                            "created_at": now_iso(),
-                            "ticket_id":  ticket_id,
-                        }
-                    )
+                    from hooks.registry import hook_registry
+                    from hooks.types import HookEvent, ToolHookContext
+                    await hook_registry.emit(ToolHookContext(
+                        event=HookEvent.TOOL_ERROR,
+                        tool_name="git:push_failed",
+                        input={"action": action},
+                        error=RuntimeError(push_err_msg),
+                        project_id=project_id,
+                        ticket_id=ticket_id,
+                        agent_type=agent_name,
+                    ))
                 except Exception:
                     pass
 

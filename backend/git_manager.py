@@ -14,22 +14,21 @@ from config import BASE_DIR
 logger = logging.getLogger("git")
 
 
-async def _publish_git_error(project_id: str | None, action: str, err: str) -> None:
-    """git 操作失败时推 SSE log_added 到操作日志面板"""
-    if not project_id:
-        return
+async def _emit_git_error_hook(project_id: str | None, action: str, err: str) -> None:
+    """git 操作失败时通过 HookRegistry emit TOOL_ERROR，
+    让 audit_log_hook / failure_library_hook / chat_alert_hook 统一处理"""
     try:
-        from events import event_manager
-        from utils import now_iso
-        import json as _json
-        await event_manager.publish_to_project(project_id, "log_added", {
-            "id":         f"git-err-{now_iso()}",
-            "agent_type": "Git",
-            "action":     action,
-            "detail":     _json.dumps({"message": err[:300]}, ensure_ascii=False),
-            "level":      "error",
-            "created_at": now_iso(),
-        })
+        from hooks.registry import hook_registry
+        from hooks.types import HookEvent, ToolHookContext
+        ctx = ToolHookContext(
+            event=HookEvent.TOOL_ERROR,
+            tool_name=f"git:{action}",
+            input={},
+            error=RuntimeError(err[:300]),
+            project_id=project_id,
+            agent_type="Git",
+        )
+        await hook_registry.emit(ctx)
     except Exception:
         pass
 
@@ -222,7 +221,7 @@ Thumbs.db
         )
         if rc != 0:
             logger.error("git commit failed: %s", err)
-            await _publish_git_error(project_id, "git_commit_failed", err)
+            await _emit_git_error_hook(project_id, "commit_failed", err)
             return None
 
         # get commit hash
@@ -260,8 +259,7 @@ Thumbs.db
         rc, _, err = await self._run_git(repo_dir, "push", remote, branch)
         if rc != 0:
             logger.error("git push failed: %s", err)
-            # 推 SSE 通知前端日志面板
-            await _publish_git_error(project_id, "git_push_failed", err)
+            await _emit_git_error_hook(project_id, "push_failed", err)
             return False
         return True
 

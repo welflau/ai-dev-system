@@ -6626,6 +6626,13 @@ function connectSSE(projectId) {
             _onPermissionRequest(data);
         });
 
+        // Agent 关键错误 → AI 聊天面板通知气泡
+        eventSource.addEventListener('agent_alert', (e) => {
+            const data = JSON.parse(e.data);
+            console.warn('[SSE] agent_alert:', data);
+            _onAgentAlert(data);
+        });
+
         eventSource.onerror = () => {
             console.warn('[SSE] 连接断开，30 秒后重连');
             disconnectSSE();
@@ -14406,6 +14413,31 @@ refreshHooksMetric();
 // ==================== 权限审批 UI ====================
 
 let _permPendingCount = 0;
+
+function _onAgentAlert(data) {
+    // 1. Toast 提醒（立即可见）
+    showToast(`${data.title || '⚠️ Agent 错误'}`, 'error');
+
+    // 2. 在 AI 聊天面板插入通知气泡（让用户在对话里也能看到）
+    const container = document.getElementById('chatMessages');
+    if (!container) return;
+
+    const body   = (data.body  || '').replace(/\n/g, '<br>');
+    const time   = formatTime(data.created_at || new Date().toISOString());
+    const bubble = document.createElement('div');
+    bubble.className = 'chat-msg assistant';
+    bubble.innerHTML = `
+        <div class="chat-msg-avatar" style="background:var(--error,#ef4444);color:#fff;font-size:14px;">⚠</div>
+        <div class="chat-msg-content">
+            <div class="chat-msg-bubble" style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.3);">
+                <div style="font-weight:600;color:var(--error,#ef4444);margin-bottom:4px;">${escHtml(data.title || '⚠️ Agent 错误')}</div>
+                <div style="font-size:13px;color:var(--text-secondary);">${body}</div>
+            </div>
+            <div class="chat-msg-time">${time}</div>
+        </div>`;
+    container.appendChild(bubble);
+    scrollChatToBottom();
+}
 
 function _onPermissionRequest(data) {
     // SSE 推送到来：更新角标 + 自动弹窗
