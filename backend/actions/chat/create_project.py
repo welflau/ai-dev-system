@@ -24,6 +24,50 @@ from utils import generate_id, now_iso
 logger = logging.getLogger("actions.chat.create_project")
 
 
+async def _ensure_github_repo_exists(git_remote_url: str, project_name: str) -> None:
+    """
+    检查 GitHub 仓库是否存在，不存在则用 gh CLI 自动创建。
+    避免项目创建后 git push 报 'Repository not found'。
+    """
+    import asyncio as _asyncio
+    # 从 URL 提取 owner/repo，如 https://github.com/AiDS-Projects/ThunderStrike.git
+    import re as _re
+    m = _re.search(r"github\.com[:/](.+?)(?:\.git)?$", git_remote_url)
+    if not m:
+        return
+    full_name = m.group(1).strip("/")
+    try:
+        # gh repo view 能访问到说明仓库存在
+        proc = await _asyncio.create_subprocess_exec(
+            "gh", "repo", "view", full_name,
+            stdout=_asyncio.subprocess.DEVNULL,
+            stderr=_asyncio.subprocess.DEVNULL,
+        )
+        await _asyncio.wait_for(proc.communicate(), timeout=10)
+        if proc.returncode == 0:
+            return  # 仓库存在，无需创建
+    except Exception:
+        pass
+
+    # 仓库不存在，自动创建
+    logger.info("GitHub 仓库 %s 不存在，自动创建...", full_name)
+    try:
+        proc = await _asyncio.create_subprocess_exec(
+            "gh", "repo", "create", full_name, "--private",
+            "--description", f"{project_name} - created by ADS",
+            stdout=_asyncio.subprocess.PIPE,
+            stderr=_asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await _asyncio.wait_for(proc.communicate(), timeout=30)
+        if proc.returncode == 0:
+            logger.info("GitHub 仓库已自动创建: %s", full_name)
+        else:
+            logger.warning("自动创建 GitHub 仓库失败 (%s): %s", full_name,
+                           stderr.decode("utf-8", errors="replace").strip())
+    except Exception as e:
+        logger.warning("_ensure_github_repo_exists 异常: %s", e)
+
+
 class CreateProjectAction(ActionBase):
 
     @property
@@ -111,6 +155,10 @@ class CreateProjectAction(ActionBase):
             git_manager.set_project_path(project_id, repo_path)
 
             logger.info("AI助手创建项目: %s, 仓库路径: %s", name, repo_path)
+
+            # 确保 GitHub 仓库存在（避免 push 时 Repository not found）
+            if git_remote_url and "github.com" in git_remote_url:
+                await _ensure_github_repo_exists(git_remote_url, name)
 
             git_dir = os.path.join(repo_path, ".git")
             cloned = False
