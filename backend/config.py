@@ -69,10 +69,10 @@ class Settings:
     AGENT_MAX_TOKENS:  int   = int(os.getenv("AGENT_MAX_TOKENS",  "200000"))
     AGENT_MAX_TURNS:   int   = int(os.getenv("AGENT_MAX_TURNS",   "50"))
     AGENT_MAX_SECONDS: float = float(os.getenv("AGENT_MAX_SECONDS", "600"))
-    # 聊天会话：单次对话预算
-    CHAT_MAX_TOKENS:   int   = int(os.getenv("CHAT_MAX_TOKENS",   "100000"))
-    CHAT_MAX_TURNS:    int   = int(os.getenv("CHAT_MAX_TURNS",    "30"))
-    CHAT_MAX_SECONDS:  float = float(os.getenv("CHAT_MAX_SECONDS",  "180"))
+    # 聊天会话：单次对话预算（复杂架构类问题需要多轮工具调用，300k 更合理）
+    CHAT_MAX_TOKENS:   int   = int(os.getenv("CHAT_MAX_TOKENS",   "300000"))
+    CHAT_MAX_TURNS:    int   = int(os.getenv("CHAT_MAX_TURNS",    "50"))
+    CHAT_MAX_SECONDS:  float = float(os.getenv("CHAT_MAX_SECONDS",  "300"))
 
 
 settings = Settings()
