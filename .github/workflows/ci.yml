@@ -50,5 +50,8 @@ jobs:
     - name: Flake8 lint
       working-directory: backend
       run: |
-        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-        flake8 . --count --max-complexity=15 --max-line-length=120 --statistics --exit-zero
+        # 排除第三方 marketplace/packs 脚本（外部代码，不在我们维护范围）
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics \
+          --exclude=skills/marketplace,skills/packs,skills/use_skills
+        flake8 . --count --max-complexity=15 --max-line-length=120 --statistics --exit-zero \
+          --exclude=skills/marketplace,skills/packs,skills/use_skills
