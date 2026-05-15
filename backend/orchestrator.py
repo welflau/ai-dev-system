@@ -185,11 +185,18 @@ class TicketOrchestrator:
         if to_remove:
             logger.info("清除项目 %s 的 SOP 规则缓存（%d 条）", project_id[:12], len(to_remove))
 
+    # 真正的终态，无论 SOP 如何配置都不应再触发新动作
+    _TERMINAL_STATUSES = frozenset({
+        TicketStatus.DEPLOYED.value,       # 已部署 = 流程终点
+        TicketStatus.CANCELLED.value,      # 已取消
+        "acceptance_complete",             # 未来扩展用
+    })
+
     async def _get_all_actionable_statuses(self) -> List[str]:
         """轮询扫 ticket 用的 WHERE IN (...) 集合。
 
         = default rules keys ∪ 所有活跃项目按其 traits compose 出来的 rules keys
-        （union，不重复）。
+        （union，不重复），再排除硬编码的终态（防止 SOP 配置错误导致无限循环）。
         """
         all_statuses = set(self.transition_rules.keys())
 
@@ -203,6 +210,8 @@ class TicketOrchestrator:
         except Exception as e:
             logger.warning("汇总 actionable_statuses 异常（只用 default）: %s", e)
 
+        # 强制排除终态，防止 SOP 配置错误（如 deployed → deploy）导致无限循环
+        all_statuses -= self._TERMINAL_STATUSES
         return list(all_statuses)
 
     def get_agent_status(self) -> Dict:
