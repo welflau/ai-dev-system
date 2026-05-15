@@ -23,13 +23,15 @@ class Database:
 
     async def connect(self):
         """连接数据库"""
-        # timeout=30 让 sqlite3 在锁冲突时最多等待 30 秒，彻底解决 database is locked
-        self._db = await aiosqlite.connect(self.db_path, timeout=30)
+        # timeout=60 让 sqlite3 在锁冲突时最多等待 60 秒（高并发工单场景）
+        self._db = await aiosqlite.connect(self.db_path, timeout=60)
         self._db.row_factory = aiosqlite.Row
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.execute("PRAGMA foreign_keys=ON")
-        await self._db.execute("PRAGMA busy_timeout=30000")  # 30s 等待
-        await self._db.execute("PRAGMA synchronous=NORMAL")  # WAL 模式下安全且更快
+        await self._db.execute("PRAGMA busy_timeout=60000")   # 60s 等待
+        await self._db.execute("PRAGMA synchronous=NORMAL")   # WAL 模式下安全且更快
+        await self._db.execute("PRAGMA wal_autocheckpoint=1000")  # 默认 1000 页，减少 checkpoint 频率
+        await self._db.execute("PRAGMA cache_size=-32000")    # 32MB 页缓存，减少 I/O
         await self._db.commit()
 
     async def disconnect(self):
