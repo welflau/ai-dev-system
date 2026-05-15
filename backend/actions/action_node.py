@@ -8,8 +8,10 @@ ActionNode — 结构化输出节点
 3. 解析输出为 Pydantic 模型（类型安全）
 4. 解析失败时宽松降级（不崩溃）
 """
+import asyncio
 import json
 import logging
+import time
 from typing import Type, Optional, Any, List
 from pydantic import BaseModel
 
@@ -62,14 +64,44 @@ class ActionNode:
         if images:
             content = _build_vision_content(prompt, images)
 
-        # 3. 调用 LLM
-        response = await llm.chat_json(
-            [{"role": "user", "content": content}],
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
+        # 3. 调用 LLM（带超时约束，防止 Agent 无限等待）
+        from config import settings as _cfg
+        from llm_client import _llm_ctx
+        _t0 = time.monotonic()
+        timeout_s = _cfg.AGENT_MAX_SECONDS  # 默认 600s
 
-        # 3. 解析并验证
+        try:
+            response = await asyncio.wait_for(
+                llm.chat_json(
+                    [{"role": "user", "content": content}],
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                ),
+                timeout=timeout_s,
+            )
+        except asyncio.TimeoutError:
+            elapsed = int((time.monotonic() - _t0))
+            err_msg = (
+                f"ActionNode[{self.key}] LLM 调用超时 "
+                f"（{elapsed}s > {timeout_s}s）"
+            )
+            logger.error("⏱️ %s", err_msg)
+            await _emit_action_node_error(err_msg, _llm_ctx)
+            self.instruct_content = self.expected_type.model_construct()
+            return self
+        except Exception as exc:
+            elapsed = int((time.monotonic() - _t0))
+            err_msg = f"ActionNode[{self.key}] LLM 调用异常（{elapsed}s）: {exc}"
+            logger.error("❌ %s", err_msg)
+            await _emit_action_node_error(err_msg, _llm_ctx)
+            self.instruct_content = self.expected_type.model_construct()
+            return self
+
+        elapsed_ms = (time.monotonic() - _t0) * 1000
+        # 成功后 emit SESSION_END Hook，写 tool_audit_log
+        await _emit_action_node_done(self.key, elapsed_ms, _llm_ctx)
+
+        # 4. 解析并验证
         if response and isinstance(response, dict):
             try:
                 self.instruct_content = self.expected_type(**response)
@@ -141,6 +173,49 @@ class ActionNode:
     def __repr__(self):
         filled = "filled" if self.is_filled else "empty"
         return f"<ActionNode:{self.key} ({filled})>"
+
+
+async def _emit_action_node_error(err_msg: str, llm_ctx) -> None:
+    """ActionNode LLM 調用失敗 → emit TOOL_ERROR Hook（觸發 chat_alert_hook 通知用戶）"""
+    try:
+        from hooks.registry import hook_registry
+        from hooks.types import HookEvent, ToolHookContext
+        await hook_registry.emit(ToolHookContext(
+            event=HookEvent.TOOL_ERROR,
+            tool_name="agent:action_node",
+            input={},
+            error=RuntimeError(err_msg),
+            project_id=llm_ctx.project_id,
+            ticket_id=llm_ctx.ticket_id,
+            agent_type=llm_ctx.agent_type,
+        ))
+    except Exception:
+        pass
+
+
+async def _emit_action_node_done(key: str, elapsed_ms: float, llm_ctx) -> None:
+    """ActionNode LLM 調用完成 → emit SESSION_END Hook（寫 tool_audit_log）"""
+    try:
+        from hooks.registry import hook_registry
+        from hooks.types import HookEvent, ToolHookContext
+        await hook_registry.emit(ToolHookContext(
+            event=HookEvent.SESSION_END,
+            tool_name="action_node",
+            input={
+                "key":       key,
+                "elapsed_s": round(elapsed_ms / 1000, 1),
+                "reason":    "done",
+                "rounds":    1,
+                "total_tokens": 0,   # chat_json 不暴露 token 數，以後可補
+                "max_tokens": 0,
+            },
+            duration_ms=elapsed_ms,
+            project_id=llm_ctx.project_id,
+            ticket_id=llm_ctx.ticket_id,
+            agent_type=llm_ctx.agent_type,
+        ))
+    except Exception:
+        pass
 
 
 def _build_vision_content(text: str, images: List[str]) -> List[dict]:
