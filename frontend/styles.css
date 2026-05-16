@@ -962,6 +962,7 @@ body.chat-open #projectListPage {
     min-height: 36px;
     max-height: 70vh;
     transition: height 0s; /* 拖拽时不要动画 */
+    contain: layout style;  /* 隔离 layout 计算，防止 scrollHeight 触发全页重排 */
 }
 
 .log-panel.collapsed {

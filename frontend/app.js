@@ -11852,11 +11852,17 @@ function handleChatKeydown(e) {
 /**
  * 自动调整输入框高度
  */
+let _autoResizeTimer = null;
 function autoResizeChatInput() {
-    const textarea = document.getElementById('chatInput');
-    if (!textarea) return;
-    textarea.style.height = 'auto';
-    textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+    // debounce：16ms（一帧）内只执行一次，避免连续按键触发多次强制 layout
+    if (_autoResizeTimer) return;
+    _autoResizeTimer = requestAnimationFrame(() => {
+        _autoResizeTimer = null;
+        const textarea = document.getElementById('chatInput');
+        if (!textarea) return;
+        textarea.style.height = 'auto';
+        textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
+    });
 }
 
 /**
