@@ -172,11 +172,18 @@ class Database:
     # ==================== 通用 CRUD ====================
 
     async def execute(self, sql: str, params: tuple = ()) -> aiosqlite.Cursor:
-        """执行 SQL（写操作加锁）"""
-        async with self._write_lock:
-            cursor = await self._db.execute(sql, params)
-            await self._db.commit()
-            return cursor
+        """执行 SQL（写操作加锁，database is locked 时自动重试 3 次）"""
+        for attempt in range(4):
+            try:
+                async with self._write_lock:
+                    cursor = await self._db.execute(sql, params)
+                    await self._db.commit()
+                    return cursor
+            except Exception as e:
+                if "database is locked" in str(e) and attempt < 3:
+                    await asyncio.sleep(0.3 * (attempt + 1))
+                    continue
+                raise
 
     async def fetch_one(self, sql: str, params: tuple = ()) -> Optional[Dict]:
         """查询单条（读操作不加锁）"""
@@ -193,13 +200,21 @@ class Database:
         return [dict(row) for row in rows]
 
     async def insert(self, table: str, data: Dict[str, Any]) -> str:
-        """插入数据"""
+        """插入数据（database is locked 时自动重试 3 次）"""
         columns = ", ".join(data.keys())
         placeholders = ", ".join(["?"] * len(data))
         sql = f"INSERT INTO {table} ({columns}) VALUES ({placeholders})"
-        async with self._write_lock:
-            await self._db.execute(sql, tuple(data.values()))
-            await self._db.commit()
+        for attempt in range(4):
+            try:
+                async with self._write_lock:
+                    await self._db.execute(sql, tuple(data.values()))
+                    await self._db.commit()
+                break
+            except Exception as e:
+                if "database is locked" in str(e) and attempt < 3:
+                    await asyncio.sleep(0.3 * (attempt + 1))
+                    continue
+                raise
         return data.get("id", "")
 
     async def update(self, table: str, data: Dict[str, Any], where: str, params: tuple = ()) -> int:

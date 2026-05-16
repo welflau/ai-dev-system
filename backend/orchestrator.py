@@ -41,7 +41,7 @@ class TicketOrchestrator:
 
         # 每个项目的并发限制，防止大批需求同时涌入耗尽 LLM 配额
         # 默认每项目最多 3 个工单并行；_poll_once 调度时直接限流，不多创建 asyncio task
-        self._MAX_CONCURRENT_PER_PROJECT = 2   # 降低並發減少 DB 鎖競爭
+        self._MAX_CONCURRENT_PER_PROJECT = 1   # DB 高負載期間降到 1，保障聊天可用
         # 每个项目当前活跃的工单集合（用于调度时判断是否有空位，超出则等下轮轮询）
         self._project_active: Dict[str, set] = {}
 
