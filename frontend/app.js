@@ -7208,11 +7208,14 @@ function appendLogEntry(log) {
         <span class="log-entry-msg">${_linkifyTicketIds(message, null)}</span>
     `;
 
-    // 检查筛选条件
-    const levelFilter = document.getElementById('logLevelFilter')?.value || '';
-    const agentFilter = document.getElementById('logAgentFilter')?.value || '';
-    if (levelFilter && level !== levelFilter) div.style.display = 'none';
-    if (agentFilter && agent !== agentFilter) div.style.display = 'none';
+    // 检查筛选条件（与 filterLogPanel 保持一致，包括关键字）
+    const levelFilter = (document.getElementById('logLevelFilter')?.value || '').toLowerCase();
+    const agentFilter =  document.getElementById('logAgentFilter')?.value || '';
+    const kwFilter    = (document.getElementById('logSearchInput')?.value || '').trim().toLowerCase();
+    const entryText   = (div.textContent || '').toLowerCase();
+    if (levelFilter && levelFilter !== level.toLowerCase()) div.style.display = 'none';
+    if (agentFilter && !entryText.includes(agentFilter.toLowerCase())) div.style.display = 'none';
+    if (kwFilter    && !entryText.includes(kwFilter)) div.style.display = 'none';
 
     entries.appendChild(div);
 
@@ -8117,6 +8120,15 @@ function addLog(level, message) {
         <span class="log-entry-agent">System</span>
         <span class="log-entry-msg">${escapeHtml(message)}</span>
     `;
+
+    // 应用当前过滤条件（addLog 之前缺少此步骤导致新条目绕过过滤）
+    const _agentFilter = document.getElementById('logAgentFilter')?.value || '';
+    const _levelFilter = (document.getElementById('logLevelFilter')?.value || '').toLowerCase();
+    const _kwFilter    = (document.getElementById('logSearchInput')?.value || '').trim().toLowerCase();
+    const _entryText   = (entry.textContent || '').toLowerCase();
+    if (_agentFilter && !_entryText.includes(_agentFilter.toLowerCase())) entry.style.display = 'none';
+    if (_levelFilter && _levelFilter !== 'info' && !_entryText.includes(_levelFilter)) entry.style.display = 'none';
+    if (_kwFilter    && !_entryText.includes(_kwFilter)) entry.style.display = 'none';
 
     // 限制日志条数
     while (content.children.length >= LOG_PANEL_MAX_ENTRIES) {
