@@ -832,6 +832,16 @@ async def ticket_events(ticket_id: str):
     )
 
 
+@router.get("/api/events/global")
+async def global_events():
+    """全局事件流（SSE）——全局聊天、指标等跨项目事件"""
+    from sse_starlette.sse import EventSourceResponse
+
+    return EventSourceResponse(
+        event_manager.event_generator("global")
+    )
+
+
 # ==================== 内部方法 ====================
 
 

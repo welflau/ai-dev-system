@@ -14402,6 +14402,35 @@ async function refreshMetrics() {
 setInterval(refreshMetrics, 5000);
 refreshMetrics();
 
+// ==================== 全局 SSE 频道（全局聊天 AI 工具日志）====================
+
+let _globalEventSource = null;
+
+function connectGlobalSSE() {
+    if (_globalEventSource) return;
+    try {
+        _globalEventSource = new EventSource(`${API}/events/global`);
+        _globalEventSource.addEventListener('log_added', (e) => {
+            const data = JSON.parse(e.data);
+            appendLogEntry(data);
+        });
+        _globalEventSource.addEventListener('agent_alert', (e) => {
+            const data = JSON.parse(e.data);
+            _onAgentAlert(data);
+        });
+        _globalEventSource.onerror = () => {
+            _globalEventSource?.close();
+            _globalEventSource = null;
+            setTimeout(connectGlobalSSE, 30000);
+        };
+    } catch (e) {
+        console.warn('[GlobalSSE] 连接失败:', e);
+    }
+}
+
+// 页面加载后连接全局 SSE
+connectGlobalSSE();
+
 // ==================== Hook 可观测性 ====================
 
 let _hooksPanelOpen = false;

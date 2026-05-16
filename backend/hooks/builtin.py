@@ -122,9 +122,14 @@ async def audit_log_hook(ctx: ToolHookContext) -> None:
                     "created_at":    now,
                     "ticket_id":     ctx.ticket_id,
                 }
-                await event_manager.publish_to_project(
-                    ctx.project_id, "log_added", log_entry
-                )
+                if ctx.project_id:
+                    # 項目聊天：推到項目 SSE 頻道
+                    await event_manager.publish_to_project(
+                        ctx.project_id, "log_added", log_entry
+                    )
+                else:
+                    # 全局聊天（project_id=None）：推到 global 頻道
+                    await event_manager.publish("global", "log_added", log_entry)
             except Exception as sse_err:
                 logger.debug("audit_log_hook SSE 推送失败（非致命）: %s", sse_err)
 
@@ -183,29 +188,30 @@ async def _handle_session_end(ctx: ToolHookContext) -> None:
             ),
         )
 
-        # SSE 推送到日志面板
-        if ctx.project_id:
-            try:
-                from events import event_manager
-                level = "warn" if reason != "done" else "info"
-                await event_manager.publish_to_project(
-                    ctx.project_id, "log_added", {
-                        "id":         f"qe-done-{now}",
-                        "agent_type": ctx.agent_type or "ChatAssistant",
-                        "action":     "query_engine:done",
-                        "detail":     json.dumps({
-                            "message":       f"QueryEngine 完成 | {input_summary}",
-                            "input_summary": input_summary,
-                            "output_summary": output_summary,
-                            "duration_ms":   round(elapsed_s * 1000, 1),
-                        }, ensure_ascii=False),
-                        "level":      level,
-                        "created_at": now,
-                        "ticket_id":  ctx.ticket_id,
-                    }
-                )
-            except Exception:
-                pass
+        # SSE 推送到日志面板（项目聊天推项目频道，全局聊天推 global 频道）
+        try:
+            from events import event_manager
+            level = "warn" if reason != "done" else "info"
+            log_entry = {
+                "id":         f"qe-done-{now}",
+                "agent_type": ctx.agent_type or "ChatAssistant",
+                "action":     "query_engine:done",
+                "detail":     json.dumps({
+                    "message":       f"QueryEngine 完成 | {input_summary}",
+                    "input_summary": input_summary,
+                    "output_summary": output_summary,
+                    "duration_ms":   round(elapsed_s * 1000, 1),
+                }, ensure_ascii=False),
+                "level":      level,
+                "created_at": now,
+                "ticket_id":  ctx.ticket_id,
+            }
+            if ctx.project_id:
+                await event_manager.publish_to_project(ctx.project_id, "log_added", log_entry)
+            else:
+                await event_manager.publish("global", "log_added", log_entry)
+        except Exception:
+            pass
     except Exception as e:
         logger.warning("_handle_session_end 写库失败: %s", e)
 
