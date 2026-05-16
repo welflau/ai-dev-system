@@ -14412,7 +14412,9 @@ function connectGlobalSSE() {
         _globalEventSource = new EventSource(`${API}/events/global`);
         _globalEventSource.addEventListener('log_added', (e) => {
             const data = JSON.parse(e.data);
+            // 同时推到项目日志面板（如果在项目内）和全局日志面板
             appendLogEntry(data);
+            _appendGlobalLogEntry(data);
         });
         _globalEventSource.addEventListener('agent_alert', (e) => {
             const data = JSON.parse(e.data);
@@ -14430,6 +14432,88 @@ function connectGlobalSSE() {
 
 // 页面加载后连接全局 SSE
 connectGlobalSSE();
+
+// ─── 全局日志面板（projectListPage 底部）───────────────────────────────────
+
+let _globalLogAutoScroll = true;
+let _globalLogCount = 0;
+
+function _appendGlobalLogEntry(log) {
+    const entries = document.getElementById('globalLogPanelEntries');
+    if (!entries) return;
+    // 清除空状态
+    const empty = entries.querySelector('.log-panel-empty');
+    if (empty) empty.remove();
+
+    const div = document.createElement('div');
+    div.innerHTML = renderLogItem(log);
+    const el = div.firstElementChild;
+    if (!el) return;
+    entries.appendChild(el);
+
+    // 最多保留 200 条
+    while (entries.children.length > 200) entries.removeChild(entries.firstChild);
+
+    // 角标
+    _globalLogCount++;
+    const badge = document.getElementById('globalLogPanelBadge');
+    if (badge) { badge.style.display = ''; badge.textContent = _globalLogCount; }
+
+    // 自动滚动
+    if (_globalLogAutoScroll) entries.scrollTop = entries.scrollHeight;
+}
+
+function filterGlobalLogPanel() {
+    const levelFilter = (document.getElementById('globalLogLevelFilter')?.value || '').toLowerCase();
+    const kw = (document.getElementById('globalLogSearchInput')?.value || '').trim().toLowerCase();
+    const entries = document.getElementById('globalLogPanelEntries');
+    if (!entries) return;
+    entries.querySelectorAll('.log-entry, .log-item').forEach(el => {
+        const text = (el.textContent || '').toLowerCase();
+        let show = true;
+        if (levelFilter && !text.includes(levelFilter)) show = false;
+        if (kw && !text.includes(kw)) show = false;
+        el.style.display = show ? '' : 'none';
+    });
+}
+
+function clearGlobalLogPanel() {
+    const entries = document.getElementById('globalLogPanelEntries');
+    if (entries) entries.innerHTML = '<div class="log-panel-empty">等待 AI 助手日志...</div>';
+    _globalLogCount = 0;
+    const badge = document.getElementById('globalLogPanelBadge');
+    if (badge) badge.style.display = 'none';
+}
+
+function toggleGlobalLogPanel() {
+    const body   = document.getElementById('globalLogPanelBody');
+    const toggle = document.getElementById('globalLogPanelToggle');
+    const panel  = document.getElementById('globalLogPanel');
+    if (!body) return;
+    const collapsed = body.style.display === 'none';
+    body.style.display = collapsed ? '' : 'none';
+    if (toggle) toggle.textContent = collapsed ? '▼' : '▲';
+    if (panel)  panel.classList.toggle('collapsed', !collapsed);
+}
+
+// 拖拽调整高度（复用 logPanel 同款逻辑）
+(function _initGlobalLogResize() {
+    document.addEventListener('DOMContentLoaded', () => {
+        const resizer = document.getElementById('globalLogPanelResize');
+        const panel   = document.getElementById('globalLogPanel');
+        if (!resizer || !panel) return;
+        let startY, startH;
+        resizer.addEventListener('mousedown', e => {
+            startY = e.clientY; startH = panel.offsetHeight;
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', () => document.removeEventListener('mousemove', onMove), {once: true});
+        });
+        function onMove(e) {
+            const newH = Math.max(80, Math.min(500, startH - (e.clientY - startY)));
+            panel.style.height = newH + 'px';
+        }
+    });
+})();
 
 // ==================== Hook 可观测性 ====================
 
