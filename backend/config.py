@@ -22,7 +22,7 @@ class Settings:
     DEBUG: bool = os.getenv("DEBUG", "true").lower() == "true"
 
     # Database
-    DB_PATH: str = str(DATA_DIR / "ai_dev_system.db")
+    DB_PATH: str = os.getenv("DB_PATH", str(DATA_DIR / "ai_dev_system.db"))
 
     # LLM
     LLM_BASE_URL: str = os.getenv("LLM_BASE_URL", "")
@@ -76,3 +76,5 @@ class Settings:
 
 
 settings = Settings()
+
+# trigger reload

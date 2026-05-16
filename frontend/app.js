@@ -14463,8 +14463,8 @@ async function _pollGlobalLogs() {
 
 function startGlobalLogPolling() {
     if (_globalLogTimer) return;
-    _pollGlobalLogs(); // 立即拉一次
-    _globalLogTimer = setInterval(_pollGlobalLogs, 3000);
+    setTimeout(_pollGlobalLogs, 1000); // 延迟 1s 再拉第一次，不影响页面渲染
+    _globalLogTimer = setInterval(_pollGlobalLogs, 10000); // 10s 一次，不影响输入响应
 }
 
 function stopGlobalLogPolling() {
@@ -14472,28 +14472,36 @@ function stopGlobalLogPolling() {
 }
 
 function _appendGlobalLogEntry(log) {
-    const entries = document.getElementById('globalLogPanelEntries');
-    if (!entries) return;
-    // 清除空状态
-    const empty = entries.querySelector('.log-panel-empty');
-    if (empty) empty.remove();
+    // 使用 requestIdleCallback 在浏览器空闲时更新 DOM，避免卡输入
+    const doAppend = () => {
+        const entries = document.getElementById('globalLogPanelEntries');
+        if (!entries) return;
+        const empty = entries.querySelector('.log-panel-empty');
+        if (empty) empty.remove();
 
-    const div = document.createElement('div');
-    div.innerHTML = renderLogItem(log);
-    const el = div.firstElementChild;
-    if (!el) return;
-    entries.appendChild(el);
+        const div = document.createElement('div');
+        div.innerHTML = renderLogItem(log);
+        const el = div.firstElementChild;
+        if (!el) return;
+        entries.appendChild(el);
 
-    // 最多保留 200 条
-    while (entries.children.length > 200) entries.removeChild(entries.firstChild);
+        // 最多保留 200 条
+        while (entries.children.length > 200) entries.removeChild(entries.firstChild);
 
-    // 角标
-    _globalLogCount++;
-    const badge = document.getElementById('globalLogPanelBadge');
-    if (badge) { badge.style.display = ''; badge.textContent = _globalLogCount; }
+        // 角标
+        _globalLogCount++;
+        const badge = document.getElementById('globalLogPanelBadge');
+        if (badge) { badge.style.display = ''; badge.textContent = _globalLogCount; }
 
-    // 自动滚动
-    if (_globalLogAutoScroll) entries.scrollTop = entries.scrollHeight;
+        // 自动滚动
+        if (_globalLogAutoScroll) entries.scrollTop = entries.scrollHeight;
+    };
+    // 优先用 requestIdleCallback，降级用 setTimeout(0)
+    if (typeof requestIdleCallback !== 'undefined') {
+        requestIdleCallback(doAppend, { timeout: 2000 });
+    } else {
+        setTimeout(doAppend, 0);
+    }
 }
 
 function filterGlobalLogPanel() {
