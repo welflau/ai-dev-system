@@ -6057,6 +6057,50 @@ async function loadLogs() {
     }
 }
 
+/**
+ * 把日志消息里的工单 ID 变成可点击链接。
+ * 匹配：
+ *   - "工单 381b8b"  (6位十六进制后缀)
+ *   - "TK-20260514-xxxxxx" (完整工单 ID)
+ */
+function _linkifyTicketIds(text, hintTicketId) {
+    if (!text) return '';
+    // 先 escHtml
+    let html = escHtml(text);
+    // 匹配 "工单 381b8b" 或 "工单 c0ae70" (括号或空格后的6字符十六进制)
+    html = html.replace(/工单[\s(（]+([0-9a-f]{6,8})/gi, (m, shortId) => {
+        const onClick = `event.stopPropagation();_openTicketByShortId('${shortId}')`;
+        return `工单 <a class="log-ticket-link" onclick="${onClick}" title="打开工单 ${shortId}">${shortId}</a>`;
+    });
+    // 匹配完整 TK-YYYYMMDD-xxxxxx
+    html = html.replace(/(TK-\d{8}-[0-9a-f]{6})/gi, (m, fullId) => {
+        const onClick = `event.stopPropagation();openTicketDrawer('${fullId}')`;
+        return `<a class="log-ticket-link" onclick="${onClick}" title="打开工单 ${fullId}">${m}</a>`;
+    });
+    return html;
+}
+
+function _openTicketByShortId(shortId) {
+    if (!currentProjectId) return;
+    // 从页面已有数据里找完整 ticket_id
+    const allCards = document.querySelectorAll('[data-ticket-id],[id^="ticket-"]');
+    for (const el of allCards) {
+        const tid = el.dataset.ticketId || el.id;
+        if (tid && tid.endsWith(shortId)) {
+            openTicketDrawer(tid);
+            return;
+        }
+    }
+    // fallback: API 查询
+    fetch(`${API}/projects/${currentProjectId}/tickets?search=${shortId}`)
+        .then(r => r.json())
+        .then(d => {
+            const t = (d.tickets || []).find(t => t.id.endsWith(shortId));
+            if (t) openTicketDrawer(t.id);
+            else showToast(`找不到工单 ${shortId}`, 'warning');
+        }).catch(() => showToast(`找不到工单 ${shortId}`, 'warning'));
+}
+
 function renderLogItem(log) {
     let detail = '';
     let inputSummary = '';
@@ -6083,14 +6127,17 @@ function renderLogItem(log) {
     const isLong = detail.length > PREVIEW_LIMIT;
     const logId = 'log-' + (log.id || Math.random().toString(36).slice(2));
 
+    // 把 detail 中的工单 ID（TK- 或 6位十六进制）转为可点击链接
+    const detailHtml = _linkifyTicketIds(detail, log.ticket_id);
+
     let messageHtml;
     if (isLong) {
         messageHtml = `<div class="log-message log-message-collapsible" id="${logId}">
-            <div class="log-message-preview">${escHtml(detail)}</div>
+            <div class="log-message-preview">${detailHtml}</div>
             <span class="log-expand-link" onclick="toggleLogMessage('${logId}')">展开 ▼</span>
         </div>`;
     } else {
-        messageHtml = `<div class="log-message">${escHtml(detail)}</div>`;
+        messageHtml = `<div class="log-message">${detailHtml}</div>`;
     }
 
     // 构建展开详情块（输入参数 + 输出摘要）
@@ -7085,7 +7132,7 @@ function appendLogEntry(log) {
         <span class="log-entry-action">${escHtml(isLlmCall ? 'AI调用' : action)}</span>
         ${statusHtml}
         ${llmBadgesHtml}
-        <span class="log-entry-msg">${escHtml(message)}</span>
+        <span class="log-entry-msg">${_linkifyTicketIds(message, null)}</span>
     `;
 
     // 检查筛选条件

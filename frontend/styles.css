@@ -8354,6 +8354,20 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
 .btn-success { background: #38a169; color: #fff; border: none; }
 .btn-success:hover { background: #276749; }
 
+/* ==================== 日志面板工单链接 ====================*/
+.log-ticket-link {
+    color: var(--primary-light, #63b3ed);
+    text-decoration: none;
+    font-family: monospace;
+    font-weight: 600;
+    border-bottom: 1px dashed var(--primary-light, #63b3ed);
+    cursor: pointer;
+}
+.log-ticket-link:hover {
+    color: #fff;
+    border-bottom-style: solid;
+}
+
 /* ==================== Agent Prompt 预览 ====================*/
 .agent-prompt-preview {
     background: var(--bg);
