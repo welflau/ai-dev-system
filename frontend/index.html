@@ -115,8 +115,8 @@
     <main class="main-container">
 
         <!-- 项目列表页 -->
-        <section id="projectListPage" class="page active" style="display:flex;flex-direction:column;height:100%;">
-            <div class="page-header" style="flex-shrink:0;">
+        <section id="projectListPage" class="page active">
+            <div class="page-header">
                 <h1>我的项目</h1>
                 <div class="page-header-actions">
                     <button class="btn btn-ghost" onclick="showSystemSettingsModal()">⚙️ 系统设置</button>
@@ -124,7 +124,7 @@
                     <button class="btn btn-primary" onclick="showCreateProjectModal()">+ 新建项目</button>
                 </div>
             </div>
-            <div class="project-grid" id="projectGrid" style="flex:1;overflow-y:auto;"></div>
+            <div class="project-grid" id="projectGrid"></div>
 
             <!-- 全局 AI 助手日志面板（底部停靠，与项目页面日志面板同款） -->
             <div class="log-panel" id="globalLogPanel" style="flex-shrink:0;">

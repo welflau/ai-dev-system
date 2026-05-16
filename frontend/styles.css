@@ -230,6 +230,25 @@ body {
 .page.active { display: block; }
 #projectPage.page { padding: 0; } /* grid 布局不需要外层 padding */
 
+/* 项目列表页：固定高度 + flex 列布局，让日志面板吸附到底部 */
+#projectListPage.page.active {
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+    height: calc(100vh - var(--topbar-height) - 26px);
+    overflow: hidden;
+}
+#projectListPage .page-header {
+    padding: 24px 24px 12px;
+    flex-shrink: 0;
+}
+#projectListPage .project-grid {
+    padding: 0 24px 12px;
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;   /* 允许 flex 子元素缩小 */
+}
+
 /* ==================== 项目列表 ==================== */
 
 .page-header {
