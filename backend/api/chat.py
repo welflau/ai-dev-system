@@ -1799,10 +1799,14 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
     final_action = None
     thinking_steps = []
 
-    projects = await db.fetch_all(
-        "SELECT id, name, status, tech_stack, description, created_at "
-        "FROM projects WHERE id != '__global__' ORDER BY created_at DESC LIMIT 20"
-    )
+    # DB 可能被 Orchestrator 鎖住，讀失敗時用空列表繼續（不阻斷聊天）
+    try:
+        projects = await db.fetch_all(
+            "SELECT id, name, status, tech_stack, description, created_at "
+            "FROM projects WHERE id != '__global__' ORDER BY created_at DESC LIMIT 20"
+        )
+    except Exception:
+        projects = []
 
     # 保存用户消息（异步 fire-and-forget，不阻塞 LLM 响应）
     import asyncio as _asyncio
