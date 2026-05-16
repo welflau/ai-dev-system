@@ -505,9 +505,10 @@ async def _chat_stream_generator(
     final_action = None
     thinking_steps = []
 
-    # 保存用户消息
-    await _save_chat_message(project_id, "user", req.message,
-                             images=req.images, session_id=_sid)
+    # 保存用户消息（异步 fire-and-forget，不阻塞 LLM 响应）
+    import asyncio as _asyncio
+    _asyncio.create_task(_save_chat_message(project_id, "user", req.message,
+                             images=req.images, session_id=_sid))
 
     try:
         async for ev in agent.chat_stream(
@@ -1803,9 +1804,10 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
         "FROM projects WHERE id != '__global__' ORDER BY created_at DESC LIMIT 20"
     )
 
-    # 保存用户消息
-    await _save_chat_message("__global__", "user", req.message,
-                             images=req.images, session_id=_sid)
+    # 保存用户消息（异步 fire-and-forget，不阻塞 LLM 响应）
+    import asyncio as _asyncio
+    _asyncio.create_task(_save_chat_message("__global__", "user", req.message,
+                             images=req.images, session_id=_sid))
 
     try:
         async for ev in agent.chat_global_stream(
