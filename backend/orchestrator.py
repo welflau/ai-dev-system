@@ -2479,6 +2479,26 @@ class TicketOrchestrator:
                 "requirement_completed",
                 {"requirement_id": requirement_id},
             )
+            # 同時推 log_added，讓操作日誌面板也能看到
+            try:
+                from utils import now_iso as _now_iso
+                import json as _json
+                req_title = ""
+                try:
+                    _req = await db.fetch_one("SELECT title FROM requirements WHERE id=?", (requirement_id,))
+                    req_title = f"「{_req['title'][:30]}」" if _req else ""
+                except Exception:
+                    pass
+                await event_manager.publish_to_project(project_id, "log_added", {
+                    "id":         f"req-done-{requirement_id[-8:]}",
+                    "agent_type": "Orchestrator",
+                    "action":     "requirement_completed",
+                    "detail":     _json.dumps({"message": f"🎉 需求{req_title}已全部完成！所有工单测试通过"}, ensure_ascii=False),
+                    "level":      "info",
+                    "created_at": _now_iso(),
+                })
+            except Exception:
+                pass
 
             # 生成需求完成报告
             try:

@@ -6297,6 +6297,15 @@ function connectSSE(projectId) {
             console.log('[SSE] requirement_completed:', data);
             showToast('需求已全部完成! 🎉', 'success');
             loadRequirements();
+            // 追加到操作日志面板（让日志也能看到这个里程碑事件）
+            appendLogEntry({
+                id:         'req-done-' + Date.now(),
+                agent_type: 'Orchestrator',
+                action:     'requirement_completed',
+                detail:     JSON.stringify({ message: '🎉 需求已全部完成！所有工单测试通过' }),
+                level:      'info',
+                created_at: new Date().toISOString(),
+            });
         });
 
         eventSource.addEventListener('agent_working', (e) => {
