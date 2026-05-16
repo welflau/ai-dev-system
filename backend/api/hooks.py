@@ -81,3 +81,48 @@ async def hooks_stats(hours: int = 1):
         "by_tool":      by_tool,
         "total_calls":  sum(r["calls"] for r in by_tool),
     }
+
+
+@router.get("/global-logs")
+async def get_global_chat_logs(since: str = None, limit: int = 50):
+    """全局聊天工具调用日志（project_id IS NULL），供前端轮询显示"""
+    from database import db
+    from datetime import datetime, timedelta, timezone
+
+    if not since:
+        since = (datetime.now(timezone.utc) - timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:%S")
+
+    rows = await db.fetch_all(
+        """SELECT tool_name, agent_type, duration_ms, success,
+                  input_summary, output_summary, error_msg, created_at
+           FROM tool_audit_log
+           WHERE project_id IS NULL AND created_at >= ?
+           ORDER BY created_at DESC LIMIT ?""",
+        (since, limit),
+    )
+    logs = []
+    for r in rows:
+        tool = r["tool_name"] or "?"
+        dur = int(r["duration_ms"] or 0)
+        parts = [f"{tool} ({dur}ms)"]
+        if r["input_summary"]:
+            parts.append(f"→ {r['input_summary'][:60]}")
+        if r["error_msg"]:
+            parts.append(f"❌ {r['error_msg'][:80]}")
+        elif r["output_summary"]:
+            parts.append(f"✓ {r['output_summary'][:80]}")
+        logs.append({
+            "id":            f"gl-{r['created_at']}",
+            "agent_type":    r["agent_type"] or "ChatAssistant",
+            "action":        f"chat:{tool}",
+            "detail":        __import__("json").dumps({
+                "message":        " | ".join(parts),
+                "input_summary":  r["input_summary"] or "",
+                "output_summary": r["output_summary"] or "",
+                "error_msg":      r["error_msg"] or "",
+                "duration_ms":    dur,
+            }, ensure_ascii=False),
+            "level":         "error" if r["error_msg"] else "info",
+            "created_at":    r["created_at"],
+        })
+    return {"logs": logs, "since": since}

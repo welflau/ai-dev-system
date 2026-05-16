@@ -533,10 +533,13 @@ function showProjectList() {
     loadProjects();
     // 聊天面板切换到全局模式
     _updateChatPanelForContext();
+    // 启动全局日志轮询
+    startGlobalLogPolling();
 }
 
 function showProjectDetail(projectId) {
     currentProjectId = projectId;
+    stopGlobalLogPolling(); // 切換到項目頁面，停止全局輪詢
     showPage('projectPage');
     loadProjectDetail();
     connectSSE(projectId);
@@ -14437,6 +14440,36 @@ connectGlobalSSE();
 
 let _globalLogAutoScroll = true;
 let _globalLogCount = 0;
+let _globalLogSince = null;   // 轮询游标：上次拉取的最新时间
+let _globalLogTimer = null;
+
+async function _pollGlobalLogs() {
+    try {
+        const url = _globalLogSince
+            ? `${API}/hooks/global-logs?since=${encodeURIComponent(_globalLogSince)}&limit=20`
+            : `${API}/hooks/global-logs?limit=20`;
+        const data = await fetch(url).then(r => r.json());
+        const logs = (data.logs || []).reverse(); // 时间正序
+        if (logs.length > 0) {
+            // 更新游标为最新时间
+            _globalLogSince = logs[logs.length - 1].created_at;
+            logs.forEach(l => _appendGlobalLogEntry(l));
+        } else if (!_globalLogSince) {
+            // 首次查询：记录游标防止下次重复拉全量
+            _globalLogSince = data.since;
+        }
+    } catch (_) {}
+}
+
+function startGlobalLogPolling() {
+    if (_globalLogTimer) return;
+    _pollGlobalLogs(); // 立即拉一次
+    _globalLogTimer = setInterval(_pollGlobalLogs, 3000);
+}
+
+function stopGlobalLogPolling() {
+    if (_globalLogTimer) { clearInterval(_globalLogTimer); _globalLogTimer = null; }
+}
 
 function _appendGlobalLogEntry(log) {
     const entries = document.getElementById('globalLogPanelEntries');
