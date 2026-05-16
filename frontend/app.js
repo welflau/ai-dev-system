@@ -5688,7 +5688,10 @@ async function loadAgentMonitor() {
     if (!grid) return;
 
     try {
-        const data = await fetch(`${API}/agents/status`).then(r => r.json());
+        const [data, orchData] = await Promise.all([
+            fetch(`${API}/agents/status`).then(r => r.json()),
+            fetch(`${API}/agents/orchestrator`).then(r => r.json()).catch(() => null),
+        ]);
         const agents = data.agents || {};
         const processingCount = data.processing_count || 0;
 
@@ -5710,7 +5713,63 @@ async function loadAgentMonitor() {
             'DeployAgent': '部署发布',
         };
 
-        let html = `<div style="display:flex; gap:8px; margin-bottom:16px; flex-wrap:wrap;">
+        // ── Orchestrator 调度状态块 ──
+        let orchHtml = '';
+        if (orchData) {
+            const maxC = orchData.max_concurrent || 2;
+            const usedC = orchData.processing_count || 0;
+            const slotBar = '█'.repeat(usedC) + '░'.repeat(Math.max(0, maxC - usedC));
+            const slotColor = usedC >= maxC ? 'var(--warning)' : 'var(--success)';
+            const activeAgents = orchData.active_agents || [];
+            const qSummary = orchData.queue_summary || {};
+            const qCount = orchData.queue_count || 0;
+            const qPreview = orchData.queue_preview || [];
+
+            const activeRows = activeAgents.length > 0
+                ? activeAgents.map(a => {
+                    const tid = (a.ticket_id || '').slice(-8);
+                    const elapsed = a.elapsed_s > 60
+                        ? `${Math.floor(a.elapsed_s/60)}m${a.elapsed_s%60}s`
+                        : `${a.elapsed_s}s`;
+                    const tidLink = a.ticket_id
+                        ? `<a class="log-ticket-link" onclick="event.stopPropagation();_openTicketByShortId('${tid}')" title="打开工单">${tid}</a>`
+                        : '-';
+                    return `<div class="orch-active-row">
+                        <span class="orch-agent-badge">${escHtml(a.agent)}</span>
+                        <span class="orch-action">${escHtml(a.action)}</span>
+                        <span class="orch-ticket">${tidLink}</span>
+                        <span class="orch-elapsed" style="color:${a.elapsed_s > 300 ? 'var(--warning)' : 'var(--text-muted)'}">${elapsed}</span>
+                    </div>`;
+                }).join('')
+                : '<div style="color:var(--text-muted);font-size:12px;padding:4px 0;">当前无 Agent 运行</div>';
+
+            const qSummaryTags = Object.entries(qSummary).map(([s, n]) =>
+                `<span class="orch-queue-tag">${escHtml(s)}×${n}</span>`
+            ).join('');
+
+            orchHtml = `
+            <div class="orch-panel">
+                <div class="orch-panel-header">
+                    <span class="orch-title">⚙️ Orchestrator 调度引擎</span>
+                    <span class="orch-slot" style="color:${slotColor}">
+                        并发槽位 ${slotBar} ${usedC}/${maxC}
+                    </span>
+                </div>
+                <div class="orch-section-label">▶ 正在执行（${activeAgents.length}）</div>
+                <div class="orch-active-list">${activeRows}</div>
+                ${qCount > 0 ? `
+                <div class="orch-section-label">⏳ 待处理队列（${qCount}）</div>
+                <div class="orch-queue-tags">${qSummaryTags}</div>
+                ${qPreview.length > 0 ? `<div class="orch-queue-preview">${
+                    qPreview.map(t => `<div class="orch-queue-item">
+                        <span class="orch-queue-status">${escHtml(t.status)}</span>
+                        <span class="orch-queue-title">${escHtml((t.title||'').slice(0,40))}</span>
+                    </div>`).join('')
+                }</div>` : ''}` : '<div style="color:var(--text-muted);font-size:11px;padding:4px 0;">队列为空</div>'}
+            </div>`;
+        }
+
+        let html = orchHtml + `<div style="display:flex; gap:8px; margin:12px 0 16px; flex-wrap:wrap;">
             <div class="agent-summary-card">
                 <span style="font-size:20px;">⚡</span>
                 <span>处理中: <strong>${processingCount}</strong></span>

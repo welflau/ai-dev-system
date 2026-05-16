@@ -184,6 +184,69 @@ async def get_agents_status():
     return status
 
 
+@router.get("/orchestrator")
+async def get_orchestrator_status():
+    """Orchestrator 调度引擎详细状态：正在处理 + 待处理队列"""
+    from orchestrator import orchestrator
+    from database import db
+    import time
+
+    # ── 正在处理的工单（_agent_status 里 working 的条目）──
+    active = []
+    for name, info in orchestrator._agent_status.items():
+        if info.get("status") == "working":
+            started = info.get("started_at")
+            elapsed_s = 0
+            if started:
+                try:
+                    from datetime import datetime, timezone
+                    t = datetime.fromisoformat(started.replace("Z", "+00:00"))
+                    elapsed_s = int((datetime.now(timezone.utc) - t).total_seconds())
+                except Exception:
+                    pass
+            active.append({
+                "agent":       name,
+                "action":      info.get("action", ""),
+                "ticket_id":   info.get("ticket_id", ""),
+                "ticket_title": info.get("ticket_title", ""),
+                "started_at":  started,
+                "elapsed_s":   elapsed_s,
+            })
+
+    # ── 待处理队列（actionable 状态的工单，未在 _processing 中）──
+    try:
+        actionable = await orchestrator._get_all_actionable_statuses()
+        if actionable:
+            placeholders = ",".join(["?"] * len(actionable))
+            pending_rows = await db.fetch_all(
+                f"SELECT t.id, t.title, t.status, t.project_id "
+                f"FROM tickets t "
+                f"WHERE t.status IN ({placeholders}) "
+                f"AND t.id NOT IN ({','.join(['?']*len(orchestrator._processing)) or 'NULL'}) "
+                f"ORDER BY t.priority ASC, t.sort_order ASC LIMIT 20",
+                tuple(actionable) + tuple(orchestrator._processing),
+            )
+            queue = [{"id": r["id"], "title": r["title"], "status": r["status"]} for r in pending_rows]
+        else:
+            queue = []
+    except Exception as e:
+        queue = []
+
+    # 待处理按状态聚合
+    from collections import Counter
+    queue_summary = dict(Counter(r["status"] for r in queue))
+
+    return {
+        "max_concurrent":     orchestrator._MAX_CONCURRENT_PER_PROJECT,
+        "processing_count":   len(orchestrator._processing),
+        "processing_tickets": list(orchestrator._processing),
+        "active_agents":      active,
+        "queue_count":        len(queue),
+        "queue_summary":      queue_summary,
+        "queue_preview":      queue[:5],
+    }
+
+
 @router.get("/actions")
 async def list_all_actions():
     """获取 Action 池全览"""

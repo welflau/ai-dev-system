@@ -8354,6 +8354,54 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
 .btn-success { background: #38a169; color: #fff; border: none; }
 .btn-success:hover { background: #276749; }
 
+/* ==================== Orchestrator 状态面板 ====================*/
+.orch-panel {
+    background: var(--bg-card, #1e2533);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+    margin-bottom: 16px;
+}
+.orch-panel-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 10px;
+}
+.orch-title { font-size: 13px; font-weight: 700; }
+.orch-slot  { font-size: 12px; font-family: monospace; font-weight: 600; }
+.orch-section-label {
+    font-size: 11px; font-weight: 700; color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: 0.5px;
+    margin: 8px 0 4px;
+}
+.orch-active-list { display: flex; flex-direction: column; gap: 4px; }
+.orch-active-row {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px; padding: 3px 0;
+    border-bottom: 1px solid var(--border-light, #2d3748);
+}
+.orch-active-row:last-child { border-bottom: none; }
+.orch-agent-badge {
+    background: var(--primary, #4299e1); color: #fff;
+    border-radius: 4px; padding: 1px 6px; font-size: 11px; font-weight: 600;
+    flex-shrink: 0;
+}
+.orch-action { color: var(--text-muted); font-family: monospace; font-size: 11px; flex-shrink: 0; }
+.orch-ticket { font-family: monospace; font-size: 11px; flex: 1; }
+.orch-elapsed { font-size: 11px; flex-shrink: 0; }
+.orch-queue-tags { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
+.orch-queue-tag {
+    background: var(--bg-elevated); color: var(--text-secondary);
+    border: 1px solid var(--border); border-radius: 4px;
+    padding: 2px 6px; font-size: 11px;
+}
+.orch-queue-preview { display: flex; flex-direction: column; gap: 2px; }
+.orch-queue-item { display: flex; gap: 8px; font-size: 11px; }
+.orch-queue-status {
+    color: var(--primary-light, #63b3ed); font-family: monospace;
+    font-size: 10px; flex-shrink: 0;
+}
+.orch-queue-title { color: var(--text-muted); }
+
 /* ==================== 日志面板工单链接 ====================*/
 .log-ticket-link {
     color: var(--primary-light, #63b3ed);
