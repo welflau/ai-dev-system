@@ -5417,6 +5417,17 @@ async function loadJobArtifacts() {
             );
         }
 
+        // 对于 deploy_config 类型只保留最新一条（避免重复部署产生多张卡片）
+        const _seenTypes = new Set();
+        const _dedupTypes = new Set(['deploy_config']);
+        artifacts = [...artifacts].reverse().filter(a => {
+            if (_dedupTypes.has(a.type)) {
+                if (_seenTypes.has(a.type)) return false;
+                _seenTypes.add(a.type);
+            }
+            return true;
+        }).reverse();
+
         if (artifacts.length === 0) {
             entries.innerHTML = '<div class="log-panel-empty">暂无产出文件</div>';
             return;
