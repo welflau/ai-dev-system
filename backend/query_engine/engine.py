@@ -118,6 +118,15 @@ def _format_result_summary(tool_name: str, result_text: str) -> str:
 
         # ── 知识库 / 历史 / 网络搜索 ─────────────────────────────────────────
         if tool_name in ("search_knowledge", "search_ticket_history", "web_search"):
+            # web_search 返回 {"type": "web_search_result", "results": [...], "query": "..."}
+            if isinstance(data, dict) and data.get("type") == "web_search_result":
+                results = data.get("results") or []
+                query   = data.get("query", "")
+                n = len(results)
+                if n == 0:
+                    return f"未找到结果 · 查询：{query[:30]}"
+                first_title = (results[0].get("title") or "")[:30]
+                return f"{n} 条结果 · {first_title}" if first_title else f"{n} 条结果"
             if isinstance(data, list):
                 n = len(data)
                 first_title = ""

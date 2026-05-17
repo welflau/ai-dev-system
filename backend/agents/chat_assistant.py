@@ -227,7 +227,17 @@ class _ChatToolExecutor:
         result = await action.run(ctx)
         data = result.data or {}
 
-        summary = result.message or data.get("message") or ("成功" if result.success else result.error or "失败")
+        # 優先 message，web_search_result 有 0 結果時顯示 query
+        if data.get("type") == "web_search_result":
+            results = data.get("results") or []
+            query   = data.get("query", "")
+            if results:
+                first = (results[0].get("title") or "")[:30]
+                summary = f"{len(results)} 条结果 · {first}" if first else f"{len(results)} 条结果"
+            else:
+                summary = f"未找到结果 · {query[:40]}"
+        else:
+            summary = result.message or data.get("message") or ("成功" if result.success else result.error or "失败")
         await self._emit_thinking(tool_name, tool_input, step="done", summary=summary)
 
         # 按优先级更新 primary_action_result
