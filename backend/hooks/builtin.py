@@ -308,6 +308,41 @@ async def chat_alert_hook(ctx: ToolHookContext) -> None:
         logger.debug("chat_alert_hook 推送失败: %s", e)
 
 
+async def nudge_hook(ctx: ToolHookContext) -> None:
+    """ASSISTANT_STOP：AI 回复完成后，若项目有未完成需求则推 SSE nudge 消息给聊天面板。
+    让用户随时看到"还有 N 个需求待处理"，避免忘记跟进。
+    只在项目聊天（project_id 有值）且有未完成需求时触发。
+    """
+    if ctx.event != HookEvent.ASSISTANT_STOP:
+        return
+    if not ctx.project_id:
+        return
+    try:
+        from database import db
+        from utils import now_iso
+        import json
+
+        # 查询未完成需求数
+        row = await db.fetch_one(
+            "SELECT COUNT(*) as cnt FROM requirements "
+            "WHERE project_id=? AND status NOT IN ('completed','cancelled')",
+            (ctx.project_id,),
+        )
+        pending_count = row["cnt"] if row else 0
+        if pending_count == 0:
+            return
+
+        # 推 SSE nudge 事件（前端显示柔性提示，不阻塞对话）
+        from events import event_manager
+        await event_manager.publish_to_project(ctx.project_id, "assistant_nudge", {
+            "message": f"项目还有 {pending_count} 个需求正在进行中，输入「查看进度」了解详情。",
+            "pending_requirements": pending_count,
+            "created_at": now_iso(),
+        })
+    except Exception as e:
+        logger.debug("nudge_hook 失败（非致命）: %s", e)
+
+
 def register_builtin_hooks(registry=None) -> None:
     """向 hook_registry 注册所有内置 Hook（在应用启动时调用）"""
     from hooks.registry import hook_registry as _default_registry
@@ -316,4 +351,5 @@ def register_builtin_hooks(registry=None) -> None:
     reg.register(shell_rate_limit_hook)
     reg.register(failure_library_hook)
     reg.register(chat_alert_hook)
-    logger.info("内置 Hooks 已注册（audit_log / shell_rate_limit / failure_library / chat_alert）")
+    reg.register(nudge_hook)
+    logger.info("内置 Hooks 已注册（audit_log / shell_rate_limit / failure_library / chat_alert / nudge）")

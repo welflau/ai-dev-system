@@ -6748,6 +6748,24 @@ function connectSSE(projectId) {
             _chatThinkingAppend(data);
         });
 
+        // AI 回复后的柔性提示（nudge）
+        eventSource.addEventListener('assistant_nudge', (e) => {
+            const data = JSON.parse(e.data);
+            // 在聊天面板底部显示淡色提示，点击可展开
+            const container = document.getElementById('chatMessages');
+            if (!container) return;
+            const existing = container.querySelector('.chat-nudge');
+            if (existing) existing.remove(); // 每次只保留最新一条
+            const nudge = document.createElement('div');
+            nudge.className = 'chat-nudge';
+            nudge.innerHTML = `<span class="chat-nudge-icon">💡</span>
+                <span class="chat-nudge-text">${escHtml(data.message || '')}</span>`;
+            container.appendChild(nudge);
+            // 8s 后自动淡出
+            setTimeout(() => nudge.classList.add('chat-nudge-fade'), 8000);
+            setTimeout(() => nudge.remove(), 9000);
+        });
+
         // 权限审批通知
         eventSource.addEventListener('permission_request', (e) => {
             const data = JSON.parse(e.data);

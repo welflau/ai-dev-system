@@ -106,6 +106,25 @@ class QueryEngine:
             )
             return
 
+        # ── USER_PROMPT_SUBMIT Hook：消息到达，LLM 开始前 ──────────────
+        if self.hooks:
+            try:
+                from hooks.types import HookEvent, ToolHookContext as _HCtx
+                # 取最后一条 user 消息作为 user_message
+                _last_user = next(
+                    (m.get("content", "") for m in reversed(messages) if m.get("role") == "user"), ""
+                )
+                if isinstance(_last_user, list):
+                    _last_user = " ".join(b.get("text", "") for b in _last_user if isinstance(b, dict))
+                await self.hooks.emit(_HCtx(
+                    event=HookEvent.USER_PROMPT_SUBMIT,
+                    user_message=str(_last_user)[:500],
+                    project_id=context.get("project_id"),
+                    agent_type=context.get("agent_type"),
+                ))
+            except Exception:
+                pass
+
         current_messages = list(messages)
         full_text = ""
         thinking_steps = []
@@ -170,6 +189,7 @@ class QueryEngine:
                     all_confirm_results = self.executor.all_confirm_results
 
                 await self._emit_session_end(context, round_count, "done")
+                await self._emit_assistant_stop(context, full_text, round_count)
                 yield MessageDoneEvent(
                     full_text=full_text,
                     thinking_steps=thinking_steps,
@@ -351,6 +371,22 @@ class QueryEngine:
             total_tokens=self.budget.used_tokens,
             all_confirm_results=all_confirm_results,
         )
+
+    async def _emit_assistant_stop(self, context: dict, full_text: str, rounds: int) -> None:
+        """AI 回复完成后 emit ASSISTANT_STOP Hook，用于注入 nudge 消息等后处理"""
+        if not self.hooks:
+            return
+        try:
+            from hooks.types import HookEvent, ToolHookContext
+            await self.hooks.emit(ToolHookContext(
+                event=HookEvent.ASSISTANT_STOP,
+                assistant_reply=full_text[:300] if full_text else "",
+                rounds=rounds,
+                project_id=context.get("project_id"),
+                agent_type=context.get("agent_type"),
+            ))
+        except Exception as e:
+            logger.debug("_emit_assistant_stop 失败（非致命）: %s", e)
 
     async def _emit_session_end(self, context: dict, rounds: int, reason: str) -> None:
         """在 MessageDone 前 emit SESSION_END Hook，用于审计日志记录本次 QueryEngine 运行统计"""
