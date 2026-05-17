@@ -50,22 +50,43 @@ class GetMemoryAction(ActionBase):
         if not project_id:
             return ActionResult(success=False, error="缺少 project_id")
 
-        # 构建查询
-        if memory_type == "all":
-            rows = await db.fetch_all(
-                """SELECT * FROM agent_memory
-                   WHERE project_id = ? AND (title LIKE ? OR content LIKE ? OR tags LIKE ?)
-                   ORDER BY created_at DESC LIMIT ?""",
-                (project_id, f"%{query}%", f"%{query}%", f"%{query}%", limit),
-            )
-        else:
-            rows = await db.fetch_all(
-                """SELECT * FROM agent_memory
-                   WHERE project_id = ? AND type = ?
-                     AND (title LIKE ? OR content LIKE ? OR tags LIKE ?)
-                   ORDER BY created_at DESC LIMIT ?""",
-                (project_id, memory_type, f"%{query}%", f"%{query}%", f"%{query}%", limit),
-            )
+        # FTS5 语义搜索（优先），降级 LIKE
+        try:
+            if memory_type == "all":
+                rows = await db.fetch_all(
+                    """SELECT m.* FROM agent_memory m
+                       JOIN agent_memory_fts fts ON m.rowid = fts.rowid
+                       WHERE m.project_id = ?
+                         AND agent_memory_fts MATCH ?
+                       ORDER BY rank, m.created_at DESC LIMIT ?""",
+                    (project_id, query, limit),
+                )
+            else:
+                rows = await db.fetch_all(
+                    """SELECT m.* FROM agent_memory m
+                       JOIN agent_memory_fts fts ON m.rowid = fts.rowid
+                       WHERE m.project_id = ? AND m.type = ?
+                         AND agent_memory_fts MATCH ?
+                       ORDER BY rank, m.created_at DESC LIMIT ?""",
+                    (project_id, memory_type, query, limit),
+                )
+        except Exception:
+            # FTS5 不可用时降级 LIKE（兼容旧数据未建 FTS 索引的情况）
+            if memory_type == "all":
+                rows = await db.fetch_all(
+                    """SELECT * FROM agent_memory
+                       WHERE project_id = ? AND (title LIKE ? OR content LIKE ? OR tags LIKE ?)
+                       ORDER BY created_at DESC LIMIT ?""",
+                    (project_id, f"%{query}%", f"%{query}%", f"%{query}%", limit),
+                )
+            else:
+                rows = await db.fetch_all(
+                    """SELECT * FROM agent_memory
+                       WHERE project_id = ? AND type = ?
+                         AND (title LIKE ? OR content LIKE ? OR tags LIKE ?)
+                       ORDER BY created_at DESC LIMIT ?""",
+                    (project_id, memory_type, f"%{query}%", f"%{query}%", f"%{query}%", limit),
+                )
 
         if not rows:
             return ActionResult(

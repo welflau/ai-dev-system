@@ -942,6 +942,27 @@ class ChatAssistantAgent(BaseAgent):
             if knowledge_content else ""
         )
 
+        # P2 Memory 主动召回：从 agent_memory 检索最近 3 条相关记忆注入动态上下文
+        # 只在有项目且有记忆时注入，不增加 cache 部分的 token
+        memory_section = ""
+        project_id = project.get("id", "")
+        if project_id:
+            try:
+                mem_rows = await db.fetch_all(
+                    """SELECT type, title, content, created_at FROM agent_memory
+                       WHERE project_id = ?
+                       ORDER BY created_at DESC LIMIT 3""",
+                    (project_id,),
+                )
+                if mem_rows:
+                    mem_lines = []
+                    for r in mem_rows:
+                        date = r["created_at"][:10] if r["created_at"] else ""
+                        mem_lines.append(f"  [{r['type']}] {r['title']} ({date})")
+                    memory_section = "\n## 项目历史记忆（最近 3 条）\n" + "\n".join(mem_lines) + "\n如需详情请调用 get_memory 工具。\n"
+            except Exception:
+                pass
+
         # v0.18：解析项目 traits，若是 UE 项目则加 UE 专属意图路由
         import json as _json
         try:
@@ -1134,7 +1155,7 @@ class ChatAssistantAgent(BaseAgent):
 
 <!--CACHE_BOUNDARY-->
 ## 当前项目状态（实时）
-
+{memory_section}
 {knowledge_section}
 ## 当前需求状态
 {req_summary}

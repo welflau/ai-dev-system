@@ -674,6 +674,36 @@ CREATE TABLE IF NOT EXISTS agent_memory (
 CREATE INDEX IF NOT EXISTS idx_agent_memory_project ON agent_memory(project_id);
 CREATE INDEX IF NOT EXISTS idx_agent_memory_type    ON agent_memory(project_id, type);
 
+-- FTS5 全文搜索（比 LIKE 更精准，支持前缀匹配和相关性排序）
+CREATE VIRTUAL TABLE IF NOT EXISTS agent_memory_fts USING fts5(
+    title,
+    content,
+    tags,
+    content=agent_memory,
+    content_rowid=rowid,
+    tokenize="trigram"
+);
+
+CREATE TRIGGER IF NOT EXISTS agent_memory_fts_ai
+  AFTER INSERT ON agent_memory BEGIN
+    INSERT INTO agent_memory_fts(rowid, title, content, tags)
+    VALUES (new.rowid, new.title, new.content, new.tags);
+END;
+
+CREATE TRIGGER IF NOT EXISTS agent_memory_fts_au
+  AFTER UPDATE ON agent_memory BEGIN
+    INSERT INTO agent_memory_fts(agent_memory_fts, rowid, title, content, tags)
+    VALUES ('delete', old.rowid, old.title, old.content, old.tags);
+    INSERT INTO agent_memory_fts(rowid, title, content, tags)
+    VALUES (new.rowid, new.title, new.content, new.tags);
+END;
+
+CREATE TRIGGER IF NOT EXISTS agent_memory_fts_ad
+  AFTER DELETE ON agent_memory BEGIN
+    INSERT INTO agent_memory_fts(agent_memory_fts, rowid, title, content, tags)
+    VALUES ('delete', old.rowid, old.title, old.content, old.tags);
+END;
+
 -- ============================================================
 -- 美术资产库（G_ArtRes manifest 同步，全局共享）
 -- ============================================================
