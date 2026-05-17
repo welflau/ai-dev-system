@@ -6,7 +6,7 @@
 
 ## 🎯 新增待办
 
-### J. AI 思考过程对标 Claude Code（P1/P2）
+### J. AI 思考过程对标 Claude Code（P1/P2）✅ J-1/J-2/J-3 已完成（2026-05-17）
 
 **背景**：A 方向改进后对 ChatAssistantAgent 做了全面升级（评分 5.5→7.5），但思考过程展示与 Claude Code 仍有差距。详细分析见 `docs/20260517_02_A方向改进成果观测指南.md` 第六节。
 
@@ -66,6 +66,24 @@ if model_supports_thinking(model):
 
 见 `docs/20260517_02_A方向改进成果观测指南.md` 第六节。
 `base.py:_react_with_think_inner` 的 QueryEngine 已有 Budget，只需在循环里调用 `budget.check()` 的 diminishing 分支即可（QueryEngine 内部已处理，实际可能已生效——需验证）。
+
+#### J-3b. 思考过程按轮次分组展示（P2）
+
+**背景**：参考某 AI 助手展示方式——每轮推理文字与该轮工具调用绑定展示，而非两个独立面板。
+
+**当前**：推理链面板（蓝） + 工具步骤面板（紫）分离，看不出哪段推理对应哪次工具调用。
+
+**目标效果**：
+```
+● 第1轮  💭 "需要搜索排行榜信息..."    [展开]
+          └ 🌐 联网搜索 ✓ 8条结果 (1240ms)
+● 第2轮  💭 "换关键词继续搜..."         [展开]
+          └ 🌐 联网搜索 ✓ 5条结果 (980ms)
+```
+
+**方案文档**：`docs/20260517_03_思考过程分组展示方案.md`
+
+**改动量**：~150 行，约半天，涉及 6 个文件（events.py / engine.py / chat_assistant.py / chat.py / app.js / styles.css）
 
 ---
 
