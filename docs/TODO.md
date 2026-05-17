@@ -1,10 +1,73 @@
 # AI Dev System — 待办清单
 
-> 最后更新: 2026-05-13
+> 最后更新: 2026-05-17
 
 ---
 
 ## 🎯 新增待办
+
+### J. AI 思考过程对标 Claude Code（P1/P2）
+
+**背景**：A 方向改进后对 ChatAssistantAgent 做了全面升级（评分 5.5→7.5），但思考过程展示与 Claude Code 仍有差距。详细分析见 `docs/20260517_02_A方向改进成果观测指南.md` 第六节。
+
+**当前差距（思考过程部分）**：
+- ❌ **无 Extended Thinking**：未使用 Anthropic 原生 `thinking` 块（`budget_tokens`），用户只能看到"AI 做了什么"，看不到"AI 在想什么"（推理链/scratchpad）
+- ❌ **无每步耗时**：`ToolDoneEvent.duration_ms` 已有但未传到前端展示
+- ⚠️ **摘要质量低**：工具结果截取前 120 字符，无结构化格式（读文件→行数，搜索→匹配数）
+
+**待做子项（按优先级）**：
+
+#### J-1. 每步耗时显示（P1，改动量小）
+
+`ToolDoneEvent.duration_ms` 已在 `query_engine/events.py` 中，只需：
+1. `chat_assistant.py` `_emit_thinking()` 把 `duration_ms` 写入 `thinking_steps` 条目
+2. 前端 `ctp-step` 行尾加 `(42ms)` 灰色小字
+
+预期效果：`📄 读取文件  (path: main.py)  ✓ 返回 87 行代码  (38ms)`
+
+---
+
+#### J-2. 结构化工具摘要（P1，改动量中）
+
+按工具类型格式化摘要，替换粗暴的 120 字截断：
+
+| 工具 | 现在 | 改后 |
+|---|---|---|
+| `read_files` | `{"content": "import...` | `main.py · 87 行` |
+| `grep` | `[{"path": "src/...`, ...` | `23 处匹配 · src/api.py:14` |
+| `shell` | `stdout: Compiling...` | `exit 0 · 3.2s` |
+| `search_knowledge` | `[{"title": "...` | `5 条结果 · 最相关：xxx` |
+
+改动位置：`backend/query_engine/engine.py` `_extract_result_summary()` 新增函数（按 tool_name 分支格式化）。
+
+---
+
+#### J-3. Extended Thinking 原生推理链（P2，改动量大）
+
+使用 Anthropic 的 `thinking` 参数让模型输出推理过程：
+
+```python
+# llm_client.py
+extra_params = {}
+if model_supports_thinking(model):
+    extra_params["thinking"] = {"type": "enabled", "budget_tokens": 8000}
+```
+
+前端新增推理链展示区（折叠，灰色斜体，与工具步骤分离显示）。
+
+**前置条件**：
+- 当前模型 `claude-sonnet-4-5` 支持 thinking（需确认 API 版本）
+- thinking 块会增加约 8000 token 成本，需评估 cost_usd 影响
+- 与 Prompt Cache 分区可能冲突（thinking 块不能缓存）
+
+---
+
+#### J-4. Agent REACT 模式接入 Diminishing Returns（P1，改动量小）
+
+见 `docs/20260517_02_A方向改进成果观测指南.md` 第六节。
+`base.py:_react_with_think_inner` 的 QueryEngine 已有 Budget，只需在循环里调用 `budget.check()` 的 diminishing 分支即可（QueryEngine 内部已处理，实际可能已生效——需验证）。
+
+---
 
 ### I. 分屏思考面板不显示（P1）
 
