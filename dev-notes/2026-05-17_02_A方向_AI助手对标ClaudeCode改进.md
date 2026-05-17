@@ -138,11 +138,67 @@ Rules + 项目基本信息 + Skills + 能力描述 + 搜索规则 + 判断准则
 
 ---
 
-## 七、待做（A 方向剩余）
+## 七、P1 L6 Hooks 生命周期补全（L6: 6 → 7 分）
+
+> 提交：`7c17003`
+
+### 新增 HookEvent
+
+```python
+USER_PROMPT_SUBMIT  = "UserPromptSubmit"   # 用户消息到达，LLM 调用前
+ASSISTANT_STOP      = "AssistantStop"      # AI 回复完成，MessageDone 后
+```
+
+`ToolHookContext` 新增字段：`user_message`、`assistant_reply`、`rounds`
+
+### QueryEngine 新增 emit 点
+
+- **开头**：emit `USER_PROMPT_SUBMIT`（带最后一条用户消息前 500 字）
+- **MessageDone 前**：emit `ASSISTANT_STOP`，调 `_emit_assistant_stop()`
+
+### nudge_hook（新内置 Hook）
+
+触发时机：`ASSISTANT_STOP`
+
+逻辑：
+1. 查询项目未完成需求数（`requirements WHERE status NOT IN completed/cancelled`）
+2. 有未完成需求 → 推 SSE `assistant_nudge` 到项目频道
+3. 前端监听 → 聊天面板底部显示柔性提示 8s 后淡出
+
+效果：
+```
+💡 项目还有 6 个需求正在进行中，输入「查看进度」了解详情。
+```
+
+### 当前注册的内置 Hook（5 个）
+
+```
+audit_log_hook       POST_TOOL_USE/TOOL_ERROR/SESSION_END → tool_audit_log
+shell_rate_limit_hook PRE_TOOL_USE → ShellAction 超 50 次中断
+failure_library_hook  TOOL_ERROR → ticket_logs error 记录
+chat_alert_hook       TOOL_ERROR（关键）→ AI 聊天面板红色通知
+nudge_hook            ASSISTANT_STOP → 未完成需求提示（新）
+```
+
+---
+
+## 八、当前评分（截至 2026-05-17）
+
+| 层 | 改进前 | 改进后 | 主要变化 |
+|----|--------|--------|---------|
+| L1 QueryEngine | 7 | 7.5 | Diminishing Returns 检测 |
+| L3 Context Assembly | 3 | 4 | Prompt Cache 分区 |
+| L4 Compaction | 2 | 5 | LLM 摘要 + 窗口扩大 |
+| L5 Memory | 3 | 6 | Rules 注入 + FTS5 + 主动注入 |
+| L6 Hooks | 6 | **7** | UserPromptSubmit + AssistantStop + nudge_hook |
+| **综合均值** | **5.5** | **7.0** | +1.5 分 |
+
+---
+
+## 九、待做（A 方向剩余）
 
 | 优先级 | 项目 | 预计得分 |
 |--------|------|---------|
-| P1 | L6 Hooks 缺 UserPromptSubmit / Stop / InstructionsLoaded | 6→7 |
-| P2 | L7 Budget 费用追踪（USD 累计）| 6→6.5 |
+| P2 | L7 Budget 费用追踪（USD 累计 + 每次对话成本）| 7→7.5 |
 | P2 | L8 并行子任务（dispatch 现在是串行的）| 5→6 |
 | P2 | L9 Feature Flags 运行时 per-session 开关 | 4→5 |
