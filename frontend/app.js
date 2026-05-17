@@ -9578,7 +9578,7 @@ async function _sendChatStreaming(url, body) {
                                 <span class="crp-toggle">∨</span>
                             </div>
                             <div class="crp-body"></div>`;
-                        container.appendChild(_reasoningPanel);
+                        container.insertBefore(_reasoningPanel, bubbleWrapper);
                         _reasoningBody = _reasoningPanel.querySelector('.crp-body');
                     }
                     if (_reasoningBody) _reasoningBody.textContent = _reasoningBuf;
