@@ -735,7 +735,7 @@ class LLMClient:
         temperature: float,
         max_tokens: int,
         enable_thinking: bool = False,   # J-3 Extended Thinking
-        thinking_budget: int = 8000,     # thinking token 预算
+        thinking_budget: int = 8000,     # thinking token 预算（API 要求 >= 1024）
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         流式 Anthropic tool_use 调用。

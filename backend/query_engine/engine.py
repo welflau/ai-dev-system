@@ -176,7 +176,7 @@ class QueryEngine:
         hooks=None,        # HookRegistry | None
         max_rounds: int = 10,
         enable_thinking: bool = False,   # J-3 Extended Thinking
-        thinking_budget: int = 8000,
+        thinking_budget: int = 8000,     # API 要求 >= 1024
     ):
         self.llm = llm_client
         self.executor = tool_executor
@@ -184,7 +184,7 @@ class QueryEngine:
         self.hooks = hooks
         self.max_rounds = max_rounds
         self.enable_thinking = enable_thinking
-        self.thinking_budget = thinking_budget
+        self.thinking_budget = max(thinking_budget, 1024)  # API 最低限制
 
     async def run(
         self,
