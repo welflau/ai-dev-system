@@ -8178,6 +8178,41 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
 .flow-stage-arrow { width: 24px; flex-shrink: 0; color: var(--text-muted); font-size: 12px; text-align: center; }
 
 /* ==================== AI 思考面板 ==================== */
+/* J-3: Extended Thinking 推理链面板 */
+.chat-reasoning-panel {
+    margin: 0 0 6px 36px;
+    font-size: 12px;
+    border-left: 2px solid rgba(99,179,237,0.4);  /* 蓝色，区别于思考步骤的紫色 */
+    border-radius: 0 6px 6px 0;
+    overflow: hidden;
+    transition: border-color 0.2s;
+}
+.chat-reasoning-panel:hover { border-color: rgba(99,179,237,0.7); }
+.crp-header {
+    display: flex; align-items: center; gap: 6px;
+    padding: 5px 10px;
+    cursor: pointer; user-select: none;
+    color: var(--text-muted, #718096);
+    transition: color 0.15s;
+}
+.crp-header:hover { color: rgba(99,179,237,0.9); }
+.crp-icon { font-size: 11px; color: rgba(99,179,237,0.7); }
+.crp-title { flex: 1; font-size: 11px; letter-spacing: 0.02em; }
+.crp-toggle { font-size: 10px; transition: transform 0.2s; }
+.crp-body {
+    max-height: 300px; overflow-y: auto;
+    padding: 6px 12px 8px;
+    color: var(--text-muted, #718096);
+    font-style: italic;
+    font-size: 11px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-word;
+    transition: max-height 0.25s ease-out;
+}
+.crp-collapsed .crp-body { max-height: 0; padding: 0 12px; overflow: hidden; }
+.crp-collapsed .crp-toggle { transform: rotate(-90deg); }
+
 .chat-thinking-panel {
     margin: 0 0 6px 36px;   /* 左对齐到 AI 头像右侧 */
     font-size: 12px;

@@ -17,6 +17,18 @@ class TextDeltaEvent:
 
 
 @dataclass
+class ThinkingDeltaEvent:
+    """J-3 Extended Thinking: 推理链流式片段"""
+    delta: str
+
+
+@dataclass
+class ThinkingDoneEvent:
+    """J-3 Extended Thinking: 完整推理文本"""
+    text: str
+
+
+@dataclass
 class ToolStartEvent:
     """工具开始执行"""
     tool: str
@@ -73,6 +85,8 @@ class ErrorEvent:
 # 联合类型，方便 isinstance 检查
 QueryEvent = Union[
     TextDeltaEvent,
+    ThinkingDeltaEvent,
+    ThinkingDoneEvent,
     ToolStartEvent,
     ToolDoneEvent,
     ToolErrorEvent,

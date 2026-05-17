@@ -486,10 +486,12 @@ class ChatAssistantAgent(BaseAgent):
         from query_engine.events import (
             TextDeltaEvent, ToolStartEvent, ToolDoneEvent, ToolErrorEvent,
             ActionEvent, MessageDoneEvent, BudgetExceededEvent, ErrorEvent,
+            ThinkingDeltaEvent, ThinkingDoneEvent,
         )
         from query_engine.executor import ChatToolExecutorAdapter
         from config import settings as _cfg
         from hooks.registry import hook_registry
+        from llm_client import _model_supports_thinking
 
         system_prompt = await self._build_system_prompt(project, project_context)
         messages = await self._assemble_messages(history, user_message, images, session_id=session_id)
@@ -522,6 +524,7 @@ class ChatAssistantAgent(BaseAgent):
             budget=budget,
             hooks=hook_registry,
             max_rounds=self.max_react_loop,
+            enable_thinking=_model_supports_thinking(llm_client.model),
         )
 
         set_llm_context(project_id=project["id"], agent_type=self.agent_type, action="chat_stream")
@@ -529,14 +532,21 @@ class ChatAssistantAgent(BaseAgent):
             async for event in engine.run(messages, system_prompt, tools, context):
                 if isinstance(event, TextDeltaEvent):
                     yield {"type": "text_delta", "delta": event.delta}
+                elif isinstance(event, ThinkingDeltaEvent):
+                    yield {"type": "thinking_delta", "delta": event.delta}
+                elif isinstance(event, ThinkingDoneEvent):
+                    yield {"type": "thinking_done", "text": event.text}
                 elif isinstance(event, ToolStartEvent):
                     yield {"type": "tool_start", "tool": event.tool,
                            "tool_use_id": event.tool_use_id, "input": event.input}
                 elif isinstance(event, ToolDoneEvent):
-                    yield {"type": "tool_done", "tool": event.tool, "summary": event.summary}
+                    yield {"type": "tool_done", "tool": event.tool,
+                           "summary": event.summary, "args_hint": event.args_hint,
+                           "duration_ms": round(event.duration_ms)}
                 elif isinstance(event, ToolErrorEvent):
                     yield {"type": "tool_done", "tool": event.tool,
-                           "summary": f"错误: {event.error}"}
+                           "summary": f"错误: {event.error}",
+                           "args_hint": "", "duration_ms": round(event.duration_ms)}
                 elif isinstance(event, ActionEvent):
                     yield {"type": "action", "payload": event.action_data}
                 elif isinstance(event, MessageDoneEvent):
@@ -627,10 +637,12 @@ class ChatAssistantAgent(BaseAgent):
         from query_engine.events import (
             TextDeltaEvent, ToolStartEvent, ToolDoneEvent, ToolErrorEvent,
             ActionEvent, MessageDoneEvent, BudgetExceededEvent, ErrorEvent,
+            ThinkingDeltaEvent, ThinkingDoneEvent,
         )
         from query_engine.executor import ChatToolExecutorAdapter
         from config import settings as _cfg
         from hooks.registry import hook_registry
+        from llm_client import _model_supports_thinking
 
         preset_suggestions = self._match_preset_suggestions(user_message)
         system_prompt = self._build_global_system_prompt(projects_brief, preset_suggestions)
@@ -652,6 +664,7 @@ class ChatAssistantAgent(BaseAgent):
             budget=budget,
             hooks=hook_registry,
             max_rounds=self.max_react_loop,
+            enable_thinking=_model_supports_thinking(llm_client.model),
         )
 
         set_llm_context(agent_type=self.agent_type, action="global_chat_stream")
@@ -659,14 +672,21 @@ class ChatAssistantAgent(BaseAgent):
             async for event in engine.run(messages, system_prompt, tools, context):
                 if isinstance(event, TextDeltaEvent):
                     yield {"type": "text_delta", "delta": event.delta}
+                elif isinstance(event, ThinkingDeltaEvent):
+                    yield {"type": "thinking_delta", "delta": event.delta}
+                elif isinstance(event, ThinkingDoneEvent):
+                    yield {"type": "thinking_done", "text": event.text}
                 elif isinstance(event, ToolStartEvent):
                     yield {"type": "tool_start", "tool": event.tool,
                            "tool_use_id": event.tool_use_id, "input": event.input}
                 elif isinstance(event, ToolDoneEvent):
-                    yield {"type": "tool_done", "tool": event.tool, "summary": event.summary}
+                    yield {"type": "tool_done", "tool": event.tool,
+                           "summary": event.summary, "args_hint": event.args_hint,
+                           "duration_ms": round(event.duration_ms)}
                 elif isinstance(event, ToolErrorEvent):
                     yield {"type": "tool_done", "tool": event.tool,
-                           "summary": f"错误: {event.error}"}
+                           "summary": f"错误: {event.error}",
+                           "args_hint": "", "duration_ms": round(event.duration_ms)}
                 elif isinstance(event, ActionEvent):
                     yield {"type": "action", "payload": event.action_data}
                 elif isinstance(event, MessageDoneEvent):

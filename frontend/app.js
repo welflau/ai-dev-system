@@ -8765,6 +8765,10 @@ async function _sendChatStreamingToContainer(url, body, msgContainer, thinkingCt
     let finalAction = null;
     let thinkingSteps = [];
     let _lastRenderLen = 0;
+    // J-3: Extended Thinking 推理链面板
+    let reasoningPanel = null;
+    let reasoningBuf = '';
+    let reasoningBodyEl = null;
 
     const response = await fetch(`${API}${url}`, {
         method: 'POST',
@@ -8809,9 +8813,39 @@ async function _sendChatStreamingToContainer(url, body, msgContainer, thinkingCt
             } else if (curEvent === 'tool_start') {
                 const hint = _extractArgsHint(data.tool, data.input);
                 thinkingCtx?.append({ step: 'start', tool: data.tool, args_hint: hint });
+            } else if (curEvent === 'thinking_delta') {
+                // J-3: 推理链流式文本 — 追加到推理面板
+                reasoningBuf += data.delta || '';
+                if (!reasoningPanel) {
+                    reasoningPanel = document.createElement('div');
+                    reasoningPanel.className = 'chat-reasoning-panel';
+                    reasoningPanel.innerHTML = `
+                        <div class="crp-header" onclick="this.closest('.chat-reasoning-panel').classList.toggle('crp-collapsed')">
+                            <span class="crp-icon">💭</span>
+                            <span class="crp-title">思考过程</span>
+                            <span class="crp-toggle">∨</span>
+                        </div>
+                        <div class="crp-body"></div>`;
+                    const insertBefore = typingEl || bubbleWrapper;
+                    insertBefore.parentNode?.insertBefore(reasoningPanel, insertBefore);
+                    reasoningBodyEl = reasoningPanel.querySelector('.crp-body');
+                }
+                if (reasoningBodyEl) reasoningBodyEl.textContent = reasoningBuf;
+            } else if (curEvent === 'thinking_done') {
+                // J-3: 推理链完成 — 折叠面板，更新标题
+                if (reasoningPanel) {
+                    const title = reasoningPanel.querySelector('.crp-title');
+                    if (title) title.textContent = `思考过程 · ${reasoningBuf.length} 字`;
+                    reasoningPanel.classList.add('crp-collapsed');
+                }
+                reasoningBuf = '';
             } else if (curEvent === 'tool_done') {
-                thinkingSteps.push({ tool: data.tool, args_hint: '', summary: data.summary || '' });
-                thinkingCtx?.append({ step: 'done', tool: data.tool, summary: data.summary || '' });
+                const durationMs = data.duration_ms || 0;
+                const argsHint   = data.args_hint   || '';
+                thinkingSteps.push({ tool: data.tool, args_hint: argsHint,
+                                     summary: data.summary || '', duration_ms: durationMs });
+                thinkingCtx?.append({ step: 'done', tool: data.tool,
+                                      summary: data.summary || '', duration_ms: durationMs });
             } else if (curEvent === 'action') {
                 finalAction = { ...data };
             } else if (curEvent === 'error' || curEvent === 'budget_exceeded') {
@@ -10081,7 +10115,10 @@ function createThinkingContext(msgContainer) {
                     existing.el.classList.remove('ctp-step-running');
                     existing.el.classList.add('ctp-step-done');
                     const statusEl = existing.el.querySelector('.ctp-step-status');
-                    if (statusEl) statusEl.textContent = data.summary ? `✓ ${data.summary.slice(0, 80)}` : '✓';
+                    if (statusEl) {
+                        const dur = data.duration_ms > 0 ? ` (${data.duration_ms}ms)` : '';
+                        statusEl.textContent = data.summary ? `✓ ${data.summary.slice(0, 80)}${dur}` : `✓${dur}`;
+                    }
                 }
             }
             body.scrollTop = body.scrollHeight;
@@ -10906,7 +10943,8 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
         const steps = thinking.map(s => {
             const label = _TOOL_LABELS[s.tool] || `🔧 ${s.tool}`;
             const hint = s.args_hint ? `<span class="ctp-step-hint">${escapeHtml(s.args_hint)}</span>` : '';
-            const summaryText = s.summary ? `✓ ${s.summary.slice(0, 80)}` : '✓';
+            const dur = (s.duration_ms > 0) ? ` (${s.duration_ms}ms)` : '';
+            const summaryText = s.summary ? `✓ ${s.summary.slice(0, 80)}${dur}` : `✓${dur}`;
             return `<div class="ctp-step ctp-step-done">
                 <div class="ctp-step-row1"><span class="ctp-step-dot"></span><span class="ctp-step-label">${escapeHtml(label)}</span><span class="ctp-step-status">${escapeHtml(summaryText)}</span></div>
                 ${s.args_hint ? `<div class="ctp-step-row2">${escapeHtml(s.args_hint)}</div>` : ''}

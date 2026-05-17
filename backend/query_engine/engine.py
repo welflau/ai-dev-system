@@ -25,6 +25,8 @@ from query_engine.events import (
     ErrorEvent,
     MessageDoneEvent,
     TextDeltaEvent,
+    ThinkingDeltaEvent,
+    ThinkingDoneEvent,
     ToolDoneEvent,
     ToolErrorEvent,
     ToolStartEvent,
@@ -58,6 +60,104 @@ def _extract_args_hint(tool_name: str, tool_input: dict) -> str:
     return f"({key}: {val})" if val else ""
 
 
+def _format_result_summary(tool_name: str, result_text: str) -> str:
+    """J-2: 按工具类型结构化格式化摘要，替代粗暴的 120 字截断。"""
+    import json as _json
+    if not result_text:
+        return ""
+
+    # 尝试解析 JSON
+    try:
+        data = _json.loads(result_text)
+    except Exception:
+        # 非 JSON：取前 80 字符
+        return result_text[:80].replace("\n", " ")
+
+    try:
+        # ── 文件读取类 ────────────────────────────────────────────────────────
+        if tool_name in ("read_files", "read_local_file"):
+            if isinstance(data, dict):
+                files = data.get("files") or {}
+                if files:
+                    total_lines = sum(
+                        len(str(v).splitlines()) for v in files.values()
+                    )
+                    names = "、".join(list(files.keys())[:2])
+                    suffix = f" 等{len(files)}个" if len(files) > 2 else ""
+                    return f"{names}{suffix} · {total_lines} 行"
+                # read_local_file → {"content": "..."}
+                content = str(data.get("content", ""))
+                return f"{len(content.splitlines())} 行"
+            return result_text[:80].replace("\n", " ")
+
+        # ── 搜索/grep 类 ──────────────────────────────────────────────────────
+        if tool_name == "grep":
+            if isinstance(data, list):
+                n = len(data)
+                first = data[0] if data else {}
+                loc = f"{first.get('path','')}:{first.get('line','')}" if first else ""
+                return f"{n} 处匹配" + (f" · {loc}" if loc else "")
+            return result_text[:80]
+
+        if tool_name in ("glob", "list_directory"):
+            if isinstance(data, list):
+                return f"{len(data)} 个文件"
+            if isinstance(data, dict) and "files" in data:
+                return f"{len(data['files'])} 个文件"
+            return result_text[:80]
+
+        # ── 命令执行 ──────────────────────────────────────────────────────────
+        if tool_name == "shell":
+            if isinstance(data, dict):
+                code = data.get("exit_code", "?")
+                out  = str(data.get("stdout", "") or data.get("output", ""))
+                lines = len(out.splitlines())
+                return f"exit {code} · 输出 {lines} 行"
+            return result_text[:80]
+
+        # ── 知识库 / 历史 / 网络搜索 ─────────────────────────────────────────
+        if tool_name in ("search_knowledge", "search_ticket_history", "web_search"):
+            if isinstance(data, list):
+                n = len(data)
+                first_title = ""
+                if data and isinstance(data[0], dict):
+                    first_title = (data[0].get("title") or data[0].get("name") or "")[:20]
+                return f"{n} 条结果" + (f" · {first_title}" if first_title else "")
+            return result_text[:80]
+
+        # ── 记忆 ──────────────────────────────────────────────────────────────
+        if tool_name == "get_memory":
+            if isinstance(data, list):
+                return f"{len(data)} 条记忆"
+            if isinstance(data, dict) and "memories" in data:
+                return f"{len(data['memories'])} 条记忆"
+
+        if tool_name == "save_memory":
+            if isinstance(data, dict):
+                return data.get("message") or "已保存"
+
+        # ── 需求 / BUG 确认 ──────────────────────────────────────────────────
+        if tool_name in ("confirm_requirement", "confirm_bug"):
+            if isinstance(data, dict):
+                return data.get("title") or data.get("message") or "已识别"
+
+        # ── 通用 dict：取 message 字段 ───────────────────────────────────────
+        if isinstance(data, dict):
+            msg = data.get("message") or data.get("summary") or data.get("result")
+            if msg:
+                return str(msg)[:80]
+
+        # ── 通用 list：条数 ─────────────────────────────────────────────────
+        if isinstance(data, list):
+            return f"{len(data)} 条"
+
+    except Exception:
+        pass
+
+    # 兜底
+    return result_text[:80].replace("\n", " ")
+
+
 class QueryEngine:
     """
     统一的 LLM 工具调用循环引擎。
@@ -75,12 +175,16 @@ class QueryEngine:
         budget: Optional[Budget] = None,
         hooks=None,        # HookRegistry | None
         max_rounds: int = 10,
+        enable_thinking: bool = False,   # J-3 Extended Thinking
+        thinking_budget: int = 8000,
     ):
         self.llm = llm_client
         self.executor = tool_executor
         self.budget = budget or Budget()
         self.hooks = hooks
         self.max_rounds = max_rounds
+        self.enable_thinking = enable_thinking
+        self.thinking_budget = thinking_budget
 
     async def run(
         self,
@@ -149,6 +253,8 @@ class QueryEngine:
                 async for chunk in self.llm._call_anthropic_tools_stream(
                     current_messages, tools, system,
                     temperature=0.7, max_tokens=4000,
+                    enable_thinking=self.enable_thinking,
+                    thinking_budget=self.thinking_budget,
                 ):
                     ctype = chunk.get("type", "")
 
@@ -156,6 +262,14 @@ class QueryEngine:
                         full_text += chunk["delta"]
                         text_chunks.append({"type": "text", "text": chunk["delta"]})
                         yield TextDeltaEvent(delta=chunk["delta"])
+
+                    elif ctype == "thinking_delta":
+                        # J-3: 推理链流式片段（前端可选显示）
+                        yield ThinkingDeltaEvent(delta=chunk["delta"])
+
+                    elif ctype == "thinking_done":
+                        # J-3: 完整推理文本（一轮一次）
+                        yield ThinkingDoneEvent(text=chunk["text"])
 
                     elif ctype == "tool_use_block":
                         tool_calls.append(chunk)
@@ -291,12 +405,13 @@ class QueryEngine:
                         )
                         await self.hooks.emit(post_ctx)
 
-                    # 收集 thinking_steps
-                    summary = result_text[:120] if result_text else ""
+                    # 收集 thinking_steps（J-2 结构化摘要在此处替换）
+                    summary = _format_result_summary(tool_name, result_text)
                     thinking_steps.append({
                         "tool": tool_name,
                         "args_hint": args_hint,
                         "summary": summary,
+                        "duration_ms": round(duration_ms),
                     })
 
                     yield ToolDoneEvent(

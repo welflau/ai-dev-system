@@ -529,9 +529,13 @@ async def _chat_stream_generator(
                 yield _sse("tool_start", {"tool": ev["tool"], "label": label, "input": ev.get("input", {})})
 
             elif etype == "tool_done":
-                summary = ev.get("summary", "")
-                thinking_steps.append({"tool": ev["tool"], "args_hint": "", "summary": summary})
-                yield _sse("tool_done", {"tool": ev["tool"], "summary": summary})
+                summary     = ev.get("summary", "")
+                args_hint   = ev.get("args_hint", "")
+                duration_ms = ev.get("duration_ms", 0)
+                thinking_steps.append({"tool": ev["tool"], "args_hint": args_hint,
+                                        "summary": summary, "duration_ms": duration_ms})
+                yield _sse("tool_done", {"tool": ev["tool"], "summary": summary,
+                                         "args_hint": args_hint, "duration_ms": duration_ms})
 
             elif etype == "action":
                 # payload key 防止 action_data.type 覆盖事件 type（QueryEngine 路径）
@@ -1827,14 +1831,24 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
                 full_text += ev["delta"]
                 yield _sse("text_delta", {"delta": ev["delta"]})
 
+            elif etype == "thinking_delta":
+                yield _sse("thinking_delta", {"delta": ev["delta"]})
+
+            elif etype == "thinking_done":
+                yield _sse("thinking_done", {"text": ev["text"]})
+
             elif etype == "tool_start":
                 label = _TOOL_LABELS_PY.get(ev["tool"], f"🔧 {ev['tool']}")
                 yield _sse("tool_start", {"tool": ev["tool"], "label": label, "input": ev.get("input", {})})
 
             elif etype == "tool_done":
-                summary = ev.get("summary", "")
-                thinking_steps.append({"tool": ev["tool"], "args_hint": "", "summary": summary})
-                yield _sse("tool_done", {"tool": ev["tool"], "summary": summary})
+                summary     = ev.get("summary", "")
+                args_hint   = ev.get("args_hint", "")
+                duration_ms = ev.get("duration_ms", 0)
+                thinking_steps.append({"tool": ev["tool"], "args_hint": args_hint,
+                                        "summary": summary, "duration_ms": duration_ms})
+                yield _sse("tool_done", {"tool": ev["tool"], "summary": summary,
+                                         "args_hint": args_hint, "duration_ms": duration_ms})
 
             elif etype == "action":
                 final_action = ev.get("payload") or {k: v for k, v in ev.items() if k != "type"}

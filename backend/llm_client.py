@@ -12,6 +12,18 @@ from config import settings
 
 logger = logging.getLogger("llm")
 
+# J-3: 支持 Extended Thinking 的模型（需 Anthropic API 兼容）
+_THINKING_CAPABLE_MODELS = {
+    "claude-3-7-sonnet",
+    "claude-opus-4",
+    "claude-sonnet-4",   # claude-sonnet-4-5 / 4-6 及后续版本
+}
+
+def _model_supports_thinking(model_id: str) -> bool:
+    """判断模型是否支持 Extended Thinking（前缀匹配）"""
+    mid = (model_id or "").lower()
+    return any(mid.startswith(m) or m in mid for m in _THINKING_CAPABLE_MODELS)
+
 
 # ==================== LLM 会话记录上下文 ====================
 import contextvars
@@ -722,6 +734,8 @@ class LLMClient:
         system: str,
         temperature: float,
         max_tokens: int,
+        enable_thinking: bool = False,   # J-3 Extended Thinking
+        thinking_budget: int = 8000,     # thinking token 预算
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         流式 Anthropic tool_use 调用。
@@ -744,14 +758,19 @@ class LLMClient:
         if not user_messages:
             user_messages = [{"role": "user", "content": "请开始工作。"}]
 
+        # J-3: Extended Thinking — 开启时不能传 temperature（API 限制）
+        use_thinking = enable_thinking and _model_supports_thinking(self.model)
         payload: Dict[str, Any] = {
             "model": self.model,
             "messages": user_messages,
-            "max_tokens": max_tokens,
+            "max_tokens": max_tokens + (thinking_budget if use_thinking else 0),
             "tools": tools,
             "stream": True,
         }
-        if temperature is not None:
+        if use_thinking:
+            payload["thinking"] = {"type": "enabled", "budget_tokens": thinking_budget}
+            # thinking 模式不支持 temperature 参数
+        elif temperature is not None:
             payload["temperature"] = temperature
         if sys_parts:
             system_text = "\n".join(sys_parts).strip()
@@ -804,6 +823,8 @@ class LLMClient:
                             _blocks[idx] = dict(blk)
                             if blk.get("type") == "tool_use":
                                 _input_buf[idx] = ""
+                            elif blk.get("type") == "thinking":
+                                _input_buf[idx] = ""  # 用同一个 buf 收集 thinking 文本
 
                         elif etype == "content_block_delta":
                             idx = ev["index"]
@@ -813,6 +834,12 @@ class LLMClient:
                                 yield {"type": "text_delta", "delta": delta.get("text", "")}
                             elif dtype == "input_json_delta":
                                 _input_buf[idx] = _input_buf.get(idx, "") + delta.get("partial_json", "")
+                            elif dtype == "thinking_delta":
+                                # J-3: 流式推理文本，实时 yield（前端可选接收）
+                                thinking_chunk = delta.get("thinking", "")
+                                _input_buf[idx] = _input_buf.get(idx, "") + thinking_chunk
+                                if thinking_chunk:
+                                    yield {"type": "thinking_delta", "delta": thinking_chunk}
 
                         elif etype == "content_block_stop":
                             idx = ev["index"]
@@ -830,6 +857,11 @@ class LLMClient:
                                     "name": blk.get("name", ""),
                                     "input": parsed_input,
                                 }
+                            elif blk.get("type") == "thinking":
+                                # J-3: thinking block 完成，发送完整推理文本
+                                thinking_text = _input_buf.get(idx, "")
+                                if thinking_text:
+                                    yield {"type": "thinking_done", "text": thinking_text}
 
                         elif etype == "message_delta":
                             _stop_reason = ev.get("delta", {}).get("stop_reason", "end_turn") or "end_turn"
