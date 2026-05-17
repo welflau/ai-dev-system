@@ -14443,6 +14443,13 @@ async function refreshMetrics() {
         const wal = d.wal_kb ?? 0;
         _setMetric('wal', wal >= 1024 ? `${(wal/1024).toFixed(1)}MB` : `${wal}KB`,
             wal >= 5120 ? 'danger' : wal >= 1024 ? 'warn' : null);
+
+        // 今日 LLM 费用
+        const cost = d.cost_today_usd ?? 0;
+        _setMetric('cost',
+            cost >= 1 ? `$${cost.toFixed(2)}` : cost >= 0.01 ? `$${cost.toFixed(3)}` : `$${cost.toFixed(4)}`,
+            cost >= 5 ? 'danger' : cost >= 1 ? 'warn' : cost > 0 ? 'ok' : null
+        );
     } catch (_) {}
 }
 

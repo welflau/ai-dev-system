@@ -335,6 +335,14 @@ app.include_router(system_settings_router)
 # ==================== 系统端点 ====================
 
 
+@app.get("/api/events/global")
+async def global_events_stream():
+    """全局 SSE 频道——全局聊天 AI 工具日志、跨项目事件"""
+    from sse_starlette.sse import EventSourceResponse
+    from events import event_manager
+    return EventSourceResponse(event_manager.event_generator("global"))
+
+
 @app.get("/api/health")
 async def health_check():
     """健康检查"""
@@ -593,6 +601,19 @@ async def get_system_metrics():
     except Exception:
         pass
 
+    # 今日 LLM 费用（USD，从 llm_conversations 累加）
+    cost_today = 0.0
+    try:
+        from datetime import datetime, timezone
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        row = await db.fetch_one(
+            "SELECT COALESCE(SUM(cost_usd), 0) as total FROM llm_conversations "
+            "WHERE created_at >= ?", (today + "T00:00:00",)
+        )
+        cost_today = round(row["total"] if row else 0.0, 4)
+    except Exception:
+        pass
+
     return {
         "processing": processing,
         "asyncio_tasks": active_tasks,
@@ -600,6 +621,7 @@ async def get_system_metrics():
         "wal_kb": wal_kb,
         "llm_pending": llm_pending,
         "db_ms": db_ms,
+        "cost_today_usd": cost_today,
     }
 
 
@@ -743,4 +765,5 @@ if __name__ == "__main__":
         reload_dirs=[str(Path(__file__).parent)],
         reload_includes=["**/*.py"],
     )
+
 

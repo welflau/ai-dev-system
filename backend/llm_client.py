@@ -85,6 +85,34 @@ def _truncate(text: str, max_len: int = 200) -> str:
     return text[:max_len] + f"... ({len(text)} chars total)"
 
 
+# ── Anthropic 定价表（$/1M tokens，2025-05 版）──────────────────────────────
+# 格式：model_prefix → (input_per_1m, output_per_1m)
+_MODEL_PRICING: dict = {
+    "claude-opus-4":         (15.0,  75.0),
+    "claude-opus":           (15.0,  75.0),
+    "claude-sonnet-4":       (3.0,   15.0),
+    "claude-sonnet-3-7":     (3.0,   15.0),
+    "claude-sonnet-3-5":     (3.0,   15.0),
+    "claude-sonnet":         (3.0,   15.0),
+    "claude-haiku-4":        (0.8,   4.0),
+    "claude-haiku-3-5":      (0.8,   4.0),
+    "claude-haiku":          (0.25,  1.25),
+}
+
+def _calc_cost_usd(model: str, input_tokens: int, output_tokens: int) -> float:
+    """根据模型和 token 数计算 USD 费用（粗估，仅供参考）"""
+    if not model or not input_tokens:
+        return 0.0
+    model_lower = model.lower()
+    price_in, price_out = 3.0, 15.0  # 默认 sonnet 价格
+    for prefix, prices in _MODEL_PRICING.items():
+        if prefix in model_lower:
+            price_in, price_out = prices
+            break
+    cost = (input_tokens * price_in + (output_tokens or 0) * price_out) / 1_000_000
+    return round(cost, 6)
+
+
 def _ctx_label() -> str:
     """返回当前上下文标签，用于日志前缀"""
     parts = []
@@ -333,6 +361,11 @@ class LLMClient:
             "input_tokens": usage.get("input_tokens") if usage else None,
             "output_tokens": usage.get("output_tokens") if usage else None,
             "duration_ms": duration_ms,
+            "cost_usd": _calc_cost_usd(
+                self.model,
+                usage.get("input_tokens", 0) if usage else 0,
+                usage.get("output_tokens", 0) if usage else 0,
+            ),
             "status": "fallback" if is_fallback else "success",
             "error": None,
             "created_at": now_iso(),
@@ -451,6 +484,7 @@ class LLMClient:
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
                 "duration_ms": duration_ms,
+                "cost_usd": _calc_cost_usd(self.model, input_tokens, output_tokens),
                 "status": "success",
                 "error": None,
                 "created_at": now_iso(),

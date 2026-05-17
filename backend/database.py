@@ -52,6 +52,8 @@ class Database:
         """自动检测并添加缺失的列（兼容旧数据库）"""
         migrations = [
             # (表名, 列名, 列定义)
+            # L7 费用追踪
+            ("llm_conversations", "cost_usd", "REAL DEFAULT 0"),
             # tool_audit_log 详情列（Phase 1A 增强）
             ("tool_audit_log", "input_summary",  "TEXT"),
             ("tool_audit_log", "output_summary", "TEXT"),
