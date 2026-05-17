@@ -398,7 +398,7 @@ class ChatAssistantAgent(BaseAgent):
         from llm_client import llm_client, set_llm_context, clear_llm_context
 
         system_prompt = await self._build_system_prompt(project, project_context)
-        messages = self._assemble_messages(history, user_message, images)
+        messages = await self._assemble_messages(history, user_message, images)
 
         # v0.17 Phase F：把项目 traits 传给 _exposed_tool_schemas，按 traits 过滤 MCP
         project_traits = []
@@ -478,7 +478,7 @@ class ChatAssistantAgent(BaseAgent):
         from hooks.registry import hook_registry
 
         system_prompt = await self._build_system_prompt(project, project_context)
-        messages = self._assemble_messages(history, user_message, images)
+        messages = await self._assemble_messages(history, user_message, images)
 
         project_traits = []
         try:
@@ -558,7 +558,7 @@ class ChatAssistantAgent(BaseAgent):
         preset_suggestions = self._match_preset_suggestions(user_message)
 
         system_prompt = self._build_global_system_prompt(projects_brief, preset_suggestions)
-        messages = self._assemble_messages(history, user_message, images)
+        messages = await self._assemble_messages(history, user_message, images)
         tools = self._exposed_tool_schemas(scope="global")
 
         executor = _ChatToolExecutor(self, project_id=None, session_id=session_id)
@@ -618,7 +618,7 @@ class ChatAssistantAgent(BaseAgent):
 
         preset_suggestions = self._match_preset_suggestions(user_message)
         system_prompt = self._build_global_system_prompt(projects_brief, preset_suggestions)
-        messages = self._assemble_messages(history, user_message, images)
+        messages = await self._assemble_messages(history, user_message, images)
         tools = self._exposed_tool_schemas(scope="global")
         inner_executor = _ChatToolExecutor(self, project_id=None, session_id=session_id)
         executor = ChatToolExecutorAdapter(inner_executor)
@@ -672,12 +672,13 @@ class ChatAssistantAgent(BaseAgent):
     # ==================== 对话历史压缩（借鉴 MagicAI §6.4）====================
     # 参数默认值跟 MagicAI 一致，实测对主观任务效果好
 
-    HISTORY_KEEP_RECENT_N = 6         # 最近 N 条全文保留
-    HISTORY_MAX_RECENT_CHARS = 4000   # 最近 N 条每条上限
-    HISTORY_OLDER_CHARS = 800         # 更早的每条压缩后上限
-    HISTORY_MAX_TOTAL_CHARS = 8000    # 历史段总硬上限
+    HISTORY_KEEP_RECENT_N = 10        # 最近 N 条全文保留（原 6）
+    HISTORY_MAX_RECENT_CHARS = 8000   # 最近 N 条每条上限（原 4000）
+    HISTORY_OLDER_CHARS = 1200        # 更早的每条压缩后上限（原 800）
+    HISTORY_MAX_TOTAL_CHARS = 30000   # 历史段总硬上限（原 8000，约 7500 tokens）
+    HISTORY_COMPACTION_THRESHOLD = 20 # 超过 N 条时触发 LLM 摘要 Compaction
 
-    def _assemble_messages(
+    async def _assemble_messages(
         self,
         history: Optional[List[Dict[str, str]]],
         user_message: str,
@@ -693,6 +694,16 @@ class ChatAssistantAgent(BaseAgent):
         messages: List[Dict[str, Any]] = []
 
         if history:
+            # Compaction：历史条数超过阈值时，用 LLM 把旧消息摘要为单条上下文
+            if len(history) > self.HISTORY_COMPACTION_THRESHOLD:
+                keep_recent = self.HISTORY_KEEP_RECENT_N
+                to_compact = history[:-keep_recent]
+                recent = history[-keep_recent:]
+                summary = await self._compact_history_with_llm(to_compact)
+                if summary:
+                    history = [{"role": "assistant", "content": summary}] + recent
+                    logger.info("历史 Compaction：%d 条 → 摘要 + %d 条", len(to_compact), len(recent))
+
             compressed = self._compress_history(
                 history,
                 keep_recent_n=self.HISTORY_KEEP_RECENT_N,
@@ -704,6 +715,58 @@ class ChatAssistantAgent(BaseAgent):
 
         messages.append({"role": "user", "content": self._build_user_content(user_message, images)})
         return messages
+
+    async def _compact_history_with_llm(
+        self,
+        messages: List[Dict],
+    ) -> str:
+        """用 LLM 把较早的对话历史压缩成一条摘要。
+
+        摘要以 [对话历史摘要] 标注，LLM 下次调用时可以读到历史上下文，
+        但不会被完整的原始消息占用 context window。
+        """
+        if not messages:
+            return ""
+        try:
+            from llm_client import llm_client
+            # 把消息整理成文本
+            lines = []
+            for m in messages[-30:]:  # 最多压缩 30 条，避免摘要请求本身也太大
+                role = m.get("role", "?")
+                content = m.get("content", "")
+                if isinstance(content, list):  # multi-block
+                    content = " ".join(
+                        b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text"
+                    )
+                if isinstance(content, str) and content.strip():
+                    prefix = "用户" if role == "user" else "AI助手"
+                    lines.append(f"{prefix}：{content[:300]}")
+
+            if not lines:
+                return ""
+
+            conv_text = "\n".join(lines)
+            summary_prompt = f"""请将以下对话历史压缩为简洁摘要，保留关键信息：
+- 用户提出的需求和问题
+- AI 做出的重要决策和操作
+- 创建/修改的需求、工单、文档等
+- 重要的技术方案和结论
+
+对话历史：
+{conv_text}
+
+请用中文，200字以内。"""
+
+            summary = await llm_client.chat(
+                [{"role": "user", "content": summary_prompt}],
+                max_tokens=300,
+                temperature=0.1,
+            )
+            if summary and isinstance(summary, str) and len(summary) > 10:
+                return f"[之前对话历史摘要]\n{summary.strip()}"
+        except Exception as e:
+            logger.warning("历史 Compaction LLM 调用失败（降级为截断）: %s", e)
+        return ""
 
     @classmethod
     def _compress_history(

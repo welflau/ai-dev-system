@@ -10175,7 +10175,7 @@ async function sendChatMessage() {
 
     try {
         // 构建历史（只取最近 10 条）
-        const historyToSend = chatHistory.slice(-10);
+        const historyToSend = chatHistory.slice(-20); // 加倍：後端 Compaction 在超 20 條時摘要
 
         let resp;
         if (chatMode === 'group' && currentProjectId) {
