@@ -195,10 +195,60 @@ nudge_hook            ASSISTANT_STOP → 未完成需求提示（新）
 
 ---
 
-## 九、待做（A 方向剩余）
+## 九、P2 L7 USD 费用追踪（L7: 6 → 7.5 分）
+
+> 提交：`c75745a`
+
+### 问题
+LLM 调用只记录 token 数，没有换算成 USD 费用，
+无法感知每次对话的成本，也不知道今天花了多少钱。
+
+### 修复
+
+**`llm_client.py` 定价表**
+```python
+_MODEL_PRICING = {
+    "claude-opus-4":    (15.0, 75.0),   # $/1M tokens (in, out)
+    "claude-sonnet-4":  (3.0,  15.0),
+    "claude-haiku-4":   (0.8,  4.0),
+    ...
+}
+```
+
+**写入 DB**
+`llm_conversations.cost_usd` 新列，每次对话写入估算费用：
+- `_save_conversation`：普通 chat 调用
+- `_save_tools_conversation`：tool_use 调用
+
+**`/api/metrics` 新增 `cost_today_usd`**
+从 `llm_conversations` 累加今日费用。
+
+**前端指标条新增 `💰 今日`**
+```
+💰 今日  $0.0123    ← 正常绿色
+💰 今日  $1.234     ← 黄色警告（>$1）
+💰 今日  $6.78      ← 红色危险（>$5）
+```
+
+---
+
+## 十、当前评分（截至 2026-05-17 晚）
+
+| 层 | 改进前 | 改进后 | 主要变化 |
+|----|--------|--------|---------|
+| L1 QueryEngine | 7 | 7.5 | Diminishing Returns 检测 |
+| L3 Context Assembly | 3 | 4 | Prompt Cache 分区 |
+| L4 Compaction | 2 | 5 | LLM 摘要 + 窗口扩大 |
+| L5 Memory | 3 | 6 | Rules 注入 + FTS5 + 主动注入 |
+| L6 Hooks | 6 | 7 | UserPromptSubmit + AssistantStop + nudge_hook |
+| L7 Budget | 6 | **7.5** | USD 费用追踪 + 指标条显示 |
+| **综合均值** | **5.5** | **7.3** | +1.8 分 |
+
+---
+
+## 十一、待做（A 方向剩余）
 
 | 优先级 | 项目 | 预计得分 |
 |--------|------|---------|
-| P2 | L7 Budget 费用追踪（USD 累计 + 每次对话成本）| 7→7.5 |
 | P2 | L8 并行子任务（dispatch 现在是串行的）| 5→6 |
 | P2 | L9 Feature Flags 运行时 per-session 开关 | 4→5 |
