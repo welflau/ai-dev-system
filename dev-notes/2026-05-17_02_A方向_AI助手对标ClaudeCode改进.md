@@ -246,9 +246,76 @@ _MODEL_PRICING = {
 
 ---
 
-## 十一、待做（A 方向剩余）
+## 十一、P2 L9 Feature Flags 运行时开关（L9: 4 → 5 分）
+
+> 提交：本次
+
+### 问题
+AI 行为（compaction / nudge / 最大 token / 最大轮次）全部硬编码在 config 里，
+用户如果需要调试某个行为（如关掉 compaction 对比效果），必须改配置并重启服务。
+Claude Code 的 `/toggle` 命令则支持运行时即时切换。
+
+### 修复
+
+**`backend/actions/chat/set_session_flag.py`（新文件）**
+
+Session 级别的内存 flag 表，支持 5 个开关：
+
+```
+compaction     on/off   — LLM 摘要压缩（默认 on）
+nudge          on/off   — AI 回复后未完成需求提示（默认 on）
+verbose        on/off   — 详细回复模式（默认 off）
+max_turns      1-200    — 当前 session 最大工具轮次（默认 50）
+budget_tokens  10k-2M   — 当前 session token 上限（默认 300000）
+list                    — 查看当前所有设置
+```
+
+重启后重置为默认值（设计如此——session 级别不做持久化）。
+
+**`ChatAssistantAgent` 集成**
+
+1. `SetSessionFlagAction` 加入 `action_classes` → 暴露为 AI 工具
+2. `_CROSS_SCOPE_TOOLS` 加入 `set_session_flag` → 全局 + 项目聊天都可用
+3. `_TOOL_LABELS_PY` 加入 `"🎛 调整 AI 行为设置"` → 思考步骤显示友好标签
+4. `args_hint` 提取器加入 `"set_session_flag": "flag"` → 思考日志显示 flag 名
+5. `chat_stream` / `chat_global_stream` 里 Budget 改为读 session flag：
+   ```python
+   _sid = session_id or "default"
+   budget = Budget(
+       max_tokens=get_session_flag(_sid, "budget_tokens") or _cfg.CHAT_MAX_TOKENS,
+       max_turns=get_session_flag(_sid, "max_turns") or _cfg.CHAT_MAX_TURNS,
+       max_seconds=_cfg.CHAT_MAX_SECONDS,
+   )
+   ```
+6. `_assemble_messages` 传入 `session_id` → compaction flag 生效
+7. `_ChatToolExecutor.execute` 注入 `session_id` 到 ctx → SetSessionFlagAction 能读到
+
+**使用示例**
+```
+用户：关掉 compaction 让我看完整历史
+AI 调用：set_session_flag(flag="compaction", value="off")
+AI 回复：✅ 已设置 compaction = False（本 session 有效）
+```
+
+---
+
+## 十二、当前评分（截至 2026-05-17 深夜）
+
+| 层 | 改进前 | 改进后 | 主要变化 |
+|----|--------|--------|---------|
+| L1 QueryEngine | 7 | 7.5 | Diminishing Returns 检测 |
+| L3 Context Assembly | 3 | 4 | Prompt Cache 分区 |
+| L4 Compaction | 2 | 5 | LLM 摘要 + 窗口扩大 |
+| L5 Memory | 3 | 6 | Rules 注入 + FTS5 + 主动注入 |
+| L6 Hooks | 6 | 7 | UserPromptSubmit + AssistantStop + nudge_hook |
+| L7 Budget | 6 | 7.5 | USD 费用追踪 + 指标条显示 |
+| L9 Feature Flags | 4 | **5** | per-session 运行时开关 |
+| **综合均值** | **5.5** | **7.4** | +1.9 分 |
+
+---
+
+## 十三、待做（A 方向剩余）
 
 | 优先级 | 项目 | 预计得分 |
 |--------|------|---------|
 | P2 | L8 并行子任务（dispatch 现在是串行的）| 5→6 |
-| P2 | L9 Feature Flags 运行时 per-session 开关 | 4→5 |

@@ -53,6 +53,7 @@ from actions.chat.memory_write import MemoryWriteAction                    # 写
 from actions.chat.read_many_files import ReadManyFilesAction               # 批量读文件
 from actions.chat.dispatch_subtask import DispatchSubtaskAction            # 子任务派发
 from actions.chat.manage_skill import ManageSkillAction                    # Skill 开关管理
+from actions.chat.set_session_flag import SetSessionFlagAction, get_session_flag  # L9 Feature Flags
 from actions.chat.create_github_repo import CreateGithubRepoAction         # GitHub 建仓库
 
 logger = logging.getLogger("agent.chat_assistant")
@@ -101,6 +102,7 @@ _TOOL_LABELS_PY: dict = {
     "install_project_skill": "📦 安装 Skill",
     "manage_skill": "🔧 管理 Skill",
     "create_github_repo": "🐙 创建 GitHub 仓库",
+    "set_session_flag": "🎛 调整 AI 行为设置",
 }
 
 # 全局聊天（项目列表页，无 project_id）下可用的工具白名单。
@@ -120,6 +122,7 @@ _CROSS_SCOPE_TOOLS = {
     "list_directory",       # 列目录（绝对路径时全局可用）
     "glob",                 # 文件搜索（绝对路径时全局可用）
     "grep",                 # 内容搜索（绝对路径时全局可用）
+    "set_session_flag",     # L9 Feature Flags（全局和项目都可用）
 }
 
 
@@ -212,6 +215,9 @@ class _ChatToolExecutor:
         ctx = dict(tool_input)
         if self.project_id is not None:
             ctx["project_id"] = self.project_id
+        # 注入 session_id（供 SetSessionFlagAction 等工具读取）
+        if self.session_id is not None:
+            ctx["session_id"] = self.session_id
 
         # 推 SSE 思考日志（start 阶段：有 project_id 或 session_id 才发，否则只记录）
         await self._emit_thinking(tool_name, tool_input, step="start")
@@ -256,6 +262,7 @@ class _ChatToolExecutor:
                 "save_memory": "title", "read_files": "paths",
                 "browse_marketplace": "dir_name", "install_project_skill": "dir_name",
                 "manage_skill": "action",
+                "set_session_flag": "flag",
             }
             key = _KEY.get(tool_name)
             arg_val = str(tool_input.get(key, ""))[:60] if key else ""
@@ -326,6 +333,7 @@ class ChatAssistantAgent(BaseAgent):
         ReadManyFilesAction,           # 批量读文件（全局+项目）
         DispatchSubtaskAction,         # Phase 4 子任务派发（仅项目）
         ManageSkillAction,             # Skill 启用/禁用管理
+        SetSessionFlagAction,          # L9 运行时行为开关
         CreateGithubRepoAction,        # GitHub 建仓库（AiDS-Projects 组织）
     ]
     react_mode = ReactMode.REACT
@@ -460,6 +468,7 @@ class ChatAssistantAgent(BaseAgent):
         history: Optional[List[Dict[str, str]]],
         project: Dict[str, Any],
         project_context: Dict[str, Any],
+        session_id: Optional[str] = None,
     ):
         """
         流式对话：逐步 yield SSE 事件 dict，由上层端点包装为 text/event-stream。
@@ -478,7 +487,7 @@ class ChatAssistantAgent(BaseAgent):
         from hooks.registry import hook_registry
 
         system_prompt = await self._build_system_prompt(project, project_context)
-        messages = await self._assemble_messages(history, user_message, images)
+        messages = await self._assemble_messages(history, user_message, images, session_id=session_id)
 
         project_traits = []
         try:
@@ -491,12 +500,14 @@ class ChatAssistantAgent(BaseAgent):
             project_traits = []
 
         tools = self._exposed_tool_schemas(scope="project", traits=project_traits)
-        inner_executor = _ChatToolExecutor(self, project["id"])
+        inner_executor = _ChatToolExecutor(self, project["id"], session_id=session_id)
         executor = ChatToolExecutorAdapter(inner_executor)
 
+        # L9 Feature Flags：運行時 budget 覆蓋
+        _sid = session_id or "default"
         budget = Budget(
-            max_tokens=_cfg.CHAT_MAX_TOKENS,
-            max_turns=_cfg.CHAT_MAX_TURNS,
+            max_tokens=get_session_flag(_sid, "budget_tokens") or _cfg.CHAT_MAX_TOKENS,
+            max_turns=get_session_flag(_sid, "max_turns") or _cfg.CHAT_MAX_TURNS,
             max_seconds=_cfg.CHAT_MAX_SECONDS,
         )
         context = {"project_id": project["id"], "agent_type": self.agent_type}
@@ -618,14 +629,15 @@ class ChatAssistantAgent(BaseAgent):
 
         preset_suggestions = self._match_preset_suggestions(user_message)
         system_prompt = self._build_global_system_prompt(projects_brief, preset_suggestions)
-        messages = await self._assemble_messages(history, user_message, images)
+        messages = await self._assemble_messages(history, user_message, images, session_id=session_id)
         tools = self._exposed_tool_schemas(scope="global")
         inner_executor = _ChatToolExecutor(self, project_id=None, session_id=session_id)
         executor = ChatToolExecutorAdapter(inner_executor)
 
+        _sid = session_id or "default"
         budget = Budget(
-            max_tokens=_cfg.CHAT_MAX_TOKENS,
-            max_turns=_cfg.CHAT_MAX_TURNS,
+            max_tokens=get_session_flag(_sid, "budget_tokens") or _cfg.CHAT_MAX_TOKENS,
+            max_turns=get_session_flag(_sid, "max_turns") or _cfg.CHAT_MAX_TURNS,
             max_seconds=_cfg.CHAT_MAX_SECONDS,
         )
         context = {"agent_type": self.agent_type}
@@ -683,6 +695,7 @@ class ChatAssistantAgent(BaseAgent):
         history: Optional[List[Dict[str, str]]],
         user_message: str,
         images: Optional[List[str]],
+        session_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """组装消息 + 压缩对话历史。
 
@@ -694,8 +707,10 @@ class ChatAssistantAgent(BaseAgent):
         messages: List[Dict[str, Any]] = []
 
         if history:
+            # L9 Feature Flag：compaction 可运行时关闭
+            compaction_enabled = get_session_flag(session_id or "default", "compaction")
             # Compaction：历史条数超过阈值时，用 LLM 把旧消息摘要为单条上下文
-            if len(history) > self.HISTORY_COMPACTION_THRESHOLD:
+            if compaction_enabled and len(history) > self.HISTORY_COMPACTION_THRESHOLD:
                 keep_recent = self.HISTORY_KEEP_RECENT_N
                 to_compact = history[:-keep_recent]
                 recent = history[-keep_recent:]
