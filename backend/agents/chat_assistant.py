@@ -890,6 +890,22 @@ class ChatAssistantAgent(BaseAgent):
             project_traits = []
         project_traits = [str(t) for t in project_traits]
 
+        # Rules 层：全局编码准则（alwaysApply=true）放在 system prompt 最前面
+        # rules/global.md 包含语言一致性 / 命名 / 安全红线等，对所有项目生效
+        rules_content = ""
+        try:
+            from skills import skill_loader as _sl
+            rule_ids = _sl.get_rules_for_context(traits=project_traits)
+            rules_parts = []
+            for rid in rule_ids:
+                content = _sl.rules.get(rid, {}).get("content", "")
+                if content:
+                    rules_parts.append(f"<!-- Rule: {rid} -->\n{content}")
+            rules_content = "\n\n".join(rules_parts)
+        except Exception:
+            pass
+        rules_section = f"{rules_content}\n\n---\n\n" if rules_content else ""
+
         # v0.20 主动触发：只注入 Skill 索引（名称+描述），不注入全文。
         # AI 按需调用 load_skill 工具加载具体内容。
         try:
@@ -946,7 +962,7 @@ class ChatAssistantAgent(BaseAgent):
 - 用户在 UE 项目里提"加个武器系统 / 做个 AI / 实现倒计时"这种**具体功能** → 调 confirm_requirement（走需求流）
 - 简单说：**动"整个工程骨架"用 propose_ue_framework；动"某个功能模块"用 confirm_requirement**"""
 
-        return f"""你是 AI 自动开发系统的智能助手，当前正在为项目「{project['name']}」提供服务。
+        return f"""{rules_section}你是 AI 自动开发系统的智能助手，当前正在为项目「{project['name']}」提供服务。
 
 ## 项目信息
 - 名称：{project['name']}
@@ -1092,6 +1108,21 @@ class ChatAssistantAgent(BaseAgent):
         else:
             proj_lines = "  （尚无项目）"
 
+        # Rules 层：全局聊天同样注入全局编码准则
+        global_rules_content = ""
+        try:
+            from skills import skill_loader as _sl
+            rule_ids = _sl.get_rules_for_context(traits=[])
+            rules_parts = []
+            for rid in rule_ids:
+                content = _sl.rules.get(rid, {}).get("content", "")
+                if content:
+                    rules_parts.append(f"<!-- Rule: {rid} -->\n{content}")
+            global_rules_content = "\n\n".join(rules_parts)
+        except Exception:
+            pass
+        global_rules_section = f"{global_rules_content}\n\n---\n\n" if global_rules_content else ""
+
         # v0.20 主动触发：全局聊天同样只注入索引
         try:
             from skills import skill_loader as _sl
@@ -1117,7 +1148,7 @@ class ChatAssistantAgent(BaseAgent):
                 preset_lines.append(f"- **{m.preset_id}**（{m.label}，分数 {m.score}）traits: {m.traits}")
             preset_section = "\n".join(preset_lines) + "\n"
 
-        return f"""你是 AI 自动开发系统的全局助手，当前用户在**项目列表页**，**还没有进入任何具体项目**。
+        return f"""{global_rules_section}你是 AI 自动开发系统的全局助手，当前用户在**项目列表页**，**还没有进入任何具体项目**。
 
 ## 已有项目（最多展示 10 个）
 {proj_lines}
