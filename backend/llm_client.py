@@ -652,7 +652,17 @@ class LLMClient:
         if temperature is not None:
             payload["temperature"] = temperature
         if sys_parts:
-            payload["system"] = "\n".join(sys_parts).strip()
+            _sys_text = "\n".join(sys_parts).strip()
+            _CACHE_MARKER = "<!--CACHE_BOUNDARY-->"
+            if _CACHE_MARKER in _sys_text:
+                _stable, _dynamic = _sys_text.split(_CACHE_MARKER, 1)
+                payload["system"] = [
+                    {"type": "text", "text": _stable.strip(),
+                     "cache_control": {"type": "ephemeral"}},
+                    {"type": "text", "text": _dynamic.strip()},
+                ]
+            else:
+                payload["system"] = _sys_text
 
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -710,7 +720,20 @@ class LLMClient:
         if temperature is not None:
             payload["temperature"] = temperature
         if sys_parts:
-            payload["system"] = "\n".join(sys_parts).strip()
+            system_text = "\n".join(sys_parts).strip()
+            # Prompt Cache：若 system 含 <!--CACHE_BOUNDARY-->，分成两块
+            # 稳定部分（Rules + 项目基本信息 + Skills + 能力描述）加 cache_control
+            # 动态部分（知识库 / 需求 / 工单 / 文件树）不缓存
+            _CACHE_MARKER = "<!--CACHE_BOUNDARY-->"
+            if _CACHE_MARKER in system_text:
+                stable, dynamic = system_text.split(_CACHE_MARKER, 1)
+                payload["system"] = [
+                    {"type": "text", "text": stable.strip(),
+                     "cache_control": {"type": "ephemeral"}},
+                    {"type": "text", "text": dynamic.strip()},
+                ]
+            else:
+                payload["system"] = system_text
 
         # 用于拼装 tool_use block 的 input JSON（流式时分片传来）
         _blocks: Dict[int, Dict] = {}  # index -> block

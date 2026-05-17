@@ -962,6 +962,9 @@ class ChatAssistantAgent(BaseAgent):
 - 用户在 UE 项目里提"加个武器系统 / 做个 AI / 实现倒计时"这种**具体功能** → 调 confirm_requirement（走需求流）
 - 简单说：**动"整个工程骨架"用 propose_ue_framework；动"某个功能模块"用 confirm_requirement**"""
 
+        # <!--CACHE_BOUNDARY--> 之前为稳定内容（Prompt Cache 命中），之后为动态内容（每次不同）
+        # 稳定：Rules + 项目基本信息 + Skills + 能力描述
+        # 动态：知识库 / 需求状态 / 工单 / 文件树 / 产出物
         return f"""{rules_section}你是 AI 自动开发系统的智能助手，当前正在为项目「{project['name']}」提供服务。
 
 ## 项目信息
@@ -971,21 +974,6 @@ class ChatAssistantAgent(BaseAgent):
 - Git 仓库：{project.get('git_repo_path') or '未配置'}
 {traits_line}
 {ue_routing}
-{knowledge_section}
-## 当前需求状态
-{req_summary}
-
-## 工单概况
-{ticket_summary}
-
-## 项目文件树
-{file_tree}
-
-## 项目关键文档内容
-{key_files_content}
-
-## 产出物列表
-{artifacts_summary}
 {skills_section}
 ## 你的能力
 你配有一组工具（见 tools 参数），用于：
@@ -1080,7 +1068,25 @@ class ChatAssistantAgent(BaseAgent):
 - 如果用户描述**真的**不清晰才追问；"重跑/重来/改颜色/加功能"这类指令是明确的，直接执行
 - 需求 ID 不明确时用标题关键词模糊匹配（工具本身支持）
 - 需求状态不允许当前操作时，工具会返回错误，据实告知用户
-"""
+
+<!--CACHE_BOUNDARY-->
+## 当前项目状态（实时）
+
+{knowledge_section}
+## 当前需求状态
+{req_summary}
+
+## 工单概况
+{ticket_summary}
+
+## 项目文件树
+{file_tree}
+
+## 项目关键文档内容
+{key_files_content}
+
+## 产出物列表
+{artifacts_summary}"""
 
     def _match_preset_suggestions(self, user_message: str) -> List[Any]:
         """预计算 preset 推荐，注入到 system prompt 给 LLM 参考。"""
