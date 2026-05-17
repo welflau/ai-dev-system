@@ -51,7 +51,7 @@ from actions.chat.web_search import WebSearchAction                        # 联
 from actions.chat.shell_exec import ShellAction                            # Shell 执行
 from actions.chat.memory_write import MemoryWriteAction                    # 写入记忆
 from actions.chat.read_many_files import ReadManyFilesAction               # 批量读文件
-from actions.chat.dispatch_subtask import DispatchSubtaskAction            # 子任务派发
+from actions.chat.dispatch_subtask import DispatchSubtaskAction, DispatchParallelSubtasksAction  # 子任务派发（L8）
 from actions.chat.manage_skill import ManageSkillAction                    # Skill 开关管理
 from actions.chat.set_session_flag import SetSessionFlagAction, get_session_flag  # L9 Feature Flags
 from actions.chat.create_github_repo import CreateGithubRepoAction         # GitHub 建仓库
@@ -103,6 +103,8 @@ _TOOL_LABELS_PY: dict = {
     "manage_skill": "🔧 管理 Skill",
     "create_github_repo": "🐙 创建 GitHub 仓库",
     "set_session_flag": "🎛 调整 AI 行为设置",
+    "dispatch_subtask": "📦 派发子任务",
+    "dispatch_parallel_subtasks": "⚡ 并行派发子任务",
 }
 
 # 全局聊天（项目列表页，无 project_id）下可用的工具白名单。
@@ -263,6 +265,8 @@ class _ChatToolExecutor:
                 "browse_marketplace": "dir_name", "install_project_skill": "dir_name",
                 "manage_skill": "action",
                 "set_session_flag": "flag",
+                "dispatch_subtask": "title",
+                "dispatch_parallel_subtasks": "subtasks",
             }
             key = _KEY.get(tool_name)
             arg_val = str(tool_input.get(key, ""))[:60] if key else ""
@@ -331,7 +335,8 @@ class ChatAssistantAgent(BaseAgent):
         WebSearchAction,               # 联网搜索（全局+项目）
         MemoryWriteAction,             # 写入记忆（全局+项目）
         ReadManyFilesAction,           # 批量读文件（全局+项目）
-        DispatchSubtaskAction,         # Phase 4 子任务派发（仅项目）
+        DispatchSubtaskAction,              # Phase 4 子任务派发
+        DispatchParallelSubtasksAction,    # L8 批量并行派发
         ManageSkillAction,             # Skill 启用/禁用管理
         SetSessionFlagAction,          # L9 运行时行为开关
         CreateGithubRepoAction,        # GitHub 建仓库（AiDS-Projects 组织）

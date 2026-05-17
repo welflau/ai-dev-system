@@ -314,8 +314,66 @@ AI 回复：✅ 已设置 compaction = False（本 session 有效）
 
 ---
 
-## 十三、待做（A 方向剩余）
+## 十三、P2 L8 并行子任务（L8: 5 → 6 分）
 
-| 优先级 | 项目 | 预计得分 |
-|--------|------|---------|
-| P2 | L8 并行子任务（dispatch 现在是串行的）| 5→6 |
+> 提交：本次
+
+### 问题
+`DispatchSubtaskAction` 每次只能创建 1 个子任务，且子任务与顶层工单共用同一个
+`_MAX_CONCURRENT_PER_PROJECT = 1` 的并发槽，实际上子任务也是串行执行的。
+对"可分拆的大任务"（如同时推进前端/后端/测试）毫无并行优势。
+
+### 修复
+
+**1. `DispatchParallelSubtasksAction`（`dispatch_subtask.py` 新增类）**
+
+一次 LLM 工具调用创建 2-5 个子任务，支持 schema：
+
+```json
+{
+  "subtasks": [
+    {"title": "前端组件", "description": "...", "start_status": "pending"},
+    {"title": "后端 API", "description": "...", "start_status": "architecture_done"},
+    {"title": "集成测试", "description": "...", "start_status": "development_done"}
+  ]
+}
+```
+
+所有子任务同时进入 PENDING，父任务进入 `waiting_subtasks`，
+已有的 `_check_subtasks_complete` 轮询检测会在全部完成后恢复父任务。
+
+**2. Orchestrator 子任务独立并发槽**
+
+在 `_poll_once` 里区分 `is_subtask = bool(t.get("parent_ticket_id"))`：
+
+| 类型 | 并发槽 | 常量 |
+|------|-------|------|
+| 顶层工单 | 每项目 1 个 | `_MAX_CONCURRENT_PER_PROJECT = 1` |
+| 子任务 | 每项目最多 3 个 | `_MAX_CONCURRENT_SUBTASKS = 3` |
+
+子任务通过 `_project_subtask_active` 独立追踪，`_poll_process(is_subtask=True)` 在 finally 里清对应集合。
+顶层工单 DB 稳定性不受影响，子任务最多 3 路并行同时推进。
+
+**实际效果**
+```
+PlannerAgent 调用 dispatch_parallel_subtasks → 3 个子任务同时 PENDING
+→ Orchestrator 下轮 poll 同时拾取 3 个（3 个 asyncio.create_task）
+→ DevAgent / UXAgent / TestAgent 并行执行
+→ 全部完成后父任务恢复，继续下一阶段
+```
+
+---
+
+## 十四、当前评分（截至 2026-05-17 深夜，A 方向全部完成）
+
+| 层 | 改进前 | 改进后 | 主要变化 |
+|----|--------|--------|---------|
+| L1 QueryEngine | 7 | 7.5 | Diminishing Returns 检测 |
+| L3 Context Assembly | 3 | 4 | Prompt Cache 分区 |
+| L4 Compaction | 2 | 5 | LLM 摘要 + 窗口扩大 |
+| L5 Memory | 3 | 6 | Rules 注入 + FTS5 + 主动注入 |
+| L6 Hooks | 6 | 7 | UserPromptSubmit + AssistantStop + nudge_hook |
+| L7 Budget | 6 | 7.5 | USD 费用追踪 + 指标条显示 |
+| L8 Orchestrator | 5 | **6** | 并行子任务调度 + 独立并发槽 |
+| L9 Feature Flags | 4 | 5 | per-session 运行时开关 |
+| **综合均值** | **5.5** | **7.5** | +2.0 分 |

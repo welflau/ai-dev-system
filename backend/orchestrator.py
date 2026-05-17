@@ -40,10 +40,13 @@ class TicketOrchestrator:
         self._processing: set = set()
 
         # 每个项目的并发限制，防止大批需求同时涌入耗尽 LLM 配额
-        # 默认每项目最多 3 个工单并行；_poll_once 调度时直接限流，不多创建 asyncio task
-        self._MAX_CONCURRENT_PER_PROJECT = 1   # DB 高負載期間降到 1，保障聊天可用
-        # 每个项目当前活跃的工单集合（用于调度时判断是否有空位，超出则等下轮轮询）
+        self._MAX_CONCURRENT_PER_PROJECT = 1   # 顶层工单：每项目同时处理 1 个（DB 稳定）
+        # L8: 子任务独立并发槽，最多 3 个子任务并行（不占顶层槽位）
+        self._MAX_CONCURRENT_SUBTASKS = 3
+        # 每个项目当前活跃的工单集合（顶层）
         self._project_active: Dict[str, set] = {}
+        # L8: 每个项目当前活跃的子任务集合（独立于顶层槽位）
+        self._project_subtask_active: Dict[str, set] = {}
 
         # Agent 实时状态追踪
         self._agent_status: Dict[str, Dict] = {
@@ -547,18 +550,31 @@ class TicketOrchestrator:
                     if not all_deps_done:
                         continue
 
-            # 检查项目并发槽位：已满则跳过，等下次轮询再补
-            active_set = self._project_active.setdefault(project_id, set())
-            if len(active_set) >= self._MAX_CONCURRENT_PER_PROJECT:
-                continue
+            # L8: 区分子任务（有 parent_ticket_id）和顶层任务，使用独立并发槽
+            is_subtask = bool(t.get("parent_ticket_id"))
 
-            # 标记为处理中并占用槽位，异步执行
-            self._processing.add(ticket_id)
-            active_set.add(ticket_id)
-            logger.info("🔄 轮询拾取工单 [%d/%d]: %s「%s」",
-                        len(active_set), self._MAX_CONCURRENT_PER_PROJECT,
-                        ticket_id[:12], t["title"][:20])
-            asyncio.create_task(self._poll_process(project_id, ticket_id))
+            if is_subtask:
+                # 子任务：独立并发槽，最多 _MAX_CONCURRENT_SUBTASKS 个并行
+                subtask_set = self._project_subtask_active.setdefault(project_id, set())
+                if len(subtask_set) >= self._MAX_CONCURRENT_SUBTASKS:
+                    continue
+                self._processing.add(ticket_id)
+                subtask_set.add(ticket_id)
+                logger.info("⚡ 子任务并行 [%d/%d]: %s「%s」",
+                            len(subtask_set), self._MAX_CONCURRENT_SUBTASKS,
+                            ticket_id[:12], t["title"][:20])
+                asyncio.create_task(self._poll_process(project_id, ticket_id, is_subtask=True))
+            else:
+                # 顶层任务：每项目 1 个槽位，保证 DB 稳定
+                active_set = self._project_active.setdefault(project_id, set())
+                if len(active_set) >= self._MAX_CONCURRENT_PER_PROJECT:
+                    continue
+                self._processing.add(ticket_id)
+                active_set.add(ticket_id)
+                logger.info("🔄 轮询拾取工单 [%d/%d]: %s「%s」",
+                            len(active_set), self._MAX_CONCURRENT_PER_PROJECT,
+                            ticket_id[:12], t["title"][:20])
+                asyncio.create_task(self._poll_process(project_id, ticket_id, is_subtask=False))
 
         # ── 自动拾取 open BUG ──
         # 扫描所有项目中 status=open 且未关联 ticket 的 BUG，自动触发修复工作流
@@ -667,13 +683,16 @@ class TicketOrchestrator:
         except Exception:
             pass
 
-    async def _poll_process(self, project_id: str, ticket_id: str):
+    async def _poll_process(self, project_id: str, ticket_id: str, is_subtask: bool = False):
         """轮询触发的工单处理（调度时已限流，此处直接执行）"""
         try:
             await self.process_ticket(project_id, ticket_id)
         finally:
             self._processing.discard(ticket_id)
-            self._project_active.get(project_id, set()).discard(ticket_id)
+            if is_subtask:
+                self._project_subtask_active.get(project_id, set()).discard(ticket_id)
+            else:
+                self._project_active.get(project_id, set()).discard(ticket_id)
 
     # ==================== BUG 修复工作流 ====================
 
