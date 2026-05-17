@@ -9614,7 +9614,6 @@ async function _sendChatStreaming(url, body) {
                             <span class="crp-round-chevron">›</span>
                         </div>
                         <div class="crp-round-body">
-                            <div class="crp-round-thinking"></div>
                             <div class="crp-round-steps"></div>
                         </div>`;
                     roundsBody.appendChild(_curRoundEl);
@@ -9629,7 +9628,7 @@ async function _sendChatStreaming(url, body) {
                     if (_curRoundThinkingEl) _curRoundThinkingEl.textContent = _curRoundBuf;
                     // 实时更新推理摘要（取前 50 字）
                     const _reasoningEl = _curRoundEl?.querySelector('.crp-round-reasoning');
-                    if (_reasoningEl) _reasoningEl.textContent = _curRoundBuf.slice(0, 120).replace(/\n+/g, ' ');
+                    if (_reasoningEl) _reasoningEl.textContent = _curRoundBuf;
                     scrollChatToBottom();
 
                 } else if (eventName === 'thinking_done') {
@@ -9638,7 +9637,7 @@ async function _sendChatStreaming(url, body) {
                     if (_curRoundThinkingEl) _curRoundThinkingEl.textContent = fullText_;
                     const _reasoningEl = _curRoundEl?.querySelector('.crp-round-reasoning');
                     if (_reasoningEl) {
-                        const preview = fullText_.slice(0, 60).replace(/\n/g, ' ');
+                        const preview = fullText_;
                         _reasoningEl.textContent = preview + (fullText_.length > 60 ? '…' : '');
                         _reasoningEl.classList.remove('crp-round-reasoning-placeholder');
                     }
@@ -11092,7 +11091,7 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
             const totalSteps = visibleRounds.reduce((n, r) => n + (r.steps?.length || 0), 0);
             const roundsHtml = visibleRounds.map(r => {
                 const reasoning = r.reasoning || '';
-                const preview = reasoning.slice(0, 120).replace(/\n+/g, ' ');
+                const preview = reasoning;
                 const stepsHtml = (r.steps || []).map(s => {
                     const label = _TOOL_LABELS[s.tool] || `🔧 ${s.tool}`;
                     const dur = s.duration_ms > 0 ? ` (${s.duration_ms}ms)` : '';
@@ -11113,7 +11112,6 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
                         <span class="crp-round-chevron">›</span>
                     </div>
                     <div class="crp-round-body">
-                        ${reasoning ? `<div class="crp-round-thinking">${escapeHtml(reasoning)}</div>` : ''}
                         <div class="crp-round-steps">${stepsHtml}</div>
                     </div>
                 </div>`;
