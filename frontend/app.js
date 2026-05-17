@@ -169,8 +169,8 @@ document.addEventListener('DOMContentLoaded', () => {
     loadProjects();
     initLogPanel();
     initProjectNameListener();
-    // 默认打开 AI 助手面板
-    toggleChatPanel();
+    // 默认全屏打开 AI 助手
+    toggleChatFullscreen();
 });
 
 /**
