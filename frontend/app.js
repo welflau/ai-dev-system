@@ -9629,7 +9629,7 @@ async function _sendChatStreaming(url, body) {
                     if (_curRoundThinkingEl) _curRoundThinkingEl.textContent = _curRoundBuf;
                     // 实时更新推理摘要（取前 50 字）
                     const _reasoningEl = _curRoundEl?.querySelector('.crp-round-reasoning');
-                    if (_reasoningEl) _reasoningEl.textContent = _curRoundBuf.slice(0, 50).replace(/\n/g, ' ') + ((_curRoundBuf.length > 50) ? '…' : '');
+                    if (_reasoningEl) _reasoningEl.textContent = _curRoundBuf.slice(0, 120).replace(/\n+/g, ' ');
                     scrollChatToBottom();
 
                 } else if (eventName === 'thinking_done') {
@@ -11092,7 +11092,7 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
             const totalSteps = visibleRounds.reduce((n, r) => n + (r.steps?.length || 0), 0);
             const roundsHtml = visibleRounds.map(r => {
                 const reasoning = r.reasoning || '';
-                const preview = reasoning.slice(0, 60).replace(/\n/g, ' ') + (reasoning.length > 60 ? '…' : '');
+                const preview = reasoning.slice(0, 120).replace(/\n+/g, ' ');
                 const stepsHtml = (r.steps || []).map(s => {
                     const label = _TOOL_LABELS[s.tool] || `🔧 ${s.tool}`;
                     const dur = s.duration_ms > 0 ? ` (${s.duration_ms}ms)` : '';
