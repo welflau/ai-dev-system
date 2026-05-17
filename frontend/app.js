@@ -9720,13 +9720,18 @@ async function _sendChatStreaming(url, body) {
 
     // J-3b: 收尾分组面板
     if (_roundsPanel) {
-        // 最后一轮标记完成
+        // 最后一轮：空轮次（无推理+无工具）直接移除 DOM，不显示
         if (_curRoundEl) {
-            _curRoundEl.classList.remove('crp-round-running');
-            _curRoundEl.classList.add('crp-round-done');
-            // 无工具调用的轮次折叠
-            if (_stepCount === 0 || !_curRoundStepsEl?.children.length) {
-                _curRoundEl.classList.remove('crp-round-expanded');
+            const hasReasoning = (_curRoundBuf || '').trim().length > 0
+                || _curRoundEl.querySelector('.crp-round-reasoning:not(.crp-round-reasoning-placeholder)');
+            const hasSteps = (_curRoundStepsEl?.children.length || 0) > 0;
+            if (!hasReasoning && !hasSteps) {
+                _curRoundEl.remove();  // 空轮次：静默移除
+                _roundCount = Math.max(0, _roundCount - 1);
+            } else {
+                _curRoundEl.classList.remove('crp-round-running');
+                _curRoundEl.classList.add('crp-round-done');
+                if (!hasSteps) _curRoundEl.classList.remove('crp-round-expanded');
             }
         }
         // 更新标题并折叠整体面板
@@ -11082,8 +11087,10 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
 
         if (isGrouped) {
             // 新格式：按轮次渲染
-            const totalSteps = thinking.reduce((n, r) => n + (r.steps?.length || 0), 0);
-            const roundsHtml = thinking.map(r => {
+            // 過濾空輪次（無推理+無工具，即答案生成輪）
+            const visibleRounds = thinking.filter(r => (r.reasoning || '').trim() || (r.steps?.length || 0) > 0);
+            const totalSteps = visibleRounds.reduce((n, r) => n + (r.steps?.length || 0), 0);
+            const roundsHtml = visibleRounds.map(r => {
                 const reasoning = r.reasoning || '';
                 const preview = reasoning.slice(0, 60).replace(/\n/g, ' ') + (reasoning.length > 60 ? '…' : '');
                 const stepsHtml = (r.steps || []).map(s => {
@@ -11115,7 +11122,7 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
             <div class="crp-rounds-panel crp-collapsed">
                 <div class="crp-rounds-header">
                     <span class="crp-rounds-icon">✦</span>
-                    <span class="crp-rounds-title">思考了 ${thinking.length} 轮 · ${totalSteps} 步</span>
+                    <span class="crp-rounds-title">思考了 ${visibleRounds.length} 轮 · ${totalSteps} 步</span>
                     <span class="crp-rounds-toggle" onclick="this.closest('.crp-rounds-panel').classList.toggle('crp-collapsed')">∨</span>
                 </div>
                 <div class="crp-rounds-body">${roundsHtml}</div>
