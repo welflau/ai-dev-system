@@ -9569,6 +9569,8 @@ async function _sendChatStreaming(url, body) {
                     // J-3: 推理链流式文本
                     _reasoningBuf += data.delta || '';
                     if (!_reasoningPanel) {
+                        // 移除 chatTyping，推理面板直接作为唯一顶部占位元素
+                        document.getElementById('chatTyping')?.remove();
                         _reasoningPanel = document.createElement('div');
                         _reasoningPanel.className = 'chat-reasoning-panel';
                         _reasoningPanel.innerHTML = `
