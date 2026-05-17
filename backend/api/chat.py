@@ -1831,6 +1831,9 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
                 full_text += ev["delta"]
                 yield _sse("text_delta", {"delta": ev["delta"]})
 
+            elif etype == "round_start":
+                yield _sse("round_start", {"round": ev["round"]})
+
             elif etype == "thinking_delta":
                 yield _sse("thinking_delta", {"delta": ev["delta"]})
 

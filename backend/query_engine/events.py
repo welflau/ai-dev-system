@@ -17,6 +17,12 @@ class TextDeltaEvent:
 
 
 @dataclass
+class RoundStartEvent:
+    """J-3b: 每轮 LLM 调用开始，用于前端分组显示"""
+    round: int   # 从 1 开始
+
+
+@dataclass
 class ThinkingDeltaEvent:
     """J-3 Extended Thinking: 推理链流式片段"""
     delta: str
@@ -85,6 +91,7 @@ class ErrorEvent:
 # 联合类型，方便 isinstance 检查
 QueryEvent = Union[
     TextDeltaEvent,
+    RoundStartEvent,
     ThinkingDeltaEvent,
     ThinkingDoneEvent,
     ToolStartEvent,

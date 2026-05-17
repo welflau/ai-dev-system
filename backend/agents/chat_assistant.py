@@ -486,7 +486,7 @@ class ChatAssistantAgent(BaseAgent):
         from query_engine.events import (
             TextDeltaEvent, ToolStartEvent, ToolDoneEvent, ToolErrorEvent,
             ActionEvent, MessageDoneEvent, BudgetExceededEvent, ErrorEvent,
-            ThinkingDeltaEvent, ThinkingDoneEvent,
+            ThinkingDeltaEvent, ThinkingDoneEvent, RoundStartEvent,
         )
         from query_engine.executor import ChatToolExecutorAdapter
         from config import settings as _cfg
@@ -532,6 +532,8 @@ class ChatAssistantAgent(BaseAgent):
             async for event in engine.run(messages, system_prompt, tools, context):
                 if isinstance(event, TextDeltaEvent):
                     yield {"type": "text_delta", "delta": event.delta}
+                elif isinstance(event, RoundStartEvent):
+                    yield {"type": "round_start", "round": event.round}
                 elif isinstance(event, ThinkingDeltaEvent):
                     yield {"type": "thinking_delta", "delta": event.delta}
                 elif isinstance(event, ThinkingDoneEvent):
@@ -637,7 +639,7 @@ class ChatAssistantAgent(BaseAgent):
         from query_engine.events import (
             TextDeltaEvent, ToolStartEvent, ToolDoneEvent, ToolErrorEvent,
             ActionEvent, MessageDoneEvent, BudgetExceededEvent, ErrorEvent,
-            ThinkingDeltaEvent, ThinkingDoneEvent,
+            ThinkingDeltaEvent, ThinkingDoneEvent, RoundStartEvent,
         )
         from query_engine.executor import ChatToolExecutorAdapter
         from config import settings as _cfg
@@ -672,6 +674,8 @@ class ChatAssistantAgent(BaseAgent):
             async for event in engine.run(messages, system_prompt, tools, context):
                 if isinstance(event, TextDeltaEvent):
                     yield {"type": "text_delta", "delta": event.delta}
+                elif isinstance(event, RoundStartEvent):
+                    yield {"type": "round_start", "round": event.round}
                 elif isinstance(event, ThinkingDeltaEvent):
                     yield {"type": "thinking_delta", "delta": event.delta}
                 elif isinstance(event, ThinkingDoneEvent):

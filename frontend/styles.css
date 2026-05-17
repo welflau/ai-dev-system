@@ -8178,6 +8178,112 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
 .flow-stage-arrow { width: 24px; flex-shrink: 0; color: var(--text-muted); font-size: 12px; text-align: center; }
 
 /* ==================== AI 思考面板 ==================== */
+/* ====================================================================
+   J-3b: 分组思考面板（rounds panel）
+   布局：整体折叠条 → 每轮组（推理摘要 + 工具步骤列表）
+   ==================================================================== */
+
+/* 整体容器 */
+.crp-rounds-panel {
+    margin: 0 0 6px 36px;
+    border-left: 2px solid var(--border, #2d3748);
+    border-radius: 0 6px 6px 0;
+    overflow: hidden;
+    transition: border-color 0.2s;
+    font-size: 12px;
+}
+.crp-rounds-panel:hover { border-color: rgba(163,113,247,0.4); }
+
+/* 整体标题栏 */
+.crp-rounds-header {
+    display: flex; align-items: center; gap: 6px;
+    padding: 5px 10px;
+    color: var(--text-muted, #718096);
+    user-select: none;
+}
+.crp-rounds-icon { font-size: 11px; color: rgba(163,113,247,0.8); }
+.crp-rounds-title { flex: 1; font-size: 11px; letter-spacing: 0.02em; }
+.crp-rounds-toggle {
+    font-size: 10px; cursor: pointer;
+    transition: transform 0.2s; padding: 2px 4px;
+}
+.crp-collapsed > .crp-rounds-header .crp-rounds-toggle { transform: rotate(-90deg); }
+
+/* 整体折叠 */
+.crp-rounds-body { transition: max-height 0.3s ease-out; }
+.crp-collapsed > .crp-rounds-body { max-height: 0 !important; overflow: hidden; }
+
+/* ── 单轮组 ── */
+.crp-round-group {
+    border-top: 1px solid rgba(255,255,255,0.04);
+}
+.crp-round-group:first-child { border-top: none; }
+
+/* 轮次标题行 */
+.crp-round-header {
+    display: flex; align-items: flex-start; gap: 8px;
+    padding: 5px 10px 5px 12px;
+    cursor: pointer; user-select: none;
+}
+.crp-round-header:hover .crp-round-reasoning { color: var(--text-secondary, #a0aec0); }
+
+/* 状态圆点 */
+.crp-round-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    flex-shrink: 0; margin-top: 3px;
+    background: rgba(99,179,237,0.5);     /* 蓝：推理中（默认） */
+    transition: background 0.3s;
+}
+.crp-round-done .crp-round-dot {
+    background: rgba(72,187,120,0.8);     /* 绿：已完成 */
+}
+.crp-round-running .crp-round-dot {
+    background: rgba(163,113,247,0.9);    /* 紫：工具执行中 */
+    animation: ctp-pulse 1.2s ease-in-out infinite;
+}
+
+/* 推理摘要文字 */
+.crp-round-reasoning {
+    flex: 1; font-size: 11px; font-style: italic;
+    color: var(--text-muted, #718096);
+    overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+    transition: color 0.15s;
+    line-height: 1.5;
+}
+.crp-round-reasoning-placeholder { opacity: 0.5; }
+
+/* 展开指示 */
+.crp-round-chevron {
+    font-size: 10px; color: var(--text-muted, #718096);
+    transition: transform 0.2s; flex-shrink: 0; margin-top: 2px;
+}
+.crp-round-expanded > .crp-round-header .crp-round-chevron { transform: rotate(90deg); }
+
+/* 轮次体（折叠/展开） */
+.crp-round-body {
+    max-height: 0; overflow: hidden;
+    transition: max-height 0.25s ease-out;
+    padding: 0 10px 0 28px;
+}
+.crp-round-expanded > .crp-round-body {
+    max-height: 600px;
+    padding-bottom: 6px;
+}
+
+/* 推理全文区（轮次体内） */
+.crp-round-thinking {
+    font-size: 11px; font-style: italic;
+    color: var(--text-muted, #718096);
+    white-space: pre-wrap; line-height: 1.6; word-break: break-word;
+    padding: 4px 0 8px;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    margin-bottom: 6px;
+}
+.crp-round-thinking:empty { display: none; }
+
+/* 工具步骤容器（复用 ctp-step 样式，无需额外写） */
+.crp-round-steps { padding: 2px 0; }
+
 /* J-3: Extended Thinking 推理链面板 */
 .chat-reasoning-panel {
     margin: 0 0 6px 36px;

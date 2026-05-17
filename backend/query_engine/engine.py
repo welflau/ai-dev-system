@@ -24,6 +24,7 @@ from query_engine.events import (
     BudgetExceededEvent,
     ErrorEvent,
     MessageDoneEvent,
+    RoundStartEvent,
     TextDeltaEvent,
     ThinkingDeltaEvent,
     ThinkingDoneEvent,
@@ -237,6 +238,9 @@ class QueryEngine:
         round_count = 0
 
         for round_no in range(self.max_rounds):
+            # J-3b: 通知前端新一轮开始（用于分组展示）
+            yield RoundStartEvent(round=round_no + 1)
+
             # ── 1. 预算检查 ────────────────────────────────────────────
             if reason := self.budget.check():
                 logger.warning("QueryEngine 预算超限（轮 %d）: %s", round_no, reason)

@@ -9490,8 +9490,18 @@ async function _sendChatStreaming(url, body) {
     let fullText = '';
     let finalAction = null;
     let finalActions = [];
-    // J-3: 推理链面板状态
-    let _reasoningPanel = null, _reasoningBody = null, _reasoningBuf = '';
+    // J-3b: 分组思考面板状态
+    let _roundsPanel = null;          // 整体容器
+    let _roundsHeader = null;         // 标题行（"思考了 N 轮 · M 步 · Xs"）
+    let _curRoundEl = null;           // 当前轮次 DOM 元素
+    let _curRoundBody = null;         // 当前轮次展开区
+    let _curRoundThinkingEl = null;   // 当前轮次推理文本元素
+    let _curRoundStepsEl = null;      // 当前轮次工具步骤容器
+    let _curRoundBuf = '';            // 当前轮次推理缓冲
+    let _roundCount = 0;              // 已开始的轮次数
+    let _stepCount = 0;               // 总工具调用步骤数
+    let _panelStartTime = 0;          // 面板开始时间（计算总耗时）
+    const _roundSteps = [];           // [{tool,summary,duration_ms,args_hint}]（用于持久化）
 
     // 节流 Markdown 渲染：每 300ms 或每 200 字渲染一次，减少闪烁
     let _lastRenderLen = 0;
@@ -9565,47 +9575,117 @@ async function _sendChatStreaming(url, body) {
                         _scheduleRender();
                     }
 
-                } else if (eventName === 'thinking_delta') {
-                    // J-3: 推理链流式文本
-                    _reasoningBuf += data.delta || '';
-                    if (!_reasoningPanel) {
-                        // 移除 chatTyping，推理面板直接作为唯一顶部占位元素
+                } else if (eventName === 'round_start') {
+                    // J-3b: 新一轮开始 — 创建整体面板（首轮）或新轮次组（后续轮）
+                    _roundCount++;
+                    if (!_roundsPanel) {
+                        _panelStartTime = Date.now();
                         document.getElementById('chatTyping')?.remove();
-                        _reasoningPanel = document.createElement('div');
-                        _reasoningPanel.className = 'chat-reasoning-panel';
-                        _reasoningPanel.innerHTML = `
-                            <div class="crp-header" onclick="this.closest('.chat-reasoning-panel').classList.toggle('crp-collapsed')">
-                                <span class="crp-icon">💭</span>
-                                <span class="crp-title">思考过程</span>
-                                <span class="crp-toggle">∨</span>
+                        _roundsPanel = document.createElement('div');
+                        _roundsPanel.className = 'crp-rounds-panel';
+                        _roundsPanel.innerHTML = `
+                            <div class="crp-rounds-header">
+                                <span class="crp-rounds-icon">✦</span>
+                                <span class="crp-rounds-title">思考中…</span>
+                                <span class="crp-rounds-toggle" onclick="this.closest('.crp-rounds-panel').classList.toggle('crp-collapsed')">∨</span>
                             </div>
-                            <div class="crp-body"></div>`;
-                        container.insertBefore(_reasoningPanel, bubbleWrapper);
-                        _reasoningBody = _reasoningPanel.querySelector('.crp-body');
+                            <div class="crp-rounds-body"></div>`;
+                        container.insertBefore(_roundsPanel, bubbleWrapper);
+                        _roundsHeader = _roundsPanel.querySelector('.crp-rounds-title');
                     }
-                    if (_reasoningBody) _reasoningBody.textContent = _reasoningBuf;
+                    // 结束上一轮（标记为完成）
+                    if (_curRoundEl) {
+                        _curRoundEl.classList.remove('crp-round-running');
+                        _curRoundEl.classList.add('crp-round-done');
+                        if (_curRoundThinkingEl && _curRoundBuf) {
+                            _curRoundThinkingEl.textContent = _curRoundBuf;
+                        }
+                    }
+                    // 创建新轮次 DOM
+                    _curRoundBuf = '';
+                    const roundsBody = _roundsPanel.querySelector('.crp-rounds-body');
+                    _curRoundEl = document.createElement('div');
+                    _curRoundEl.className = 'crp-round-group crp-round-running';
+                    _curRoundEl.dataset.round = data.round;
+                    _curRoundEl.innerHTML = `
+                        <div class="crp-round-header" onclick="this.closest('.crp-round-group').classList.toggle('crp-round-expanded')">
+                            <span class="crp-round-dot"></span>
+                            <span class="crp-round-reasoning crp-round-reasoning-placeholder">正在推理…</span>
+                            <span class="crp-round-chevron">›</span>
+                        </div>
+                        <div class="crp-round-body">
+                            <div class="crp-round-thinking"></div>
+                            <div class="crp-round-steps"></div>
+                        </div>`;
+                    roundsBody.appendChild(_curRoundEl);
+                    _curRoundBody = _curRoundEl.querySelector('.crp-round-body');
+                    _curRoundThinkingEl = _curRoundEl.querySelector('.crp-round-thinking');
+                    _curRoundStepsEl = _curRoundEl.querySelector('.crp-round-steps');
+                    scrollChatToBottom();
+
+                } else if (eventName === 'thinking_delta') {
+                    // J-3b: 当前轮推理文字流入
+                    _curRoundBuf += data.delta || '';
+                    if (_curRoundThinkingEl) _curRoundThinkingEl.textContent = _curRoundBuf;
+                    // 实时更新推理摘要（取前 50 字）
+                    const _reasoningEl = _curRoundEl?.querySelector('.crp-round-reasoning');
+                    if (_reasoningEl) _reasoningEl.textContent = _curRoundBuf.slice(0, 50).replace(/\n/g, ' ') + ((_curRoundBuf.length > 50) ? '…' : '');
                     scrollChatToBottom();
 
                 } else if (eventName === 'thinking_done') {
-                    // J-3: 推理链完成，折叠并更新标题
-                    if (_reasoningPanel) {
-                        const t = _reasoningPanel.querySelector('.crp-title');
-                        if (t) t.textContent = `思考过程 · ${_reasoningBuf.length} 字`;
-                        _reasoningPanel.classList.add('crp-collapsed');
+                    // J-3b: 当前轮推理完成，更新摘要
+                    const fullText_ = data.text || _curRoundBuf;
+                    if (_curRoundThinkingEl) _curRoundThinkingEl.textContent = fullText_;
+                    const _reasoningEl = _curRoundEl?.querySelector('.crp-round-reasoning');
+                    if (_reasoningEl) {
+                        const preview = fullText_.slice(0, 60).replace(/\n/g, ' ');
+                        _reasoningEl.textContent = preview + (fullText_.length > 60 ? '…' : '');
+                        _reasoningEl.classList.remove('crp-round-reasoning-placeholder');
                     }
-                    _reasoningBuf = '';
+                    _curRoundBuf = '';
 
                 } else if (eventName === 'tool_start') {
-                    // 状态文字：正在调用工具
+                    // J-3b: 工具开始 — 在当前轮次里添加步骤（running 状态）
                     if (_typingBubble) _typingBubble.innerHTML = `<span class="chat-typing-text">正在调用工具…</span>`;
-                    const _hint = _extractArgsHint(data.tool, data.input);
-                    _chatThinkingAppend({ step: 'start', tool: data.tool, args_hint: _hint });
+                    const _hint = _extractArgsHint(data.tool, data.input || {});
+                    const toolLabel = _TOOL_LABELS[data.tool] || `🔧 ${data.tool}`;
+                    if (_curRoundStepsEl) {
+                        const stepEl = document.createElement('div');
+                        stepEl.className = 'ctp-step ctp-step-running';
+                        stepEl.dataset.tool = data.tool;
+                        stepEl.innerHTML = `
+                            <div class="ctp-step-row1">
+                                <span class="ctp-step-dot"></span>
+                                <span class="ctp-step-label">${escHtml(toolLabel)}</span>
+                                <span class="ctp-step-status">…</span>
+                            </div>
+                            ${_hint ? `<div class="ctp-step-row2">${escHtml(_hint)}</div>` : ''}`;
+                        _curRoundStepsEl.appendChild(stepEl);
+                        // 确保当前轮展开，让步骤可见
+                        _curRoundEl?.classList.add('crp-round-expanded');
+                    }
 
                 } else if (eventName === 'tool_done') {
+                    // J-3b: 工具完成 — 更新步骤状态
                     const _dur = data.duration_ms || 0;
-                    _chatThinkingAppend({ step: 'done', tool: data.tool,
-                                         summary: data.summary || '', duration_ms: _dur });
-                    // 状态文字：最后一个工具完成后切换
+                    _stepCount++;
+                    _roundSteps.push({ tool: data.tool, summary: data.summary || '',
+                                       duration_ms: _dur, args_hint: data.args_hint || '' });
+                    if (_curRoundStepsEl) {
+                        const stepEl = [..._curRoundStepsEl.querySelectorAll('.ctp-step-running')]
+                            .reverse().find(el => el.dataset.tool === data.tool);
+                        if (stepEl) {
+                            stepEl.classList.remove('ctp-step-running');
+                            stepEl.classList.add('ctp-step-done');
+                            const st = stepEl.querySelector('.ctp-step-status');
+                            if (st) {
+                                const dur = _dur > 0 ? ` (${_dur}ms)` : '';
+                                st.textContent = data.summary ? `✓ ${data.summary.slice(0, 80)}${dur}` : `✓${dur}`;
+                            }
+                        }
+                    }
+                    // 更新整体标题
+                    if (_roundsHeader) _roundsHeader.textContent = `思考了 ${_roundCount} 轮 · ${_stepCount} 步`;
                     if (_typingBubble) _typingBubble.innerHTML = `<span class="chat-typing-text">正在生成答案…</span>`;
 
                 } else if (eventName === 'action') {
@@ -9637,6 +9717,26 @@ async function _sendChatStreaming(url, body) {
     if (_renderTimer) { clearTimeout(_renderTimer); _renderTimer = null; }
     bubbleEl.innerHTML = formatChatContent(fullText || '操作已完成。');
     bubbleWrapper.classList.remove('_streaming');
+
+    // J-3b: 收尾分组面板
+    if (_roundsPanel) {
+        // 最后一轮标记完成
+        if (_curRoundEl) {
+            _curRoundEl.classList.remove('crp-round-running');
+            _curRoundEl.classList.add('crp-round-done');
+            // 无工具调用的轮次折叠
+            if (_stepCount === 0 || !_curRoundStepsEl?.children.length) {
+                _curRoundEl.classList.remove('crp-round-expanded');
+            }
+        }
+        // 更新标题并折叠整体面板
+        if (_roundsHeader) {
+            const elapsed = _panelStartTime ? ((Date.now() - _panelStartTime) / 1000).toFixed(1) + 's' : '';
+            const stepPart = _stepCount > 0 ? ` · ${_stepCount} 步` : '';
+            _roundsHeader.textContent = `思考了 ${_roundCount} 轮${stepPart}${elapsed ? ' · ' + elapsed : ''}`;
+        }
+        _roundsPanel.classList.add('crp-collapsed');
+    }
     _chatThinkingFinish();
 
     // 追加工具栏和时间戳
@@ -9659,7 +9759,8 @@ async function _sendChatStreaming(url, body) {
     }
 
     scrollChatToBottom();
-    return { reply: fullText, action: finalAction, actions: finalActions, _streamed: true };
+    return { reply: fullText, action: finalAction, actions: finalActions,
+             thinkingSteps: _roundSteps, _streamed: true };
 }
 
 async function loadChatHistory() {
@@ -10974,25 +11075,72 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
     // 思考面板（assistant 且有历史思考步骤时，在气泡前插入）
     let thinkingHtml = '';
     if (role === 'assistant' && thinking && thinking.length > 0) {
-        const steps = thinking.map(s => {
-            const label = _TOOL_LABELS[s.tool] || `🔧 ${s.tool}`;
-            const hint = s.args_hint ? `<span class="ctp-step-hint">${escapeHtml(s.args_hint)}</span>` : '';
-            const dur = (s.duration_ms > 0) ? ` (${s.duration_ms}ms)` : '';
-            const summaryText = s.summary ? `✓ ${s.summary.slice(0, 80)}${dur}` : `✓${dur}`;
-            return `<div class="ctp-step ctp-step-done">
-                <div class="ctp-step-row1"><span class="ctp-step-dot"></span><span class="ctp-step-label">${escapeHtml(label)}</span><span class="ctp-step-status">${escapeHtml(summaryText)}</span></div>
-                ${s.args_hint ? `<div class="ctp-step-row2">${escapeHtml(s.args_hint)}</div>` : ''}
+        // J-3b: 兼容两种格式
+        // 旧格式（平铺）: [{tool, summary, duration_ms, args_hint}, ...]
+        // 新格式（分组）: [{round, reasoning, steps:[...]}, ...]
+        const isGrouped = thinking[0]?.round !== undefined;
+
+        if (isGrouped) {
+            // 新格式：按轮次渲染
+            const totalSteps = thinking.reduce((n, r) => n + (r.steps?.length || 0), 0);
+            const roundsHtml = thinking.map(r => {
+                const reasoning = r.reasoning || '';
+                const preview = reasoning.slice(0, 60).replace(/\n/g, ' ') + (reasoning.length > 60 ? '…' : '');
+                const stepsHtml = (r.steps || []).map(s => {
+                    const label = _TOOL_LABELS[s.tool] || `🔧 ${s.tool}`;
+                    const dur = s.duration_ms > 0 ? ` (${s.duration_ms}ms)` : '';
+                    const summary = s.summary ? `✓ ${s.summary.slice(0, 80)}${dur}` : `✓${dur}`;
+                    return `<div class="ctp-step ctp-step-done">
+                        <div class="ctp-step-row1">
+                            <span class="ctp-step-dot"></span>
+                            <span class="ctp-step-label">${escapeHtml(label)}</span>
+                            <span class="ctp-step-status">${escapeHtml(summary)}</span>
+                        </div>
+                        ${s.args_hint ? `<div class="ctp-step-row2">${escapeHtml(s.args_hint)}</div>` : ''}
+                    </div>`;
+                }).join('');
+                return `<div class="crp-round-group crp-round-done">
+                    <div class="crp-round-header" onclick="this.closest('.crp-round-group').classList.toggle('crp-round-expanded')">
+                        <span class="crp-round-dot"></span>
+                        <span class="crp-round-reasoning">${escapeHtml(preview || '（无推理文字）')}</span>
+                        <span class="crp-round-chevron">›</span>
+                    </div>
+                    <div class="crp-round-body">
+                        ${reasoning ? `<div class="crp-round-thinking">${escapeHtml(reasoning)}</div>` : ''}
+                        <div class="crp-round-steps">${stepsHtml}</div>
+                    </div>
+                </div>`;
+            }).join('');
+            thinkingHtml = `
+            <div class="crp-rounds-panel crp-collapsed">
+                <div class="crp-rounds-header">
+                    <span class="crp-rounds-icon">✦</span>
+                    <span class="crp-rounds-title">思考了 ${thinking.length} 轮 · ${totalSteps} 步</span>
+                    <span class="crp-rounds-toggle" onclick="this.closest('.crp-rounds-panel').classList.toggle('crp-collapsed')">∨</span>
+                </div>
+                <div class="crp-rounds-body">${roundsHtml}</div>
             </div>`;
-        }).join('');
-        thinkingHtml = `
-        <div class="chat-thinking-panel ctp-history">
-            <div class="ctp-header" onclick="this.closest('.chat-thinking-panel').classList.toggle('ctp-expanded')">
-                <span class="ctp-icon">✦</span>
-                <span class="ctp-title">思考了 ${thinking.length} 步</span>
-                <span class="ctp-toggle">∨</span>
-            </div>
-            <div class="ctp-body">${steps}</div>
-        </div>`;
+        } else {
+            // 旧格式（平铺）：向下兼容
+            const steps = thinking.map(s => {
+                const label = _TOOL_LABELS[s.tool] || `🔧 ${s.tool}`;
+                const dur = (s.duration_ms > 0) ? ` (${s.duration_ms}ms)` : '';
+                const summaryText = s.summary ? `✓ ${s.summary.slice(0, 80)}${dur}` : `✓${dur}`;
+                return `<div class="ctp-step ctp-step-done">
+                    <div class="ctp-step-row1"><span class="ctp-step-dot"></span><span class="ctp-step-label">${escapeHtml(label)}</span><span class="ctp-step-status">${escapeHtml(summaryText)}</span></div>
+                    ${s.args_hint ? `<div class="ctp-step-row2">${escapeHtml(s.args_hint)}</div>` : ''}
+                </div>`;
+            }).join('');
+            thinkingHtml = `
+            <div class="chat-thinking-panel ctp-history">
+                <div class="ctp-header" onclick="this.closest('.chat-thinking-panel').classList.toggle('ctp-expanded')">
+                    <span class="ctp-icon">✦</span>
+                    <span class="ctp-title">思考了 ${thinking.length} 步</span>
+                    <span class="ctp-toggle">∨</span>
+                </div>
+                <div class="ctp-body">${steps}</div>
+            </div>`;
+        }
     }
 
     msgEl.innerHTML = `
