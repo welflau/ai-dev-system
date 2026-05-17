@@ -535,12 +535,16 @@ async def _chat_stream_generator(
                 yield _sse("round_start", {"round": ev["round"]})
 
             elif etype == "thinking_delta":
+                # J-3b: 同步累積推理文字（保底：thinking_done 有時不觸發）
+                if _cur_round is not None:
+                    _cur_round["reasoning"] = (_cur_round.get("reasoning") or "") + (ev.get("delta") or "")
                 yield _sse("thinking_delta", {"delta": ev["delta"]})
 
             elif etype == "thinking_done":
-                if _cur_round is not None:
+                # thinking_done 若包含完整文字則覆蓋（更準確）
+                if _cur_round is not None and ev.get("text"):
                     _cur_round["reasoning"] = ev.get("text", "")
-                yield _sse("thinking_done", {"text": ev["text"]})
+                yield _sse("thinking_done", {"text": ev.get("text", "")})
 
             elif etype == "tool_start":
                 label = _TOOL_LABELS_PY.get(ev["tool"], f"🔧 {ev['tool']}")
@@ -1867,12 +1871,14 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
                 yield _sse("round_start", {"round": ev["round"]})
 
             elif etype == "thinking_delta":
+                if _cur_round_g is not None:
+                    _cur_round_g["reasoning"] = (_cur_round_g.get("reasoning") or "") + (ev.get("delta") or "")
                 yield _sse("thinking_delta", {"delta": ev["delta"]})
 
             elif etype == "thinking_done":
-                if _cur_round_g is not None:
+                if _cur_round_g is not None and ev.get("text"):
                     _cur_round_g["reasoning"] = ev.get("text", "")
-                yield _sse("thinking_done", {"text": ev["text"]})
+                yield _sse("thinking_done", {"text": ev.get("text", "")})
 
             elif etype == "tool_start":
                 label = _TOOL_LABELS_PY.get(ev["tool"], f"🔧 {ev['tool']}")

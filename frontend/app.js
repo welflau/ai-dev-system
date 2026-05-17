@@ -11102,7 +11102,7 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
                 return `<div class="crp-round-group crp-round-done">
                     <div class="crp-round-header" onclick="this.closest('.crp-round-group').classList.toggle('crp-round-expanded')">
                         <span class="crp-round-dot"></span>
-                        <span class="crp-round-reasoning">${escapeHtml(preview || '（无推理文字）')}</span>
+                        <span class="crp-round-reasoning ${!preview ? 'crp-round-reasoning-placeholder' : ''}">${escapeHtml(preview || '（整理回复中）')}</span>
                         <span class="crp-round-chevron">›</span>
                     </div>
                     <div class="crp-round-body">
