@@ -9490,6 +9490,8 @@ async function _sendChatStreaming(url, body) {
     let fullText = '';
     let finalAction = null;
     let finalActions = [];
+    // J-3: 推理链面板状态
+    let _reasoningPanel = null, _reasoningBody = null, _reasoningBuf = '';
 
     // 节流 Markdown 渲染：每 300ms 或每 200 字渲染一次，减少闪烁
     let _lastRenderLen = 0;
@@ -9563,6 +9565,34 @@ async function _sendChatStreaming(url, body) {
                         _scheduleRender();
                     }
 
+                } else if (eventName === 'thinking_delta') {
+                    // J-3: 推理链流式文本
+                    _reasoningBuf += data.delta || '';
+                    if (!_reasoningPanel) {
+                        _reasoningPanel = document.createElement('div');
+                        _reasoningPanel.className = 'chat-reasoning-panel';
+                        _reasoningPanel.innerHTML = `
+                            <div class="crp-header" onclick="this.closest('.chat-reasoning-panel').classList.toggle('crp-collapsed')">
+                                <span class="crp-icon">💭</span>
+                                <span class="crp-title">思考过程</span>
+                                <span class="crp-toggle">∨</span>
+                            </div>
+                            <div class="crp-body"></div>`;
+                        container.appendChild(_reasoningPanel);
+                        _reasoningBody = _reasoningPanel.querySelector('.crp-body');
+                    }
+                    if (_reasoningBody) _reasoningBody.textContent = _reasoningBuf;
+                    scrollChatToBottom();
+
+                } else if (eventName === 'thinking_done') {
+                    // J-3: 推理链完成，折叠并更新标题
+                    if (_reasoningPanel) {
+                        const t = _reasoningPanel.querySelector('.crp-title');
+                        if (t) t.textContent = `思考过程 · ${_reasoningBuf.length} 字`;
+                        _reasoningPanel.classList.add('crp-collapsed');
+                    }
+                    _reasoningBuf = '';
+
                 } else if (eventName === 'tool_start') {
                     // 状态文字：正在调用工具
                     if (_typingBubble) _typingBubble.innerHTML = `<span class="chat-typing-text">正在调用工具…</span>`;
@@ -9570,7 +9600,9 @@ async function _sendChatStreaming(url, body) {
                     _chatThinkingAppend({ step: 'start', tool: data.tool, args_hint: _hint });
 
                 } else if (eventName === 'tool_done') {
-                    _chatThinkingAppend({ step: 'done', tool: data.tool, summary: data.summary || '' });
+                    const _dur = data.duration_ms || 0;
+                    _chatThinkingAppend({ step: 'done', tool: data.tool,
+                                         summary: data.summary || '', duration_ms: _dur });
                     // 状态文字：最后一个工具完成后切换
                     if (_typingBubble) _typingBubble.innerHTML = `<span class="chat-typing-text">正在生成答案…</span>`;
 
