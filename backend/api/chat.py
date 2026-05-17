@@ -504,6 +504,9 @@ async def _chat_stream_generator(
     full_text = ""
     final_action = None
     thinking_steps = []
+    # J-3b: 分组结构（最终保存到 DB，支持历史分组渲染）
+    _thinking_rounds: list = []   # [{round, reasoning, steps:[]}]
+    _cur_round: dict | None = None
 
     # 保存用户消息（异步 fire-and-forget，不阻塞 LLM 响应）
     import asyncio as _asyncio
@@ -524,6 +527,21 @@ async def _chat_stream_generator(
                 full_text += ev["delta"]
                 yield _sse("text_delta", {"delta": ev["delta"]})
 
+            elif etype == "round_start":
+                # J-3b: 新轮开始，追加上一轮（已完成）到列表
+                if _cur_round is not None:
+                    _thinking_rounds.append(_cur_round)
+                _cur_round = {"round": ev["round"], "reasoning": "", "steps": []}
+                yield _sse("round_start", {"round": ev["round"]})
+
+            elif etype == "thinking_delta":
+                yield _sse("thinking_delta", {"delta": ev["delta"]})
+
+            elif etype == "thinking_done":
+                if _cur_round is not None:
+                    _cur_round["reasoning"] = ev.get("text", "")
+                yield _sse("thinking_done", {"text": ev["text"]})
+
             elif etype == "tool_start":
                 label = _TOOL_LABELS_PY.get(ev["tool"], f"🔧 {ev['tool']}")
                 yield _sse("tool_start", {"tool": ev["tool"], "label": label, "input": ev.get("input", {})})
@@ -532,8 +550,11 @@ async def _chat_stream_generator(
                 summary     = ev.get("summary", "")
                 args_hint   = ev.get("args_hint", "")
                 duration_ms = ev.get("duration_ms", 0)
-                thinking_steps.append({"tool": ev["tool"], "args_hint": args_hint,
-                                        "summary": summary, "duration_ms": duration_ms})
+                step = {"tool": ev["tool"], "args_hint": args_hint,
+                        "summary": summary, "duration_ms": duration_ms}
+                thinking_steps.append(step)
+                if _cur_round is not None:
+                    _cur_round["steps"].append(step)
                 yield _sse("tool_done", {"tool": ev["tool"], "summary": summary,
                                          "args_hint": args_hint, "duration_ms": duration_ms})
 
@@ -552,16 +573,21 @@ async def _chat_stream_generator(
                 return
 
             elif etype == "message_done":
-                # chat_stream 已把 executor 结果附在这里
-                thinking_steps = ev.get("thinking_steps") or thinking_steps
+                # J-3b: 追加最后一轮，构建分组格式存 DB
+                if _cur_round is not None:
+                    _thinking_rounds.append(_cur_round)
+                    _cur_round = None
+                # 优先用分组格式，降级到平铺格式（向下兼容）
+                save_thinking = _thinking_rounds if _thinking_rounds else (
+                    ev.get("thinking_steps") or thinking_steps or None
+                )
                 final_action = final_action or ev.get("action")
-                # 先保存消息再 yield done，防止前端关闭连接后 DB 写入被取消
                 if not full_text:
                     full_text = "操作已完成。"
                 try:
                     await _save_chat_message(project_id, "assistant", full_text,
                                              action=final_action, session_id=_sid,
-                                             thinking=thinking_steps or None)
+                                             thinking=save_thinking)
                 except Exception as _se:
                     logger.warning("流式消息保存失败: %s", _se)
                 yield _sse("message_done", {"rounds": ev.get("rounds", 1)})
@@ -1802,6 +1828,9 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
     full_text = ""
     final_action = None
     thinking_steps = []
+    # J-3b: 分组结构
+    _thinking_rounds_g: list = []
+    _cur_round_g: dict | None = None
 
     # DB 可能被 Orchestrator 鎖住，讀失敗時用空列表繼續（不阻斷聊天）
     try:
@@ -1832,12 +1861,17 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
                 yield _sse("text_delta", {"delta": ev["delta"]})
 
             elif etype == "round_start":
+                if _cur_round_g is not None:
+                    _thinking_rounds_g.append(_cur_round_g)
+                _cur_round_g = {"round": ev["round"], "reasoning": "", "steps": []}
                 yield _sse("round_start", {"round": ev["round"]})
 
             elif etype == "thinking_delta":
                 yield _sse("thinking_delta", {"delta": ev["delta"]})
 
             elif etype == "thinking_done":
+                if _cur_round_g is not None:
+                    _cur_round_g["reasoning"] = ev.get("text", "")
                 yield _sse("thinking_done", {"text": ev["text"]})
 
             elif etype == "tool_start":
@@ -1848,8 +1882,11 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
                 summary     = ev.get("summary", "")
                 args_hint   = ev.get("args_hint", "")
                 duration_ms = ev.get("duration_ms", 0)
-                thinking_steps.append({"tool": ev["tool"], "args_hint": args_hint,
-                                        "summary": summary, "duration_ms": duration_ms})
+                step = {"tool": ev["tool"], "args_hint": args_hint,
+                        "summary": summary, "duration_ms": duration_ms}
+                thinking_steps.append(step)
+                if _cur_round_g is not None:
+                    _cur_round_g["steps"].append(step)
                 yield _sse("tool_done", {"tool": ev["tool"], "summary": summary,
                                          "args_hint": args_hint, "duration_ms": duration_ms})
 
@@ -1867,14 +1904,19 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
                 return
 
             elif etype == "message_done":
-                thinking_steps = ev.get("thinking_steps") or thinking_steps
+                if _cur_round_g is not None:
+                    _thinking_rounds_g.append(_cur_round_g)
+                    _cur_round_g = None
+                save_thinking_g = _thinking_rounds_g if _thinking_rounds_g else (
+                    ev.get("thinking_steps") or thinking_steps or None
+                )
                 final_action = final_action or ev.get("action")
                 if not full_text:
                     full_text = "操作已完成。"
                 try:
                     await _save_chat_message("__global__", "assistant", full_text,
                                              action=final_action, session_id=_sid,
-                                             thinking=thinking_steps or None)
+                                             thinking=save_thinking_g)
                 except Exception as _se:
                     logger.warning("全局流式消息保存失败: %s", _se)
                 yield _sse("message_done", {"rounds": ev.get("rounds", 1)})
