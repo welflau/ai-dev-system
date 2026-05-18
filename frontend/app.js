@@ -11823,9 +11823,9 @@ function buildCodeFileCard(lang, code) {
 
     // 预览：取前 3 条非空行（跳过空行，避免代码顶部/底部出现大块空白）
     const nonEmptyLines = lines.filter(l => l.trim() !== '');
-    const previewLines = nonEmptyLines.slice(0, 3).join('\n');
+    const previewLines = lines.slice(0, 3).join('\n');   // 保留原始前3行（含空行）
     const previewEscaped = escapeHtml(previewLines);
-    const hiddenCount = lineCount - Math.min(3, nonEmptyLines.length);
+    const hiddenCount = Math.max(0, lineCount - 3);
 
     // 完整代码（转义）
     const fullEscaped = escapeHtml(code);
