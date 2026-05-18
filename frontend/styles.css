@@ -6023,6 +6023,10 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
     border-top: 1px solid var(--border);
     position: relative;
     overflow: hidden;
+    padding: 0 !important;
+    min-height: 0 !important;
+    height: auto !important;
+    box-sizing: border-box;
 }
 
 /* 覆盖 hljs CDN 的 pre code.hljs { padding: 1em } — 避免撑高预览区 */
