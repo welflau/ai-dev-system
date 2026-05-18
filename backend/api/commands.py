@@ -304,15 +304,19 @@ async def _cmd_ue_bp_gen(args: str, project_id: Optional[str], context: dict) ->
 
 
 async def _cmd_ue_level(args: str, project_id: Optional[str], context: dict) -> CommandResult:
-    """生成关卡"""
+    """生成關卡布局（B-2 LLM 生成 + Python 橋接）"""
     if not project_id:
         return CommandResult(success=False, output="❌ /ue-level 需要在项目内使用")
     if not args.strip():
-        return CommandResult(success=False, output="用法：/ue-level <描述，如：8x8 地板 + 4 盏灯 + NavMesh>")
-    try:
-        from actions.ue_level_gen import LevelGenAction
-        action = LevelGenAction()
-        result = await action.run({"description": args.strip(), "project_id": project_id})
-        return CommandResult(success=result.success, output=result.message or (result.error or ""))
-    except ImportError:
-        return CommandResult(success=False, output="⚠️ LevelGenAction 尚未实现（待 B-2 完成）")
+        return CommandResult(
+            success=False,
+            output="用法：/ue-level <描述>\n例：/ue-level 8×8地面，四角放燈光，中央出生點，全NavMesh",
+        )
+    from actions.ue_level_gen import LevelGenAction
+    action = LevelGenAction()
+    result = await action.run({"description": args.strip(), "project_id": project_id})
+    output = result.message or result.error or ""
+    if result.data and result.data.get("generated_code"):
+        code = result.data["generated_code"]
+        output += f"\n\n**生成的代碼：**\n```python\n{code[:1000]}\n```"
+    return CommandResult(success=result.success, output=output, data=result.data)

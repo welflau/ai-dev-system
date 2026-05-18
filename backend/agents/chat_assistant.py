@@ -46,6 +46,7 @@ from actions.chat.read_local_file import ReadLocalFileAction               # 读
 from actions.chat.ue_call import UECallAction                              # UE Editor UCP 控制
 from actions.ue_run_python import UERunPythonAction                        # B-0 UE Python 橋接
 from actions.ue_blueprint_gen import BlueprintGenAction                    # B-1 Blueprint 生成
+from actions.ue_level_gen import LevelGenAction                            # B-2 關卡生成
 from actions.chat.install_project_skill import InstallProjectSkillAction   # 项目 Skill 安装/卸载
 from actions.chat.browse_marketplace import BrowseMarketplaceAction        # 浏览/安装/卸载市场 Skill
 from actions.chat.glob_search import GlobAction, GrepAction, ListDirectoryAction  # 文件系统搜索
@@ -110,6 +111,7 @@ _TOOL_LABELS_PY: dict = {
     "ue_call": "🎮 UE Editor 操作",
     "ue_run_python": "🐍 UE Python 執行",
     "ue_blueprint_gen": "🔷 生成 Blueprint",
+    "ue_level_gen":     "🗺 生成關卡布局",
     # 新增工具（对标 Gemini CLI）
     "glob": "🔍 查找文件",
     "grep": "🔎 搜索文件内容",
@@ -354,6 +356,7 @@ class ChatAssistantAgent(BaseAgent):
         UECallAction,                  # UE Editor UCP 控制（仅 engine:ue5/ue4）
         UERunPythonAction,             # B-0 UE Python 橋接
         BlueprintGenAction,            # B-1 Blueprint 生成
+        LevelGenAction,                # B-2 關卡生成
         InstallProjectSkillAction,     # 对话中为项目安装/卸载 Marketplace Skill
         BrowseMarketplaceAction,       # 浏览/安装/卸载市场 Skill（系统级+项目级）
         LoadSkillAction,               # v0.20 主动触发：按需加载 Skill 全文
