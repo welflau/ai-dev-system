@@ -6022,7 +6022,6 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
 .code-card-preview {
     border-top: 1px solid var(--border);
     position: relative;
-    flex: 1;
 }
 
 .code-card-pre {
