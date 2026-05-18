@@ -29,6 +29,8 @@ _FLAG_DEFAULTS: Dict[str, Any] = {
     "verbose":       False,
     "max_turns":     50,
     "budget_tokens": 300_000,
+    "thinking_mode": "adaptive",   # A-2: adaptive / on / off
+    "thinking_budget": 8000,       # A-2: thinking token 预算（API 要求 >= 1024）
 }
 
 # 合法值範圍
@@ -38,6 +40,8 @@ _FLAG_VALIDATORS = {
     "verbose":       lambda v: v in (True, False, "on", "off", "true", "false", "1", "0"),
     "max_turns":     lambda v: isinstance(v, (int, str)) and 1 <= int(v) <= 200,
     "budget_tokens": lambda v: isinstance(v, (int, str)) and 10_000 <= int(v) <= 2_000_000,
+    "thinking_mode": lambda v: str(v).lower() in ("adaptive", "on", "off", "enabled", "disabled"),
+    "thinking_budget": lambda v: isinstance(v, (int, str)) and 1024 <= int(v) <= 100_000,
 }
 
 
@@ -51,8 +55,16 @@ def _parse_value(key: str, raw):
     """把字符串值轉為對應類型"""
     if key in ("compaction", "nudge", "verbose"):
         return _parse_bool(raw)
-    if key in ("max_turns", "budget_tokens"):
+    if key in ("max_turns", "budget_tokens", "thinking_budget"):
         return int(raw)
+    if key == "thinking_mode":
+        v = str(raw).lower()
+        # 归一化：on/enabled → "on"，off/disabled → "off"
+        if v in ("on", "enabled", "true", "1"):
+            return "on"
+        if v in ("off", "disabled", "false", "0"):
+            return "off"
+        return "adaptive"
     return raw
 
 
@@ -76,7 +88,7 @@ class SetSessionFlagAction(ActionBase):
 
     @property
     def description(self) -> str:
-        return "設置本會話的 AI 行為開關（compaction / nudge / verbose / max_turns / budget_tokens）"
+        return "設置本會話的 AI 行為開關（compaction / nudge / thinking_mode / max_turns / budget_tokens 等）"
 
     @property
     def tool_schema(self) -> Dict[str, Any]:

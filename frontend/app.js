@@ -12163,6 +12163,28 @@ function _showSlashSuggestions(cmds) {
     box.style.display = 'block';
 }
 
+// ultrathink：設置最大 thinking budget，顯示視覺提示
+async function _activateUltrathink() {
+    showToast('⚡ ultrathink 已啟動 — 最大推理預算', 'info');
+    try {
+        const url = currentProjectId
+            ? `/projects/${currentProjectId}/commands/think`
+            : `/commands/think`;
+        await originalApi(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ args: 'on', session_id: _currentChatSessionId,
+                                   thinking_budget: 32000 }),
+        });
+        // 前端標記輸入框，視覺提示進入 ultrathink 模式
+        const input = document.getElementById('chatInput');
+        if (input) {
+            input.style.borderColor = 'rgba(163,113,247,0.8)';
+            setTimeout(() => { if (input) input.style.borderColor = ''; }, 3000);
+        }
+    } catch(e) { /* ignore */ }
+}
+
 function _hideSlashSuggestions() {
     const box = document.getElementById('slashSuggestBox');
     if (box) box.style.display = 'none';
@@ -12276,6 +12298,10 @@ function handleChatKeydown(e) {
             _handleSlashTest(val);
             if (input) input.value = '';
             return;
+        }
+        // ultrathink 關鍵字 → 最大 thinking budget（A-2）
+        if (/\bultrathink\b/i.test(val)) {
+            _activateUltrathink();
         }
         // 通用斜杠命令路由
         if (val.startsWith('/') && val.length > 1 && !val.startsWith('/ ')) {

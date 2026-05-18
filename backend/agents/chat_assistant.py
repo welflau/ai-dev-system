@@ -59,6 +59,22 @@ from actions.chat.create_github_repo import CreateGithubRepoAction         # Git
 logger = logging.getLogger("agent.chat_assistant")
 
 
+def _resolve_thinking_enabled(session_id: str, model_id: str) -> bool:
+    """A-2: 三態 thinking 解析
+    - thinking_mode=adaptive → 模型支持才開啟（默認）
+    - thinking_mode=on       → 強制開啟（模型不支持時降級）
+    - thinking_mode=off      → 強制關閉
+    """
+    from llm_client import _model_supports_thinking
+    mode = (get_session_flag(session_id, "thinking_mode") or "adaptive").lower()
+    if mode == "off":
+        return False
+    if mode == "on":
+        return True   # 強制開啟，不判斷模型支持
+    # adaptive（默認）
+    return _model_supports_thinking(model_id)
+
+
 # 不对 LLM 暴露为 tool 的 Action 名（只能由后端内部调用）
 _INTERNAL_ONLY_ACTIONS = {"create_requirement"}
 
@@ -533,7 +549,8 @@ class ChatAssistantAgent(BaseAgent):
             budget=budget,
             hooks=hook_registry,
             max_rounds=self.max_react_loop,
-            enable_thinking=_model_supports_thinking(llm_client.model),
+            enable_thinking=_resolve_thinking_enabled(_sid, llm_client.model),
+            thinking_budget=max(1024, get_session_flag(_sid, "thinking_budget") or 8000),
         )
 
         set_llm_context(project_id=project["id"], agent_type=self.agent_type, action="chat_stream")
@@ -677,7 +694,8 @@ class ChatAssistantAgent(BaseAgent):
             budget=budget,
             hooks=hook_registry,
             max_rounds=self.max_react_loop,
-            enable_thinking=_model_supports_thinking(llm_client.model),
+            enable_thinking=_resolve_thinking_enabled(_sid, llm_client.model),
+            thinking_budget=max(1024, get_session_flag(_sid, "thinking_budget") or 8000),
         )
 
         set_llm_context(agent_type=self.agent_type, action="global_chat_stream")
@@ -777,11 +795,14 @@ class ChatAssistantAgent(BaseAgent):
         self,
         messages: List[Dict],
     ) -> str:
-        """用 LLM 把较早的对话历史压缩成一条摘要。
+        """委托到 BaseAgent.compact_history（A-2 下沉）"""
+        return await self.compact_history(messages)
 
-        摘要以 [对话历史摘要] 标注，LLM 下次调用时可以读到历史上下文，
-        但不会被完整的原始消息占用 context window。
-        """
+    async def _compact_history_with_llm_legacy(
+        self,
+        messages: List[Dict],
+    ) -> str:
+        """原实现保留（备用）"""
         if not messages:
             return ""
         try:
