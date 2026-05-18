@@ -6022,8 +6022,7 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
 .code-card-preview {
     border-top: 1px solid var(--border);
     position: relative;
-    height: fit-content;
-    min-height: 0;
+    overflow: hidden;
 }
 
 /* 覆盖 hljs CDN 的 pre code.hljs { padding: 1em } — 避免撑高预览区 */
@@ -6047,9 +6046,12 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
     background: transparent !important;
     overflow-x: auto;
     white-space: pre;
-    min-height: 0 !important;
-    height: auto !important;
-    display: block !important;
+}
+
+/* 预览区的 pre 限制高度为 3 行 + 上下padding（避免被全量代码撑高）*/
+.code-card-preview .code-card-pre {
+    max-height: calc(3 * 1.6 * 12px + 12px);  /* 3行×行高 + 上下padding */
+    overflow: hidden;
 }
 
 .code-card-more {
