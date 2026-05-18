@@ -6025,8 +6025,8 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
     overflow: hidden;
     padding: 0 !important;
     min-height: 0 !important;
-    height: auto !important;
-    flex: 0 0 auto !important;  /* 禁止 flex 拉伸 */
+    /* height 由 buildCodeFileCard 的 inline style 精確控制，不用 !important 覆蓋它 */
+    flex: 0 0 auto !important;
     box-sizing: border-box;
 }
 
