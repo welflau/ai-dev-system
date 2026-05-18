@@ -11836,8 +11836,9 @@ function buildCodeFileCard(lang, code) {
         : '';
 
     // 預計算 preview 高度，style 寫死避免 flex 父容器撐高
+    // 19.2 = font-size(12) * line-height(1.6)；+16 buffer for rounding/font
     const previewLineCount = previewLines.split('\n').length;
-    const previewH = Math.ceil(previewLineCount * 19.2 + 12 + (hiddenCount > 0 ? 26 : 0));
+    const previewH = Math.ceil(previewLineCount * 19.2 + 14 + (hiddenCount > 0 ? 32 : 0) + 6);
 
     return `<div class="code-file-card" id="${cardId}">
     <div class="code-card-header" onclick="toggleCodeCard('${cardId}')">
