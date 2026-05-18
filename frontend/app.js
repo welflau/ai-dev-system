@@ -11860,9 +11860,7 @@ function buildCodeFileCard(lang, code) {
       + '</div>'
       + (hiddenCount > 0 ? `<div class="code-card-more">…还有 ${hiddenCount} 行，点击展开</div>` : '')
     }</div>
-    <div class="code-card-full" id="${cardId}_full">
-        <pre class="code-card-pre"><code class="language-${lang}">${fullEscaped}</code></pre>
-    </div>
+    <div class="code-card-full" id="${cardId}_full"><pre class="code-card-pre"><code class="language-${lang}">${fullEscaped}</code></pre></div>
 </div>`;
 }
 
