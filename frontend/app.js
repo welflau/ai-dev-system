@@ -11804,7 +11804,8 @@ function _inlineFormat(text) {
 
 /** 生成可折叠的代码文件卡片 */
 function buildCodeFileCard(lang, code) {
-    // 去掉前后空行，避免代码卡顶部/底部出现多余空白
+    // 統一換行符（Windows \r\n → \n），去掉首尾空行
+    code = code.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
     code = code.replace(/^\n+/, '').replace(/\n+$/, '');
     const lines = code.split('\n');
     const lineCount = lines.length;
