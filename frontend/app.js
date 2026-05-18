@@ -9649,6 +9649,13 @@ async function _sendChatStreaming(url, body) {
                     if (_typingBubble) _typingBubble.innerHTML = `<span class="chat-typing-text">正在调用工具…</span>`;
                     const _hint = _extractArgsHint(data.tool, data.input || {});
                     const toolLabel = _TOOL_LABELS[data.tool] || `🔧 ${data.tool}`;
+                    // 无推理文字时，用第一个工具标签作为本轮说明
+                    const _reasoningEl2 = _curRoundEl?.querySelector('.crp-round-reasoning');
+                    if (_reasoningEl2 && _reasoningEl2.classList.contains('crp-reasoning-hidden')) {
+                        _reasoningEl2.textContent = toolLabel;
+                        _reasoningEl2.classList.remove('crp-reasoning-hidden');
+                        _reasoningEl2.classList.add('crp-round-reasoning-placeholder');
+                    }
                     if (_curRoundStepsEl) {
                         const stepEl = document.createElement('div');
                         stepEl.className = 'ctp-step ctp-step-running';
@@ -11184,7 +11191,7 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
                 return `<div class="crp-round-group crp-round-done">
                     <div class="crp-round-header" onclick="this.closest('.crp-round-group').classList.toggle('crp-round-expanded')">
                         <span class="crp-round-dot"></span>
-                        <span class="crp-round-reasoning ${!preview ? 'crp-reasoning-hidden' : ''}">${escapeHtml(preview)}</span>
+                        <span class="crp-round-reasoning ${!preview ? 'crp-round-reasoning-placeholder' : ''}">${escapeHtml(preview || (r.steps?.[0] ? (_TOOL_LABELS[r.steps[0].tool] || r.steps[0].tool) : ''))}</span>
                         <span class="crp-round-chevron">›</span>
                     </div>
                     <div class="crp-round-body">
