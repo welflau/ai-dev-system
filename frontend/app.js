@@ -10362,25 +10362,10 @@ function _chatThinkingFinish() { _globalThinking.finish();
  * 发送聊天消息
  */
 async function sendChatMessage() {
-    if (chatSending || (chatMode !== 'global' && chatMode !== 'group')) return;
-
-    // 记住发送时的 context，回调时若已切换则丢弃响应（防止跨 context 串台）
-    const _sendContextId = currentProjectId;
-
     const input = document.getElementById('chatInput');
-    const message = input.value.trim();
-    const images = [...chatPendingImages]; // 拷贝一份，防止发送中被修改
-    const docs = [...chatPendingDocs];     // 拷贝文档列表
+    const message = input?.value.trim() || '';
 
-    // 将文档内容追加到消息末尾
-    let fullMessage = message;
-    for (const doc of docs) {
-        fullMessage += `\n\n【附件：${doc.filename}】\n${doc.text}`;
-    }
-
-    if (!fullMessage.trim() && images.length === 0) return;
-
-    // 发送前将内容存入历史（去重：与最近一条相同则不存）
+    // 发送前将内容存入历史（守卫之前执行，所有模式均保存）
     if (message && message !== _chatInputHistory[0]) {
         _chatInputHistory.unshift(message);
         if (_chatInputHistory.length > 50) _chatInputHistory.pop();
@@ -10388,6 +10373,21 @@ async function sendChatMessage() {
     }
     _chatHistoryIdx = -1;
     _chatInputDraft = '';
+
+    if (chatSending || (chatMode !== 'global' && chatMode !== 'group')) return;
+
+    // 记住发送时的 context，回调时若已切换则丢弃响应（防止跨 context 串台）
+    const _sendContextId = currentProjectId;
+
+    const images = [...chatPendingImages];
+    const docs = [...chatPendingDocs];
+
+    let fullMessage = message;
+    for (const doc of docs) {
+        fullMessage += `\n\n【附件：${doc.filename}】\n${doc.text}`;
+    }
+
+    if (!fullMessage.trim() && images.length === 0) return;
 
     chatSending = true;
     _refreshHistoryRunningState();  // 历史面板若已打开，更新 Running 状态
