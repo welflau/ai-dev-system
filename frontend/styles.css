@@ -6026,6 +6026,7 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
     padding: 0 !important;
     min-height: 0 !important;
     height: auto !important;
+    flex: 0 0 auto !important;  /* 禁止 flex 拉伸 */
     box-sizing: border-box;
 }
 
