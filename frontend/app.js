@@ -11835,6 +11835,10 @@ function buildCodeFileCard(lang, code) {
         ? `<button class="code-card-repo-btn" onclick="openRepoFileFromChat('${escapeHtml(detectedFile)}')" title="在仓库中打开">📂 仓库</button>`
         : '';
 
+    // 預計算 preview 高度，style 寫死避免 flex 父容器撐高
+    const previewLineCount = previewLines.split('\n').length;
+    const previewH = Math.ceil(previewLineCount * 19.2 + 12 + (hiddenCount > 0 ? 26 : 0));
+
     return `<div class="code-file-card" id="${cardId}">
     <div class="code-card-header" onclick="toggleCodeCard('${cardId}')">
         <div class="code-card-left">
@@ -11849,7 +11853,7 @@ function buildCodeFileCard(lang, code) {
             <button class="code-card-copy-btn" onclick="copyCodeCard('${cardId}')" title="复制代码">⎘</button>
         </div>
     </div>
-    <div class="code-card-preview" id="${cardId}_preview">
+    <div class="code-card-preview" id="${cardId}_preview" style="height:${previewH}px">
         <div class="code-card-lines">${previewLines.split('\n').map(l => `<div class="code-card-line">${escapeHtml(l)}</div>`).join('')}</div>
         ${hiddenCount > 0 ? `<div class="code-card-more">…还有 ${hiddenCount} 行，点击展开</div>` : ''}
     </div>
