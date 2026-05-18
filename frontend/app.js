@@ -9610,7 +9610,7 @@ async function _sendChatStreaming(url, body) {
                     _curRoundEl.innerHTML = `
                         <div class="crp-round-header" onclick="this.closest('.crp-round-group').classList.toggle('crp-round-expanded')">
                             <span class="crp-round-dot"></span>
-                            <span class="crp-round-reasoning crp-round-reasoning-placeholder">正在推理…</span>
+                            <span class="crp-round-reasoning crp-round-reasoning-placeholder crp-reasoning-hidden"></span>
                             <span class="crp-round-chevron">›</span>
                         </div>
                         <div class="crp-round-body">
@@ -9628,18 +9628,19 @@ async function _sendChatStreaming(url, body) {
                     if (_curRoundThinkingEl) _curRoundThinkingEl.textContent = _curRoundBuf;
                     // 实时更新推理摘要（取前 50 字）
                     const _reasoningEl = _curRoundEl?.querySelector('.crp-round-reasoning');
-                    if (_reasoningEl) _reasoningEl.textContent = _curRoundBuf;
+                    if (_reasoningEl) {
+                        _reasoningEl.textContent = _curRoundBuf;
+                        _reasoningEl.classList.remove('crp-reasoning-hidden', 'crp-round-reasoning-placeholder');
+                    }
                     scrollChatToBottom();
 
                 } else if (eventName === 'thinking_done') {
-                    // J-3b: 当前轮推理完成，更新摘要
+                    // J-3b: 当前轮推理完成
                     const fullText_ = data.text || _curRoundBuf;
-                    if (_curRoundThinkingEl) _curRoundThinkingEl.textContent = fullText_;
                     const _reasoningEl = _curRoundEl?.querySelector('.crp-round-reasoning');
-                    if (_reasoningEl) {
-                        const preview = fullText_;
-                        _reasoningEl.textContent = preview + (fullText_.length > 60 ? '…' : '');
-                        _reasoningEl.classList.remove('crp-round-reasoning-placeholder');
+                    if (_reasoningEl && fullText_) {
+                        _reasoningEl.textContent = fullText_;
+                        _reasoningEl.classList.remove('crp-reasoning-hidden', 'crp-round-reasoning-placeholder');
                     }
                     _curRoundBuf = '';
 
@@ -11108,7 +11109,7 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
                 return `<div class="crp-round-group crp-round-done">
                     <div class="crp-round-header" onclick="this.closest('.crp-round-group').classList.toggle('crp-round-expanded')">
                         <span class="crp-round-dot"></span>
-                        <span class="crp-round-reasoning ${!preview ? 'crp-round-reasoning-placeholder' : ''}">${escapeHtml(preview || '（整理回复中）')}</span>
+                        <span class="crp-round-reasoning ${!preview ? 'crp-reasoning-hidden' : ''}">${escapeHtml(preview)}</span>
                         <span class="crp-round-chevron">›</span>
                     </div>
                     <div class="crp-round-body">

@@ -8252,6 +8252,7 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
     white-space: pre-wrap;
 }
 .crp-round-reasoning-placeholder { opacity: 0.5; }
+.crp-reasoning-hidden { display: none; }
 
 /* 展开指示 */
 .crp-round-chevron {
