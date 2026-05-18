@@ -11849,7 +11849,7 @@ function buildCodeFileCard(lang, code) {
         </div>
     </div>
     <div class="code-card-preview" id="${cardId}_preview">
-        <pre class="code-card-pre"><code>${previewEscaped}</code></pre>
+        <div class="code-card-lines">${previewLines.split('\n').map(l => `<div class="code-card-line">${escapeHtml(l)}</div>`).join('')}</div>
         ${hiddenCount > 0 ? `<div class="code-card-more">…还有 ${hiddenCount} 行，点击展开</div>` : ''}
     </div>
     <div class="code-card-full" id="${cardId}_full">

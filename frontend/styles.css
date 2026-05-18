@@ -6048,10 +6048,17 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
     white-space: pre;
 }
 
-/* 预览区的 pre 限制高度为 3 行 + 上下padding（避免被全量代码撑高）*/
-.code-card-preview .code-card-pre {
-    max-height: calc(3 * 1.6 * 12px + 12px);  /* 3行×行高 + 上下padding */
-    overflow: hidden;
+/* 预览区：用 div 逐行渲染，完全绕开 <pre> 和 hljs */
+.code-card-lines {
+    padding: 6px 12px;
+}
+.code-card-line {
+    font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text-secondary);
+    white-space: pre;
+    min-height: 1.6em;
 }
 
 .code-card-more {
