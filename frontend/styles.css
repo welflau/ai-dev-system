@@ -8758,3 +8758,36 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
     font-weight: 600;
     margin-left: 4px;
 }
+
+/* ==================== 斜杠命令系统 ==================== */
+.slash-suggest-box {
+    position: absolute;
+    bottom: 100%; left: 0; right: 0;
+    background: var(--bg-elevated, #1a202c);
+    border: 1px solid var(--border, #2d3748);
+    border-radius: 8px 8px 0 0;
+    max-height: 240px;
+    overflow-y: auto;
+    z-index: 100;
+    box-shadow: 0 -4px 16px rgba(0,0,0,0.3);
+}
+.slash-suggest-item {
+    display: flex; align-items: baseline; gap: 8px;
+    padding: 7px 12px; cursor: pointer;
+    font-size: 12px; transition: background 0.1s;
+}
+.slash-suggest-item:hover, .slash-suggest-active {
+    background: rgba(163,113,247,0.12);
+}
+.slash-cmd-name { color: rgba(163,113,247,0.9); font-weight: 600; flex-shrink: 0; }
+.slash-cmd-hint { color: rgba(99,179,237,0.7); font-size: 11px; flex-shrink: 0; }
+.slash-cmd-desc { color: var(--text-muted, #718096); font-size: 11px; flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+
+/* 命令执行结果 */
+.system-msg { justify-content: flex-start !important; }
+.cmd-executing { padding: 6px 12px; color: var(--text-muted); font-size: 12px; font-style: italic; }
+.cmd-result { padding: 8px 12px; border-radius: 6px; font-size: 12px; background: rgba(0,0,0,0.15); border-left: 3px solid; max-width: 700px; }
+.cmd-ok  { border-color: rgba(72,187,120,0.6); }
+.cmd-fail { border-color: rgba(252,129,129,0.6); }
+.cmd-label { font-weight: 600; display: block; margin-bottom: 4px; }
+.cmd-output { color: var(--text-secondary, #a0aec0); line-height: 1.6; }

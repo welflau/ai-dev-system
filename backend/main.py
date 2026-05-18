@@ -295,6 +295,7 @@ from api.mcp_status import router as mcp_status_router
 from api.skills import router as skills_router
 from api.traits import router as traits_router
 from api.ue_engines import router as ue_engines_router
+from api.commands import router as commands_router
 from api.ue_framework import router as ue_framework_router
 from api.image_gen import router as image_gen_router
 from api.art_assets import router as art_assets_router
@@ -323,6 +324,7 @@ app.include_router(ue_engines_router)
 app.include_router(ue_framework_router)
 app.include_router(image_gen_router)
 app.include_router(art_assets_router)
+app.include_router(commands_router)
 app.include_router(efficiency_router)
 app.include_router(competitor_router)
 app.include_router(agent_test_router)

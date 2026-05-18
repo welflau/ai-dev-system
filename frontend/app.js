@@ -12062,6 +12062,122 @@ const _AGENT_TEST_LIST = [
     { id: 'ImageProcessor',label: '🎨 ImageProcessor', desc: 'LightAI 生图 API' },
 ];
 
+// ==================== 斜杠命令系统 ====================
+
+let _slashCommands = [];   // 从后端加载的命令列表缓存
+
+async function _loadSlashCommands() {
+    if (_slashCommands.length > 0) return _slashCommands;
+    try {
+        const data = await api('/commands');
+        _slashCommands = data.commands || [];
+    } catch {}
+    return _slashCommands;
+}
+
+async function _handleSlashCommand(input) {
+    const parts = input.slice(1).split(/\s+/);
+    const name = parts[0].toLowerCase();
+    const args = parts.slice(1).join(' ');
+
+    // 显示执行中提示
+    const container = document.getElementById('chatMessages');
+    const bubble = document.createElement('div');
+    bubble.className = 'chat-msg system-msg';
+    bubble.innerHTML = `<div class="cmd-executing">⚡ 执行 <code>/${name}</code>${args ? ' ' + escapeHtml(args) : ''}…</div>`;
+    container?.appendChild(bubble);
+    scrollChatToBottom();
+
+    try {
+        const url = currentProjectId
+            ? `/projects/${currentProjectId}/commands/${name}`
+            : `/commands/${name}`;
+        const resp = await originalApi(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ args, session_id: _currentChatSessionId }),
+        });
+
+        bubble.remove();
+
+        // 渲染结果
+        const out = document.createElement('div');
+        out.className = 'chat-msg system-msg';
+        const icon = resp.success ? '✅' : '❌';
+        out.innerHTML = `<div class="cmd-result ${resp.success ? 'cmd-ok' : 'cmd-fail'}">
+            <span class="cmd-label">${icon} <code>/${name}</code></span>
+            <div class="cmd-output">${formatChatContent(resp.output || '')}</div>
+        </div>`;
+        container?.appendChild(out);
+        scrollChatToBottom();
+
+        // 处理 compact_triggered 等特殊事件
+        if (resp.sse_events) {
+            for (const ev of resp.sse_events) {
+                if (ev.type === 'compact_triggered') {
+                    // 触发历史压缩（告知用户）
+                    showToast('对话历史压缩已触发', 'info');
+                }
+            }
+        }
+    } catch(e) {
+        bubble.remove();
+        const out = document.createElement('div');
+        out.className = 'chat-msg system-msg';
+        out.innerHTML = `<div class="cmd-result cmd-fail">❌ <code>/${name}</code> 执行失败: ${escapeHtml(String(e))}</div>`;
+        container?.appendChild(out);
+        scrollChatToBottom();
+    }
+}
+
+// 输入时显示斜杠命令补全
+async function _onChatInputChange(val) {
+    if (!val.startsWith('/') || val.length < 2 || val.startsWith('/ ')) {
+        _hideSlashSuggestions(); return;
+    }
+    const query = val.slice(1).toLowerCase();
+    if (query.includes(' ')) { _hideSlashSuggestions(); return; }  // 已输入参数，不补全
+
+    const cmds = await _loadSlashCommands();
+    const matched = cmds.filter(c => c.name.toLowerCase().startsWith(query)).slice(0, 6);
+    if (matched.length === 0) { _hideSlashSuggestions(); return; }
+    _showSlashSuggestions(matched);
+}
+
+function _showSlashSuggestions(cmds) {
+    let box = document.getElementById('slashSuggestBox');
+    if (!box) {
+        box = document.createElement('div');
+        box.id = 'slashSuggestBox';
+        box.className = 'slash-suggest-box';
+        const wrap = document.querySelector('.chat-input-wrap');
+        wrap?.insertAdjacentElement('beforebegin', box);
+    }
+    box.innerHTML = cmds.map((c, i) => `
+        <div class="slash-suggest-item${i === 0 ? ' slash-suggest-active' : ''}"
+             onclick="_selectSlashSuggestion('/${c.name}')">
+            <span class="slash-cmd-name">/${c.name}</span>
+            ${c.args_hint ? `<span class="slash-cmd-hint">${escapeHtml(c.args_hint)}</span>` : ''}
+            <span class="slash-cmd-desc">${escapeHtml(c.description)}</span>
+        </div>`).join('');
+    box.style.display = 'block';
+}
+
+function _hideSlashSuggestions() {
+    const box = document.getElementById('slashSuggestBox');
+    if (box) box.style.display = 'none';
+}
+
+function _selectSlashSuggestion(cmd) {
+    const input = document.getElementById('chatInput');
+    if (input) {
+        input.value = cmd + ' ';
+        input.focus();
+        autoResizeChatInput();
+    }
+    _hideSlashSuggestions();
+}
+
 function _handleSlashTest(cmd) {
     const parts = cmd.split(/\s+/);
     const target = parts[1] || '';  // '' = 展示面板, 'all' = 全测, 'DevAgent' = 单测
@@ -12159,6 +12275,13 @@ function handleChatKeydown(e) {
         if (val.startsWith('/test')) {
             _handleSlashTest(val);
             if (input) input.value = '';
+            return;
+        }
+        // 通用斜杠命令路由
+        if (val.startsWith('/') && val.length > 1 && !val.startsWith('/ ')) {
+            _handleSlashCommand(val);
+            if (input) input.value = '';
+            _hideSlashSuggestions();
             return;
         }
         sendChatMessage();
