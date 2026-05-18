@@ -80,6 +80,7 @@ def _register_builtin_agents():
     from agents.review import ReviewAgent
     from agents.deploy import DeployAgent
     from agents.chat_assistant import ChatAssistantAgent
+    from agents.ue_editor import UEEditorAgent           # B-3
 
     builtin = {
         "ProductAgent": ProductAgent,
@@ -92,6 +93,7 @@ def _register_builtin_agents():
         "ReviewAgent": ReviewAgent,
         "DeployAgent": DeployAgent,
         "ChatAssistant": ChatAssistantAgent,
+        "UEEditorAgent": UEEditorAgent,                  # B-3 UE 內容創作
     }
     for name, cls in builtin.items():
         if name not in _REGISTRY:

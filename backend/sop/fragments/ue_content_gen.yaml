@@ -1,0 +1,27 @@
+# UE 内容生成阶段 — 在 architecture_done 后，用 UEEditorAgent 生成 BP/关卡等内容
+# 仅对 engine:ue5 / engine:ue4 项目生效
+# 当工单 type=ue_content 时触发
+id: ue_content_gen
+name: UE 内容生成
+insert_after: architecture
+priority: 88   # 在架构后、开发前
+description: 通过 Python 桥接向 UE Editor 生成 Blueprint、关卡布局等内容
+
+required_traits:
+  any_of:
+    - engine:ue5
+    - engine:ue4
+
+# 仅对 type=ue_content 的工单生效
+required_ticket_type: ue_content
+
+stage:
+  agent: UEEditorAgent
+  action: ue_content
+  trigger_on: ue_content_pending
+  success_status: ue_content_done
+  reject_status: ue_content_failed
+  reject_goto: ue_content_pending   # 失败可重试
+  config:
+    max_retries: 2
+    timeout_seconds: 300
