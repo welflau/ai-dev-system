@@ -554,13 +554,16 @@ async def _chat_stream_generator(
                 summary     = ev.get("summary", "")
                 args_hint   = ev.get("args_hint", "")
                 duration_ms = ev.get("duration_ms", 0)
+                result_raw = ev.get("result", "")
                 step = {"tool": ev["tool"], "args_hint": args_hint,
-                        "summary": summary, "duration_ms": duration_ms}
+                        "summary": summary, "duration_ms": duration_ms,
+                        "result": result_raw}
                 thinking_steps.append(step)
                 if _cur_round is not None:
                     _cur_round["steps"].append(step)
                 yield _sse("tool_done", {"tool": ev["tool"], "summary": summary,
-                                         "args_hint": args_hint, "duration_ms": duration_ms})
+                                         "args_hint": args_hint, "duration_ms": duration_ms,
+                                         "result": result_raw})
 
             elif etype == "action":
                 # payload key 防止 action_data.type 覆盖事件 type（QueryEngine 路径）

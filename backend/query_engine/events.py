@@ -49,6 +49,7 @@ class ToolDoneEvent:
     summary: str
     args_hint: str
     duration_ms: float
+    result: str = ""   # 完整工具返回内容（用于前端展开显示）
 
 
 @dataclass

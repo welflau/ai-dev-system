@@ -432,6 +432,7 @@ class QueryEngine:
                         summary=summary,
                         args_hint=args_hint,
                         duration_ms=duration_ms,
+                        result=result_text or "",
                     )
 
                     if action_data:

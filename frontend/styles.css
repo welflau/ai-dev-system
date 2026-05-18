@@ -8283,8 +8283,51 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
 }
 .crp-round-thinking:empty { display: none; }
 
-/* 工具步骤容器（复用 ctp-step 样式，无需额外写） */
+/* 工具步骤容器 */
 .crp-round-steps { padding: 2px 0; }
+
+/* 工具结果展开区 */
+.ctp-result-toggle {
+    margin-left: 6px; font-size: 10px;
+    color: var(--text-muted, #718096); cursor: pointer;
+    transition: transform 0.2s; display: inline-block;
+    padding: 0 4px;
+}
+.ctp-step-expanded .ctp-result-toggle { transform: rotate(90deg); }
+
+.ctp-step-result {
+    max-height: 0; overflow: hidden;
+    transition: max-height 0.25s ease-out;
+    margin: 0 0 0 16px;
+    font-size: 11px; line-height: 1.5;
+}
+.ctp-step-expanded .ctp-step-result {
+    max-height: 400px; overflow-y: auto;
+    padding: 6px 0 4px;
+}
+
+/* 搜索结果条目 */
+.ctr-item { padding: 4px 0 6px; border-bottom: 1px solid rgba(255,255,255,0.05); }
+.ctr-item:last-child { border-bottom: none; }
+.ctr-title a { color: rgba(99,179,237,0.9); text-decoration: none; font-size: 11px; }
+.ctr-title a:hover { text-decoration: underline; }
+.ctr-snippet { color: var(--text-secondary, #a0aec0); font-size: 10.5px; margin-top: 2px; }
+.ctr-url { color: var(--text-muted, #718096); font-size: 10px; margin-top: 1px; opacity: 0.7; }
+
+/* 代码/文件输出 */
+.ctr-code {
+    background: rgba(0,0,0,0.2); border-radius: 4px;
+    padding: 6px 8px; margin: 4px 0;
+    font-size: 10.5px; white-space: pre-wrap; word-break: break-all;
+    color: var(--text-secondary, #a0aec0); max-height: 200px; overflow-y: auto;
+}
+.ctr-stderr { color: rgba(252,129,129,0.8); }
+.ctr-file-name { color: rgba(99,179,237,0.8); font-size: 10.5px; margin-top: 4px; }
+.ctr-exit { font-size: 10.5px; color: var(--text-muted, #718096); }
+
+/* grep 匹配行 */
+.ctr-match { font-size: 10.5px; padding: 1px 0; }
+.ctr-match-loc { color: rgba(99,179,237,0.8); margin-right: 8px; }
 
 /* J-3: Extended Thinking 推理链面板 */
 .chat-reasoning-panel {

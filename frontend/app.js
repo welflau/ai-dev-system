@@ -9658,10 +9658,11 @@ async function _sendChatStreaming(url, body) {
                                 <span class="ctp-step-dot"></span>
                                 <span class="ctp-step-label">${escHtml(toolLabel)}</span>
                                 <span class="ctp-step-status">…</span>
+                                <span class="ctp-result-toggle" style="display:none" onclick="this.closest('.ctp-step').classList.toggle('ctp-step-expanded')">›</span>
                             </div>
-                            ${_hint ? `<div class="ctp-step-row2">${escHtml(_hint)}</div>` : ''}`;
+                            ${_hint ? `<div class="ctp-step-row2">${escHtml(_hint)}</div>` : ''}
+                            <div class="ctp-step-result"></div>`;
                         _curRoundStepsEl.appendChild(stepEl);
-                        // 确保当前轮展开，让步骤可见
                         _curRoundEl?.classList.add('crp-round-expanded');
                     }
 
@@ -9681,6 +9682,13 @@ async function _sendChatStreaming(url, body) {
                             if (st) {
                                 const dur = _dur > 0 ? ` (${_dur}ms)` : '';
                                 st.textContent = data.summary ? `✓ ${data.summary.slice(0, 80)}${dur}` : `✓${dur}`;
+                            }
+                            // 填充展开结果
+                            const resultEl = stepEl.querySelector('.ctp-step-result');
+                            const toggleEl = stepEl.querySelector('.ctp-result-toggle');
+                            if (resultEl && data.result) {
+                                resultEl.innerHTML = _formatToolResult(data.tool, data.result);
+                                if (toggleEl) toggleEl.style.display = '';
                             }
                         }
                     }
@@ -10127,6 +10135,68 @@ const _TOOL_INPUT_KEY = {
     save_memory: 'title', read_files: 'paths',
     browse_marketplace: 'dir_name',
 };
+
+/** 把工具 result JSON 格式化为可读 HTML（展开区用） */
+function _formatToolResult(toolName, resultRaw) {
+    if (!resultRaw) return '<span style="opacity:.5">（无返回内容）</span>';
+    let data;
+    try { data = JSON.parse(resultRaw); } catch { return `<pre>${escHtml(resultRaw.slice(0, 2000))}</pre>`; }
+
+    // web_search_result
+    if (data?.type === 'web_search_result') {
+        const results = data.results || [];
+        if (!results.length) return `<span style="opacity:.5">未找到结果（查询：${escHtml(data.query || '')}）</span>`;
+        return results.map(r => `
+            <div class="ctr-item">
+                <div class="ctr-title"><a href="${escHtml(r.url || '#')}" target="_blank">${escHtml(r.title || r.url || '(无标题)')}</a></div>
+                ${r.snippet ? `<div class="ctr-snippet">${escHtml(r.snippet)}</div>` : ''}
+                <div class="ctr-url">${escHtml(r.url || '')}</div>
+            </div>`).join('');
+    }
+
+    // read_files / read_local_file
+    if (data?.files || data?.content) {
+        const files = data.files || { '文件': data.content };
+        return Object.entries(files).map(([path, content]) => {
+            const lines = String(content).split('\n');
+            const preview = lines.slice(0, 30).join('\n');
+            const more = lines.length > 30 ? `\n… 共 ${lines.length} 行` : '';
+            return `<div class="ctr-file-name">${escHtml(path)}</div><pre class="ctr-code">${escHtml(preview + more)}</pre>`;
+        }).join('');
+    }
+
+    // grep
+    if (Array.isArray(data) && data[0]?.path && data[0]?.line !== undefined) {
+        return data.slice(0, 30).map(m =>
+            `<div class="ctr-match"><span class="ctr-match-loc">${escHtml(m.path)}:${m.line}</span>  ${escHtml(m.text || '')}</div>`
+        ).join('') + (data.length > 30 ? `<div style="opacity:.5">… 共 ${data.length} 条</div>` : '');
+    }
+
+    // shell
+    if (data?.exit_code !== undefined) {
+        const out = (data.stdout || data.output || '').trim();
+        const err = (data.stderr || '').trim();
+        return `<div class="ctr-exit">exit ${data.exit_code}</div>` +
+            (out ? `<pre class="ctr-code">${escHtml(out.slice(0, 2000))}</pre>` : '') +
+            (err ? `<pre class="ctr-code ctr-stderr">${escHtml(err.slice(0, 500))}</pre>` : '');
+    }
+
+    // search_knowledge / search_ticket_history
+    if (Array.isArray(data) && data[0]?.title) {
+        return data.slice(0, 10).map(r =>
+            `<div class="ctr-item"><div class="ctr-title">${escHtml(r.title || '')}</div><div class="ctr-snippet">${escHtml((r.content || r.snippet || '').slice(0, 150))}</div></div>`
+        ).join('');
+    }
+
+    // glob / list_directory
+    if (Array.isArray(data) && typeof data[0] === 'string') {
+        return `<pre class="ctr-code">${escHtml(data.slice(0, 50).join('\n'))}${data.length > 50 ? '\n… 共 ' + data.length + ' 项' : ''}</pre>`;
+    }
+
+    // 通用 fallback
+    const str = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+    return `<pre class="ctr-code">${escHtml(str.slice(0, 2000))}</pre>`;
+}
 
 function _extractArgsHint(toolName, input) {
     if (!input) return '';
@@ -11097,13 +11167,17 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
                     const label = _TOOL_LABELS[s.tool] || `🔧 ${s.tool}`;
                     const dur = s.duration_ms > 0 ? ` (${s.duration_ms}ms)` : '';
                     const summary = s.summary ? `✓ ${s.summary.slice(0, 80)}${dur}` : `✓${dur}`;
+                    const resultHtml = s.result ? _formatToolResult(s.tool, s.result) : '';
+                    const hasResult = !!resultHtml;
                     return `<div class="ctp-step ctp-step-done">
                         <div class="ctp-step-row1">
                             <span class="ctp-step-dot"></span>
                             <span class="ctp-step-label">${escapeHtml(label)}</span>
                             <span class="ctp-step-status">${escapeHtml(summary)}</span>
+                            ${hasResult ? `<span class="ctp-result-toggle" onclick="this.closest('.ctp-step').classList.toggle('ctp-step-expanded')">›</span>` : ''}
                         </div>
                         ${s.args_hint ? `<div class="ctp-step-row2">${escapeHtml(s.args_hint)}</div>` : ''}
+                        ${hasResult ? `<div class="ctp-step-result">${resultHtml}</div>` : ''}
                     </div>`;
                 }).join('');
                 return `<div class="crp-round-group crp-round-done">

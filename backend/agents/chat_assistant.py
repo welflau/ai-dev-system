@@ -554,11 +554,13 @@ class ChatAssistantAgent(BaseAgent):
                 elif isinstance(event, ToolDoneEvent):
                     yield {"type": "tool_done", "tool": event.tool,
                            "summary": event.summary, "args_hint": event.args_hint,
-                           "duration_ms": round(event.duration_ms)}
+                           "duration_ms": round(event.duration_ms),
+                           "result": event.result}
                 elif isinstance(event, ToolErrorEvent):
                     yield {"type": "tool_done", "tool": event.tool,
                            "summary": f"错误: {event.error}",
-                           "args_hint": "", "duration_ms": round(event.duration_ms)}
+                           "args_hint": "", "duration_ms": round(event.duration_ms),
+                           "result": ""}
                 elif isinstance(event, ActionEvent):
                     yield {"type": "action", "payload": event.action_data}
                 elif isinstance(event, MessageDoneEvent):
@@ -696,11 +698,13 @@ class ChatAssistantAgent(BaseAgent):
                 elif isinstance(event, ToolDoneEvent):
                     yield {"type": "tool_done", "tool": event.tool,
                            "summary": event.summary, "args_hint": event.args_hint,
-                           "duration_ms": round(event.duration_ms)}
+                           "duration_ms": round(event.duration_ms),
+                           "result": event.result}
                 elif isinstance(event, ToolErrorEvent):
                     yield {"type": "tool_done", "tool": event.tool,
                            "summary": f"错误: {event.error}",
-                           "args_hint": "", "duration_ms": round(event.duration_ms)}
+                           "args_hint": "", "duration_ms": round(event.duration_ms),
+                           "result": ""}
                 elif isinstance(event, ActionEvent):
                     yield {"type": "action", "payload": event.action_data}
                 elif isinstance(event, MessageDoneEvent):
