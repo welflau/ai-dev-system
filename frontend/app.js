@@ -12132,6 +12132,18 @@ async function _handleSlashCommand(input) {
 
 // 输入时显示斜杠命令补全
 async function _onChatInputChange(val) {
+    // A-4: @file 輸入提示
+    if (val.includes('@') && !val.startsWith('/')) {
+        const atMatch = val.match(/@([A-Za-z]:[/\\][^\s]*|[./~][^\s]*|/[^\s]*)$/);
+        if (atMatch) {
+            _showAtFileTip(atMatch[0]);
+        } else if (val.endsWith('@')) {
+            _showAtFileTip('@');
+        } else {
+            _hideSlashSuggestions();
+        }
+        return;
+    }
     if (!val.startsWith('/') || val.length < 2 || val.startsWith('/ ')) {
         _hideSlashSuggestions(); return;
     }
@@ -12188,6 +12200,24 @@ async function _activateUltrathink() {
 function _hideSlashSuggestions() {
     const box = document.getElementById('slashSuggestBox');
     if (box) box.style.display = 'none';
+}
+
+// @file 提示氣泡
+function _showAtFileTip(partial) {
+    let box = document.getElementById('atFileTipBox');
+    if (!box) {
+        box = document.createElement('div');
+        box.id = 'atFileTipBox';
+        box.className = 'slash-suggest-box';
+        const wrap = document.querySelector('.chat-input-wrap');
+        wrap?.insertAdjacentElement('beforebegin', box);
+    }
+    box.innerHTML = `<div class="slash-suggest-item">
+        <span class="slash-cmd-name">@file</span>
+        <span class="slash-cmd-desc">輸入文件路徑，如 @G:/A_Works/... 或 @./readme.md，文件內容將自動注入</span>
+    </div>`;
+    box.style.display = 'block';
+    setTimeout(() => { if (box) box.style.display = 'none'; }, 3000);
 }
 
 function _selectSlashSuggestion(cmd) {

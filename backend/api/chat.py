@@ -508,6 +508,9 @@ async def _chat_stream_generator(
     _thinking_rounds: list = []   # [{round, reasoning, steps:[]}]
     _cur_round: dict | None = None
 
+    # A-4: @file 引用展開（在 LLM 調用前注入文件內容）
+    expanded_message, _file_warnings = _expand_file_refs(req.message)
+
     # 保存用户消息（异步 fire-and-forget，不阻塞 LLM 响应）
     import asyncio as _asyncio
     _asyncio.create_task(_save_chat_message(project_id, "user", req.message,
@@ -515,7 +518,7 @@ async def _chat_stream_generator(
 
     try:
         async for ev in agent.chat_stream(
-            user_message=req.message,
+            user_message=expanded_message,  # 使用展開後的消息
             images=req.images,
             history=history_list,
             project=project,
@@ -1848,6 +1851,9 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
     except Exception:
         projects = []
 
+    # A-4: @file 引用展開
+    expanded_message_g, _ = _expand_file_refs(req.message)
+
     # 保存用户消息（异步 fire-and-forget，不阻塞 LLM 响应）
     import asyncio as _asyncio
     _asyncio.create_task(_save_chat_message("__global__", "user", req.message,
@@ -1855,7 +1861,7 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
 
     try:
         async for ev in agent.chat_global_stream(
-            user_message=req.message,
+            user_message=expanded_message_g,
             images=req.images,
             history=history_list,
             projects_brief=projects,
@@ -2193,6 +2199,65 @@ async def get_projects_brief():
 
 
 # ==================== 图片消息构建 ====================
+
+import re as _re
+
+def _expand_file_refs(message: str) -> tuple[str, list[str]]:
+    """A-4: 展開 @file 引用。
+
+    識別 @/path/to/file 或 @C:/path/to/file 語法，
+    讀取文件內容並作為附件注入消息。
+
+    Returns:
+        (expanded_message, file_warnings)
+        expanded_message: 原消息 + 文件內容附件塊
+        file_warnings: 讀取失敗的文件警告列表
+    """
+    # 匹配 @/path 或 @C:/path 或 @../path 形式（不匹配 @用戶名 形式）
+    pattern = _re.compile(r'@([A-Za-z]:[/\\][^\s,;]+|[./~][^\s,;]*|/[^\s,;]+)')
+    matches = pattern.findall(message)
+    if not matches:
+        return message, []
+
+    attachments = []
+    warnings = []
+    for raw_path in matches:
+        try:
+            from pathlib import Path
+            p = Path(raw_path.replace('\\', '/'))
+            if not p.exists():
+                warnings.append(f"@{raw_path}：文件不存在")
+                continue
+            if not p.is_file():
+                warnings.append(f"@{raw_path}：不是文件")
+                continue
+            # 大小限制 100KB
+            size = p.stat().st_size
+            if size > 100_000:
+                warnings.append(f"@{raw_path}：文件過大（{size//1024}KB，限 100KB）")
+                continue
+            # 安全檢查：不讀取密鑰文件
+            name_lower = p.name.lower()
+            if any(name_lower.endswith(ext) for ext in ('.pem', '.key', '.pfx', '.p12')):
+                warnings.append(f"@{raw_path}：安全限制，不允許讀取密鑰文件")
+                continue
+            content = p.read_text(encoding='utf-8', errors='replace')
+            attachments.append(
+                f"\n\n---\n**附件：{p.name}**（`{raw_path}`）\n```\n{content[:8000]}\n```"
+            )
+        except Exception as e:
+            warnings.append(f"@{raw_path}：讀取失敗（{e}）")
+
+    if not attachments and not warnings:
+        return message, []
+
+    expanded = message
+    for attach in attachments:
+        expanded += attach
+    if warnings:
+        expanded += "\n\n> ⚠️ 部分文件引用失敗：" + "；".join(warnings)
+    return expanded, warnings
+
 
 def _build_user_content(text: str, images: Optional[List[str]] = None):
     """
