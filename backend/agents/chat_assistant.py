@@ -44,6 +44,7 @@ from actions.chat.get_memory import GetMemoryAction                       # 查�
 from actions.chat.competitor_analysis import CompetitorAnalysisAction     # 竞品反拆
 from actions.chat.read_local_file import ReadLocalFileAction               # 读本地文件（Skill 文档等）
 from actions.chat.ue_call import UECallAction                              # UE Editor UCP 控制
+from actions.ue_run_python import UERunPythonAction                        # B-0 UE Python 橋接
 from actions.chat.install_project_skill import InstallProjectSkillAction   # 项目 Skill 安装/卸载
 from actions.chat.browse_marketplace import BrowseMarketplaceAction        # 浏览/安装/卸载市场 Skill
 from actions.chat.glob_search import GlobAction, GrepAction, ListDirectoryAction  # 文件系统搜索
@@ -106,6 +107,7 @@ _TOOL_LABELS_PY: dict = {
     "load_skill": "📚 加载 Skill",
     "read_local_file": "📂 读取本地文件",
     "ue_call": "🎮 UE Editor 操作",
+    "ue_run_python": "🐍 UE Python 執行",
     # 新增工具（对标 Gemini CLI）
     "glob": "🔍 查找文件",
     "grep": "🔎 搜索文件内容",
@@ -348,6 +350,7 @@ class ChatAssistantAgent(BaseAgent):
         CompetitorAnalysisAction,      # 竞品反拆分析
         ReadLocalFileAction,           # 读本地文件（动态加载 Skill 文档）
         UECallAction,                  # UE Editor UCP 控制（仅 engine:ue5/ue4）
+        UERunPythonAction,             # B-0 UE Python 橋接
         InstallProjectSkillAction,     # 对话中为项目安装/卸载 Marketplace Skill
         BrowseMarketplaceAction,       # 浏览/安装/卸载市场 Skill（系统级+项目级）
         LoadSkillAction,               # v0.20 主动触发：按需加载 Skill 全文

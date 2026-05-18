@@ -267,22 +267,20 @@ async def _cmd_skills(args: str, project_id: Optional[str], context: dict) -> Co
 
 
 async def _cmd_ue_run(args: str, project_id: Optional[str], context: dict) -> CommandResult:
-    """在 UE Editor 执行 Python 代码"""
+    """在 UE Editor 执行 Python 代码（B-0 Python 桥接）"""
     if not project_id:
         return CommandResult(success=False, output="❌ /ue-run 需要在项目内使用")
     code = args.strip()
     if not code:
-        return CommandResult(success=False, output="用法：/ue-run <python code>")
-    try:
-        # 尝试调用 ue_python_bridge（P0 实现后生效）
-        from engines.ue_python_bridge import run_python
-        result = await run_python(code, project_id)
-        if result["success"]:
-            return CommandResult(success=True, output=f"✅ 执行成功\n```\n{result.get('stdout', '')}\n```")
-        else:
-            return CommandResult(success=False, output=f"❌ 执行失败\n```\n{result.get('stderr', result.get('error', ''))}\n```")
-    except ImportError:
-        return CommandResult(success=False, output="⚠️ UE Python 桥接尚未实现（待 B-0 完成）")
+        return CommandResult(success=False, output="用法：/ue-run <python code>\n例：/ue-run import unreal; print(unreal.SystemLibrary.get_engine_version())")
+    from engines.ue_python_bridge import run_python
+    result = await run_python(code, project_id=project_id)
+    if result["success"]:
+        out = result.get("stdout") or result.get("result") or "✅ 执行成功（无输出）"
+        return CommandResult(success=True, output=f"✅ 执行成功\n```\n{out}\n```", data=result)
+    else:
+        err = result.get("error") or "执行失败"
+        return CommandResult(success=False, output=f"❌ {err}", data=result)
 
 
 async def _cmd_ue_bp_gen(args: str, project_id: Optional[str], context: dict) -> CommandResult:
