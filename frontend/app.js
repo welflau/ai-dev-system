@@ -11849,11 +11849,11 @@ function buildCodeFileCard(lang, code) {
         </div>
     </div>
     <div class="code-card-preview" id="${cardId}_preview">
-        <pre class="code-card-pre">${previewEscaped}</pre>
+        <pre class="code-card-pre"><code>${previewEscaped}</code></pre>
         ${hiddenCount > 0 ? `<div class="code-card-more">…还有 ${hiddenCount} 行，点击展开</div>` : ''}
     </div>
     <div class="code-card-full" id="${cardId}_full">
-        <pre class="code-card-pre">${fullEscaped}</pre>
+        <pre class="code-card-pre"><code class="language-${lang}">${fullEscaped}</code></pre>
     </div>
 </div>`;
 }
@@ -11902,8 +11902,8 @@ function toggleCodeCard(cardId) {
         full.classList.add('visible');
         arrow.textContent = '▼';
         card.classList.add('expanded');
-        // 展开时对代码块做语法高亮
-        const codeEl = full.querySelector('pre');
+        // 展开时对 <code> 做语法高亮（不操作 <pre>，避免改变结构撑高预览区）
+        const codeEl = full.querySelector('pre > code');
         if (codeEl && window.hljs && !codeEl.dataset.highlighted) {
             codeEl.dataset.highlighted = '1';
             hljs.highlightElement(codeEl);

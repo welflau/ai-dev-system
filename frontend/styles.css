@@ -6026,6 +6026,17 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
     min-height: 0;
 }
 
+/* 覆盖 hljs CDN 的 pre code.hljs { padding: 1em } — 避免撑高预览区 */
+.code-card-pre > code {
+    padding: 0 !important;
+    background: transparent !important;
+    display: block;
+    white-space: pre;
+    font-size: inherit;
+    font-family: inherit;
+    line-height: inherit;
+}
+
 .code-card-pre {
     margin: 0 !important;
     padding: 6px 12px !important;
