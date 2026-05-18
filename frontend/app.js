@@ -12134,7 +12134,7 @@ async function _handleSlashCommand(input) {
 async function _onChatInputChange(val) {
     // A-4: @file 輸入提示
     if (val.includes('@') && !val.startsWith('/')) {
-        const atMatch = val.match(/@([A-Za-z]:[/\\][^\s]*|[./~][^\s]*|/[^\s]*)$/);
+        const atMatch = val.match(/@([A-Za-z]:[/\\][^\s]*|[./~][^\s]*|\/[^\s]*)$/);
         if (atMatch) {
             _showAtFileTip(atMatch[0]);
         } else if (val.endsWith('@')) {
