@@ -11853,7 +11853,7 @@ function buildCodeFileCard(lang, code) {
         ${hiddenCount > 0 ? `<div class="code-card-more">…还有 ${hiddenCount} 行，点击展开</div>` : ''}
     </div>
     <div class="code-card-full" id="${cardId}_full">
-        <pre class="code-card-pre" data-raw="${fullEscaped}">${fullEscaped}</pre>
+        <pre class="code-card-pre">${fullEscaped}</pre>
     </div>
 </div>`;
 }
@@ -11915,7 +11915,7 @@ function toggleCodeCard(cardId) {
 function copyCodeCard(cardId) {
     const full = document.getElementById(cardId + '_full');
     const preview = document.getElementById(cardId + '_preview');
-    const raw = full?.querySelector('pre')?.dataset?.raw
+    const raw = full?.querySelector('pre')?.textContent
         || preview?.querySelector('pre')?.textContent
         || '';
     navigator.clipboard.writeText(raw).then(() => showToast('已复制', 'success'))

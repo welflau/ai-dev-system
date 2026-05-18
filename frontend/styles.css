@@ -6022,18 +6022,23 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
 .code-card-preview {
     border-top: 1px solid var(--border);
     position: relative;
+    height: fit-content;
+    min-height: 0;
 }
 
 .code-card-pre {
-    margin: 0;
-    padding: 6px 12px;
+    margin: 0 !important;
+    padding: 6px 12px !important;
     font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
     font-size: 12px;
     line-height: 1.6;
     color: var(--text-secondary);
-    background: transparent;
+    background: transparent !important;
     overflow-x: auto;
     white-space: pre;
+    min-height: 0 !important;
+    height: auto !important;
+    display: block !important;
 }
 
 .code-card-more {
