@@ -11854,10 +11854,12 @@ function buildCodeFileCard(lang, code) {
             <button class="code-card-copy-btn" onclick="copyCodeCard('${cardId}')" title="复制代码">⎘</button>
         </div>
     </div>
-    <div class="code-card-preview" id="${cardId}_preview" style="height:${previewH}px">
-        <div class="code-card-lines">${previewLines.split('\n').map(l => `<div class="code-card-line">${escapeHtml(l)}</div>`).join('')}</div>
-        ${hiddenCount > 0 ? `<div class="code-card-more">…还有 ${hiddenCount} 行，点击展开</div>` : ''}
-    </div>
+    <div class="code-card-preview" id="${cardId}_preview" style="height:${previewH}px">${
+      '<div class="code-card-lines">'
+      + previewLines.split('\n').map(l => `<div class="code-card-line">${escapeHtml(l)}</div>`).join('')
+      + '</div>'
+      + (hiddenCount > 0 ? `<div class="code-card-more">…还有 ${hiddenCount} 行，点击展开</div>` : '')
+    }</div>
     <div class="code-card-full" id="${cardId}_full">
         <pre class="code-card-pre"><code class="language-${lang}">${fullEscaped}</code></pre>
     </div>
