@@ -378,9 +378,26 @@ class BaseAgent(ABC):
             logger.warning("BaseAgent.compact_history 失败: %s", e)
         return ""
 
-    async def get_memory_prompt(self, project_id: str, limit: int = 3) -> str:
-        """A-2: 查询 agent_memory 返回适合注入 system prompt 的文本。
-        所有 Agent 均可调用，在 _resolve_skills_prompt 或 system prompt 构建时使用。
+    # A-3: 4 類型標籤映射（對標 Claude Code）
+    _MEMORY_TYPE_LABELS = {
+        "user_profile":      "👤 用户",
+        "behavior_feedback": "💬 反馈",
+        "project_context":   "📁 项目",
+        "external_ref":      "🔗 外部",
+        # 向後兼容舊類型
+        "user":      "👤 用户",
+        "project":   "📁 项目",
+        "technical": "📁 项目",
+        "decision":  "📁 项目",
+        "handoff":   "📁 项目",
+        "insight":   "💬 反馈",
+        "project_status": "📁 项目",
+    }
+
+    async def get_memory_prompt(self, project_id: str, limit: int = 5) -> str:
+        """A-3: 查询 agent_memory，以 MEMORY.md 索引樣式返回注入文本。
+        支持 4 類型（user_profile/behavior_feedback/project_context/external_ref）。
+        所有 Agent 均可調用。
         """
         if not project_id:
             return ""
@@ -388,17 +405,19 @@ class BaseAgent(ABC):
             from database import db
             rows = await db.fetch_all(
                 """SELECT type, title, content, created_at FROM agent_memory
-                   WHERE project_id = ? ORDER BY created_at DESC LIMIT ?""",
+                   WHERE project_id = ?
+                   ORDER BY created_at DESC LIMIT ?""",
                 (project_id, limit),
             )
             if not rows:
                 return ""
-            lines = [f"## 项目历史记忆（最近 {len(rows)} 条）"]
+            lines = ["## 项目记忆（MEMORY）\n"]
             for r in rows:
-                lines.append(f"  [{r['type']}] {r['title']}（{r['created_at'][:10]}）")
-                if r['content']:
-                    lines.append(f"    {r['content'][:80]}")
-            lines.append("如需详情请调用 get_memory 工具。")
+                label = self._MEMORY_TYPE_LABELS.get(r["type"], "📝")
+                lines.append(f"- [{label}] **{r['title']}**（{r['created_at'][:10]}）")
+                if r["content"] and r["content"].strip():
+                    lines.append(f"  {r['content'][:120].strip()}")
+            lines.append("\n如需完整记忆请调用 get_memory 工具。")
             return "\n".join(lines)
         except Exception as e:
             logger.debug("BaseAgent.get_memory_prompt 失败: %s", e)

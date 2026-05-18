@@ -27,8 +27,13 @@ class MemoryWriteAction(ActionBase):
             "name": self.name,
             "description": (
                 "将重要信息保存到记忆中，供后续对话检索使用。\n"
-                "适合：用户偏好、项目约定、已解决的问题、重要决策等。\n"
-                "category 可选：user（用户偏好）/ project（项目约定）/ technical（技术决策）"
+                "适合：用户偏好、行为反馈、项目决策、外部资源指针等。\n"
+                "category（4 类，对标 Claude Code）：\n"
+                "  user_profile     — 用户角色、偏好、知识背景\n"
+                "  behavior_feedback — 行为反馈（正向确认 or 纠正）\n"
+                "  project_context  — 项目约定、技术决策、里程碑\n"
+                "  external_ref     — 外部系统指针（Linear/Notion/文档链接）\n"
+                "旧值兼容：user→user_profile, project→project_context, technical→project_context"
             ),
             "input_schema": {
                 "type": "object",
@@ -43,8 +48,9 @@ class MemoryWriteAction(ActionBase):
                     },
                     "category": {
                         "type": "string",
-                        "enum": ["user", "project", "technical"],
-                        "description": "记忆类型，默认 project",
+                        "enum": ["user_profile", "behavior_feedback", "project_context", "external_ref",
+                                 "user", "project", "technical"],  # 旧值向后兼容
+                        "description": "记忆类型，默认 project_context",
                     },
                 },
                 "required": ["title", "content"],
@@ -62,8 +68,16 @@ class MemoryWriteAction(ActionBase):
         if not content:
             return ActionResult(success=False, error="content 不能为空")
 
-        if category not in ("user", "project", "technical"):
-            category = "project"
+        # 類型映射：舊值向後兼容 + 標準化到 4 類
+        _TYPE_MAP = {
+            "user":     "user_profile",
+            "project":  "project_context",
+            "technical": "project_context",
+        }
+        category = _TYPE_MAP.get(category, category)
+        _VALID = {"user_profile", "behavior_feedback", "project_context", "external_ref"}
+        if category not in _VALID:
+            category = "project_context"
 
         try:
             from database import db
