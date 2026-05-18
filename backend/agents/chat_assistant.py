@@ -107,25 +107,23 @@ _TOOL_LABELS_PY: dict = {
     "dispatch_parallel_subtasks": "⚡ 并行派发子任务",
 }
 
-# 全局聊天（项目列表页，无 project_id）下可用的工具白名单。
-# confirm_project：识别新建项目意图
-# search_knowledge / search_ticket_history：全局模式下搜全库（无 project_id 过滤）
-# 仅全局聊天（项目列表页）可用的工具白名单
-_GLOBAL_CHAT_TOOLS = {"confirm_project", "search_knowledge", "search_ticket_history", "fetch_url", "confirm_save_doc"}
+# 全局聊天下额外可用（仅在全局模式有意义）
+_GLOBAL_ONLY_TOOLS = {"confirm_project"}
 
-# 全局 + 项目两个模式都可用的工具（不受 _GLOBAL_CHAT_TOOLS 排除逻辑影响）
-_CROSS_SCOPE_TOOLS = {
-    "browse_marketplace",   # 浏览/安装市场 Skill
-    "manage_skill",         # 启用/禁用 Skill（全局和项目都能管理）
-    "web_search",           # 联网搜索
-    "save_memory",          # 写入记忆
-    "read_files",           # 批量读文件
-    "read_local_file",      # 读本地文件（用户提供路径时全局可用）
-    "list_directory",       # 列目录（绝对路径时全局可用）
-    "glob",                 # 文件搜索（绝对路径时全局可用）
-    "grep",                 # 内容搜索（绝对路径时全局可用）
-    "set_session_flag",     # L9 Feature Flags（全局和项目都可用）
+# 需要 project_id 才能运行、全局模式下无意义的工具（即使暴露也会报错，直接隐藏）
+_PROJECT_ONLY_TOOLS = {
+    "confirm_requirement", "confirm_requirements_batch", "confirm_bug",
+    "close_requirement", "pause_requirement", "resume_requirement",
+    "get_requirement_pipeline", "get_ticket_status", "get_requirement_logs",
+    "get_build_logs", "generate_document", "confirm_save_doc",
+    "git_log", "git_read_file", "git_list_branches",
+    "git_switch_branch", "git_merge",
+    "dispatch_subtask", "dispatch_parallel_subtasks",
+    "competitor_analysis",
 }
+
+# _CROSS_SCOPE_TOOLS 保留用于向后兼容，全局模式现在直接用"全量 - PROJECT_ONLY"
+_CROSS_SCOPE_TOOLS = set()  # 不再需要，逻辑移入 _exposed_tool_schemas
 
 
 class _ChatToolExecutor:
@@ -378,12 +376,13 @@ class ChatAssistantAgent(BaseAgent):
         for action in self._actions.values():
             if action.name in _INTERNAL_ONLY_ACTIONS:
                 continue
-            # _CROSS_SCOPE_TOOLS：全局和项目都可用，跳过下面的 scope 过滤
-            if action.name not in _CROSS_SCOPE_TOOLS:
-                if scope == "global" and action.name not in _GLOBAL_CHAT_TOOLS:
+            if scope == "global":
+                # 全局模式：暴露所有工具，排除需要 project_id 才能运行的
+                if action.name in _PROJECT_ONLY_TOOLS:
                     continue
-                if scope == "project" and action.name in _GLOBAL_CHAT_TOOLS:
-                    # confirm_project 不在项目内聊天里暴露——项目里不能再创项目
+            elif scope == "project":
+                # 项目模式：排除仅全局有意义的（confirm_project）
+                if action.name in _GLOBAL_ONLY_TOOLS:
                     continue
             # traits 过滤：action 声明了 available_for_traits 时，按项目 traits 决定是否暴露
             action_traits_cfg = getattr(action, "available_for_traits", None)
