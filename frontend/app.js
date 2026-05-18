@@ -10383,7 +10383,8 @@ async function sendChatMessage() {
     // 发送前将内容存入历史（去重：与最近一条相同则不存）
     if (message && message !== _chatInputHistory[0]) {
         _chatInputHistory.unshift(message);
-        if (_chatInputHistory.length > 50) _chatInputHistory.pop(); // 最多保留 50 条
+        if (_chatInputHistory.length > 50) _chatInputHistory.pop();
+        try { localStorage.setItem('chatInputHistory', JSON.stringify(_chatInputHistory)); } catch {}
     }
     _chatHistoryIdx = -1;
     _chatInputDraft = '';
@@ -12026,9 +12027,12 @@ function clearChatPanel() {
 }
 
 // 聊天输入历史（类 terminal 上下键回溯）
-const _chatInputHistory = [];
-let _chatHistoryIdx = -1;       // -1 = 当前草稿
-let _chatInputDraft = '';        // 用户正在编辑的草稿，上键前保存
+// 从 localStorage 恢复历史（刷新后保留）
+const _chatInputHistory = (() => {
+    try { return JSON.parse(localStorage.getItem('chatInputHistory') || '[]'); } catch { return []; }
+})();
+let _chatHistoryIdx = -1;
+let _chatInputDraft = '';
 
 /**
  * 处理键盘事件
