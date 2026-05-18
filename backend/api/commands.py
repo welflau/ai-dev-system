@@ -284,18 +284,23 @@ async def _cmd_ue_run(args: str, project_id: Optional[str], context: dict) -> Co
 
 
 async def _cmd_ue_bp_gen(args: str, project_id: Optional[str], context: dict) -> CommandResult:
-    """生成 Blueprint"""
+    """生成 Blueprint（B-1 LLM 生成 + Python 橋接）"""
     if not project_id:
         return CommandResult(success=False, output="❌ /ue-bp-gen 需要在项目内使用")
     if not args.strip():
-        return CommandResult(success=False, output="用法：/ue-bp-gen <描述，如：创建一个波次生成器 Blueprint>")
-    try:
-        from actions.ue_blueprint_gen import BlueprintGenAction
-        action = BlueprintGenAction()
-        result = await action.run({"description": args.strip(), "project_id": project_id})
-        return CommandResult(success=result.success, output=result.message or (result.error or ""))
-    except ImportError:
-        return CommandResult(success=False, output="⚠️ BlueprintGenAction 尚未实现（待 B-1 完成）")
+        return CommandResult(
+            success=False,
+            output="用法：/ue-bp-gen <描述>\n例：/ue-bp-gen 创建一个波次生成器，每隔5秒在随机位置生成一个敌人",
+        )
+    from actions.ue_blueprint_gen import BlueprintGenAction
+    action = BlueprintGenAction()
+    result = await action.run({"description": args.strip(), "project_id": project_id})
+    output = result.message or result.error or ""
+    # 附加生成的代碼供用戶查看
+    if result.data and result.data.get("generated_code"):
+        code = result.data["generated_code"]
+        output += f"\n\n**生成的代碼：**\n```python\n{code[:800]}\n```"
+    return CommandResult(success=result.success, output=output, data=result.data)
 
 
 async def _cmd_ue_level(args: str, project_id: Optional[str], context: dict) -> CommandResult:
