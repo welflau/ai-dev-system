@@ -59,9 +59,9 @@ class GlobAction(ActionBase):
         return {
             "name": self.name,
             "description": (
-                "用 glob 通配符查找项目目录中的文件。\n"
-                "示例：pattern='**/*.py' 找所有 Python 文件，pattern='Source/**/*.h' 找 C++ 头文件。\n"
-                "返回匹配的文件路径列表（相对项目根目录），按修改时间倒序排列。"
+                "用 glob 通配符查找文件。支持任意绝对路径（如 G:/A_Works/... 或 C:/Users/...）。\n"
+                "示例：pattern='**/*.py' 找所有 Python 文件，pattern='*.log' 找日志文件。\n"
+                "path 可传绝对路径（如 G:/A_Works/OG2/BUG/2026-05-14_Crash），不传则用项目根目录。"
             ),
             "input_schema": {
                 "type": "object",
@@ -277,7 +277,8 @@ class ListDirectoryAction(ActionBase):
         return {
             "name": self.name,
             "description": (
-                "以树形结构列出项目目录，了解代码组织方式。\n"
+                "以树形结构列出目录内容。支持任意绝对路径（如 G:/A_Works/... 或 C:/Users/...）。\n"
+                "path 不传则用项目根目录；传绝对路径可查看任意本地目录。\n"
                 "自动过滤 __pycache__、node_modules、.git 等无关目录。"
             ),
             "input_schema": {

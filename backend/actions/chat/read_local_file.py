@@ -84,9 +84,9 @@ class ReadLocalFileAction(ActionBase):
         return {
             "name": self.name,
             "description": (
-                "读取本地文件内容。主要用于加载 Skill 文档（SKILL.md）让 AI 理解如何操作某个工具或系统。\n"
-                "用户说『用这个 skill』或给出一个本地文件路径时调用。\n"
-                "只能读取允许目录内的文件（ue_plugins、skills、docs 等），不能读取凭证或配置文件。"
+                "读取本地文件内容。用户给出任意本地文件路径时调用（包括 C:/、D:/、G:/ 等任意磁盘）。\n"
+                "用户显式提供的路径视为已授权，可直接读取。\n"
+                "禁止读取：.env、密钥(.pem/.key)、凭证文件。其他文件均可读取。"
             ),
             "input_schema": {
                 "type": "object",
