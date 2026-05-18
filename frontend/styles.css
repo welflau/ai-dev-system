@@ -6306,6 +6306,7 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
     border-radius: 12px;
     padding: 6px 8px 6px 14px;
     transition: border-color 0.2s;
+    position: relative;  /* 讓 slash-suggest-box 相對定位 */
 }
 
 .chat-input-wrap:focus-within {

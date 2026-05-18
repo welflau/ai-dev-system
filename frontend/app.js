@@ -12163,7 +12163,7 @@ function _showSlashSuggestions(cmds) {
         box.id = 'slashSuggestBox';
         box.className = 'slash-suggest-box';
         const wrap = document.querySelector('.chat-input-wrap');
-        wrap?.insertAdjacentElement('beforebegin', box);
+        wrap?.insertAdjacentElement('afterbegin', box);  // 插入 wrap 內部最前面
     }
     box.innerHTML = cmds.map((c, i) => `
         <div class="slash-suggest-item${i === 0 ? ' slash-suggest-active' : ''}"
@@ -12210,7 +12210,7 @@ function _showAtFileTip(partial) {
         box.id = 'atFileTipBox';
         box.className = 'slash-suggest-box';
         const wrap = document.querySelector('.chat-input-wrap');
-        wrap?.insertAdjacentElement('beforebegin', box);
+        wrap?.insertAdjacentElement('afterbegin', box);  // 插入 wrap 內部最前面
     }
     box.innerHTML = `<div class="slash-suggest-item">
         <span class="slash-cmd-name">@file</span>
