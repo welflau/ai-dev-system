@@ -5436,6 +5436,7 @@ body.chat-fullscreen .chat-panel {
     width: 100% !important;
     max-width: 100% !important;
     top: calc(var(--topbar-height) + 26px);  /* topbar + metrics-bar */
+    height: calc(100vh - var(--topbar-height) - 26px);  /* 同步扣除 metrics-bar 高度 */
     display: flex;
     box-shadow: none;
     border-left: none;
