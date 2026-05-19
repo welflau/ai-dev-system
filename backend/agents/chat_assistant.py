@@ -35,9 +35,12 @@ from actions.chat.get_ticket_status import GetTicketStatusAction
 from actions.chat.get_requirement_logs import GetRequirementLogsAction
 from actions.chat.propose_ue_framework import ProposeUEFrameworkAction
 from actions.chat.get_build_logs import GetBuildLogsAction
-from actions.chat.get_bugs import GetBugsAction                            # K
-from actions.chat.get_ci_builds import GetCIBuildsAction                   # K
-from actions.chat.get_failure_cases import GetFailureCasesAction           # K     # v0.19.x 构建日志查询
+from actions.chat.get_bugs import GetBugsAction                            # K P1
+from actions.chat.get_ci_builds import GetCIBuildsAction                   # K P1
+from actions.chat.get_failure_cases import GetFailureCasesAction           # K P1
+from actions.chat.get_milestones import GetMilestonesAction                # K P2
+from actions.chat.search_design_knowledge import SearchDesignKnowledgeAction  # K P2
+from actions.chat.search_art_assets import SearchArtAssetsAction           # K P2     # v0.19.x 构建日志查询
 from actions.chat.search_knowledge import SearchKnowledgeAction        # 知识库全文搜索
 from actions.chat.search_ticket_history import SearchTicketHistoryAction  # 历史工单检索
 from actions.chat.fetch_url import FetchUrlAction                         # 访问外部 URL
@@ -110,6 +113,9 @@ _TOOL_LABELS_PY: dict = {
     "get_bugs": "🐛 查 Bug 列表",
     "get_ci_builds": "🏗 查 CI 构建记录",
     "get_failure_cases": "📚 查失败案例库",
+    "get_milestones": "🎯 查里程碑",
+    "search_design_knowledge": "🎨 搜索设计知识库",
+    "search_art_assets": "🖼 搜索美术资产库",
     "get_memory": "🧠 查 Agent 记忆",
     "competitor_analysis": "🔎 竞品分析",
     "load_skill": "📚 加载 Skill",
@@ -355,6 +361,9 @@ class ChatAssistantAgent(BaseAgent):
         GetBugsAction,                 # K — Bug 列表
         GetCIBuildsAction,             # K — CI 构建记录
         GetFailureCasesAction,         # K — 失败案例库
+        GetMilestonesAction,           # K — 里程碑
+        SearchDesignKnowledgeAction,   # K — 设计知识库
+        SearchArtAssetsAction,         # K — 美术资产库
         SearchKnowledgeAction,         # 知识库全文搜索（FTS5）
         SearchTicketHistoryAction,     # 历史工单解决方案检索（FTS5）
         FetchUrlAction,                # 访问外部 URL
