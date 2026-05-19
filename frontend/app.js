@@ -9849,16 +9849,15 @@ async function _sendChatStreaming(url, body) {
 
     // 追加 action 卡片（若有）
     if (finalAction) {
-        // 根据 action type 选择正确的卡片渲染方式
-        // _buildConfirmCardHtml 只处理单条 confirm_requirement/confirm_bug，
-        // 批量和其他类型需要走 _buildAnyActionCardHtml
         const cardHtml = _buildAnyActionCardHtml(finalAction);
-        if (cardHtml) {
+        if (cardHtml && cardHtml !== '__rendered__') {
+            // 普通卡片：插入 HTML
             const cardEl = document.createElement('div');
             cardEl.innerHTML = cardHtml;
             const child = cardEl.firstElementChild;
             if (child) contentEl.insertBefore(child, timeEl);
         }
+        // '__rendered__'：已由 _buildAnyActionCardHtml 直接渲染到 DOM，无需再处理
     }
 
     scrollChatToBottom();
@@ -10766,18 +10765,93 @@ function _buildAnyActionCardHtml(action) {
     if (t === 'confirm_requirements_batch') {
         return _buildBatchRequirementsCardHtml(action);
     }
-    // confirm_project 走原有的 _buildConfirmCardHtml 入口
-    // (appendChatBubble 里的 confirm_project 分支已覆盖，这里简化处理)
     if (t === 'confirm_project') {
-        // 复用 appendChatBubble 的 confirm_project 路径：通过临时容器插入
-        const tmp = document.createElement('div');
-        // 直接调用 appendChatBubble 的 action 渲染部分（传入 tmp 作为容器）
-        // 简化：对于流式结束，confirm_project 卡片已在 _sendChatStreaming 的特殊路径里处理
-        // 此处返回空，防止错误的单条需求卡片出现
-        return '';
+        // 直接渲染到 DOM（因为需要 setTimeout 副作用，不能只返回 HTML）
+        _renderConfirmProjectCard(action);
+        return '__rendered__';  // 特殊标记，告知调用方已直接渲染，不需再 innerHTML
     }
-    // 其他类型：不渲染（历史加载时 appendChatBubble 会正确处理）
     return '';
+}
+
+/** 流式结束后直接渲染 confirm_project 卡片（带 setTimeout 副作用）*/
+function _renderConfirmProjectCard(action) {
+    // 找到最后一个 assistant 消息气泡的 .chat-msg-content
+    const msgs = document.querySelectorAll('#chatMessages .chat-msg.assistant .chat-msg-content');
+    const contentEl = msgs.length ? msgs[msgs.length - 1] : null;
+    if (!contentEl) return;
+
+    const safeId = _nextCardId('proj_confirm');
+    const traitsArr = Array.isArray(action.traits) ? action.traits : [];
+    const traitsJsonAttr = escapeHtml(JSON.stringify(traitsArr));
+    const traitChips = traitsArr.length
+        ? `<div class="confirm-req-meta" style="margin-top:6px; display:flex; flex-wrap:wrap; align-items:center; gap:4px 6px;">
+             <span style="flex:0 0 auto;">🏷 Traits:</span>
+             ${traitsArr.map(t => `<code class="mcp-tool-tag" style="background:rgba(163,113,247,0.1); border-color:rgba(163,113,247,0.4);">${escapeHtml(t)}</code>`).join('')}
+           </div>`
+        : '<div class="confirm-req-meta" style="color:var(--warning, #f59e0b); font-size:11px;">⚠️ 未带 traits</div>';
+    const presetBadge = action.preset_id
+        ? `<div class="confirm-req-meta" style="font-size:11px; color:var(--text-muted);">📦 Preset: ${escapeHtml(action.preset_id)}</div>`
+        : '';
+
+    const cardHtml = `
+        <div class="chat-action-card chat-confirm-card chat-confirm-project-card" id="${safeId}"
+             data-name="${escapeHtml(action.name || '')}"
+             data-description="${escapeHtml(action.description || '')}"
+             data-tech-stack="${escapeHtml(action.tech_stack || '')}"
+             data-git-remote-url="${escapeHtml(action.git_remote_url || '')}"
+             data-local-repo-path="${escapeHtml(action.local_repo_path || '')}"
+             data-traits="${traitsJsonAttr}"
+             data-preset-id="${escapeHtml(action.preset_id || '')}"
+             data-message-id="${escapeHtml(action._message_id || '')}"
+             style="border-left-color: var(--accent, #a371f7);">
+            <div class="action-title">📦 识别到新建项目意图，是否创建？</div>
+            <div class="action-detail">
+                <div class="confirm-proj-name-row">
+                    <label class="confirm-proj-name-label">项目名称</label>
+                    <input type="text" class="confirm-proj-name-input" id="projName_${safeId}"
+                           value="${escapeHtml(action.name || '')}" placeholder="输入项目名称"
+                           oninput="updateProjRepoName('${safeId}')">
+                </div>
+                <div class="confirm-proj-repo-hint" id="projRepoHint_${safeId}"></div>
+                ${action.description ? `<div class="confirm-req-desc">${escapeHtml(action.description)}</div>` : ''}
+                <div class="confirm-req-meta">Git 仓库：<code>${escapeHtml(action.git_remote_url || '')}</code></div>
+                ${action.tech_stack ? `<div class="confirm-req-meta">技术栈：${escapeHtml(action.tech_stack)}</div>` : ''}
+                ${action.local_repo_path ? `<div class="confirm-req-meta">本地路径：<code>${escapeHtml(action.local_repo_path)}</code></div>` : `<div class="confirm-req-meta" style="color:var(--text-muted);font-size:11px;" id="confirmProjDefaultPath">本地路径：自动生成（加载中…）</div>`}
+                ${traitChips}${presetBadge}
+                <div id="preview_${safeId}" style="margin-top:10px; padding:10px; background:var(--bg); border-radius:6px; font-size:12px;">
+                    <div style="color:var(--text-muted);">🔄 预计组装...</div>
+                </div>
+            </div>
+            <div class="confirm-req-btns">
+                <button class="btn btn-sm btn-primary" onclick="doConfirmProject('${safeId}')">✅ 确认创建</button>
+                <button class="btn btn-sm" onclick="doCancelProject('${safeId}')">✗ 取消</button>
+            </div>
+        </div>`;
+
+    const timeEl = contentEl.querySelector('.chat-msg-time');
+    const cardEl = document.createElement('div');
+    cardEl.innerHTML = cardHtml;
+    const child = cardEl.firstElementChild;
+    if (child) {
+        if (timeEl) contentEl.insertBefore(child, timeEl);
+        else contentEl.appendChild(child);
+    }
+
+    setTimeout(() => loadProjectAssemblyPreview(safeId, traitsArr), 50);
+    setTimeout(() => updateProjRepoName(safeId), 80);
+    if (!action.local_repo_path) {
+        setTimeout(async () => {
+            const el = document.getElementById('confirmProjDefaultPath');
+            if (!el) return;
+            try {
+                const d = await api('/system/settings/projects_default_dir');
+                const dir = d.value || 'backend/projects/';
+                const safeName = (action.name || '').replace(/[<>:"/\\|?*]/g, '-');
+                el.innerHTML = `本地路径：<code>${escapeHtml(dir + '\\' + safeName)}</code>`;
+            } catch (_) { el.textContent = '本地路径：自动生成到 backend/projects/'; }
+        }, 100);
+    }
+    scrollChatToBottom();
 }
 
 /** 构建批量需求卡片 HTML */
