@@ -414,11 +414,24 @@ async def _cmd_ads_init(args: str, project_id: Optional[str], context: dict) -> 
             created.append("rules/project-rules.md")
 
         summary = "\n".join(f"  ✅ {f}" for f in created) if created else "  （目录已存在，无需重建）"
+        # 检测 .gitignore 是否可能屏蔽 .ads/
+        gitignore_warn = ""
+        gitignore_file = repo / ".gitignore"
+        if gitignore_file.exists():
+            gi_content = gitignore_file.read_text(encoding="utf-8", errors="replace")
+            # 检测 .* 通配符（常见于 UE 项目）
+            if any(line.strip() in (".*", "/.*") for line in gi_content.splitlines()):
+                gitignore_warn = (
+                    "\n\n⚠️ **注意**：检测到 `.gitignore` 含 `.*` 规则，可能会忽略 `.ads/`。\n"
+                    "建议在 `.gitignore` 中添加：\n```\n!.ads/\n!.ads/**\n```"
+                )
+
         return CommandResult(
             success=True,
             output=f"✅ `.ads/` 目录已初始化\n{summary}\n\n"
                    f"目录：`{ads_dir}`\n\n"
-                   "可以开始编写项目规范：修改 `.ads/rules/project-rules.md`",
+                   f"可以开始编写项目规范：修改 `.ads/rules/project-rules.md`"
+                   f"{gitignore_warn}",
         )
     except Exception as e:
         return CommandResult(success=False, output=f"初始化失败: {e}")
