@@ -11799,8 +11799,27 @@ async function doConfirmSaveDoc(cardId) {
         card.innerHTML = `<div class="action-title" style="color:var(--success);">✅ 已保存到 <code>${escapeHtml(result.path || 'docs/' + filename)}</code></div>`;
         showToast(`文档已保存：docs/${filename}`, 'success');
     } catch (e) {
-        showToast(`保存失败: ${e.message}`, 'error');
+        const errMsg = e.message || '未知错误';
+        showToast(`保存失败: ${errMsg}`, 'error');
         if (btn) { btn.disabled = false; btn.textContent = '💾 确认保存'; }
+        // 在聊天里插入错误气泡，方便 AI 感知并协助解决
+        const container = document.getElementById('chatMessages');
+        if (container) {
+            const errBubble = document.createElement('div');
+            errBubble.className = 'chat-msg assistant';
+            errBubble.innerHTML = `
+                <div class="chat-msg-avatar" style="background:var(--error,#ef4444);color:#fff;font-size:14px;">⚠</div>
+                <div class="chat-msg-content">
+                    <div class="chat-msg-bubble" style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.3);">
+                        <div style="font-weight:600;color:var(--error,#ef4444);margin-bottom:4px;">⚠️ Git Commit 失败</div>
+                        <div style="font-size:13px;color:var(--text-secondary);">文件写入失败，代码未提交。<br>原因：${escHtml(errMsg)}</div>
+                        <div style="margin-top:8px;font-size:12px;color:var(--text-muted);">你可以告诉 AI 助手这个错误，让它帮你排查。</div>
+                    </div>
+                    <div class="chat-msg-time">${formatTime(new Date().toISOString())}</div>
+                </div>`;
+            container.appendChild(errBubble);
+            scrollChatToBottom();
+        }
     }
 }
 

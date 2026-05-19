@@ -274,7 +274,7 @@ async def chat_alert_hook(ctx: ToolHookContext) -> None:
     if not project_id:
         return
 
-    error_msg = str(ctx.error) if ctx.error else "未知错误"
+    error_msg = str(ctx.error) if ctx.error else f"工具 {tool} 执行失败（无详细错误信息）"
     ticket_id  = ctx.ticket_id
     agent_type = ctx.agent_type or "System"
 
