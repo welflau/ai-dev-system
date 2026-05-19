@@ -26,9 +26,10 @@
 
 ---
 
-### J-4. Agent REACT 模式接入 Diminishing Returns 验证（P1）
+### ✅ J-4. Agent REACT 模式接入 Diminishing Returns 验证（已验证 2026-05-19）
 
-`base.py:_react_with_think_inner` 的 QueryEngine 已有 Budget，需验证 `is_diminishing()` 实际是否触发。
+`QueryEngine.run()` → `budget.check()` → `is_diminishing()` 链路已通。
+连续 3 轮 < 500 token 时第 3 轮触发，所有 REACT Agent 自动受保护，无需额外修改。
 
 ---
 
