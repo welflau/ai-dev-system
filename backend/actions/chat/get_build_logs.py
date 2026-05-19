@@ -117,12 +117,12 @@ class GetBuildLogsAction(ActionBase):
         # ===== 2. SOP 驱动路径：ticket_logs 表（拉 reject 日志里的编译错误）=====
         reject_rows = await db.fetch_all(
             f"""SELECT tl.id, tl.ticket_id, tl.agent_type, tl.action,
-                       tl.message, tl.detail, tl.created_at,
+                       tl.detail, tl.created_at,
                        t.title, t.status
                FROM ticket_logs tl
                LEFT JOIN tickets t ON t.id = tl.ticket_id
                WHERE tl.project_id = ? AND tl.action = 'reject'
-               {"AND tl.message LIKE '%失败%' OR tl.message LIKE '%error%' OR tl.message LIKE '%ERROR%'" if failed_only else ""}
+               {"AND (tl.detail LIKE '%失败%' OR tl.detail LIKE '%error%' OR tl.detail LIKE '%ERROR%')" if failed_only else ""}
                ORDER BY tl.created_at DESC LIMIT ?""",
             (project_id, limit),
         )
@@ -135,7 +135,7 @@ class GetBuildLogsAction(ActionBase):
                 "ticket_title": row.get("title") or "-",
                 "ticket_status": row.get("status") or "-",
                 "agent": row["agent_type"],
-                "message": (row["message"] or "")[:300],
+                "message": (row["detail"] or "")[:300],
                 "created_at": row["created_at"],
             }
             # 结构化错误详情（engine_compile_failed / play_test_failed / self_test_failed）
