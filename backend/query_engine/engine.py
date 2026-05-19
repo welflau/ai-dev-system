@@ -261,6 +261,7 @@ class QueryEngine:
             tool_calls: List[Dict] = []
             round_input = 0
             round_output = 0
+            round_stop_reason = "end_turn"
 
             try:
                 async for chunk in self.llm._call_anthropic_tools_stream(
@@ -291,6 +292,7 @@ class QueryEngine:
                         usage = chunk.get("usage", {})
                         round_input  = usage.get("input_tokens",  0) or 0
                         round_output = usage.get("output_tokens", 0) or 0
+                        round_stop_reason = chunk.get("stop_reason", "end_turn") or "end_turn"
 
                     elif ctype == "error":
                         yield ErrorEvent(message=chunk.get("message", "LLM 错误"))
@@ -324,6 +326,7 @@ class QueryEngine:
                     rounds=round_count,
                     total_tokens=self.budget.used_tokens,
                     all_confirm_results=all_confirm_results,
+                    stop_reason=round_stop_reason,
                 )
                 return
 

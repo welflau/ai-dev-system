@@ -595,6 +595,7 @@ class ChatAssistantAgent(BaseAgent):
                         "thinking_steps": event.thinking_steps or [],
                         "action": event.final_action,
                         "actions": event.all_confirm_results if len(event.all_confirm_results) > 1 else None,
+                        "stop_reason": event.stop_reason,
                     }
                 elif isinstance(event, BudgetExceededEvent):
                     yield {"type": "budget_exceeded", "reason": event.reason}
@@ -740,6 +741,7 @@ class ChatAssistantAgent(BaseAgent):
                         "thinking_steps": event.thinking_steps or [],
                         "action": event.final_action,
                         "actions": event.all_confirm_results if len(event.all_confirm_results) > 1 else None,
+                        "stop_reason": event.stop_reason,
                     }
                 elif isinstance(event, BudgetExceededEvent):
                     yield {"type": "budget_exceeded", "reason": event.reason}

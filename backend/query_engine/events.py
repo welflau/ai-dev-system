@@ -75,6 +75,7 @@ class MessageDoneEvent:
     rounds: int
     total_tokens: int
     all_confirm_results: List[dict] = field(default_factory=list)
+    stop_reason: str = "end_turn"   # end_turn / max_tokens / tool_use / stop_sequence
 
 
 @dataclass

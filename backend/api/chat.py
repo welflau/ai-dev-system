@@ -600,7 +600,7 @@ async def _chat_stream_generator(
                                              thinking=save_thinking)
                 except Exception as _se:
                     logger.warning("流式消息保存失败: %s", _se)
-                yield _sse("message_done", {"rounds": ev.get("rounds", 1)})
+                yield _sse("message_done", {"rounds": ev.get("rounds", 1), "stop_reason": ev.get("stop_reason", "end_turn")})
                 return  # generator 结束，不再执行后续保存
 
     except Exception as e:
@@ -1934,7 +1934,7 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
                                              thinking=save_thinking_g)
                 except Exception as _se:
                     logger.warning("全局流式消息保存失败: %s", _se)
-                yield _sse("message_done", {"rounds": ev.get("rounds", 1)})
+                yield _sse("message_done", {"rounds": ev.get("rounds", 1), "stop_reason": ev.get("stop_reason", "end_turn")})
                 return
 
     except Exception as e:

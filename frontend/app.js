@@ -9574,6 +9574,7 @@ async function _sendChatStreaming(url, body) {
     let finalAction = null;
     let finalActions = [];
     // J-3b: 分组思考面板状态
+    let _stopReasonWarning = null;   // 'max_tokens' | null
     let _roundsPanel = null;          // 整体容器
     let _roundsHeader = null;         // 标题行（"思考了 N 轮 · M 步 · Xs"）
     let _curRoundEl = null;           // 当前轮次 DOM 元素
@@ -9798,6 +9799,10 @@ async function _sendChatStreaming(url, body) {
                     return { reply: data.message, action: null, actions: [], _streamed: true };
 
                 } else if (eventName === 'message_done') {
+                    // 检查 stop_reason：max_tokens 说明回复被截断
+                    if (data.stop_reason === 'max_tokens') {
+                        _stopReasonWarning = 'max_tokens';
+                    }
                     break;
                 }
                 eventName = '';
@@ -9839,6 +9844,13 @@ async function _sendChatStreaming(url, body) {
             _roundsHeader.textContent = `思考了 ${_roundCount} 轮${stepPart}${elapsed ? ' · ' + elapsed : ''}`;
         }
         _roundsPanel.classList.add('crp-collapsed');
+        // max_tokens 截断提示：在思考面板下方插入说明
+        if (_stopReasonWarning === 'max_tokens') {
+            const warn = document.createElement('div');
+            warn.className = 'crp-truncated-hint';
+            warn.innerHTML = `⚠️ <b>回复被截断</b>（超出单次输出上限）<br>发送 <code>继续</code> 让 AI 接着执行未完成的操作`;
+            _roundsPanel.insertAdjacentElement('afterend', warn);
+        }
     }
     _chatThinkingFinish();
 

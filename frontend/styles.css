@@ -8830,3 +8830,21 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
     font-size: 11px; color: var(--text-muted);
     line-height: 1.5; white-space: pre-wrap; word-break: break-word;
 }
+
+/* 回复截断提示（stop_reason=max_tokens） */
+.crp-truncated-hint {
+    margin: 4px 0 6px 36px;
+    padding: 6px 12px;
+    font-size: 12px;
+    color: rgba(245,158,11,0.9);
+    background: rgba(245,158,11,0.08);
+    border-left: 2px solid rgba(245,158,11,0.5);
+    border-radius: 0 6px 6px 0;
+    line-height: 1.6;
+}
+.crp-truncated-hint code {
+    background: rgba(245,158,11,0.15);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 11px;
+}
