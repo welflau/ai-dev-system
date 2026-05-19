@@ -12319,7 +12319,50 @@ function _resetAgentTests() {
 }
 
 function handleChatKeydown(e) {
+    // Tab 鍵：補全當前高亮的斜杠命令
+    if (e.key === 'Tab') {
+        const box = document.getElementById('slashSuggestBox');
+        if (box && box.style.display !== 'none') {
+            e.preventDefault();
+            const active = box.querySelector('.slash-suggest-active');
+            if (active) active.click();
+            return;
+        }
+    }
+
+    // 上下鍵：在補全列表間導航
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        const box = document.getElementById('slashSuggestBox');
+        if (box && box.style.display !== 'none') {
+            e.preventDefault();
+            const items = [...box.querySelectorAll('.slash-suggest-item')];
+            if (!items.length) return;
+            const activeIdx = items.findIndex(i => i.classList.contains('slash-suggest-active'));
+            const nextIdx = e.key === 'ArrowDown'
+                ? (activeIdx + 1) % items.length
+                : (activeIdx - 1 + items.length) % items.length;
+            items.forEach(i => i.classList.remove('slash-suggest-active'));
+            items[nextIdx].classList.add('slash-suggest-active');
+            items[nextIdx].scrollIntoView({ block: 'nearest' });
+            return;
+        }
+    }
+
+    if (e.key === 'Escape') {
+        const box = document.getElementById('slashSuggestBox');
+        if (box && box.style.display !== 'none') {
+            _hideSlashSuggestions();
+            return;
+        }
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
+        // Enter 也可確認補全
+        const box = document.getElementById('slashSuggestBox');
+        if (box && box.style.display !== 'none') {
+            const active = box.querySelector('.slash-suggest-active');
+            if (active) { e.preventDefault(); active.click(); return; }
+        }
         e.preventDefault();
         // 斜杠命令拦截
         const input = document.getElementById('chatInput');
