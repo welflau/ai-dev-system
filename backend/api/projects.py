@@ -30,6 +30,34 @@ def _ensure_git_path(project: dict):
 
 
 @router.post("")
+def _auto_init_ads_dir(repo_path: str, project_name: str, traits: list) -> None:
+    """新建项目时自动创建 .ads/ 目录结构（不覆盖已有文件）。"""
+    import json as _json
+    from pathlib import Path
+    ads_dir = Path(repo_path) / ".ads"
+    (ads_dir / "rules").mkdir(parents=True, exist_ok=True)
+    (ads_dir / "skills").mkdir(parents=True, exist_ok=True)
+
+    # config.json（不存在才创建）
+    cfg_file = ads_dir / "config.json"
+    if not cfg_file.exists():
+        cfg_file.write_text(_json.dumps({
+            "project_name": project_name,
+            "traits": traits,
+            "description": ""
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    # rules/project-rules.md 模板（不存在才创建）
+    rule_file = ads_dir / "rules" / "project-rules.md"
+    if not rule_file.exists():
+        rule_file.write_text(
+            "---\nalwaysApply: true\npriority: medium\n"
+            f"description: {project_name} 项目编码规范\n---\n\n"
+            f"# {project_name} 项目规范\n\n<!-- 在这里写项目专属的编码规范 -->\n",
+            encoding="utf-8"
+        )
+
+
 def _load_ads_config(repo_path: str) -> dict:
     """读取 {repo}/.ads/config.json，返回配置字典，不存在或解析失败返回 {}。"""
     import json as _json
@@ -199,6 +227,12 @@ async def create_project(req: ProjectCreate):
             "updated_at": now,
         }
         await db.insert("projects", data)
+
+        # 自动初始化 .ads/ 目录结构（新建项目时自动创建，不覆盖已有内容）
+        try:
+            _auto_init_ads_dir(repo_path, req.name, traits_list)
+        except Exception as e:
+            logger.debug("自动初始化 .ads/ 失败（忽略）: %s", e)
 
         # P4: 读取 .ads/config.json，覆盖 traits 等配置
         try:
