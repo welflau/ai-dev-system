@@ -12144,7 +12144,7 @@ async function _onChatInputChange(val) {
         }
         return;
     }
-    if (!val.startsWith('/') || val.length < 2 || val.startsWith('/ ')) {
+    if (!val.startsWith('/') || val.startsWith('/ ')) {
         _hideSlashSuggestions(); return;
     }
     const query = val.slice(1).toLowerCase();
