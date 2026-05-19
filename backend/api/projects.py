@@ -1536,3 +1536,60 @@ async def get_project_flow(project_id: str):
         "active_fragments": fragments,
         "sop_name": sop_cfg.get("name", "") if isinstance(sop_cfg, dict) else "",
     }
+
+
+# ==================== 记忆管理 API ====================
+
+@router.get("/{project_id}/memory")
+async def list_memory(
+    project_id: str,
+    query: str = "",
+    type: str = "",
+    limit: int = 50,
+):
+    """列出项目记忆（支持搜索和类型过滤）"""
+    from database import db
+    pid = project_id if project_id != "__global__" else "__global__"
+    try:
+        if query:
+            rows = await db.fetch_all(
+                """SELECT id, type, title, content, agent_type, created_at
+                   FROM agent_memory
+                   WHERE (project_id = ? OR project_id = '__global__')
+                   AND (title LIKE ? OR content LIKE ?)
+                   ORDER BY created_at DESC LIMIT ?""",
+                (pid, f"%{query}%", f"%{query}%", limit),
+            )
+        elif type and type != "all":
+            rows = await db.fetch_all(
+                """SELECT id, type, title, content, agent_type, created_at
+                   FROM agent_memory
+                   WHERE (project_id = ? OR project_id = '__global__')
+                   AND type = ?
+                   ORDER BY created_at DESC LIMIT ?""",
+                (pid, type, limit),
+            )
+        else:
+            rows = await db.fetch_all(
+                """SELECT id, type, title, content, agent_type, created_at
+                   FROM agent_memory
+                   WHERE project_id = ? OR project_id = '__global__'
+                   ORDER BY created_at DESC LIMIT ?""",
+                (pid, limit),
+            )
+        return {"memories": [dict(r) for r in rows], "total": len(rows)}
+    except Exception as e:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/{project_id}/memory/{memory_id}")
+async def delete_memory(project_id: str, memory_id: str):
+    """删除一条记忆"""
+    from database import db
+    try:
+        await db.execute("DELETE FROM agent_memory WHERE id = ?", (memory_id,))
+        return {"success": True, "id": memory_id}
+    except Exception as e:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=500, detail=str(e))

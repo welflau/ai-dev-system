@@ -9301,11 +9301,94 @@ function _refreshHistoryRunningState() {
 async function toggleChatHistory() {
     const panel = document.getElementById('chatHistoryPanel');
     if (!panel) return;
+    // 关闭记忆面板
+    document.getElementById('memoryPanel')?.style && (document.getElementById('memoryPanel').style.display = 'none');
     if (panel.style.display === 'none') {
         panel.style.display = 'flex';
         await loadChatSessions();
     } else {
         panel.style.display = 'none';
+    }
+}
+
+// ==================== 记忆管理面板 ====================
+
+let _memoryFilter = 'all';
+
+async function toggleMemoryPanel() {
+    const panel = document.getElementById('memoryPanel');
+    if (!panel) return;
+    // 关闭历史面板
+    document.getElementById('chatHistoryPanel')?.style && (document.getElementById('chatHistoryPanel').style.display = 'none');
+    if (panel.style.display === 'none') {
+        panel.style.display = 'flex';
+        panel.style.flexDirection = 'column';
+        await loadMemoryPanel('', _memoryFilter);
+    } else {
+        panel.style.display = 'none';
+    }
+}
+
+async function loadMemoryPanel(query = '', typeFilter = null) {
+    if (typeFilter !== null) _memoryFilter = typeFilter;
+    const list = document.getElementById('memoryPanelList');
+    if (!list) return;
+
+    // 更新过滤按钮高亮
+    ['all','user_profile','behavior_feedback','project_context','external_ref'].forEach(t => {
+        const btn = document.getElementById('memFilter' + {
+            all:'All', user_profile:'User', behavior_feedback:'Feedback',
+            project_context:'Project', external_ref:'External'
+        }[t]);
+        if (btn) btn.style.background = (t === _memoryFilter) ? 'var(--primary)' : '';
+        if (btn) btn.style.color = (t === _memoryFilter) ? '#fff' : '';
+    });
+
+    list.innerHTML = '<div style="padding:12px;color:var(--text-muted);font-size:12px;">加载中…</div>';
+    try {
+        const pid = currentProjectId || '__global__';
+        let url = `/projects/${pid}/memory?limit=50`;
+        if (query) url += `&query=${encodeURIComponent(query)}`;
+        if (_memoryFilter && _memoryFilter !== 'all') url += `&type=${_memoryFilter}`;
+        const data = await api(url);
+        const items = data.memories || [];
+        if (!items.length) {
+            list.innerHTML = '<div style="padding:16px;color:var(--text-muted);font-size:12px;text-align:center;">暂无记忆</div>';
+            return;
+        }
+        const _TYPE_ICONS = {
+            user_profile:'👤', behavior_feedback:'💬',
+            project_context:'📁', external_ref:'🔗',
+            user:'👤', project:'📁', technical:'📁',
+            decision:'📁', handoff:'📁', insight:'💬', project_status:'📁'
+        };
+        list.innerHTML = items.map(m => {
+            const icon = _TYPE_ICONS[m.type] || '📝';
+            const date = (m.created_at || '').slice(0, 10);
+            return `<div class="memory-item">
+                <div class="memory-item-header">
+                    <span class="memory-type-badge">${icon} ${escHtml(m.type)}</span>
+                    <span class="memory-date">${date}</span>
+                    <button class="btn-icon memory-del-btn" onclick="deleteMemory('${m.id}')" title="删除">🗑</button>
+                </div>
+                <div class="memory-title">${escHtml(m.title)}</div>
+                ${m.content ? `<div class="memory-content">${escHtml(m.content.slice(0, 200))}${m.content.length > 200 ? '…' : ''}</div>` : ''}
+            </div>`;
+        }).join('');
+    } catch(e) {
+        list.innerHTML = `<div style="padding:12px;color:var(--warning);font-size:12px;">加载失败: ${escHtml(String(e))}</div>`;
+    }
+}
+
+async function deleteMemory(memId) {
+    if (!confirm('确认删除这条记忆？')) return;
+    try {
+        const pid = currentProjectId || '__global__';
+        await originalApi(`/projects/${pid}/memory/${memId}`, { method: 'DELETE' });
+        await loadMemoryPanel(document.getElementById('memorySearchInput')?.value || '', _memoryFilter);
+        showToast('记忆已删除', 'success');
+    } catch(e) {
+        showToast('删除失败: ' + e, 'error');
     }
 }
 

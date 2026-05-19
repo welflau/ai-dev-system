@@ -8792,3 +8792,41 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
 .cmd-fail { border-color: rgba(252,129,129,0.6); }
 .cmd-label { font-weight: 600; display: block; margin-bottom: 4px; }
 .cmd-output { color: var(--text-secondary, #a0aec0); line-height: 1.6; }
+
+/* ==================== 记忆管理面板 ==================== */
+.memory-item {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    margin-bottom: 6px;
+    transition: border-color 0.15s;
+}
+.memory-item:hover { border-color: rgba(163,113,247,0.4); }
+.memory-item-header {
+    display: flex; align-items: center; gap: 6px;
+    margin-bottom: 4px;
+}
+.memory-type-badge {
+    font-size: 10px; padding: 1px 6px;
+    border-radius: 10px;
+    background: rgba(163,113,247,0.15);
+    color: rgba(163,113,247,0.9);
+    flex-shrink: 0;
+}
+.memory-date { font-size: 11px; color: var(--text-muted); flex: 1; }
+.memory-del-btn {
+    opacity: 0; transition: opacity 0.15s;
+    font-size: 12px; padding: 0 4px;
+    color: var(--text-muted);
+}
+.memory-item:hover .memory-del-btn { opacity: 1; }
+.memory-title {
+    font-size: 12px; font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: 2px;
+}
+.memory-content {
+    font-size: 11px; color: var(--text-muted);
+    line-height: 1.5; white-space: pre-wrap; word-break: break-word;
+}
