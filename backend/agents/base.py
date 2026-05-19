@@ -93,6 +93,7 @@ class BaseAgent(ABC):
 
     async def _resolve_skills_prompt(self, context: Dict[str, Any]) -> str:
         """v0.17: 根据 context.project_id 拉项目 traits，动态计算 skills prompt。
+        A-2 补全：同时注入项目记忆（所有 Agent 共享）。
         无 project_id 或查 traits 失败 → 退回 __init__ 时算好的静态版（兜底）。
         """
         project_id = context.get("project_id")
@@ -110,10 +111,16 @@ class BaseAgent(ABC):
             if not isinstance(traits, list):
                 traits = []
             from skills import skill_loader
-            return skill_loader.build_prompt_for_agent(self.agent_type, traits=traits)
+            skills_text = skill_loader.build_prompt_for_agent(self.agent_type, traits=traits)
         except Exception as e:
             logger.warning("动态计算 skills 失败（Agent=%s, project=%s）: %s", self.agent_type, project_id, e)
-            return self._skills_prompt
+            skills_text = self._skills_prompt
+
+        # 注入项目记忆（A-2 能力下沉完整化）
+        memory_text = await self.get_memory_prompt(project_id, limit=3)
+        if memory_text:
+            return f"{skills_text}\n\n{memory_text}" if skills_text else memory_text
+        return skills_text
 
     async def run_action(self, action_name: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """执行指定 Action（含 v0.17 动态 Skills 注入 + Pre/Post Hooks）
@@ -253,13 +260,26 @@ class BaseAgent(ABC):
             max_rounds=self.max_react_loop,
         )
 
-        # 构建初始消息
+        # 构建初始消息（注入 Memory + Skills）
         action_names = list(self._actions.keys())
+        project_id = context.get("project_id", "")
+
+        # 注入记忆（BaseAgent.get_memory_prompt，所有 Agent 共享）
+        memory_text = ""
+        if project_id:
+            try:
+                memory_text = await self.get_memory_prompt(project_id, limit=3)
+            except Exception:
+                pass
+
         system = (
             f"你是 {self.agent_type}，当前任务：{context.get('ticket_title', task_name)}\n"
             f"可用工具：{', '.join(action_names)}，以及 done（完成时调用）\n"
             f"请依次调用合适的工具完成任务，所有步骤完成后调用 done。"
         )
+        if memory_text:
+            system += f"\n\n{memory_text}"
+
         messages = [{"role": "user", "content": f"请执行任务：{task_name}"}]
 
         result = {}
