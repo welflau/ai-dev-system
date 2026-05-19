@@ -1,57 +1,57 @@
-# NextPhase Commands 斜杠命令系統完整驗收
+# NextPhase Commands 斜杠命令系统完整验收
 
 > 系列：NextPhase  
 > 日期：2026-05-19  
-> 提交範圍：`e973507`（A-1）→ `6d9bbb2`（鍵盤操作）
+> 提交范围：`e973507`（A-1）→ `6d9bbb2`（键盘操作）
 
 ---
 
-## 效果截圖
+## 效果截图
 
-![斜杠命令補全面板](../docs/screenshots/20260519_slash_commands.png)
+![斜杠命令补全面板](../docs/screenshots/20260519_slash_commands.png)
 
-截圖說明：
-- 輸入 `/` 立即彈出所有可用命令補全
-- 高亮顯示當前選中項（`/compact`）
-- 每條命令顯示：**命令名**（紫色）+ **參數提示**（藍色）+ **描述**
-- 使用 ↑↓ 鍵導航，Tab/Enter 補全，Esc 關閉
+截图说明：
+- 输入 `/` 立即弹出所有可用命令补全
+- 高亮显示当前选中项（`/compact`）
+- 每条命令显示：**命令名**（紫色）+ **参数提示**（蓝色）+ **描述**
+- 使用 ↑↓ 键导航，Tab/Enter 补全，Esc 关闭
 
 ---
 
-## 完整功能清單
+## 完整功能清单
 
-### 可用命令（7 個）
+### 可用命令（7 个）
 
-| 命令 | 參數 | 功能 |
+| 命令 | 参数 | 功能 |
 |---|---|---|
-| `/compact` | — | 手動觸發對話歷史壓縮 |
-| `/memory` | `[query]` | 查看或搜索 Agent 記憶 |
-| `/skills` | — | 查看當前項目已加載 Skills |
-| `/think` | `<on\|off\|adaptive>` | 切換 Extended Thinking 模式 |
-| `/ue-bp-gen` | `<描述>` | 生成 Blueprint 並寫入 UE Editor |
-| `/ue-level` | `<描述>` | 生成並布置 UE 關卡 |
-| `/ue-run` | `<python>` | 在 UE Editor 執行 Python 代碼 |
+| `/compact` | — | 手动触发对话历史压缩 |
+| `/memory` | `[query]` | 查看或搜索 Agent 记忆 |
+| `/skills` | — | 查看当前项目已加载 Skills |
+| `/think` | `<on\|off\|adaptive>` | 切换 Extended Thinking 模式 |
+| `/ue-bp-gen` | `<描述>` | 生成 Blueprint 并写入 UE Editor |
+| `/ue-level` | `<描述>` | 生成并布置 UE 关卡 |
+| `/ue-run` | `<python>` | 在 UE Editor 执行 Python 代码 |
 
-### 鍵盤操作
+### 键盘操作
 
-| 按鍵 | 行為 |
+| 按键 | 行为 |
 |---|---|
-| `/` | 立即顯示所有命令補全 |
-| `/m`（任意字母）| 過濾匹配命令 |
-| `↑` `↓` | 在建議列表間導航 |
-| `Tab` / `Enter` | 補全當前高亮命令 |
-| `Esc` | 關閉建議列表 |
+| `/` | 立即显示所有命令补全 |
+| `/m`（任意字母）| 过滤匹配命令 |
+| `↑` `↓` | 在建议列表间导航 |
+| `Tab` / `Enter` | 补全当前高亮命令 |
+| `Esc` | 关闭建议列表 |
 
-### 擴展方式
+### 扩展方式
 
-新增命令只需在 `backend/skills/commands/` 加 `.md` 文件 + 在 `api/commands.py` 加處理函數，服務器重啟後自動出現在補全列表。
+新增命令只需在 `backend/skills/commands/` 加 `.md` 文件 + 在 `api/commands.py` 加处理函数，服务器重启后自动出现在补全列表。
 
 ---
 
-## 調試記錄
+## 调试记录
 
-| 問題 | 原因 | 修復 |
+| 问题 | 原因 | 修复 |
 |---|---|---|
-| 頁面白屏 JS 報錯 | `@file` 正則 `/[^\s]*` 中 `/` 未轉義 | 改為 `\/[^\s]*` |
-| 補全框不顯示 | `insertAdjacentElement('beforebegin')` 插在 wrap 外，`position:absolute` 計算錯誤 | 改為 `afterbegin` 插入 wrap 內，加 `position:relative` |
-| 輸入 `/` 不觸發 | `val.length < 2` 過濾了單字符 `/` | 移除長度限制 |
+| 页面白屏 JS 报错 | `@file` 正则 `/[^\s]*` 中 `/` 未转义 | 改为 `\/[^\s]*` |
+| 补全框不显示 | `insertAdjacentElement('beforebegin')` 插在 wrap 外，`position:absolute` 计算错误 | 改为 `afterbegin` 插入 wrap 内，加 `position:relative` |
+| 输入 `/` 不触发 | `val.length < 2` 过滤了单字符 `/` | 移除长度限制 |

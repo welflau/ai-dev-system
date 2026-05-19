@@ -3,59 +3,59 @@
 > 系列：NextPhase  
 > 日期：2026-05-18  
 > 提交：`63e1635`  
-> 依賴：B-0 `ue_python_bridge`
+> 依赖：B-0 `ue_python_bridge`
 
 ---
 
-## 實現
+## 实现
 
-### 執行流程
+### 执行流程
 
 ```
-用戶輸入描述（自然語言）
+用户输入描述（自然语言）
   ↓
 LLM（temperature=0.2）
   system: _BP_SYSTEM_PROMPT（含常用模式 few-shot）
-  ↓ 生成 UE Python 代碼
+  ↓ 生成 UE Python 代码
 ue_python_bridge.run_python(code, project_id)
-  ↓ 通過 Remote Execution 發送到 UE Editor
-Blueprint 創建/修改/編譯
+  ↓ 通过 Remote Execution 发送到 UE Editor
+Blueprint 创建/修改/编译
   ↓
 返回 stdout + result
 ```
 
-### `_BP_SYSTEM_PROMPT` 內容
+### `_BP_SYSTEM_PROMPT` 内容
 
-- Blueprint vs C++ 決策規則
-- 新建 Blueprint 類模式
-- 修改 CDO 屬性模式
-- 添加組件模式
-- 編譯 Blueprint 模式
-- API 限制說明（節點圖級別需 `/ue-extend Blueprint`）
+- Blueprint vs C++ 决策规则
+- 新建 Blueprint 类模式
+- 修改 CDO 属性模式
+- 添加组件模式
+- 编译 Blueprint 模式
+- API 限制说明（节点图级别需 `/ue-extend Blueprint`）
 
 ### 使用方式
 
-**通過 `/ue-bp-gen` 命令**：
+**通过 `/ue-bp-gen` 命令**：
 ```
-/ue-bp-gen 創建一個波次生成器，每隔5秒在隨機位置生成一個敵人
-/ue-bp-gen 修改 BP_PlayerCharacter 的移動速度為 600
-/ue-bp-gen 為 BP_Door 添加一個 IsLocked 布爾屬性，默認 false
-```
-
-**通過 AI 助手自然語言**（LLM 自動調用 `ue_blueprint_gen` 工具）：
-```
-「幫我創建一個 BP_WaveSpawner Blueprint，繼承自 Actor」
+/ue-bp-gen 创建一个波次生成器，每隔5秒在随机位置生成一个敌人
+/ue-bp-gen 修改 BP_PlayerCharacter 的移动速度为 600
+/ue-bp-gen 为 BP_Door 添加一个 IsLocked 布尔属性，默认 false
 ```
 
-### 返回內容
+**通过 AI 助手自然语言**（LLM 自动调用 `ue_blueprint_gen` 工具）：
+```
+「帮我创建一个 BP_WaveSpawner Blueprint，继承自 Actor」
+```
 
-- 執行成功：UE Editor 輸出的 stdout（如「✅ 已創建：/Game/Blueprints/BP_WaveSpawner」）
-- 執行失敗：錯誤信息
-- 附帶：生成的 Python 代碼（供用戶審查/複用）
+### 返回内容
+
+- 执行成功：UE Editor 输出的 stdout（如「✅ 已创建：/Game/Blueprints/BP_WaveSpawner」）
+- 执行失败：错误信息
+- 附带：生成的 Python 代码（供用户审查/复用）
 
 ---
 
 ## 下一步
 
-- **B-2**：LevelGenAction — 類似架構，生成關卡布置代碼
-- **B-3**：UEEditorAgent — 封裝 BP/Level 生成為工單 Agent，繼承 BaseAgent 公共能力
+- **B-2**：LevelGenAction — 类似架构，生成关卡布置代码
+- **B-3**：UEEditorAgent — 封装 BP/Level 生成为工单 Agent，继承 BaseAgent 公共能力
