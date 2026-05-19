@@ -1,6 +1,6 @@
 # AI Dev System — 待办清单
 
-> 最后更新: 2026-05-17
+"> 最后更新: 2026-05-19
 
 ---
 
@@ -84,6 +84,30 @@ if model_supports_thinking(model):
 **方案文档**：`docs/20260517_03_思考过程分组展示方案.md`
 
 **改动量**：~150 行，约半天，涉及 6 个文件（events.py / engine.py / chat_assistant.py / chat.py / app.js / styles.css）
+
+---
+
+### K. AI 助手无法访问系统内多类数据（P1/P2）
+
+**背景**：系统 DB 有 60+ 张表，但 AI 助手只有部分数据的专用工具，其余只能靠 `shell` 间接查询。用户问「有哪些 Bug」「CI 构建结果如何」等问题时，AI 无法直接回答。
+
+**P1（实用性高，优先补）**：
+
+| 缺失工具 | 对应数据 | 用途 |
+|---|---|---|
+| `get_bugs` | `bugs` 表 | 查看项目 Bug 列表、状态、优先级 |
+| `get_ci_builds` | `ci_builds` 表 | 查看真实 CI 构建记录（现有 `get_build_logs` 只查 ticket_logs）|
+| `get_failure_cases` | `failure_cases` 表 | 查看失败案例库（AI 已写入但无法主动读取）|
+
+**P2（需要但不急）**：
+
+| 缺失工具 | 对应数据 |
+|---|---|
+| `get_milestones` | `milestones` 表（项目里程碑）|
+| `search_design_knowledge` | `design_knowledge` / `ux_knowledge` 表 |
+| `search_art_assets` | `art_assets` 表（美术资产库 33000+ 条）|
+
+**已知 Bug（已修复）**：`get_build_logs` 引用 `tl.message` 列（不存在），已改为 `tl.detail`（`205268f`）。
 
 ---
 
