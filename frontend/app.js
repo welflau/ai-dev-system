@@ -8597,9 +8597,15 @@ function _initChatSplitContainer() {
         Array.from(srcMessages.childNodes).forEach(node => {
             dstMessages.appendChild(node.cloneNode(true));
         });
-        // 克隆后确保所有思考面板展开显示（接近的面板可能已被 finish() 折叠）
+        // 克隆后展开所有思考相关面板（分组轮次面板、推理链面板、旧思考面板）
         dstMessages.querySelectorAll('.chat-thinking-panel').forEach(p => {
             p.classList.add('ctp-expanded');
+        });
+        dstMessages.querySelectorAll('.crp-rounds-panel').forEach(p => {
+            p.classList.remove('crp-collapsed');
+        });
+        dstMessages.querySelectorAll('.chat-reasoning-panel').forEach(p => {
+            p.classList.remove('crp-collapsed');
         });
         requestAnimationFrame(() => { dstMessages.scrollTop = dstMessages.scrollHeight; });
     }
