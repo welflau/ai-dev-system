@@ -157,13 +157,15 @@ async def _dispatch_command(
 ) -> CommandResult:
     """命令分发器：路由到对应处理函数"""
     handlers = {
-        "compact":   _cmd_compact,
-        "memory":    _cmd_memory,
-        "think":     _cmd_think,
-        "skills":    _cmd_skills,
-        "ue-run":    _cmd_ue_run,
-        "ue-bp-gen": _cmd_ue_bp_gen,
-        "ue-level":  _cmd_ue_level,
+        "compact":        _cmd_compact,
+        "memory":         _cmd_memory,
+        "think":          _cmd_think,
+        "skills":         _cmd_skills,
+        "ue-run":         _cmd_ue_run,
+        "ue-bp-gen":      _cmd_ue_bp_gen,
+        "ue-level":       _cmd_ue_level,
+        "memory-export":  _cmd_memory_export,
+        "memory-import":  _cmd_memory_import,
     }
 
     handler = handlers.get(name)
@@ -264,6 +266,108 @@ async def _cmd_skills(args: str, project_id: Optional[str], context: dict) -> Co
         return CommandResult(success=True, output="\n".join(lines))
     except Exception as e:
         return CommandResult(success=False, output=f"获取 Skills 失败: {e}")
+
+
+async def _cmd_memory_export(args: str, project_id: Optional[str], context: dict) -> CommandResult:
+    """将项目记忆导出到 {仓库}/.ads/memory.md（P3）"""
+    if not project_id:
+        return CommandResult(success=False, output="❌ /memory-export 需要在项目内使用")
+    try:
+        from database import db
+        from pathlib import Path
+        # 查项目仓库路径
+        row = await db.fetch_one("SELECT git_repo_path, name FROM projects WHERE id = ?", (project_id,))
+        if not row or not row.get("git_repo_path"):
+            return CommandResult(success=False, output="❌ 项目没有配置 Git 仓库路径")
+        repo_path = Path(row["git_repo_path"])
+        ads_dir = repo_path / ".ads"
+        ads_dir.mkdir(exist_ok=True)
+
+        # 查记忆
+        rows = await db.fetch_all(
+            """SELECT type, title, content, created_at FROM agent_memory
+               WHERE project_id = ? ORDER BY created_at DESC""",
+            (project_id,),
+        )
+        if not rows:
+            return CommandResult(success=True, output="项目暂无记忆，无需导出")
+
+        _ICONS = {"user_profile":"👤", "behavior_feedback":"💬",
+                  "project_context":"📁", "external_ref":"🔗",
+                  "user":"👤", "project":"📁", "technical":"📁",
+                  "decision":"📁", "insight":"💬", "project_status":"📁", "handoff":"📁"}
+        from utils import now_iso
+        lines = [f"# 项目记忆（{row['name']}）\n\n> 最后导出：{now_iso()[:10]}\n"]
+        for r in rows:
+            icon = _ICONS.get(r["type"], "📝")
+            date = r["created_at"][:10]
+            lines.append(f"- [{icon} {r['type']}] **{r['title']}**（{date}）")
+            if r["content"]:
+                lines.append(f"  {r['content'][:200]}")
+        content = "\n".join(lines)
+        (ads_dir / "memory.md").write_text(content, encoding="utf-8")
+        return CommandResult(
+            success=True,
+            output=f"✅ 已导出 {len(rows)} 条记忆到 `.ads/memory.md`",
+            data={"path": str(ads_dir / "memory.md"), "count": len(rows)},
+        )
+    except Exception as e:
+        return CommandResult(success=False, output=f"导出失败: {e}")
+
+
+async def _cmd_memory_import(args: str, project_id: Optional[str], context: dict) -> CommandResult:
+    """从 {仓库}/.ads/memory.md 导入记忆到数据库（P3）"""
+    if not project_id:
+        return CommandResult(success=False, output="❌ /memory-import 需要在项目内使用")
+    try:
+        from database import db
+        from pathlib import Path
+        row = await db.fetch_one("SELECT git_repo_path FROM projects WHERE id = ?", (project_id,))
+        if not row or not row.get("git_repo_path"):
+            return CommandResult(success=False, output="❌ 项目没有配置 Git 仓库路径")
+        memory_file = Path(row["git_repo_path"]) / ".ads" / "memory.md"
+        if not memory_file.exists():
+            return CommandResult(success=False, output="❌ 找不到 .ads/memory.md，请先在仓库中创建")
+        content = memory_file.read_text(encoding="utf-8", errors="replace")
+
+        # 简单解析：每行 "- [图标 type] **标题**（日期）" + 下一行内容
+        import re
+        from utils import generate_id, now_iso
+        pattern = re.compile(r"-\s+\[.+?\s+(\w+)\]\s+\*\*(.+?)\*\*")
+        imported = 0
+        lines = content.splitlines()
+        i = 0
+        while i < len(lines):
+            m = pattern.match(lines[i].strip())
+            if m:
+                mem_type, title = m.group(1), m.group(2)
+                memo_content = ""
+                if i + 1 < len(lines) and lines[i+1].startswith("  "):
+                    memo_content = lines[i+1].strip()
+                    i += 1
+                # 不重复导入（按 title 去重）
+                exists = await db.fetch_one(
+                    "SELECT id FROM agent_memory WHERE project_id=? AND title=?",
+                    (project_id, title),
+                )
+                if not exists:
+                    await db.insert("agent_memory", {
+                        "id": generate_id("MEM"),
+                        "project_id": project_id,
+                        "type": mem_type if mem_type in ("user_profile","behavior_feedback","project_context","external_ref") else "project_context",
+                        "agent_type": "import",
+                        "title": title[:200],
+                        "content": memo_content[:2000],
+                        "tags": "[]",
+                        "requirement_id": None,
+                        "ticket_id": None,
+                        "created_at": now_iso(),
+                    })
+                    imported += 1
+            i += 1
+        return CommandResult(success=True, output=f"✅ 已导入 {imported} 条记忆（跳过重复项）")
+    except Exception as e:
+        return CommandResult(success=False, output=f"导入失败: {e}")
 
 
 async def _cmd_ue_run(args: str, project_id: Optional[str], context: dict) -> CommandResult:
