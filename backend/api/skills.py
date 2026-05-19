@@ -247,12 +247,15 @@ async def uninstall_use_skill(dir_name: str):
 # ── 项目 .Agent/skills 目录助手 ─────────────────────────────────────────────
 
 async def _get_project_agent_skills_dir(project_id: str) -> Path:
-    """返回项目 .Agent/skills/ 目录路径。
-    优先用 git_repo_path，不存在时降级到 data/project_skills/{id}/.Agent/skills/。
+    """返回项目 Skills 目录路径。
+    P2: 优先 .ads/skills/，降级 .Agent/skills/（向后兼容）。
     """
     row = await db.fetch_one("SELECT git_repo_path FROM projects WHERE id=?", (project_id,))
     if row and row.get("git_repo_path"):
         base = Path(row["git_repo_path"])
+        ads_skills = base / ".ads" / "skills"
+        if ads_skills.exists():
+            return ads_skills
         return base / ".Agent" / "skills"
     fallback = Path(__file__).parent.parent / "data" / "project_skills" / project_id / ".Agent" / "skills"
     return fallback

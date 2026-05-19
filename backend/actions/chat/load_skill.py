@@ -156,13 +156,21 @@ async def _get_available_skill_ids(project_id: str = None) -> list:
 
 
 async def _get_project_agent_skills_dir(project_id: str):
-    """返回项目 .Agent/skills/ 目录路径（与 api/skills.py 同逻辑）。"""
+    """返回项目 Skills 目录路径。
+    P2: 优先读 .ads/skills/，降级到 .Agent/skills/（向后兼容）。
+    """
     from pathlib import Path
     from database import db
     try:
         row = await db.fetch_one("SELECT git_repo_path FROM projects WHERE id=?", (project_id,))
         if row and row.get("git_repo_path"):
-            return Path(row["git_repo_path"]) / ".Agent" / "skills"
+            repo = Path(row["git_repo_path"])
+            # P2: 优先 .ads/skills/
+            ads_skills = repo / ".ads" / "skills"
+            if ads_skills.exists():
+                return ads_skills
+            # 向后兼容 .Agent/skills/
+            return repo / ".Agent" / "skills"
     except Exception:
         pass
     return Path(__file__).parent.parent.parent / "data" / "project_skills" / project_id / ".Agent" / "skills"
