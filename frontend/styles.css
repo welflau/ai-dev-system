@@ -5435,10 +5435,15 @@ body.chat-fullscreen .chat-panel {
     right: 0;
     width: 100% !important;
     max-width: 100% !important;
-    top: var(--topbar-height);
+    top: calc(var(--topbar-height) + 26px);  /* topbar + metrics-bar */
     display: flex;
     box-shadow: none;
     border-left: none;
+}
+
+/* 全屏时 metrics-bar 保持可见，z-index 高于 chat-panel */
+body.chat-fullscreen .metrics-bar {
+    z-index: 200;
 }
 
 body.chat-fullscreen .chat-panel-resize {
