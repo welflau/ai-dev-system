@@ -30,6 +30,19 @@ def _ensure_git_path(project: dict):
 
 
 @router.post("")
+def _load_ads_config(repo_path: str) -> dict:
+    """读取 {repo}/.ads/config.json，返回配置字典，不存在或解析失败返回 {}。"""
+    import json as _json
+    from pathlib import Path
+    cfg_file = Path(repo_path) / ".ads" / "config.json"
+    if not cfg_file.exists():
+        return {}
+    try:
+        return _json.loads(cfg_file.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return {}
+
+
 async def create_project(req: ProjectCreate):
     """创建项目"""
     import os
@@ -186,6 +199,25 @@ async def create_project(req: ProjectCreate):
             "updated_at": now,
         }
         await db.insert("projects", data)
+
+        # P4: 读取 .ads/config.json，覆盖 traits 等配置
+        try:
+            _ads_cfg = _load_ads_config(repo_path)
+            if _ads_cfg:
+                updates = {}
+                if "traits" in _ads_cfg and isinstance(_ads_cfg["traits"], list):
+                    # 合并：保留自动检测的 traits，追加 config 里声明的
+                    existing = json.loads(data.get("traits", "[]"))
+                    merged = list(dict.fromkeys(existing + _ads_cfg["traits"]))
+                    updates["traits"] = json.dumps(merged, ensure_ascii=False)
+                if "description" in _ads_cfg and not req.description:
+                    updates["description"] = str(_ads_cfg["description"])[:500]
+                if updates:
+                    updates["updated_at"] = now_iso()
+                    await db.update("projects", updates, "id = ?", (project_id,))
+                    logger.info("项目 %s 已从 .ads/config.json 更新配置", project_id[:12])
+        except Exception as e:
+            logger.debug("读取 .ads/config.json 失败（忽略）: %s", e)
 
         if remotes_list:
             logger.info("项目创建完成: %s (%s)，%d 个 Remote: %s",

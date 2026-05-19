@@ -166,6 +166,7 @@ async def _dispatch_command(
         "ue-level":       _cmd_ue_level,
         "memory-export":  _cmd_memory_export,
         "memory-import":  _cmd_memory_import,
+        "ads-init":       _cmd_ads_init,
     }
 
     handler = handlers.get(name)
@@ -368,6 +369,59 @@ async def _cmd_memory_import(args: str, project_id: Optional[str], context: dict
         return CommandResult(success=True, output=f"✅ 已导入 {imported} 条记忆（跳过重复项）")
     except Exception as e:
         return CommandResult(success=False, output=f"导入失败: {e}")
+
+
+async def _cmd_ads_init(args: str, project_id: Optional[str], context: dict) -> CommandResult:
+    """初始化项目 .ads/ 目录结构（P4）"""
+    if not project_id:
+        return CommandResult(success=False, output="❌ /ads-init 需要在项目内使用")
+    try:
+        from database import db
+        from pathlib import Path
+        import json as _json
+        row = await db.fetch_one("SELECT git_repo_path, name, traits FROM projects WHERE id = ?", (project_id,))
+        if not row or not row.get("git_repo_path"):
+            return CommandResult(success=False, output="❌ 项目没有配置 Git 仓库路径")
+        repo = Path(row["git_repo_path"])
+        ads_dir = repo / ".ads"
+
+        # 创建目录结构
+        (ads_dir / "rules").mkdir(parents=True, exist_ok=True)
+        (ads_dir / "skills").mkdir(parents=True, exist_ok=True)
+
+        created = []
+
+        # config.json（如不存在）
+        cfg_file = ads_dir / "config.json"
+        if not cfg_file.exists():
+            import json as _j
+            traits = _j.loads(row.get("traits") or "[]")
+            cfg_file.write_text(_j.dumps({
+                "project_name": row["name"],
+                "traits": traits,
+                "description": ""
+            }, ensure_ascii=False, indent=2), encoding="utf-8")
+            created.append("config.json")
+
+        # rules/project-rules.md 示例（如不存在）
+        sample_rule = ads_dir / "rules" / "project-rules.md"
+        if not sample_rule.exists():
+            sample_rule.write_text(
+                "---\nalwaysApply: true\npriority: medium\ndescription: 项目编码规范\n---\n\n"
+                "# 项目规范\n\n<!-- 在这里写项目专属的编码规范 -->\n",
+                encoding="utf-8"
+            )
+            created.append("rules/project-rules.md")
+
+        summary = "\n".join(f"  ✅ {f}" for f in created) if created else "  （目录已存在，无需重建）"
+        return CommandResult(
+            success=True,
+            output=f"✅ `.ads/` 目录已初始化\n{summary}\n\n"
+                   f"目录：`{ads_dir}`\n\n"
+                   "可以开始编写项目规范：修改 `.ads/rules/project-rules.md`",
+        )
+    except Exception as e:
+        return CommandResult(success=False, output=f"初始化失败: {e}")
 
 
 async def _cmd_ue_run(args: str, project_id: Optional[str], context: dict) -> CommandResult:
