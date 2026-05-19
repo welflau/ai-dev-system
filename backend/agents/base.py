@@ -116,11 +116,25 @@ class BaseAgent(ABC):
             logger.warning("动态计算 skills 失败（Agent=%s, project=%s）: %s", self.agent_type, project_id, e)
             skills_text = self._skills_prompt
 
+        # P1: 注入 .ads/rules/ 项目级规则
+        project_rules_text = ""
+        try:
+            from database import db as _db
+            repo_row = await _db.fetch_one(
+                "SELECT git_repo_path FROM projects WHERE id = ?", (project_id,)
+            )
+            repo_path = repo_row.get("git_repo_path", "") if repo_row else ""
+            if repo_path:
+                from skills import skill_loader
+                project_rules_text = skill_loader.load_project_rules(repo_path)
+        except Exception as e:
+            logger.debug("加载项目规则失败（忽略）: %s", e)
+
         # 注入项目记忆（A-2 能力下沉完整化）
         memory_text = await self.get_memory_prompt(project_id, limit=3)
-        if memory_text:
-            return f"{skills_text}\n\n{memory_text}" if skills_text else memory_text
-        return skills_text
+
+        parts = [p for p in [skills_text, project_rules_text, memory_text] if p]
+        return "\n\n".join(parts) if parts else skills_text
 
     async def run_action(self, action_name: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """执行指定 Action（含 v0.17 动态 Skills 注入 + Pre/Post Hooks）

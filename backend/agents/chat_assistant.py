@@ -1062,6 +1062,20 @@ class ChatAssistantAgent(BaseAgent):
             rules_content = "\n\n".join(rules_parts)
         except Exception:
             pass
+        # P1: 追加 .ads/rules/ 项目级规则（优先级低于全局 rules，注入在全局之后）
+        try:
+            from skills import skill_loader as _sl
+            _repo_row = await db.fetch_one(
+                "SELECT git_repo_path FROM projects WHERE id = ?", (project.get("id", ""),)
+            )
+            _repo_path = _repo_row.get("git_repo_path", "") if _repo_row else ""
+            if _repo_path:
+                _proj_rules = _sl.load_project_rules(_repo_path)
+                if _proj_rules:
+                    rules_content = (rules_content + "\n\n---\n\n" + _proj_rules) if rules_content else _proj_rules
+        except Exception:
+            pass
+
         rules_section = f"{rules_content}\n\n---\n\n" if rules_content else ""
 
         # v0.20 主动触发：只注入 Skill 索引（名称+描述），不注入全文。

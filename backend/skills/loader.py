@@ -190,6 +190,39 @@ class SkillLoader:
         )
         return applicable
 
+    # ==================== .ads/ 项目级规则加载（P1）====================
+
+    def load_project_rules(self, repo_path: str) -> str:
+        """从项目仓库 .ads/rules/*.md 加载项目级规则，返回拼接后的 prompt 文本。
+
+        格式与全局 rules/*.md 完全一致（YAML frontmatter + body）。
+        alwaysApply 字段对项目级规则默认为 True（只要存在就注入）。
+        """
+        from pathlib import Path
+        rules_dir = Path(repo_path) / ".ads" / "rules"
+        if not rules_dir.exists():
+            return ""
+
+        sections = []
+        for md_file in sorted(rules_dir.glob("*.md")):
+            try:
+                text = md_file.read_text(encoding="utf-8", errors="replace")
+                frontmatter, body = _parse_frontmatter(text)
+                # 默认 alwaysApply=True（项目级规则视为对该项目无条件生效）
+                if not frontmatter.get("alwaysApply", True):
+                    continue
+                content = body.strip()
+                if content:
+                    rule_id = f"project.{md_file.stem}"
+                    sections.append(f"<!-- Rule: {rule_id} -->\n{content}")
+                    logger.debug("加载项目级规则: %s", md_file.name)
+            except Exception as e:
+                logger.warning("读取项目规则 %s 失败: %s", md_file.name, e)
+
+        if sections:
+            logger.info("📋 项目规则已加载: %d 条（来自 .ads/rules/）", len(sections))
+        return "\n\n---\n\n".join(sections)
+
     # ==================== 生成最终 prompt ====================
 
     def build_prompt_for_agent(
