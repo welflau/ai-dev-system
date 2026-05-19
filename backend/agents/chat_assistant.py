@@ -34,7 +34,10 @@ from actions.chat.get_requirement_pipeline import GetRequirementPipelineAction
 from actions.chat.get_ticket_status import GetTicketStatusAction
 from actions.chat.get_requirement_logs import GetRequirementLogsAction
 from actions.chat.propose_ue_framework import ProposeUEFrameworkAction
-from actions.chat.get_build_logs import GetBuildLogsAction     # v0.19.x 构建日志查询
+from actions.chat.get_build_logs import GetBuildLogsAction
+from actions.chat.get_bugs import GetBugsAction                            # K
+from actions.chat.get_ci_builds import GetCIBuildsAction                   # K
+from actions.chat.get_failure_cases import GetFailureCasesAction           # K     # v0.19.x 构建日志查询
 from actions.chat.search_knowledge import SearchKnowledgeAction        # 知识库全文搜索
 from actions.chat.search_ticket_history import SearchTicketHistoryAction  # 历史工单检索
 from actions.chat.fetch_url import FetchUrlAction                         # 访问外部 URL
@@ -104,6 +107,9 @@ _TOOL_LABELS_PY: dict = {
     "get_ticket_status": "📊 查工单状态",
     "get_requirement_logs": "📋 查工单日志",
     "get_build_logs": "🔧 查构建日志",
+    "get_bugs": "🐛 查 Bug 列表",
+    "get_ci_builds": "🏗 查 CI 构建记录",
+    "get_failure_cases": "📚 查失败案例库",
     "get_memory": "🧠 查 Agent 记忆",
     "competitor_analysis": "🔎 竞品分析",
     "load_skill": "📚 加载 Skill",
@@ -346,6 +352,9 @@ class ChatAssistantAgent(BaseAgent):
         GetRequirementLogsAction,
         ProposeUEFrameworkAction,      # v0.18 Phase A.6 — UE 框架方案卡片
         GetBuildLogsAction,            # v0.19.x — 查构建/编译日志让 AI 自动诊断
+        GetBugsAction,                 # K — Bug 列表
+        GetCIBuildsAction,             # K — CI 构建记录
+        GetFailureCasesAction,         # K — 失败案例库
         SearchKnowledgeAction,         # 知识库全文搜索（FTS5）
         SearchTicketHistoryAction,     # 历史工单解决方案检索（FTS5）
         FetchUrlAction,                # 访问外部 URL
