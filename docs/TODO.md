@@ -33,10 +33,10 @@
 
 ---
 
-### I. 分屏思考面板不显示（P1）
+### ✅ I. 分屏思考面板不显示（已修复 2026-05-20）
 
-进入分屏模式后，主格思考面板不显示，非分屏正常显示。
-疑为 CSS 问题，需用 DevTools 检查 computed style。
+根本原因：克隆节点时 `.crp-rounds-panel` 和 `.chat-reasoning-panel` 带有 `crp-collapsed` class（流结束时添加），克隆后未移除导致折叠不显示。
+修复：克隆后统一移除三种思考面板的折叠 class（`fdcb25a`）。
 
 ---
 
