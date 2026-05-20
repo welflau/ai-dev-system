@@ -8885,3 +8885,11 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
     white-space: pre-wrap; word-break: break-word;
 }
 .ctx-mem-expanded .ctx-mem-detail { display: block; }
+
+/* 停止生成提示 */
+.crp-stopped-hint {
+    padding: 4px 10px 6px;
+    font-size: 11px;
+    color: rgba(245,158,11,0.8);
+    font-style: italic;
+}

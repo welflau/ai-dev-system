@@ -9871,6 +9871,15 @@ async function _sendChatStreaming(url, body) {
                 bubbleWrapper.remove();
             }
             document.getElementById('chatTyping')?.remove();
+            // 在思考面板里加「已停止生成」标记
+            if (_roundsPanel) {
+                const stopTag = document.createElement('div');
+                stopTag.className = 'crp-stopped-hint';
+                stopTag.textContent = '⏹ 已停止生成';
+                _roundsPanel.appendChild(stopTag);
+                if (_roundsHeader) _roundsHeader.textContent += ' · 已停止';
+                _roundsPanel.classList.remove('crp-collapsed');
+            }
             _chatThinkingFinish();
             scrollChatToBottom();
             return { reply: fullText, action: null, actions: [], _streamed: true, _aborted: true };
