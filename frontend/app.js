@@ -9665,7 +9665,22 @@ async function _sendChatStreaming(url, body) {
                         _scheduleRender();
                     }
 
-                } else if (eventName === 'round_start') {
+                } else if (eventName === 'context_memory') {
+                    // 在思考面板之前插入记忆注入提示
+                    if (data.count > 0 && !document.getElementById('ctxMemoryHint')) {
+                        const hint = document.createElement('div');
+                        hint.id = 'ctxMemoryHint';
+                        hint.className = 'ctx-memory-hint';
+                        const titles = (data.memories || []).map(m => m.title).join('、');
+                        hint.innerHTML = `
+                            <span class="ctx-mem-icon">🧠</span>
+                            <span class="ctx-mem-text">已注入 <b>${data.count}</b> 条记忆</span>
+                            <span class="ctx-mem-toggle" onclick="this.parentElement.classList.toggle('ctx-mem-expanded')">›</span>
+                            <div class="ctx-mem-detail">${escHtml(titles)}</div>`;
+                        container.insertBefore(hint, bubbleWrapper);
+                    }
+
+            } else if (eventName === 'round_start') {
                     // J-3b: 新一轮开始 — 创建整体面板（首轮）或新轮次组（后续轮）
                     _roundCount++;
                     if (!_roundsPanel) {

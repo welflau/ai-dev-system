@@ -8854,3 +8854,34 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
     border-radius: 3px;
     font-size: 11px;
 }
+
+/* 记忆注入提示（context_memory 事件） */
+.ctx-memory-hint {
+    margin: 0 0 4px 36px;
+    padding: 4px 10px;
+    display: flex; align-items: center; gap: 6px;
+    font-size: 11px; color: var(--text-muted);
+    border-left: 2px solid rgba(163,113,247,0.3);
+    border-radius: 0 4px 4px 0;
+    cursor: pointer;
+    position: relative;
+}
+.ctx-memory-hint:hover { border-color: rgba(163,113,247,0.6); }
+.ctx-mem-icon { font-size: 12px; }
+.ctx-mem-text { flex: 1; }
+.ctx-mem-toggle {
+    font-size: 10px; transition: transform 0.2s;
+    padding: 0 4px; color: var(--text-muted);
+}
+.ctx-mem-expanded .ctx-mem-toggle { transform: rotate(90deg); }
+.ctx-mem-detail {
+    display: none; position: absolute;
+    top: 100%; left: 0; right: 0;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 10px;
+    font-size: 11px; color: var(--text-secondary);
+    z-index: 10; line-height: 1.6;
+    white-space: pre-wrap; word-break: break-word;
+}
+.ctx-mem-expanded .ctx-mem-detail { display: block; }

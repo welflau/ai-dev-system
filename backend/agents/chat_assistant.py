@@ -548,6 +548,25 @@ class ChatAssistantAgent(BaseAgent):
         system_prompt = await self._build_system_prompt(project, project_context)
         messages = await self._assemble_messages(history, user_message, images, session_id=session_id)
 
+        # 发送本次注入的记忆元数据给前端（用于思考面板显示）
+        project_id_for_mem = project.get("id", "")
+        if project_id_for_mem:
+            try:
+                from database import db as _db
+                mem_rows = await _db.fetch_all(
+                    """SELECT type, title FROM agent_memory
+                       WHERE project_id = ? ORDER BY created_at DESC LIMIT 5""",
+                    (project_id_for_mem,),
+                )
+                if mem_rows:
+                    yield {
+                        "type": "context_memory",
+                        "count": len(mem_rows),
+                        "memories": [{"type": r["type"], "title": r["title"][:60]} for r in mem_rows],
+                    }
+            except Exception:
+                pass
+
         project_traits = []
         try:
             import json as _json

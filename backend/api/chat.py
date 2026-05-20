@@ -526,7 +526,12 @@ async def _chat_stream_generator(
         ):
             etype = ev.get("type", "")
 
-            if etype == "text_delta":
+            if etype == "context_memory":
+                yield _sse("context_memory", {
+                    "count": ev["count"], "memories": ev["memories"]
+                })
+
+            elif etype == "text_delta":
                 full_text += ev["delta"]
                 yield _sse("text_delta", {"delta": ev["delta"]})
 
