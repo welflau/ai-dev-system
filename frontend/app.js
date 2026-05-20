@@ -9871,8 +9871,17 @@ async function _sendChatStreaming(url, body) {
                 bubbleWrapper.remove();
             }
             document.getElementById('chatTyping')?.remove();
-            // 在思考面板里加「已停止生成」标记
+            // 在思考面板里加「已停止生成」标记，清除运行中动画
             if (_roundsPanel) {
+                // 停止所有正在运行的轮次动画
+                _roundsPanel.querySelectorAll('.crp-round-running').forEach(el => {
+                    el.classList.remove('crp-round-running');
+                    el.classList.add('crp-round-done');
+                });
+                _roundsPanel.querySelectorAll('.ctp-step-running').forEach(el => {
+                    el.classList.remove('ctp-step-running');
+                    el.classList.add('ctp-step-done');
+                });
                 const stopTag = document.createElement('div');
                 stopTag.className = 'crp-stopped-hint';
                 stopTag.textContent = '⏹ 已停止生成';
