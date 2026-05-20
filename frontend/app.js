@@ -7036,6 +7036,21 @@ function closeModal(id) {
 // ESC 关闭
 document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
+        // 正在流式对话时：全局 Esc 中止（不依赖输入框焦点）
+        if (chatSending && _streamAbortController) {
+            e.preventDefault();
+            const input = document.getElementById('chatInput');
+            const prevMsg = _chatInputHistory[0] || '';
+            abortChatStreaming();
+            chatSending = false;
+            if (input && prevMsg) {
+                input.value = prevMsg;
+                autoResizeChatInput?.();
+                input.focus();
+            }
+            showToast('已停止生成', 'info');
+            return;
+        }
         document.querySelectorAll('.modal-overlay.active').forEach(m => m.classList.remove('active'));
         closeDrawer();
         closeJobLogPanel();
