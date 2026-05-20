@@ -9553,6 +9553,15 @@ async function _ensureChatSession() {
  * 流式聊天：fetch + ReadableStream，逐 token 渲染到气泡。
  * 返回与非流式路径兼容的 {reply, action, actions} 对象。
  */
+let _streamAbortController = null;   // 当前流式请求的 AbortController
+
+function abortChatStreaming() {
+    if (_streamAbortController) {
+        _streamAbortController.abort();
+        _streamAbortController = null;
+    }
+}
+
 async function _sendChatStreaming(url, body) {
     // 保留 chatTyping 显示状态文字，等第一个 text_delta 再移除
     const _typingEl = document.getElementById('chatTyping');
@@ -9608,11 +9617,13 @@ async function _sendChatStreaming(url, body) {
         }, 300);
     };
 
+    _streamAbortController = new AbortController();
     try {
         const fetchResp = await fetch(`${API}${url}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
+            signal: _streamAbortController.signal,
         });
 
         if (!fetchResp.ok || !fetchResp.body) {
@@ -9831,12 +9842,31 @@ async function _sendChatStreaming(url, body) {
         }
 
     } catch (e) {
+        _streamAbortController = null;
+        // Esc 中止：显示已有内容，不 fallback
+        if (e.name === 'AbortError') {
+            if (_renderTimer) { clearTimeout(_renderTimer); _renderTimer = null; }
+            if (fullText) {
+                bubbleEl.innerHTML = formatChatContent(fullText);
+                bubbleWrapper.classList.remove('_streaming');
+                bubbleWrapper.style.display = '';
+                const timeEl = bubbleWrapper.querySelector('.chat-msg-time');
+                if (timeEl) timeEl.textContent = formatTime(new Date().toISOString());
+            } else {
+                bubbleWrapper.remove();
+            }
+            document.getElementById('chatTyping')?.remove();
+            _chatThinkingFinish();
+            scrollChatToBottom();
+            return { reply: fullText, action: null, actions: [], _streamed: true, _aborted: true };
+        }
         console.error('[stream] 流式请求失败:', e);
         // fallback 到非流式
         bubbleWrapper.remove();
         return await originalApi(url.replace('/stream', ''), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     }
 
+    _streamAbortController = null;
     // 流结束：取消节流，完整 Markdown 渲染
     if (_renderTimer) { clearTimeout(_renderTimer); _renderTimer = null; }
     bubbleEl.innerHTML = formatChatContent(fullText || '操作已完成。');
@@ -10756,6 +10786,7 @@ async function sendChatMessage() {
         scrollChatToBottom();
     } finally {
         chatSending = false;
+        _streamAbortController = null;
         _refreshHistoryRunningState();  // 更新 Running → 消失
         sendBtn.disabled = false;
         input.focus();
@@ -12561,6 +12592,21 @@ function handleChatKeydown(e) {
         const box = document.getElementById('slashSuggestBox');
         if (box && box.style.display !== 'none') {
             _hideSlashSuggestions();
+            return;
+        }
+        // 正在流式对话时：Esc 中止并恢复输入内容
+        if (chatSending && _streamAbortController) {
+            e.preventDefault();
+            const input = document.getElementById('chatInput');
+            const prevMsg = _chatInputHistory[0] || '';  // 最近发送的消息
+            abortChatStreaming();
+            chatSending = false;
+            if (input && prevMsg) {
+                input.value = prevMsg;
+                autoResizeChatInput();
+                input.focus();
+            }
+            showToast('已停止生成', 'info');
             return;
         }
     }
