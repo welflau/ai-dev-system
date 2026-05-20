@@ -8,7 +8,7 @@
 
 ## 效果截图
 
-![斜杠命令补全面板](../docs/screenshots/20260519_slash_commands.png)
+![斜杠命令补全面板](screenshots/20260519_slash_commands.png)
 
 截图说明：
 - 输入 `/` 立即弹出所有可用命令补全
