@@ -50,6 +50,15 @@ description: "规则说明"
 
 已存在的文件不会被覆盖（加 `--force` 参数强制覆盖）。
 
+## 智能检测模式
+
+| 场景 | 行为 |
+|------|------|
+| `.claude/` 不存在 | 完整生成 `.ads/` 目录 + `ADS.md` |
+| `.claude/` 已存在 | **扩展模式**：只生成 ADS 专属文件，提示 ADS 会自动读取 `.claude/rules/` |
+| `/ads-init --claude` | 额外生成 `.claude/` 骨架 + `CLAUDE.md` 模板（适合新项目） |
+
 初始化后：
-- 编辑 `.ads/rules/` 下的规则文件写入项目编码约定
-- 编辑 `.ads/mcp_servers.json` 启用/禁用/添加项目专属 MCP server（或使用 `/mcp-config` 命令管理）
+- 编辑 `ADS.md`（优先级最高）或 `CLAUDE.md`（两者均被 ADS 读取）
+- 编辑 `.ads/rules/` 下的规则文件写入项目编码约定（同名文件覆盖 `.claude/rules/`）
+- 编辑 `.ads/mcp_servers.json` 配置项目级 MCP（或使用 `/mcp-config` 命令管理）

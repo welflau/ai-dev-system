@@ -503,6 +503,59 @@ async def _cmd_ads_init(args: str, project_id: Optional[str], context: dict) -> 
         # mcp_servers.json — 项目级 MCP 配置模板
         _write("mcp_servers.json", _MCP_TEMPLATE)
 
+        # ── ClaudeCompat Phase E：检测 .claude/ 已存在 ──────────────────
+        claude_dir = repo / ".claude"
+        has_claude = claude_dir.exists()
+        claude_mode = "--claude" in (args or "")
+
+        if has_claude and not claude_mode:
+            # 扩展模式：.claude/ 已有，只生成 ADS 专属文件，不重复创建规则
+            ext_note = (
+                "\n\n📌 **扩展模式**：检测到 `.claude/` 已存在。\n"
+                "ADS 将自动读取 `.claude/rules/`、`CLAUDE.md` 和 `.claude/commands/`。\n"
+                "`.ads/` 作为扩展层，仅需填写 ADS 专属配置（mcp_servers.json / wiki / config.json）。\n"
+                "如需覆盖 `.claude/rules/` 中的规则，在 `.ads/rules/` 创建同名文件即可。"
+            )
+        elif claude_mode:
+            # --claude 模式：同时生成标准 .claude/ 骨架
+            claude_created = []
+            def _write_claude(rel: str, content: str) -> None:
+                p = claude_dir / rel
+                if not p.exists() or force:
+                    p.parent.mkdir(parents=True, exist_ok=True)
+                    p.write_text(content, encoding="utf-8")
+                    claude_created.append(f".claude/{rel}")
+
+            _write_claude("settings.json", _j.dumps({"permissions": {"allow": [], "deny": []}}, indent=2))
+            _write_claude("rules/.gitkeep", "")
+            _write_claude("commands/.gitkeep", "")
+            # 生成 CLAUDE.md 模板
+            claude_md = repo / "CLAUDE.md"
+            if not claude_md.exists() or force:
+                claude_md.write_text(
+                    "# 项目 AI 工作规范\n\n"
+                    "<!-- 此文件同时被 Claude Code CLI 和 ADS 读取 -->\n\n"
+                    "## 编码约定\n<!-- 在这里写项目编码规范 -->\n\n"
+                    "## 禁止事项\n<!-- 在这里写 AI 禁止行为 -->\n",
+                    encoding="utf-8"
+                )
+                claude_created.append("CLAUDE.md")
+            created.extend(claude_created)
+            ext_note = f"\n\n📁 已生成 `.claude/` 骨架（{len(claude_created)} 个文件）和 `CLAUDE.md`。"
+        else:
+            ext_note = ""
+
+        # ADS.md 模板（如不存在）
+        ads_md = repo / "ADS.md"
+        if not ads_md.exists() or force:
+            ads_md.write_text(
+                "# ADS 项目指令\n\n"
+                "<!-- 此文件仅被 ADS 读取，优先级高于 CLAUDE.md -->\n\n"
+                "## Agent 行为约定\n<!-- 在这里写 ADS 专属指令 -->\n",
+                encoding="utf-8"
+            )
+            created.append("ADS.md")
+
         summary = "\n".join(f"  ✅ {f}" for f in created) if created else "  （所有文件已存在，使用 --force 强制覆盖）"
 
         # .gitignore 检查
@@ -522,7 +575,7 @@ async def _cmd_ads_init(args: str, project_id: Optional[str], context: dict) -> 
             output=f"✅ `.ads/` 目录已初始化 {traits_info}\n{summary}\n\n"
                    f"目录：`{ads_dir}`\n\n"
                    f"编辑 `.ads/rules/` 下的规则文件写入项目约定，Agent 会自动按文件类型按需注入。"
-                   f"{gitignore_warn}",
+                   f"{ext_note}{gitignore_warn}",
         )
     except Exception as e:
         return CommandResult(success=False, output=f"初始化失败: {e}")
