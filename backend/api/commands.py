@@ -172,6 +172,7 @@ async def _dispatch_command(
         "aicr-rules":          _cmd_aicr_rules,
         "save-to-knowledge":   _cmd_save_to_knowledge,
         "search-knowledge":    _cmd_search_knowledge,
+        "harness-audit":       _cmd_harness_audit,
     }
 
     handler = handlers.get(name)
@@ -805,3 +806,30 @@ async def _cmd_search_knowledge(args: str, project_id: Optional[str], context: d
         return CommandResult(success=True, output="\n".join(lines))
     except Exception as e:
         return CommandResult(success=False, output=f"搜索失败: {e}")
+
+
+# ==================== Harness 审计命令 ====================
+
+async def _cmd_harness_audit(args: str, project_id: Optional[str], context: dict) -> CommandResult:
+    """生成 Harness 健康审计报告"""
+    import re
+    dm = re.search(r'--days\s+(\d+)', args or "")
+    days = int(dm.group(1)) if dm else 7
+    try:
+        from scripts.skill_audit import run_audit
+        report = await run_audit(project_id=project_id, days=days)
+
+        # 可选：写入 audits/ 目录存档
+        from pathlib import Path
+        from datetime import date
+        audits_dir = Path(__file__).parent.parent / "audits"
+        audits_dir.mkdir(exist_ok=True)
+        report_file = audits_dir / f"harness-{date.today()}.md"
+        report_file.write_text(report, encoding="utf-8")
+
+        return CommandResult(
+            success=True,
+            output=f"{report}\n\n---\n报告已存档：`{report_file}`"
+        )
+    except Exception as e:
+        return CommandResult(success=False, output=f"审计失败: {e}")
