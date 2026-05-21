@@ -64,46 +64,86 @@ _BUILTIN_COMMANDS: Dict[str, Dict[str, Any]] = {
 }
 
 
+def _parse_command_md(content: str, name: str, source: str = "system") -> Dict[str, Any]:
+    """解析命令 .md 文件的 frontmatter，返回命令元数据。"""
+    description = ""
+    args_hint = ""
+    requires_project = False
+    if content.startswith("---"):
+        fm_end = content.find("---", 3)
+        if fm_end > 0:
+            fm = content[3:fm_end]
+            for line in fm.splitlines():
+                if line.startswith("description:"):
+                    description = line.split(":", 1)[1].strip().strip('"\'')
+                elif line.startswith("args_hint:"):
+                    args_hint = line.split(":", 1)[1].strip().strip('"\'')
+                elif line.startswith("requires_project:"):
+                    requires_project = "true" in line.lower()
+    return {
+        "description": description or f"/{name} 命令",
+        "args_hint": args_hint,
+        "requires_project": requires_project,
+        "from_disk": True,
+        "source": source,
+    }
+
+
 def _load_disk_commands() -> Dict[str, Dict[str, Any]]:
-    """扫描 skills/commands/*.md，加载磁盘命令定义"""
+    """扫描 skills/commands/*.md，加载系统全局命令定义"""
     commands_dir = Path(__file__).resolve().parent.parent / "skills" / "commands"
     if not commands_dir.exists():
         return {}
     result = {}
     for md_file in sorted(commands_dir.glob("*.md")):
-        name = md_file.stem
         try:
-            content = md_file.read_text(encoding="utf-8")
-            # 简单解析 YAML frontmatter
-            description = ""
-            args_hint = ""
-            requires_project = False
-            if content.startswith("---"):
-                fm_end = content.find("---", 3)
-                if fm_end > 0:
-                    fm = content[3:fm_end]
-                    for line in fm.splitlines():
-                        if line.startswith("description:"):
-                            description = line.split(":", 1)[1].strip().strip('"\'')
-                        elif line.startswith("args_hint:"):
-                            args_hint = line.split(":", 1)[1].strip().strip('"\'')
-                        elif line.startswith("requires_project:"):
-                            requires_project = "true" in line.lower()
-            result[name] = {
-                "description": description or f"/{name} 命令",
-                "args_hint": args_hint,
-                "requires_project": requires_project,
-                "from_disk": True,
-            }
+            result[md_file.stem] = _parse_command_md(
+                md_file.read_text(encoding="utf-8"), md_file.stem, source="system"
+            )
         except Exception as e:
             logger.warning("加载命令定义失败 %s: %s", md_file.name, e)
     return result
 
 
-def get_all_commands() -> Dict[str, Dict[str, Any]]:
-    """合并内置命令 + 磁盘命令（磁盘可覆盖内置）"""
+def _load_project_commands(repo_path: str) -> Dict[str, Dict[str, Any]]:
+    """ClaudeCompat Phase C：扫描项目级命令定义，两路合并（低→高优先级）：
+
+    1. {repo}/.claude/commands/*.md  — Claude Code 标准路径
+    2. {repo}/.ads/commands/*.md     — ADS 扩展路径（同名覆盖）
+    """
+    if not repo_path:
+        return {}
+    repo = Path(repo_path)
+    result: Dict[str, Dict[str, Any]] = {}
+
+    for src_dir, source_label in [
+        (repo / ".claude" / "commands", "claude"),
+        (repo / ".ads" / "commands", "ads"),
+    ]:
+        if not src_dir.exists():
+            continue
+        for md_file in sorted(src_dir.glob("*.md")):
+            try:
+                result[md_file.stem] = _parse_command_md(
+                    md_file.read_text(encoding="utf-8"), md_file.stem, source=source_label
+                )
+            except Exception as e:
+                logger.warning("加载项目命令失败 %s: %s", md_file.name, e)
+
+    if result:
+        logger.debug("加载项目级命令 %d 条（%s）", len(result), repo_path)
+    return result
+
+
+def get_all_commands(repo_path: str = "") -> Dict[str, Dict[str, Any]]:
+    """合并系统命令 + 项目级命令（项目可覆盖系统同名命令）。
+
+    优先级（低→高）：内置 → 系统磁盘 → .claude/commands/ → .ads/commands/
+    """
     all_cmds = dict(_BUILTIN_COMMANDS)
     all_cmds.update(_load_disk_commands())
+    if repo_path:
+        all_cmds.update(_load_project_commands(repo_path))
     return all_cmds
 
 
@@ -119,9 +159,20 @@ class CommandResult(BaseModel):
 # ── 路由 ──────────────────────────────────────────────────────────────────────
 
 @router.get("/api/commands")
-async def list_commands():
-    """列出所有可用命令（供前端补全）"""
-    cmds = get_all_commands()
+async def list_commands(project_id: Optional[str] = None):
+    """列出所有可用命令（供前端补全）。
+
+    project_id 不为空时，额外合并 .claude/commands/ 和 .ads/commands/ 的项目级命令。
+    """
+    repo_path = ""
+    if project_id:
+        try:
+            from database import db
+            row = await db.fetch_one("SELECT git_repo_path FROM projects WHERE id = ?", (project_id,))
+            repo_path = (row or {}).get("git_repo_path", "")
+        except Exception:
+            pass
+    cmds = get_all_commands(repo_path=repo_path)
     return {
         "commands": [
             {
@@ -129,6 +180,7 @@ async def list_commands():
                 "description": info["description"],
                 "args_hint": info.get("args_hint", ""),
                 "requires_project": info.get("requires_project", False),
+                "source": info.get("source", "system"),
             }
             for name, info in sorted(cmds.items())
         ]

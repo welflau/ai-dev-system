@@ -539,6 +539,7 @@ function showProjectList() {
 
 function showProjectDetail(projectId) {
     currentProjectId = projectId;
+    _slashCommands = []; _slashCommandsProjectId = ''; // 切换项目时重新加载命令列表
     stopGlobalLogPolling(); // 切換到項目頁面，停止全局輪詢
     showPage('projectPage');
     loadProjectDetail();
@@ -12377,13 +12378,18 @@ const _AGENT_TEST_LIST = [
 
 // ==================== 斜杠命令系统 ====================
 
-let _slashCommands = [];   // 从后端加载的命令列表缓存
+let _slashCommands = [];        // 从后端加载的命令列表缓存
+let _slashCommandsProjectId = ''; // 缓存对应的项目 ID（切换项目时失效）
 
 async function _loadSlashCommands() {
-    if (_slashCommands.length > 0) return _slashCommands;
+    const pid = currentProjectId || '';
+    // 项目切换时清缓存，重新加载（合并项目级 .claude/commands/ + .ads/commands/）
+    if (_slashCommands.length > 0 && _slashCommandsProjectId === pid) return _slashCommands;
     try {
-        const data = await api('/commands');
+        const url = pid ? `/commands?project_id=${encodeURIComponent(pid)}` : '/commands';
+        const data = await api(url);
         _slashCommands = data.commands || [];
+        _slashCommandsProjectId = pid;
     } catch {}
     return _slashCommands;
 }
