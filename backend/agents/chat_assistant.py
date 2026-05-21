@@ -439,29 +439,26 @@ class ChatAssistantAgent(BaseAgent):
         self,
         scope: str = "project",
         traits: Optional[List[str]] = None,
+        repo_path: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """返回可暴露给 LLM 的 tool schema 列表。
 
-        scope="project"（默认）：项目内聊天，暴露所有非 INTERNAL 工具 + MCP 工具。
-        scope="global"：项目列表页的全局聊天，只暴露 _GLOBAL_CHAT_TOOLS 白名单（confirm_project），
-          不带 MCP（外部 MCP 工具大多也需要 project 上下文）。
+        scope="project"：项目内聊天，暴露所有非 INTERNAL 工具 + MCP 工具。
+        scope="global"：全局聊天，只暴露白名单（confirm_project），不带 MCP。
 
-        v0.17 Phase F：项目内聊天把 project.traits 传给 mcp_client，让 MCP server
-        的 `enabled_for_traits` 过滤生效（例如 git MCP 只对 vcs:git 项目暴露）。
+        Phase 6：repo_path 不为空时，合并项目层 .ads/mcp_servers.json，
+        支持项目独立启用/禁用/添加 MCP server。
         """
         schemas = []
         for action in self._actions.values():
             if action.name in _INTERNAL_ONLY_ACTIONS:
                 continue
             if scope == "global":
-                # 全局模式：暴露所有工具，排除需要 project_id 才能运行的
                 if action.name in _PROJECT_ONLY_TOOLS:
                     continue
             elif scope == "project":
-                # 项目模式：排除仅全局有意义的（confirm_project）
                 if action.name in _GLOBAL_ONLY_TOOLS:
                     continue
-            # traits 过滤：action 声明了 available_for_traits 时，按项目 traits 决定是否暴露
             action_traits_cfg = getattr(action, "available_for_traits", None)
             if action_traits_cfg and traits is not None:
                 from actions.base import _match_traits
@@ -471,15 +468,23 @@ class ChatAssistantAgent(BaseAgent):
             if schema:
                 schemas.append(schema)
 
-        if scope == "project":
-            # 追加外部 MCP 工具（name 已带 mcp__ 前缀，防冲突），按 project traits 过滤
-            try:
-                from mcp_client import mcp_client
-                schemas.extend(mcp_client.list_all_tool_schemas(traits=traits))
-            except Exception as e:
-                logger.warning("合并 MCP 工具列表失败: %s", e)
-
+        # MCP 工具由调用方通过 _get_mcp_schemas() 单独 await 追加
         return schemas
+
+    async def _get_mcp_schemas(
+        self,
+        traits: Optional[List[str]] = None,
+        repo_path: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """异步获取 MCP 工具 schema（支持项目层合并）。"""
+        try:
+            from mcp_client import mcp_client
+            if repo_path:
+                return await mcp_client.list_tool_schemas_for_project(repo_path, traits=traits)
+            return mcp_client.list_all_tool_schemas(traits=traits)
+        except Exception as e:
+            logger.warning("合并 MCP 工具列表失败: %s", e)
+            return []
 
     # ==================== Chat 入口 ====================
 
@@ -499,7 +504,6 @@ class ChatAssistantAgent(BaseAgent):
         system_prompt = await self._build_system_prompt(project, project_context)
         messages = await self._assemble_messages(history, user_message, images)
 
-        # v0.17 Phase F：把项目 traits 传给 _exposed_tool_schemas，按 traits 过滤 MCP
         project_traits = []
         try:
             import json as _json
@@ -511,7 +515,9 @@ class ChatAssistantAgent(BaseAgent):
         except Exception:
             project_traits = []
 
+        _repo_path = project.get("git_repo_path") or ""
         tools = self._exposed_tool_schemas(scope="project", traits=project_traits)
+        tools += await self._get_mcp_schemas(traits=project_traits, repo_path=_repo_path or None)
 
         executor = _ChatToolExecutor(self, project["id"])
 
@@ -611,7 +617,9 @@ class ChatAssistantAgent(BaseAgent):
         except Exception:
             project_traits = []
 
+        _repo_path = project.get("git_repo_path") or ""
         tools = self._exposed_tool_schemas(scope="project", traits=project_traits)
+        tools += await self._get_mcp_schemas(traits=project_traits, repo_path=_repo_path or None)
         inner_executor = _ChatToolExecutor(self, project["id"], session_id=session_id)
         executor = ChatToolExecutorAdapter(inner_executor)
 

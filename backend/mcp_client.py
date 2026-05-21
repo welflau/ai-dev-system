@@ -30,6 +30,42 @@ logger = logging.getLogger("mcp_client")
 
 _CONFIG_PATH = Path(__file__).parent / "mcp_servers.json"
 _TOOL_PREFIX = "mcp__"
+_PROJECT_MCP_RELPATH = Path(".ads") / "mcp_servers.json"  # 相对于项目 repo 根
+
+
+def _load_project_mcp_config(repo_path: str) -> Dict[str, Any]:
+    """加载 {repo}/.ads/mcp_servers.json，不存在或解析失败时返回空 dict。"""
+    if not repo_path:
+        return {}
+    try:
+        p = Path(repo_path) / _PROJECT_MCP_RELPATH
+        if not p.exists():
+            return {}
+        with open(p, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        # 过滤以 _ 开头的注释键
+        return {k: v for k, v in raw.items() if not k.startswith("_")}
+    except Exception as e:
+        logger.warning("加载项目 MCP 配置失败 (%s): %s", repo_path, e)
+        return {}
+
+
+def _merge_mcp_configs(
+    global_cfg: Dict[str, Any],
+    project_cfg: Dict[str, Any],
+) -> Dict[str, Any]:
+    """合并全局层与项目层 MCP 配置，项目层优先。
+
+    - 同名 server：项目层字段逐一覆盖全局层（浅合并）
+    - 项目层新增 server：仅该项目可用
+    """
+    result = {k: dict(v) for k, v in global_cfg.items()}  # 深拷贝全局层
+    for name, proj_server in project_cfg.items():
+        if name in result:
+            result[name] = {**result[name], **proj_server}
+        else:
+            result[name] = dict(proj_server)
+    return result
 
 
 def _match_trait_filter(filter_cfg: Optional[Dict[str, Any]], traits: List[str]) -> bool:
@@ -257,6 +293,52 @@ class MCPClient:
             schemas.extend(conn.tools)
         return schemas
 
+    async def list_tool_schemas_for_project(
+        self,
+        repo_path: str,
+        traits: Optional[List[str]] = None,
+    ) -> List[Dict[str, Any]]:
+        """合并全局层 + 项目层后，返回该项目可用的工具列表。
+
+        Phase 6：读取 {repo}/.ads/mcp_servers.json，与全局配置合并，
+        启动项目层新增的 server（若尚未运行），再按 traits 过滤返回工具。
+        """
+        project_cfg = _load_project_mcp_config(repo_path)
+        if not project_cfg:
+            # 无项目层配置，走原有全局逻辑
+            return self.list_all_tool_schemas(traits=traits)
+
+        merged = _merge_mcp_configs(self._servers_config, project_cfg)
+
+        # 启动项目层新增 / 被覆盖为 enabled:true 的 server
+        for name, cfg in merged.items():
+            if not cfg.get("enabled"):
+                continue
+            if name not in self._servers:
+                conn = _ServerConnection(name, cfg)
+                ok = await conn.start()
+                self._servers[name] = conn
+                if ok:
+                    logger.info("MCP 项目层 server 已启动: %s", name)
+                else:
+                    logger.warning("MCP 项目层 server 启动失败: %s — %s", name, conn.error)
+
+        # 按合并后配置过滤并收集工具
+        schemas = []
+        for name, conn in self._servers.items():
+            if conn.status != "running":
+                continue
+            cfg = merged.get(name, self._servers_config.get(name, {}))
+            # 项目层显式 disabled → 跳过
+            if not cfg.get("enabled", True):
+                continue
+            trait_filter = cfg.get("enabled_for_traits")
+            if trait_filter and traits is not None:
+                if not _match_trait_filter(trait_filter, traits):
+                    continue
+            schemas.extend(conn.tools)
+        return schemas
+
     async def call_tool(self, tool_name: str, tool_input: Dict[str, Any]) -> str:
         """分发到对应 server；返回 JSON 字符串或纯文本"""
         parsed = _parse_tool_name(tool_name)
@@ -270,6 +352,22 @@ class MCPClient:
                 ensure_ascii=False,
             )
         return await conn.call(raw_name, tool_input or {})
+
+    def get_merged_config_for_project(self, repo_path: str) -> Dict[str, Any]:
+        """返回全局层与项目层合并后的配置（供 /mcp-config 命令展示）。"""
+        project_cfg = _load_project_mcp_config(repo_path)
+        return _merge_mcp_configs(self._servers_config, project_cfg)
+
+    def get_project_config_source(self, repo_path: str) -> Dict[str, str]:
+        """返回每个 server 的配置来源：'global' 或 'project'。"""
+        project_cfg = _load_project_mcp_config(repo_path)
+        sources: Dict[str, str] = {}
+        for name in self._servers_config:
+            sources[name] = "project" if name in project_cfg else "global"
+        for name in project_cfg:
+            if name not in sources:
+                sources[name] = "project"
+        return sources
 
     def get_status(self) -> Dict[str, Any]:
         """状态查询（供 /api/mcp/status + 调试）"""

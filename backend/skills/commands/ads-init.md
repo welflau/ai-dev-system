@@ -15,9 +15,10 @@ requires_project: true
 │   ├── cpp-rules.md          ← C++ 专属规范（ue5/c++ 项目自动生成）
 │   ├── ts-rules.md           ← TypeScript 专属规范（ts 项目自动生成）
 │   └── workflow/
-│       └── autoaicr.md       ← 项目级 AutoAICR 补充规则（可选）
+│       └── autoaicr.md       ← 项目级 AutoAICR 补充规则
 ├── skills/                   ← 项目 Skill 目录
-└── config.json               ← 项目配置（traits 等）
+├── mcp_servers.json          ← 项目级 MCP 配置（覆盖全局层）
+└── config.json               ← 项目配置（traits / aicr 等）
 ```
 
 ## 规则文件格式
@@ -45,7 +46,10 @@ description: "规则说明"
 - traits 含 `typescript` / `react` → 生成 `ts-rules.md`（paths: *.ts/*.tsx）
 - traits 含 `python` → 生成 `python-rules.md`（paths: *.py）
 - 所有项目 → 生成 `workflow/autoaicr.md`（scene: autoaicr）
+- 所有项目 → 生成 `mcp_servers.json`（项目级 MCP 配置模板，含注释说明）
 
 已存在的文件不会被覆盖（加 `--force` 参数强制覆盖）。
 
-初始化后编辑各规则文件写入项目专属约定，所有 Agent 执行时会自动按文件上下文匹配注入。
+初始化后：
+- 编辑 `.ads/rules/` 下的规则文件写入项目编码约定
+- 编辑 `.ads/mcp_servers.json` 启用/禁用/添加项目专属 MCP server（或使用 `/mcp-config` 命令管理）

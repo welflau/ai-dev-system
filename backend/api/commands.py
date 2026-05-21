@@ -173,6 +173,7 @@ async def _dispatch_command(
         "save-to-knowledge":   _cmd_save_to_knowledge,
         "search-knowledge":    _cmd_search_knowledge,
         "harness-audit":       _cmd_harness_audit,
+        "mcp-config":          _cmd_mcp_config,
     }
 
     handler = handlers.get(name)
@@ -446,6 +447,9 @@ async def _cmd_ads_init(args: str, project_id: Optional[str], context: dict) -> 
             "---\nalwaysApply: false\nscene: autoaicr\npriority: medium\n"
             "description: 项目级 AutoAICR 补充规则\n---\n\n"
             "# 项目 AutoAICR 补充\n\n<!-- 在这里写项目特有的编辑后自检规则 -->\n")
+
+        # mcp_servers.json — 项目级 MCP 配置模板
+        _write("mcp_servers.json", _MCP_TEMPLATE)
 
         summary = "\n".join(f"  ✅ {f}" for f in created) if created else "  （所有文件已存在，使用 --force 强制覆盖）"
 
@@ -833,3 +837,121 @@ async def _cmd_harness_audit(args: str, project_id: Optional[str], context: dict
         )
     except Exception as e:
         return CommandResult(success=False, output=f"审计失败: {e}")
+
+
+# ==================== MCP 配置分层命令 ====================
+
+_ADS_MCP_FILE = Path(".ads") / "mcp_servers.json"
+
+_MCP_TEMPLATE = """{
+  "_comment": "项目级 MCP 配置。与 backend/mcp_servers.json 合并，项目层优先。",
+  "_usage": {
+    "enable_global_server": "将全局层 enabled:false 的 server 在本项目启用",
+    "disable_global_server": "将全局层 enabled:true 的 server 在本项目禁用",
+    "add_private_server": "添加仅本项目可用的私有 MCP server"
+  },
+  "_example_enable_filesystem": {
+    "type": "stdio",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
+    "enabled": true,
+    "_note": "去掉此条目的 _ 前缀即可激活"
+  }
+}
+"""
+
+
+async def _cmd_mcp_config(args: str, project_id: Optional[str], context: dict) -> CommandResult:
+    """查看或修改项目级 MCP 配置"""
+    if not project_id:
+        return CommandResult(success=False, output="❌ /mcp-config 需要在项目内使用")
+
+    try:
+        from database import db
+        from pathlib import Path as _P
+        import json as _j
+
+        row = await db.fetch_one("SELECT git_repo_path FROM projects WHERE id = ?", (project_id,))
+        repo_path = (row or {}).get("git_repo_path", "")
+        if not repo_path:
+            return CommandResult(success=False, output="❌ 项目没有配置 Git 仓库路径")
+
+        repo = _P(repo_path)
+        ads_mcp_file = repo / ".ads" / "mcp_servers.json"
+        parts = (args or "").strip().split()
+        op = parts[0].lower() if parts else "list"
+
+        from mcp_client import mcp_client, _load_project_mcp_config, _merge_mcp_configs
+
+        # ---- list（默认）----
+        if op in ("list", ""):
+            merged = mcp_client.get_merged_config_for_project(repo_path)
+            sources = mcp_client.get_project_config_source(repo_path)
+            status_map = {n: s.status for n, s in mcp_client._servers.items()}
+
+            lines = ["**当前项目 MCP Server 列表**（全局层 + 项目层合并）\n"]
+            lines.append(f"{'Server':<20} {'来源':<8} {'状态':<12} {'说明'}")
+            lines.append("-" * 65)
+            for name, cfg in sorted(merged.items()):
+                src = sources.get(name, "global")
+                enabled = cfg.get("enabled", False)
+                svc_status = status_map.get(name, "disabled" if not enabled else "not_started")
+                status_icon = "✅ 运行中" if svc_status == "running" else ("⭕ 已禁用" if not enabled else "⚠ 未启动")
+                desc = cfg.get("description", "")[:30]
+                src_tag = "项目层" if src == "project" else "全局层"
+                lines.append(f"{name:<20} {src_tag:<8} {status_icon:<12} {desc}")
+
+            project_cfg = _load_project_mcp_config(repo_path)
+            if not project_cfg:
+                lines.append(f"\n项目层配置文件不存在（`.ads/mcp_servers.json`）。执行 `/ads-init` 创建模板。")
+            return CommandResult(success=True, output="\n".join(lines))
+
+        # ---- enable <name> ----
+        if op == "enable":
+            name = parts[1] if len(parts) > 1 else ""
+            if not name:
+                return CommandResult(success=False, output="用法：/mcp-config enable <server名>")
+            proj_cfg = _load_project_mcp_config(repo_path)
+            proj_cfg[name] = {**proj_cfg.get(name, {}), "enabled": True}
+            ads_mcp_file.parent.mkdir(parents=True, exist_ok=True)
+            ads_mcp_file.write_text(_j.dumps(proj_cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+            return CommandResult(success=True, output=f"✅ `{name}` 已在项目层启用（写入 `.ads/mcp_servers.json`）\n重启服务后生效。")
+
+        # ---- disable <name> ----
+        if op == "disable":
+            name = parts[1] if len(parts) > 1 else ""
+            if not name:
+                return CommandResult(success=False, output="用法：/mcp-config disable <server名>")
+            proj_cfg = _load_project_mcp_config(repo_path)
+            proj_cfg[name] = {**proj_cfg.get(name, {}), "enabled": False}
+            ads_mcp_file.parent.mkdir(parents=True, exist_ok=True)
+            ads_mcp_file.write_text(_j.dumps(proj_cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+            return CommandResult(success=True, output=f"⭕ `{name}` 已在项目层禁用（写入 `.ads/mcp_servers.json`）")
+
+        # ---- add <name> <command> [args...] ----
+        if op == "add":
+            if len(parts) < 3:
+                return CommandResult(success=False, output="用法：/mcp-config add <名称> <命令> [参数...]")
+            name = parts[1]
+            cmd = parts[2]
+            cmd_args = parts[3:] if len(parts) > 3 else []
+            proj_cfg = _load_project_mcp_config(repo_path)
+            if name in proj_cfg:
+                return CommandResult(success=False, output=f"❌ `{name}` 已存在于项目层配置中")
+            proj_cfg[name] = {
+                "type": "stdio",
+                "command": cmd,
+                "args": cmd_args,
+                "enabled": True,
+                "description": f"项目私有 MCP server（通过 /mcp-config add 添加）",
+            }
+            ads_mcp_file.parent.mkdir(parents=True, exist_ok=True)
+            ads_mcp_file.write_text(_j.dumps(proj_cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+            return CommandResult(
+                success=True,
+                output=f"✅ 已添加项目私有 MCP server `{name}`\n命令：`{cmd} {' '.join(cmd_args)}`\n重启服务后生效。"
+            )
+
+        return CommandResult(success=False, output=f"❌ 未知操作：{op}。可选：list / enable / disable / add")
+    except Exception as e:
+        return CommandResult(success=False, output=f"MCP 配置操作失败: {e}")
