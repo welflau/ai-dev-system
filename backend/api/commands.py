@@ -167,9 +167,11 @@ async def _dispatch_command(
         "memory-export":  _cmd_memory_export,
         "memory-import":  _cmd_memory_import,
         "ads-init":       _cmd_ads_init,
-        "aicr-check":     _cmd_aicr_check,
-        "aicr-config":    _cmd_aicr_config,
-        "aicr-rules":     _cmd_aicr_rules,
+        "aicr-check":          _cmd_aicr_check,
+        "aicr-config":         _cmd_aicr_config,
+        "aicr-rules":          _cmd_aicr_rules,
+        "save-to-knowledge":   _cmd_save_to_knowledge,
+        "search-knowledge":    _cmd_search_knowledge,
     }
 
     handler = handlers.get(name)
@@ -628,3 +630,178 @@ async def _cmd_aicr_rules(args: str, project_id: Optional[str], context: dict) -
         success=True,
         output="\n\n---\n\n".join(output_parts) if output_parts else "无规则"
     )
+
+
+# ==================== 知识库命令 ====================
+
+async def _cmd_save_to_knowledge(args: str, project_id: Optional[str], context: dict) -> CommandResult:
+    """将对话内容归档为 .ads/wiki/ 知识条目"""
+    if not project_id:
+        return CommandResult(success=False, output="❌ /save-to-knowledge 需要在项目内使用")
+    try:
+        from database import db
+        from pathlib import Path
+        import json as _j
+        row = await db.fetch_one("SELECT git_repo_path, name FROM projects WHERE id = ?", (project_id,))
+        if not row or not row.get("git_repo_path"):
+            return CommandResult(success=False, output="❌ 项目没有配置 Git 仓库路径")
+        repo = Path(row["git_repo_path"])
+        wiki_dir = repo / ".ads" / "wiki"
+
+        # 获取最近对话历史作为上下文
+        history = context.get("history") or []
+        recent = history[-6:] if len(history) > 6 else history
+        history_text = "\n".join(
+            f"{m.get('role','?')}: {str(m.get('content',''))[:300]}" for m in recent
+        ) or "(无历史)"
+
+        title_hint = args.strip() or "知识点"
+
+        # LLM 生成 wiki 条目
+        from llm_client import llm_client
+        prompt = f"""你是技术文档助手。请根据下面的对话内容，生成一篇结构化的技术知识 wiki 条目。
+
+标题提示：{title_hint}
+
+对话内容：
+{history_text}
+
+请生成完整的 Markdown wiki 条目，包含 YAML frontmatter：
+
+```markdown
+---
+title: "条目标题"
+feature: <功能域，如：mass-npc / network-sync / rendering / ui / gameplay / misc>
+role: [programmer]
+type: <文档类型：technical-design / bugfix / howto / decision>
+status: active
+tags: [tag1, tag2]
+summary: "一句话摘要（60字以内）"
+---
+
+# 标题
+
+## 问题/背景
+（描述问题或背景）
+
+## 解决方案/结论
+（核心知识点）
+
+## 关键细节
+（重要技术细节）
+```
+
+只输出 markdown 内容，不要额外解释。"""
+
+        content = await llm_client.generate(prompt, max_tokens=2000, temperature=0.2)
+        content = content.strip()
+
+        # 从生成内容中提取 feature 字段确定保存路径
+        import re
+        feature_match = re.search(r'feature:\s*([^\n\r]+)', content)
+        feature = feature_match.group(1).strip().strip('"\'') if feature_match else "misc"
+        safe_feature = re.sub(r'[^\w\-]', '_', feature)
+
+        # 生成文件名（从 title 字段）
+        title_match = re.search(r'title:\s*"?([^"\n\r]+)"?', content)
+        raw_title = title_match.group(1).strip() if title_match else title_hint
+        safe_title = re.sub(r'[^\w\-一-鿿]', '_', raw_title)[:50]
+
+        # 创建目录并写入
+        feature_dir = wiki_dir / safe_feature
+        feature_dir.mkdir(parents=True, exist_ok=True)
+        from datetime import date
+        filename = f"{date.today().strftime('%Y%m%d')}_{safe_title}.md"
+        out_file = feature_dir / filename
+        out_file.write_text(content, encoding="utf-8")
+
+        # 重新生成 wiki_index
+        try:
+            import subprocess, sys
+            script = Path(__file__).parent.parent / "scripts" / "gen_wiki_index.py"
+            subprocess.run(
+                [sys.executable, str(script), str(wiki_dir), "--budget", "600"],
+                capture_output=True, timeout=10
+            )
+        except Exception:
+            pass
+
+        return CommandResult(
+            success=True,
+            output=f"✅ 已保存到 `.ads/wiki/{safe_feature}/{filename}`\n\n{content[:500]}..."
+        )
+    except Exception as e:
+        return CommandResult(success=False, output=f"保存失败: {e}")
+
+
+async def _cmd_search_knowledge(args: str, project_id: Optional[str], context: dict) -> CommandResult:
+    """搜索项目 wiki 知识库"""
+    if not project_id:
+        return CommandResult(success=False, output="❌ /search-knowledge 需要在项目内使用")
+    if not args.strip():
+        return CommandResult(success=False, output="❌ 请提供搜索关键词：/search-knowledge <关键词>")
+    try:
+        from database import db
+        from pathlib import Path
+        import re
+        row = await db.fetch_one("SELECT git_repo_path FROM projects WHERE id = ?", (project_id,))
+        repo_path = (row or {}).get("git_repo_path", "")
+        if not repo_path:
+            return CommandResult(success=False, output="❌ 项目没有配置 Git 仓库路径")
+
+        # 解析过滤器
+        query = args
+        feature_filter = ""
+        type_filter = ""
+        fm = re.search(r'feature:(\S+)', args)
+        tm = re.search(r'type:(\S+)', args)
+        if fm:
+            feature_filter = fm.group(1)
+            query = query.replace(fm.group(0), "").strip()
+        if tm:
+            type_filter = tm.group(1)
+            query = query.replace(tm.group(0), "").strip()
+
+        wiki_dir = Path(repo_path) / ".ads" / "wiki"
+        if not wiki_dir.exists():
+            return CommandResult(success=True, output="项目尚未创建 wiki 知识库。使用 `/save-to-knowledge` 保存第一条知识。")
+
+        from scripts.gen_wiki_index import scan_wiki, _parse_frontmatter
+        entries = scan_wiki(wiki_dir)
+
+        # 过滤
+        if feature_filter:
+            entries = [e for e in entries if feature_filter.lower() in e["feature"].lower()]
+        if type_filter:
+            entries = [e for e in entries if type_filter.lower() in e["type"].lower()]
+
+        # 关键词匹配（title + summary + tags）
+        kw = query.lower()
+        scored = []
+        for e in entries:
+            score = 0
+            if kw in e["title"].lower():
+                score += 3
+            if kw in e["summary"].lower():
+                score += 2
+            if any(kw in t.lower() for t in (e["tags"] or [])):
+                score += 1
+            if score > 0 or not kw:
+                scored.append((score, e))
+
+        scored.sort(key=lambda x: -x[0])
+        top = scored[:5]
+
+        if not top:
+            return CommandResult(success=True, output=f"未找到匹配「{query}」的知识条目。")
+
+        lines = [f"搜索「{query}」，找到 {len(top)} 条结果：\n"]
+        for _, e in top:
+            lines.append(f"**{e['title']}** [{e['type']}] feature={e['feature']}")
+            if e["summary"]:
+                lines.append(f"> {e['summary']}")
+            lines.append("")
+
+        return CommandResult(success=True, output="\n".join(lines))
+    except Exception as e:
+        return CommandResult(success=False, output=f"搜索失败: {e}")

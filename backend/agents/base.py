@@ -430,12 +430,12 @@ class BaseAgent(ABC):
     }
 
     async def get_memory_prompt(self, project_id: str, limit: int = 5) -> str:
-        """A-3: 查询 agent_memory，以 MEMORY.md 索引樣式返回注入文本。
-        支持 4 類型（user_profile/behavior_feedback/project_context/external_ref）。
-        所有 Agent 均可調用。
+        """A-3: 查询 agent_memory，以 MEMORY.md 索引样式返回注入文本。
+        同时追加项目 wiki 知识库索引（.ads/wiki/_wiki_index.md）。
         """
         if not project_id:
             return ""
+        parts: list[str] = []
         try:
             from database import db
             rows = await db.fetch_all(
@@ -444,16 +444,33 @@ class BaseAgent(ABC):
                    ORDER BY created_at DESC LIMIT ?""",
                 (project_id, limit),
             )
-            if not rows:
-                return ""
-            lines = ["## 项目记忆（MEMORY）\n"]
-            for r in rows:
-                label = self._MEMORY_TYPE_LABELS.get(r["type"], "📝")
-                lines.append(f"- [{label}] **{r['title']}**（{r['created_at'][:10]}）")
-                if r["content"] and r["content"].strip():
-                    lines.append(f"  {r['content'][:120].strip()}")
-            lines.append("\n如需完整记忆请调用 get_memory 工具。")
-            return "\n".join(lines)
+            if rows:
+                lines = ["## 项目记忆（MEMORY）\n"]
+                for r in rows:
+                    label = self._MEMORY_TYPE_LABELS.get(r["type"], "📝")
+                    lines.append(f"- [{label}] **{r['title']}**（{r['created_at'][:10]}）")
+                    if r["content"] and r["content"].strip():
+                        lines.append(f"  {r['content'][:120].strip()}")
+                lines.append("\n如需完整记忆请调用 get_memory 工具。")
+                parts.append("\n".join(lines))
         except Exception as e:
             logger.debug("BaseAgent.get_memory_prompt 失败: %s", e)
-            return ""
+
+        # 注入项目 wiki 知识库索引
+        try:
+            from database import db as _db
+            repo_row = await _db.fetch_one(
+                "SELECT git_repo_path FROM projects WHERE id = ?", (project_id,)
+            )
+            repo_path = (repo_row or {}).get("git_repo_path", "")
+            if repo_path:
+                from pathlib import Path as _P
+                wiki_index = _P(repo_path) / ".ads" / "wiki" / "_wiki_index.md"
+                if wiki_index.exists():
+                    content = wiki_index.read_text(encoding="utf-8", errors="replace").strip()
+                    if content:
+                        parts.append(content[:2000])  # 限制 500 token
+        except Exception as e:
+            logger.debug("wiki_index 注入失败（忽略）: %s", e)
+
+        return "\n\n".join(parts) if parts else ""
