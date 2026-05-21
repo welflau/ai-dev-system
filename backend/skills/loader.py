@@ -70,11 +70,11 @@ class SkillLoader:
         logger.info("✅ Skills 已加载: %d 条（启用 %d）", len(self.skills), len(enabled))
 
     def _load_rules(self) -> None:
-        """从 rules/*.md 扫描全局规则。每个 md 文件的 YAML frontmatter 声明适用范围。"""
+        """从 rules/**/*.md 递归扫描全局规则（支持子目录，如 workflow/）。"""
         if not self.rules_dir.exists():
             return
 
-        for md_file in sorted(self.rules_dir.glob("*.md")):
+        for md_file in sorted(self.rules_dir.rglob("*.md")):
             try:
                 text = md_file.read_text(encoding="utf-8")
             except Exception as e:
@@ -82,12 +82,18 @@ class SkillLoader:
                 continue
 
             frontmatter, body = _parse_frontmatter(text)
-            rule_id = md_file.stem
+            # rule_id 用相对路径（去扩展名），如 "workflow/autoaicr"
+            try:
+                rel = md_file.relative_to(self.rules_dir)
+                rule_id = str(rel.with_suffix("")).replace("\\", "/")
+            except ValueError:
+                rule_id = md_file.stem
             self.rules[rule_id] = {
                 "content": body.strip(),
                 "alwaysApply": bool(frontmatter.get("alwaysApply", False)),
                 "traits_match": frontmatter.get("traits_match") or {},
                 "paths": frontmatter.get("paths") or [],
+                "scene": frontmatter.get("scene") or "",   # 新增：触发场景过滤
                 "priority": frontmatter.get("priority", "medium"),
                 "description": frontmatter.get("description", ""),
             }
@@ -167,22 +173,37 @@ class SkillLoader:
         self,
         traits: Optional[Iterable[str]] = None,
         current_file: Optional[str] = None,
+        scene: Optional[str] = None,
     ) -> List[str]:
-        """返回适用于当前 traits + file 的 rule_id 列表。
+        """返回适用于当前 traits + file + scene 的 rule_id 列表。
 
-        alwaysApply=true 的 rule 对所有场景生效。
-        有 traits_match / paths 的 rule 按对应条件过滤。
+        alwaysApply=true 的 rule 始终生效（scene 字段为空时也生效）。
+        scene 字段非空的 rule，只在指定场景触发时注入。
         """
         traits_set = set(traits or [])
         applicable: List[str] = []
         for rule_id, cfg in self.rules.items():
+            rule_scene = cfg.get("scene") or ""
+            # scene 约束：规则声明了 scene，必须当前 scene 匹配才注入
+            if rule_scene and rule_scene != (scene or ""):
+                continue
             if cfg["alwaysApply"]:
+                applicable.append(rule_id)
+                continue
+            # scene 规则（无 paths、非 alwaysApply）：scene 已在上面匹配，直接包含
+            if rule_scene:
                 applicable.append(rule_id)
                 continue
             # 否则按 traits_match / paths 过滤
             if cfg["traits_match"] and not _match_traits(cfg["traits_match"], traits_set):
                 continue
             if current_file and cfg["paths"] and not _match_paths(current_file, cfg["paths"]):
+                continue
+            # 有 paths 但无 current_file：paths-only 规则在无文件上下文时跳过
+            if cfg["paths"] and not current_file:
+                continue
+            # 无 paths 且无 alwaysApply 且无 scene 且无 traits_match：跳过（无条件规则）
+            if not cfg["paths"] and not cfg["traits_match"]:
                 continue
             applicable.append(rule_id)
         applicable.sort(
@@ -192,35 +213,60 @@ class SkillLoader:
 
     # ==================== .ads/ 项目级规则加载（P1）====================
 
-    def load_project_rules(self, repo_path: str) -> str:
-        """从项目仓库 .ads/rules/*.md 加载项目级规则，返回拼接后的 prompt 文本。
+    def load_project_rules(
+        self,
+        repo_path: str,
+        current_file: Optional[str] = None,
+        scene: Optional[str] = None,
+    ) -> str:
+        """从项目仓库 .ads/rules/**/*.md 加载项目级规则，返回拼接后的 prompt 文本。
 
-        格式与全局 rules/*.md 完全一致（YAML frontmatter + body）。
-        alwaysApply 字段对项目级规则默认为 True（只要存在就注入）。
+        支持 paths: glob 文件匹配——有 paths: 的规则只在 current_file 匹配时注入。
+        无 paths: 的规则视为 alwaysApply（对该项目无条件生效）。
+        支持子目录扫描（workflow/ 等）。
         """
-        from pathlib import Path
         rules_dir = Path(repo_path) / ".ads" / "rules"
         if not rules_dir.exists():
             return ""
 
         sections = []
-        for md_file in sorted(rules_dir.glob("*.md")):
+        for md_file in sorted(rules_dir.rglob("*.md")):
             try:
                 text = md_file.read_text(encoding="utf-8", errors="replace")
                 frontmatter, body = _parse_frontmatter(text)
-                # 默认 alwaysApply=True（项目级规则视为对该项目无条件生效）
-                if not frontmatter.get("alwaysApply", True):
-                    continue
-                content = body.strip()
-                if content:
-                    rule_id = f"project.{md_file.stem}"
-                    sections.append(f"<!-- Rule: {rule_id} -->\n{content}")
-                    logger.debug("加载项目级规则: %s", md_file.name)
             except Exception as e:
                 logger.warning("读取项目规则 %s 失败: %s", md_file.name, e)
+                continue
+
+            paths = frontmatter.get("paths") or []
+            rule_scene = frontmatter.get("scene") or ""
+            always = frontmatter.get("alwaysApply", not bool(paths))
+
+            # scene 约束
+            if rule_scene and rule_scene != (scene or ""):
+                continue
+            # paths 约束
+            if paths:
+                if not current_file:
+                    continue  # 有 paths 但无当前文件上下文，跳过
+                if not _match_paths(current_file, paths):
+                    continue
+            elif not always:
+                # 无 paths、非 alwaysApply：scene 规则在 scene 命中时保留，否则跳过
+                if not (rule_scene and rule_scene == (scene or "")):
+                    continue
+
+            content = body.strip()
+            if content:
+                try:
+                    rel_id = str(md_file.relative_to(rules_dir).with_suffix("")).replace("\\", "/")
+                except ValueError:
+                    rel_id = md_file.stem
+                sections.append(f"<!-- Rule: project.{rel_id} -->\n{content}")
+                logger.debug("加载项目级规则: %s (file=%s)", rel_id, current_file or "-")
 
         if sections:
-            logger.info("📋 项目规则已加载: %d 条（来自 .ads/rules/）", len(sections))
+            logger.info("📋 项目规则已加载: %d 条（.ads/rules/ file=%s）", len(sections), current_file or "-")
         return "\n\n---\n\n".join(sections)
 
     # ==================== 生成最终 prompt ====================
@@ -230,17 +276,19 @@ class SkillLoader:
         agent_type: str,
         traits: Optional[Iterable[str]] = None,
         current_file: Optional[str] = None,
+        scene: Optional[str] = None,
     ) -> str:
         """组合规则 + skills，返回注入 system prompt 的文本。
 
+        scene 参数用于场景过滤（如 "autoaicr" / "precommit"）。
         空字符串表示这个 Agent 在此上下文下没有任何可注入内容。
         """
         traits_tuple = tuple(sorted(traits or []))
-        cache_key = (agent_type, traits_tuple, current_file or "")
+        cache_key = (agent_type, traits_tuple, current_file or "", scene or "")
         if cache_key in self._agent_prompt_cache:
             return self._agent_prompt_cache[cache_key]
 
-        rule_ids = self.get_rules_for_context(traits, current_file)
+        rule_ids = self.get_rules_for_context(traits, current_file, scene=scene)
         skill_ids = self.get_skills_for_agent(agent_type, traits, current_file)
 
         sections: List[str] = []
@@ -536,16 +584,21 @@ def _match_traits(match_cfg: Optional[dict], traits_set: Set[str]) -> bool:
 
 
 def _match_paths(current_file: str, patterns: List[str]) -> bool:
-    """用 fnmatch glob 对 current_file 做匹配（跟 AgentHub paths: 语义一致）。"""
+    """用 fnmatch glob 对 current_file 做匹配（支持 **/*.ext 跨目录语义）。"""
     if not patterns:
         return True
     norm = current_file.replace("\\", "/")
+    basename = norm.split("/")[-1]
     for pat in patterns:
         p = str(pat).replace("\\", "/")
         if fnmatch.fnmatch(norm, p):
             return True
-        # 支持 **/*.ext 这种跨目录匹配
-        if fnmatch.fnmatch(norm.split("/")[-1], p):
+        # **/*.ext → 去掉 **/ 前缀后匹配 basename（处理无目录部分的文件名）
+        if p.startswith("**/"):
+            if fnmatch.fnmatch(basename, p[3:]):
+                return True
+        # 纯 *.ext 模式也直接对 basename 匹配
+        if fnmatch.fnmatch(basename, p):
             return True
     return False
 

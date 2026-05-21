@@ -372,13 +372,14 @@ async def _cmd_memory_import(args: str, project_id: Optional[str], context: dict
 
 
 async def _cmd_ads_init(args: str, project_id: Optional[str], context: dict) -> CommandResult:
-    """初始化项目 .ads/ 目录结构（P4）"""
+    """初始化项目 .ads/ 目录结构，根据 traits 生成对应规则模板"""
     if not project_id:
         return CommandResult(success=False, output="❌ /ads-init 需要在项目内使用")
+    force = "--force" in (args or "")
     try:
         from database import db
         from pathlib import Path
-        import json as _json
+        import json as _j
         row = await db.fetch_one("SELECT git_repo_path, name, traits FROM projects WHERE id = ?", (project_id,))
         if not row or not row.get("git_repo_path"):
             return CommandResult(success=False, output="❌ 项目没有配置 Git 仓库路径")
@@ -387,50 +388,78 @@ async def _cmd_ads_init(args: str, project_id: Optional[str], context: dict) -> 
 
         # 创建目录结构
         (ads_dir / "rules").mkdir(parents=True, exist_ok=True)
+        (ads_dir / "rules" / "workflow").mkdir(parents=True, exist_ok=True)
         (ads_dir / "skills").mkdir(parents=True, exist_ok=True)
 
-        created = []
+        traits: list = _j.loads(row.get("traits") or "[]")
+        traits_set = set(t.lower() for t in traits)
+        created: list[str] = []
 
-        # config.json（如不存在）
-        cfg_file = ads_dir / "config.json"
-        if not cfg_file.exists():
-            import json as _j
-            traits = _j.loads(row.get("traits") or "[]")
-            cfg_file.write_text(_j.dumps({
-                "project_name": row["name"],
-                "traits": traits,
-                "description": ""
-            }, ensure_ascii=False, indent=2), encoding="utf-8")
-            created.append("config.json")
+        def _write(rel: str, content: str) -> None:
+            p = ads_dir / rel
+            if not p.exists() or force:
+                p.write_text(content, encoding="utf-8")
+                created.append(rel)
 
-        # rules/project-rules.md 示例（如不存在）
-        sample_rule = ads_dir / "rules" / "project-rules.md"
-        if not sample_rule.exists():
-            sample_rule.write_text(
-                "---\nalwaysApply: true\npriority: medium\ndescription: 项目编码规范\n---\n\n"
-                "# 项目规范\n\n<!-- 在这里写项目专属的编码规范 -->\n",
-                encoding="utf-8"
-            )
-            created.append("rules/project-rules.md")
+        # config.json
+        _write("config.json", _j.dumps({
+            "project_name": row["name"],
+            "traits": traits,
+            "description": "",
+            "aicr": {"autoaicr": True, "precommit": False}
+        }, ensure_ascii=False, indent=2))
 
-        summary = "\n".join(f"  ✅ {f}" for f in created) if created else "  （目录已存在，无需重建）"
-        # 检测 .gitignore 是否可能屏蔽 .ads/
+        # rules/project-rules.md — 常驻，无 paths
+        _write("rules/project-rules.md",
+            "---\nalwaysApply: true\npriority: medium\ndescription: 项目编码规范\n---\n\n"
+            "# 项目规范\n\n<!-- 在这里写项目专属的编码约定 -->\n")
+
+        # C++ 规则（ue5 / unreal / cpp 项目）
+        if traits_set & {"ue5", "unreal", "ue", "cpp", "game-ue"}:
+            _write("rules/cpp-rules.md",
+                '---\nalwaysApply: false\npaths:\n  - "**/*.cpp"\n  - "**/*.h"\n  - "**/*.hpp"\n'
+                'priority: high\ndescription: 项目 C++ 专属规范\n---\n\n'
+                "# 项目 C++ 规范\n\n<!-- 在这里补充项目特有的 C++ 约定 -->\n")
+
+        # TypeScript 规则
+        if traits_set & {"typescript", "ts", "react", "frontend", "ui"}:
+            _write("rules/ts-rules.md",
+                '---\nalwaysApply: false\npaths:\n  - "**/*.ts"\n  - "**/*.tsx"\n'
+                'priority: high\ndescription: 项目 TypeScript 专属规范\n---\n\n'
+                "# 项目 TypeScript 规范\n\n<!-- 在这里补充项目特有的 TS 约定 -->\n")
+
+        # Python 规则
+        if traits_set & {"python", "py", "backend", "ml"}:
+            _write("rules/python-rules.md",
+                '---\nalwaysApply: false\npaths:\n  - "**/*.py"\n'
+                'priority: high\ndescription: 项目 Python 专属规范\n---\n\n'
+                "# 项目 Python 规范\n\n<!-- 在这里补充项目特有的 Python 约定 -->\n")
+
+        # workflow/autoaicr.md — AutoAICR 场景补充
+        _write("rules/workflow/autoaicr.md",
+            "---\nalwaysApply: false\nscene: autoaicr\npriority: medium\n"
+            "description: 项目级 AutoAICR 补充规则\n---\n\n"
+            "# 项目 AutoAICR 补充\n\n<!-- 在这里写项目特有的编辑后自检规则 -->\n")
+
+        summary = "\n".join(f"  ✅ {f}" for f in created) if created else "  （所有文件已存在，使用 --force 强制覆盖）"
+
+        # .gitignore 检查
         gitignore_warn = ""
-        gitignore_file = repo / ".gitignore"
-        if gitignore_file.exists():
-            gi_content = gitignore_file.read_text(encoding="utf-8", errors="replace")
-            # 检测 .* 通配符（常见于 UE 项目）
-            if any(line.strip() in (".*", "/.*") for line in gi_content.splitlines()):
+        gi_file = repo / ".gitignore"
+        if gi_file.exists():
+            gi_lines = gi_file.read_text(encoding="utf-8", errors="replace").splitlines()
+            if any(l.strip() in (".*", "/.*") for l in gi_lines):
                 gitignore_warn = (
-                    "\n\n⚠️ **注意**：检测到 `.gitignore` 含 `.*` 规则，可能会忽略 `.ads/`。\n"
-                    "建议在 `.gitignore` 中添加：\n```\n!.ads/\n!.ads/**\n```"
+                    "\n\n⚠️ 检测到 `.gitignore` 含 `.*` 规则，可能忽略 `.ads/`。\n"
+                    "建议追加：\n```\n!.ads/\n!.ads/**\n```"
                 )
 
+        traits_info = f"（traits: {', '.join(traits) or '未设置'}）"
         return CommandResult(
             success=True,
-            output=f"✅ `.ads/` 目录已初始化\n{summary}\n\n"
+            output=f"✅ `.ads/` 目录已初始化 {traits_info}\n{summary}\n\n"
                    f"目录：`{ads_dir}`\n\n"
-                   f"可以开始编写项目规范：修改 `.ads/rules/project-rules.md`"
+                   f"编辑 `.ads/rules/` 下的规则文件写入项目约定，Agent 会自动按文件类型按需注入。"
                    f"{gitignore_warn}",
         )
     except Exception as e:

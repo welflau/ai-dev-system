@@ -116,7 +116,7 @@ class BaseAgent(ABC):
             logger.warning("动态计算 skills 失败（Agent=%s, project=%s）: %s", self.agent_type, project_id, e)
             skills_text = self._skills_prompt
 
-        # P1: 注入 .ads/rules/ 项目级规则
+        # P1: 注入 .ads/rules/ 项目级规则（支持 paths: 文件匹配）
         project_rules_text = ""
         try:
             from database import db as _db
@@ -126,7 +126,8 @@ class BaseAgent(ABC):
             repo_path = repo_row.get("git_repo_path", "") if repo_row else ""
             if repo_path:
                 from skills import skill_loader
-                project_rules_text = skill_loader.load_project_rules(repo_path)
+                current_file = context.get("current_file") or context.get("file_path") or None
+                project_rules_text = skill_loader.load_project_rules(repo_path, current_file=current_file)
         except Exception as e:
             logger.debug("加载项目规则失败（忽略）: %s", e)
 
