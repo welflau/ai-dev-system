@@ -211,7 +211,7 @@ class SkillLoader:
         )
         return applicable
 
-    # ==================== .ads/ 项目级规则加载（P1）====================
+    # ==================== 项目级规则加载（ClaudeCompat Phase A）====================
 
     def load_project_rules(
         self,
@@ -219,40 +219,92 @@ class SkillLoader:
         current_file: Optional[str] = None,
         scene: Optional[str] = None,
     ) -> str:
-        """从项目仓库 .ads/rules/**/*.md 加载项目级规则，返回拼接后的 prompt 文本。
+        """四路合并加载项目级规则，优先级从低到高：
 
-        支持 paths: glob 文件匹配——有 paths: 的规则只在 current_file 匹配时注入。
-        无 paths: 的规则视为 alwaysApply（对该项目无条件生效）。
-        支持子目录扫描（workflow/ 等）。
+        1. {repo}/.claude/rules/**/*.md  — Claude Code 标准规则
+        2. {repo}/CLAUDE.md             — Claude 项目总指令（alwaysApply，限 3000 字符）
+        3. {repo}/.ads/rules/**/*.md    — ADS 专属规则（同名覆盖 .claude/rules/）
+        4. {repo}/ADS.md                — ADS 项目总指令（alwaysApply，追加最后）
+
+        同名 rule_id 后写覆盖前写；CLAUDE.md / ADS.md 各有固定 key，不参与覆盖逻辑。
         """
-        rules_dir = Path(repo_path) / ".ads" / "rules"
-        if not rules_dir.exists():
-            return ""
+        repo = Path(repo_path)
+        # ordered dict：rule_id → content，后写覆盖前写
+        all_rules: "dict[str, str]" = {}
 
-        sections = []
+        # ── 1. .claude/rules/ ──────────────────────────────
+        claude_rules_dir = repo / ".claude" / "rules"
+        if claude_rules_dir.exists():
+            self._scan_rules_dir(claude_rules_dir, "claude", all_rules, current_file, scene)
+
+        # ── 2. CLAUDE.md ───────────────────────────────────
+        claude_md = repo / "CLAUDE.md"
+        if claude_md.exists():
+            try:
+                content = claude_md.read_text(encoding="utf-8", errors="replace").strip()
+                if content:
+                    all_rules["__CLAUDE_MD__"] = f"<!-- CLAUDE.md -->\n{content[:3000]}"
+                    logger.debug("加载 CLAUDE.md (%d 字符)", min(len(content), 3000))
+            except Exception as e:
+                logger.warning("读取 CLAUDE.md 失败: %s", e)
+
+        # ── 3. .ads/rules/ ─────────────────────────────────
+        ads_rules_dir = repo / ".ads" / "rules"
+        if ads_rules_dir.exists():
+            self._scan_rules_dir(ads_rules_dir, "project", all_rules, current_file, scene)
+
+        # ── 4. ADS.md ──────────────────────────────────────
+        ads_md = repo / "ADS.md"
+        if ads_md.exists():
+            try:
+                content = ads_md.read_text(encoding="utf-8", errors="replace").strip()
+                if content:
+                    all_rules["__ADS_MD__"] = f"<!-- ADS.md -->\n{content[:3000]}"
+                    logger.debug("加载 ADS.md (%d 字符)", min(len(content), 3000))
+            except Exception as e:
+                logger.warning("读取 ADS.md 失败: %s", e)
+
+        if all_rules:
+            logger.info(
+                "📋 项目规则已加载: %d 条（claude_rules=%s ads_rules=%s claude_md=%s ads_md=%s file=%s）",
+                len(all_rules),
+                claude_rules_dir.exists(),
+                ads_rules_dir.exists(),
+                claude_md.exists(),
+                ads_md.exists(),
+                current_file or "-",
+            )
+        return "\n\n---\n\n".join(all_rules.values())
+
+    def _scan_rules_dir(
+        self,
+        rules_dir: Path,
+        prefix: str,
+        out: "dict[str, str]",
+        current_file: Optional[str],
+        scene: Optional[str],
+    ) -> None:
+        """扫描 rules_dir/**/*.md，按 paths/scene/alwaysApply 过滤后写入 out。"""
         for md_file in sorted(rules_dir.rglob("*.md")):
             try:
                 text = md_file.read_text(encoding="utf-8", errors="replace")
                 frontmatter, body = _parse_frontmatter(text)
             except Exception as e:
-                logger.warning("读取项目规则 %s 失败: %s", md_file.name, e)
+                logger.warning("读取规则 %s 失败: %s", md_file.name, e)
                 continue
 
             paths = frontmatter.get("paths") or []
             rule_scene = frontmatter.get("scene") or ""
             always = frontmatter.get("alwaysApply", not bool(paths))
 
-            # scene 约束
             if rule_scene and rule_scene != (scene or ""):
                 continue
-            # paths 约束
             if paths:
                 if not current_file:
-                    continue  # 有 paths 但无当前文件上下文，跳过
+                    continue
                 if not _match_paths(current_file, paths):
                     continue
             elif not always:
-                # 无 paths、非 alwaysApply：scene 规则在 scene 命中时保留，否则跳过
                 if not (rule_scene and rule_scene == (scene or "")):
                     continue
 
@@ -262,12 +314,10 @@ class SkillLoader:
                     rel_id = str(md_file.relative_to(rules_dir).with_suffix("")).replace("\\", "/")
                 except ValueError:
                     rel_id = md_file.stem
-                sections.append(f"<!-- Rule: project.{rel_id} -->\n{content}")
-                logger.debug("加载项目级规则: %s (file=%s)", rel_id, current_file or "-")
-
-        if sections:
-            logger.info("📋 项目规则已加载: %d 条（.ads/rules/ file=%s）", len(sections), current_file or "-")
-        return "\n\n---\n\n".join(sections)
+                # 用 rel_id（不含前缀）作为去重 key，后加载的覆盖先加载的
+                # 例：.ads/rules/cpp.md (rel_id="cpp") 覆盖 .claude/rules/cpp.md (rel_id="cpp")
+                out[rel_id] = f"<!-- Rule: {prefix}.{rel_id} -->\n{content}"
+                logger.debug("加载规则: %s.%s (file=%s)", prefix, rel_id, current_file or "-")
 
     # ==================== 生成最终 prompt ====================
 
