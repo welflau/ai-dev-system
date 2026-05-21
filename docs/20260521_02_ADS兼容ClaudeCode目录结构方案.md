@@ -2,7 +2,7 @@
 
 > 日期：2026-05-21
 > 状态：规划中
-> 目标：让 ADS 同时支持 `.ads/` 和 `.claude/` 两套目录，已有 Claude Code 项目无需迁移即可接入 ADS。
+> 目标：让 ADS 同时支持 `.ads/` 和 `.claude/` 两套目录，以及 `ADS.md` / `CLAUDE.md` 项目总指令文件，已有 Claude Code 项目无需迁移即可接入 ADS。
 
 ---
 
@@ -22,6 +22,8 @@ ADS 目前使用 `.ads/` 作为项目级配置目录，Claude Code CLI 使用 `.
 
 ```
 项目仓库/
+├── CLAUDE.md        ← Claude Code 项目总指令（Claude CLI 读取）
+├── ADS.md           ← ADS 项目总指令（ADS 读取，优先级高于 CLAUDE.md）
 ├── .claude/         ← Claude Code 标准目录（Claude CLI 使用）
 │   ├── settings.json
 │   ├── commands/
@@ -41,6 +43,7 @@ ADS 目前使用 `.ads/` 作为项目级配置目录，Claude Code CLI 使用 `.
 
 | 功能 | ADS `.ads/` | Claude Code `.claude/` | 兼容策略 |
 |------|------------|----------------------|---------|
+| 项目总指令 | `ADS.md`（新增） | `CLAUDE.md` | 合并读取，`ADS.md` 优先；两者均为 alwaysApply |
 | 规则注入 | `.ads/rules/*.md` | `.claude/rules/*.md` + `CLAUDE.md` | 合并读取，`.ads/` 优先 |
 | 斜杠命令 | 全局 `backend/skills/commands/` | `.claude/commands/*.md`（项目级） | 扫描两路径，合并补全列表 |
 | MCP 配置 | `.ads/mcp_servers.json` | `.claude/settings.json` > `mcpServers` | 合并，`.ads/` 优先 |
@@ -52,8 +55,12 @@ ADS 目前使用 `.ads/` 作为项目级配置目录，Claude Code CLI 使用 `.
 **合并优先级**（高 → 低）：
 
 ```
+ADS.md（项目根，alwaysApply）
+    ↑ 追加
 .ads/ 同名条目
     ↑ 覆盖
+CLAUDE.md（项目根，alwaysApply）
+    ↑ 追加
 .claude/ 条目
     ↑ 覆盖
 系统全局（backend/skills/rules/ 等）
@@ -67,18 +74,54 @@ ADS 目前使用 `.ads/` 作为项目级配置目录，Claude Code CLI 使用 `.
 
 **改动文件**：`backend/skills/loader.py`
 
-**目标**：`load_project_rules()` 同时扫描 `.claude/rules/` 和 `.ads/rules/`，同名规则 `.ads/` 优先。
+#### A.1 `ADS.md` — ADS 专属项目总指令文件
+
+对标 `CLAUDE.md`，在项目仓库根目录放置 `ADS.md` 作为 ADS 的项目总指令文件：
+
+| 文件 | 谁读 | 用途 |
+|------|------|------|
+| `CLAUDE.md` | Claude Code CLI | Claude Code 的项目总指令 |
+| `ADS.md` | ADS | ADS 的项目总指令（优先级高于 `CLAUDE.md`） |
+
+**`ADS.md` 与 `CLAUDE.md` 的区别**：
+- `CLAUDE.md` 面向 Claude Code CLI 的通用编码约定
+- `ADS.md` 可包含 ADS 专属指令（Agent 行为调整、工单处理规范、项目特殊约定等）
+- 两者都作为 `alwaysApply` 规则注入，无 `paths:` 文件过滤
+- 同时存在时，`ADS.md` 内容**追加**在 `CLAUDE.md` 之后（不覆盖，两者均注入）
+
+**示例 `ADS.md`**：
+
+```markdown
+# 项目 AI 工作规范
+
+## Agent 行为约定
+- 修改 Source/ 下的文件前必须先查阅 OGDocs 对应模块文档
+- 所有网络同步相关代码修改后需运行 /aicr-check
+
+## 工单处理规范
+- P0 Bug 工单优先于所有功能开发
+- 技术方案超过 200 行代码时先拆分子任务
+
+## 禁止事项
+- 禁止直接修改 ThirdParty/ 目录下的代码
+- 禁止使用 LogTemp，必须用模块专属 log 类别
+```
+
+#### A.2 规则加载优先级与合并逻辑
+
+**读取顺序（低→高优先级）**：
+
+```
+1. .claude/rules/**/*.md    Claude Code 标准规则
+2. CLAUDE.md                Claude 项目总指令（alwaysApply，整体注入）
+3. .ads/rules/**/*.md       ADS 专属规则（同名覆盖 .claude/rules/）
+4. ADS.md                   ADS 项目总指令（alwaysApply，追加在 CLAUDE.md 之后）
+```
 
 ```python
 def load_project_rules(repo_path, current_file=None, scene=None):
-    """
-    读取顺序（低→高优先级）：
-    1. .claude/rules/**/*.md   Claude Code 标准规则
-    2. .claude/CLAUDE.md       项目总指令（整体注入，无 paths: 过滤）
-    3. .ads/rules/**/*.md      ADS 专属规则（同名覆盖 .claude/rules/）
-    """
     repo = Path(repo_path)
-    all_rules: dict[str, str] = {}  # rule_id → content
+    all_rules: dict[str, str] = {}  # rule_id → content（后写覆盖前写）
 
     # 1. 读 .claude/rules/
     claude_rules_dir = repo / ".claude" / "rules"
@@ -86,26 +129,35 @@ def load_project_rules(repo_path, current_file=None, scene=None):
         for md_file in sorted(claude_rules_dir.rglob("*.md")):
             _load_rule_file(md_file, claude_rules_dir, all_rules, current_file, scene)
 
-    # 2. 读 CLAUDE.md（整体作为 alwaysApply 规则）
+    # 2. 读 CLAUDE.md（alwaysApply，无 paths: 过滤，限制 3000 字符）
     claude_md = repo / "CLAUDE.md"
     if claude_md.exists():
-        content = claude_md.read_text(encoding="utf-8").strip()
+        content = claude_md.read_text(encoding="utf-8").strip()[:3000]
         if content:
-            all_rules["CLAUDE.md"] = content
+            all_rules["__CLAUDE_MD__"] = f"<!-- CLAUDE.md -->\n{content}"
 
-    # 3. 读 .ads/rules/（同名 key 覆盖步骤 1/2）
+    # 3. 读 .ads/rules/（同名 key 覆盖步骤 1）
     ads_rules_dir = repo / ".ads" / "rules"
     if ads_rules_dir.exists():
         for md_file in sorted(ads_rules_dir.rglob("*.md")):
             _load_rule_file(md_file, ads_rules_dir, all_rules, current_file, scene)
 
+    # 4. 读 ADS.md（alwaysApply，追加在最后，优先级最高）
+    ads_md = repo / "ADS.md"
+    if ads_md.exists():
+        content = ads_md.read_text(encoding="utf-8").strip()[:3000]
+        if content:
+            all_rules["__ADS_MD__"] = f"<!-- ADS.md -->\n{content}"
+
     return "\n\n---\n\n".join(all_rules.values())
 ```
 
 **完成标准**：
-- 项目 `.claude/rules/cpp.md` 被 ADS 自动读取注入
-- 项目 `.ads/rules/cpp.md` 存在时覆盖 `.claude/rules/cpp.md`
-- `CLAUDE.md` 作为 alwaysApply 规则注入
+- 项目根有 `CLAUDE.md`，ADS 聊天时自动注入其内容（限 3000 字符）
+- 项目根有 `ADS.md`，注入在 `CLAUDE.md` 之后，优先级最高
+- `.claude/rules/cpp.md` 被 ADS 自动读取注入
+- `.ads/rules/cpp.md` 存在时覆盖 `.claude/rules/cpp.md`
+- `ADS.md` 不存在时静默跳过，不影响现有流程
 
 ---
 
@@ -290,9 +342,11 @@ Day 4     Phase D + 集成测试
 ## 七、完成标准（DoD）
 
 **Phase A**：
-- 项目根有 `CLAUDE.md`，ADS 聊天时注入其内容
+- 项目根有 `CLAUDE.md`，ADS 聊天时自动注入其内容（限 3000 字符）
+- 项目根有 `ADS.md`，注入在 `CLAUDE.md` 之后，优先级最高
 - `.claude/rules/cpp.md` 存在，编辑 `.cpp` 文件时被 ADS 自动读取
 - `.ads/rules/cpp.md` 存在时覆盖 `.claude/rules/cpp.md`
+- 两个文件均不存在时静默跳过，不影响现有流程
 
 **Phase B**：
 - `.claude/settings.json` 中配置的 `mcpServers` 出现在 `/mcp-config` 列表中，来源标注为「.claude」
@@ -315,7 +369,8 @@ Day 4     Phase D + 集成测试
 | 风险 | 说明 | 缓解措施 |
 |------|------|---------|
 | 规则重复注入 | `.claude/rules/` 和 `.ads/rules/` 有同名文件时重复 | 用 `rule_id` 去重，后者覆盖前者 |
-| CLAUDE.md 过大 | 项目 CLAUDE.md 可能几千 token，全量注入消耗上下文 | 限制最大 3000 字符，超出截断并提示 |
+| CLAUDE.md / ADS.md 过大 | 项目总指令文件可能几千 token，全量注入消耗上下文 | 各限制最大 3000 字符，超出截断并在思考面板提示 |
+| ADS.md 与 CLAUDE.md 内容冲突 | 两个文件对同一规则有不同描述 | ADS.md 排在后面，LLM 自然以后出现的为准；文档建议用户保持互补而非重复 |
 | `.claude/settings.json` 格式变更 | Claude Code 版本升级可能调整格式 | 用 `try/except` 容错，解析失败静默跳过 |
 | 命令名冲突 | `.claude/commands/compact.md` 与系统命令冲突 | 项目级命令加命名空间前缀，或以项目层覆盖系统层（可配置） |
 
