@@ -42,7 +42,52 @@ _BUILTIN_COMMANDS: Dict[str, Dict[str, Any]] = {
         "requires_project": False,
     },
     "skills": {
-        "description": "查看当前项目已加载的 Skills",
+        "description": "查看当前项目已加载的 Skills 和 Rules",
+        "args_hint": "",
+        "requires_project": False,
+    },
+    "doctor": {
+        "description": "检查 ADS 运行环境健康状态（DB / LLM / MCP / Git）",
+        "args_hint": "",
+        "requires_project": False,
+    },
+    "cost": {
+        "description": "查看 LLM 使用费用（今日 / 本月 / 当前 session）",
+        "args_hint": "[--today|--month|--session]",
+        "requires_project": False,
+    },
+    "review": {
+        "description": "对 git staged diff 做代码审查（/aicr-check 别名）",
+        "args_hint": "",
+        "requires_project": True,
+    },
+    "mcp": {
+        "description": "查看或管理项目 MCP server（/mcp-config 别名）",
+        "args_hint": "[enable|disable|add] [server名]",
+        "requires_project": True,
+    },
+    "init": {
+        "description": "初始化项目 .ads/ 目录（/ads-init 别名）",
+        "args_hint": "[--claude] [--force]",
+        "requires_project": True,
+    },
+    "diff": {
+        "description": "查看当前项目 git diff",
+        "args_hint": "[--staged] [文件路径]",
+        "requires_project": True,
+    },
+    "config": {
+        "description": "查看或修改当前 session 配置（model / think / compaction 等）",
+        "args_hint": "[key] [value]",
+        "requires_project": False,
+    },
+    "commit": {
+        "description": "AI 辅助生成 commit message 并提交",
+        "args_hint": "[消息]",
+        "requires_project": True,
+    },
+    "context": {
+        "description": "查看当前 session context token 使用分布",
         "args_hint": "",
         "requires_project": False,
     },
@@ -226,6 +271,16 @@ async def _dispatch_command(
         "search-knowledge":    _cmd_search_knowledge,
         "harness-audit":       _cmd_harness_audit,
         "mcp-config":          _cmd_mcp_config,
+        # ── 与 Claude Code 名称统一的命令 ──
+        "doctor":    _cmd_doctor,
+        "cost":      _cmd_cost,
+        "review":    lambda a, p, c: _cmd_aicr_check(a, p, c),
+        "mcp":       lambda a, p, c: _cmd_mcp_config(a, p, c),
+        "init":      lambda a, p, c: _cmd_ads_init(a, p, c),
+        "diff":      _cmd_diff,
+        "config":    _cmd_config,
+        "commit":    _cmd_commit,
+        "context":   _cmd_context,
     }
 
     handler = handlers.get(name)
@@ -1105,3 +1160,361 @@ async def _cmd_mcp_config(args: str, project_id: Optional[str], context: dict) -
         return CommandResult(success=False, output=f"❌ 未知操作：{op}。可选：list / enable / disable / add")
     except Exception as e:
         return CommandResult(success=False, output=f"MCP 配置操作失败: {e}")
+
+
+# ==================== /doctor ====================
+
+async def _cmd_doctor(args: str, project_id: Optional[str], context: dict) -> CommandResult:
+    """检查 ADS 运行环境健康状态"""
+    lines = ["## ADS 环境诊断\n"]
+
+    # 1. 数据库
+    try:
+        from database import db
+        await db.fetch_one("SELECT 1")
+        lines.append("✅ 数据库：连接正常")
+    except Exception as e:
+        lines.append(f"❌ 数据库：{e}")
+
+    # 2. LLM 连通性
+    try:
+        from llm_client import llm_client
+        if llm_client.is_configured:
+            lines.append(f"✅ LLM：已配置（{llm_client.model}）")
+        else:
+            lines.append("⚠️ LLM：未配置（缺少 LLM_BASE_URL / LLM_API_KEY）")
+    except Exception as e:
+        lines.append(f"❌ LLM：{e}")
+
+    # 3. MCP servers
+    try:
+        from mcp_client import mcp_client
+        status = mcp_client.get_status()
+        servers = status.get("servers", {})
+        if not servers:
+            lines.append("⭕ MCP：无已配置 server")
+        else:
+            running = [n for n, s in servers.items() if s.get("status") == "running"]
+            disabled = [n for n, s in servers.items() if not s.get("enabled")]
+            failed = [n for n, s in servers.items() if s.get("enabled") and s.get("status") != "running"]
+            lines.append(f"{'✅' if not failed else '⚠️'} MCP：{len(running)} 运行中 / {len(disabled)} 已禁用"
+                        + (f" / {len(failed)} 启动失败（{', '.join(failed)}）" if failed else ""))
+    except Exception as e:
+        lines.append(f"❌ MCP：{e}")
+
+    # 4. 项目 Git 仓库（若在项目内）
+    if project_id:
+        try:
+            from database import db
+            from pathlib import Path
+            row = await db.fetch_one("SELECT git_repo_path, name FROM projects WHERE id = ?", (project_id,))
+            if row and row.get("git_repo_path"):
+                repo = Path(row["git_repo_path"])
+                if repo.exists():
+                    has_git = (repo / ".git").exists()
+                    has_ads = (repo / ".ads").exists()
+                    has_claude = (repo / ".claude").exists()
+                    lines.append(f"✅ 项目仓库：`{repo}`")
+                    lines.append(f"   git: {'✅' if has_git else '❌'}  .ads/: {'✅' if has_ads else '⭕'}  .claude/: {'✅' if has_claude else '⭕'}")
+                else:
+                    lines.append(f"❌ 项目仓库路径不存在：`{row['git_repo_path']}`")
+            else:
+                lines.append("⭕ 项目仓库：未配置 git_repo_path")
+        except Exception as e:
+            lines.append(f"❌ 项目仓库检查：{e}")
+
+    # 5. 今日费用
+    try:
+        from database import db
+        from datetime import datetime, timezone
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        row = await db.fetch_one(
+            "SELECT COALESCE(SUM(cost_usd), 0) as total FROM llm_conversations WHERE created_at >= ?",
+            (today + "T00:00:00",)
+        )
+        cost = round((row["total"] if row else 0.0), 4)
+        lines.append(f"💰 今日费用：${cost:.4f}")
+    except Exception:
+        pass
+
+    return CommandResult(success=True, output="\n".join(lines))
+
+
+# ==================== /cost ====================
+
+async def _cmd_cost(args: str, project_id: Optional[str], context: dict) -> CommandResult:
+    """查看 LLM 使用费用"""
+    opt = (args or "").strip().lower()
+    try:
+        from database import db
+        from datetime import datetime, timezone
+
+        now = datetime.now(timezone.utc)
+        today = now.strftime("%Y-%m-%d")
+        month_start = now.strftime("%Y-%m-01")
+
+        async def _query(since: str, until: str = "") -> float:
+            sql = "SELECT COALESCE(SUM(cost_usd), 0) as total FROM llm_conversations WHERE created_at >= ?"
+            params: list = [since + "T00:00:00"]
+            if until:
+                sql += " AND created_at < ?"
+                params.append(until + "T00:00:00")
+            row = await db.fetch_one(sql, tuple(params))
+            return round((row["total"] if row else 0.0), 4)
+
+        if opt == "--session":
+            session_id = context.get("session_id", "")
+            if not session_id:
+                return CommandResult(success=True, output="当前 session 费用：$0.0000（无 session_id）")
+            row = await db.fetch_one(
+                "SELECT COALESCE(SUM(cost_usd), 0) as total FROM llm_conversations WHERE session_id = ?",
+                (session_id,)
+            )
+            cost = round((row["total"] if row else 0.0), 4)
+            return CommandResult(success=True, output=f"当前 session 费用：${cost:.4f}")
+
+        elif opt == "--month":
+            # 按天展示本月明细
+            rows = await db.fetch_all(
+                "SELECT DATE(created_at) as day, SUM(cost_usd) as total, COUNT(*) as calls "
+                "FROM llm_conversations WHERE created_at >= ? GROUP BY DATE(created_at) ORDER BY day DESC",
+                (month_start + "T00:00:00",)
+            )
+            month_total = await _query(month_start)
+            lines = [f"本月费用：${month_total:.4f}\n"]
+            for r in rows:
+                lines.append(f"  {r['day']}  ${r['total']:.4f}  ({r['calls']} 次调用)")
+            return CommandResult(success=True, output="\n".join(lines))
+
+        else:
+            # 默认：今日 + 本月 + 7天趋势
+            cost_today = await _query(today)
+            cost_month = await _query(month_start)
+            # 7 天趋势
+            rows = await db.fetch_all(
+                "SELECT DATE(created_at) as day, COALESCE(SUM(cost_usd),0) as total "
+                "FROM llm_conversations WHERE created_at >= ? "
+                "GROUP BY DATE(created_at) ORDER BY day DESC LIMIT 7",
+                (today[:8] + str(int(today[8:]) - 6).zfill(2) + "T00:00:00",)
+            )
+            lines = [
+                f"**今日费用**：${cost_today:.4f}",
+                f"**本月累计**：${cost_month:.4f}",
+            ]
+            if rows:
+                lines.append("\n近 7 天：")
+                for r in rows:
+                    bar = "█" * min(int(r["total"] * 1000), 20)
+                    lines.append(f"  {r['day']}  ${r['total']:.4f}  {bar}")
+            lines.append("\n`/cost --session` 查当前 session  |  `/cost --month` 查本月明细")
+            return CommandResult(success=True, output="\n".join(lines))
+    except Exception as e:
+        return CommandResult(success=False, output=f"费用查询失败: {e}")
+
+
+# ==================== /diff ====================
+
+async def _cmd_diff(args: str, project_id: Optional[str], context: dict) -> CommandResult:
+    """查看项目 git diff"""
+    if not project_id:
+        return CommandResult(success=False, output="❌ /diff 需要在项目内使用")
+    try:
+        from database import db
+        from pathlib import Path
+        import subprocess
+        row = await db.fetch_one("SELECT git_repo_path FROM projects WHERE id = ?", (project_id,))
+        repo = (row or {}).get("git_repo_path", "")
+        if not repo or not Path(repo).exists():
+            return CommandResult(success=False, output="❌ 项目仓库路径无效")
+
+        opt = (args or "").strip()
+        staged = "--staged" in opt
+        file_path = opt.replace("--staged", "").strip()
+
+        cmd = ["git", "diff"]
+        if staged:
+            cmd.append("--staged")
+        if file_path:
+            cmd += ["--", file_path]
+
+        proc = subprocess.run(cmd, cwd=repo, capture_output=True, text=True, timeout=15)
+        diff_text = proc.stdout.strip()
+
+        if not diff_text:
+            label = "staged " if staged else ""
+            return CommandResult(success=True, output=f"无{label}变更。")
+
+        # 限制输出长度
+        lines = diff_text.splitlines()
+        truncated = len(lines) > 200
+        output_lines = lines[:200]
+        result = "\n".join(output_lines)
+        if truncated:
+            result += f"\n\n（已截断，共 {len(lines)} 行。使用 `/diff --staged <文件>` 查看单文件）"
+        label = "Staged diff" if staged else "Working tree diff"
+        return CommandResult(success=True, output=f"**{label}**\n```diff\n{result}\n```")
+    except Exception as e:
+        return CommandResult(success=False, output=f"git diff 失败: {e}")
+
+
+# ==================== /config ====================
+
+async def _cmd_config(args: str, project_id: Optional[str], context: dict) -> CommandResult:
+    """查看或修改 session 配置"""
+    from actions.chat.set_session_flag import get_all_session_flags, _SESSION_FLAGS, _FLAG_DEFAULTS, _parse_value
+
+    session_id = context.get("session_id", "default")
+    opt = (args or "").strip().split()
+
+    # 无参数 → 列出所有配置
+    if not opt:
+        flags = get_all_session_flags(session_id)
+        lines = ["**当前 session 配置**\n"]
+        desc_map = {
+            "compaction":     "对话历史自动压缩",
+            "nudge":          "AI 回复后未完成需求提示",
+            "verbose":        "详细模式",
+            "max_turns":      "最大工具调用轮次",
+            "budget_tokens":  "token 上限",
+            "thinking_mode":  "推理模式（adaptive/on/off）",
+            "thinking_budget":"推理 token 预算",
+        }
+        for k, v in flags.items():
+            desc = desc_map.get(k, "")
+            default_mark = " *(默认)*" if v == _FLAG_DEFAULTS.get(k) else ""
+            lines.append(f"  `{k}` = **{v}**{default_mark}  {desc}")
+        lines.append("\n用法：`/config <key> <value>`  例：`/config thinking_mode on`")
+        return CommandResult(success=True, output="\n".join(lines))
+
+    # 有参数 → 修改
+    if len(opt) < 2:
+        return CommandResult(success=False, output="用法：`/config <key> <value>`")
+    key, value = opt[0], " ".join(opt[1:])
+    if key not in _FLAG_DEFAULTS:
+        valid = ", ".join(_FLAG_DEFAULTS.keys())
+        return CommandResult(success=False, output=f"❌ 未知配置项：`{key}`\n可用：{valid}")
+    try:
+        parsed = _parse_value(key, value)
+        _SESSION_FLAGS.setdefault(session_id, {})[key] = parsed
+        return CommandResult(success=True, output=f"✅ `{key}` 已设置为 **{parsed}**")
+    except Exception as e:
+        return CommandResult(success=False, output=f"❌ 值无效：{e}")
+
+
+# ==================== /commit ====================
+
+async def _cmd_commit(args: str, project_id: Optional[str], context: dict) -> CommandResult:
+    """AI 辅助生成 commit message 并提交"""
+    if not project_id:
+        return CommandResult(success=False, output="❌ /commit 需要在项目内使用")
+    try:
+        from database import db
+        from pathlib import Path
+        import subprocess
+        row = await db.fetch_one("SELECT git_repo_path FROM projects WHERE id = ?", (project_id,))
+        repo = (row or {}).get("git_repo_path", "")
+        if not repo or not Path(repo).exists():
+            return CommandResult(success=False, output="❌ 项目仓库路径无效")
+
+        manual_msg = (args or "").strip()
+
+        # 获取 staged diff
+        proc = subprocess.run(["git", "diff", "--staged", "--stat"],
+                              cwd=repo, capture_output=True, text=True, timeout=15)
+        stat = proc.stdout.strip()
+        if not stat:
+            return CommandResult(success=True, output="⭕ 没有 staged 变更。请先 `git add` 要提交的文件。")
+
+        if manual_msg:
+            # 直接用指定消息提交
+            commit_msg = manual_msg
+        else:
+            # LLM 生成 commit message
+            diff_proc = subprocess.run(["git", "diff", "--staged"],
+                                       cwd=repo, capture_output=True, text=True, timeout=15)
+            diff_text = diff_proc.stdout[:6000]
+            from llm_client import llm_client
+            prompt = f"""请根据以下 git staged diff 生成一条简洁的 commit message。
+
+规范：
+- 第一行：英文，≤70 字符，格式 `<type>(<scope>): <subject>`
+  type: feat/fix/refactor/docs/test/chore/perf
+- 第二行：空行（如有正文）
+- 正文：可用中文，说明原因和影响
+
+只输出 commit message 文本，不要其他解释。
+
+变更统计：
+{stat}
+
+Diff：
+```diff
+{diff_text}
+```"""
+            commit_msg = (await llm_client.generate(prompt, max_tokens=200, temperature=0.2)).strip()
+
+        # 执行提交
+        proc = subprocess.run(["git", "commit", "-m", commit_msg],
+                              cwd=repo, capture_output=True, text=True, timeout=30)
+        if proc.returncode == 0:
+            output = proc.stdout.strip()
+            return CommandResult(
+                success=True,
+                output=f"✅ 提交成功\n\n**Message**：\n```\n{commit_msg}\n```\n\n{output}"
+            )
+        else:
+            return CommandResult(success=False, output=f"❌ 提交失败：\n{proc.stderr.strip()}")
+    except Exception as e:
+        return CommandResult(success=False, output=f"commit 失败: {e}")
+
+
+# ==================== /context ====================
+
+async def _cmd_context(args: str, project_id: Optional[str], context: dict) -> CommandResult:
+    """查看当前 session context token 使用分布"""
+    try:
+        session_id = context.get("session_id", "")
+        history = context.get("history") or []
+
+        from actions.chat.set_session_flag import get_all_session_flags
+        flags = get_all_session_flags(session_id or "default")
+        budget = flags.get("budget_tokens", 300_000)
+
+        # 估算各段 token（粗略：1 token ≈ 4 字符）
+        def est(text: str) -> int:
+            return max(1, len(str(text)) // 4)
+
+        history_tokens = sum(est(m.get("content", "")) for m in history)
+        history_msgs = len(history)
+
+        # 最近一次 LLM 调用的 token 数（从 DB 取）
+        last_call_tokens = 0
+        if session_id:
+            try:
+                from database import db
+                row = await db.fetch_one(
+                    "SELECT input_tokens, output_tokens FROM llm_conversations "
+                    "WHERE session_id = ? ORDER BY created_at DESC LIMIT 1",
+                    (session_id,)
+                )
+                if row:
+                    last_call_tokens = (row.get("input_tokens") or 0) + (row.get("output_tokens") or 0)
+            except Exception:
+                pass
+
+        pct = min(100, round(history_tokens / budget * 100, 1)) if budget else 0
+        bar_len = min(30, int(pct / 100 * 30))
+        bar = "█" * bar_len + "░" * (30 - bar_len)
+
+        lines = [
+            "**Context 使用情况**\n",
+            f"对话历史：约 {history_tokens:,} tokens（{history_msgs} 条消息）",
+            f"Token 预算：{budget:,}",
+            f"使用率：{pct}%  [{bar}]",
+        ]
+        if last_call_tokens:
+            lines.append(f"上次调用：{last_call_tokens:,} tokens（输入+输出）")
+        lines.append(f"\n`/config budget_tokens <N>` 调整 token 上限")
+        return CommandResult(success=True, output="\n".join(lines))
+    except Exception as e:
+        return CommandResult(success=False, output=f"context 查询失败: {e}")
