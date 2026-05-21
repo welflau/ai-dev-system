@@ -34,20 +34,49 @@ _PROJECT_MCP_RELPATH = Path(".ads") / "mcp_servers.json"  # 相对于项目 repo
 
 
 def _load_project_mcp_config(repo_path: str) -> Dict[str, Any]:
-    """加载 {repo}/.ads/mcp_servers.json，不存在或解析失败时返回空 dict。"""
+    """两路合并加载项目级 MCP 配置（ClaudeCompat Phase B）：
+
+    1. {repo}/.claude/settings.json ["mcpServers"]  — Claude Code 标准格式
+       Claude Code 格式中出现的 server 视为 enabled:true（无此字段）
+    2. {repo}/.ads/mcp_servers.json                 — ADS 格式（优先级高，覆盖步骤 1）
+
+    同名 server：.ads/ 字段逐一覆盖 .claude/settings.json 的值。
+    """
     if not repo_path:
         return {}
-    try:
-        p = Path(repo_path) / _PROJECT_MCP_RELPATH
-        if not p.exists():
-            return {}
-        with open(p, "r", encoding="utf-8") as f:
-            raw = json.load(f)
-        # 过滤以 _ 开头的注释键
-        return {k: v for k, v in raw.items() if not k.startswith("_")}
-    except Exception as e:
-        logger.warning("加载项目 MCP 配置失败 (%s): %s", repo_path, e)
-        return {}
+    repo = Path(repo_path)
+    result: Dict[str, Any] = {}
+
+    # ── 1. .claude/settings.json ["mcpServers"] ────────────────
+    claude_settings = repo / ".claude" / "settings.json"
+    if claude_settings.exists():
+        try:
+            data = json.loads(claude_settings.read_text(encoding="utf-8"))
+            for name, cfg in (data.get("mcpServers") or {}).items():
+                # Claude Code 格式无 enabled 字段，出现即视为启用
+                result[name] = {**cfg, "enabled": True, "_source": "claude"}
+            if result:
+                logger.debug("从 .claude/settings.json 加载 %d 个 MCP server", len(result))
+        except Exception as e:
+            logger.warning("解析 .claude/settings.json 失败: %s", e)
+
+    # ── 2. .ads/mcp_servers.json （覆盖 .claude/settings.json 同名条目）
+    ads_mcp = repo / _PROJECT_MCP_RELPATH
+    if ads_mcp.exists():
+        try:
+            raw = json.loads(ads_mcp.read_text(encoding="utf-8"))
+            for name, cfg in raw.items():
+                if name.startswith("_"):
+                    continue
+                if name in result:
+                    result[name] = {**result[name], **cfg, "_source": "ads"}
+                else:
+                    result[name] = {**cfg, "_source": "ads"}
+            logger.debug("从 .ads/mcp_servers.json 加载/覆盖，当前共 %d 个", len(result))
+        except Exception as e:
+            logger.warning("加载 .ads/mcp_servers.json 失败: %s", e)
+
+    return result
 
 
 def _merge_mcp_configs(
@@ -359,14 +388,14 @@ class MCPClient:
         return _merge_mcp_configs(self._servers_config, project_cfg)
 
     def get_project_config_source(self, repo_path: str) -> Dict[str, str]:
-        """返回每个 server 的配置来源：'global' 或 'project'。"""
+        """返回每个 server 的配置来源：'global' / 'claude' / 'ads'。"""
         project_cfg = _load_project_mcp_config(repo_path)
         sources: Dict[str, str] = {}
         for name in self._servers_config:
-            sources[name] = "project" if name in project_cfg else "global"
-        for name in project_cfg:
-            if name not in sources:
-                sources[name] = "project"
+            sources[name] = "global"
+        for name, cfg in project_cfg.items():
+            # _source 字段由 _load_project_mcp_config 注入
+            sources[name] = cfg.get("_source", "project")
         return sources
 
     def get_status(self) -> Dict[str, Any]:
