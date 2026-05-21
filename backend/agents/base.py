@@ -456,7 +456,7 @@ class BaseAgent(ABC):
         except Exception as e:
             logger.debug("BaseAgent.get_memory_prompt 失败: %s", e)
 
-        # 注入项目 wiki 知识库索引
+        # 注入项目 wiki 知识库索引 + .claude/agents/ 项目 Agent 定义
         try:
             from database import db as _db
             repo_row = await _db.fetch_one(
@@ -465,12 +465,53 @@ class BaseAgent(ABC):
             repo_path = (repo_row or {}).get("git_repo_path", "")
             if repo_path:
                 from pathlib import Path as _P
-                wiki_index = _P(repo_path) / ".ads" / "wiki" / "_wiki_index.md"
+                _repo = _P(repo_path)
+
+                # wiki_index
+                wiki_index = _repo / ".ads" / "wiki" / "_wiki_index.md"
                 if wiki_index.exists():
                     content = wiki_index.read_text(encoding="utf-8", errors="replace").strip()
                     if content:
-                        parts.append(content[:2000])  # 限制 500 token
+                        parts.append(content[:2000])
+
+                # ClaudeCompat Phase D：.claude/agents/*.md 项目自定义 Agent 定义
+                agents_dir = _repo / ".claude" / "agents"
+                if agents_dir.exists():
+                    agent_entries = _load_project_agent_defs(agents_dir)
+                    if agent_entries:
+                        parts.append(agent_entries)
+
         except Exception as e:
-            logger.debug("wiki_index 注入失败（忽略）: %s", e)
+            logger.debug("wiki_index/agents 注入失败（忽略）: %s", e)
 
         return "\n\n".join(parts) if parts else ""
+
+
+def _load_project_agent_defs(agents_dir) -> str:
+    """读取 .claude/agents/*.md，生成项目自定义 Agent 摘要（供 Orchestrator 调度参考）。"""
+    from pathlib import Path
+    import re
+    _FM_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n(.*)$", re.DOTALL)
+
+    entries = []
+    for md_file in sorted(Path(agents_dir).glob("*.md")):
+        try:
+            text = md_file.read_text(encoding="utf-8", errors="replace")
+            m = _FM_RE.match(text)
+            if m:
+                fm_text = m.group(1)
+                name = re.search(r"^name:\s*(.+)$", fm_text, re.M)
+                desc = re.search(r"^description:\s*(.+)$", fm_text, re.M)
+                name_val = name.group(1).strip().strip('"\'') if name else md_file.stem
+                desc_val = desc.group(1).strip().strip('"\'') if desc else ""
+            else:
+                name_val = md_file.stem
+                # 取第一行非空内容作为描述
+                desc_val = next((l.lstrip("#").strip() for l in text.splitlines() if l.strip()), "")
+            entries.append(f"- **{name_val}**：{desc_val[:100]}" if desc_val else f"- **{name_val}**")
+        except Exception:
+            continue
+
+    if not entries:
+        return ""
+    return "## 项目自定义 Agent（.claude/agents/）\n\n" + "\n".join(entries)
