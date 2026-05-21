@@ -9834,6 +9834,22 @@ async function _sendChatStreaming(url, body) {
                     if (_roundsHeader) _roundsHeader.textContent = `思考了 ${_roundCount} 轮 · ${_stepCount} 步`;
                     if (_typingBubble) _typingBubble.innerHTML = `<span class="chat-typing-text">正在生成答案…</span>`;
 
+                } else if (eventName === 'aicr_feedback') {
+                    // AutoAICR 反馈：在思考面板末尾追加折叠提示
+                    if (_curRoundStepsEl && (data.issues?.length || data.suggestions?.length)) {
+                        const aEl = document.createElement('div');
+                        aEl.className = 'ctp-step ctp-step-done ctp-aicr-hint';
+                        const issueCount = (data.issues || []).length;
+                        const sugCount   = (data.suggestions || []).length;
+                        const icon = data.passed ? '⚠' : '❌';
+                        const label = issueCount > 0
+                            ? `AutoAICR ${icon} ${issueCount} 项提示` + (sugCount ? ` · ${sugCount} 建议` : '')
+                            : `AutoAICR 💡 ${sugCount} 建议`;
+                        aEl.innerHTML = `<span class="ctp-aicr-label" onclick="this.closest('.ctp-aicr-hint').classList.toggle('ctp-aicr-expanded')">${label} ›</span>
+                            <div class="ctp-aicr-body">${_formatAicrIssues(data.issues, data.suggestions)}</div>`;
+                        _curRoundStepsEl.appendChild(aEl);
+                    }
+
                 } else if (eventName === 'action') {
                     finalAction = data;
 
@@ -10320,6 +10336,19 @@ const _TOOL_INPUT_KEY = {
     save_memory: 'title', read_files: 'paths',
     browse_marketplace: 'dir_name',
 };
+
+/** 格式化 AICR issues/suggestions 为 HTML */
+function _formatAicrIssues(issues, suggestions) {
+    const rows = [];
+    (issues || []).forEach(i => {
+        const color = i.severity === 'error' ? '#e53e3e' : '#d69e2e';
+        rows.push(`<div class="ctp-aicr-issue"><span style="color:${color}">[${escapeHtml(i.rule)}]</span> ${escapeHtml(i.message)}</div>`);
+    });
+    (suggestions || []).forEach(s => {
+        rows.push(`<div class="ctp-aicr-issue" style="opacity:.8"><span style="color:#68d391">[${escapeHtml(s.rule)}]</span> ${escapeHtml(s.message)}</div>`);
+    });
+    return rows.join('') || '（无内容）';
+}
 
 /** 把工具 result JSON 格式化为可读 HTML（展开区用） */
 function _formatToolResult(toolName, resultRaw) {

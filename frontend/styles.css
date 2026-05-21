@@ -8893,3 +8893,31 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
     color: rgba(245,158,11,0.8);
     font-style: italic;
 }
+
+/* AICR 反馈提示 */
+.ctp-aicr-hint {
+    background: rgba(214,158,46,0.08);
+    border-left: 2px solid rgba(214,158,46,0.5);
+    border-radius: 4px;
+    margin: 4px 0;
+    cursor: pointer;
+}
+.ctp-aicr-label {
+    display: block;
+    padding: 4px 8px;
+    font-size: 11px;
+    color: rgba(214,158,46,0.9);
+    font-weight: 500;
+    user-select: none;
+}
+.ctp-aicr-body {
+    display: none;
+    padding: 4px 8px 8px;
+    font-size: 11px;
+    line-height: 1.6;
+}
+.ctp-aicr-expanded .ctp-aicr-body { display: block; }
+.ctp-aicr-issue {
+    padding: 2px 0;
+    word-break: break-word;
+}

@@ -68,6 +68,40 @@ from actions.chat.create_github_repo import CreateGithubRepoAction         # Git
 logger = logging.getLogger("agent.chat_assistant")
 
 
+async def _maybe_autoaicr(tool_done_event, project: dict) -> dict | None:
+    """在 write/edit 工具完成后尝试触发 AutoAICR，返回 aicr_feedback SSE 事件或 None。"""
+    try:
+        diff = tool_done_event.result or ""
+        if not diff or len(diff) < 20:
+            return None
+        from aicr import aicr_engine
+        project_id = project.get("id") if project else None
+        traits = []
+        if project:
+            import json as _j
+            traits = _j.loads(project.get("traits") or "[]")
+        result = await aicr_engine.run_autoaicr(
+            diff=diff[:6000],
+            file_paths=[tool_done_event.args_hint or ""],
+            project_traits=traits,
+            project_id=project_id,
+        )
+        if not result.has_issues and not result.suggestions:
+            return None
+        return {
+            "type": "aicr_feedback",
+            "scene": result.scene.value,
+            "issues": [{"rule": i.rule, "message": i.message, "severity": i.severity}
+                       for i in result.issues],
+            "suggestions": [{"rule": s.rule, "message": s.message, "severity": s.severity}
+                            for s in result.suggestions],
+            "passed": result.passed,
+        }
+    except Exception as e:
+        logger.debug("AutoAICR 触发失败（忽略）: %s", e)
+        return None
+
+
 def _resolve_thinking_enabled(session_id: str, model_id: str) -> bool:
     """A-2: 三態 thinking 解析
     - thinking_mode=adaptive → 模型支持才開啟（默認）
@@ -618,6 +652,11 @@ class ChatAssistantAgent(BaseAgent):
                            "summary": event.summary, "args_hint": event.args_hint,
                            "duration_ms": round(event.duration_ms),
                            "result": event.result}
+                    # AutoAICR：写文件后自动触发
+                    if event.tool in ("write_file", "edit_file", "Write", "Edit") and event.result:
+                        aicr_ev = await _maybe_autoaicr(event, project)
+                        if aicr_ev:
+                            yield aicr_ev
                 elif isinstance(event, ToolErrorEvent):
                     yield {"type": "tool_done", "tool": event.tool,
                            "summary": f"错误: {event.error}",

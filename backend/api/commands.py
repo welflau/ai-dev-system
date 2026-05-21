@@ -167,6 +167,9 @@ async def _dispatch_command(
         "memory-export":  _cmd_memory_export,
         "memory-import":  _cmd_memory_import,
         "ads-init":       _cmd_ads_init,
+        "aicr-check":     _cmd_aicr_check,
+        "aicr-config":    _cmd_aicr_config,
+        "aicr-rules":     _cmd_aicr_rules,
     }
 
     handler = handlers.get(name)
@@ -520,3 +523,108 @@ async def _cmd_ue_level(args: str, project_id: Optional[str], context: dict) -> 
         code = result.data["generated_code"]
         output += f"\n\n**生成的代碼：**\n```python\n{code[:1000]}\n```"
     return CommandResult(success=result.success, output=output, data=result.data)
+
+
+# ==================== AICR 命令 ====================
+
+async def _cmd_aicr_check(args: str, project_id: Optional[str], context: dict) -> CommandResult:
+    """对 git staged diff 执行 PreCommit 审查"""
+    if not project_id:
+        return CommandResult(success=False, output="❌ /aicr-check 需要在项目内使用")
+    try:
+        from database import db
+        import subprocess
+        row = await db.fetch_one("SELECT git_repo_path, traits FROM projects WHERE id = ?", (project_id,))
+        if not row or not row.get("git_repo_path"):
+            return CommandResult(success=False, output="❌ 项目没有配置 Git 仓库路径")
+        repo = row["git_repo_path"]
+        proc = subprocess.run(
+            ["git", "diff", "--staged"],
+            cwd=repo, capture_output=True, text=True, timeout=30
+        )
+        staged_diff = proc.stdout.strip()
+        if not staged_diff:
+            return CommandResult(success=True, output="✅ 没有 staged 变更，无需审查。")
+        import json as _j
+        traits = _j.loads(row.get("traits") or "[]")
+        from aicr import aicr_engine
+        result = await aicr_engine.run_precommit(
+            staged_diff=staged_diff,
+            project_traits=traits,
+            project_id=project_id,
+        )
+        md = result.to_markdown()
+        if not md:
+            return CommandResult(success=True, output="✅ PreCommit 扫描通过，未发现问题。")
+        status = "✅ 通过" if result.passed else "❌ 发现阻断项"
+        return CommandResult(success=True, output=f"{status}\n\n{md}")
+    except Exception as e:
+        return CommandResult(success=False, output=f"审查失败: {e}")
+
+
+async def _cmd_aicr_config(args: str, project_id: Optional[str], context: dict) -> CommandResult:
+    """查看或切换 AICR 开关"""
+    opt = (args or "").strip().lower()
+    session_id = context.get("session_id", "")
+    from actions.chat.set_session_flag import get_session_flag, _SESSION_FLAGS as _session_flags
+    current_auto = _session_flags.get(session_id, {}).get("aicr_autoaicr", True)
+    current_pre  = _session_flags.get(session_id, {}).get("aicr_precommit", False)
+
+    if not opt:
+        return CommandResult(success=True, output=(
+            f"**AICR 当前状态**\n"
+            f"- AutoAICR（写文件后自动审查）：{'开启 ✅' if current_auto else '关闭 ⭕'}\n"
+            f"- PreCommit（提交前扫描）：{'开启 ✅' if current_pre else '关闭 ⭕'}\n\n"
+            f"切换：`/aicr-config autoaicr` / `precommit` / `all` / `off`"
+        ))
+    if opt == "all":
+        _session_flags.setdefault(session_id, {}).update({"aicr_autoaicr": True, "aicr_precommit": True})
+        return CommandResult(success=True, output="AutoAICR + PreCommit 均已开启")
+    elif opt == "off":
+        _session_flags.setdefault(session_id, {}).update({"aicr_autoaicr": False, "aicr_precommit": False})
+        return CommandResult(success=True, output="所有 AICR 审查已关闭")
+    elif opt == "autoaicr":
+        new_val = not current_auto
+        _session_flags.setdefault(session_id, {})["aicr_autoaicr"] = new_val
+        return CommandResult(success=True, output=f"AutoAICR 已{'开启' if new_val else '关闭'}")
+    elif opt == "precommit":
+        new_val = not current_pre
+        _session_flags.setdefault(session_id, {})["aicr_precommit"] = new_val
+        return CommandResult(success=True, output=f"PreCommit 已{'开启' if new_val else '关闭'}")
+    return CommandResult(success=False, output=f"❌ 未知选项：{opt}。可选：autoaicr / precommit / all / off")
+
+
+async def _cmd_aicr_rules(args: str, project_id: Optional[str], context: dict) -> CommandResult:
+    """列出 AICR 规则"""
+    from pathlib import Path
+    from skills.loader import _parse_frontmatter
+    scene = (args or "").strip().lower() or "all"
+    rules_dir = Path(__file__).parent.parent / "skills" / "rules" / "workflow"
+    output_parts = []
+    scenes = []
+    if scene in ("autoaicr", "all"):
+        scenes.append(("AutoAICR", "autoaicr.md"))
+    if scene in ("precommit", "all"):
+        scenes.append(("PreCommit", "precommit.md"))
+    for label, filename in scenes:
+        path = rules_dir / filename
+        if path.exists():
+            _, body = _parse_frontmatter(path.read_text(encoding="utf-8"))
+            output_parts.append(f"## {label} 规则\n\n{body.strip()}")
+    if project_id:
+        try:
+            from database import db
+            from skills import skill_loader
+            row = await db.fetch_one("SELECT git_repo_path FROM projects WHERE id = ?", (project_id,))
+            repo_path = (row or {}).get("git_repo_path", "")
+            if repo_path:
+                proj_scene = None if scene == "all" else scene
+                proj_rules = skill_loader.load_project_rules(repo_path, scene=proj_scene)
+                if proj_rules:
+                    output_parts.append(f"## 项目规则（.ads/rules/）\n\n{proj_rules}")
+        except Exception:
+            pass
+    return CommandResult(
+        success=True,
+        output="\n\n---\n\n".join(output_parts) if output_parts else "无规则"
+    )
