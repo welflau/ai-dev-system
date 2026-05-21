@@ -5421,10 +5421,7 @@ body.chat-open .chat-panel {
 
 /* ── 全屏模式 ────────────────────────────────────── */
 /* 隐藏其他区域，只留 chat-panel */
-body.chat-fullscreen .top-bar-left,
-body.chat-fullscreen .top-bar-nav,
-body.chat-fullscreen .top-bar-right .llm-status,
-body.chat-fullscreen .top-bar-right .chat-toggle-btn,
+body.chat-fullscreen .top-bar,
 body.chat-fullscreen #projectPage > .project-layout,
 body.chat-fullscreen #projectListPage {
     display: none !important;
@@ -5435,15 +5432,16 @@ body.chat-fullscreen .chat-panel {
     right: 0;
     width: 100% !important;
     max-width: 100% !important;
-    top: calc(var(--topbar-height) + 26px);  /* topbar + metrics-bar */
-    height: calc(100vh - var(--topbar-height) - 26px);  /* 同步扣除 metrics-bar 高度 */
+    top: 26px;           /* 仅 metrics-bar 高度，topbar 已隐藏 */
+    height: calc(100vh - 26px);
     display: flex;
     box-shadow: none;
     border-left: none;
 }
 
-/* 全屏时 metrics-bar 保持可见，z-index 高于 chat-panel */
+/* 全屏时 metrics-bar 顶置，z-index 高于 chat-panel */
 body.chat-fullscreen .metrics-bar {
+    top: 0;
     z-index: 200;
 }
 
