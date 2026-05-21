@@ -10654,8 +10654,16 @@ async function sendChatMessage() {
     // 全局聊天已改为流式（/chat/stream），无需单独的 thinking-stream SSE
 
     try {
-        // 构建历史（只取最近 10 条）
-        const historyToSend = chatHistory.slice(-20); // 加倍：後端 Compaction 在超 20 條時摘要
+        // 构建历史（只取最近 20 条），清除末尾孤立的 user 消息（abort 留下的，API 要求交替）
+        const _rawHistory = chatHistory.slice(-20);
+        const historyToSend = (() => {
+            const h = [..._rawHistory];
+            // 去掉末尾连续的 user 消息（每轮最多保留最后一条 user，等待 assistant 回复）
+            while (h.length > 1 && h[h.length - 1].role === 'user' && h[h.length - 2].role === 'user') {
+                h.splice(h.length - 2, 1);
+            }
+            return h;
+        })();
 
         let resp;
         if (chatMode === 'group' && currentProjectId) {
@@ -10746,8 +10754,11 @@ async function sendChatMessage() {
         const actions = resp.actions || [];
 
         // 更新历史（图片用多模态 blocks 保存，后续追问时 AI 仍知道有图）
+        // abort 时只保留用户消息，不把中止的回复推入历史（否则下轮 LLM 会续写中止内容）
         chatHistory.push({ role: 'user', content: _buildUserHistoryContent(fullMessage, images) });
-        chatHistory.push({ role: 'assistant', content: reply });
+        if (!resp._aborted) {
+            chatHistory.push({ role: 'assistant', content: reply });
+        }
 
         // 流式路径气泡已在流中渲染，非流式才调 appendChatBubble
         if (!resp._streamed) {
