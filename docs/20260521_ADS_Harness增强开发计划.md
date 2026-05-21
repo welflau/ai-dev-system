@@ -18,6 +18,7 @@
 | AI 代码审查（AICR） | 无 | ❌ 缺失 |
 | Hook 触发链 | 无 pre/post 编辑 hook | ❌ 缺失 |
 | MCP 规则服务 | 无 | ❌ 缺失 |
+| **MCP 配置分层** | **只有全局层（mcp_servers.json），无项目级配置** | **❌ 缺失** |
 | 知识库结构 | 平铺，无分层、无 Frontmatter 导航 | ⚠️ 待升级 |
 | Plugin 正式化 | marketplace 目录存在，但无标准接口 | ⚠️ 初步 |
 | Skill 质量保障 | 无审计 pipeline | ❌ 缺失 |
@@ -412,46 +413,176 @@ python -m mcps.rules-bridge-mcp.server --port 3100
 ## 七、实施路线图
 
 ```
-Week 1-2   Phase 1：规则体系精细化
-           ├─ Day 1-2：load_project_rules paths: 支持
-           ├─ Day 3-4：rules/ 目录补充（ue5.md, cpp.md, ts.md, python.md）
-           ├─ Day 5-6：_load_rules() 支持子目录 + scene 字段
-           └─ Day 7-10：ads-init 升级 + DevNote
+Week 1-2   Phase 1：规则体系精细化           ✅ 已完成
+Week 3-5   Phase 2：AICR 子系统             ✅ 已完成
+Week 6-8   Phase 3：知识库三层架构           ✅ 已完成
+Week 9-10  Phase 4：rules-bridge-mcp        ✅ 已完成
+Week 11-12 Phase 5：工程质量体系             ✅ 已完成
 
-Week 3-5   Phase 2：AICR 子系统
-           ├─ Day 1-3：AICREngine + 两场景规则库
-           ├─ Day 4-6：_after_tool_call hook 集成
-           ├─ Day 7-9：前端 aicr_feedback 事件显示
-           └─ Day 10-13：/aicr-check /aicr-config 命令 + DevNote
-
-Week 6-8   Phase 3：知识库三层架构
-           ├─ Day 1-4：目录迁移 + Frontmatter 规范落地
-           ├─ Day 5-7：gen_wiki_index.py 脚本
-           ├─ Day 8-10：wiki_index 注入 get_memory_prompt
-           └─ Day 11-15：/save-to-knowledge /search-knowledge 命令 + DevNote
-
-Week 9-10  Phase 4：rules-bridge-mcp
-           ├─ Day 1-4：MCP server 实现
-           ├─ Day 5-7：IDE 接入测试（VSCode / Cursor）
-           └─ Day 8-10：README + 安装文档 + DevNote
-
-Week 11-12 Phase 5：工程质量体系
-           ├─ Day 1-4：Skill L1/L2 self-check 集成
-           ├─ Day 5-7：skill_audit.py 脚本
-           └─ Day 8-10：/harness-audit 命令 + DevNote
+Week 13-14 Phase 6：MCP 配置分层（项目级）
+           ├─ Day 1-2：mcp_client.py 支持合并加载 .ads/mcp_servers.json
+           ├─ Day 3-4：/ads-init 生成 .ads/mcp_servers.json 模板
+           ├─ Day 5-7：/mcp-config 命令（查看/启用/禁用项目 MCP）
+           ├─ Day 8-9：前端 MCP 状态面板显示当前项目生效的 server
+           └─ Day 10：DevNote
 ```
 
 ---
 
 ## 八、优先级汇总
 
-| Phase | 内容 | 优先级 | 工期 | 核心价值 |
-|-------|------|--------|------|--------|
-| 1 | 规则精细化（paths + 分层 + scene） | **P0** | 1.5 周 | 减少无关规则注入，提高规则精度 |
-| 2 | AICR 自动代码审查 | **P1** | 2.5 周 | 写完即审，提前发现问题 |
-| 3 | 知识库三层架构 | **P1** | 3 周 | 提高知识检索精度，实现知识积累闭环 |
-| 4 | rules-bridge-mcp | **P2** | 1.5 周 | 规则单一真源，多工具共享 |
-| 5 | 工程质量体系 | **P2** | 2 周 | Harness 健康可见，持续运营保障 |
+| Phase | 内容 | 优先级 | 工期 | 状态 | 核心价值 |
+|-------|------|--------|------|------|--------|
+| 1 | 规则精细化（paths + 分层 + scene） | **P0** | 1.5 周 | ✅ 完成 | 减少无关规则注入，提高规则精度 |
+| 2 | AICR 自动代码审查 | **P1** | 2.5 周 | ✅ 完成 | 写完即审，提前发现问题 |
+| 3 | 知识库三层架构 | **P1** | 3 周 | ✅ 完成 | 提高知识检索精度，实现知识积累闭环 |
+| 4 | rules-bridge-mcp | **P2** | 1.5 周 | ✅ 完成 | 规则单一真源，多工具共享 |
+| 5 | 工程质量体系 | **P2** | 2 周 | ✅ 完成 | Harness 健康可见，持续运营保障 |
+| **6** | **MCP 配置分层（项目级）** | **P1** | **1.5 周** | **待开发** | **项目独立控制 MCP server，支持私有 MCP** |
+
+---
+
+## 六-补、Phase 6：MCP 配置分层（项目级）（P1，预计 1.5 周）
+
+### 背景与问题
+
+目前 ADS 的 MCP 配置**只有全局一层**：
+
+```
+backend/mcp_servers.json   ← 所有项目共用，服务器启动时统一加载
+```
+
+对比 Claude Code 的两层结构：
+
+```
+~/.claude/settings.json         用户全局 MCP（所有 session 可用）
+{project}/.claude/settings.json 项目级 MCP（仅该项目 session 可用）
+```
+
+ADS 缺少项目层，导致：
+- 不能给「UE5 项目」单独启用 UE Editor MCP，其他项目不受影响
+- 不能给特定项目配置私有 MCP server（如项目专属的数据库 MCP、内部 API MCP）
+- 全局 enabled/disabled 修改会影响所有项目
+
+### 6.1 目标架构
+
+```
+全局层   backend/mcp_servers.json          所有项目默认可用（管理员维护）
+项目层   {repo}/.ads/mcp_servers.json      项目独立启用/禁用/添加 MCP server
+```
+
+**合并规则**（项目层优先）：
+- 项目层 `enabled: true` → 覆盖全局层 `enabled: false`（项目单独开启）
+- 项目层 `enabled: false` → 覆盖全局层 `enabled: true`（项目单独关闭）
+- 项目层新增条目 → 仅该项目可用的私有 MCP server
+
+### 6.2 `.ads/mcp_servers.json` 格式
+
+与全局层格式完全一致，支持所有字段：
+
+```json
+{
+  "filesystem": {
+    "enabled": true,
+    "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/project"],
+    "_comment": "覆盖全局 enabled:false，为本项目单独开启"
+  },
+  "project-db": {
+    "type": "stdio",
+    "command": "python",
+    "args": ["-m", "my_project_mcp.server"],
+    "enabled": true,
+    "description": "项目专属数据库 MCP（仅此项目可用）"
+  }
+}
+```
+
+### 6.3 后端实现
+
+**`mcp_client.py` 新增 `get_tools_for_project(project_id)` 方法**：
+
+```python
+async def get_tools_for_project(self, project_id: str) -> list[dict]:
+    """合并全局 + 项目层 MCP 配置，返回该项目可用的工具列表。"""
+    # 1. 加载项目 .ads/mcp_servers.json
+    repo_path = await _get_repo_path(project_id)
+    project_cfg = _load_project_mcp_config(repo_path)
+    
+    # 2. 合并：项目层覆盖全局层
+    merged = _merge_mcp_configs(self._global_config, project_cfg)
+    
+    # 3. 启动项目独有的 server（尚未运行的）
+    # 4. 返回合并后的工具列表
+```
+
+**合并逻辑**：
+
+```python
+def _merge_mcp_configs(global_cfg: dict, project_cfg: dict) -> dict:
+    result = {**global_cfg}
+    for name, proj_server in project_cfg.items():
+        if name in result:
+            # 项目层覆盖：只覆盖显式声明的字段（enabled / args / env）
+            result[name] = {**result[name], **proj_server}
+        else:
+            # 项目新增 server
+            result[name] = proj_server
+    return result
+```
+
+**`chat_assistant.py` 调用点**：
+
+```python
+# 现有：
+tools = mcp_client.get_tools(traits=traits)
+
+# 改为：
+tools = await mcp_client.get_tools_for_project(project_id, traits=traits)
+```
+
+### 6.4 `/ads-init` 升级
+
+生成 `.ads/mcp_servers.json` 模板（空配置 + 注释说明）：
+
+```json
+{
+  "_comment": "项目级 MCP 配置。覆盖全局 mcp_servers.json 中同名 server 的字段。",
+  "_example_enable_filesystem": {
+    "type": "stdio",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
+    "enabled": true
+  }
+}
+```
+
+### 6.5 新增命令 `/mcp-config`
+
+```
+/mcp-config                    列出当前项目生效的所有 MCP server（全局 + 项目层合并结果）
+/mcp-config enable filesystem  在项目层启用 filesystem MCP
+/mcp-config disable git        在项目层禁用 git MCP
+/mcp-config add <name> <cmd>   向项目层添加自定义 MCP server
+```
+
+### 6.6 前端 MCP 状态显示
+
+在 `/mcp-config` 命令输出中展示三列：
+
+```
+MCP Server     来源      状态
+filesystem     项目层    启用 ✅
+fetch          全局      禁用 ⭕
+git            全局      启用 ✅（traits 过滤）
+project-db     项目层    启用 ✅（仅本项目）
+```
+
+### 6.7 完成标准（DoD）
+
+- `.ads/mcp_servers.json` 中 `enabled: true` 的 server 被纳入该项目的工具列表，全局层同名 server 若 `enabled: false` 也能正常工作
+- 项目层新增的私有 server 只对该项目的 chat_stream 可见
+- `/mcp-config` 命令输出正确区分「全局层」和「项目层」来源
+- `/ads-init` 生成带注释的 `.ads/mcp_servers.json` 模板
 
 ---
 
@@ -477,6 +608,12 @@ Week 11-12 Phase 5：工程质量体系
 - `/harness-audit` 输出包含 Rules 覆盖、Skills 使用、AICR 命中三项统计
 - skill_audit.py 生成审计报告写入 `backend/audits/`
 
+**Phase 6**：
+- `.ads/mcp_servers.json` 中 `enabled: true` 的 server 被纳入项目工具列表（全局层 disabled 也能工作）
+- 项目层新增私有 server 只对该项目可见
+- `/mcp-config` 命令输出区分「全局层」和「项目层」来源
+- `/ads-init` 生成带注释的 `.ads/mcp_servers.json` 模板
+
 ---
 
-*文档创建：2026-05-21 | 项目：ai-dev-system | 版本：v1.0*
+*文档创建：2026-05-21 | 项目：ai-dev-system | 版本：v1.1（2026-05-21 新增 Phase 6）*
