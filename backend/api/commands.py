@@ -305,27 +305,72 @@ async def _cmd_think(args: str, project_id: Optional[str], context: dict) -> Com
 
 
 async def _cmd_skills(args: str, project_id: Optional[str], context: dict) -> CommandResult:
-    """列出当前项目已加载的 Skills"""
+    """列出当前已加载的 Skills 和全局 Rules"""
     try:
         from skills.loader import skill_loader
+        import json as _j
+
         # 获取项目 traits
         traits = []
+        repo_path = ""
         if project_id:
             from database import db
-            row = await db.fetch_one("SELECT traits FROM projects WHERE id = ?", (project_id,))
-            if row and row["traits"]:
-                import json
-                traits = json.loads(row["traits"]) if isinstance(row["traits"], str) else list(row["traits"])
+            row = await db.fetch_one("SELECT traits, git_repo_path FROM projects WHERE id = ?", (project_id,))
+            if row:
+                raw = row.get("traits") or "[]"
+                traits = _j.loads(raw) if isinstance(raw, str) else list(raw or [])
+                repo_path = row.get("git_repo_path") or ""
 
-        loaded = skill_loader.get_skills_for_agent("ChatAssistant", traits=traits)
-        if not loaded:
-            return CommandResult(success=True, output="当前无已加载 Skills")
-        lines = [f"已加载 {len(loaded)} 个 Skills：\n"]
-        for s in loaded:
-            lines.append(f"• **{s.get('name', '?')}** — {s.get('description', '')[:60]}")
-        return CommandResult(success=True, output="\n".join(lines))
+        # Skills
+        skill_ids = skill_loader.get_skills_for_agent("ChatAssistant", traits=traits)
+        all_status = skill_loader.get_all_skills_status()
+
+        skill_lines = []
+        for sid in skill_ids:
+            cfg = all_status.get(sid, {})
+            name = cfg.get("name", sid)
+            desc = cfg.get("description", "")[:60]
+            src = "market" if cfg.get("source") == "marketplace" else "built-in"
+            skill_lines.append(f"  • **{name}** `[{src}]` — {desc}")
+
+        # 全局 Rules（当前生效）
+        rule_ids = skill_loader.get_rules_for_context(traits=traits)
+        rule_lines = []
+        for rid in rule_ids:
+            cfg = skill_loader.rules.get(rid, {})
+            desc = cfg.get("description", "")[:60]
+            tag = "always" if cfg.get("alwaysApply") else ("scene:" + cfg.get("scene", "")) if cfg.get("scene") else "traits"
+            rule_lines.append(f"  • `{rid}` `[{tag}]` — {desc}")
+
+        # 项目规则来源
+        proj_rule_summary = ""
+        if repo_path:
+            from pathlib import Path
+            sources = []
+            if (Path(repo_path) / "CLAUDE.md").exists():
+                sources.append("CLAUDE.md")
+            if (Path(repo_path) / "ADS.md").exists():
+                sources.append("ADS.md")
+            if (Path(repo_path) / ".claude" / "rules").exists():
+                sources.append(".claude/rules/")
+            if (Path(repo_path) / ".ads" / "rules").exists():
+                sources.append(".ads/rules/")
+            if sources:
+                proj_rule_summary = f"\n\n**项目规则来源**：{', '.join(sources)}"
+
+        parts = []
+        if skill_lines:
+            parts.append(f"**Skills（{len(skill_lines)} 个）**\n" + "\n".join(skill_lines))
+        else:
+            parts.append("**Skills**：当前无已加载 Skill")
+        if rule_lines:
+            parts.append(f"**全局 Rules（{len(rule_lines)} 条）**\n" + "\n".join(rule_lines))
+        if proj_rule_summary:
+            parts.append(proj_rule_summary.strip())
+
+        return CommandResult(success=True, output="\n\n".join(parts))
     except Exception as e:
-        return CommandResult(success=False, output=f"获取 Skills 失败: {e}")
+        return CommandResult(success=False, output=f"获取 Skills/Rules 失败: {e}")
 
 
 async def _cmd_memory_export(args: str, project_id: Optional[str], context: dict) -> CommandResult:
