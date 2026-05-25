@@ -271,6 +271,8 @@ body {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
     gap: 16px;
+    align-content: start;  /* 行高由内容决定，不拉伸填满容器 */
+    align-items: start;    /* 卡片高度由自身内容决定 */
 }
 
 .project-card {
