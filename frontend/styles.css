@@ -243,7 +243,7 @@ body {
     flex-shrink: 0;
 }
 #projectListPage .project-grid {
-    padding: 0 24px 12px;
+    padding: 8px 24px 12px;  /* 顶部留 8px，防止 hover translateY(-2px) 被裁剪 */
     flex: 1;
     overflow-y: auto;
     min-height: 0;   /* 允许 flex 子元素缩小 */
@@ -271,8 +271,7 @@ body {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
     gap: 16px;
-    align-content: start;  /* 行高由内容决定，不拉伸填满容器 */
-    align-items: start;    /* 卡片高度由自身内容决定 */
+    align-content: start;  /* 行不拉伸填满容器高度 */
 }
 
 .project-card {
