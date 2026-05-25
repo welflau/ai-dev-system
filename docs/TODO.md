@@ -6,10 +6,11 @@
 
 ## 🎯 待办（未完成）
 
-### H. 系统自进化：成功经验自动沉淀为 Skill（P2）
+### ✅ H. 系统自进化：成功经验自动沉淀为 Skill（已完成 2026-05-22）
 
-工单验收通过后，AI 自动提炼可复用技术模式，生成 Skill 草案（draft），人工确认后写入 skills.json。
-详见：`docs/20260509_04_系统自进化_Skill自动沉淀方案.md`
+工单验收通过后异步触发 SkillExtractorAction，LLM 分析工单轨迹提取草案，
+人工通过 `confirm_skill` 工具确认后写入 skills.json 并热重载。
+提交：`7e72802` | DevNote：`2026-05-22_02_Evolve_TODOH_Skill自动沉淀.md`
 
 ---
 
