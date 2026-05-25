@@ -14,9 +14,10 @@
 
 ---
 
-### G. Reflexion UE uproject 自愈（P2）
+### ✅ G. Reflexion UE uproject 自愈（已完成 2026-05-22）
 
 Playtest 因 "module could not be loaded" 失败时，自动检测缺失插件声明并补写 `.uproject`，重触发编译+重测。
+提交：`4550be2` | DevNote：`2026-05-22_03_Evolve_TODOG_UEuproject自愈.md`
 
 ---
 
