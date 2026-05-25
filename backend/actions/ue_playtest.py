@@ -468,6 +468,15 @@ class UEPlaytestAction(ActionBase):
         head = text[:8192]
         tail = text[-8192:] if len(text) > 8192 else ""
 
+        # TODO G：检测 module not loaded 错误，供自愈逻辑使用
+        module_load_errors: list = []
+        if status == "playtest_failed":
+            try:
+                from actions.ue_uproject_heal import _extract_missing_modules
+                module_load_errors = _extract_missing_modules(head + tail)
+            except Exception:
+                pass
+
         data: Dict[str, Any] = {
             "status": status,
             "exit_code": exit_code,
@@ -481,6 +490,7 @@ class UEPlaytestAction(ActionBase):
             "engine_used": engine_info.to_dict(),
             "test_filter": test_filter,
             "test_names": test_names,
+            "module_load_errors": module_load_errors,  # TODO G：缺失模块列表
         }
 
         msg = (

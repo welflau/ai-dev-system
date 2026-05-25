@@ -2072,6 +2072,27 @@ class TicketOrchestrator:
                         },
                     )
                 else:
+                    # TODO G：playtest_failed 时先尝试 uproject 自愈
+                    module_errors = result.get("module_load_errors") or []
+                    if module_errors:
+                        heal_result = await self._try_uproject_heal(
+                            project_id, ticket_id, result
+                        )
+                        if heal_result.get("healed"):
+                            # 自愈成功 → 重走编译+测试（状态回退到 engine_compile）
+                            added = heal_result.get("added_plugins", [])
+                            await self._log(
+                                project_id, requirement_id, ticket_id, agent_name,
+                                "action", current_status, "engine_compile",
+                                f"uproject 自愈：追加插件 {', '.join(added)}，重新编译+测试",
+                                detail_data={"added_plugins": added, "heal_result": heal_result},
+                            )
+                            await db.update("tickets", {
+                                "status": "engine_compile",
+                                "updated_at": now_iso(),
+                            }, "id = ?", (ticket_id,))
+                            return   # Orchestrator 下次轮询到 engine_compile 继续
+
                     # playtest_failed → play_test_failed → SOP reject_goto development
                     new_status = "play_test_failed"
                     await db.update("tickets", {
@@ -2083,11 +2104,14 @@ class TicketOrchestrator:
                         f"{t.get('name', '?')}: {'/'.join((t.get('errors') or ['?'])[:1])[:60]}"
                         for t in failed_tests[:3]
                     )
+                    heal_note = ""
+                    if module_errors:
+                        heal_note = f"（已尝试 uproject 自愈，无有效插件可补充）"
                     await self._log(
                         project_id, requirement_id, ticket_id, agent_name,
                         "reject", current_status, new_status,
                         f"Playtest 失败 · {summary.get('failed', len(failed_tests))}/{summary.get('total', 0)} failed · "
-                        f"将触发 DevAgent.fix_issues 修复",
+                        f"将触发 DevAgent.fix_issues 修复{heal_note}",
                         "warning",
                         detail_data={
                             "tests": failed_tests[:10],
@@ -2097,6 +2121,7 @@ class TicketOrchestrator:
                             "duration_ms": result.get("duration_ms"),
                             "command": result.get("command"),
                             "fail_brief": fail_brief,
+                            "module_load_errors": module_errors,
                         },
                     )
                 return   # 不进入下面的常规 testing 分支
@@ -3488,6 +3513,29 @@ class TicketOrchestrator:
             )
         except Exception as e:
             logger.warning("SessionLogger.log_event 失败: %s", e)
+
+
+    # ── TODO G：uproject 自愈 ───────────────────────────────────────────────
+
+    async def _try_uproject_heal(
+        self,
+        project_id: str,
+        ticket_id: str,
+        playtest_result: Dict,
+    ) -> Dict:
+        """尝试 uproject 自愈，返回 heal_result dict。"""
+        try:
+            from actions.ue_uproject_heal import UEUprojectHealAction
+            action = UEUprojectHealAction()
+            log_text = (playtest_result.get("raw_head") or "") + (playtest_result.get("raw_tail") or "")
+            result = await action.run({
+                "project_id": project_id,
+                "playtest_log": log_text,
+            })
+            return result.data or {}
+        except Exception as e:
+            logger.warning("uproject 自愈失败（忽略）: %s", e)
+            return {"healed": False, "reason": str(e)}
 
 
 # 全局 Orchestrator
