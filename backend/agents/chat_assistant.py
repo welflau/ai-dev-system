@@ -64,6 +64,7 @@ from actions.chat.dispatch_subtask import DispatchSubtaskAction, DispatchParalle
 from actions.chat.manage_skill import ManageSkillAction                    # Skill 开关管理
 from actions.chat.set_session_flag import SetSessionFlagAction, get_session_flag  # L9 Feature Flags
 from actions.chat.create_github_repo import CreateGithubRepoAction         # GitHub 建仓库
+from actions.chat.confirm_skill import ConfirmSkillAction                  # TODO H：Skill 草案确认
 
 logger = logging.getLogger("agent.chat_assistant")
 
@@ -425,6 +426,7 @@ class ChatAssistantAgent(BaseAgent):
         ManageSkillAction,             # Skill 启用/禁用管理
         SetSessionFlagAction,          # L9 运行时行为开关
         CreateGithubRepoAction,        # GitHub 建仓库（AiDS-Projects 组织）
+        ConfirmSkillAction,            # TODO H：Skill 草案确认/拒绝
     ]
     react_mode = ReactMode.REACT
     max_react_loop = 6   # 工具调用可能多轮（搜索+fetch），留足余量输出最终回答
@@ -1123,6 +1125,20 @@ class ChatAssistantAgent(BaseAgent):
             if mem_text:
                 memory_section = "\n" + mem_text + "\n"
 
+        # TODO H：Skill 草案感知——有待确认草案时主动提示
+        skill_draft_hint = ""
+        if project_id:
+            try:
+                from skills.pending_skills import pending_skills_manager
+                n = await pending_skills_manager.count_pending(project_id=project_id)
+                if n > 0:
+                    skill_draft_hint = (
+                        f"\n\n> 💡 **Skill 草案提示**：系统自动提取了 {n} 条新 Skill 草案（来自最近验收通过的工单）。"
+                        f"可以主动询问用户是否查看，使用 `confirm_skill` 工具列出详情。"
+                    )
+            except Exception:
+                pass
+
         # v0.18：解析项目 traits，若是 UE 项目则加 UE 专属意图路由
         import json as _json
         try:
@@ -1330,7 +1346,7 @@ class ChatAssistantAgent(BaseAgent):
 <!--CACHE_BOUNDARY-->
 ## 当前项目状态（实时）
 {memory_section}
-{knowledge_section}
+{knowledge_section}{skill_draft_hint}
 ## 当前需求状态
 {req_summary}
 

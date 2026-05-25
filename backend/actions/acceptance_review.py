@@ -175,6 +175,18 @@ class AcceptanceReviewAction(ActionBase):
 
         logger.info("📋 验收: %s → %s (score=%d)", ticket_title[:20], status, score)
 
+        # 验收通过后异步触发 Skill 提取（不阻塞主流程）
+        if passed:
+            import asyncio as _asyncio
+            _asyncio.create_task(
+                _async_extract_skill(
+                    ticket_id=context.get("ticket_id", ""),
+                    project_id=context.get("project_id", ""),
+                    agent_type=self.agent_type,
+                    project_traits=context.get("project_traits", []),
+                )
+            )
+
         return ActionResult(
             success=True,
             data={"status": status, "review": review.model_dump() if review else {}},
@@ -262,3 +274,21 @@ class AcceptanceReviewAction(ActionBase):
             pass
 
         return False
+
+
+async def _async_extract_skill(
+    ticket_id: str, project_id: str, agent_type: str, project_traits: list
+) -> None:
+    """验收通过后异步提取 Skill（fire-and-forget，失败静默）"""
+    try:
+        from actions.skill_extractor import SkillExtractorAction
+        action = SkillExtractorAction()
+        await action.run({
+            "ticket_id": ticket_id,
+            "project_id": project_id,
+            "agent_type": agent_type,
+            "project_traits": project_traits,
+        })
+    except Exception as e:
+        import logging
+        logging.getLogger("skill_extractor").debug("异步 Skill 提取失败（忽略）: %s", e)
