@@ -116,6 +116,30 @@ cd ai-dev-system/backend
 pip install -r requirements.txt
 ```
 
+### 桌面版（推荐）
+
+额外安装桌面依赖：
+
+```bash
+pip install pywebview pystray
+```
+
+双击运行或从项目根目录启动：
+
+```bash
+python desktop.py
+```
+
+启动后自动弹出原生窗口，系统托盘常驻，支持最小化到后台。
+
+### 打包为 exe
+
+```bash
+pip install pyinstaller
+pyinstaller desktop.spec
+# 输出：dist/AI-Dev-System/AI-Dev-System.exe
+```
+
 ### 配置 LLM
 
 复制配置模板并编辑：
