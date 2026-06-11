@@ -342,21 +342,124 @@ async function checkLLMStatus() {
 
 // ==================== LLM 配置弹窗 ====================
 
+// ==================== AI 配置弹窗 Tab 切换 ====================
+
+function switchAICfgTab(tab) {
+    ['llm', 'lightai', 'assets'].forEach(t => {
+        document.getElementById(`aiTab-${t}`)?.classList.toggle('active', t === tab);
+        const panel = document.getElementById(`aiPanel-${t}`);
+        if (panel) panel.style.display = t === tab ? 'block' : 'none';
+    });
+}
+
+
+let _cliModelOptions = {};
+let _cliDefaultCmds  = {};
+
+// 接入方式切换时动态显示/隐藏 API / CLI 字段区块
+function onLLMFormatChange(format) {
+    const apiFields     = document.getElementById('llmApiFields');
+    const cliFields     = document.getElementById('llmCliFields');
+    const apiOnlyFields = document.getElementById('llmApiOnlyFields');
+    if (!apiFields || !cliFields) return;
+    const isCli = format === 'cli';
+    apiFields.style.display     = isCli ? 'none' : 'block';
+    cliFields.style.display     = isCli ? 'block' : 'none';
+    if (apiOnlyFields) apiOnlyFields.style.display = isCli ? 'none' : 'block';
+}
+
+// CLI 工具类型切换：更新模型下拉 + 自动填充默认命令名
+function onCLITypeChange(cliType) {
+    _fillCliModelSelect(cliType, '');
+    // 自动回填该工具的默认 cmd
+    // 规则：字段为空、或当前值与某个已知默认命令完全一致时才覆盖（避免用户自定义路径被清掉）
+    const cmdEl = document.getElementById('llmCliCmd');
+    if (cmdEl) {
+        const defaultCmd = _cliDefaultCmds[cliType] || '';
+        const currentVal = cmdEl.value.trim();
+        const knownDefaults = new Set(Object.values(_cliDefaultCmds).filter(Boolean));
+        const isDefaultOrEmpty = currentVal === '' || knownDefaults.has(currentVal);
+        if (isDefaultOrEmpty && defaultCmd) cmdEl.value = defaultCmd;
+    }
+}
+
+// 填充模型下拉，currentModel 为当前已选中的模型名
+function _fillCliModelSelect(cliType, currentModel) {
+    const selectEl = document.getElementById('llmCliModelSelect');
+    const customEl = document.getElementById('llmCliModelCustom');
+    if (!selectEl || !customEl) return;
+
+    const models = _cliModelOptions[cliType] || [];
+
+    if (cliType === 'custom' || models.length === 0) {
+        // 自定义工具或无预设模型：隐藏下拉，显示手动输入
+        selectEl.style.display = 'none';
+        customEl.style.display = 'block';
+        customEl.value = currentModel || '';
+        return;
+    }
+
+    // 有预设模型列表：显示下拉，隐藏输入框
+    selectEl.style.display = 'block';
+    customEl.style.display = 'none';
+    selectEl.innerHTML = models.map(m =>
+        `<option value="${m}"${m === currentModel ? ' selected' : ''}>${m}</option>`
+    ).join('');
+    // 若 currentModel 不在列表里则默认选第一个
+    if (currentModel && !models.includes(currentModel)) {
+        selectEl.insertAdjacentHTML('afterbegin',
+            `<option value="${currentModel}" selected>${currentModel}（当前）</option>`);
+    }
+}
+
+// 读取当前 CLI 模型值（兼容 select / input 两种模式）
+function _getCliModelValue() {
+    const customEl = document.getElementById('llmCliModelCustom');
+    if (customEl && customEl.style.display !== 'none') return customEl.value.trim();
+    return document.getElementById('llmCliModelSelect')?.value || '';
+}
+
 async function showLLMConfigModal() {
+    // 先禁用 CLI 类型下拉，防止数据未到时切换导致联动错误
+    const cliTypeEl = document.getElementById('llmCliType');
+    if (cliTypeEl) cliTypeEl.disabled = true;
+
     // 先获取最新状态
     try {
         const data = await api('/llm/status');
+        // 缓存模型列表和默认命令名（必须在填充 CLI 字段之前）
+        _cliModelOptions = data.cli_model_options || {};
+        _cliDefaultCmds  = data.cli_default_cmds  || {};
+        // 接入方式
+        const fmt = data.api_format || 'anthropic';
+        const fmtEl = document.getElementById('llmApiFormat');
+        if (fmtEl) { fmtEl.value = fmt; onLLMFormatChange(fmt); }
+        // API 模式字段
         document.getElementById('llmBaseUrl').value = data.base_url || '';
         document.getElementById('llmApiKey').value = '';  // 出于安全不回填 key
         document.getElementById('llmModel').value = data.model || 'gpt-4';
         document.getElementById('llmTimeout').value = data.timeout || 60;
         document.getElementById('llmMaxRetries').value = data.max_retries || 3;
+        // CLI 模式字段：先设 cmd/timeout，再填模型列表（顺序重要）
+        const cliType    = data.cli_type    || 'claude';
+        const cliCmd     = data.cli_cmd     || _cliDefaultCmds[cliType] || cliType;
+        const cliModel   = data.cli_model   || '';
+        const cliTimeout = data.cli_timeout || 120;
+        const cliCmdEl   = document.getElementById('llmCliCmd');
+        const cliToutEl  = document.getElementById('llmCliTimeout');
+        if (cliTypeEl)  cliTypeEl.value  = cliType;
+        if (cliCmdEl)   cliCmdEl.value   = cliCmd;
+        if (cliToutEl)  cliToutEl.value  = cliTimeout;
+        _fillCliModelSelect(cliType, cliModel);   // 填充模型下拉并选中当前值
     } catch {
         document.getElementById('llmBaseUrl').value = '';
         document.getElementById('llmApiKey').value = '';
         document.getElementById('llmModel').value = 'gpt-4';
         document.getElementById('llmTimeout').value = 60;
         document.getElementById('llmMaxRetries').value = 3;
+    } finally {
+        // 数据加载完成后恢复下拉可用
+        if (cliTypeEl) cliTypeEl.disabled = false;
     }
     // 加载 LightAI 配置
     try {
@@ -375,19 +478,30 @@ async function showLLMConfigModal() {
         const el = document.getElementById(id);
         if (el) { el.style.display = 'none'; el.textContent = ''; }
     });
+    // 回到 LLM Tab
+    switchAICfgTab('llm');
     openModal('llmConfigModal');
 }
 
 async function saveLLMConfig() {
-    const base_url = document.getElementById('llmBaseUrl').value.trim();
-    const api_key = document.getElementById('llmApiKey').value.trim();
-    const model = document.getElementById('llmModel').value.trim() || 'gpt-4';
-    const timeout = parseInt(document.getElementById('llmTimeout').value) || 60;
+    const format      = document.getElementById('llmApiFormat')?.value || 'anthropic';
+    const base_url    = document.getElementById('llmBaseUrl').value.trim();
+    const api_key     = document.getElementById('llmApiKey').value.trim();
+    const model       = document.getElementById('llmModel').value.trim() || 'gpt-4';
+    const timeout     = parseInt(document.getElementById('llmTimeout').value) || 60;
     const max_retries = parseInt(document.getElementById('llmMaxRetries').value) || 3;
 
-    const payload = { model, timeout, max_retries };
+    const payload = { api_format: format, model, timeout, max_retries };
     if (base_url) payload.base_url = base_url;
-    if (api_key) payload.api_key = api_key;
+    if (api_key)  payload.api_key  = api_key;
+
+    // CLI 模式专属字段
+    if (format === 'cli') {
+        payload.cli_type    = document.getElementById('llmCliType')?.value    || 'claude';
+        payload.cli_cmd     = document.getElementById('llmCliCmd')?.value.trim() || 'claude';
+        payload.cli_model   = _getCliModelValue();
+        payload.cli_timeout = parseInt(document.getElementById('llmCliTimeout')?.value) || 120;
+    }
 
     // 保存 Pexels API Key
     const pexelsKey = document.getElementById('pexelsApiKey')?.value.trim();
@@ -414,6 +528,7 @@ async function saveLLMConfig() {
         showToast(`保存失败: ${e.message}`, 'error');
     }
 }
+
 
 async function testLightAIConnection() {
     const resultEl = document.getElementById('lightaiTestResult');
@@ -450,33 +565,83 @@ async function testLightAIConnection() {
 
 async function testLLMConnection() {
     const resultEl = document.getElementById('llmTestResult');
-    const testBtn = document.getElementById('llmTestBtn');
+    const testBtn  = document.getElementById('llmTestBtn');
+    if (!resultEl || !testBtn) return;
 
-    // 先保存当前填写的值（临时生效）
+    const format = document.getElementById('llmApiFormat')?.value || 'anthropic';
+
+    // —— CLI 模式 ——
+    if (format === 'cli') {
+        const cliCmd = document.getElementById('llmCliCmd')?.value.trim();
+        if (!cliCmd) {
+            resultEl.style.display = 'block';
+            resultEl.style.background = 'rgba(255,90,90,0.1)';
+            resultEl.style.color = 'var(--error)';
+            resultEl.textContent = '请先填写 CLI 可执行路径';
+            return;
+        }
+        // 先把 CLI 配置同步到后端
+        const cliPayload = {
+            api_format:  'cli',
+            cli_type:    document.getElementById('llmCliType')?.value    || 'claude',
+            cli_cmd:     cliCmd,
+            cli_model:   _getCliModelValue(),
+            cli_timeout: parseInt(document.getElementById('llmCliTimeout')?.value) || 120,
+        };
+        try { await api('/llm/config', { method: 'POST', body: cliPayload }); } catch {}
+
+        testBtn.textContent = '⏳ 测试中...';
+        testBtn.disabled = true;
+        resultEl.style.display = 'block';
+        resultEl.style.background = 'var(--bg-elevated)';
+        resultEl.style.color = 'var(--text-muted)';
+        resultEl.textContent = `正在检测 ${cliCmd} ...`;
+
+        try {
+            const data = await api('/llm/test', { method: 'POST' });
+            if (data.status === 'ok') {
+                resultEl.style.background = 'rgba(52,211,153,0.1)';
+                resultEl.style.color = 'var(--success)';
+                resultEl.textContent = `✅ ${data.message}${data.response ? '  ' + data.response : ''}`;
+            } else {
+                resultEl.style.background = 'rgba(255,90,90,0.1)';
+                resultEl.style.color = 'var(--error)';
+                resultEl.textContent = `❌ ${data.message || '检测失败'}`;
+            }
+        } catch (e) {
+            resultEl.style.background = 'rgba(255,90,90,0.1)';
+            resultEl.style.color = 'var(--error)';
+            resultEl.textContent = `❌ 请求失败: ${e.message}`;
+        } finally {
+            testBtn.textContent = '🔗 测试 LLM 连接';
+            testBtn.disabled = false;
+        }
+        return;
+    }
+
+    // —— API 模式 ——
     const base_url = document.getElementById('llmBaseUrl').value.trim();
-    const api_key = document.getElementById('llmApiKey').value.trim();
-    const model = document.getElementById('llmModel').value.trim();
+    const api_key  = document.getElementById('llmApiKey').value.trim();
+    const model    = document.getElementById('llmModel').value.trim();
 
     if (!base_url) {
         resultEl.style.display = 'block';
-        resultEl.style.background = 'var(--error-bg, rgba(255,90,90,0.1))';
+        resultEl.style.background = 'rgba(255,90,90,0.1)';
         resultEl.style.color = 'var(--error)';
         resultEl.textContent = '请先填写 API Base URL';
         return;
     }
 
     // 先把配置保存到后端（这样测试用的是最新的值）
-    const payload = { base_url, model: model || 'gpt-4' };
+    const payload = { api_format: format, base_url, model: model || 'gpt-4' };
     if (api_key) payload.api_key = api_key;
-    try {
-        await api('/llm/config', { method: 'POST', body: payload });
-    } catch {}
+    try { await api('/llm/config', { method: 'POST', body: payload }); } catch {}
 
     testBtn.textContent = '⏳ 测试中...';
     testBtn.disabled = true;
     resultEl.style.display = 'block';
     resultEl.style.background = 'var(--bg-elevated)';
-    resultEl.style.color = 'var(--text-secondary)';
+    resultEl.style.color = 'var(--text-muted)';
     resultEl.textContent = '正在连接 LLM 服务...';
 
     try {
@@ -499,7 +664,7 @@ async function testLLMConnection() {
         resultEl.style.color = 'var(--error)';
         resultEl.textContent = `❌ 请求失败: ${e.message}`;
     } finally {
-        testBtn.textContent = '🔗 测试连接';
+        testBtn.textContent = '🔗 测试 LLM 连接';
         testBtn.disabled = false;
     }
 }
@@ -6181,6 +6346,7 @@ function renderLogItem(log) {
     let outputSummary = '';
     let errorMsg = '';
     let durationMs = null;
+    let cliCmd = '';
     try {
         const parsed = JSON.parse(log.detail || '{}');
         detail        = parsed.message || '';
@@ -6188,6 +6354,7 @@ function renderLogItem(log) {
         outputSummary = parsed.output_summary || '';
         errorMsg      = parsed.error_msg      || '';
         durationMs    = parsed.duration_ms    ?? null;
+        cliCmd        = parsed.cli_cmd        || '';   // CLI 完整指令
     } catch {
         detail = log.detail || '';
     }
@@ -6214,21 +6381,23 @@ function renderLogItem(log) {
         messageHtml = `<div class="log-message">${detailHtml}</div>`;
     }
 
-    // 构建展开详情块（输入参数 + 输出摘要）
+    // 构建展开详情块（输入参数 + 输出摘要 + CLI指令）
     const expandId = 'logx-' + Math.random().toString(36).slice(2);
-    const hasExpand = log._isChatTool && (inputSummary || outputSummary || errorMsg);
+    const hasExpand = (log._isChatTool && (inputSummary || outputSummary || errorMsg)) || cliCmd;
     const expandHtml = hasExpand ? `
         <div id="${expandId}" class="log-item-expand" style="display:none;">
+            ${cliCmd        ? `<div class="log-expand-row"><span class="log-expand-label">CLI</span><code class="log-expand-val" style="font-family:monospace;font-size:11px;word-break:break-all;">${escHtml(cliCmd)}</code></div>` : ''}
             ${inputSummary  ? `<div class="log-expand-row"><span class="log-expand-label">输入</span><span class="log-expand-val">${escHtml(inputSummary)}</span></div>`  : ''}
             ${outputSummary ? `<div class="log-expand-row"><span class="log-expand-label">结果</span><span class="log-expand-val">${escHtml(outputSummary)}</span></div>` : ''}
             ${errorMsg      ? `<div class="log-expand-row"><span class="log-expand-label log-expand-err">错误</span><span class="log-expand-val log-expand-err">${escHtml(errorMsg)}</span></div>` : ''}
         </div>` : '';
 
     return `
-        <div class="log-item ${log.level || 'info'}${log._isChatTool ? ' log-chat-tool' : ''}"${hasExpand ? ` onclick="toggleBlock('${expandId}')" style="cursor:pointer;"` : ''}>
+        <div class="log-item ${log.level || 'info'}${log._isChatTool ? ' log-chat-tool' : ''}"${hasExpand ? ` onclick="toggleBlock('${expandId}')" style="cursor:pointer;" title="点击展开详情"` : ''}>
             <div class="log-header">
                 <span class="log-agent">${log._isChatTool ? '💬 ' : ''}${escHtml(log.agent_type || 'System')}</span>
                 <span class="log-action">${escHtml((log.action || '').replace(/^chat:/, '🔧 '))}</span>
+                ${cliCmd ? `<span class="log-action" style="color:var(--text-muted);font-size:11px;">▶ CLI</span>` : ''}
                 ${log.from_status && log.to_status ? `
                     <span class="log-status-change">
                         ${getStatusLabel(log.from_status)} <span class="arrow">→</span> ${getStatusLabel(log.to_status)}
@@ -12436,9 +12605,18 @@ async function _handleSlashCommand(input) {
                 if (ev.type === 'compact_triggered') {
                     // 触发历史压缩（告知用户）
                     showToast('对话历史压缩已触发', 'info');
+                } else if (ev.type === 'clear_history') {
+                    // 清空当前对话历史
+                    chatHistory = [];
+                    const msgs = document.getElementById('chatMessages');
+                    if (msgs) msgs.innerHTML = '';
+                    showToast('对话历史已清空', 'info');
                 }
             }
         }
+
+        // 斜杠命令结果持久化（仅全局模式，项目内走 session 持久化）
+        if (!currentProjectId) _saveGlobalChatToStorage();
     } catch(e) {
         bubble.remove();
         const out = document.createElement('div');
@@ -12446,6 +12624,7 @@ async function _handleSlashCommand(input) {
         out.innerHTML = `<div class="cmd-result cmd-fail">❌ <code>/${name}</code> 执行失败: ${escapeHtml(String(e))}</div>`;
         container?.appendChild(out);
         scrollChatToBottom();
+        if (!currentProjectId) _saveGlobalChatToStorage();
     }
 }
 

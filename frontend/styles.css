@@ -8920,3 +8920,30 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
     padding: 2px 0;
     word-break: break-word;
 }
+
+/* ==================== AI 配置弹窗侧栏 Tab ==================== */
+.ai-cfg-tab {
+    display: block;
+    width: 100%;
+    padding: 10px 14px;
+    text-align: left;
+    background: none;
+    border: none;
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+    margin: 0 4px;
+    width: calc(100% - 8px);
+}
+.ai-cfg-tab:hover {
+    background: var(--bg-elevated, rgba(255,255,255,0.05));
+    color: var(--text);
+}
+.ai-cfg-tab.active {
+    background: var(--primary-muted, rgba(99,102,241,0.15));
+    color: var(--primary, #6366f1);
+    font-weight: 600;
+}
+

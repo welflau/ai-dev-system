@@ -257,6 +257,34 @@ class QueryEngine:
                 return
 
             # ── 2. 流式 LLM 调用 ──────────────────────────────────────
+            # CLI 模式：使用 _call_cli_stream 实现真正的流式输出
+            if getattr(self.llm, "api_format", "anthropic") == "cli":
+                full_cli_text = ""
+
+                async for ev in self.llm._call_cli_stream(
+                    current_messages, temperature=0.7, max_tokens=4000
+                ):
+                    etype = ev.get("type", "")
+                    if etype == "text_delta":
+                        chunk = ev.get("delta", "")
+                        full_cli_text += chunk
+                        yield TextDeltaEvent(delta=chunk)
+                    elif etype == "thinking_delta":
+                        yield ThinkingDeltaEvent(delta=ev.get("delta", ""))
+                    elif etype == "stop":
+                        break
+
+                if full_cli_text:
+                    yield ThinkingDoneEvent(text="")  # 折叠思考面板
+                yield MessageDoneEvent(
+                    full_text=full_cli_text,
+                    thinking_steps=[],
+                    final_action=None,
+                    rounds=1,
+                    total_tokens=0,
+                )
+                return
+
             text_chunks: List[Dict] = []
             tool_calls: List[Dict] = []
             round_input = 0

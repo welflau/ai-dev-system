@@ -453,13 +453,23 @@ async def get_preview_url(project_id: str):
 @app.get("/api/llm/status")
 async def llm_status():
     """LLM 状态"""
-    from llm_client import llm_client
+    from llm_client import llm_client, CLI_MODEL_OPTIONS, _CLI_ADAPTERS
+    is_cli = llm_client.api_format == "cli"
     return {
-        "configured": llm_client.is_configured,
-        "base_url": llm_client.base_url if llm_client.is_configured else None,
-        "model": llm_client.model if llm_client.is_configured else None,
-        "timeout": llm_client.timeout,
+        "configured":  llm_client.is_configured,
+        "api_format":  llm_client.api_format,
+        "base_url":    llm_client.base_url if not is_cli else None,
+        "model":       llm_client.model,
+        "timeout":     llm_client.timeout,
         "max_retries": llm_client.max_retries,
+        # CLI 专属字段（非 CLI 模式时为 None）
+        "cli_type":    llm_client.cli_type    if is_cli else None,
+        "cli_cmd":     llm_client.cli_cmd     if is_cli else None,
+        "cli_model":   llm_client.cli_model   if is_cli else None,
+        "cli_timeout": llm_client.cli_timeout if is_cli else None,
+        # 前端联动用：各 CLI 工具的模型列表 + 默认命令名（始终返回，方便弹窗初始化）
+        "cli_model_options": CLI_MODEL_OPTIONS,
+        "cli_default_cmds":  {k: v["default_cmd"] for k, v in _CLI_ADAPTERS.items()},
     }
 
 
@@ -470,6 +480,8 @@ async def llm_config(body: dict):
     from config import BASE_DIR
 
     # 更新运行时
+    if "api_format" in body:
+        llm_client.api_format = body["api_format"] or "anthropic"
     if "base_url" in body:
         llm_client.base_url = (body["base_url"] or "").rstrip("/")
     if "api_key" in body:
@@ -480,13 +492,27 @@ async def llm_config(body: dict):
         llm_client.timeout = int(body.get("timeout", 60))
     if "max_retries" in body:
         llm_client.max_retries = int(body.get("max_retries", 3))
+    # CLI 专属字段
+    if "cli_type" in body:
+        llm_client.cli_type = body["cli_type"] or "claude"
+    if "cli_cmd" in body:
+        llm_client.cli_cmd = body["cli_cmd"] or "claude"
+    if "cli_model" in body:
+        llm_client.cli_model = body["cli_model"] or llm_client.model
+    if "cli_timeout" in body:
+        llm_client.cli_timeout = int(body.get("cli_timeout", 120))
 
     # 同步更新 settings
-    settings.LLM_BASE_URL = llm_client.base_url
-    settings.LLM_API_KEY = llm_client.api_key
-    settings.LLM_MODEL = llm_client.model
-    settings.LLM_TIMEOUT = llm_client.timeout
+    settings.LLM_API_FORMAT  = llm_client.api_format
+    settings.LLM_BASE_URL    = llm_client.base_url
+    settings.LLM_API_KEY     = llm_client.api_key
+    settings.LLM_MODEL       = llm_client.model
+    settings.LLM_TIMEOUT     = llm_client.timeout
     settings.LLM_MAX_RETRIES = llm_client.max_retries
+    settings.LLM_CLI_TYPE    = llm_client.cli_type
+    settings.LLM_CLI_CMD     = llm_client.cli_cmd
+    settings.LLM_CLI_MODEL   = llm_client.cli_model
+    settings.LLM_CLI_TIMEOUT = llm_client.cli_timeout
 
     # 持久化到 .env
     env_path = BASE_DIR / ".env"
@@ -498,11 +524,16 @@ async def llm_config(body: dict):
                 k, v = line.split("=", 1)
                 env_lines[k.strip()] = v.strip()
 
-    env_lines["LLM_BASE_URL"] = llm_client.base_url
-    env_lines["LLM_API_KEY"] = llm_client.api_key
-    env_lines["LLM_MODEL"] = llm_client.model
-    env_lines["LLM_TIMEOUT"] = str(llm_client.timeout)
+    env_lines["LLM_API_FORMAT"]  = llm_client.api_format
+    env_lines["LLM_BASE_URL"]    = llm_client.base_url
+    env_lines["LLM_API_KEY"]     = llm_client.api_key
+    env_lines["LLM_MODEL"]       = llm_client.model
+    env_lines["LLM_TIMEOUT"]     = str(llm_client.timeout)
     env_lines["LLM_MAX_RETRIES"] = str(llm_client.max_retries)
+    env_lines["LLM_CLI_TYPE"]    = llm_client.cli_type
+    env_lines["LLM_CLI_CMD"]     = llm_client.cli_cmd
+    env_lines["LLM_CLI_MODEL"]   = llm_client.cli_model
+    env_lines["LLM_CLI_TIMEOUT"] = str(llm_client.cli_timeout)
 
     # Pexels API Key（资产网络搜索）
     if "pexels_api_key" in body and body["pexels_api_key"]:
@@ -530,8 +561,9 @@ async def llm_config(body: dict):
 
     return {
         "status": "ok",
-        "configured": llm_client.is_configured,
-        "model": llm_client.model,
+        "configured":         llm_client.is_configured,
+        "api_format":         llm_client.api_format,
+        "model":              llm_client.model,
         "lightai_configured": bool(settings.LIGHTAI_API_KEY),
     }
 
@@ -759,13 +791,13 @@ if __name__ == "__main__":
     # 每次启动清除 __pycache__，防止旧 .pyc 导致代码更改不生效
     for _pc in Path(__file__).parent.rglob("__pycache__"):
         _sh.rmtree(_pc, ignore_errors=True)
+    # 注意：reload 模式下 uvicorn 会 fork 子进程并用字符串 "main:app" 重新 import，
+    # 子进程的 sys.path 可能不包含 backend/，导致加载到错误的 main 模块。
+    # 因此始终禁用 reload，改用外部工具（如 watchdog）或手动重启。
     uvicorn.run(
-        "main:app",
+        app,                              # 直接传 app 对象，避免字符串解析路径问题
         host=settings.HOST,
         port=settings.PORT,
-        reload=settings.DEBUG,
-        reload_dirs=[str(Path(__file__).parent)],
-        reload_includes=["**/*.py"],
+        reload=False,                     # 永远不开 reload
     )
-
 

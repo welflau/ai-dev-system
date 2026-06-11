@@ -137,8 +137,134 @@ def _ctx_label() -> str:
     return " | ".join(parts) if parts else "no-context"
 
 
+# ==================== CLI 适配表 ====================
+# 每个 cli_type 描述如何把 (cli_cmd, model, prompt) 组装成子进程调用
+# build_cmd(cli, model, prompt) -> list[str]
+# stdin=True 表示 prompt 通过 stdin 传入（custom 模式），否则作为命令行参数
+#
+# 各工具默认可执行文件名（在 PATH 中直接可用时）：
+#   claude           → claude
+#   claude-internal  → claude  （腾讯内网版 Claude Code，同二进制，通过模型名区分）
+#   gemini-internal  → gemini  （腾讯内网版 Gemini CLI）
+#   codebuddy        → codebuddy
+#   custom           → 用户自定义
+#
+# 各工具支持的模型列表（前端下拉联动，后端仅做透传，无需枚举校验）：
+CLI_MODEL_OPTIONS: Dict[str, list] = {
+    "claude": [
+        # Claude 官方 CLI 支持的模型（来源：claude --model 选择界面）
+        "claude-sonnet-4-6",
+        "claude-sonnet-4-6-1m",
+        "claude-opus-4-8",
+        "claude-opus-4-8-1m",
+        "claude-opus-4-7",
+        "claude-opus-4-7-1m",
+        "claude-opus-4-6",
+        "claude-opus-4-6-1m",
+        "claude-haiku-4-5",
+    ],
+    "claude-internal": [
+        # 腾讯内网 Claude Code 可用模型（同 claude 二进制，模型名区分）
+        "claude-sonnet-4-6",
+        "claude-sonnet-4-6-1m",
+        "claude-opus-4-8",
+        "claude-opus-4-8-1m",
+        "claude-haiku-4-5",
+    ],
+    "gemini-internal": [
+        # 腾讯内网 Gemini CLI 可用模型
+        "gemini-3.1-pro",
+        "gemini-3.5-flash",
+        "gemini-2.5-pro",
+    ],
+    "codebuddy": [
+        # CodeBuddy CLI 可用模型（来源：codebuddy 模型选择界面）
+        "claude-sonnet-4-6",
+        "claude-sonnet-4-6-1m",
+        "claude-opus-4-8",
+        "claude-opus-4-8-1m",
+        "claude-opus-4-7",
+        "claude-opus-4-7-1m",
+        "claude-opus-4-6",
+        "claude-opus-4-6-1m",
+        "claude-haiku-4-5",
+        "gemini-3.1-pro",
+        "gemini-3.5-flash",
+        "gemini-2.5-pro",
+        "gpt-5.5",
+        "gpt-5.4",
+        "gpt-5.3-codex",
+        "gpt-5.1-codex",
+        "gpt-5.1-codex-mini",
+        "glm-5.1-ioa",
+        "glm-5v-turbo-ioa",
+        "glm-5.0-ioa",
+        "glm-4.7-ioa",
+        "minimax-m2.7-ioa",
+        "minimax-m2.5-ioa",
+        "kimi-k2.6-ioa",
+        "hy3-preview-ioa",
+        "deepseek-v4-pro-ioa",
+        "deepseek-v4-flash-ioa",
+        "deepseek-v3-2-volc-ioa",
+    ],
+    "custom": [],   # 自定义工具不预设模型列表
+}
+
+_CLI_ADAPTERS: Dict[str, Dict] = {
+    "claude": {
+        "build_cmd": lambda cli, model, prompt: (
+            [cli, "--print", "--output-format", "stream-json",
+             "--include-partial-messages", "--model", model]
+            if model else
+            [cli, "--print", "--output-format", "stream-json", "--include-partial-messages"]
+        ),
+        "stdin": True,
+        "streaming": True,
+        "default_cmd": "claude",
+    },
+    "claude-internal": {
+        "build_cmd": lambda cli, model, prompt: (
+            [cli, "--print", "--output-format", "stream-json",
+             "--include-partial-messages", "--model", model]
+            if model else
+            [cli, "--print", "--output-format", "stream-json", "--include-partial-messages"]
+        ),
+        "stdin": True,
+        "streaming": True,
+        "default_cmd": "claude",
+    },
+    "gemini-internal": {
+        "build_cmd": lambda cli, model, prompt: (
+            [cli, "--model", model]
+            if model else [cli]
+        ),
+        "stdin": True,
+        "streaming": False,
+        "default_cmd": "gemini",
+    },
+    "codebuddy": {
+        "build_cmd": lambda cli, model, prompt: (
+            [cli, "--print", "--output-format", "stream-json",
+             "--include-partial-messages", "--model", model]
+            if model else
+            [cli, "--print", "--output-format", "stream-json", "--include-partial-messages"]
+        ),
+        "stdin": True,
+        "streaming": True,
+        "default_cmd": "codebuddy",
+    },
+    "custom": {
+        "build_cmd": lambda cli, model, prompt: [cli],
+        "stdin": True,
+        "streaming": False,
+        "default_cmd": "",
+    },
+}
+
+
 class LLMClient:
-    """LLM 客户端 — 支持 Anthropic Messages API 和 OpenAI 兼容 API"""
+    """LLM 客户端 — 支持 Anthropic Messages API、OpenAI 兼容 API 和本地 CLI"""
 
     def __init__(self):
         self.base_url = settings.LLM_BASE_URL.rstrip("/")
@@ -146,12 +272,20 @@ class LLMClient:
         self.model = settings.LLM_MODEL
         self.timeout = settings.LLM_TIMEOUT
         self.max_retries = settings.LLM_MAX_RETRIES
-        self.api_format = settings.LLM_API_FORMAT  # "anthropic" or "openai"
+        self.api_format = settings.LLM_API_FORMAT  # "anthropic" / "openai" / "cli"
         self._pending_requests: int = 0   # 当前在途 LLM 请求数（供 /api/metrics 读取）
+
+        # CLI 模式专属
+        self.cli_type    = settings.LLM_CLI_TYPE
+        self.cli_cmd     = settings.LLM_CLI_CMD
+        self.cli_model   = settings.LLM_CLI_MODEL or settings.LLM_MODEL
+        self.cli_timeout = settings.LLM_CLI_TIMEOUT
 
     @property
     def is_configured(self) -> bool:
         """是否已配置 LLM"""
+        if self.api_format == "cli":
+            return bool(self.cli_cmd)   # CLI 模式只需要可执行文件路径非空
         return bool(self.base_url and self.api_key)
 
     # ---- Anthropic Messages API ----
@@ -276,6 +410,333 @@ class LLMClient:
 
         return self._fallback_response(messages), None
 
+    # ---- CLI 子进程调用 ----
+
+    def _messages_to_prompt(self, messages: List[Dict]) -> str:
+        """
+        将 messages 转为 CLI 可接受的单段文本 prompt。
+
+        策略：只取最后一条 user 消息作为提问，system 消息作为前置上下文拼在最前面。
+        历史对话（多轮）不透传——CLI 工具无状态，传整段历史只会让它困惑。
+        """
+        system_text = ""
+        last_user_text = ""
+
+        for m in messages:
+            role    = m.get("role", "")
+            content = m.get("content", "")
+            if isinstance(content, list):
+                content = " ".join(
+                    b.get("text", "") for b in content
+                    if isinstance(b, dict) and b.get("type") == "text"
+                )
+            if not isinstance(content, str):
+                content = str(content)
+
+            if role == "system":
+                # 系统提示词可能很长，截取关键部分（前 500 字）避免超长
+                system_text = content[:500].strip()
+            elif role == "user":
+                last_user_text = content.strip()
+
+        if system_text and last_user_text:
+            return f"{system_text}\n\n{last_user_text}"
+        return last_user_text or system_text
+
+    @staticmethod
+    def _resolve_cmd(cli_cmd: str) -> list:
+        """
+        解析 CLI 命令，处理 Windows 下 .cmd / .bat 脚本无法被
+        asyncio.create_subprocess_exec 直接执行的问题。
+        返回可直接传给 create_subprocess_exec 的参数列表前缀。
+        示例：
+          'codebuddy'    (Windows, .cmd) → ['cmd', '/c', 'codebuddy']
+          'claude'       (Windows, .exe) → ['claude']
+          'claude'       (Linux)         → ['claude']
+        """
+        import sys, shutil as _sh
+        if sys.platform != "win32":
+            return [cli_cmd]
+        resolved = _sh.which(cli_cmd)
+        if resolved and (resolved.lower().endswith('.cmd') or resolved.lower().endswith('.bat')):
+            return ['cmd', '/c', cli_cmd]
+        return [cli_cmd]
+
+    async def _call_cli(
+        self,
+        messages: List[Dict],
+        temperature: float,
+        max_tokens: int,
+    ) -> tuple:
+        """通过本地 CLI 子进程调用 LLM，返回 (response_text, usage_dict)"""
+        import asyncio as _asyncio
+        import os as _os
+
+        adapter    = _CLI_ADAPTERS.get(self.cli_type, _CLI_ADAPTERS["custom"])
+        prompt     = self._messages_to_prompt(messages)
+        use_stdin  = adapter["stdin"]
+        use_stream = adapter.get("streaming", False)
+        cmd_prefix = self._resolve_cmd(self.cli_cmd)
+        raw_args   = adapter["build_cmd"](self.cli_cmd, self.cli_model, prompt)
+        cmd = cmd_prefix + raw_args[1:]
+
+        logger.info("🖥️  CLI 调用: %s < stdin (type=%s, stream=%s, prompt_len=%d)",
+                    " ".join(cmd), self.cli_type, use_stream, len(prompt))
+
+        env = _os.environ.copy()
+        if self.cli_type in ("codebuddy", "claude", "claude-internal"):
+            env["CODEBUDDY_API_KEY_DISABLED"] = "1"
+
+        stdin_data = prompt.encode("utf-8") if use_stdin else None
+
+        try:
+            proc = await _asyncio.create_subprocess_exec(
+                *cmd,
+                stdin=_asyncio.subprocess.PIPE if use_stdin else None,
+                stdout=_asyncio.subprocess.PIPE,
+                stderr=_asyncio.subprocess.PIPE,
+                env=env,
+            )
+
+            if use_stream:
+                # 流式读取：逐行解析 stream-json，拼接文本
+                full_text = await self._parse_cli_stream(proc, stdin_data)
+            else:
+                try:
+                    stdout, stderr = await _asyncio.wait_for(
+                        proc.communicate(input=stdin_data), timeout=self.cli_timeout
+                    )
+                except _asyncio.TimeoutError:
+                    proc.kill()
+                    logger.error("CLI 调用超时（%ds）: %s", self.cli_timeout, self.cli_cmd)
+                    return self._fallback_response(messages), None
+
+                if proc.returncode != 0:
+                    err_msg = stderr.decode("utf-8", errors="replace")[:500]
+                    logger.error("CLI 调用失败 (rc=%d): %s", proc.returncode, err_msg)
+                    return f"[CLI错误] {err_msg}", None
+
+                full_text = stdout.decode("utf-8", errors="replace").strip()
+                stderr_text = stderr.decode("utf-8", errors="replace").strip()
+                if not full_text and stderr_text:
+                    logger.warning("CLI stdout 为空，stderr: %s", stderr_text[:200])
+                    return f"[CLI错误] {stderr_text[:500]}", None
+
+            return full_text, {"input_tokens": None, "output_tokens": None}
+
+        except FileNotFoundError:
+            logger.error("CLI 可执行文件不存在: %s", self.cli_cmd)
+            return self._fallback_response(messages), None
+        except Exception as e:
+            logger.error("CLI 调用异常: %s", e)
+            return self._fallback_response(messages), None
+
+    async def _parse_cli_stream(self, proc, stdin_data: bytes) -> str:
+        """
+        解析 stream-json 格式的 CLI 输出，返回拼接后的完整文本。
+        stream-json 每行一个 JSON 对象，文本在：
+          {"type":"assistant","message":{"content":[{"type":"text","text":"..."}]}}
+        """
+        import asyncio as _asyncio
+        import json as _json
+
+        # 先写入 stdin
+        if stdin_data and proc.stdin:
+            proc.stdin.write(stdin_data)
+            await proc.stdin.drain()
+            proc.stdin.close()
+
+        full_text = ""
+        try:
+            async def _read_lines():
+                nonlocal full_text
+                async for raw_line in proc.stdout:
+                    line = raw_line.decode("utf-8", errors="replace").strip()
+                    if not line:
+                        continue
+                    try:
+                        obj = _json.loads(line)
+                    except _json.JSONDecodeError:
+                        continue
+
+                    t = obj.get("type", "")
+                    # assistant 消息块：提取文本
+                    if t == "assistant":
+                        msg = obj.get("message", {})
+                        for block in msg.get("content", []):
+                            if block.get("type") == "text":
+                                full_text += block.get("text", "")
+                    # result 块：记录错误
+                    elif t == "result" and obj.get("is_error"):
+                        errors = obj.get("errors", [])
+                        if errors and not full_text:
+                            full_text = f"[CLI错误] {errors[0][:300]}"
+
+            await _asyncio.wait_for(_read_lines(), timeout=self.cli_timeout)
+        except _asyncio.TimeoutError:
+            proc.kill()
+            logger.error("CLI 流式读取超时（%ds）", self.cli_timeout)
+            if not full_text:
+                full_text = self._fallback_response([])
+
+        # 等进程结束
+        try:
+            await _asyncio.wait_for(proc.wait(), timeout=5)
+        except Exception:
+            pass
+
+        return full_text.strip()
+
+    async def _call_cli_stream(
+        self,
+        messages: List[Dict],
+        temperature: float,
+        max_tokens: int,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """
+        流式版 CLI 调用，实时 yield text_delta 事件（供 QueryEngine CLI 模式使用）。
+        stream-json 格式：每行一个 JSON，assistant 消息块里有文本。
+        """
+        import asyncio as _asyncio
+        import json as _json
+        import os as _os
+
+        adapter    = _CLI_ADAPTERS.get(self.cli_type, _CLI_ADAPTERS["custom"])
+        prompt     = self._messages_to_prompt(messages)
+        use_stdin  = adapter["stdin"]
+        use_stream = adapter.get("streaming", False)
+        cmd_prefix = self._resolve_cmd(self.cli_cmd)
+        raw_args   = adapter["build_cmd"](self.cli_cmd, self.cli_model, prompt)
+        cmd = cmd_prefix + raw_args[1:]
+
+        logger.info("🖥️  CLI 流式调用: %s (type=%s)", " ".join(cmd), self.cli_type)
+
+        env = _os.environ.copy()
+        if self.cli_type in ("codebuddy", "claude", "claude-internal"):
+            env["CODEBUDDY_API_KEY_DISABLED"] = "1"
+
+        stdin_data = prompt.encode("utf-8") if use_stdin else None
+
+        try:
+            proc = await _asyncio.create_subprocess_exec(
+                *cmd,
+                stdin=_asyncio.subprocess.PIPE if use_stdin else None,
+                stdout=_asyncio.subprocess.PIPE,
+                stderr=_asyncio.subprocess.PIPE,
+                env=env,
+            )
+
+            if stdin_data and proc.stdin:
+                proc.stdin.write(stdin_data)
+                await proc.stdin.drain()
+                proc.stdin.close()
+
+            full_text = ""
+            if use_stream:
+                # stream-json + --include-partial-messages 格式：
+                #   {"type":"stream_event","event":{"type":"content_block_delta",
+                #     "delta":{"type":"text_delta","text":"..."}}}
+                #   {"type":"stream_event","event":{"type":"content_block_delta",
+                #     "delta":{"type":"thinking_delta","thinking":"..."}}}
+                # 用 Queue 桥接：_reader task 解析行 → queue → yield
+                queue: _asyncio.Queue = _asyncio.Queue()
+
+                async def _reader():
+                    nonlocal full_text
+                    async for raw_line in proc.stdout:
+                        line = raw_line.decode("utf-8", errors="replace").strip()
+                        if not line:
+                            continue
+                        try:
+                            obj = _json.loads(line)
+                        except _json.JSONDecodeError:
+                            continue
+                        t = obj.get("type", "")
+                        if t == "stream_event":
+                            ev = obj.get("event", {})
+                            et = ev.get("type", "")
+                            delta = ev.get("delta", {})
+                            dt = delta.get("type", "")
+                            if et == "content_block_delta":
+                                if dt == "text_delta":
+                                    chunk = delta.get("text", "")
+                                    if chunk:
+                                        full_text += chunk
+                                        await queue.put(("text", chunk))
+                                elif dt == "thinking_delta":
+                                    chunk = delta.get("thinking", "")
+                                    if chunk:
+                                        await queue.put(("thinking", chunk))
+                        elif t == "result" and obj.get("is_error"):
+                            errors = obj.get("errors", [])
+                            if errors and not full_text:
+                                full_text = f"[CLI错误] {errors[0][:300]}"
+                                await queue.put(("text", full_text))
+                    await queue.put(None)  # 结束哨兵
+
+                reader_task = _asyncio.create_task(_reader())
+                deadline = _asyncio.get_event_loop().time() + self.cli_timeout
+
+                try:
+                    while True:
+                        remaining = deadline - _asyncio.get_event_loop().time()
+                        if remaining <= 0:
+                            reader_task.cancel()
+                            proc.kill()
+                            logger.error("CLI 流式调用超时（%ds）", self.cli_timeout)
+                            if not full_text:
+                                yield {"type": "text_delta", "delta": "[CLI错误] 调用超时"}
+                            break
+                        try:
+                            item = await _asyncio.wait_for(queue.get(), timeout=min(remaining, 5.0))
+                        except _asyncio.TimeoutError:
+                            # 5 秒内没有新内容，检查进程是否还活着
+                            if proc.returncode is not None:
+                                break
+                            continue
+                        if item is None:
+                            break
+                        kind, chunk = item
+                        if kind == "text":
+                            yield {"type": "text_delta", "delta": chunk}
+                        elif kind == "thinking":
+                            yield {"type": "thinking_delta", "delta": chunk}
+                except Exception as ex:
+                    logger.error("CLI 流式读取异常: %s", ex)
+                finally:
+                    if not reader_task.done():
+                        reader_task.cancel()
+            else:
+                # 非流式 CLI：等待全部输出，一次性 yield
+                try:
+                    stdout, stderr = await _asyncio.wait_for(
+                        proc.communicate(), timeout=self.cli_timeout
+                    )
+                    full_text = stdout.decode("utf-8", errors="replace").strip()
+                    if not full_text:
+                        full_text = stderr.decode("utf-8", errors="replace").strip()
+                    yield {"type": "text_delta", "delta": full_text}
+                except _asyncio.TimeoutError:
+                    proc.kill()
+                    yield {"type": "text_delta", "delta": "[CLI错误] 调用超时"}
+
+        except FileNotFoundError:
+            yield {"type": "text_delta", "delta": f"[CLI错误] 找不到可执行文件: {self.cli_cmd}"}
+        except Exception as e:
+            yield {"type": "text_delta", "delta": f"[CLI错误] {e}"}
+
+        # 流式结束后保存会话记录（推送日志到前端）
+        try:
+            await self._save_conversation(
+                messages, full_text,
+                {"input_tokens": None, "output_tokens": None},
+                0,
+            )
+        except Exception as e:
+            logger.error("CLI 流式会话记录保存失败: %s", e)
+
+        yield {"type": "stop", "stop_reason": "end_turn", "usage": {}}
+
     # ---- 统一接口 ----
 
     async def chat(
@@ -314,6 +775,8 @@ class LLMClient:
         try:
             if self.api_format == "anthropic":
                 response_text, usage = await self._call_anthropic(messages, temperature, max_tokens)
+            elif self.api_format == "cli":
+                response_text, usage = await self._call_cli(messages, temperature, max_tokens)
             else:
                 response_text, usage = await self._call_openai(messages, temperature, max_tokens)
         finally:
@@ -402,31 +865,58 @@ class LLMClient:
             logger.error("SessionLogger.log_llm 失败: %s", e)
 
         # === 推送到前端实时日志面板 ===
+        from events import event_manager
+        from utils import generate_id as _gen_id
+
+        input_t = usage.get("input_tokens", 0) if usage else 0
+        output_t = usage.get("output_tokens", 0) if usage else 0
+        agent_label = _llm_ctx.agent_type or "System"
+        status_emoji = "⚠️" if is_fallback else "🤖"
+        # CLI 模式显示实际使用的 cli_model，API 模式显示 model
+        display_model = self.cli_model if self.api_format == "cli" else self.model
+        cli_note = f" via {self.cli_type}" if self.api_format == "cli" else ""
+        msg = (
+            f"{status_emoji} AI调用 [{display_model}{cli_note}] "
+            f"{duration_ms}ms, tokens: {input_t}→{output_t}"
+        )
+        log_id = generate_id("LOG")
+        created_at = data["created_at"]
+
+        # CLI 模式：构造完整调用指令摘要
+        cli_cmd_display = ""
+        if self.api_format == "cli":
+            adapter    = _CLI_ADAPTERS.get(self.cli_type, _CLI_ADAPTERS["custom"])
+            cmd_prefix = self._resolve_cmd(self.cli_cmd)
+            raw_args   = adapter["build_cmd"](self.cli_cmd, self.cli_model, "...")
+            cmd_full   = cmd_prefix + raw_args[1:]
+            use_stdin  = adapter.get("stdin", False)
+            cli_cmd_display = " ".join(cmd_full) + (" < stdin" if use_stdin else "")
+
+        detail_json = json.dumps({
+            "message": msg,
+            "model": display_model,
+            "input_tokens": input_t,
+            "output_tokens": output_t,
+            "duration_ms": duration_ms,
+            "llm_status": data["status"],
+            **({"cli_cmd": cli_cmd_display} if cli_cmd_display else {}),
+        }, ensure_ascii=False)
+
+        log_payload = {
+            "id": log_id,
+            "ticket_id": _llm_ctx.ticket_id,
+            "requirement_id": _llm_ctx.requirement_id,
+            "agent_type": agent_label,
+            "action": "llm_call",
+            "from_status": None,
+            "to_status": None,
+            "detail": detail_json,
+            "level": "info",
+            "created_at": created_at,
+        }
+
         if _llm_ctx.project_id:
-            from events import event_manager
-
-            input_t = usage.get("input_tokens", 0) if usage else 0
-            output_t = usage.get("output_tokens", 0) if usage else 0
-            agent_label = _llm_ctx.agent_type or "System"
-            action_label = _llm_ctx.action or "chat"
-            status_emoji = "⚠️" if is_fallback else "🤖"
-            msg = (
-                f"{status_emoji} AI调用 [{self.model}] "
-                f"{duration_ms}ms, tokens: {input_t}→{output_t}"
-            )
-
-            log_id = generate_id("LOG")
-            created_at = data["created_at"]
-            detail_json = json.dumps({
-                "message": msg,
-                "model": self.model,
-                "input_tokens": input_t,
-                "output_tokens": output_t,
-                "duration_ms": duration_ms,
-                "llm_status": data["status"],
-            }, ensure_ascii=False)
-
-            # 写入 ticket_logs 表（持久化，历史可查）
+            # 写入 ticket_logs 表（持久化）
             await db.insert("ticket_logs", {
                 "id": log_id,
                 "ticket_id": _llm_ctx.ticket_id,
@@ -441,22 +931,14 @@ class LLMClient:
                 "level": "info",
                 "created_at": created_at,
             })
-
-            # SSE 实时推送
+            # 推送到项目频道
             await event_manager.publish_to_project(
-                _llm_ctx.project_id, "log_added", {
-                    "id": log_id,
-                    "ticket_id": _llm_ctx.ticket_id,
-                    "requirement_id": _llm_ctx.requirement_id,
-                    "agent_type": agent_label,
-                    "action": "llm_call",
-                    "from_status": None,
-                    "to_status": None,
-                    "detail": detail_json,
-                    "level": "info",
-                    "created_at": created_at,
-                },
+                _llm_ctx.project_id, "log_added", {**log_payload, "project_id": _llm_ctx.project_id},
             )
+        else:
+            # 无项目上下文（全局 AI 助手）→ 推送到 global 频道
+            await event_manager.publish("global", "log_added", log_payload)
+
 
     async def _save_tools_conversation(
         self,
@@ -577,6 +1059,17 @@ class LLMClient:
         if not self.is_configured:
             logger.warning("[%s] LLM 未配置，跳过 tool use", ctx)
             return {"messages": messages, "rounds": 0, "finished": False}
+
+        # CLI 模式不支持原生 tool_use block，降级为纯文本 chat（依赖 [ACTION:xxx] 文本协议）
+        if self.api_format == "cli":
+            logger.warning("[%s] CLI 模式不支持 tool use，降级为文本协议", ctx)
+            if system:
+                all_messages = [{"role": "system", "content": system}] + list(messages)
+            else:
+                all_messages = list(messages)
+            response = await self.chat(all_messages, temperature=temperature, max_tokens=max_tokens)
+            final_messages = list(messages) + [{"role": "assistant", "content": response}]
+            return {"messages": final_messages, "rounds": 1, "finished": True, "cli_fallback": True}
 
         history = list(messages)  # 不修改原始列表
         _total_input_tokens = 0
@@ -898,7 +1391,19 @@ class LLMClient:
             yield {"type": "message_done", "rounds": 0}
             return
 
-        history = list(messages)
+        # CLI 模式不支持流式 tool use，降级为非流式文本 chat 并逐字符 yield
+        if self.api_format == "cli":
+            logger.warning("[%s] CLI 模式不支持流式 tool use，降级为文本协议", ctx)
+            if system:
+                all_messages = [{"role": "system", "content": system}] + list(messages)
+            else:
+                all_messages = list(messages)
+            response = await self.chat(all_messages, temperature=temperature, max_tokens=max_tokens)
+            yield {"type": "text_delta", "delta": response}
+            yield {"type": "message_done", "rounds": 1, "cli_fallback": True}
+            return
+
+
         _total_input = 0
         _total_output = 0
         _t0 = time.time()
@@ -1119,6 +1624,34 @@ class LLMClient:
         """测试 LLM 连接"""
         if not self.is_configured:
             return {"status": "not_configured", "message": "LLM 未配置"}
+
+        # CLI 模式：检查可执行文件是否存在，并尝试 --version
+        if self.api_format == "cli":
+            import shutil, asyncio as _asyncio
+            resolved = shutil.which(self.cli_cmd)
+            if not resolved:
+                return {"status": "error", "message": f"找不到 CLI 工具: {self.cli_cmd}（请确认已安装并在 PATH 中）"}
+            try:
+                # Windows 下 .cmd/.bat 需要 cmd /c 包装
+                cmd_prefix = self._resolve_cmd(self.cli_cmd)
+                version_cmd = cmd_prefix + ["--version"]
+                proc = await _asyncio.create_subprocess_exec(
+                    *version_cmd,
+                    stdout=_asyncio.subprocess.PIPE,
+                    stderr=_asyncio.subprocess.PIPE,
+                )
+                stdout, stderr = await _asyncio.wait_for(proc.communicate(), timeout=10)
+                version_str = (stdout or stderr).decode("utf-8", errors="replace").strip()[:100]
+                logger.info("🖥️  CLI 连接测试通过: %s", version_str)
+                return {
+                    "status": "ok",
+                    "message": f"CLI 就绪 (type={self.cli_type})",
+                    "response": version_str,
+                }
+            except _asyncio.TimeoutError:
+                return {"status": "error", "message": f"CLI --version 超时: {self.cli_cmd}"}
+            except Exception as e:
+                return {"status": "error", "message": str(e)}
 
         try:
             logger.info("🔗 测试 LLM 连接: %s (%s)", self.base_url, self.api_format)

@@ -281,6 +281,14 @@ async def _dispatch_command(
         "config":    _cmd_config,
         "commit":    _cmd_commit,
         "context":   _cmd_context,
+        # ── 通用便捷命令 ──
+        "help":      _cmd_help,
+        "model":     _cmd_model,
+        "clear":     _cmd_clear,
+        "status":    _cmd_status,
+        "tasks":     _cmd_tasks,
+        "todos":     _cmd_tasks,   # 别名
+        "agents":    _cmd_agents,
     }
 
     handler = handlers.get(name)
@@ -362,7 +370,7 @@ async def _cmd_think(args: str, project_id: Optional[str], context: dict) -> Com
 async def _cmd_skills(args: str, project_id: Optional[str], context: dict) -> CommandResult:
     """列出当前已加载的 Skills 和全局 Rules"""
     try:
-        from skills.loader import skill_loader
+        from skills import skill_loader
         import json as _j
 
         # 获取项目 traits
@@ -1518,3 +1526,375 @@ async def _cmd_context(args: str, project_id: Optional[str], context: dict) -> C
         return CommandResult(success=True, output="\n".join(lines))
     except Exception as e:
         return CommandResult(success=False, output=f"context 查询失败: {e}")
+
+
+# ── /help ────────────────────────────────────────────────────────────────────
+
+async def _cmd_help(args: str, project_id: Optional[str], context: dict) -> CommandResult:
+    """显示所有可用命令"""
+    from config import settings as _cfg
+    from llm_client import llm_client
+
+    # LLM 状态
+    if llm_client.api_format == "cli":
+        llm_info = f"CLI 模式 · {llm_client.cli_type} · {llm_client.cli_model}"
+    else:
+        llm_info = f"API 模式 · {llm_client.api_format} · {llm_client.model}"
+
+    lines = [
+        "## 🛠️ 可用命令\n",
+        f"> 当前 LLM：{llm_info}\n",
+        "### 基础",
+        "| 命令 | 说明 |",
+        "|------|------|",
+        "| `/help` | 显示此帮助 |",
+        "| `/model [模型名]` | 查看或切换当前模型 |",
+        "| `/status` | 查看 LLM 连接状态 |",
+        "| `/clear` | 清空当前对话历史 |",
+        "| `/compact` | 手动压缩对话历史 |",
+        "| `/context` | 查看 token 使用情况 |",
+        "| `/cost` | 查看今日 API 费用 |",
+        "",
+        "### 记忆",
+        "| 命令 | 说明 |",
+        "|------|------|",
+        "| `/memory [查询]` | 查看或搜索 Agent 记忆 |",
+        "| `/memory-export` | 导出记忆到文件 |",
+        "| `/memory-import <路径>` | 从文件导入记忆 |",
+        "",
+        "### AI 思考",
+        "| 命令 | 说明 |",
+        "|------|------|",
+        "| `/think on/off/adaptive` | 切换 Extended Thinking 模式 |",
+        "",
+        "### 项目 / Git",
+        "| 命令 | 说明 |",
+        "|------|------|",
+        "| `/commit [消息]` | 提交当前变更 |",
+        "| `/diff` | 查看未提交变更 |",
+        "| `/review` | AI 代码审查 |",
+        "",
+        "### 知识库",
+        "| 命令 | 说明 |",
+        "|------|------|",
+        "| `/search-knowledge <关键词>` | 搜索知识库 |",
+        "| `/save-to-knowledge` | 保存当前对话到知识库 |",
+        "",
+        "### UE 专属",
+        "| 命令 | 说明 |",
+        "|------|------|",
+        "| `/ue-run <代码>` | 在 UE Editor 执行 Python |",
+        "| `/ue-bp-gen <描述>` | AI 生成 Blueprint |",
+        "| `/ue-level <描述>` | AI 生成关卡布局 |",
+        "",
+        "### 系统",
+        "| 命令 | 说明 |",
+        "|------|------|",
+        "| `/skills` | 查看已加载 Skills |",
+        "| `/doctor` | 系统健康检查 |",
+        "| `/config <键> [值]` | 读写会话配置 |",
+        "| `/mcp` | 查看 MCP 服务器状态 |",
+        "| `/init` | 初始化 ADS 目录结构 |",
+        "| `/harness-audit` | Harness 健康审计 |",
+    ]
+    return CommandResult(success=True, output="\n".join(lines))
+
+
+# ── /model ───────────────────────────────────────────────────────────────────
+
+async def _cmd_model(args: str, project_id: Optional[str], context: dict) -> CommandResult:
+    """查看或切换当前模型"""
+    from llm_client import llm_client, CLI_MODEL_OPTIONS
+    from config import settings
+
+    arg = args.strip()
+
+    if not arg:
+        # 查看当前模型
+        if llm_client.api_format == "cli":
+            available = CLI_MODEL_OPTIONS.get(llm_client.cli_type, [])
+            lines = [
+                f"**当前模型：** `{llm_client.cli_model}`",
+                f"**接入方式：** CLI · {llm_client.cli_type}",
+                "",
+            ]
+            if available:
+                lines.append("**可用模型：**")
+                for m in available:
+                    marker = " ← 当前" if m == llm_client.cli_model else ""
+                    lines.append(f"- `{m}`{marker}")
+            lines.append("\n`/model <模型名>` 切换模型")
+        else:
+            lines = [
+                f"**当前模型：** `{llm_client.model}`",
+                f"**接入方式：** API · {llm_client.api_format}",
+                "\n`/model <模型名>` 切换模型",
+            ]
+        return CommandResult(success=True, output="\n".join(lines))
+
+    # 切换模型
+    if llm_client.api_format == "cli":
+        old = llm_client.cli_model
+        llm_client.cli_model = arg
+        settings.LLM_CLI_MODEL = arg
+        # 持久化到 .env
+        try:
+            from config import BASE_DIR
+            import re
+            env_path = BASE_DIR / ".env"
+            if env_path.exists():
+                text = env_path.read_text(encoding="utf-8")
+                if "LLM_CLI_MODEL=" in text:
+                    text = re.sub(r"LLM_CLI_MODEL=.*", f"LLM_CLI_MODEL={arg}", text)
+                else:
+                    text += f"\nLLM_CLI_MODEL={arg}\n"
+                env_path.write_text(text, encoding="utf-8")
+        except Exception:
+            pass
+        return CommandResult(success=True, output=f"✅ 模型已切换：`{old}` → `{arg}`")
+    else:
+        old = llm_client.model
+        llm_client.model = arg
+        settings.LLM_MODEL = arg
+        try:
+            from config import BASE_DIR
+            import re
+            env_path = BASE_DIR / ".env"
+            if env_path.exists():
+                text = env_path.read_text(encoding="utf-8")
+                if "LLM_MODEL=" in text:
+                    text = re.sub(r"LLM_MODEL=.*", f"LLM_MODEL={arg}", text)
+                else:
+                    text += f"\nLLM_MODEL={arg}\n"
+                env_path.write_text(text, encoding="utf-8")
+        except Exception:
+            pass
+        return CommandResult(success=True, output=f"✅ 模型已切换：`{old}` → `{arg}`")
+
+
+# ── /clear ───────────────────────────────────────────────────────────────────
+
+async def _cmd_clear(args: str, project_id: Optional[str], context: dict) -> CommandResult:
+    """清空当前对话历史"""
+    session_id = context.get("session_id", "default")
+    return CommandResult(
+        success=True,
+        output="✅ 对话历史已清空",
+        sse_events=[{"type": "clear_history", "session_id": session_id}],
+    )
+
+
+# ── /status ──────────────────────────────────────────────────────────────────
+
+async def _cmd_status(args: str, project_id: Optional[str], context: dict) -> CommandResult:
+    """显示 LLM 连接状态和系统信息"""
+    from llm_client import llm_client
+    from config import settings
+    import platform, sys
+
+    # LLM 状态
+    if llm_client.api_format == "cli":
+        import shutil
+        resolved = shutil.which(llm_client.cli_cmd) or "未找到"
+        llm_lines = [
+            f"**LLM 接入方式：** CLI",
+            f"**工具类型：** {llm_client.cli_type}",
+            f"**可执行文件：** `{llm_client.cli_cmd}` → `{resolved}`",
+            f"**当前模型：** `{llm_client.cli_model}`",
+            f"**超时：** {llm_client.cli_timeout}s",
+        ]
+    else:
+        configured = "✅ 已配置" if llm_client.is_configured else "❌ 未配置"
+        llm_lines = [
+            f"**LLM 接入方式：** {llm_client.api_format.upper()} API  {configured}",
+            f"**Endpoint：** `{llm_client.base_url or '未设置'}`",
+            f"**当前模型：** `{llm_client.model}`",
+            f"**超时：** {llm_client.timeout}s  **重试：** {llm_client.max_retries}次",
+        ]
+
+    # 系统信息
+    sys_lines = [
+        f"**Python：** {sys.version.split()[0]}",
+        f"**平台：** {platform.system()} {platform.release()}",
+        f"**DB：** `{settings.DB_PATH}`",
+    ]
+
+    lines = ["## 📊 系统状态\n", "### LLM"] + llm_lines + ["", "### 系统"] + sys_lines
+    return CommandResult(success=True, output="\n".join(lines))
+
+
+# ── /tasks ───────────────────────────────────────────────────────────────────
+
+async def _cmd_tasks(args: str, project_id: Optional[str], context: dict) -> CommandResult:
+    """显示正在执行的工单和 Agent 状态"""
+    from database import db
+    from utils import now_iso
+    import datetime
+
+    try:
+        # 正在执行的工单（running / in_progress）
+        running_tickets = await db.fetch_all(
+            """SELECT id, title, status, assigned_agent, current_action, updated_at, project_id
+               FROM tickets
+               WHERE status IN ('running','in_progress','executing')
+               ORDER BY updated_at DESC
+               LIMIT 20"""
+        )
+
+        # 待执行的工单（pending / queued）
+        pending_tickets = await db.fetch_all(
+            """SELECT id, title, status, project_id
+               FROM tickets
+               WHERE status IN ('pending','queued','todo')
+               ORDER BY created_at ASC
+               LIMIT 10"""
+        )
+
+        # Agent 状态（从 agent_registry 获取）
+        try:
+            from agent_registry import agent_registry
+            agents = agent_registry.get_all_status() if hasattr(agent_registry, 'get_all_status') else {}
+        except Exception:
+            agents = {}
+
+        def elapsed(ts: str) -> str:
+            try:
+                dt = datetime.datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                now = datetime.datetime.now(datetime.timezone.utc)
+                secs = int((now - dt).total_seconds())
+                if secs < 60:   return f"{secs}s"
+                if secs < 3600: return f"{secs//60}m{secs%60}s"
+                return f"{secs//3600}h{(secs%3600)//60}m"
+            except Exception:
+                return "?"
+
+        lines = ["## 🔄 任务状态\n"]
+
+        # Agent 工作状态
+        working_agents = {k: v for k, v in agents.items() if v.get("status") == "working"}
+        if working_agents:
+            lines.append(f"### ⚡ 工作中 Agent（{len(working_agents)}）")
+            for name, info in working_agents.items():
+                ticket_title = info.get("ticket_title", "")
+                action = info.get("action", "")
+                started = info.get("started_at", "")
+                el = elapsed(started) if started else "?"
+                lines.append(f"- **{name}** · {action} · {elapsed(started) if started else '?'}")
+                if ticket_title:
+                    lines.append(f"  工单：{ticket_title[:50]}")
+            lines.append("")
+
+        # 执行中工单
+        if running_tickets:
+            lines.append(f"### 🔄 执行中工单（{len(running_tickets)}）")
+            lines.append("| 状态 | 工单 | Agent | 耗时 |")
+            lines.append("|------|------|-------|------|")
+            for t in running_tickets:
+                el = elapsed(t.get("updated_at", ""))
+                agent = t.get("assigned_agent") or "-"
+                action = t.get("current_action") or ""
+                title = (t.get("title") or "")[:40]
+                status = t.get("status", "")
+                action_str = f" · {action}" if action else ""
+                lines.append(f"| {status} | {title} | {agent}{action_str} | {el} |")
+            lines.append("")
+
+        # 待执行工单
+        if pending_tickets:
+            lines.append(f"### ⏳ 待执行工单（{len(pending_tickets)}）")
+            for t in pending_tickets:
+                title = (t.get("title") or "")[:50]
+                lines.append(f"- {title}")
+            lines.append("")
+
+        if not running_tickets and not pending_tickets and not working_agents:
+            lines.append("✅ 当前无运行中任务\n")
+            lines.append("> 进入项目查看工单详情，或提交新需求开始执行。")
+
+        # 当前项目过滤提示
+        if project_id:
+            lines.append(f"\n> 仅显示项目 `{project_id[:8]}` 内工单，全局状态见各项目面板")
+
+        return CommandResult(success=True, output="\n".join(lines))
+
+    except Exception as e:
+        return CommandResult(success=False, output=f"获取任务状态失败: {e}")
+
+
+# ── /agents ──────────────────────────────────────────────────────────────────
+
+async def _cmd_agents(args: str, project_id: Optional[str], context: dict) -> CommandResult:
+    """显示所有 Agent 及其状态"""
+    try:
+        from orchestrator import orchestrator
+
+        icons = {
+            "ProductAgent":   "📝", "ArchitectAgent": "🏗️",
+            "DevAgent":       "💻", "TestAgent":      "🧪",
+            "ReviewAgent":    "🔍", "DeployAgent":    "🚀",
+            "ChatAssistant":  "💬", "UEEditorAgent":  "🎮",
+        }
+        roles = {
+            "ProductAgent":   "需求拆单 + 产品验收",
+            "ArchitectAgent": "增量架构设计",
+            "DevAgent":       "代码开发 + 自测",
+            "TestAgent":      "5层质量测试",
+            "ReviewAgent":    "代码审查",
+            "DeployAgent":    "三环境部署",
+            "ChatAssistant":  "AI 助手 + 全局工具",
+            "UEEditorAgent":  "UE 蓝图/关卡生成",
+        }
+
+        lines = ["## 🤖 Agent 列表\n"]
+
+        # 工单调度 Agent
+        orch_agents = list(orchestrator.agents.items())
+        if orch_agents:
+            lines.append(f"### 工单 Agent（{len(orch_agents)} 个）\n")
+            lines.append("| Agent | 角色 | 状态 | 完成 | 异常 |")
+            lines.append("|-------|------|------|------|------|")
+            for name, agent in orch_agents:
+                status_info = orchestrator._agent_status.get(name, {})
+                status = status_info.get("status", "idle")
+                completed = status_info.get("completed_count", 0)
+                errors = status_info.get("error_count", 0)
+                icon = icons.get(name, "🤖")
+                role = roles.get(name, name)
+                status_label = "🔄 运行中" if status == "working" else "💤 空闲"
+                lines.append(f"| {icon} {name} | {role} | {status_label} | {completed} | {errors} |")
+
+            # 正在运行的工单详情
+            working = [(n, orchestrator._agent_status.get(n, {}))
+                       for n, _ in orch_agents
+                       if orchestrator._agent_status.get(n, {}).get("status") == "working"]
+            if working:
+                lines.append("\n**正在执行：**")
+                for name, info in working:
+                    ticket = info.get("ticket_title", "")
+                    action = info.get("action", "")
+                    lines.append(f"- **{name}** → {ticket[:40]} `{action}`")
+
+        # ChatAssistant
+        try:
+            from agents.chat_assistant import ChatAssistantAgent
+            ca_actions = ChatAssistantAgent().list_actions()
+            lines.append(f"\n### AI 助手\n")
+            lines.append(f"- **💬 ChatAssistant** — {roles.get('ChatAssistant','')}  ·  {len(ca_actions)} 个工具")
+        except Exception:
+            pass
+
+        # Skills 概览
+        try:
+            from skills import skill_loader
+            all_skills = skill_loader.get_all_skills_status()
+            enabled = [s for s in all_skills.values() if s.get("enabled")]
+            lines.append(f"\n### Skills\n")
+            lines.append(f"已加载 **{len(enabled)}** 个 Skill，`/skills` 查看详情")
+        except Exception:
+            pass
+
+        return CommandResult(success=True, output="\n".join(lines))
+
+    except Exception as e:
+        return CommandResult(success=False, output=f"获取 Agent 列表失败: {e}")
+

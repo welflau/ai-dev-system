@@ -30,7 +30,13 @@ class Settings:
     LLM_MODEL: str = os.getenv("LLM_MODEL", "claude-sonnet-4-20250514")
     LLM_TIMEOUT: int = int(os.getenv("LLM_TIMEOUT", "120"))
     LLM_MAX_RETRIES: int = int(os.getenv("LLM_MAX_RETRIES", "3"))
-    LLM_API_FORMAT: str = os.getenv("LLM_API_FORMAT", "anthropic")  # anthropic / openai
+    LLM_API_FORMAT: str = os.getenv("LLM_API_FORMAT", "anthropic")  # anthropic / openai / cli
+
+    # LLM CLI 模式（LLM_API_FORMAT=cli 时生效）
+    LLM_CLI_TYPE:    str = os.getenv("LLM_CLI_TYPE",    "claude")   # claude / codebuddy / custom
+    LLM_CLI_CMD:     str = os.getenv("LLM_CLI_CMD",     "claude")   # 可执行文件名或完整路径
+    LLM_CLI_MODEL:   str = os.getenv("LLM_CLI_MODEL",   "")         # 留空则复用 LLM_MODEL
+    LLM_CLI_TIMEOUT: int = int(os.getenv("LLM_CLI_TIMEOUT", "120")) # 子进程超时（秒）
 
     # Agent 技能系统（Tool Use）
     ENABLE_AGENT_TOOLS: bool = os.getenv("ENABLE_AGENT_TOOLS", "false").lower() in ("1", "true", "yes")

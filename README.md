@@ -118,24 +118,40 @@ pip install -r requirements.txt
 
 ### 配置 LLM
 
+复制配置模板并编辑：
+
 ```bash
-# 创建 .env 文件
-cat > .env << EOF
-LLM_BASE_URL=https://api.anthropic.com
+cp .env.example .env
+```
+
+`.env` 核心配置：
+
+```ini
+# API 模式（Anthropic / OpenAI 兼容，二选一）
+LLM_API_FORMAT=anthropic
+LLM_BASE_URL=https://your-api-endpoint/anthropic
 LLM_API_KEY=your-api-key
 LLM_MODEL=claude-sonnet-4-5
-LLM_API_FORMAT=anthropic   # 或 openai
-EOF
+
+# CLI 模式（本地命令行工具，可选）
+# LLM_API_FORMAT=cli
+# LLM_CLI_TYPE=claude          # claude / claude-internal / gemini-internal / codebuddy / custom
+# LLM_CLI_CMD=claude
+# LLM_CLI_MODEL=claude-sonnet-4-5
 ```
 
 ### 启动
 
 ```bash
+# 必须在 backend 目录下执行
 cd backend
-DB_PATH=./data/ai_dev_system.db python -m uvicorn main:app --port 8000
+python main.py
 ```
 
-访问 http://localhost:8000/app
+访问 **http://localhost:8000**
+
+> ⚠️ 不要使用 `python -m uvicorn main:app --reload`，reload 模式在 Windows 下有路径污染问题，会导致代码改动不生效。  
+> 代码更新后直接 Ctrl+C 重启即可。
 
 ### 基本使用
 
@@ -143,6 +159,10 @@ DB_PATH=./data/ai_dev_system.db python -m uvicorn main:app --port 8000
 2. **创建项目**：填入 Git 仓库 URL，系统识别项目类型并自动安装匹配 Skill
 3. **提交需求**：自然语言描述，AI 自动拆单并执行完整流水线
 4. **深度思考**：消息里加 `ultrathink` 启用最大推理预算
+
+### LLM 配置（界面操作）
+
+启动后点击顶栏 **LLM 状态指示灯** → 弹出配置对话框 → 填写后保存（自动写入 `.env`，无需重启）。
 
 ---
 
