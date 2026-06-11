@@ -24,10 +24,11 @@ def _resource(rel: str) -> str:
     return os.path.join(base, rel)
 
 # ── 配置 ──────────────────────────────────────────────────────────────────────
-APP_TITLE   = "AI Dev System"
-APP_HOST    = "127.0.0.1"
-APP_PORT    = 18000          # 桌面版用独立端口，避免与开发服务冲突
-APP_URL     = f"http://{APP_HOST}:{APP_PORT}"
+APP_TITLE    = "AI Dev System"
+APP_HOST     = "127.0.0.1"
+APP_PORT     = 18000          # 桌面版用独立端口，避免与开发服务冲突
+APP_URL      = f"http://{APP_HOST}:{APP_PORT}/app"        # 前端挂载在 /app
+HEALTH_URL   = f"http://{APP_HOST}:{APP_PORT}/api/health" # 健康检查独立路径
 BACKEND_DIR = _resource("backend")
 ICON_PATH   = _resource("assets/icon.ico")
 ICON_PNG    = _resource("assets/icon.png")
@@ -59,7 +60,7 @@ def _wait_for_server(timeout: int = 30) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
-            urllib.request.urlopen(f"{APP_URL}/api/health", timeout=1)
+            urllib.request.urlopen(HEALTH_URL, timeout=1)
             return True
         except Exception:
             time.sleep(0.4)
