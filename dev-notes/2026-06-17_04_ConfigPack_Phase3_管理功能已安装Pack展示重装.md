@@ -32,6 +32,8 @@
 
 `settings-agents` → `📦 ConfigPack` tab，分两区：
 
+![ConfigPack 管理 tab 实际截图](screenshots/20260617_configpack_tab.png)
+
 **已安装区**
 ```
 📦 UE5 开发套件   [rules] [agents] [commands]
