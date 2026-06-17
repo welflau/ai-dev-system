@@ -1,18 +1,18 @@
 """
 ConfigPack Installer — 把 CLI 配置 Pack 安装到项目目录
 
-目录结构约定：
-  shared/   → 内容相同，同时安装到所有检测到的 CLI 目录
-  claude/   → 仅安装到 .claude/（Claude Code 专有）
-  codebuddy/ → 仅安装到 .codebuddy/（Codebuddy 专有）
-
-安装操作：
-  - copy:   commands / agents / skills / rules（独立文件直接复制）
-  - append: CLAUDE.md / CODEBUDDY.md（多 Pack section 追加，幂等）
-  - merge:  settings.json / mcp.json（只添加新 key，不覆盖已有）
-
-shared/ 中的 CLAUDE.md 安装到 .claude/ 时保持名称，
-安装到 .codebuddy/ 时自动重命名为 CODEBUDDY.md。
+Pack 目录约定：
+  shared/          → 同时安装到所有检测到的 CLI
+    rules.md       → claude: 追加到 CLAUDE.md；codebuddy: rules/{pack}.md（自动补 frontmatter）
+    rules/*.md     → 两端: rules/ 目录直接 copy
+    commands/*.md  → 两端: commands/ 目录直接 copy
+    skills/*.md    → 两端: skills/ 目录直接 copy
+    agents/*.md    → 两端: agents/ 目录直接 copy
+    scripts/       → 两端: scripts/ 目录直接 copy
+    mcps/*.json    → claude: merge 到 settings.json mcpServers；codebuddy: mcps/ 直接 copy
+    hooks/*.json   → claude: merge 到 settings.json hooks；codebuddy: hooks/ 直接 copy
+  claude/          → 仅安装到 .claude/（Claude Code 专有格式）
+  codebuddy/       → 仅安装到 .codebuddy/（Codebuddy 专有格式）
 """
 import json
 import logging
@@ -182,9 +182,15 @@ def install_pack(
     def _install_files(src_dir: Path, dst_root: Path, target: str, is_shared: bool = False) -> None:
         """将 src_dir 下的文件安装到 dst_root，处理 copy/追加/merge 三种操作。
 
-        shared/rules.md 分发规则：
-          - claude   → 追加到 .claude/CLAUDE.md
-          - codebuddy → 写入 .codebuddy/rules/{pack_name}.md（自动补 frontmatter）
+        shared/ 分发规则：
+          rules.md       → claude: 追加到 CLAUDE.md；codebuddy: rules/{pack}.md（自动补 frontmatter）
+          rules/*.md     → claude: .claude/rules/；codebuddy: .codebuddy/rules/（直接 copy）
+          commands/      → 两端直接 copy
+          skills/        → 两端直接 copy
+          agents/        → 两端直接 copy
+          scripts/       → 两端直接 copy
+          mcps/*.json    → claude: merge 到 settings.json；codebuddy: .codebuddy/mcps/ 直接 copy
+          hooks/*.json   → claude: merge 到 settings.json hooks 节；codebuddy: .codebuddy/hooks/ 直接 copy
         """
         dst_root.mkdir(parents=True, exist_ok=True)
         for src_file in sorted(src_dir.rglob("*")):
@@ -198,46 +204,78 @@ def install_pack(
 
             content = _render_template(content, ctx)
             rel = src_file.relative_to(src_dir)
+            parts = rel.parts  # e.g. ('mcps', 'ue-mcp.json') or ('rules.md',)
 
-            # shared/rules.md：按目标 CLI 决定存放位置和格式
-            if is_shared and src_file.name == "rules.md":
+            # ── shared/rules.md（单文件规则） ──────────────────────────
+            if is_shared and src_file.name == "rules.md" and len(parts) == 1:
                 if target == "claude":
                     dst = dst_root / "CLAUDE.md"
                     _append_to_main_md(dst, pack_name, content)
                     copied_files.append(f".claude/CLAUDE.md [追加]")
-                else:  # codebuddy
+                else:
                     dst = dst_root / "rules" / f"{pack_name}.md"
                     dst.parent.mkdir(parents=True, exist_ok=True)
-                    # 自动补 frontmatter（若原文件没有）
                     if not content.startswith("---"):
-                        frontmatter = (
+                        content = (
                             f"---\nname: {pack_name}\n"
                             f"description: {meta.get('description', pack_name)}\n"
                             f"type: always\n---\n\n"
-                        )
-                        content = frontmatter + content
+                        ) + content
                     dst.write_text(content, encoding="utf-8")
                     copied_files.append(f".codebuddy/rules/{pack_name}.md")
                 continue
 
-            # CLAUDE.md / CODEBUDDY.md（claude/ 或 codebuddy/ 特有目录里的）
-            dst_name = rel
-            dst = dst_root / dst_name
-            display = f".{target}/{dst_name}"
-
-            try:
-                if src_file.name in ("CLAUDE.md", "CODEBUDDY.md"):
-                    _append_to_main_md(dst, pack_name, content)
-                    copied_files.append(f"{display} [追加]")
-                elif src_file.name in ("settings.json", "mcp.json"):
-                    _merge_json(dst, json.loads(content))
-                    copied_files.append(f"{display} [merge]")
+            # ── shared/mcps/*.json ─────────────────────────────────────
+            if is_shared and len(parts) >= 2 and parts[0] == "mcps" and src_file.suffix == ".json":
+                if target == "claude":
+                    # Claude Code 通过 settings.json 的 mcpServers 注册 MCP
+                    settings_dst = dst_root / "settings.json"
+                    try:
+                        mcp_data = json.loads(content)
+                        _merge_json(settings_dst, {"mcpServers": mcp_data})
+                        copied_files.append(f".claude/settings.json [merge mcpServers.{src_file.stem}]")
+                    except Exception as e:
+                        errors.append(f"mcps/{src_file.name}: JSON 解析失败 ({e})")
                 else:
+                    dst = dst_root / rel
                     dst.parent.mkdir(parents=True, exist_ok=True)
                     dst.write_text(content, encoding="utf-8")
-                    copied_files.append(display)
-            except Exception as e:
-                errors.append(f"{rel}: 安装失败 ({e})")
+                    copied_files.append(f".codebuddy/{rel}")
+                continue
+
+            # ── shared/hooks/*.json ────────────────────────────────────
+            if is_shared and len(parts) >= 2 and parts[0] == "hooks" and src_file.suffix == ".json":
+                if target == "claude":
+                    # Claude Code hooks 在 settings.json 的 hooks 节
+                    settings_dst = dst_root / "settings.json"
+                    try:
+                        hook_data = json.loads(content)
+                        _merge_json(settings_dst, {"hooks": hook_data})
+                        copied_files.append(f".claude/settings.json [merge hooks]")
+                    except Exception as e:
+                        errors.append(f"hooks/{src_file.name}: JSON 解析失败 ({e})")
+                else:
+                    dst = dst_root / rel
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    dst.write_text(content, encoding="utf-8")
+                    copied_files.append(f".codebuddy/{rel}")
+                continue
+
+            # ── 其余文件（commands / skills / agents / scripts / rules/子目录）
+            # 路径原样保留，直接 copy 到 dst_root/rel
+            dst = dst_root / rel
+            display = f".{target}/{rel}"
+
+            if src_file.name in ("CLAUDE.md", "CODEBUDDY.md"):
+                _append_to_main_md(dst, pack_name, content)
+                copied_files.append(f"{display} [追加]")
+            elif src_file.name in ("settings.json", "mcp.json"):
+                _merge_json(dst, json.loads(content))
+                copied_files.append(f"{display} [merge]")
+            else:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                dst.write_text(content, encoding="utf-8")
+                copied_files.append(display)
 
     # 1. 安装 shared/（安装到所有目标 CLI）
     shared_dir = pack_dir / "shared"
