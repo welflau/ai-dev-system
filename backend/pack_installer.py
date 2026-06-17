@@ -1,11 +1,18 @@
 """
 ConfigPack Installer — 把 CLI 配置 Pack 安装到项目目录
 
-支持 Claude Code (.claude/) 和 Codebuddy (.codebuddy/) 两种 CLI。
+目录结构约定：
+  shared/   → 内容相同，同时安装到所有检测到的 CLI 目录
+  claude/   → 仅安装到 .claude/（Claude Code 专有）
+  codebuddy/ → 仅安装到 .codebuddy/（Codebuddy 专有）
+
 安装操作：
-  - copy:   rules / agents / commands / skills（独立文件直接复制）
-  - append: CLAUDE.md（多 Pack section 追加，幂等）
+  - copy:   commands / agents / skills / rules（独立文件直接复制）
+  - append: CLAUDE.md / CODEBUDDY.md（多 Pack section 追加，幂等）
   - merge:  settings.json / mcp.json（只添加新 key，不覆盖已有）
+
+shared/ 中的 CLAUDE.md 安装到 .claude/ 时保持名称，
+安装到 .codebuddy/ 时自动重命名为 CODEBUDDY.md。
 """
 import json
 import logging
@@ -85,8 +92,8 @@ def _detect_cli_targets(project_path: str, pack_targets: List[str]) -> List[str]
     return targets
 
 
-def _append_to_claude_md(dst: Path, pack_name: str, content: str) -> None:
-    """将 Pack 规则追加到 CLAUDE.md，section 标题保证幂等。"""
+def _append_to_main_md(dst: Path, pack_name: str, content: str) -> None:
+    """将 Pack 规则追加到主记忆文件（CLAUDE.md 或 CODEBUDDY.md），section 幂等。"""
     section = f"\n\n## Pack: {pack_name}\n\n{content.strip()}\n"
     if dst.exists():
         existing = dst.read_text(encoding="utf-8")
@@ -96,6 +103,10 @@ def _append_to_claude_md(dst: Path, pack_name: str, content: str) -> None:
     else:
         dst.parent.mkdir(parents=True, exist_ok=True)
         dst.write_text(content.strip() + "\n", encoding="utf-8")
+
+
+# 保留旧名称作为别名，兼容现有调用
+_append_to_claude_md = _append_to_main_md
 
 
 def _merge_json(dst: Path, new_data: Dict) -> None:
@@ -168,19 +179,12 @@ def install_pack(
     errors: List[str] = []
     copied_files: List[str] = []  # 记录实际操作的文件，供日志展示
 
-    for target in targets:
-        src_dir = pack_dir / target
-        if not src_dir.exists():
-            skipped.append(f"{target}: Pack 未提供该 CLI 的配置")
-            continue
-
-        dst_root = Path(project_path) / f".{target}"
+    def _install_files(src_dir: Path, dst_root: Path, target: str) -> None:
+        """将 src_dir 下的文件安装到 dst_root，处理 copy/追加/merge 三种操作。"""
         dst_root.mkdir(parents=True, exist_ok=True)
-
         for src_file in sorted(src_dir.rglob("*")):
             if src_file.is_dir():
                 continue
-
             try:
                 content = src_file.read_text(encoding="utf-8")
             except Exception as e:
@@ -189,24 +193,49 @@ def install_pack(
 
             content = _render_template(content, ctx)
             rel = src_file.relative_to(src_dir)
-            dst = dst_root / rel
+
+            # shared/ 中 CLAUDE.md 安装到 .codebuddy/ 时重命名为 CODEBUDDY.md
+            dst_name = rel
+            if target == "codebuddy" and src_file.name == "CLAUDE.md":
+                dst_name = rel.parent / "CODEBUDDY.md"
+
+            dst = dst_root / dst_name
+            display = f".{target}/{dst_name}"
 
             try:
-                if src_file.name == "CLAUDE.md":
-                    _append_to_claude_md(dst, pack_name, content)
-                    copied_files.append(f".{target}/{rel} [追加]")
+                if src_file.name in ("CLAUDE.md", "CODEBUDDY.md"):
+                    _append_to_main_md(dst, pack_name, content)
+                    copied_files.append(f"{display} [追加]")
                 elif src_file.name in ("settings.json", "mcp.json"):
                     _merge_json(dst, json.loads(content))
-                    copied_files.append(f".{target}/{rel} [merge]")
+                    copied_files.append(f"{display} [merge]")
                 else:
                     dst.parent.mkdir(parents=True, exist_ok=True)
                     dst.write_text(content, encoding="utf-8")
-                    copied_files.append(f".{target}/{rel}")
+                    copied_files.append(display)
             except Exception as e:
                 errors.append(f"{rel}: 安装失败 ({e})")
-                continue
 
-        installed_targets.append(target)
+    # 1. 安装 shared/（安装到所有目标 CLI）
+    shared_dir = pack_dir / "shared"
+    if shared_dir.exists():
+        for target in targets:
+            dst_root = Path(project_path) / f".{target}"
+            _install_files(shared_dir, dst_root, target)
+            if target not in installed_targets:
+                installed_targets.append(target)
+
+    # 2. 安装 CLI 特有目录（claude/ codebuddy/）
+    for target in targets:
+        src_dir = pack_dir / target
+        if not src_dir.exists():
+            if not shared_dir.exists():
+                skipped.append(f"{target}: Pack 未提供该 CLI 的配置")
+            continue
+        dst_root = Path(project_path) / f".{target}"
+        _install_files(src_dir, dst_root, target)
+        if target not in installed_targets:
+            installed_targets.append(target)
 
     success = len(installed_targets) > 0
     if errors:
