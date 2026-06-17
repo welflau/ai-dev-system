@@ -166,6 +166,7 @@ def install_pack(
     installed_targets: List[str] = []
     skipped: List[str] = []
     errors: List[str] = []
+    copied_files: List[str] = []  # 记录实际操作的文件，供日志展示
 
     for target in targets:
         src_dir = pack_dir / target
@@ -193,11 +194,14 @@ def install_pack(
             try:
                 if src_file.name == "CLAUDE.md":
                     _append_to_claude_md(dst, pack_name, content)
+                    copied_files.append(f".{target}/{rel} [追加]")
                 elif src_file.name in ("settings.json", "mcp.json"):
                     _merge_json(dst, json.loads(content))
+                    copied_files.append(f".{target}/{rel} [merge]")
                 else:
                     dst.parent.mkdir(parents=True, exist_ok=True)
                     dst.write_text(content, encoding="utf-8")
+                    copied_files.append(f".{target}/{rel}")
             except Exception as e:
                 errors.append(f"{rel}: 安装失败 ({e})")
                 continue
@@ -214,6 +218,7 @@ def install_pack(
         "success": success,
         "pack_name": pack_name,
         "installed_targets": installed_targets,
+        "copied_files": copied_files,
         "skipped": skipped,
         "errors": errors,
     }

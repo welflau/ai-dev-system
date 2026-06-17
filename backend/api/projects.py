@@ -1912,9 +1912,9 @@ async def get_available_packs(project_id: str):
 @router.post("/{project_id}/packs/{pack_name}/install")
 async def install_pack_for_project(project_id: str, pack_name: str):
     """手动安装指定 Pack 到项目。"""
-    import asyncio as _asyncio
     from pack_installer import install_pack
     from utils import generate_id, now_iso
+    from events import event_manager
 
     proj = await db.fetch_one("SELECT * FROM projects WHERE id = ?", (project_id,))
     if not proj:
@@ -1931,9 +1931,56 @@ async def install_pack_for_project(project_id: str, pack_name: str):
         "git_remote": proj.get("git_remote_url", ""),
     }
 
+    async def _push_log(message: str, level: str = "info"):
+        log_id = generate_id("LOG")
+        created_at = now_iso()
+        detail = json.dumps({"message": message}, ensure_ascii=False)
+        await db.insert("ticket_logs", {
+            "id": log_id,
+            "ticket_id": None,
+            "subtask_id": None,
+            "requirement_id": None,
+            "project_id": project_id,
+            "agent_type": "ConfigPack",
+            "action": "install_pack",
+            "from_status": None,
+            "to_status": None,
+            "detail": detail,
+            "level": level,
+            "created_at": created_at,
+        })
+        await event_manager.publish_to_project(project_id, "log_added", {
+            "id": log_id,
+            "agent_type": "ConfigPack",
+            "action": "install_pack",
+            "detail": detail,
+            "level": level,
+            "created_at": created_at,
+        })
+
+    await _push_log(f"▶ 开始安装 ConfigPack: {pack_name}")
+
     result = install_pack(pack_name, repo_path, ctx)
+
     if not result["success"]:
-        raise HTTPException(400, "; ".join(result.get("errors", ["安装失败"])))
+        err_msg = "; ".join(result.get("errors", ["安装失败"]))
+        await _push_log(f"✗ 安装失败: {err_msg}", level="error")
+        raise HTTPException(400, err_msg)
+
+    # 记录复制的文件
+    copied = result.get("copied_files", [])
+    for f in copied:
+        await _push_log(f"  → {f}")
+
+    targets_str = ", ".join(result.get("installed_targets", []))
+    await _push_log(f"✓ 安装完成 [{targets_str}]，共 {len(copied)} 个文件")
+
+    if result.get("skipped"):
+        for s in result["skipped"]:
+            await _push_log(f"  跳过: {s}", level="warn")
+    if result.get("errors"):
+        for e in result["errors"]:
+            await _push_log(f"  ⚠ {e}", level="warn")
 
     # 检查是否已有记录（重装场景）
     existing = await db.fetch_one(
