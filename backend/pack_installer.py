@@ -179,8 +179,13 @@ def install_pack(
     errors: List[str] = []
     copied_files: List[str] = []  # 记录实际操作的文件，供日志展示
 
-    def _install_files(src_dir: Path, dst_root: Path, target: str) -> None:
-        """将 src_dir 下的文件安装到 dst_root，处理 copy/追加/merge 三种操作。"""
+    def _install_files(src_dir: Path, dst_root: Path, target: str, is_shared: bool = False) -> None:
+        """将 src_dir 下的文件安装到 dst_root，处理 copy/追加/merge 三种操作。
+
+        shared/rules.md 分发规则：
+          - claude   → 追加到 .claude/CLAUDE.md
+          - codebuddy → 写入 .codebuddy/rules/{pack_name}.md（自动补 frontmatter）
+        """
         dst_root.mkdir(parents=True, exist_ok=True)
         for src_file in sorted(src_dir.rglob("*")):
             if src_file.is_dir():
@@ -194,11 +199,29 @@ def install_pack(
             content = _render_template(content, ctx)
             rel = src_file.relative_to(src_dir)
 
-            # shared/ 中 CLAUDE.md 安装到 .codebuddy/ 时重命名为 CODEBUDDY.md
-            dst_name = rel
-            if target == "codebuddy" and src_file.name == "CLAUDE.md":
-                dst_name = rel.parent / "CODEBUDDY.md"
+            # shared/rules.md：按目标 CLI 决定存放位置和格式
+            if is_shared and src_file.name == "rules.md":
+                if target == "claude":
+                    dst = dst_root / "CLAUDE.md"
+                    _append_to_main_md(dst, pack_name, content)
+                    copied_files.append(f".claude/CLAUDE.md [追加]")
+                else:  # codebuddy
+                    dst = dst_root / "rules" / f"{pack_name}.md"
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    # 自动补 frontmatter（若原文件没有）
+                    if not content.startswith("---"):
+                        frontmatter = (
+                            f"---\nname: {pack_name}\n"
+                            f"description: {meta.get('description', pack_name)}\n"
+                            f"type: always\n---\n\n"
+                        )
+                        content = frontmatter + content
+                    dst.write_text(content, encoding="utf-8")
+                    copied_files.append(f".codebuddy/rules/{pack_name}.md")
+                continue
 
+            # CLAUDE.md / CODEBUDDY.md（claude/ 或 codebuddy/ 特有目录里的）
+            dst_name = rel
             dst = dst_root / dst_name
             display = f".{target}/{dst_name}"
 
@@ -221,7 +244,7 @@ def install_pack(
     if shared_dir.exists():
         for target in targets:
             dst_root = Path(project_path) / f".{target}"
-            _install_files(shared_dir, dst_root, target)
+            _install_files(shared_dir, dst_root, target, is_shared=True)
             if target not in installed_targets:
                 installed_targets.append(target)
 
