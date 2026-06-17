@@ -1,0 +1,10 @@
+{
+  "name": "git-workflow",
+  "display_name": "Git 工作流",
+  "description": "Git 日常操作命令：PR 创建、代码审查、分支管理",
+  "version": "1.0.0",
+  "tags": ["git", "workflow", "pr", "review"],
+  "auto_traits": ["vcs:git", "category:game", "category:app"],
+  "contains": ["commands"],
+  "targets": ["claude", "codebuddy"]
+}

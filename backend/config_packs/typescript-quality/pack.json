@@ -1,0 +1,10 @@
+{
+  "name": "typescript-quality",
+  "display_name": "TypeScript 编码规范",
+  "description": "共享逻辑优先、类型安全边界（Zod）、状态不变性，适用于 TypeScript / Vue / React 项目",
+  "version": "1.0.0",
+  "tags": ["typescript", "type-safety", "zod", "state", "frontend"],
+  "auto_traits": ["lang:typescript", "framework:react", "framework:vue"],
+  "contains": ["rules"],
+  "targets": ["claude", "codebuddy"]
+}

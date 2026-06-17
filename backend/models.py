@@ -277,6 +277,7 @@ class ProjectCreate(BaseModel):
     traits: Optional[List[str]] = Field(default=None, description="项目 traits（可选）")
     preset_id: Optional[str] = Field(default=None, description="preset 名（可选）")
     traits_confidence: Optional[Dict[str, Any]] = Field(default=None, description="trait 置信度（可选）")
+    selected_packs: Optional[List[str]] = Field(default=None, description="用户选择安装的 ConfigPack 名称列表")
 
 
 class ProjectUpdate(BaseModel):

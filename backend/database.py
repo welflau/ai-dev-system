@@ -110,6 +110,12 @@ class Database:
             ("chat_messages", "session_id", "TEXT DEFAULT 'default'"),  # 关联 chat_sessions.id
             # v0.20 思考步骤持久化：AI 调工具时的思考日志，刷新后可恢复
             ("chat_messages", "thinking_json", "TEXT"),  # JSON array: [{tool, args_hint, summary, step}, ...]
+            # 手动挡模式：auto=自动挡（工单流转+自动commit），manual=手动挡（纯对话+不自动commit）
+            ("projects", "mode", "TEXT NOT NULL DEFAULT 'auto'"),
+            # 多路径配置：JSON [{path, vcs, auto_detected, writable, label}]
+            ("projects", "extra_paths", "TEXT NOT NULL DEFAULT '[]'"),
+            # ConfigPack：已安装 Pack 名称列表 JSON（冗余，便于快速展示）
+            ("projects", "installed_packs", "TEXT NOT NULL DEFAULT '[]'"),
         ]
         async with self._write_lock:
             for table, column, col_def in migrations:
@@ -344,6 +350,22 @@ CREATE TABLE IF NOT EXISTS ticket_logs (
     level           TEXT NOT NULL DEFAULT 'info',
     created_at      TEXT NOT NULL
 );
+
+-- ============================================================
+-- 工单评论表（人工指令 + Agent 阶段总结）
+-- ============================================================
+CREATE TABLE IF NOT EXISTS ticket_comments (
+    id          TEXT PRIMARY KEY,
+    ticket_id   TEXT NOT NULL REFERENCES tickets(id),
+    project_id  TEXT NOT NULL REFERENCES projects(id),
+    author      TEXT NOT NULL,
+    author_type TEXT NOT NULL DEFAULT 'human',
+    content     TEXT NOT NULL,
+    phase       TEXT,
+    created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ticket_comments_ticket
+    ON ticket_comments(ticket_id, created_at);
 
 -- ============================================================
 -- 产物表
@@ -775,6 +797,18 @@ CREATE TABLE IF NOT EXISTS global_skill_settings (
     enabled     INTEGER DEFAULT 1,   -- 1=开启, 0=关闭（覆盖 skills.json 默认值）
     updated_at  TEXT NOT NULL
 );
+
+-- ============================================================
+-- ConfigPack 安装记录（每个项目装了哪些 Pack）
+-- ============================================================
+CREATE TABLE IF NOT EXISTS project_packs (
+    id           TEXT PRIMARY KEY,
+    project_id   TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    pack_name    TEXT NOT NULL,
+    installed_at TEXT NOT NULL,
+    targets      TEXT DEFAULT '[]'   -- JSON: ["claude", "codebuddy"]
+);
+CREATE INDEX IF NOT EXISTS idx_project_packs_project ON project_packs(project_id);
 
 -- ============================================================
 -- 系统全局设置（key-value）

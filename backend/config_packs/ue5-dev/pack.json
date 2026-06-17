@@ -1,0 +1,10 @@
+{
+  "name": "ue5-dev",
+  "display_name": "UE5 开发套件",
+  "description": "UE5 项目全套 CLI 配置：构建命令、资产规范、蓝图 Agent",
+  "version": "1.0.0",
+  "tags": ["ue5", "gamedev", "cpp", "unreal"],
+  "auto_traits": ["engine:ue5", "engine:ue4"],
+  "contains": ["rules", "agents", "commands"],
+  "targets": ["claude", "codebuddy"]
+}

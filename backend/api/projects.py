@@ -1659,3 +1659,335 @@ async def delete_memory(project_id: str, memory_id: str):
     except Exception as e:
         from fastapi import HTTPException
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== 快速打开目录 ====================
+
+@router.post("/scan-directory")
+async def scan_directory(body: dict):
+    """
+    扫描本地目录，识别项目信息（名称、技术栈、git、P4、引擎路径、traits）。
+    用于 AI 助手「打开目录」快速创建项目。
+    返回可直接用于创建项目的识别结果。
+    """
+    import os
+    from pathlib import Path
+
+    local_path = (body.get("path") or body.get("local_path") or "").strip()
+    if not local_path:
+        raise HTTPException(400, "路径不能为空")
+
+    local_path = os.path.abspath(local_path)
+    if not os.path.exists(local_path):
+        raise HTTPException(404, f"路径不存在: {local_path}")
+    if not os.path.isdir(local_path):
+        raise HTTPException(400, "路径必须是目录")
+
+    # 检查是否已是现有项目
+    from database import db as _db
+    existing = await _db.fetch_one(
+        "SELECT id, name FROM projects WHERE git_repo_path = ?", (local_path,)
+    )
+    if existing:
+        return {
+            "already_exists": True,
+            "project_id": existing["id"],
+            "project_name": existing["name"],
+            "path": local_path,
+        }
+
+    result = {"already_exists": False, "path": local_path}
+
+    # ── 1. 项目名 ──────────────────────────────────────────
+    dir_name = Path(local_path).name
+    project_name = dir_name.replace("-", " ").replace("_", " ")
+
+    # 从特征文件读取更好的名称
+    for name_file, name_key in [
+        ("package.json", "name"),
+        ("pyproject.toml", None),
+    ]:
+        candidate = Path(local_path) / name_file
+        if candidate.exists():
+            try:
+                if name_file == "package.json":
+                    import json
+                    data = json.loads(candidate.read_text(encoding="utf-8", errors="ignore"))
+                    if data.get("name"):
+                        project_name = data["name"].replace("-", " ").replace("_", " ").title()
+                        break
+            except Exception:
+                pass
+
+    # 从 .uproject 文件名读取项目名
+    uprojects = list(Path(local_path).glob("*.uproject"))
+    if uprojects:
+        project_name = uprojects[0].stem
+
+    result["project_name"] = project_name
+
+    # ── 2. VCS 检测（根路径）──────────────────────────────
+    from vcs_detector import detect_vcs, scan_project_paths, VCSType
+    from p4_manager import p4_manager
+
+    root_vcs = await detect_vcs(local_path)
+    result["root_vcs"] = root_vcs.value
+
+    # git 信息
+    if root_vcs == VCSType.GIT:
+        result["git_repo_path"] = local_path
+        rc, out, _ = await git_manager._run_git(local_path, "remote", "-v")
+        if rc == 0 and out:
+            seen = {}
+            for line in out.strip().splitlines():
+                parts = line.split()
+                if len(parts) >= 2:
+                    seen[parts[0]] = parts[1]
+            remotes = [{"name": n, "url": u} for n, u in seen.items()]
+            result["git_remotes"] = remotes
+            if remotes:
+                result["git_remote_url"] = remotes[0]["url"]
+    elif root_vcs == VCSType.P4:
+        result["p4_root"] = local_path
+        p4_info = await p4_manager.p4_info(cwd=local_path)
+        if p4_info:
+            result["p4_info"] = {
+                "client": p4_info.get("Client name"),
+                "server": p4_info.get("Server address"),
+                "root": p4_info.get("Client root"),
+            }
+
+    # ── 3. 多路径扫描 ─────────────────────────────────────
+    extra_paths = await scan_project_paths(local_path)
+    result["extra_paths"] = extra_paths
+
+    # ── 4. UE 引擎路径识别 ───────────────────────────────
+    engine_path = None
+    if uprojects:
+        try:
+            import json
+            uproject_data = json.loads(uprojects[0].read_text(encoding="utf-8", errors="ignore"))
+            engine_assoc = uproject_data.get("EngineAssociation", "")
+            # 从注册表或默认安装路径查找引擎
+            candidate_roots = [
+                Path("C:/Program Files/Epic Games"),
+                Path("D:/Program Files/Epic Games"),
+                Path("E:/UE"),
+                Path("D:/UE"),
+                Path("F:/UE"),
+            ]
+            for root in candidate_roots:
+                if not root.exists():
+                    continue
+                for child in root.iterdir():
+                    if child.is_dir() and engine_assoc.lower() in child.name.lower():
+                        engine_path = str(child)
+                        break
+                if engine_path:
+                    break
+            if engine_path:
+                result["engine_path"] = engine_path
+                result["engine_type"] = "UE5" if "5" in (engine_assoc or "") else "UE4"
+                extra_paths.append({
+                    "path": engine_path,
+                    "vcs": "git",
+                    "auto_detected": True,
+                    "writable": False,
+                    "label": f"UE 引擎 ({engine_assoc})",
+                })
+            else:
+                result["engine_path_warning"] = f"未找到 UE 引擎路径（EngineAssociation={engine_assoc}），请手动配置"
+        except Exception:
+            pass
+
+    # ── 5. traits 检测 ────────────────────────────────────
+    try:
+        from actions.chat.detect_project_type import ProjectTypeDetectorAction
+        detector = ProjectTypeDetectorAction()
+        detection = await detector.run({"repo_path": local_path})
+        det_data = detection.data if detection.success else {}
+        candidates = det_data.get("candidates", [])
+        suggested_traits = [c["trait"] for c in candidates if c.get("confidence", 0) >= 0.7]
+        result["traits"] = suggested_traits
+        result["suggested_preset"] = det_data.get("suggested_preset")
+        result["tech_stack"] = _infer_tech_stack(suggested_traits)
+    except Exception as e:
+        result["traits"] = []
+        result["traits_warning"] = str(e)
+
+    # ── 6. 推荐模式 ──────────────────────────────────────
+    # 有现有代码的目录默认推荐手动挡
+    has_code = any(
+        Path(local_path).glob(pat)
+        for pat in ["**/*.py", "**/*.js", "**/*.ts", "**/*.cpp", "**/*.cs"]
+    )
+    result["suggested_mode"] = "manual" if has_code else "auto"
+
+    return result
+
+
+def _infer_tech_stack(traits: list) -> str:
+    """从 traits 推断 tech_stack 描述"""
+    parts = []
+    engine_map = {"engine:ue5": "Unreal Engine 5", "engine:unity": "Unity", "engine:godot": "Godot"}
+    lang_map = {"lang:cpp": "C++", "lang:python": "Python", "lang:javascript": "JavaScript",
+                "lang:typescript": "TypeScript", "lang:csharp": "C#", "lang:rust": "Rust"}
+    fw_map = {"framework:react": "React", "framework:fastapi": "FastAPI",
+              "framework:django": "Django", "framework:phaser": "Phaser"}
+    for t in traits:
+        if t in engine_map:
+            parts.append(engine_map[t])
+        elif t in lang_map:
+            parts.append(lang_map[t])
+        elif t in fw_map:
+            parts.append(fw_map[t])
+    return ", ".join(parts) if parts else ""
+
+
+@router.patch("/{project_id}/mode")
+async def update_project_mode(project_id: str, body: dict):
+    """切换项目运行模式：auto（自动挡）或 manual（手动挡）"""
+    from database import db as _db
+    mode = body.get("mode", "auto")
+    if mode not in ("auto", "manual"):
+        raise HTTPException(400, "mode 必须是 auto 或 manual")
+    await _db.update("projects", {"mode": mode}, "id = ?", (project_id,))
+    return {"project_id": project_id, "mode": mode}
+
+
+@router.patch("/{project_id}/extra-paths")
+async def update_extra_paths(project_id: str, body: dict):
+    """更新项目多路径配置"""
+    import json as _json
+    from database import db as _db
+    extra_paths = body.get("extra_paths", [])
+    await _db.update(
+        "projects",
+        {"extra_paths": _json.dumps(extra_paths, ensure_ascii=False)},
+        "id = ?", (project_id,)
+    )
+    return {"project_id": project_id, "extra_paths": extra_paths}
+
+
+# ==================== ConfigPack 管理 ====================
+
+@router.get("/{project_id}/packs")
+async def get_project_packs(project_id: str):
+    """获取项目已安装的 ConfigPack 列表。"""
+    from pack_installer import list_packs
+    rows = await db.fetch_all(
+        "SELECT * FROM project_packs WHERE project_id = ? ORDER BY installed_at DESC",
+        (project_id,)
+    )
+    all_packs = {p["name"]: p for p in list_packs()}
+    result = []
+    for row in rows:
+        meta = all_packs.get(row["pack_name"], {})
+        result.append({
+            "id": row["id"],
+            "pack_name": row["pack_name"],
+            "display_name": meta.get("display_name", row["pack_name"]),
+            "description": meta.get("description", ""),
+            "tags": meta.get("tags", []),
+            "contains": meta.get("contains", []),
+            "targets": json.loads(row.get("targets") or "[]"),
+            "installed_at": row["installed_at"],
+        })
+    return {"packs": result}
+
+
+@router.get("/{project_id}/packs/available")
+async def get_available_packs(project_id: str):
+    """获取可安装的 Pack 列表（排除已安装的）。"""
+    from pack_installer import list_packs
+    installed_rows = await db.fetch_all(
+        "SELECT pack_name FROM project_packs WHERE project_id = ?", (project_id,)
+    )
+    installed_names = {r["pack_name"] for r in installed_rows}
+    all_packs = list_packs()
+    available = [p for p in all_packs if p["name"] not in installed_names]
+    return {"packs": available}
+
+
+@router.post("/{project_id}/packs/{pack_name}/install")
+async def install_pack_for_project(project_id: str, pack_name: str):
+    """手动安装指定 Pack 到项目。"""
+    import asyncio as _asyncio
+    from pack_installer import install_pack
+    from utils import generate_id, now_iso
+
+    proj = await db.fetch_one("SELECT * FROM projects WHERE id = ?", (project_id,))
+    if not proj:
+        raise HTTPException(404, "项目不存在")
+
+    repo_path = proj.get("git_repo_path", "")
+    if not repo_path:
+        raise HTTPException(400, "项目缺少本地路径，无法安装 Pack")
+
+    ctx = {
+        "project_name": proj.get("name", ""),
+        "repo_path": repo_path,
+        "tech_stack": proj.get("tech_stack", ""),
+        "git_remote": proj.get("git_remote_url", ""),
+    }
+
+    result = install_pack(pack_name, repo_path, ctx)
+    if not result["success"]:
+        raise HTTPException(400, "; ".join(result.get("errors", ["安装失败"])))
+
+    # 检查是否已有记录（重装场景）
+    existing = await db.fetch_one(
+        "SELECT id FROM project_packs WHERE project_id = ? AND pack_name = ?",
+        (project_id, pack_name)
+    )
+    now = now_iso()
+    if existing:
+        await db.update(
+            "project_packs",
+            {"installed_at": now, "targets": json.dumps(result.get("installed_targets", []))},
+            "project_id = ? AND pack_name = ?", (project_id, pack_name)
+        )
+    else:
+        await db.insert("project_packs", {
+            "id": generate_id("PKG"),
+            "project_id": project_id,
+            "pack_name": pack_name,
+            "installed_at": now,
+            "targets": json.dumps(result.get("installed_targets", []), ensure_ascii=False),
+        })
+
+    # 更新 projects.installed_packs 冗余列
+    all_packs_rows = await db.fetch_all(
+        "SELECT pack_name FROM project_packs WHERE project_id = ?", (project_id,)
+    )
+    installed_names = [r["pack_name"] for r in all_packs_rows]
+    await db.update(
+        "projects",
+        {"installed_packs": json.dumps(installed_names, ensure_ascii=False), "updated_at": now},
+        "id = ?", (project_id,)
+    )
+
+    return {
+        "success": True,
+        "pack_name": pack_name,
+        "installed_targets": result.get("installed_targets", []),
+        "skipped": result.get("skipped", []),
+    }
+
+
+@router.delete("/{project_id}/packs/{pack_name}")
+async def uninstall_pack_record(project_id: str, pack_name: str):
+    """从记录中移除 Pack（不删除已 copy 的文件，文件归用户所有）。"""
+    from utils import now_iso
+    await db.delete("project_packs", "project_id = ? AND pack_name = ?", (project_id, pack_name))
+    # 更新冗余列
+    rows = await db.fetch_all(
+        "SELECT pack_name FROM project_packs WHERE project_id = ?", (project_id,)
+    )
+    installed_names = [r["pack_name"] for r in rows]
+    await db.update(
+        "projects",
+        {"installed_packs": json.dumps(installed_names, ensure_ascii=False), "updated_at": now_iso()},
+        "id = ?", (project_id,)
+    )
+    return {"success": True, "note": "记录已移除，已安装的文件不受影响（文件归用户所有）"}

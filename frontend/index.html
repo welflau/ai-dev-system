@@ -105,8 +105,6 @@
             <span class="metric-value" id="mv-hooks">—</span>
         </div>
     </div>
-
-    <!-- ==================== Hook 可观测浮层 ==================== -->
     <div id="hooksPanel" class="hooks-panel" style="display:none;">
         <div class="hooks-panel-header">
             <span class="hooks-panel-title">🔧 Hook 运行状态</span>
@@ -952,6 +950,9 @@
                                 <button class="inner-tab" data-inner-tab="skills" onclick="switchAgentConfigTab('skills')">
                                     🎓 Skills
                                 </button>
+                                <button class="inner-tab" data-inner-tab="packs" onclick="switchAgentConfigTab('packs')">
+                                    📦 ConfigPack
+                                </button>
                             </div>
 
                             <!-- 面板：Agent 列表 -->
@@ -1026,6 +1027,25 @@
                                         ＋ 上传自定义 Skill (.md)
                                         <input type="file" accept=".md" style="display:none;" onchange="uploadCustomSkill(this)">
                                     </label>
+                                </div>
+                            </div>
+
+                            <!-- 面板：ConfigPack -->
+                            <div class="inner-tab-panel" id="inner-panel-packs">
+                                <div class="settings-card">
+                                    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:4px;">
+                                        <h3 class="settings-card-title" style="margin:0;">已安装 ConfigPack</h3>
+                                        <button class="btn btn-sm btn-ghost" onclick="loadProjectPacks()">🔄 刷新</button>
+                                    </div>
+                                    <p class="settings-description" style="margin-bottom:12px;">
+                                        ConfigPack 将 CLI 工具配置（rules、agents、commands 等）安装到项目的 <code>.claude/</code> 或 <code>.codebuddy/</code> 目录。
+                                    </p>
+                                    <div id="installedPacksList"><div class="empty-state-sm">加载中...</div></div>
+                                </div>
+                                <div class="settings-card" style="margin-top:16px;">
+                                    <h3 class="settings-card-title" style="margin-bottom:8px;">安装更多 Pack</h3>
+                                    <p class="settings-description" style="margin-bottom:12px;">从内置 Pack 库中选择并安装到当前项目。</p>
+                                    <div id="availablePacksList"><div class="empty-state-sm">加载中...</div></div>
                                 </div>
                             </div>
 
@@ -1238,6 +1258,11 @@
                 <button class="btn-icon chat-panel-btn" id="chatFullscreenBtn" onclick="toggleChatFullscreen()" title="全屏">⛶</button>
                 <button class="btn-icon chat-panel-btn" onclick="toggleChatPanel()" title="收起面板">✕</button>
             </div>
+            <div id="chatHeaderProjectLabel" style="
+                position:absolute; left:50%; transform:translateX(-50%);
+                font-size:13px; font-weight:600; color:var(--text);
+                white-space:nowrap; pointer-events:none; display:none;
+            "></div>
         </div>
         <!-- 记忆管理面板 -->
         <div id="memoryPanel" class="chat-history-panel" style="display:none;">
@@ -1349,6 +1374,7 @@
     <!-- ==================== 工单详情抽屉 ==================== -->
     <div class="drawer-overlay" id="drawerOverlay" onclick="closeDrawer()"></div>
     <aside class="drawer" id="ticketDrawer">
+        <div class="drawer-resize-handle" id="drawerResizeHandle"></div>
         <div class="drawer-header">
             <div class="drawer-title" id="drawerTitle"></div>
             <div class="drawer-header-actions">

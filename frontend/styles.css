@@ -409,7 +409,9 @@ body.chat-open #projectListPage {
 .content-area {
     flex: 1;
     overflow-y: auto;
+    overflow-x: auto;    /* 允许横向滚动条，不能 hidden */
     padding: 20px;
+    padding-bottom: 28px;
     min-height: 0;
 }
 
@@ -469,9 +471,10 @@ body.chat-open #projectListPage {
 .board {
     display: flex;
     gap: 12px;
-    width: 100%;          /* 强制填满父容器；防止 flex 容器收缩到 content-size 留空白 */
-    overflow-x: auto;
-    padding-bottom: 12px;
+    width: max-content;  /* 让 board 撑开到实际宽度，由父容器 content-area 来滚动 */
+    min-width: 100%;
+    overflow-x: visible;
+    padding-bottom: 20px;
     min-height: 400px;
 }
 
@@ -1343,18 +1346,21 @@ body.chat-open #projectListPage {
 .drawer {
     position: fixed;
     top: 0;
-    right: -500px;
+    right: 0;
     width: 500px;
+    min-width: 320px;
+    max-width: 900px;
     height: 100vh;
     background: var(--bg-card);
     border-left: 1px solid var(--border);
     z-index: 201;
-    transition: right 0.3s ease;
+    transform: translateX(100%);
+    transition: transform 0.3s ease;
     display: flex;
     flex-direction: column;
 }
 .drawer.active {
-    right: 0;
+    transform: translateX(0);
 }
 
 /* Dock 模式：与主内容并排，不遮盖、无 overlay */
@@ -1368,7 +1374,7 @@ body.has-docked-drawer .drawer-overlay {
 }
 /* 当 body 有 Dock drawer 时，主内容区右边预留宽度 */
 body.has-docked-drawer .main-container {
-    padding-right: 500px;
+    padding-right: var(--docked-drawer-width, 500px);
     transition: padding-right 0.3s ease;
 }
 
@@ -3039,7 +3045,7 @@ input[readonly]:focus {
     .sidebar { width: 180px; min-width: 180px; }
     .project-layout { grid-template-columns: 180px 1fr; }
     .board-column { min-width: 180px; }
-    .drawer { width: 100%; right: -100%; }
+    .drawer { width: 100%; transform: translateX(100%); }
     .job-drawer { width: 100%; right: -100%; }
     .modal { width: 90%; }
     .log-entry-agent { width: 80px; }
@@ -5427,6 +5433,11 @@ body.chat-fullscreen #projectPage > .project-layout,
 body.chat-fullscreen #projectListPage {
     display: none !important;
 }
+/* 全屏模式下强制隐藏工单抽屉和遮罩 */
+body.chat-fullscreen .drawer,
+body.chat-fullscreen .drawer-overlay {
+    display: none !important;
+}
 
 body.chat-fullscreen .chat-panel {
     left: 0;
@@ -5629,6 +5640,7 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
     background: var(--bg-card);
+    position: relative;
 }
 
 .chat-panel-title {
@@ -8947,3 +8959,156 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
     font-weight: 600;
 }
 
+
+/* ============================================================
+   统一时间轴 + 评论区（ticket_comments）
+   ============================================================ */
+
+/* 时间轴标题行 */
+.timeline-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+}
+.timeline-header h4 { margin: 0; }
+.btn-text-sm {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 12px;
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 4px;
+    transition: background 0.15s;
+}
+.btn-text-sm:hover { background: var(--bg-elevated); color: var(--text-secondary); }
+
+/* 评论气泡：人工评论（右对齐，黄色） */
+.comment-bubble {
+    border-radius: 8px;
+    padding: 8px 12px;
+    margin-bottom: 10px;
+    position: relative;
+}
+.comment-bubble.human {
+    background: rgba(236, 201, 75, 0.10);
+    border: 1px solid rgba(236, 201, 75, 0.28);
+    border-radius: 8px 2px 8px 8px;
+    margin-left: 32px;
+}
+.comment-bubble.human .comment-author { color: #d4a017; }
+
+/* 评论气泡：Agent 总结（左对齐，蓝色） */
+.comment-bubble.agent {
+    background: rgba(99, 179, 237, 0.08);
+    border: 1px solid rgba(99, 179, 237, 0.22);
+    border-radius: 2px 8px 8px 8px;
+    margin-right: 32px;
+}
+.comment-bubble.agent .comment-author { color: #63b3ed; }
+
+/* 评论 meta 行 */
+.comment-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 4px;
+}
+.comment-author {
+    font-size: 12px;
+    font-weight: 600;
+}
+.comment-time {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-left: auto;
+}
+.comment-content {
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.55;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+.comment-delete-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 11px;
+    cursor: pointer;
+    padding: 1px 4px;
+    border-radius: 3px;
+    opacity: 0.6;
+    transition: opacity 0.15s;
+}
+.comment-delete-btn:hover { opacity: 1; color: var(--error); }
+
+/* 评论输入栏 */
+.comment-input-bar {
+    display: flex;
+    gap: 8px;
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+}
+.comment-input-bar textarea {
+    flex: 1;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-primary);
+    padding: 8px 10px;
+    font-size: 13px;
+    resize: none;
+    line-height: 1.5;
+    font-family: inherit;
+    transition: border-color 0.15s;
+}
+.comment-input-bar textarea:focus {
+    outline: none;
+    border-color: var(--primary);
+}
+.comment-input-bar textarea::placeholder { color: var(--text-muted); }
+.comment-send-btn {
+    padding: 0 14px;
+    background: var(--primary);
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    white-space: nowrap;
+    align-self: flex-end;
+    height: 36px;
+    transition: opacity 0.15s;
+}
+.comment-send-btn:hover { opacity: 0.85; }
+.comment-send-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* 二级日志折叠区 */
+.secondary-logs-toggle {
+    text-align: center;
+    margin: 6px 0 2px;
+}
+
+/* ============================================================
+   抽屉宽度拖拽手柄
+   ============================================================ */
+.drawer-resize-handle {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 5px;
+    height: 100%;
+    cursor: col-resize;
+    z-index: 10;
+    background: transparent;
+    transition: background 0.15s;
+}
+.drawer-resize-handle:hover,
+.drawer-resize-handle.dragging {
+    background: var(--primary, #6366f1);
+    opacity: 0.5;
+}

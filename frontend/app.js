@@ -728,7 +728,8 @@ function _updateChatPanelForContext() {
     const modeBtn = document.getElementById('chatModeBtn');
     const msgContainer = document.getElementById('chatMessages');
 
-    // 切换 context 时：若有进行中的请求，清理残留状态（请求本身仍在后台跑，但结果会被丢弃）
+    // 切换 context 时：若有进行中的请求，只清理 UI 状态，不中断后台请求
+    // 注意：仅在项目真正切换时才清理（switchTab 同项目内切换不应走到这里）
     if (chatSending) {
         chatSending = false;
         document.getElementById('chatSendBtn') && (document.getElementById('chatSendBtn').disabled = false);
@@ -759,6 +760,7 @@ function _updateChatPanelForContext() {
             const name = currentProject?.name || '';
             titleEl.textContent = name ? `AI 助手 · ${name}` : 'AI 助手';
         }
+        _updateFullscreenProjectLabel();
     } else {
         // 返回列表：切回全局模式，标题恢复
         if (modeBar) modeBar.style.display = 'none';
@@ -767,10 +769,13 @@ function _updateChatPanelForContext() {
 
         const titleEl = document.getElementById('chatPanelTitle');
         if (titleEl) titleEl.textContent = 'AI 助手';
+        _updateFullscreenProjectLabel();
     }
 
-    // 重置当前聊天历史
-    chatHistory = [];
+    // 重置当前聊天历史（流式输出进行中时跳过，避免切 Tab 打断对话）
+    if (!chatSending && !_streamAbortController) {
+        chatHistory = [];
+    }
 
     if (chatPanelOpen) {
         if (!currentProjectId && _globalChatDom) {
@@ -847,6 +852,7 @@ function switchTab(tab) {
         loadAgentToolsStatus();
         loadMCPStatus();
         loadProjectSkills();
+        loadProjectPacks();
     }
     if (tab === 'settings-knowledge') loadSettingsKnowledge();
     if (tab === 'settings-assets') { loadArtAssetsStats(); searchArtAssets(); }
@@ -937,6 +943,7 @@ function switchAgentConfigTab(inner) {
     // 切换时懒加载一次（数据可能已在 switchTab 里加载过，这里做兜底）
     if (inner === 'mcp') loadMCPStatus();
     if (inner === 'skills') loadProjectSkills();
+    if (inner === 'packs') loadProjectPacks();
     // traits 已移到「系统设置」modal（showSystemSettingsModal('traits')）
 }
 
@@ -993,8 +1000,109 @@ async function loadMCPStatus() {
 
 // ==================== Skills 列表（Agent 配置页 → Skills Tab） ====================
 
+// ==================== ConfigPack 管理 ====================
+
+async function loadProjectPacks() {
+    if (!currentProjectId) return;
+    const installedEl = document.getElementById('installedPacksList');
+    const availableEl = document.getElementById('availablePacksList');
+    if (!installedEl) return;
+
+    installedEl.innerHTML = '<div class="empty-state-sm">加载中...</div>';
+
+    try {
+        const [installedData, availableData] = await Promise.all([
+            api(`/projects/${currentProjectId}/packs`),
+            api(`/projects/${currentProjectId}/packs/available`),
+        ]);
+
+        const installed = installedData.packs || [];
+        const available = availableData.packs || [];
+
+        // 已安装列表
+        if (installed.length === 0) {
+            installedEl.innerHTML = '<div class="empty-state-sm">未安装任何 ConfigPack</div>';
+        } else {
+            installedEl.innerHTML = installed.map(p => `
+                <div class="skill-row">
+                    <div class="skill-row-info">
+                        <div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;">
+                            <span class="skill-row-name">📦 ${escapeHtml(p.display_name || p.name)}</span>
+                            ${(p.contains || []).map(c => `<code class="mcp-tool-tag" style="font-size:10px;">${escapeHtml(c)}</code>`).join('')}
+                        </div>
+                        <span class="skill-row-id">${escapeHtml(p.pack_name)}</span>
+                        ${p.description ? `<span class="skill-row-desc">${escapeHtml(p.description)}</span>` : ''}
+                        <span style="font-size:10px;color:var(--text-muted);">安装于 ${escapeHtml((p.installed_at||'').slice(0,16).replace('T',' '))} · 目标: ${escapeHtml((p.targets||[]).join(', ') || '—')}</span>
+                    </div>
+                    <div class="skill-row-actions">
+                        <button class="btn btn-xs btn-secondary" onclick="reinstallPack('${escapeHtml(p.pack_name)}')" title="重新安装（覆盖）">↩ 重装</button>
+                        <button class="btn btn-xs btn-ghost" onclick="removePack('${escapeHtml(p.pack_name)}', '${escapeHtml(p.display_name || p.pack_name)}')" title="移除记录（不删文件）">✕</button>
+                    </div>
+                </div>`).join('');
+        }
+
+        // 可安装列表
+        if (availableEl) {
+            if (available.length === 0) {
+                availableEl.innerHTML = '<div class="empty-state-sm">所有 Pack 均已安装</div>';
+            } else {
+                availableEl.innerHTML = available.map(p => `
+                    <div class="skill-row">
+                        <div class="skill-row-info">
+                            <div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;">
+                                <span class="skill-row-name">📦 ${escapeHtml(p.display_name || p.name)}</span>
+                                ${(p.contains || []).map(c => `<code class="mcp-tool-tag" style="font-size:10px;">${escapeHtml(c)}</code>`).join('')}
+                            </div>
+                            ${p.description ? `<span class="skill-row-desc">${escapeHtml(p.description)}</span>` : ''}
+                            <span style="font-size:10px;color:var(--text-muted);">支持: ${escapeHtml((p.targets||[]).join(', ') || '—')}</span>
+                        </div>
+                        <div class="skill-row-actions">
+                            <button class="btn btn-xs btn-primary" onclick="installPack('${escapeHtml(p.name)}')">⬇ 安装</button>
+                        </div>
+                    </div>`).join('');
+            }
+        }
+    } catch (e) {
+        installedEl.innerHTML = `<div class="empty-state-sm">加载失败: ${escapeHtml(e.message)}</div>`;
+    }
+}
+
+async function installPack(packName) {
+    if (!currentProjectId) return;
+    try {
+        await api(`/projects/${currentProjectId}/packs/${encodeURIComponent(packName)}/install`, { method: 'POST' });
+        showToast(`Pack「${packName}」已安装`, 'success');
+        loadProjectPacks();
+    } catch (e) {
+        showToast(`安装失败: ${e.message}`, 'error');
+    }
+}
+
+async function reinstallPack(packName) {
+    if (!currentProjectId) return;
+    if (!confirm(`重新安装「${packName}」？已修改的配置文件会被追加/覆盖。`)) return;
+    try {
+        await api(`/projects/${currentProjectId}/packs/${encodeURIComponent(packName)}/install`, { method: 'POST' });
+        showToast(`Pack「${packName}」已重新安装`, 'success');
+        loadProjectPacks();
+    } catch (e) {
+        showToast(`重装失败: ${e.message}`, 'error');
+    }
+}
+
+async function removePack(packName, displayName) {
+    if (!currentProjectId) return;
+    if (!confirm(`移除「${displayName}」的安装记录？\n（已 copy 到项目的文件不会被删除）`)) return;
+    try {
+        await api(`/projects/${currentProjectId}/packs/${encodeURIComponent(packName)}`, { method: 'DELETE' });
+        showToast('记录已移除', 'success');
+        loadProjectPacks();
+    } catch (e) {
+        showToast(`操作失败: ${e.message}`, 'error');
+    }
+}
+
 async function loadProjectSkills() {
-    const sysContainer = document.getElementById('projectSkillsList');
     const customContainer = document.getElementById('customSkillsList');
     if (!sysContainer) return;
 
@@ -3364,28 +3472,19 @@ async function openTicketDrawer(ticketId) {
             </div>`;
         }
 
-        // 日志
-        const logs = data.logs || [];
-        if (logs.length > 0) {
-            html += `
-            <div class="drawer-section">
-                <h4>操作日志 (${logs.length})</h4>
-                <div class="log-timeline" style="padding-left:24px;">
-                    ${logs.slice(0, 20).map(l => renderLogItem(l)).join('')}
-                </div>
-            </div>`;
-        }
-
-        // Agent 讨论区（异步加载）
+        // 统一时间轴（logs + comments 合并，异步加载）
         html += `
-        <div class="drawer-section drawer-agent-discuss" id="drawerAgentDiscuss">
-            <div class="agent-discuss-header" onclick="toggleAgentDiscuss('${data.id}')">
-                <span class="agent-discuss-icon">🤖</span>
-                <h4 style="margin:0;flex:1;">Agent 讨论</h4>
-                <span class="agent-discuss-toggle" id="agentDiscussToggle">▶</span>
+        <div class="drawer-section" id="timelineSection">
+            <div class="timeline-header">
+                <h4>📋 进展时间轴</h4>
+                <button class="btn-text-sm" onclick="toggleSecondaryLogs()" id="secondaryLogsToggle">详细日志</button>
             </div>
-            <div class="agent-discuss-body" id="agentDiscussBody" style="display:none;">
-                <div class="agent-discuss-loading">加载中…</div>
+            <div class="log-timeline" id="unifiedTimeline" style="padding-left:24px;">
+                <div style="color:var(--text-muted);font-size:13px;">加载中…</div>
+            </div>
+            <div class="comment-input-bar">
+                <textarea id="commentInput" placeholder="输入指令或评论，Agent 执行时将优先遵循…" rows="2"></textarea>
+                <button class="comment-send-btn" onclick="submitTicketComment('${data.id}')">发送</button>
             </div>
         </div>`;
 
@@ -3400,8 +3499,162 @@ async function openTicketDrawer(ticketId) {
         document.getElementById('ticketDrawer').classList.add('active');
         // v0.19.x 启动进度区（首次拉数据 + 5s ticker 刷已用时）
         _startTicketActionProgress(ticketId);
+        // 异步加载统一时间轴
+        _loadUnifiedTimeline(ticketId);
     } catch (e) {
         showToast(`加载工单失败: ${e.message}`, 'error');
+    }
+}
+
+// ==================== 统一时间轴 + 评论功能 ====================
+
+/** 当前打开的工单 ID（供刷新时间轴使用） */
+let _currentTimelineTicketId = null;
+/** 是否显示二级详细日志 */
+let _showSecondaryLogs = false;
+
+/**
+ * 加载并渲染统一时间轴（logs + comments 合并）
+ */
+async function _loadUnifiedTimeline(ticketId) {
+    _currentTimelineTicketId = ticketId;
+    const container = document.getElementById('unifiedTimeline');
+    if (!container) return;
+    try {
+        const data = await api(`/tickets/${ticketId}/timeline`);
+        _renderUnifiedTimeline(container, data.timeline || []);
+    } catch (e) {
+        if (container) container.innerHTML = `<div style="color:var(--text-muted);font-size:13px;">加载失败: ${escHtml(e.message)}</div>`;
+    }
+}
+
+/**
+ * 渲染时间轴列表到指定容器
+ */
+function _renderUnifiedTimeline(container, items) {
+    if (!container) return;
+    const primary = items.filter(i => i._tier === 'primary' || i._type === 'comment');
+    const secondary = items.filter(i => i._tier === 'secondary' && i._type !== 'comment');
+
+    // 更新"详细日志"按钮文字
+    const btn = document.getElementById('secondaryLogsToggle');
+    if (btn) btn.textContent = `详细日志 (${secondary.length})`;
+
+    let html = primary.map(i => renderTimelineItem(i)).join('');
+
+    if (secondary.length > 0) {
+        html += `
+        <div class="secondary-logs-toggle">
+            <div id="secondaryLogsContent" style="display:${_showSecondaryLogs ? '' : 'none'}">
+                ${secondary.map(i => renderTimelineItem(i)).join('')}
+            </div>
+        </div>`;
+    }
+
+    if (!html) {
+        html = `<div style="color:var(--text-muted);font-size:13px;padding:8px 0;">暂无记录</div>`;
+    }
+
+    container.innerHTML = html;
+}
+
+/**
+ * 渲染单个时间轴条目（log 或 comment）
+ */
+function renderTimelineItem(item) {
+    if (item._type === 'comment') {
+        return renderCommentBubble(item);
+    }
+    // log 类型：复用现有 renderLogItem
+    return renderLogItem(item);
+}
+
+/**
+ * 渲染评论气泡
+ */
+function renderCommentBubble(comment) {
+    const isHuman = comment.author_type === 'human';
+    const authorIcon = isHuman ? '👤' : '🤖';
+    const bubbleClass = isHuman ? 'human' : 'agent';
+    const deleteBtn = isHuman
+        ? `<button class="comment-delete-btn" onclick="deleteTicketComment('${escHtml(comment.ticket_id)}','${escHtml(comment.id)}')" title="删除">✕</button>`
+        : '';
+    return `
+    <div class="comment-bubble ${bubbleClass}" id="comment-${escHtml(comment.id)}">
+        <div class="comment-meta">
+            <span class="comment-author">${authorIcon} ${escHtml(comment.author)}</span>
+            ${comment.phase ? `<span class="log-action" style="font-size:11px;">${escHtml(comment.phase)}</span>` : ''}
+            ${deleteBtn}
+            <span class="comment-time">${formatTime(comment.created_at)}</span>
+        </div>
+        <div class="comment-content">${escHtml(comment.content)}</div>
+    </div>`;
+}
+
+/**
+ * 切换详细日志显示/隐藏
+ */
+function toggleSecondaryLogs() {
+    _showSecondaryLogs = !_showSecondaryLogs;
+    const el = document.getElementById('secondaryLogsContent');
+    if (el) el.style.display = _showSecondaryLogs ? '' : 'none';
+    const btn = document.getElementById('secondaryLogsToggle');
+    if (btn) {
+        const match = btn.textContent.match(/\((\d+)\)/);
+        const count = match ? match[1] : '';
+        btn.textContent = _showSecondaryLogs ? `收起详细日志 (${count})` : `详细日志 (${count})`;
+    }
+}
+
+/**
+ * 发送人工评论
+ */
+async function submitTicketComment(ticketId) {
+    const input = document.getElementById('commentInput');
+    if (!input) return;
+    const content = input.value.trim();
+    if (!content) return;
+
+    const btn = document.querySelector('.comment-send-btn');
+    if (btn) btn.disabled = true;
+    try {
+        await api(`/tickets/${ticketId}/comments`, {
+            method: 'POST',
+            body: { content },
+        });
+        input.value = '';
+        // 刷新时间轴
+        await _loadUnifiedTimeline(ticketId);
+        showToast('评论已发送，Agent 下次执行时将优先参考', 'success');
+    } catch (e) {
+        showToast(e.message || '发送失败', 'error');
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
+/**
+ * 删除人工评论
+ */
+async function deleteTicketComment(ticketId, commentId) {
+    if (!confirm('确认删除这条评论？')) return;
+    try {
+        await api(`/tickets/${ticketId}/comments/${commentId}`, { method: 'DELETE' });
+        // 从 DOM 直接移除
+        const el = document.getElementById(`comment-${commentId}`);
+        if (el) el.remove();
+        showToast('已删除', 'success');
+    } catch (e) {
+        showToast(e.message || '删除失败', 'error');
+    }
+}
+
+/**
+ * 刷新时间轴（供外部调用，如 SSE 推送）
+ */
+async function refreshTimeline(ticketId) {
+    if (ticketId && ticketId === _currentTimelineTicketId) {
+        await _loadUnifiedTimeline(ticketId);
     }
 }
 
@@ -4266,6 +4519,11 @@ function _syncDockBtnState(isDocked) {
         btn.innerHTML = '📍';  // Dock 态 = 实心定位
         btn.title = 'Dock 模式开启（与主内容并排）。点击切回浮动';
         document.body.classList.add('has-docked-drawer');
+        // 同步当前抽屉宽度到 CSS 变量，让 padding-right 正确
+        const drawer = document.getElementById('ticketDrawer');
+        if (drawer) {
+            document.body.style.setProperty('--docked-drawer-width', drawer.offsetWidth + 'px');
+        }
     } else {
         btn.innerHTML = '📌';  // 浮动态 = 图钉
         btn.title = '浮动模式（遮盖主内容）。点击切 Dock 模式';
@@ -4282,6 +4540,66 @@ function toggleDrawerDock() {
         localStorage.setItem('drawer_dock_mode', isDocked ? '1' : '0');
     } catch {}
 }
+
+/** 初始化抽屉宽度拖拽 */
+function _initDrawerResize() {
+    const handle = document.getElementById('drawerResizeHandle');
+    const drawer = document.getElementById('ticketDrawer');
+    if (!handle || !drawer) return;
+
+    let startX = 0;
+    let startWidth = 0;
+
+    handle.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        startX = e.clientX;
+        startWidth = drawer.offsetWidth;
+        handle.classList.add('dragging');
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+
+        const onMove = (e) => {
+            // 向左拖 → 变宽，向右拖 → 变窄
+            const delta = startX - e.clientX;
+            const newWidth = Math.min(900, Math.max(320, startWidth + delta));
+            drawer.style.width = newWidth + 'px';
+            // docked 模式同步更新主容器留白
+            if (drawer.classList.contains('docked')) {
+                document.body.style.setProperty('--docked-drawer-width', newWidth + 'px');
+                const main = document.querySelector('.main-container');
+                if (main) main.style.paddingRight = newWidth + 'px';
+            }
+        };
+
+        const onUp = () => {
+            handle.classList.remove('dragging');
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            // 保存宽度到 localStorage
+            try {
+                localStorage.setItem('drawer_width', drawer.offsetWidth);
+            } catch {}
+        };
+
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+    });
+
+    // 恢复上次宽度
+    try {
+        const saved = parseInt(localStorage.getItem('drawer_width'));
+        if (saved >= 320 && saved <= 900) {
+            drawer.style.width = saved + 'px';
+            // 同步 CSS 变量，确保 docked 时 padding-right 正确
+            document.body.style.setProperty('--docked-drawer-width', saved + 'px');
+        }
+    } catch {}
+}
+
+// 页面加载后初始化拖拽
+document.addEventListener('DOMContentLoaded', _initDrawerResize);
 
 /** 打开抽屉时根据用户偏好自动应用 Dock 状态 */
 function _applyDrawerDockPreference() {
@@ -6448,6 +6766,14 @@ function connectSSE(projectId) {
             console.log('[SSE] ticket_status_changed:', data);
             _debouncedSSERefresh();
             appendLogEntry({id: 'ts-' + Date.now(), agent_type: data.agent || 'Orchestrator', action: 'status_change', from_status: data.from, to_status: data.to, detail: JSON.stringify({message: `工单状态: ${data.from} → ${data.to}`}), level: 'info', created_at: new Date().toISOString(), ticket_id: data.ticket_id});
+            // 如果当前打开的是这张工单，刷新时间轴
+            if (data.ticket_id) refreshTimeline(data.ticket_id);
+        });
+
+        eventSource.addEventListener('comment_added', (e) => {
+            const data = JSON.parse(e.data);
+            console.log('[SSE] comment_added:', data);
+            if (data.ticket_id) refreshTimeline(data.ticket_id);
         });
 
         eventSource.addEventListener('requirement_decomposed', (e) => {
@@ -7265,8 +7591,9 @@ function initLogPanel() {
     const savedHeight = localStorage.getItem('logPanelHeight');
     const savedCollapsed = localStorage.getItem('logPanelCollapsed');
     if (savedHeight) {
-        panel.style.setProperty('--log-panel-height', savedHeight + 'px');
-        panel.style.height = savedHeight + 'px';
+        const h = Math.max(parseInt(savedHeight, 10) || 220, 120);
+        panel.style.setProperty('--log-panel-height', h + 'px');
+        panel.style.height = h + 'px';
     }
     if (savedCollapsed === 'true') {
         panel.classList.add('collapsed');
@@ -7295,7 +7622,7 @@ function initLogPanel() {
         const wrapperH = wrapper ? wrapper.offsetHeight : window.innerHeight * 0.8;
         const maxH = wrapperH - 100; // 内容区至少保留 100px
         const diff = startY - e.clientY;
-        const newH = Math.min(Math.max(startH + diff, 60), maxH);
+        const newH = Math.min(Math.max(startH + diff, 120), maxH);
         panel.style.height = newH + 'px';
         panel.style.setProperty('--log-panel-height', newH + 'px');
     });
@@ -8732,6 +9059,17 @@ function _switchToGlobalChat() {
     _updateChatPanelForContext();
 }
 
+function _updateFullscreenProjectLabel() {
+    const el = document.getElementById('chatHeaderProjectLabel');
+    if (!el) return;
+    if (_chatFullscreen && currentProject?.name) {
+        el.textContent = currentProject.name;
+        el.style.display = '';
+    } else {
+        el.style.display = 'none';
+    }
+}
+
 function toggleChatFullscreen() {
     _chatFullscreen = !_chatFullscreen;
     const btn = document.getElementById('chatFullscreenBtn');
@@ -8743,6 +9081,9 @@ function toggleChatFullscreen() {
         btn.textContent = '⊡';
         btn.title = '退出全屏';
         if (splitBtn) splitBtn.style.display = '';
+        // 全屏时关闭工单抽屉，避免遮挡聊天面板
+        closeDrawer();
+        _updateFullscreenProjectLabel();
     } else {
         document.body.classList.remove('chat-fullscreen');
         document.body.classList.remove('chat-split');
@@ -8750,14 +9091,17 @@ function toggleChatFullscreen() {
         btn.title = '全屏';
         if (splitBtn) splitBtn.style.display = 'none';
         _destroyAllSplitPanes();
+        _updateFullscreenProjectLabel();
         // 退出全屏：若当前有项目（全屏期间可能切换过），进入该项目页
-        if (currentProjectId) {
-            showProjectDetail(currentProjectId);
-        } else {
-            // 无项目则回到全局列表
-            showProjectList();
+        // 流式输出进行中时跳过页面重载，避免打断对话
+        if (!chatSending && !_streamAbortController) {
+            if (currentProjectId) {
+                showProjectDetail(currentProjectId);
+            } else {
+                showProjectList();
+            }
+            setTimeout(() => loadChatHistory(), 100);
         }
-        setTimeout(() => loadChatHistory(), 100);
     }
 }
 
@@ -10131,6 +10475,8 @@ async function _sendChatStreaming(url, body) {
 
     // 追加 action 卡片（若有）
     if (finalAction) {
+        // 确保气泡可见（无 text_delta 时气泡是隐藏的）
+        bubbleWrapper.style.display = '';
         const cardHtml = _buildAnyActionCardHtml(finalAction);
         if (cardHtml && cardHtml !== '__rendered__') {
             // 普通卡片：插入 HTML
@@ -11090,41 +11436,104 @@ function _renderConfirmProjectCard(action) {
     const safeId = _nextCardId('proj_confirm');
     const traitsArr = Array.isArray(action.traits) ? action.traits : [];
     const traitsJsonAttr = escapeHtml(JSON.stringify(traitsArr));
+    const extraPathsAttr = escapeHtml(JSON.stringify(action.extra_paths || []));
+    const mode = action.mode || 'auto';
+    const isManual = mode === 'manual';
+
+    // Pack 选择区
+    const recommendedPacks = Array.isArray(action.recommended_packs) ? action.recommended_packs : [];
+    const packsJsonAttr = escapeHtml(JSON.stringify(recommendedPacks));
+    const packsHtml = recommendedPacks.length ? `
+        <div class="confirm-req-meta" style="margin-top:10px;">
+            <div style="font-size:12px; margin-bottom:6px; color:var(--text-muted);">⚙️ ConfigPack（CLI 配置，可取消勾选）</div>
+            <div id="packList_${safeId}">
+                ${recommendedPacks.map(p => `
+                <label style="display:flex; align-items:flex-start; gap:6px; padding:4px 0; cursor:pointer; font-size:12px;">
+                    <input type="checkbox" name="pack_${safeId}" value="${escHtml(p.name)}" ${p.selected !== false ? 'checked' : ''}
+                           style="margin-top:2px; flex-shrink:0; accent-color:var(--accent);">
+                    <div>
+                        <span style="font-weight:600; color:var(--text);">${escHtml(p.display_name || p.name)}</span>
+                        <span style="color:var(--text-muted); margin-left:4px;">${escHtml(p.description || '')}</span>
+                        <div style="margin-top:2px;">${(p.contains||[]).map(c=>`<code class="mcp-tool-tag" style="font-size:10px;">${escHtml(c)}</code>`).join('')}</div>
+                    </div>
+                </label>`).join('')}
+            </div>
+        </div>` : '';
+
     const traitChips = traitsArr.length
         ? `<div class="confirm-req-meta" style="margin-top:6px; display:flex; flex-wrap:wrap; align-items:center; gap:4px 6px;">
              <span style="flex:0 0 auto;">🏷 Traits:</span>
-             ${traitsArr.map(t => `<code class="mcp-tool-tag" style="background:rgba(163,113,247,0.1); border-color:rgba(163,113,247,0.4);">${escapeHtml(t)}</code>`).join('')}
+             ${traitsArr.map(t => `<code class="mcp-tool-tag" style="background:rgba(163,113,247,0.1); border-color:rgba(163,113,247,0.4);">${escHtml(t)}</code>`).join('')}
            </div>`
-        : '<div class="confirm-req-meta" style="color:var(--warning, #f59e0b); font-size:11px;">⚠️ 未带 traits</div>';
+        : '<div class="confirm-req-meta" style="color:var(--warning, #f59e0b); font-size:11px;">⚠️ 未识别到 traits</div>';
     const presetBadge = action.preset_id
-        ? `<div class="confirm-req-meta" style="font-size:11px; color:var(--text-muted);">📦 Preset: ${escapeHtml(action.preset_id)}</div>`
+        ? `<div class="confirm-req-meta" style="font-size:11px; color:var(--text-muted);">📦 Preset: ${escHtml(action.preset_id)}</div>`
         : '';
+
+    // 多路径展示
+    const extraPaths = action.extra_paths || [];
+    const pathsHtml = extraPaths.length ? `
+        <div class="confirm-req-meta" style="margin-top:6px;">
+            <div style="margin-bottom:4px; font-size:11px; color:var(--text-muted);">📁 检测到的路径：</div>
+            ${extraPaths.map(p => `
+                <div style="font-size:11px; padding:2px 0; display:flex; gap:6px; align-items:center;">
+                    <code style="background:var(--bg-elevated); padding:1px 5px; border-radius:3px; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${escHtml(p.path)}">${escHtml(p.path)}</code>
+                    <span class="mcp-tool-tag" style="flex-shrink:0; ${p.vcs==='git'?'background:rgba(72,187,120,0.1);border-color:rgba(72,187,120,0.4);':p.vcs==='p4'?'background:rgba(246,173,85,0.1);border-color:rgba(246,173,85,0.4);':''}">${escHtml(p.vcs||'none')}</span>
+                    ${p.auto_detected ? '<span style="font-size:10px;color:var(--text-muted);">自动识别</span>' : ''}
+                    ${!p.writable ? '<span style="font-size:10px;color:var(--warning);">只读</span>' : ''}
+                </div>`).join('')}
+        </div>` : '';
+
+    // P4 信息
+    const p4Html = action.p4_info ? `
+        <div class="confirm-req-meta" style="font-size:11px; color:var(--text-muted);">
+            🔑 P4 Client: ${escHtml(action.p4_info.client || '')} · ${escHtml(action.p4_info.server || '')}
+        </div>` : '';
+
+    // 引擎路径警告
+    const engineWarning = action.engine_path_warning ? `
+        <div class="confirm-req-meta" style="color:var(--warning);font-size:11px;">⚠️ ${escHtml(action.engine_path_warning)}</div>` : '';
+
+    // 模式选择器
+    const modeHtml = `
+        <div class="confirm-req-meta" style="margin-top:8px; display:flex; align-items:center; gap:8px;">
+            <span style="font-size:12px;">运行模式：</span>
+            <label style="font-size:12px; cursor:pointer; display:flex; align-items:center; gap:4px;">
+                <input type="radio" name="mode_${safeId}" value="manual" ${isManual ? 'checked' : ''}> 手动挡（直接对话修改，不自动提交）
+            </label>
+            <label style="font-size:12px; cursor:pointer; display:flex; align-items:center; gap:4px;">
+                <input type="radio" name="mode_${safeId}" value="auto" ${!isManual ? 'checked' : ''}> 自动挡（工单流转 + 自动提交）
+            </label>
+        </div>`;
 
     const cardHtml = `
         <div class="chat-action-card chat-confirm-card chat-confirm-project-card" id="${safeId}"
-             data-name="${escapeHtml(action.name || '')}"
-             data-description="${escapeHtml(action.description || '')}"
-             data-tech-stack="${escapeHtml(action.tech_stack || '')}"
-             data-git-remote-url="${escapeHtml(action.git_remote_url || '')}"
-             data-local-repo-path="${escapeHtml(action.local_repo_path || '')}"
+             data-name="${escHtml(action.name || '')}"
+             data-description="${escHtml(action.description || '')}"
+             data-tech-stack="${escHtml(action.tech_stack || '')}"
+             data-git-remote-url="${escHtml(action.git_remote_url || '')}"
+             data-local-repo-path="${escHtml(action.local_repo_path || '')}"
              data-traits="${traitsJsonAttr}"
-             data-preset-id="${escapeHtml(action.preset_id || '')}"
-             data-message-id="${escapeHtml(action._message_id || '')}"
-             style="border-left-color: var(--accent, #a371f7);">
-            <div class="action-title">📦 识别到新建项目意图，是否创建？</div>
+             data-extra-paths="${extraPathsAttr}"
+             data-packs="${packsJsonAttr}"
+             data-preset-id="${escHtml(action.preset_id || '')}"
+             data-mode="${escHtml(mode)}"
+             data-message-id="${escHtml(action._message_id || '')}"
+             style="border-left-color: ${isManual ? 'var(--warning, #f59e0b)' : 'var(--accent, #a371f7)'};">
+            <div class="action-title">${isManual ? '📂 检测到本地项目，是否创建？' : '📦 识别到新建项目意图，是否创建？'}</div>
             <div class="action-detail">
                 <div class="confirm-proj-name-row">
                     <label class="confirm-proj-name-label">项目名称</label>
                     <input type="text" class="confirm-proj-name-input" id="projName_${safeId}"
-                           value="${escapeHtml(action.name || '')}" placeholder="输入项目名称"
+                           value="${escHtml(action.name || '')}" placeholder="输入项目名称"
                            oninput="updateProjRepoName('${safeId}')">
                 </div>
                 <div class="confirm-proj-repo-hint" id="projRepoHint_${safeId}"></div>
-                ${action.description ? `<div class="confirm-req-desc">${escapeHtml(action.description)}</div>` : ''}
-                <div class="confirm-req-meta">Git 仓库：<code>${escapeHtml(action.git_remote_url || '')}</code></div>
-                ${action.tech_stack ? `<div class="confirm-req-meta">技术栈：${escapeHtml(action.tech_stack)}</div>` : ''}
-                ${action.local_repo_path ? `<div class="confirm-req-meta">本地路径：<code>${escapeHtml(action.local_repo_path)}</code></div>` : `<div class="confirm-req-meta" style="color:var(--text-muted);font-size:11px;" id="confirmProjDefaultPath">本地路径：自动生成（加载中…）</div>`}
-                ${traitChips}${presetBadge}
+                ${action.description ? `<div class="confirm-req-desc">${escHtml(action.description)}</div>` : ''}
+                ${action.git_remote_url ? `<div class="confirm-req-meta">Git 仓库：<code>${escHtml(action.git_remote_url)}</code></div>` : ''}
+                ${action.tech_stack ? `<div class="confirm-req-meta">技术栈：${escHtml(action.tech_stack)}</div>` : ''}
+                ${action.local_repo_path ? `<div class="confirm-req-meta">本地路径：<code>${escHtml(action.local_repo_path)}</code></div>` : `<div class="confirm-req-meta" style="color:var(--text-muted);font-size:11px;" id="confirmProjDefaultPath">本地路径：自动生成（加载中…）</div>`}
+                ${p4Html}${pathsHtml}${engineWarning}${traitChips}${presetBadge}${modeHtml}${packsHtml}
                 <div id="preview_${safeId}" style="margin-top:10px; padding:10px; background:var(--bg); border-radius:6px; font-size:12px;">
                     <div style="color:var(--text-muted);">🔄 预计组装...</div>
                 </div>
@@ -11942,10 +12351,8 @@ async function loadProjectAssemblyPreview(cardId, traits) {
 async function doConfirmProject(cardId) {
     const card = document.getElementById(cardId);
     if (!card) return;
-    // 防止重复点击：标记后立即禁用所有按钮
     if (card.dataset.confirming === '1') return;
     card.dataset.confirming = '1';
-    // 优先读用户编辑后的 input 值
     const nameInput = document.getElementById(`projName_${cardId}`);
     const name = (nameInput ? nameInput.value.trim() : '') || card.dataset.name || '';
     const description = card.dataset.description || '';
@@ -11954,22 +12361,29 @@ async function doConfirmProject(cardId) {
     const local_repo_path = card.dataset.localRepoPath || '';
     let traits = [];
     try { traits = JSON.parse(card.dataset.traits || '[]'); } catch { traits = []; }
+    let extra_paths = [];
+    try { extra_paths = JSON.parse(card.dataset.extraPaths || '[]'); } catch { extra_paths = []; }
     const preset_id = card.dataset.presetId || null;
+    // 读取用户勾选的 Pack
+    const selectedPacks = Array.from(card.querySelectorAll(`input[name="pack_${cardId}"]:checked`))
+        .map(cb => cb.value);
+    // 读取用户选择的模式
+    const modeRadio = card.querySelector(`input[name="mode_${cardId}"]:checked`);
+    const mode = modeRadio ? modeRadio.value : (card.dataset.mode || 'auto');
     const btns = card.querySelector('.confirm-req-btns');
-    if (btns) btns.innerHTML = '<span style="color:var(--text-muted);font-size:12px">⏳ 创建中（clone 仓库 + 初始化）...</span>';
+    if (btns) btns.innerHTML = '<span style="color:var(--text-muted);font-size:12px">⏳ 创建中…</span>';
     try {
         const result = await api('/chat/confirm-create-project', {
             method: 'POST',
-            body: { name, description, tech_stack, git_remote_url, local_repo_path, traits, preset_id: preset_id || null },
+            body: { name, description, tech_stack, git_remote_url, local_repo_path, traits, preset_id: preset_id || null, mode, extra_paths, selected_packs: selectedPacks },
         });
         card.style.borderLeftColor = 'var(--success, #34d058)';
         card.querySelector('.action-title').textContent = '✅ 项目已创建';
         if (btns) {
-            btns.innerHTML = `<span class="action-link" onclick="showProjectDetail('${escapeHtml(result.project_id || '')}')">进入项目 →</span>`;
+            btns.innerHTML = `<span class="action-link" onclick="showProjectDetail('${escHtml(result.project_id || '')}')">进入项目 →</span>`;
         }
-        showToast(`项目「${result.name || name}」已创建`, 'success');
+        showToast(`项目「${result.name || name}」已创建（${mode === 'manual' ? '手动挡' : '自动挡'}）`, 'success');
 
-        // 持久化 action_state（刷新后仍显示「进入项目」链接）
         const msgId = card.dataset.messageId || '';
         if (msgId) {
             patchActionState(msgId, 'executed', {
@@ -11979,21 +12393,20 @@ async function doConfirmProject(cardId) {
             });
         }
 
-        // 刷新项目列表 + 延迟跳转详情
         if (typeof loadProjects === 'function') loadProjects();
         setTimeout(() => {
             if (result.project_id && typeof showProjectDetail === 'function') {
                 showProjectDetail(result.project_id);
-                // v0.19.1 对话一键流：UE 项目自动触发 propose_ue_framework
                 if (result.auto_next && typeof runAutoNextAfterProjectCreated === 'function') {
                     runAutoNextAfterProjectCreated(result.project_id, result.auto_next);
                 }
             }
         }, 1200);
     } catch (e) {
+        card.dataset.confirming = '0';
         card.style.borderLeftColor = 'var(--danger, #ea4a5a)';
         card.querySelector('.action-title').textContent = '⚠️ 创建失败';
-        if (btns) btns.innerHTML = `<span style="color:var(--danger);font-size:12px">${escapeHtml(e.message)}</span>`;
+        if (btns) btns.innerHTML = `<span style="color:var(--danger);font-size:12px">${escHtml(e.message)}</span>`;
     }
 }
 

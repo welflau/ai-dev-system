@@ -195,9 +195,63 @@ _PROJECT_ONLY_TOOLS = {
 _CROSS_SCOPE_TOOLS = set()  # 不再需要，逻辑移入 _exposed_tool_schemas
 
 
+# 本次会话写文件记录（project_id → [file_path, ...]）
+_session_file_changes: dict = {}
+
+# MCP 写文件工具名称集合
+_MCP_WRITE_TOOLS = {
+    "mcp__filesystem__write_file",
+    "mcp__filesystem__edit_file",
+    "mcp__filesystem__create_directory",
+}
+
+
+async def _ensure_writable_for_mcp(tool_name: str, tool_input: dict, project_id: str):
+    """MCP 写文件工具执行前，检查 VCS 状态，P4 路径自动 checkout"""
+    write_tools = {"write_file", "edit_file", "create_file"}
+    short = tool_name.split("__")[-1] if "__" in tool_name else tool_name
+    if short not in write_tools and tool_name not in _MCP_WRITE_TOOLS:
+        return
+
+    file_path = (tool_input or {}).get("path") or (tool_input or {}).get("file_path") or ""
+    if not file_path:
+        return
+
+    import os
+    abs_path = os.path.abspath(file_path)
+    try:
+        from database import db as _db
+        project = await _db.fetch_one("SELECT mode FROM projects WHERE id = ?", (project_id,))
+        if not project or project.get("mode") != "manual":
+            return
+
+        from vcs_detector import ensure_writable
+        result = await ensure_writable(abs_path)
+        if result.get("action") == "p4_edit":
+            logger.info("🔓 P4 checkout: %s → %s", abs_path, result.get("message", ""))
+        elif not result.get("ok"):
+            logger.warning("⚠️ 写文件 VCS 检查: %s → %s", abs_path, result.get("message", ""))
+    except Exception as e:
+        logger.debug("_ensure_writable_for_mcp 失败（忽略）: %s", e)
+
+
+def _record_file_change(tool_name: str, tool_input: dict, project_id: str):
+    """记录写文件操作到 session 变更列表"""
+    write_tools = {"write_file", "edit_file", "create_file"}
+    short = tool_name.split("__")[-1] if "__" in tool_name else tool_name
+    if short not in write_tools and tool_name not in _MCP_WRITE_TOOLS:
+        return
+    file_path = (tool_input or {}).get("path") or (tool_input or {}).get("file_path") or ""
+    if not file_path:
+        return
+    if project_id not in _session_file_changes:
+        _session_file_changes[project_id] = []
+    if file_path not in _session_file_changes[project_id]:
+        _session_file_changes[project_id].append(file_path)
+
+
 class _ChatToolExecutor:
     """
-    chat_with_tools 协议要求的 tool_executor：async execute(name, input) -> str
     负责：
     1. 往 Action 的 context 里注入 project_id（LLM 看不到的环境变量）
     2. 跟踪"最值得展示"的 Action 执行结果 → 用于填充 ChatResponse.action
@@ -259,9 +313,16 @@ class _ChatToolExecutor:
     async def execute(self, tool_name: str, tool_input: Any) -> str:
         # MCP 外部工具（以 "mcp__<server>__" 开头）：分发给 MCP 客户端
         if tool_name.startswith("mcp__"):
+            # 手动挡：写文件前做 VCS 检查（P4 自动 checkout，只读路径拦截）
+            if self.project_id:
+                await _ensure_writable_for_mcp(tool_name, tool_input, self.project_id)
             try:
                 from mcp_client import mcp_client
-                return await mcp_client.call_tool(tool_name, tool_input if isinstance(tool_input, dict) else {})
+                result = await mcp_client.call_tool(tool_name, tool_input if isinstance(tool_input, dict) else {})
+                # 记录写文件操作（用于汇报）
+                if self.project_id:
+                    _record_file_change(tool_name, tool_input, self.project_id)
+                return result
             except Exception as e:
                 logger.warning("MCP 工具调用异常 (%s): %s", tool_name, e)
                 return json.dumps({"error": f"MCP 调用失败: {e}"}, ensure_ascii=False)
@@ -503,7 +564,10 @@ class ChatAssistantAgent(BaseAgent):
         """
         from llm_client import llm_client, set_llm_context, clear_llm_context
 
-        system_prompt = await self._build_system_prompt(project, project_context)
+        history_len = len(history) if history else 0
+        system_prompt = await self._build_system_prompt(
+            project, {**project_context, "history_len": history_len}
+        )
         messages = await self._assemble_messages(history, user_message, images)
 
         project_traits = []
@@ -587,7 +651,10 @@ class ChatAssistantAgent(BaseAgent):
         from hooks.registry import hook_registry
         from llm_client import _model_supports_thinking
 
-        system_prompt = await self._build_system_prompt(project, project_context)
+        history_len = len(history) if history else 0
+        system_prompt = await self._build_system_prompt(
+            project, {**project_context, "history_len": history_len}
+        )
         messages = await self._assemble_messages(history, user_message, images, session_id=session_id)
 
         # 发送本次注入的记忆元数据给前端（用于思考面板显示）
@@ -683,6 +750,16 @@ class ChatAssistantAgent(BaseAgent):
                         "actions": event.all_confirm_results if len(event.all_confirm_results) > 1 else None,
                         "stop_reason": event.stop_reason,
                     }
+                    # 手动挡：会话结束后推送文件改动汇报
+                    _pid = project_id if 'project_id' in dir() else None
+                    _proj = project if 'project' in dir() else None
+                    changes = _session_file_changes.pop(_pid, []) if _pid else []
+                    if changes and _proj and _proj.get("mode") == "manual":
+                        change_text = "\n".join(f"  - `{f}`" for f in changes)
+                        yield {
+                            "type": "text_delta",
+                            "delta": f"\n\n---\n📝 **本次共修改 {len(changes)} 个文件：**\n{change_text}\n\n请自行决定提交时机（git commit / p4 submit）。",
+                        }
                 elif isinstance(event, BudgetExceededEvent):
                     yield {"type": "budget_exceeded", "reason": event.reason}
                 elif isinstance(event, ErrorEvent):
@@ -829,6 +906,16 @@ class ChatAssistantAgent(BaseAgent):
                         "actions": event.all_confirm_results if len(event.all_confirm_results) > 1 else None,
                         "stop_reason": event.stop_reason,
                     }
+                    # 手动挡：会话结束后推送文件改动汇报
+                    _pid = project_id if 'project_id' in dir() else None
+                    _proj = project if 'project' in dir() else None
+                    changes = _session_file_changes.pop(_pid, []) if _pid else []
+                    if changes and _proj and _proj.get("mode") == "manual":
+                        change_text = "\n".join(f"  - `{f}`" for f in changes)
+                        yield {
+                            "type": "text_delta",
+                            "delta": f"\n\n---\n📝 **本次共修改 {len(changes)} 个文件：**\n{change_text}\n\n请自行决定提交时机（git commit / p4 submit）。",
+                        }
                 elif isinstance(event, BudgetExceededEvent):
                     yield {"type": "budget_exceeded", "reason": event.reason}
                 elif isinstance(event, ErrorEvent):
@@ -1091,9 +1178,8 @@ class ChatAssistantAgent(BaseAgent):
                     return text
         return ""
 
-    # ==================== System prompt ====================
 
-    async def _build_system_prompt(self, project: dict, context: dict) -> str:
+    async def _build_system_prompt(self, project: dict, context: dict, history_len: int = 0) -> str:
         """
         精简版系统提示词 —— 不再列 [ACTION:XXX] 格式，
         因为能力通过 Anthropic 原生 tools 字段提供给 LLM，与 prompt 正交。
@@ -1239,7 +1325,17 @@ class ChatAssistantAgent(BaseAgent):
         # <!--CACHE_BOUNDARY--> 之前为稳定内容（Prompt Cache 命中），之后为动态内容（每次不同）
         # 稳定：Rules + 项目基本信息 + Skills + 能力描述
         # 动态：知识库 / 需求状态 / 工单 / 文件树 / 产出物
-        return f"""{rules_section}你是 AI 自动开发系统的智能助手，当前正在为项目「{project['name']}」提供服务。
+        return f"""{rules_section}**【语言要求】无论用户用什么语言提问，你的所有回复必须使用中文。**
+
+你是 AI 自动开发系统的智能助手，当前正在为项目「{project['name']}」提供服务。
+
+## ⚠️ 最高优先级规则
+
+**如果用户发送的消息看起来是一个本地文件路径**（含反斜杠或以盘符开头如 `F:`、`C:`，或 Unix 路径 `/home/...`）：
+- **立即且只调用 `confirm_project(local_path=该路径)`**
+- **禁止**用 Glob/Bash/Read 探索目录，**禁止**询问用户意图
+
+---
 
 ## 项目信息
 - 名称：{project['name']}
@@ -1247,7 +1343,7 @@ class ChatAssistantAgent(BaseAgent):
 - 技术栈：{project.get('tech_stack') or '未指定'}
 - Git 仓库：{project.get('git_repo_path') or '未配置'}
 {traits_line}
-{ue_routing}
+{_build_manual_mode_section(project, context.get('history_len', 0))}{ue_routing}
 {skills_section}
 ## 你的能力
 你配有一组工具（见 tools 参数），用于：
@@ -1287,6 +1383,9 @@ class ChatAssistantAgent(BaseAgent):
 - **不要只复述文件内容**，要给出有价值的分析和下一步行动建议
 
 ## 判断准则
+- 用户发送的消息**看起来是本地路径**（如 `F:/MyGame`、`/home/user/project`、`C:/Projects/xxx`、包含反斜杠或斜杠的路径格式）
+  → **立即调用 confirm_project(local_path=该路径)**，不要询问用户意图，不要探索目录结构
+  → 系统会自动扫描识别项目信息，生成确认卡片让用户选择
 - 用户**明确要求**新增/开发**单个**功能 → 调 confirm_requirement
 - 用户上传文档/让 AI 规划需求列表 → 提取所有独立需求点，调 **confirm_requirements_batch**（≥2 条时），不要逐条调 confirm_requirement
 - 用户描述已有功能的缺陷/报错/崩溃/白屏 → 调 confirm_bug（不是需求）
@@ -1428,7 +1527,22 @@ class ChatAssistantAgent(BaseAgent):
                 preset_lines.append(f"- **{m.preset_id}**（{m.label}，分数 {m.score}）traits: {m.traits}")
             preset_section = "\n".join(preset_lines) + "\n"
 
-        return f"""{global_rules_section}你是 AI 自动开发系统的全局助手，当前用户在**项目列表页**，**还没有进入任何具体项目**。
+        return f"""{global_rules_section}**【语言要求】无论用户用什么语言提问，你的所有回复必须使用中文。**
+
+你是 AI 自动开发系统的全局助手，当前用户在**项目列表页**，**还没有进入任何具体项目**。
+
+## ⚠️ 最高优先级规则（必须在任何其他判断之前执行）
+
+**如果用户发送的消息看起来是一个本地文件路径**（包含反斜杠 `\` 或以盘符开头如 `F:`、`C:`、`D:`，或是 Unix 路径 `/home/...`）：
+- **立即且只调用 `confirm_project(local_path=该路径)`**
+- **禁止**用 Glob、Bash、Read 等工具去探索目录
+- **禁止**询问用户想做什么
+- **禁止**自行分析目录内容
+- 系统会自动扫描识别项目信息，生成确认卡片
+
+示例：用户发送 `F:\A_Works\BigShot` → 立刻调 `confirm_project(local_path="F:\\A_Works\\BigShot")`
+
+---
 
 ## 已有项目（最多展示 10 个）
 {proj_lines}
@@ -1437,7 +1551,9 @@ class ChatAssistantAgent(BaseAgent):
 
 你有以下工具：
 
-**1. confirm_project** — 新建项目草稿
+**1. confirm_project** — 新建项目草稿 / 打开本地目录
+- **用户发送本地路径**（如 `F:/MyGame`、`C:/Projects/xxx`、`/home/user/proj`，含反斜杠或斜杠的路径）
+  → **立即调用 confirm_project(local_path=该路径)**，无需追问，系统自动扫描识别
 - 当用户**明确表示想新建项目**时调用，产出草稿让用户确认。**不会直接建项目**。
 
 **2. search_knowledge** — 搜索知识库文档
@@ -1475,8 +1591,11 @@ class ChatAssistantAgent(BaseAgent):
 
 **对于查项目状态、涉及具体项目操作**：提示用户先点击进入那个项目再继续对话。
 
-## 调 confirm_project 必填字段（**全齐了才能调**）
+## 调 confirm_project 字段说明
 
+**打开本地路径时（local_path 模式）**：只需填 `local_path`，其他字段留空，系统自动识别。
+
+**新建项目时（全字段模式）**，必填：
 - **name**（必填）：项目名称。用户未指定时**自动生成**一个简短有辨识度的名字（2-4词，如 JumpGame / TaskBoard），用户可在卡片里修改
 - **git_remote_url**（必填）：Git 远程仓库 URL
 - **traits**（必填）：项目特征标签数组，至少包含：
@@ -1565,3 +1684,64 @@ class ChatAssistantAgent(BaseAgent):
 - 不要自己编 Git URL
 - traits 的值必须从固定分类里选，不能自创
 """
+def _build_manual_mode_section(project: dict, history_len: int = 0) -> str:
+    """为手动挡项目生成多路径信息区块，注入 system prompt"""
+    import json as _json
+    mode = project.get("mode", "auto")
+    if mode != "manual":
+        return ""
+
+    lines = ["\n## 🔧 手动挡模式（Manual Mode）"]
+    lines.append("当前项目运行在手动挡模式：AI 直接读写文件，**不自动 git commit / P4 submit**，用户自行决定提交时机。")
+
+    # 多路径
+    extra_paths = []
+    try:
+        raw = project.get("extra_paths") or "[]"
+        extra_paths = _json.loads(raw) if isinstance(raw, str) else raw
+    except Exception:
+        pass
+
+    git_repo = project.get("git_repo_path")
+    all_paths = []
+    if git_repo:
+        all_paths.append({"path": git_repo, "vcs": "git", "writable": True, "label": "主仓库"})
+    for p in (extra_paths or []):
+        if p.get("path") and p["path"] != git_repo:
+            all_paths.append(p)
+
+    if all_paths:
+        lines.append("\n### 项目路径（写文件前请确认路径归属）")
+        vcs_emoji = {"git": "🟢", "p4": "🟡", "none": "⚪"}
+        for p in all_paths:
+            vcs = p.get("vcs", "none")
+            emoji = vcs_emoji.get(vcs, "⚪")
+            label = p.get("label", "")
+            writable = p.get("writable", True)
+            ro_tag = " **[只读]**" if not writable else ""
+            auto_tag = " (自动识别)" if p.get("auto_detected") else ""
+            lines.append(f"- {emoji} `{p['path']}` — {vcs.upper()}{ro_tag}{auto_tag}" + (f" ({label})" if label else ""))
+
+        lines.append("\n### 写文件规则")
+        lines.append("- **git 路径**：直接写入，不 commit")
+        lines.append("- **P4 路径**：系统自动在写前执行 `p4 edit`，无需手动 checkout")
+        lines.append("- **只读路径**：需用户确认才能修改（如引擎源码）")
+        lines.append("- 写完后告知用户「已修改 N 个文件，请自行决定提交」")
+
+    # 「是否创建需求」智能提示（对话 >= 2 轮后才生效）
+    if history_len >= 2:
+        lines.append("\n### 智能任务识别")
+        lines.append(
+            "在对话过程中，如果你判断用户的任务已经**足够清晰**（目标明确、影响范围确定）且涉及"
+            "较大改动（多个文件或系统性重构），可以主动询问：\n"
+            "> 「任务已明确，是否正式创建需求来跟踪进度？创建后可以走工单流程；不创建则继续在对话中直接处理。」\n\n"
+            "询问后调用 `confirm_requirement` 工具产出草稿供用户确认。\n"
+            "**注意**：简单的单文件修改、提问、调试不需要询问。只有系统性改动才需要。"
+        )
+
+    lines.append("")
+    return "\n".join(lines)
+
+
+# ── ChatAssistantAgent._build_system_prompt 在类体内，见下方 ──
+

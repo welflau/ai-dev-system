@@ -1,0 +1,10 @@
+{
+  "name": "code-quality",
+  "display_name": "代码质量规范",
+  "description": "Agent 行为准则 + 代码简洁性 + 注释规范 + Git 提交约定，适用于任何技术栈",
+  "version": "1.0.0",
+  "tags": ["quality", "git", "comments", "simplicity", "best-practices"],
+  "auto_traits": ["vcs:git"],
+  "contains": ["rules"],
+  "targets": ["claude", "codebuddy"]
+}

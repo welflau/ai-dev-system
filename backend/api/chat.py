@@ -511,6 +511,13 @@ async def _chat_stream_generator(
     # A-4: @file 引用展開（在 LLM 調用前注入文件內容）
     expanded_message, _file_warnings = _expand_file_refs(req.message)
 
+    # ── 路径检测预处理（项目内聊天也支持打开新目录）──
+    _path_action_p = await _detect_and_handle_path(expanded_message, [])
+    if _path_action_p:
+        yield _sse("action", _path_action_p)
+        yield _sse("message_done", {"full_text": "", "final_action": _path_action_p, "rounds": 0})
+        return
+
     # 保存用户消息（异步 fire-and-forget，不阻塞 LLM 响应）
     import asyncio as _asyncio
     _asyncio.create_task(_save_chat_message(project_id, "user", req.message,
@@ -1859,6 +1866,17 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
     # A-4: @file 引用展開
     expanded_message_g, _ = _expand_file_refs(req.message)
 
+    # ── 路径检测预处理：消息是本地路径时直接触发 scan-directory，不依赖 LLM tool_use ──
+    _path_action = await _detect_and_handle_path(expanded_message_g, projects)
+    if _path_action:
+        import asyncio as _asyncio
+        # 直接输出 action 卡片，跳过 LLM 调用
+        _asyncio.create_task(_save_chat_message("__global__", "user", req.message,
+                                 images=req.images, session_id=_sid))
+        yield _sse("action", _path_action)
+        yield _sse("message_done", {"full_text": "", "final_action": _path_action, "rounds": 0})
+        return
+
     # 保存用户消息（异步 fire-and-forget，不阻塞 LLM 响应）
     import asyncio as _asyncio
     _asyncio.create_task(_save_chat_message("__global__", "user", req.message,
@@ -2151,11 +2169,14 @@ class ConfirmCreateProjectRequest(BaseModel):
     name: str = Field(..., min_length=1)
     description: str = Field(default="")
     tech_stack: str = Field(default="")
-    git_remote_url: str = Field(..., min_length=1)
+    git_remote_url: str = Field(default="")
     local_repo_path: str = Field(default="")
     traits: List[str] = Field(default_factory=list)              # v0.17
     preset_id: Optional[str] = Field(default=None)               # v0.17
     traits_confidence: Dict[str, Any] = Field(default_factory=dict)  # v0.17
+    mode: str = Field(default="auto")                            # auto | manual
+    extra_paths: List[Dict[str, Any]] = Field(default_factory=list)  # 多路径配置
+    selected_packs: Optional[List[str]] = Field(default=None)    # 用户选中的 ConfigPack
 
 
 @global_chat_router.get("/thinking-stream")
@@ -2206,6 +2227,84 @@ async def get_projects_brief():
 # ==================== 图片消息构建 ====================
 
 import re as _re
+
+_PATH_RE = _re.compile(
+    r'^'
+    r'(?:'
+    r'[A-Za-z]:[/\\]'       # Windows: C:\ 或 C:/
+    r'|'
+    r'[/\\]{1,2}\w'         # Unix /home 或 \\server
+    r')'
+    r'[^\n\r"\'<>|?*\x00-\x1f]*'
+    r'$',
+    _re.UNICODE,
+)
+
+
+async def _detect_and_handle_path(message: str, projects: list) -> dict | None:
+    """
+    检测消息是否是本地路径。
+    是路径 → 调 scan-directory，返回 confirm_project action dict（供前端渲染卡片）。
+    否则返回 None。
+    """
+    import os
+    text = message.strip().strip('"\'')
+    if not _PATH_RE.match(text):
+        return None
+
+    # 路径需存在
+    abs_path = os.path.abspath(text)
+    if not os.path.isdir(abs_path):
+        return None
+
+    # 检查是否已有项目
+    for p in projects:
+        if p.get("git_repo_path") == abs_path:
+            return {
+                "type": "switch_project",
+                "project_id": p["id"],
+                "project_name": p["name"],
+                "message": f"项目「{p['name']}」已存在，正在切换…",
+            }
+
+    # 调用 scan-directory 识别
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                "http://localhost:8000/api/projects/scan-directory",
+                json={"path": abs_path},
+            )
+            scan = resp.json() if resp.status_code == 200 else {}
+    except Exception:
+        scan = {"project_name": os.path.basename(abs_path)}
+
+    if scan.get("already_exists"):
+        return {
+            "type": "switch_project",
+            "project_id": scan["project_id"],
+            "project_name": scan["project_name"],
+            "message": f"项目「{scan['project_name']}」已存在，正在切换…",
+        }
+
+    return {
+        "type": "confirm_project",
+        "name": scan.get("project_name", os.path.basename(abs_path)),
+        "local_repo_path": abs_path,
+        "git_remote_url": scan.get("git_remote_url", ""),
+        "tech_stack": scan.get("tech_stack", ""),
+        "description": "",
+        "traits": scan.get("traits", []),
+        "preset_id": scan.get("suggested_preset"),
+        "mode": scan.get("suggested_mode", "manual"),
+        "extra_paths": scan.get("extra_paths", []),
+        "engine_path": scan.get("engine_path"),
+        "engine_path_warning": scan.get("engine_path_warning"),
+        "root_vcs": scan.get("root_vcs", "none"),
+        "p4_info": scan.get("p4_info"),
+        "scan_result": scan,
+    }
+
 
 def _expand_file_refs(message: str) -> tuple[str, list[str]]:
     """A-4: 展開 @file 引用。

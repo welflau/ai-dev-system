@@ -127,7 +127,7 @@ class CreateProjectAction(ActionBase):
 
         if not name:
             return ActionResult(success=False, data={"type": "error", "message": "项目名称不能为空"})
-        if not git_remote_url:
+        if not git_remote_url and not local_repo_path:
             return ActionResult(success=False, data={"type": "error", "message": "Git 远程仓库 URL 不能为空"})
         if not traits:
             logger.warning("创建项目 '%s' 时 traits 为空 — 后续 skill/SOP 匹配会退化为通用流程", name)
@@ -200,40 +200,46 @@ class CreateProjectAction(ActionBase):
                         os.makedirs(repo_path, exist_ok=True)
 
             if not cloned:
-                # 本地初始化流程
-                os.makedirs(repo_path, exist_ok=True)
-                for d in git_manager.REPO_DIRS:
-                    os.makedirs(os.path.join(repo_path, d), exist_ok=True)
+                if local_repo_path and os.path.isdir(git_dir):
+                    # 导入已有本地仓库：目录和 .git 都已存在，直接注册路径即可，
+                    # 不执行 add/commit/push（避免在大型项目上扫描几万文件卡住）
+                    if git_remote_url:
+                        await git_manager.set_remote(project_id, git_remote_url)
+                else:
+                    # 全新建仓库流程
+                    os.makedirs(repo_path, exist_ok=True)
+                    for d in git_manager.REPO_DIRS:
+                        os.makedirs(os.path.join(repo_path, d), exist_ok=True)
 
-                readme = f"# {name}\n\n{description or '由 AI 自动开发系统创建的项目'}\n"
-                readme_path = os.path.join(repo_path, "README.md")
-                if not os.path.exists(readme_path):
-                    with open(readme_path, "w", encoding="utf-8") as f:
-                        f.write(readme)
+                    readme = f"# {name}\n\n{description or '由 AI 自动开发系统创建的项目'}\n"
+                    readme_path = os.path.join(repo_path, "README.md")
+                    if not os.path.exists(readme_path):
+                        with open(readme_path, "w", encoding="utf-8") as f:
+                            f.write(readme)
 
-                gitignore = "__pycache__/\n*.py[cod]\n.venv/\nvenv/\n.idea/\n.vscode/\n.DS_Store\nThumbs.db\n.env\n*.log\n"
-                gitignore_path = os.path.join(repo_path, ".gitignore")
-                if not os.path.exists(gitignore_path):
-                    with open(gitignore_path, "w", encoding="utf-8") as f:
-                        f.write(gitignore)
+                    gitignore = "__pycache__/\n*.py[cod]\n.venv/\nvenv/\n.idea/\n.vscode/\n.DS_Store\nThumbs.db\n.env\n*.log\n"
+                    gitignore_path = os.path.join(repo_path, ".gitignore")
+                    if not os.path.exists(gitignore_path):
+                        with open(gitignore_path, "w", encoding="utf-8") as f:
+                            f.write(gitignore)
 
-                if not os.path.isdir(git_dir):
-                    await git_manager._run_git(repo_path, "init", "-b", "main")
+                    if not os.path.isdir(git_dir):
+                        await git_manager._run_git(repo_path, "init", "-b", "main")
 
-                if git_remote_url:
-                    await git_manager.set_remote(project_id, git_remote_url)
+                    if git_remote_url:
+                        await git_manager.set_remote(project_id, git_remote_url)
 
-                await git_manager._run_git(repo_path, "add", ".")
-                await git_manager._run_git(
-                    repo_path, "commit", "-m",
-                    f"init: {name} - project initialized by AI Dev System",
-                    "--author", "AI Dev System <ai@dev-system.local>",
-                )
+                    await git_manager._run_git(repo_path, "add", ".")
+                    await git_manager._run_git(
+                        repo_path, "commit", "-m",
+                        f"init: {name} - project initialized by AI Dev System",
+                        "--author", "AI Dev System <ai@dev-system.local>",
+                    )
 
-                try:
-                    push_success = await git_manager.push(project_id)
-                except Exception as e:
-                    logger.warning("AI助手创建项目首次推送失败: %s", e)
+                    try:
+                        push_success = await git_manager.push(project_id)
+                    except Exception as e:
+                        logger.warning("AI助手创建项目首次推送失败: %s", e)
 
             # 写入数据库
             proj_data = {
@@ -248,6 +254,8 @@ class CreateProjectAction(ActionBase):
                 "traits": _json.dumps(traits, ensure_ascii=False),
                 "traits_confidence": _json.dumps(traits_confidence, ensure_ascii=False),
                 "preset_id": preset_id,
+                "mode": context.get("mode", "auto"),
+                "extra_paths": _json.dumps(context.get("extra_paths", []), ensure_ascii=False),
                 "created_at": now,
                 "updated_at": now,
             }
@@ -261,6 +269,13 @@ class CreateProjectAction(ActionBase):
 
             # 自动安装 marketplace Skill（基于 traits 规则匹配，fire-and-forget）
             asyncio.create_task(_auto_install_skills(project_id, traits))
+
+            # 自动安装 ConfigPack（CLI 配置文件，fire-and-forget）
+            selected_packs = context.get("selected_packs") or None  # None = 按 traits 自动推荐
+            asyncio.create_task(_auto_install_packs(
+                project_id, traits, repo_path,
+                name, tech_stack, git_remote_url, selected_packs,
+            ))
 
             # v0.19.1 对话一键流：UE 项目自动弹 propose 方案卡，持久化到项目聊天
             # 前端跳转到项目详情后，loadChatHistory 自然能拿到这条消息，无需前端再串 API。
@@ -385,3 +400,58 @@ async def _auto_install_skills(project_id: str, traits: list) -> None:
             logger.info("project=%s auto-installed skills: %s", project_id, installed)
     except Exception as e:
         logger.warning("_auto_install_skills failed for %s: %s", project_id, e)
+
+
+async def _auto_install_packs(
+    project_id: str,
+    traits: list,
+    repo_path: str,
+    project_name: str,
+    tech_stack: str,
+    git_remote: str,
+    selected_packs=None,
+) -> None:
+    """根据 traits（或用户选择）自动把 ConfigPack 安装到项目 CLI 配置目录。"""
+    try:
+        from pack_installer import install_packs, get_recommended_packs
+        import json as _json
+
+        pack_names = selected_packs if selected_packs is not None else get_recommended_packs(traits)
+        if not pack_names:
+            return
+
+        ctx = {
+            "project_name": project_name or "",
+            "repo_path": repo_path or "",
+            "tech_stack": tech_stack or "",
+            "git_remote": git_remote or "",
+        }
+        results = install_packs(pack_names, repo_path, ctx)
+
+        installed_names = [r["pack_name"] for r in results if r.get("success")]
+        if not installed_names:
+            return
+
+        # 记录到 project_packs 表
+        from utils import generate_id, now_iso
+        now = now_iso()
+        for r in results:
+            if not r.get("success"):
+                continue
+            await db.insert("project_packs", {
+                "id": generate_id("PKG"),
+                "project_id": project_id,
+                "pack_name": r["pack_name"],
+                "installed_at": now,
+                "targets": _json.dumps(r.get("installed_targets", []), ensure_ascii=False),
+            })
+
+        # 更新 projects.installed_packs 冗余列
+        await db.update(
+            "projects",
+            {"installed_packs": _json.dumps(installed_names, ensure_ascii=False), "updated_at": now},
+            "id = ?", (project_id,),
+        )
+        logger.info("project=%s auto-installed packs: %s", project_id, installed_names)
+    except Exception as e:
+        logger.warning("_auto_install_packs failed for %s: %s", project_id, e)

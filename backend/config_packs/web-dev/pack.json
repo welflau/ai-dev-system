@@ -1,0 +1,10 @@
+{
+  "name": "web-dev",
+  "display_name": "Web 前端开发",
+  "description": "Web 项目配置：组件开发规范、API 调试命令",
+  "version": "1.0.0",
+  "tags": ["web", "react", "frontend", "api"],
+  "auto_traits": ["platform:web", "framework:react"],
+  "contains": ["rules", "commands"],
+  "targets": ["claude", "codebuddy"]
+}
