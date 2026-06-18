@@ -944,6 +944,7 @@ function switchAgentConfigTab(inner) {
     if (inner === 'mcp') loadMCPStatus();
     if (inner === 'skills') loadProjectSkills();
     if (inner === 'packs') loadProjectPacks();
+    if (inner === 'commands') loadProjectCommands();
     // traits 已移到「系统设置」modal（showSystemSettingsModal('traits')）
 }
 
@@ -1296,86 +1297,248 @@ function selectPackItem(idx) {
     }
 }
 
+// ── 通用来源分组渲染 helper ──────────────────────────────────────────────────
+
+const _SOURCE_META = {
+    builtin: { label: '内置', color: '#6366f1', bg: 'rgba(99,102,241,.12)' },
+    user:    { label: '用户', color: '#22c55e', bg: 'rgba(34,197,94,.12)'  },
+    pack:    { label: 'Pack', color: '#f97316', bg: 'rgba(249,115,22,.12)' },
+};
+
+function _injectSourceFilter(wrapper, containerId, counts, switchFn) {
+    let bar = wrapper.querySelector(`#${containerId}_filter`);
+    if (!bar) {
+        bar = document.createElement('div');
+        bar.id = `${containerId}_filter`;
+        bar.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;';
+        const container = document.getElementById(containerId);
+        wrapper.insertBefore(bar, container);
+    }
+    const chips = [
+        { key: 'all',     label: `全部 ${counts.total}` },
+        { key: 'builtin', label: `内置 ${counts.builtin}` },
+        { key: 'user',    label: `用户 ${counts.user}`,  hide: counts.user === 0 },
+        { key: 'pack',    label: `Pack ${counts.pack}`,  hide: counts.pack === 0 },
+    ].filter(c => !c.hide);
+    bar.innerHTML = chips.map(c => `
+        <button class="src-filter-chip" data-panel="${containerId}" data-source="${c.key}"
+                onclick="${switchFn}('${c.key}')"
+                style="font-size:11px;padding:3px 10px;border-radius:12px;border:1px solid var(--border-color);cursor:pointer;
+                       background:${c.key==='all'?'var(--primary)':'var(--bg-elevated)'};
+                       color:${c.key==='all'?'#fff':'var(--text-secondary)'};">
+            ${escapeHtml(c.label)}
+        </button>`).join('');
+}
+
+function _setSourceFilter(containerId, source) {
+    document.querySelectorAll(`.src-filter-chip[data-panel="${containerId}"]`).forEach(el => {
+        const active = el.dataset.source === source;
+        el.style.background = active ? 'var(--primary)' : 'var(--bg-elevated)';
+        el.style.color = active ? '#fff' : 'var(--text-secondary)';
+    });
+}
+
+function _renderSourceGroups(container, data, source, renderItem, groupTitles) {
+    // groupTitles: { builtin, user, pack }
+    if (source !== 'all') {
+        const list = data[source] || [];
+        if (list.length === 0) {
+            container.innerHTML = `<div class="empty-state-sm">暂无${_SOURCE_META[source]?.label || source}来源</div>`;
+        } else {
+            container.innerHTML = list.map(renderItem).join('');
+        }
+        return;
+    }
+    let html = '';
+    for (const key of ['builtin', 'user', 'pack']) {
+        const list = data[key] || [];
+        if (!list.length) continue;
+        const sm = _SOURCE_META[key];
+        const gt = groupTitles[key] || key;
+        let cardsHtml = '';
+        if (key === 'pack') {
+            const byPack = {};
+            for (const item of list) {
+                const pn = item.pack_name || '未知';
+                if (!byPack[pn]) byPack[pn] = [];
+                byPack[pn].push(item);
+            }
+            for (const [pn, items] of Object.entries(byPack)) {
+                cardsHtml += `<div style="font-size:11px;color:var(--text-muted);padding:4px 0 2px;font-weight:600;opacity:.7;">📦 ${escapeHtml(pn)}</div>`;
+                cardsHtml += items.map(renderItem).join('');
+            }
+        } else {
+            cardsHtml = list.map(renderItem).join('');
+        }
+        html += `<div style="margin-bottom:14px;">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;padding:6px 8px;background:var(--bg-elevated);border-radius:6px;cursor:pointer;"
+                 onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'':'none'">
+                <span style="font-size:13px;font-weight:600;">${escapeHtml(gt.icon)} ${escapeHtml(gt.title)}</span>
+                <span style="font-size:11px;padding:1px 6px;border-radius:10px;background:${sm.bg};color:${sm.color};">${list.length}</span>
+                <span style="font-size:11px;color:var(--text-muted);flex:1;">${escapeHtml(gt.desc)}</span>
+                <span style="font-size:11px;color:var(--text-muted);">▾</span>
+            </div>
+            <div>${cardsHtml}</div>
+        </div>`;
+    }
+    container.innerHTML = html || '<div class="empty-state-sm">暂无数据</div>';
+}
+
+// ── Skills ────────────────────────────────────────────────────────────────────
+
 async function loadProjectSkills() {
     const customContainer = document.getElementById('customSkillsList');
+    const sysContainer = document.getElementById('skillsListSettings');
     if (!sysContainer) return;
-
     sysContainer.innerHTML = '<div class="empty-state-sm">加载中...</div>';
 
-    const url = currentProjectId
-        ? `/api/projects/${currentProjectId}/skills`
-        : '/api/skills';
+    // 无项目时降级到旧接口
+    if (!currentProjectId) {
+        try {
+            const resp = await fetch('/api/skills');
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const data = await resp.json();
+            _renderLegacySkills(data.skills || [], customContainer);
+        } catch (e) {
+            sysContainer.innerHTML = `<div class="empty-state-sm">加载失败: ${escapeHtml(e.message)}</div>`;
+        }
+        return;
+    }
 
     try {
-        const resp = await fetch(url);
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        const data = await resp.json();
-        const skills = data.skills || [];
+        const data = await api(`/projects/${currentProjectId}/skills/all`);
+        const counts = data.counts;
+        const wrapper = sysContainer.closest('.settings-card') || sysContainer.parentElement;
+        _injectSourceFilter(wrapper, 'skillsListSettings', counts, 'switchSkillSourceFilter');
+        sysContainer._skillData = data;
+        _renderSkillView(sysContainer, data, 'all');
 
-        const globalSkills = skills.filter(s => s.source === 'global');
-        const customSkills = skills.filter(s => s.source === 'custom');
-
-        // 系统 Skills
-        if (globalSkills.length === 0) {
-            sysContainer.innerHTML = '<div class="empty-state-sm">暂无全局 Skill（检查 backend/skills/skills.json）</div>';
-        } else {
-            sysContainer.innerHTML = globalSkills.map(sk => {
-                const canToggle = !!currentProjectId;
-                const toggleHtml = canToggle ? `
-                    <label class="toggle-switch" title="${sk.enabled ? '点击禁用' : '点击启用'}">
-                        <input type="checkbox" ${sk.enabled ? 'checked' : ''} onchange="toggleProjectSkill('${escapeHtml(sk.id)}', this.checked)">
-                        <span class="toggle-slider"></span>
-                    </label>` : '';
-                const dimClass = sk.enabled ? '' : ' style="opacity:0.5"';
-                // 全局默认标签
-                const globalDefault = sk.enabled_global !== undefined
-                    ? (sk.enabled_global ? '全局默认开' : '全局默认关')
-                    : (sk.enabled ? '全局默认开' : '全局默认关');
-                const defaultBadge = !sk.overridden
-                    ? `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:var(--bg-elevated);color:var(--text-muted);margin-left:4px;">${globalDefault}</span>`
-                    : `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:rgba(99,102,241,.15);color:#818cf8;margin-left:4px;">项目覆盖</span>`;
-                const resetBtn = sk.overridden
-                    ? `<button class="btn btn-xs btn-ghost" onclick="resetProjectSkill('${escapeHtml(sk.id)}')" title="恢复为全局默认" style="font-size:11px;">↩ 重置</button>`
-                    : '';
-                return `
-                <div class="skill-row"${dimClass}>
-                    <div class="skill-row-info">
-                        <div style="display:flex;align-items:center;flex-wrap:wrap;gap:2px;">
-                            <span class="skill-row-name">🎓 ${escapeHtml(sk.name)}</span>
-                            ${defaultBadge}
-                        </div>
-                        <span class="skill-row-id">${escapeHtml(sk.id)}</span>
-                        ${sk.description ? `<span class="skill-row-desc">${escapeHtml(sk.description)}</span>` : ''}
-                    </div>
-                    <div class="skill-row-actions">
-                        ${resetBtn}
-                        ${toggleHtml}
-                    </div>
-                </div>`;
-            }).join('');
-        }
-
-        // 自定义 Skills
+        // 自定义 Skill 区块（保持原有逻辑）
         if (customContainer) {
-            if (customSkills.length === 0) {
-                customContainer.innerHTML = '<div class="empty-state-sm" style="margin-bottom:8px;">暂无自定义 Skill</div>';
-            } else {
-                customContainer.innerHTML = customSkills.map(sk => `
-                <div class="skill-row">
-                    <div class="skill-row-info">
-                        <span class="skill-row-name">📄 ${escapeHtml(sk.name)}</span>
-                        <span class="skill-row-id">${escapeHtml(sk.id)}</span>
-                    </div>
-                    <div class="skill-row-actions">
-                        <button class="btn btn-xs btn-danger-ghost" onclick="deleteCustomSkill('${escapeHtml(sk.id)}', '${escapeHtml(sk.name)}')" title="删除">🗑</button>
-                    </div>
-                </div>`).join('');
-            }
+            const customSkills = (data.user || []).filter(s => s.source === 'custom');
+            customContainer.innerHTML = customSkills.length === 0
+                ? '<div class="empty-state-sm" style="margin-bottom:8px;">暂无自定义 Skill</div>'
+                : customSkills.map(sk => `
+                    <div class="skill-row">
+                        <div class="skill-row-info">
+                            <span class="skill-row-name">📄 ${escapeHtml(sk.name)}</span>
+                            <span class="skill-row-id">${escapeHtml(sk.id || '')}</span>
+                        </div>
+                        <div class="skill-row-actions">
+                            <button class="btn btn-xs btn-danger-ghost" onclick="deleteCustomSkill('${escapeHtml(sk.id||sk.name)}', '${escapeHtml(sk.name)}')" title="删除">🗑</button>
+                        </div>
+                    </div>`).join('');
         }
     } catch (e) {
         sysContainer.innerHTML = `<div class="empty-state-sm">加载失败: ${escapeHtml(e.message)}</div>`;
     }
 }
+
+function switchSkillSourceFilter(source) {
+    _setSourceFilter('skillsListSettings', source);
+    const container = document.getElementById('skillsListSettings');
+    if (container && container._skillData) _renderSkillView(container, container._skillData, source);
+}
+
+function _renderSkillView(container, data, source) {
+    const renderItem = (sk) => {
+        const sm = _SOURCE_META[sk.source] || _SOURCE_META.builtin;
+        const srcBadge = `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:${sm.bg};color:${sm.color};margin-left:4px;">${sm.label}${sk.pack_name ? ' · '+escapeHtml(sk.pack_name) : ''}</span>`;
+        const canToggle = sk.source === 'builtin' && !!currentProjectId;
+        const toggleHtml = canToggle ? `
+            <label class="toggle-switch">
+                <input type="checkbox" ${sk.enabled !== false ? 'checked' : ''} onchange="toggleProjectSkill('${escapeHtml(sk.id||sk.name)}', this.checked)">
+                <span class="toggle-slider"></span>
+            </label>` : '';
+        const opacity = sk.enabled === false ? ' style="opacity:0.5"' : '';
+        return `<div class="skill-row"${opacity}>
+            <div class="skill-row-info" style="flex:1;min-width:0;">
+                <div style="display:flex;align-items:center;flex-wrap:wrap;gap:2px;">
+                    <span class="skill-row-name">🎓 ${escapeHtml(sk.name)}</span>${srcBadge}
+                </div>
+                ${sk.description ? `<span class="skill-row-desc">${escapeHtml(sk.description)}</span>` : ''}
+            </div>
+            <div class="skill-row-actions">${toggleHtml}</div>
+        </div>`;
+    };
+    _renderSourceGroups(container, data, source, renderItem, {
+        builtin: { icon: '🏠', title: '内置 Skill', desc: 'ADS 系统内置，可按项目开关' },
+        user:    { icon: '👤', title: '用户 Skill',  desc: '.claude/skills/ 或上传的自定义 Skill' },
+        pack:    { icon: '📦', title: 'Pack Skill',   desc: '已安装 ConfigPack 提供' },
+    });
+}
+
+function _renderLegacySkills(skills, customContainer) {
+    const sysContainer = document.getElementById('skillsListSettings');
+    if (!sysContainer) return;
+    const globalSkills = skills.filter(s => s.source === 'global');
+    const customSkills = skills.filter(s => s.source === 'custom');
+    if (globalSkills.length === 0) {
+        sysContainer.innerHTML = '<div class="empty-state-sm">暂无全局 Skill</div>';
+    } else {
+        sysContainer.innerHTML = globalSkills.map(sk => {
+            const canToggle = !!currentProjectId;
+            const toggleHtml = canToggle ? `<label class="toggle-switch"><input type="checkbox" ${sk.enabled?'checked':''} onchange="toggleProjectSkill('${escapeHtml(sk.id)}',this.checked)"><span class="toggle-slider"></span></label>` : '';
+            const dimClass = sk.enabled ? '' : ' style="opacity:0.5"';
+            return `<div class="skill-row"${dimClass}><div class="skill-row-info"><span class="skill-row-name">🎓 ${escapeHtml(sk.name)}</span>${sk.description?`<span class="skill-row-desc">${escapeHtml(sk.description)}</span>`:''}</div><div class="skill-row-actions">${toggleHtml}</div></div>`;
+        }).join('');
+    }
+    if (customContainer) {
+        customContainer.innerHTML = customSkills.length === 0
+            ? '<div class="empty-state-sm">暂无自定义 Skill</div>'
+            : customSkills.map(sk => `<div class="skill-row"><div class="skill-row-info"><span class="skill-row-name">📄 ${escapeHtml(sk.name)}</span></div><div class="skill-row-actions"><button class="btn btn-xs btn-danger-ghost" onclick="deleteCustomSkill('${escapeHtml(sk.id)}','${escapeHtml(sk.name)}')" title="删除">🗑</button></div></div>`).join('');
+    }
+}
+
+// ── Commands ──────────────────────────────────────────────────────────────────
+
+async function loadProjectCommands() {
+    const container = document.getElementById('commandListSettings');
+    if (!container) return;
+    container.innerHTML = '<div class="empty-state-sm">加载中...</div>';
+    if (!currentProjectId) return;
+    try {
+        const data = await api(`/projects/${currentProjectId}/commands/all`);
+        const wrapper = container.closest('.settings-card') || container.parentElement;
+        _injectSourceFilter(wrapper, 'commandListSettings', data.counts, 'switchCommandSourceFilter');
+        container._cmdData = data;
+        _renderCommandView(container, data, 'all');
+    } catch (e) {
+        container.innerHTML = `<div class="empty-state-sm">加载失败: ${escapeHtml(e.message)}</div>`;
+    }
+}
+
+function switchCommandSourceFilter(source) {
+    _setSourceFilter('commandListSettings', source);
+    const container = document.getElementById('commandListSettings');
+    if (container && container._cmdData) _renderCommandView(container, container._cmdData, source);
+}
+
+function _renderCommandView(container, data, source) {
+    const renderItem = (cmd) => {
+        const sm = _SOURCE_META[cmd.source] || _SOURCE_META.builtin;
+        const srcBadge = `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:${sm.bg};color:${sm.color};margin-left:4px;">${sm.label}${cmd.pack_name ? ' · '+escapeHtml(cmd.pack_name) : ''}</span>`;
+        const overrideBadge = cmd.is_active === false
+            ? `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:rgba(239,68,68,.12);color:#ef4444;margin-left:4px;">被覆盖</span>` : '';
+        const opacity = cmd.is_active === false ? ' style="opacity:0.4"' : '';
+        return `<div class="skill-row"${opacity}>
+            <div class="skill-row-info" style="flex:1;min-width:0;">
+                <div style="display:flex;align-items:center;flex-wrap:wrap;gap:2px;">
+                    <span class="skill-row-name">⚡ /${escapeHtml(cmd.name)}</span>${srcBadge}${overrideBadge}
+                </div>
+                ${cmd.description ? `<span class="skill-row-desc">${escapeHtml(cmd.description)}</span>` : ''}
+            </div>
+        </div>`;
+    };
+    _renderSourceGroups(container, data, source, renderItem, {
+        builtin: { icon: '🏠', title: '内置 Command', desc: 'ADS 系统硬编码命令' },
+        user:    { icon: '👤', title: '用户 Command',  desc: '.claude/commands/ 或 .ads/commands/' },
+        pack:    { icon: '📦', title: 'Pack Command',   desc: '已安装 ConfigPack 提供（安装后在 .claude/commands/）' },
+    });
+}
+
+// ── MCP ───────────────────────────────────────────────────────────────────────
+
 
 async function toggleProjectSkill(skillId, enabled) {
     if (!currentProjectId) return;

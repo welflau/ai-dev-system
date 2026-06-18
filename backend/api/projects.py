@@ -2174,6 +2174,256 @@ async def get_project_agents_all(project_id: str):
     }
 
 
+
+@router.get("/{project_id}/skills/all")
+async def get_project_skills_all(project_id: str):
+    """合并三来源 Skill：内置(global/custom) / 用户(.claude/.codebuddy skills/) / Pack。"""
+    from pack_installer import _PACKS_DIR
+    import re
+
+    proj = await db.fetch_one("SELECT git_repo_path FROM projects WHERE id = ?", (project_id,))
+    repo_path = (proj or {}).get("git_repo_path", "") if proj else ""
+
+    def _parse_skill_md(content: str, stem: str) -> dict:
+        fm: dict = {}
+        if content.startswith("---"):
+            end = content.find("\n---", 3)
+            if end != -1:
+                for line in content[3:end].splitlines():
+                    m = re.match(r'^([\w-]+)\s*:\s*(.+)$', line.strip())
+                    if m:
+                        fm[m.group(1)] = m.group(2).strip().strip('"\'')
+        body = re.sub(r'^---[\s\S]*?---\r?\n?', '', content, count=1).strip()
+        return {
+            "name": fm.get("name") or stem.replace("-", " ").replace("_", " ").title(),
+            "description": fm.get("description", ""),
+            "preview": body[:150],
+        }
+
+    # 1. 内置 skills（现有接口数据）
+    builtin_skills = []
+    try:
+        from skills import skill_loader
+        for sid, info in skill_loader.get_all_skills_status().items():
+            builtin_skills.append({
+                "id": sid, "name": info["name"], "description": info["description"],
+                "source": "builtin", "pack_name": None,
+                "enabled": info["enabled"], "priority": info["priority"],
+            })
+    except Exception:
+        pass
+
+    # 2. 用户 skills（.claude/skills/ + .codebuddy/skills/）
+    user_skills = []
+    if repo_path:
+        for cli in ("claude", "codebuddy"):
+            skills_dir = Path(repo_path) / f".{cli}" / "skills"
+            if not skills_dir.exists():
+                continue
+            for skill_dir in sorted(skills_dir.iterdir()):
+                skill_md = skill_dir / "SKILL.md" if skill_dir.is_dir() else (skill_dir if skill_dir.suffix == ".md" else None)
+                if not skill_md or not skill_md.exists():
+                    continue
+                try:
+                    content = skill_md.read_text(encoding="utf-8")
+                    info = _parse_skill_md(content, skill_dir.stem if skill_dir.is_dir() else skill_dir.stem)
+                    info["source"] = "user"
+                    info["cli"] = cli
+                    info["pack_name"] = None
+                    info["id"] = info["name"]
+                    user_skills.append(info)
+                except Exception:
+                    pass
+
+    # 3. Pack skills
+    pack_skills = []
+    installed_rows = await db.fetch_all(
+        "SELECT pack_name FROM project_packs WHERE project_id = ?", (project_id,)
+    )
+    for row in installed_rows:
+        pn = row["pack_name"]
+        for sub in ("shared", "claude", "codebuddy"):
+            skills_dir = _PACKS_DIR / pn / sub / "skills"
+            if not skills_dir.exists():
+                continue
+            for skill_dir in sorted(skills_dir.iterdir()):
+                skill_md = skill_dir / "SKILL.md" if skill_dir.is_dir() else None
+                if not skill_md or not skill_md.exists():
+                    continue
+                try:
+                    content = skill_md.read_text(encoding="utf-8")
+                    info = _parse_skill_md(content, skill_dir.stem)
+                    info["source"] = "pack"
+                    info["pack_name"] = pn
+                    info["scope"] = sub
+                    info["id"] = info["name"]
+                    pack_skills.append(info)
+                except Exception:
+                    pass
+
+    all_skills = builtin_skills + user_skills + pack_skills
+    return {
+        "builtin": builtin_skills, "user": user_skills, "pack": pack_skills, "all": all_skills,
+        "counts": {"builtin": len(builtin_skills), "user": len(user_skills),
+                   "pack": len(pack_skills), "total": len(all_skills)},
+    }
+
+
+@router.get("/{project_id}/commands/all")
+async def get_project_commands_all(project_id: str):
+    """合并三来源 Command：内置(system) / 用户(.claude/.codebuddy commands/) / Pack。"""
+    from pack_installer import _PACKS_DIR
+    import re
+
+    proj = await db.fetch_one("SELECT git_repo_path FROM projects WHERE id = ?", (project_id,))
+    repo_path = (proj or {}).get("git_repo_path", "") if proj else ""
+
+    def _parse_cmd_md(content: str, stem: str) -> dict:
+        fm: dict = {}
+        if content.startswith("---"):
+            end = content.find("\n---", 3)
+            if end != -1:
+                for line in content[3:end].splitlines():
+                    m = re.match(r'^([\w-]+)\s*:\s*(.+)$', line.strip())
+                    if m:
+                        fm[m.group(1)] = m.group(2).strip().strip('"\'')
+        body = re.sub(r'^---[\s\S]*?---\r?\n?', '', content, count=1).strip()
+        return {
+            "name": stem,
+            "description": fm.get("description", ""),
+            "preview": body[:150],
+        }
+
+    # 1. 内置 + 用户 commands（现有 get_all_commands）
+    builtin_cmds, user_cmds = [], []
+    try:
+        from api.commands import get_all_commands, _BUILTIN_COMMANDS
+        all_cmds = get_all_commands(repo_path=repo_path)
+        builtin_names = set(_BUILTIN_COMMANDS.keys())
+        for name, info in all_cmds.items():
+            src = info.get("source", "system")
+            entry = {"name": name, "description": info.get("description", ""),
+                     "pack_name": None, "source": src}
+            if src in ("claude", "ads") or name not in builtin_names:
+                entry["source"] = "user"
+                user_cmds.append(entry)
+            else:
+                entry["source"] = "builtin"
+                builtin_cmds.append(entry)
+    except Exception:
+        pass
+
+    # 2. Pack commands（来自 pack 目录，安装后实际在 .claude/commands/）
+    pack_cmds = []
+    installed_rows = await db.fetch_all(
+        "SELECT pack_name FROM project_packs WHERE project_id = ?", (project_id,)
+    )
+    for row in installed_rows:
+        pn = row["pack_name"]
+        for sub in ("shared", "claude", "codebuddy"):
+            cmds_dir = _PACKS_DIR / pn / sub / "commands"
+            if not cmds_dir.exists():
+                continue
+            for f in sorted(cmds_dir.glob("*.md")):
+                try:
+                    content = f.read_text(encoding="utf-8")
+                    info = _parse_cmd_md(content, f.stem)
+                    info["source"] = "pack"
+                    info["pack_name"] = pn
+                    info["scope"] = sub
+                    pack_cmds.append(info)
+                except Exception:
+                    pass
+
+    # 去重：pack 中与 user 同名的标注 is_active
+    user_names = {c["name"] for c in user_cmds}
+    for pc in pack_cmds:
+        pc["is_active"] = pc["name"] not in user_names
+
+    all_cmds_list = builtin_cmds + user_cmds + pack_cmds
+    return {
+        "builtin": builtin_cmds, "user": user_cmds, "pack": pack_cmds, "all": all_cmds_list,
+        "counts": {"builtin": len(builtin_cmds), "user": len(user_cmds),
+                   "pack": len(pack_cmds), "total": len(all_cmds_list)},
+    }
+
+
+@router.get("/{project_id}/mcp/all")
+async def get_project_mcp_all(project_id: str):
+    """合并三来源 MCP：内置(全局 mcp_servers.json) / 用户(settings.json mcpServers) / Pack。"""
+    from pack_installer import _PACKS_DIR
+
+    proj = await db.fetch_one("SELECT git_repo_path FROM projects WHERE id = ?", (project_id,))
+    repo_path = (proj or {}).get("git_repo_path", "") if proj else ""
+
+    # 1. 内置 MCP（全局 mcp_client）
+    builtin_mcps = []
+    try:
+        from mcp_client import mcp_client
+        status = mcp_client.get_status()
+        for name, info in (status.get("servers") or {}).items():
+            builtin_mcps.append({
+                "name": name, "description": info.get("description", ""),
+                "status": info.get("status", "unknown"), "tools": info.get("tools", []),
+                "source": "builtin", "pack_name": None,
+            })
+    except Exception:
+        pass
+
+    # 2. 用户 MCP（.claude/settings.json + .codebuddy/settings.json mcpServers）
+    user_mcps = []
+    if repo_path:
+        for cli in ("claude", "codebuddy"):
+            settings_file = Path(repo_path) / f".{cli}" / "settings.json"
+            if not settings_file.exists():
+                continue
+            try:
+                settings = json.loads(settings_file.read_text(encoding="utf-8"))
+                for name, cfg in (settings.get("mcpServers") or {}).items():
+                    builtin_names = {m["name"] for m in builtin_mcps}
+                    if name in builtin_names:
+                        continue  # 已在内置中
+                    user_mcps.append({
+                        "name": name,
+                        "description": cfg.get("description", ""),
+                        "command": cfg.get("command", ""),
+                        "source": "user", "cli": cli, "pack_name": None,
+                    })
+            except Exception:
+                pass
+
+    # 3. Pack MCP（pack 的 shared/mcps/*.json 声明）
+    pack_mcps = []
+    installed_rows = await db.fetch_all(
+        "SELECT pack_name FROM project_packs WHERE project_id = ?", (project_id,)
+    )
+    for row in installed_rows:
+        pn = row["pack_name"]
+        for sub in ("shared", "claude", "codebuddy"):
+            mcps_dir = _PACKS_DIR / pn / sub / "mcps"
+            if not mcps_dir.exists():
+                continue
+            for f in sorted(mcps_dir.glob("*.json")):
+                try:
+                    mcp_data = json.loads(f.read_text(encoding="utf-8"))
+                    for name, cfg in mcp_data.items():
+                        pack_mcps.append({
+                            "name": name,
+                            "description": cfg.get("description", ""),
+                            "command": cfg.get("command", ""),
+                            "source": "pack", "pack_name": pn, "scope": sub,
+                        })
+                except Exception:
+                    pass
+
+    all_mcps = builtin_mcps + user_mcps + pack_mcps
+    return {
+        "builtin": builtin_mcps, "user": user_mcps, "pack": pack_mcps, "all": all_mcps,
+        "counts": {"builtin": len(builtin_mcps), "user": len(user_mcps),
+                   "pack": len(pack_mcps), "total": len(all_mcps)},
+    }
+
+
 @router.post("/{project_id}/packs/{pack_name}/install")
 async def install_pack_for_project(project_id: str, pack_name: str):
     """手动安装指定 Pack 到项目。"""

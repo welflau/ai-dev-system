@@ -953,6 +953,9 @@
                                 <button class="inner-tab" data-inner-tab="packs" onclick="switchAgentConfigTab('packs')">
                                     📦 ConfigPack
                                 </button>
+                                <button class="inner-tab" data-inner-tab="commands" onclick="switchAgentConfigTab('commands')">
+                                    ⚡ Commands
+                                </button>
                             </div>
 
                             <!-- 面板：Agent 列表 -->
@@ -1014,7 +1017,7 @@
                                     <p class="settings-description" style="margin-bottom:12px;">
                                         AI 助手在需要时会主动调用 <code>load_skill</code> 工具加载对应文档。可按项目启用或禁用某个 Skill。
                                     </p>
-                                    <div id="projectSkillsList"><div class="empty-state-sm">加载中...</div></div>
+                                    <div id="skillsListSettings"><div class="empty-state-sm">加载中...</div></div>
                                 </div>
                                 <!-- 自定义 Skill -->
                                 <div class="settings-card" style="margin-top:16px;">
@@ -1046,6 +1049,20 @@
                                     <h3 class="settings-card-title" style="margin-bottom:8px;">安装更多 Pack</h3>
                                     <p class="settings-description" style="margin-bottom:12px;">从内置 Pack 库中选择并安装到当前项目。</p>
                                     <div id="availablePacksList"><div class="empty-state-sm">加载中...</div></div>
+                                </div>
+                            </div>
+
+                            <!-- 面板：Commands -->
+                            <div class="inner-tab-panel" id="inner-panel-commands">
+                                <div class="settings-card">
+                                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+                                        <h3 class="settings-card-title" style="margin:0;">Commands</h3>
+                                        <button class="btn btn-sm btn-ghost" onclick="loadProjectCommands()">🔄 刷新</button>
+                                    </div>
+                                    <p class="settings-description" style="margin-bottom:12px;">
+                                        内置系统命令 + 项目 .claude/commands/ + 已安装 ConfigPack 提供的命令。
+                                    </p>
+                                    <div id="commandListSettings"><div class="empty-state-sm">加载中...</div></div>
                                 </div>
                             </div>
 
