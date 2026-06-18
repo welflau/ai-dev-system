@@ -2030,6 +2030,150 @@ async def get_available_packs(project_id: str):
     return {"packs": available}
 
 
+
+@router.get("/{project_id}/agents/all")
+async def get_project_agents_all(project_id: str):
+    """合并三个来源的 Agent 列表：内置 / 用户（.claude/.codebuddy）/ Pack（已安装）。
+    每个 agent 标注 source、pack_name、override_by。
+    """
+    import re
+    from pack_installer import _PACKS_DIR
+
+    proj = await db.fetch_one("SELECT * FROM projects WHERE id = ?", (project_id,))
+    if not proj:
+        raise HTTPException(404, "项目不存在")
+    repo_path = proj.get("git_repo_path", "")
+
+    def _parse_frontmatter(content: str) -> dict:
+        if not content.startswith("---"):
+            return {}
+        end = content.find("\n---", 3)
+        if end == -1:
+            return {}
+        fm_text = content[3:end].strip()
+        result = {}
+        for line in fm_text.splitlines():
+            m = re.match(r'^(\w[\w-]*)\s*:\s*(.+)$', line.strip())
+            if m:
+                result[m.group(1)] = m.group(2).strip().strip('"\'')
+        return result
+
+    def _scan_agents_dir(agents_dir: Path) -> list:
+        items = []
+        if not agents_dir.exists():
+            return items
+        for f in sorted(agents_dir.glob("*.md")):
+            try:
+                content = f.read_text(encoding="utf-8")
+            except Exception:
+                continue
+            fm = _parse_frontmatter(content)
+            body = content.replace("---", "", 1)
+            body = re.sub(r'^[\s\S]*?---\s*\n', '', content, count=1).strip()
+            items.append({
+                "name": fm.get("name") or f.stem,
+                "file": f.name,
+                "description": fm.get("description", ""),
+                "model": fm.get("model", ""),
+                "color": fm.get("color", ""),
+                "emoji": fm.get("emoji", ""),
+                "preview": body[:200],
+            })
+        return items
+
+    # ── 1. 内置 Agent（ADS 系统 orchestrator）──────────────────────────────
+    builtin_agents = []
+    try:
+        from orchestrator import orchestrator
+        icons = {"ProductAgent":"📝","ArchitectAgent":"🏗️","DevAgent":"💻",
+                 "TestAgent":"🧪","ReviewAgent":"🔍","DeployAgent":"🚀","ChatAssistant":"💬"}
+        roles = {"ProductAgent":"产品经理 — 需求拆单 + 产品验收",
+                 "ArchitectAgent":"架构师 — 增量架构设计",
+                 "DevAgent":"开发工程师 — 代码开发 + 自测",
+                 "TestAgent":"测试工程师 — 5层质量测试",
+                 "ReviewAgent":"代码审查 — 读取实际代码审查",
+                 "DeployAgent":"运维工程师 — 三环境部署",
+                 "ChatAssistant":"AI 助手 — 聊天 + 工具调用"}
+        for name, agent in orchestrator.agents.items():
+            builtin_agents.append({
+                "name": name,
+                "description": roles.get(name, name),
+                "emoji": icons.get(name, "🤖"),
+                "source": "builtin",
+                "pack_name": None,
+                "react_mode": agent.react_mode.value if hasattr(agent.react_mode, "value") else "single",
+                "actions": agent.list_actions(),
+            })
+    except Exception:
+        pass
+
+    # ── 2. 用户 Agent（项目 .claude/agents/ + .codebuddy/agents/）──────────
+    user_agents = []
+    if repo_path:
+        for cli in ("claude", "codebuddy"):
+            agents_dir = Path(repo_path) / f".{cli}" / "agents"
+            for item in _scan_agents_dir(agents_dir):
+                item["source"] = "user"
+                item["cli"] = cli
+                item["pack_name"] = None
+                user_agents.append(item)
+
+    # ── 3. Pack Agent（已安装 pack 的 agents 目录）────────────────────────
+    pack_agents = []
+    installed_rows = await db.fetch_all(
+        "SELECT pack_name FROM project_packs WHERE project_id = ?", (project_id,)
+    )
+    for row in installed_rows:
+        pack_name = row["pack_name"]
+        pack_dir = _PACKS_DIR / pack_name
+        for sub in ("shared", "claude", "codebuddy"):
+            agents_dir = pack_dir / sub / "agents"
+            for item in _scan_agents_dir(agents_dir):
+                item["source"] = "pack"
+                item["pack_name"] = pack_name
+                item["scope"] = sub
+                pack_agents.append(item)
+
+    # ── 4. 覆盖关系检测（同名时：用户 > Pack > 内置）──────────────────────
+    all_agents = builtin_agents + pack_agents + user_agents
+    # 优先级：builtin=0 pack=1 user=2（数字越大优先级越高）
+    priority = {"builtin": 0, "pack": 1, "user": 2}
+    name_map: dict = {}
+    for ag in all_agents:
+        n = ag["name"]
+        if n not in name_map:
+            name_map[n] = []
+        name_map[n].append(ag)
+
+    for n, group in name_map.items():
+        if len(group) > 1:
+            group.sort(key=lambda x: priority.get(x["source"], 0), reverse=True)
+            winner = group[0]["source"]
+            for ag in group:
+                if ag["source"] == winner and group.index(ag) == 0:
+                    ag["override_by"] = None
+                    ag["is_active"] = True
+                else:
+                    ag["override_by"] = winner
+                    ag["is_active"] = False
+        else:
+            group[0]["override_by"] = None
+            group[0]["is_active"] = True
+
+    return {
+        "builtin": builtin_agents,
+        "user": user_agents,
+        "pack": pack_agents,
+        "all": all_agents,
+        "counts": {
+            "builtin": len(builtin_agents),
+            "user": len(user_agents),
+            "pack": len(pack_agents),
+            "total": len(all_agents),
+        }
+    }
+
+
 @router.post("/{project_id}/packs/{pack_name}/install")
 async def install_pack_for_project(project_id: str, pack_name: str):
     """手动安装指定 Pack 到项目。"""

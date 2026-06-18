@@ -7523,41 +7523,170 @@ async function loadAgentList() {
     const container = document.getElementById('agentListSettings');
     if (!container) return;
 
-    try {
-        const data = await api('/agents');
-        agentRegistryCache = data.agents || [];
+    // 注入 filter 芯片和占位容器（首次）
+    const wrapper = container.closest('.settings-card') || container.parentElement;
+    let filterBar = wrapper.querySelector('#agentSourceFilter');
+    if (!filterBar) {
+        filterBar = document.createElement('div');
+        filterBar.id = 'agentSourceFilter';
+        filterBar.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;';
+        wrapper.insertBefore(filterBar, container);
+    }
 
-        if (agentRegistryCache.length === 0) {
-            container.innerHTML = '<div style="text-align:center; padding:20px; color:var(--text-muted);">暂无 Agent</div>';
+    container.innerHTML = '<div style="text-align:center;padding:20px;color:var(--text-muted);font-size:13px;">加载中...</div>';
+
+    try {
+        // 先加载内置 agents（保持 agentRegistryCache 供 showAgentDetail 使用）
+        const builtinData = await api('/agents');
+        agentRegistryCache = builtinData.agents || [];
+
+        // 再加载合并视图（需要 project）
+        let allData = null;
+        if (currentProjectId) {
+            try {
+                allData = await api(`/projects/${currentProjectId}/agents/all`);
+            } catch (e) { /* 无项目时降级 */ }
+        }
+
+        if (!allData) {
+            // 无项目：只显示内置
+            _renderAgentGroup(container, agentRegistryCache.map(a => ({...a, source: 'builtin'})), 'all');
+            filterBar.innerHTML = '';
             return;
         }
 
-        const modeLabels = {single: '单步', by_order: '顺序', react: '自主'};
-        const modeColors = {single: 'var(--text-muted)', by_order: 'var(--primary)', react: 'var(--success)'};
+        const counts = allData.counts;
+        // 渲染 filter 芯片
+        const chips = [
+            { key: 'all',     label: `全部 ${counts.total}` },
+            { key: 'builtin', label: `内置 ${counts.builtin}` },
+            { key: 'user',    label: `用户 ${counts.user}`,   hide: counts.user === 0 },
+            { key: 'pack',    label: `Pack ${counts.pack}`,   hide: counts.pack === 0 },
+        ].filter(c => !c.hide);
 
-        container.innerHTML = agentRegistryCache.map(agent => {
-            const mode = agent.react_mode || 'single';
-            const actionsHtml = (agent.actions || []).map(a =>
-                `<code style="font-size:10px;background:var(--bg);padding:1px 4px;border-radius:3px;color:var(--primary);">${escHtml(a.name)}</code>`
-            ).join(' ') || '<span style="color:var(--text-muted);font-size:11px;">legacy</span>';
+        filterBar.innerHTML = chips.map(c => `
+            <button class="agent-source-chip ${c.key === 'all' ? 'active' : ''}"
+                    data-source="${c.key}"
+                    onclick="switchAgentSourceFilter('${c.key}')"
+                    style="font-size:11px;padding:3px 10px;border-radius:12px;border:1px solid var(--border-color);background:${c.key==='all'?'var(--primary)':'var(--bg-elevated)'};color:${c.key==='all'?'#fff':'var(--text-secondary)'};cursor:pointer;">
+                ${escHtml(c.label)}
+            </button>`).join('');
 
-            return `
-            <div class="agent-item" onclick="showAgentDetail('${escHtml(agent.name)}')" style="cursor:pointer;">
-                <div class="agent-icon">${agent.icon || '🤖'}</div>
-                <div class="agent-info" style="flex:1;">
-                    <div class="agent-name">${escHtml(agent.name)}</div>
-                    <div class="agent-desc" style="font-size:12px;color:var(--text-muted);">${escHtml(agent.role || '')}</div>
-                    <div style="margin-top:4px;">${actionsHtml}</div>
-                </div>
-                <div style="text-align:right;font-size:11px;">
-                    <span style="color:${modeColors[mode]};font-weight:500;">${modeLabels[mode] || mode}</span><br>
-                    <span style="color:var(--text-muted);">✅${agent.completed_count || 0} ❌${agent.error_count || 0}</span>
-                </div>
-            </div>`;
-        }).join('');
+        // 缓存 allData 供切换 filter 使用
+        container._agentData = allData;
+        _renderAgentView(container, allData, 'all');
+
     } catch (e) {
-        container.innerHTML = '<div style="text-align:center; padding:20px; color:var(--error);">加载失败</div>';
+        container.innerHTML = '<div style="text-align:center;padding:20px;color:var(--error);">加载失败</div>';
     }
+}
+
+function switchAgentSourceFilter(source) {
+    // 更新芯片高亮
+    document.querySelectorAll('.agent-source-chip').forEach(el => {
+        const isActive = el.dataset.source === source;
+        el.style.background = isActive ? 'var(--primary)' : 'var(--bg-elevated)';
+        el.style.color = isActive ? '#fff' : 'var(--text-secondary)';
+    });
+    const container = document.getElementById('agentListSettings');
+    if (container && container._agentData) {
+        _renderAgentView(container, container._agentData, source);
+    }
+}
+
+function _renderAgentView(container, allData, source) {
+    const modeLabels = {single: '单步', by_order: '顺序', react: '自主'};
+    const modeColors = {single: 'var(--text-muted)', by_order: 'var(--primary)', react: 'var(--success)'};
+    const SOURCE_META = {
+        builtin: { label: '内置', color: '#6366f1', bg: 'rgba(99,102,241,.12)' },
+        user:    { label: '用户', color: '#22c55e', bg: 'rgba(34,197,94,.12)' },
+        pack:    { label: 'Pack', color: '#f97316', bg: 'rgba(249,115,22,.12)' },
+    };
+
+    function _agentCard(ag) {
+        const sm = SOURCE_META[ag.source] || SOURCE_META.builtin;
+        const sourceBadge = `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:${sm.bg};color:${sm.color};margin-left:4px;">${sm.label}${ag.pack_name ? ' · '+escHtml(ag.pack_name) : ''}</span>`;
+        const overrideBadge = ag.is_active === false
+            ? `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:rgba(239,68,68,.12);color:#ef4444;margin-left:4px;">被覆盖</span>`
+            : (ag.override_by === null && ag.source !== 'builtin' ? '' : '');
+        const actionsHtml = (ag.actions || []).map(a =>
+            `<code style="font-size:10px;background:var(--bg);padding:1px 4px;border-radius:3px;color:var(--primary);">${escHtml(typeof a === 'string' ? a : a.name)}</code>`
+        ).join(' ') || '';
+        const mode = ag.react_mode || '';
+        const opacity = ag.is_active === false ? 'opacity:0.45;' : '';
+
+        return `
+        <div class="agent-item" onclick="showAgentDetail('${escHtml(ag.name)}')" style="cursor:pointer;${opacity}">
+            <div class="agent-icon">${ag.emoji || ag.icon || '🤖'}</div>
+            <div class="agent-info" style="flex:1;min-width:0;">
+                <div style="display:flex;align-items:center;flex-wrap:wrap;gap:2px;">
+                    <span class="agent-name">${escHtml(ag.name)}</span>
+                    ${sourceBadge}${overrideBadge}
+                </div>
+                <div class="agent-desc" style="font-size:12px;color:var(--text-muted);">${escHtml(ag.description || ag.role || '')}</div>
+                ${actionsHtml ? `<div style="margin-top:4px;">${actionsHtml}</div>` : ''}
+            </div>
+            ${mode ? `<div style="text-align:right;font-size:11px;flex-shrink:0;">
+                <span style="color:${modeColors[mode]||'var(--text-muted)'};font-weight:500;">${modeLabels[mode]||mode}</span><br>
+                <span style="color:var(--text-muted);">✅${ag.completed_count||0} ❌${ag.error_count||0}</span>
+            </div>` : ''}
+        </div>`;
+    }
+
+    if (source !== 'all') {
+        // 平铺过滤视图
+        const list = source === 'builtin' ? allData.builtin
+                   : source === 'user'    ? allData.user
+                   : allData.pack;
+        if (!list || list.length === 0) {
+            container.innerHTML = `<div class="empty-state-sm">暂无 ${SOURCE_META[source]?.label || source} Agent</div>`;
+            return;
+        }
+        container.innerHTML = list.map(_agentCard).join('');
+        return;
+    }
+
+    // 全部：分组视图
+    let html = '';
+    const groups = [
+        { key: 'builtin', list: allData.builtin, title: '🏠 内置 Agent',   desc: 'ADS 系统核心 Agent' },
+        { key: 'user',    list: allData.user,    title: '👤 用户 Agent',   desc: '来自项目 .claude/agents/ 或 .codebuddy/agents/' },
+        { key: 'pack',    list: allData.pack,    title: '📦 Pack Agent',   desc: '已安装的 ConfigPack 提供' },
+    ];
+
+    for (const g of groups) {
+        if (!g.list || g.list.length === 0) continue;
+        // Pack 来源额外按 pack_name 分子组
+        let cardsHtml = '';
+        if (g.key === 'pack') {
+            const byPack = {};
+            for (const ag of g.list) {
+                const pn = ag.pack_name || '未知';
+                if (!byPack[pn]) byPack[pn] = [];
+                byPack[pn].push(ag);
+            }
+            for (const [pn, ags] of Object.entries(byPack)) {
+                cardsHtml += `<div style="font-size:11px;color:var(--text-muted);padding:4px 0 2px;font-weight:600;opacity:.7;">📦 ${escHtml(pn)}</div>`;
+                cardsHtml += ags.map(_agentCard).join('');
+            }
+        } else {
+            cardsHtml = g.list.map(_agentCard).join('');
+        }
+        const sm = SOURCE_META[g.key];
+        html += `
+        <div style="margin-bottom:14px;">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;padding:6px 8px;background:var(--bg-elevated);border-radius:6px;cursor:pointer;"
+                 onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'':'none'">
+                <span style="font-size:13px;font-weight:600;">${g.title}</span>
+                <span style="font-size:11px;padding:1px 6px;border-radius:10px;background:${sm.bg};color:${sm.color};">${g.list.length}</span>
+                <span style="font-size:11px;color:var(--text-muted);flex:1;">${g.desc}</span>
+                <span style="font-size:11px;color:var(--text-muted);">▾</span>
+            </div>
+            <div>${cardsHtml}</div>
+        </div>`;
+    }
+
+    container.innerHTML = html || '<div class="empty-state-sm">暂无 Agent</div>';
 }
 
 /** 高亮提示词中的变量占位符 {xxx} */
