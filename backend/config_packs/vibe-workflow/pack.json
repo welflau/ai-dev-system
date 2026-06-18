@@ -3,8 +3,24 @@
   "display_name": "Vibe 开发工作流",
   "description": "六阶段开发闭环：think→plan→execute→review→done→retro，含 Wave 并行编排、流程守卫规则",
   "version": "1.0.0",
-  "tags": ["workflow", "agile", "wave", "planning", "review"],
-  "auto_traits": [],
-  "contains": ["commands", "rules"],
-  "targets": ["claude", "codebuddy"]
+  "tags": [
+    "workflow",
+    "agile",
+    "wave",
+    "planning",
+    "review"
+  ],
+  "auto_traits": [
+    "vcs:git",
+    "category:game",
+    "category:app"
+  ],
+  "contains": [
+    "commands",
+    "rules"
+  ],
+  "targets": [
+    "claude",
+    "codebuddy"
+  ]
 }

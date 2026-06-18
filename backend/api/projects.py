@@ -1997,14 +1997,36 @@ async def get_project_packs(project_id: str):
 
 @router.get("/{project_id}/packs/available")
 async def get_available_packs(project_id: str):
-    """获取可安装的 Pack 列表（排除已安装的）。"""
-    from pack_installer import list_packs
+    """获取可安装的 Pack 列表（排除已安装的），附带项目符合率。"""
+    from pack_installer import list_packs, score_pack
     installed_rows = await db.fetch_all(
         "SELECT pack_name FROM project_packs WHERE project_id = ?", (project_id,)
     )
     installed_names = {r["pack_name"] for r in installed_rows}
+
+    proj = await db.fetch_one(
+        "SELECT traits, traits_confidence FROM projects WHERE id = ?", (project_id,)
+    )
+    project_traits: list = []
+    if proj and proj.get("traits"):
+        try:
+            project_traits = json.loads(proj["traits"])
+        except Exception:
+            pass
+
     all_packs = list_packs()
-    available = [p for p in all_packs if p["name"] not in installed_names]
+    available = []
+    for p in all_packs:
+        if p["name"] in installed_names:
+            continue
+        score_info = score_pack(p, project_traits)
+        p["match_score"] = score_info["match_score"]
+        p["matched_traits"] = score_info["matched_traits"]
+        p["is_recommended"] = score_info["is_recommended"]
+        available.append(p)
+
+    # 推荐的排前面，同组内按 match_score 降序
+    available.sort(key=lambda x: (-x["match_score"], x.get("display_name") or x.get("name", "")))
     return {"packs": available}
 
 

@@ -3,7 +3,23 @@
   "display_name": "AI 工作流套件",
   "version": "1.0.0",
   "description": "AI Agent 工作流：深度研究、Agent 自省调试、多 Agent 并行编排(dmux)、ML 工程流程、ECC 安装规划",
-  "targets": ["claude", "codebuddy"],
-  "tags": ["ai", "agent", "research", "mlops", "multi-agent", "orchestration"],
-  "contains": ["skills"]
+  "targets": [
+    "claude",
+    "codebuddy"
+  ],
+  "tags": [
+    "ai",
+    "agent",
+    "research",
+    "mlops",
+    "multi-agent",
+    "orchestration"
+  ],
+  "contains": [
+    "skills"
+  ],
+  "auto_traits": [
+    "category:ai",
+    "category:app"
+  ]
 }

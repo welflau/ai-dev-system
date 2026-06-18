@@ -1046,20 +1046,43 @@ async function loadProjectPacks() {
             if (available.length === 0) {
                 availableEl.innerHTML = '<div class="empty-state-sm">所有 Pack 均已安装</div>';
             } else {
-                availableEl.innerHTML = available.map(p => `
-                    <div class="skill-row pack-row-clickable" onclick="showPackDetail('${escapeHtml(p.name)}', '${escapeHtml(p.display_name || p.name)}')" style="cursor:pointer;" title="点击查看详情">
-                        <div class="skill-row-info">
+                availableEl.innerHTML = available.map(p => {
+                    const score = p.match_score || 0;
+                    const pct = Math.round(score * 100);
+                    const isRec = p.is_recommended;
+                    const matchedTraits = (p.matched_traits || []).join(', ');
+
+                    // 颜色：100%=绿 ≥50%=橙 >0%=黄 0=灰
+                    const barColor = pct === 100 ? '#22c55e' : pct >= 50 ? '#f97316' : pct > 0 ? '#eab308' : 'var(--border-color)';
+                    const recBadge = isRec
+                        ? `<span style="font-size:10px;padding:1px 6px;border-radius:3px;background:rgba(34,197,94,.15);color:#22c55e;font-weight:600;">推荐</span>`
+                        : '';
+
+                    const matchBar = `
+                        <div style="display:flex;align-items:center;gap:6px;margin-top:4px;">
+                            <div style="flex:1;height:3px;background:var(--bg-elevated);border-radius:2px;overflow:hidden;">
+                                <div style="width:${pct}%;height:100%;background:${barColor};border-radius:2px;transition:width .3s;"></div>
+                            </div>
+                            <span style="font-size:10px;color:${isRec ? barColor : 'var(--text-muted)'};min-width:28px;text-align:right;font-weight:${isRec?'600':'400'};">${pct}%</span>
+                            ${matchedTraits ? `<span style="font-size:10px;color:var(--text-muted);opacity:.7;" title="${escapeHtml(matchedTraits)}">· ${escapeHtml(matchedTraits)}</span>` : ''}
+                        </div>`;
+
+                    return `
+                    <div class="skill-row pack-row-clickable" onclick="showPackDetail('${escapeHtml(p.name)}', '${escapeHtml(p.display_name || p.name)}')" style="cursor:pointer;${isRec ? 'border-left:3px solid '+barColor+';' : ''}" title="点击查看详情">
+                        <div class="skill-row-info" style="flex:1;min-width:0;">
                             <div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;">
                                 <span class="skill-row-name">📦 ${escapeHtml(p.display_name || p.name)}</span>
+                                ${recBadge}
                                 ${(p.contains || []).map(c => `<code class="mcp-tool-tag" style="font-size:10px;">${escapeHtml(c)}</code>`).join('')}
                             </div>
                             ${p.description ? `<span class="skill-row-desc">${escapeHtml(p.description)}</span>` : ''}
-                            <span style="font-size:10px;color:var(--text-muted);">支持: ${escapeHtml((p.targets||[]).join(', ') || '—')}</span>
+                            ${matchBar}
                         </div>
-                        <div class="skill-row-actions" onclick="event.stopPropagation()">
+                        <div class="skill-row-actions" onclick="event.stopPropagation()" style="flex-shrink:0;">
                             <button class="btn btn-xs btn-primary" onclick="installPack('${escapeHtml(p.name)}')">⬇ 安装</button>
                         </div>
-                    </div>`).join('');
+                    </div>`;
+                }).join('');
             }
         }
     } catch (e) {

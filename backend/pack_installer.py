@@ -28,15 +28,19 @@ _TEMPLATE_VARS = {"project_name", "repo_path", "tech_stack", "git_remote"}
 
 # traits → pack 名称映射
 _TRAIT_PACK_MAP: Dict[str, List[str]] = {
-    "engine:ue5":           ["ue5-dev"],
-    "engine:ue4":           ["ue5-dev"],
-    "platform:web":         ["web-dev"],
-    "framework:react":      ["web-dev", "typescript-quality"],
-    "framework:vue":        ["web-dev", "typescript-quality"],
-    "lang:typescript":      ["typescript-quality"],
-    "vcs:git":              ["git-workflow", "code-quality"],
-    "category:game":        ["git-workflow"],
-    "category:app":         ["git-workflow"],
+    "engine:ue5":       ["ue5-dev"],
+    "engine:ue4":       ["ue5-dev"],
+    "engine:godot":     ["godot-dev"],
+    "engine:unity":     ["unity-dev"],
+    "platform:web":     ["web-dev"],
+    "framework:react":  ["web-dev", "typescript-quality"],
+    "framework:vue":    ["web-dev", "typescript-quality"],
+    "lang:typescript":  ["typescript-quality"],
+    "vcs:git":          ["git-workflow", "code-quality", "vibe-workflow"],
+    "category:game":    ["game-dev", "git-workflow", "vibe-workflow"],
+    "category:app":     ["git-workflow", "vibe-workflow", "ai-workflow"],
+    "category:ai":      ["ai-workflow"],
+    "category:content": ["content-creation"],
 }
 
 
@@ -67,6 +71,30 @@ def get_recommended_packs(traits: List[str]) -> List[str]:
                 seen.add(pack_name)
                 result.append(pack_name)
     return result
+
+
+def score_pack(pack_meta: Dict, project_traits: List[str]) -> Dict:
+    """计算单个 pack 对项目 traits 的符合率。
+
+    Returns:
+        {
+            "match_score": 0.0~1.0,   # 命中率
+            "matched_traits": [...],   # 命中的 trait 列表
+            "is_recommended": bool,    # 是否推荐（score > 0）
+        }
+    """
+    auto_traits: List[str] = pack_meta.get("auto_traits") or []
+    if not auto_traits:
+        return {"match_score": 0.0, "matched_traits": [], "is_recommended": False}
+
+    project_trait_set = set(project_traits or [])
+    matched = [t for t in auto_traits if t in project_trait_set]
+    score = round(len(matched) / len(auto_traits), 2)
+    return {
+        "match_score": score,
+        "matched_traits": matched,
+        "is_recommended": score > 0,
+    }
 
 
 def _render_template(content: str, ctx: Dict[str, str]) -> str:

@@ -2,7 +2,27 @@
   "name": "game-dev",
   "version": "1.1.0",
   "description": "通用游戏开发全角色套件 — 32个 Agent（创意/技术总监、程序/设计/QA/运营等）+ 35个工作流 skill + 11条代码规范",
-  "targets": ["claude", "codebuddy"],
-  "tags": ["game", "design", "level-design", "audio", "narrative", "technical-art", "producer", "qa", "release"],
-  "contains": ["agents", "skills", "rules"]
+  "targets": [
+    "claude",
+    "codebuddy"
+  ],
+  "tags": [
+    "game",
+    "design",
+    "level-design",
+    "audio",
+    "narrative",
+    "technical-art",
+    "producer",
+    "qa",
+    "release"
+  ],
+  "contains": [
+    "agents",
+    "skills",
+    "rules"
+  ],
+  "auto_traits": [
+    "category:game"
+  ]
 }
