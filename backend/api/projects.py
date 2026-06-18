@@ -2223,7 +2223,27 @@ async def install_pack_for_project(project_id: str, pack_name: str):
             "created_at": created_at,
         })
 
-    await _push_log(f"▶ 开始安装 ConfigPack: {pack_name}")
+    # 读取 pack 元信息用于日志
+    from pack_installer import _PACKS_DIR
+    _pack_meta: dict = {}
+    try:
+        _pack_meta = json.loads((_PACKS_DIR / pack_name / "pack.json").read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    _version = _pack_meta.get("version", "")
+    _declared_targets = _pack_meta.get("targets", [])
+
+    await _push_log(
+        f"▶ 开始安装 ConfigPack: {pack_name}"
+        + (f" v{_version}" if _version else "")
+        + (f"  [声明目标: {', '.join(_declared_targets)}]" if _declared_targets else "")
+    )
+    # 检测项目目录中实际存在的 CLI 配置目录
+    _cli_found = [c for c in ("claude", "codebuddy") if (Path(repo_path) / f".{c}").exists()]
+    if _cli_found:
+        await _push_log(f"  检测到 CLI 目录: {', '.join('.'+c for c in _cli_found)}")
+    else:
+        await _push_log(f"  未检测到 CLI 目录，将按声明目标创建: {', '.join('.'+t for t in _declared_targets)}", level="warn")
 
     result = install_pack(pack_name, repo_path, ctx)
 
@@ -2290,7 +2310,9 @@ async def install_pack_for_project(project_id: str, pack_name: str):
 @router.delete("/{project_id}/packs/{pack_name}")
 async def uninstall_pack_record(project_id: str, pack_name: str):
     """从记录中移除 Pack（不删除已 copy 的文件，文件归用户所有）。"""
-    from utils import now_iso
+    from utils import now_iso, generate_id
+    from events import event_manager
+
     await db.delete("project_packs", "project_id = ? AND pack_name = ?", (project_id, pack_name))
     # 更新冗余列
     rows = await db.fetch_all(
@@ -2302,4 +2324,18 @@ async def uninstall_pack_record(project_id: str, pack_name: str):
         {"installed_packs": json.dumps(installed_names, ensure_ascii=False), "updated_at": now_iso()},
         "id = ?", (project_id,)
     )
+    # 写操作日志
+    log_id = generate_id("LOG")
+    created_at = now_iso()
+    detail = json.dumps({"message": f"✕ 移除 ConfigPack 记录: {pack_name}（已安装的文件不受影响）"}, ensure_ascii=False)
+    await db.insert("ticket_logs", {
+        "id": log_id, "ticket_id": None, "subtask_id": None, "requirement_id": None,
+        "project_id": project_id, "agent_type": "ConfigPack", "action": "remove_pack",
+        "from_status": None, "to_status": None, "detail": detail, "level": "info",
+        "created_at": created_at,
+    })
+    await event_manager.publish_to_project(project_id, "log_added", {
+        "id": log_id, "agent_type": "ConfigPack", "action": "remove_pack",
+        "detail": detail, "level": "info", "created_at": created_at,
+    })
     return {"success": True, "note": "记录已移除，已安装的文件不受影响（文件归用户所有）"}
