@@ -1871,6 +1871,105 @@ async def update_extra_paths(project_id: str, body: dict):
 
 # ==================== ConfigPack 管理 ====================
 
+@router.get("/packs/{pack_name}/detail")
+async def get_pack_detail(pack_name: str):
+    """返回指定 Pack 的内容清单：agents / commands / skills / mcps / hooks / rules。"""
+    from pack_installer import _PACKS_DIR
+    pack_dir = _PACKS_DIR / pack_name
+    if not pack_dir.exists():
+        raise HTTPException(404, f"Pack '{pack_name}' 不存在")
+
+    meta_file = pack_dir / "pack.json"
+    if not meta_file.exists():
+        raise HTTPException(404, f"Pack '{pack_name}' 缺少 pack.json")
+
+    import re
+    meta = json.loads(meta_file.read_text(encoding="utf-8"))
+
+    CATEGORY_MAP = {
+        "agents": "agents",
+        "commands": "commands",
+        "skills": "skills",
+        "mcps": "mcps",
+        "hooks": "hooks",
+        "rules": "rules",
+        "scripts": "scripts",
+    }
+
+    categories: dict = {k: [] for k in CATEGORY_MAP}
+
+    def _extract_frontmatter(content: str) -> dict:
+        if not content.startswith("---"):
+            return {}
+        end = content.find("\n---", 3)
+        if end == -1:
+            return {}
+        fm_text = content[3:end].strip()
+        result = {}
+        for line in fm_text.splitlines():
+            m = re.match(r'^(\w+)\s*:\s*(.+)$', line.strip())
+            if m:
+                result[m.group(1)] = m.group(2).strip().strip('"\'')
+        return result
+
+    for src_root_name in ("shared", "claude", "codebuddy"):
+        src_root = pack_dir / src_root_name
+        if not src_root.exists():
+            continue
+        scope = "" if src_root_name == "shared" else src_root_name
+
+        for src_file in sorted(src_root.rglob("*")):
+            if src_file.is_dir():
+                continue
+            rel = src_file.relative_to(src_root)
+            parts = rel.parts
+
+            if src_root_name == "shared" and src_file.name == "rules.md" and len(parts) == 1:
+                try:
+                    content = src_file.read_text(encoding="utf-8")
+                    categories["rules"].append({
+                        "name": f"{pack_name} rules",
+                        "file": "rules.md",
+                        "scope": "shared",
+                        "description": "",
+                        "emoji": "",
+                        "color": "",
+                        "content": content,
+                    })
+                except Exception:
+                    pass
+                continue
+
+            if len(parts) < 2:
+                continue
+            cat_key = parts[0]
+            if cat_key not in CATEGORY_MAP:
+                continue
+
+            try:
+                content = src_file.read_text(encoding="utf-8")
+            except Exception:
+                content = ""
+
+            fm = _extract_frontmatter(content) if src_file.suffix == ".md" else {}
+            categories[cat_key].append({
+                "name": fm.get("name") or src_file.stem.replace("-", " ").replace("_", " ").title(),
+                "file": str(rel).replace("\\", "/"),
+                "scope": scope or "shared",
+                "description": fm.get("description", ""),
+                "emoji": fm.get("emoji", ""),
+                "color": fm.get("color", ""),
+                "preview": content[:200],
+                "content": content,
+            })
+
+    return {
+        "pack_name": pack_name,
+        "meta": meta,
+        "categories": {k: v for k, v in categories.items() if v},
+    }
+
+
 @router.get("/{project_id}/packs")
 async def get_project_packs(project_id: str):
     """获取项目已安装的 ConfigPack 列表。"""

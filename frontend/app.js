@@ -1024,7 +1024,7 @@ async function loadProjectPacks() {
             installedEl.innerHTML = '<div class="empty-state-sm">未安装任何 ConfigPack</div>';
         } else {
             installedEl.innerHTML = installed.map(p => `
-                <div class="skill-row">
+                <div class="skill-row pack-row-clickable" onclick="showPackDetail('${escapeHtml(p.pack_name)}', '${escapeHtml(p.display_name || p.pack_name)}')" style="cursor:pointer;" title="点击查看详情">
                     <div class="skill-row-info">
                         <div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;">
                             <span class="skill-row-name">📦 ${escapeHtml(p.display_name || p.name)}</span>
@@ -1034,7 +1034,7 @@ async function loadProjectPacks() {
                         ${p.description ? `<span class="skill-row-desc">${escapeHtml(p.description)}</span>` : ''}
                         <span style="font-size:10px;color:var(--text-muted);">安装于 ${escapeHtml((p.installed_at||'').slice(0,16).replace('T',' '))} · 目标: ${escapeHtml((p.targets||[]).join(', ') || '—')}</span>
                     </div>
-                    <div class="skill-row-actions">
+                    <div class="skill-row-actions" onclick="event.stopPropagation()">
                         <button class="btn btn-xs btn-secondary" onclick="reinstallPack('${escapeHtml(p.pack_name)}')" title="重新安装（覆盖）">↩ 重装</button>
                         <button class="btn btn-xs btn-ghost" onclick="removePack('${escapeHtml(p.pack_name)}', '${escapeHtml(p.display_name || p.pack_name)}')" title="移除记录（不删文件）">✕</button>
                     </div>
@@ -1047,7 +1047,7 @@ async function loadProjectPacks() {
                 availableEl.innerHTML = '<div class="empty-state-sm">所有 Pack 均已安装</div>';
             } else {
                 availableEl.innerHTML = available.map(p => `
-                    <div class="skill-row">
+                    <div class="skill-row pack-row-clickable" onclick="showPackDetail('${escapeHtml(p.name)}', '${escapeHtml(p.display_name || p.name)}')" style="cursor:pointer;" title="点击查看详情">
                         <div class="skill-row-info">
                             <div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;">
                                 <span class="skill-row-name">📦 ${escapeHtml(p.display_name || p.name)}</span>
@@ -1056,7 +1056,7 @@ async function loadProjectPacks() {
                             ${p.description ? `<span class="skill-row-desc">${escapeHtml(p.description)}</span>` : ''}
                             <span style="font-size:10px;color:var(--text-muted);">支持: ${escapeHtml((p.targets||[]).join(', ') || '—')}</span>
                         </div>
-                        <div class="skill-row-actions">
+                        <div class="skill-row-actions" onclick="event.stopPropagation()">
                             <button class="btn btn-xs btn-primary" onclick="installPack('${escapeHtml(p.name)}')">⬇ 安装</button>
                         </div>
                     </div>`).join('');
@@ -1099,6 +1099,162 @@ async function removePack(packName, displayName) {
         loadProjectPacks();
     } catch (e) {
         showToast(`操作失败: ${e.message}`, 'error');
+    }
+}
+
+// ── Pack 详情 Modal ──────────────────────────────────────────────────────────
+
+const PACK_CATEGORY_META = {
+    agents:   { label: 'Agents',   icon: '🤖' },
+    commands: { label: 'Commands', icon: '⚡' },
+    skills:   { label: 'Skills',   icon: '🎓' },
+    mcps:     { label: 'MCPs',     icon: '🔌' },
+    hooks:    { label: 'Hooks',    icon: '🪝' },
+    rules:    { label: 'Rules',    icon: '📋' },
+    scripts:  { label: 'Scripts',  icon: '📜' },
+};
+
+const SCOPE_LABEL = { shared: '共享', claude: 'Claude', codebuddy: 'Codebuddy' };
+const COLOR_MAP = {
+    red: '#ef4444', blue: '#3b82f6', green: '#22c55e', yellow: '#eab308',
+    purple: '#a855f7', pink: '#ec4899', indigo: '#6366f1', teal: '#14b8a6',
+    orange: '#f97316', gray: '#6b7280',
+};
+
+async function showPackDetail(packName, displayName) {
+    let modal = document.getElementById('packDetailModal');
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'packDetailModal';
+        modal.className = 'modal-overlay';
+        modal.innerHTML = `
+            <div class="modal" style="max-width:900px;width:90vw;max-height:84vh;display:flex;flex-direction:column;">
+                <div class="modal-header">
+                    <h3 id="packDetailTitle" style="margin:0;font-size:15px;">Pack 详情</h3>
+                    <button class="btn-icon" onclick="closeModal('packDetailModal')">&times;</button>
+                </div>
+                <div id="packDetailMeta" style="padding:10px 20px 8px;border-bottom:1px solid var(--border-color);flex-shrink:0;"></div>
+                <div style="display:flex;flex:1;min-height:0;">
+                    <div id="packDetailList" style="width:260px;flex-shrink:0;overflow-y:auto;border-right:1px solid var(--border-color);padding:8px;"></div>
+                    <div id="packDetailContent" style="flex:1;overflow-y:auto;padding:14px 18px;"></div>
+                </div>
+            </div>`;
+        modal.addEventListener('click', e => { if (e.target === modal) closeModal('packDetailModal'); });
+        document.body.appendChild(modal);
+    }
+
+    document.getElementById('packDetailTitle').textContent = `📦 ${displayName}`;
+    document.getElementById('packDetailMeta').innerHTML = '';
+    document.getElementById('packDetailList').innerHTML = '<div class="empty-state-sm">加载中...</div>';
+    document.getElementById('packDetailContent').innerHTML = '';
+    openModal('packDetailModal');
+
+    try {
+        const data = await api(`/projects/packs/${encodeURIComponent(packName)}/detail`);
+        const { meta, categories } = data;
+
+        // meta 区
+        const tagsBadges = (meta.tags || []).map(t =>
+            `<code class="mcp-tool-tag" style="font-size:10px;">${escapeHtml(t)}</code>`).join('');
+        const targetsBadges = (meta.targets || []).map(t =>
+            `<span style="font-size:10px;padding:1px 6px;border-radius:3px;background:rgba(99,102,241,.15);color:#818cf8;">${escapeHtml(t)}</span>`).join('');
+        document.getElementById('packDetailMeta').innerHTML = `
+            ${meta.description ? `<p style="margin:0 0 6px;font-size:13px;color:var(--text-secondary);">${escapeHtml(meta.description)}</p>` : ''}
+            <div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;">
+                ${tagsBadges}${targetsBadges}
+                ${meta.version ? `<span style="font-size:10px;color:var(--text-muted);">v${escapeHtml(meta.version)}</span>` : ''}
+            </div>`;
+
+        // 收集所有条目并构建左侧列表
+        const catOrder = ['agents', 'commands', 'skills', 'rules', 'mcps', 'hooks', 'scripts'];
+        const allItems = [];  // { catKey, item }
+
+        let listHtml = '';
+        for (const catKey of catOrder) {
+            const items = categories[catKey];
+            if (!items || items.length === 0) continue;
+            const cm = PACK_CATEGORY_META[catKey] || { label: catKey, icon: '📄' };
+            listHtml += `<div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;padding:6px 6px 3px;">${cm.icon} ${cm.label} (${items.length})</div>`;
+            for (const item of items) {
+                const idx = allItems.length;
+                allItems.push({ catKey, item });
+                const accentColor = COLOR_MAP[item.color] || 'var(--border-color)';
+                const emojiHtml = item.emoji ? `${escapeHtml(item.emoji)} ` : '';
+                listHtml += `
+                    <div class="pack-detail-list-item" data-idx="${idx}"
+                         style="padding:7px 8px;border-radius:5px;cursor:pointer;border-left:3px solid ${accentColor};margin-bottom:3px;"
+                         onclick="selectPackItem(${idx})">
+                        <div style="font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${emojiHtml}${escapeHtml(item.name)}</div>
+                        <div style="font-size:10px;color:var(--text-muted);margin-top:1px;">${escapeHtml(item.file)}</div>
+                    </div>`;
+            }
+        }
+
+        if (allItems.length === 0) {
+            listHtml = '<div class="empty-state-sm">暂无内容</div>';
+        }
+
+        document.getElementById('packDetailList').innerHTML = listHtml;
+        // 存到 modal 上供 selectPackItem 使用
+        modal._packItems = allItems;
+        modal._packName = packName;
+
+        // 默认选中第一项
+        if (allItems.length > 0) selectPackItem(0);
+
+    } catch (e) {
+        document.getElementById('packDetailList').innerHTML = `<div class="empty-state-sm">加载失败: ${escapeHtml(e.message)}</div>`;
+    }
+}
+
+function selectPackItem(idx) {
+    const modal = document.getElementById('packDetailModal');
+    if (!modal || !modal._packItems) return;
+    const { catKey, item } = modal._packItems[idx];
+
+    // 高亮左侧选中项
+    modal.querySelectorAll('.pack-detail-list-item').forEach((el, i) => {
+        el.style.background = i === idx ? 'var(--bg-elevated)' : '';
+    });
+
+    const cm = PACK_CATEGORY_META[catKey] || { label: catKey, icon: '📄' };
+    const scopeBadge = item.scope && item.scope !== 'shared'
+        ? `<span style="font-size:10px;padding:1px 6px;border-radius:3px;background:rgba(234,179,8,.12);color:#ca8a04;margin-left:6px;">${escapeHtml(SCOPE_LABEL[item.scope] || item.scope)}</span>`
+        : '';
+    const accentColor = COLOR_MAP[item.color] || 'var(--border-color)';
+    const emojiHtml = item.emoji ? `${escapeHtml(item.emoji)} ` : '';
+
+    // 完整文件路径：pack名/shared(或cli名)/类型/文件名
+    const scopeDir = item.scope === 'shared' ? 'shared' : item.scope;
+    const fullPath = `${modal._packName}/${scopeDir}/${item.file}`;
+
+    // 剥掉 frontmatter，只渲染正文
+    const rawContent = item.content || item.preview || '';
+    const bodyText = rawContent.replace(/^---[\s\S]*?---\r?\n?/, '').trim();
+
+    const contentEl = document.getElementById('packDetailContent');
+    contentEl.innerHTML = `
+        <div style="border-left:3px solid ${accentColor};padding-left:12px;margin-bottom:10px;">
+            <div style="font-size:15px;font-weight:600;margin-bottom:3px;">${emojiHtml}${escapeHtml(item.name)}${scopeBadge}</div>
+            ${item.description ? `<div style="font-size:12px;color:var(--text-secondary);">${escapeHtml(item.description)}</div>` : ''}
+        </div>
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:12px;display:flex;align-items:center;gap:6px;">
+            <span style="opacity:.6;">${cm.icon} ${escapeHtml(cm.label)}</span>
+            <span style="opacity:.4;">·</span>
+            <code style="font-size:10px;background:var(--bg-elevated);padding:2px 6px;border-radius:3px;color:var(--text-secondary);">config_packs/${escapeHtml(fullPath)}</code>
+        </div>
+        <div id="packDetailMdBody" style="font-size:13px;line-height:1.7;"></div>`;
+
+    // 用 marked 渲染 markdown
+    const mdBody = document.getElementById('packDetailMdBody');
+    if (window.marked && bodyText) {
+        try {
+            mdBody.innerHTML = marked.parse(bodyText);
+        } catch (e) {
+            mdBody.textContent = bodyText;
+        }
+    } else {
+        mdBody.textContent = bodyText || '（无内容）';
     }
 }
 
