@@ -1,14 +1,8 @@
 {
   "name": "game-dev",
-  "version": "1.0.0",
-  "description": "通用游戏开发角色 — 游戏设计师、关卡设计师、技术美术、音频工程师、叙事设计师",
+  "version": "1.1.0",
+  "description": "通用游戏开发全角色套件 — 32个 Agent（创意/技术总监、程序/设计/QA/运营等）+ 35个工作流 skill + 11条代码规范",
   "targets": ["claude", "codebuddy"],
-  "tags": ["game", "design", "level-design", "audio", "narrative", "technical-art"],
-  "agents": [
-    "game-designer",
-    "level-designer",
-    "technical-artist",
-    "game-audio-engineer",
-    "narrative-designer"
-  ]
+  "tags": ["game", "design", "level-design", "audio", "narrative", "technical-art", "producer", "qa", "release"],
+  "contains": ["agents", "skills", "rules"]
 }

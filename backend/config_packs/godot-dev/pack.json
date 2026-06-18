@@ -2,7 +2,7 @@
   "name": "godot-dev",
   "display_name": "Godot 开发套件",
   "version": "1.0.0",
-  "description": "Godot 4.x 开发全套配置：4个 Claude subagent、6个 Codebuddy 团队 agent、25个专项 skill（重构/优化/多人/导航/动画/导出等）",
+  "description": "Godot 4.x 开发全套配置：8个 Claude subagent（game-dev/asset-creator/design-doc/qa + specialist/gdscript/gdextension/shader）、6个 Codebuddy 团队 agent、25个专项 skill",
   "targets": ["claude", "codebuddy"],
   "tags": ["godot", "gamedev", "gdscript", "2d", "3d", "multiagent"],
   "contains": ["agents", "skills"]

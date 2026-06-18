@@ -1,0 +1,9 @@
+{
+  "name": "unity-dev",
+  "display_name": "Unity 开发套件",
+  "version": "1.0.0",
+  "description": "Unity 专属 Agent 套件：引擎通才 + DOTS/ECS + Shader/VFX + Addressables + UI Toolkit",
+  "targets": ["claude", "codebuddy"],
+  "tags": ["unity", "gamedev", "csharp", "dots", "ecs", "addressables", "urp", "hdrp"],
+  "contains": ["agents"]
+}
