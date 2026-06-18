@@ -105,19 +105,8 @@ def _render_template(content: str, ctx: Dict[str, str]) -> str:
 
 
 def _detect_cli_targets(project_path: str, pack_targets: List[str]) -> List[str]:
-    """
-    检测项目目录中已有哪些 CLI 配置目录。
-    两个都不存在时，按 pack.json targets 字段声明的目标创建目录。
-    """
-    p = Path(project_path)
-    targets = []
-    if (p / ".claude").exists():
-        targets.append("claude")
-    if (p / ".codebuddy").exists():
-        targets.append("codebuddy")
-    if not targets:
-        targets = [t for t in pack_targets if t in ("claude", "codebuddy")]
-    return targets
+    """始终按 pack.json targets 字段安装，目录不存在时自动创建。"""
+    return [t for t in pack_targets if t in ("claude", "codebuddy")]
 
 
 def _append_to_main_md(dst: Path, pack_name: str, content: str) -> None:

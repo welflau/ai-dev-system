@@ -2238,12 +2238,13 @@ async def install_pack_for_project(project_id: str, pack_name: str):
         + (f" v{_version}" if _version else "")
         + (f"  [声明目标: {', '.join(_declared_targets)}]" if _declared_targets else "")
     )
-    # 检测项目目录中实际存在的 CLI 配置目录
-    _cli_found = [c for c in ("claude", "codebuddy") if (Path(repo_path) / f".{c}").exists()]
+    # 显示哪些目录已存在、哪些会被新建
+    _cli_found = [c for c in _declared_targets if (Path(repo_path) / f".{c}").exists()]
+    _cli_new = [c for c in _declared_targets if c not in _cli_found]
     if _cli_found:
-        await _push_log(f"  检测到 CLI 目录: {', '.join('.'+c for c in _cli_found)}")
-    else:
-        await _push_log(f"  未检测到 CLI 目录，将按声明目标创建: {', '.join('.'+t for t in _declared_targets)}", level="warn")
+        await _push_log(f"  已有 CLI 目录: {', '.join('.'+c for c in _cli_found)}")
+    if _cli_new:
+        await _push_log(f"  将新建 CLI 目录: {', '.join('.'+c for c in _cli_new)}")
 
     result = install_pack(pack_name, repo_path, ctx)
 
