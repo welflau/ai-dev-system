@@ -1,0 +1,9 @@
+{
+  "name": "content-creation",
+  "display_name": "内容创作套件",
+  "version": "1.0.0",
+  "description": "内容创作全流程：文章写作、品牌声音、社媒内容引擎、多平台分发、幻灯片、投资材料、市场调研",
+  "targets": ["claude", "codebuddy"],
+  "tags": ["content", "writing", "social", "marketing", "research", "slides", "investor"],
+  "contains": ["skills"]
+}

@@ -1,9 +1,9 @@
 {
   "name": "web-dev",
   "display_name": "Web 前端开发",
-  "description": "Web 项目配置：组件开发规范、API 调试命令、UI 视觉设计规则、Web 设计指引 skill",
-  "version": "1.0.0",
-  "tags": ["web", "react", "frontend", "api"],
+  "description": "Web 全栈配置：UI 设计规范 + web-design-guidelines skill + API/前后端/Next.js/Bun/文档查询/MCP服务端模式 7个 skill",
+  "version": "1.1.0",
+  "tags": ["web", "react", "frontend", "api", "nextjs", "backend", "mcp"],
   "auto_traits": ["platform:web", "framework:react"],
   "contains": ["rules", "commands", "skills"],
   "targets": ["claude", "codebuddy"]

@@ -1,9 +1,9 @@
 {
   "name": "code-quality",
   "display_name": "代码质量规范",
-  "description": "Agent 行为准则 + 代码简洁性 + 注释规范，含代码评审 skill 和重构审计 skill",
-  "version": "1.0.0",
-  "tags": ["quality", "git", "comments", "simplicity", "best-practices"],
+  "description": "代码质量全套：简洁性/注释规范 + 代码评审/重构审计 + TDD/安全审查/E2E测试/验证循环/编码标准/eval框架",
+  "version": "1.1.0",
+  "tags": ["quality", "git", "comments", "simplicity", "tdd", "security", "testing", "best-practices"],
   "auto_traits": ["vcs:git"],
   "contains": ["rules", "skills"],
   "targets": ["claude", "codebuddy"]

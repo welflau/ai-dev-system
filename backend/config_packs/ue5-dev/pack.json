@@ -1,8 +1,8 @@
 {
   "name": "ue5-dev",
   "display_name": "UE5 开发套件",
-  "description": "UE5 项目全套 CLI 配置：构建命令、资产规范，含9个 UE5 专属 Agent（multiplayer/systems/blueprint/GAS/replication/UMG/technical-artist/world-builder/specialist）",
-  "version": "1.1.0",
+  "description": "UE5 项目全套 CLI 配置：9个专属 Agent + 14个 UE 命令（init/scaffold/gdd/auto/run/asset/bp-gen/level/playtest/review/ci/evolve/extend/antipatterns）",
+  "version": "1.2.0",
   "tags": ["ue5", "gamedev", "cpp", "unreal", "blueprint", "gas"],
   "auto_traits": ["engine:ue5", "engine:ue4"],
   "contains": ["rules", "agents", "commands"],
