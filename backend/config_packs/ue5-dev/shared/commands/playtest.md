@@ -1,7 +1,7 @@
 Run a playtest session for the current UE5 project.
 
 ```bash
-python scripts/ue_python.py "
+python .claude/scripts/ue_python.py "
 import unreal
 # 打开 PIE（Play In Editor）
 unreal.EditorLevelLibrary.play_in_viewport()

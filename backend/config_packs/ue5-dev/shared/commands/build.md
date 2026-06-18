@@ -2,10 +2,10 @@ Build the current UE5 project.
 
 ```bash
 # 检查引擎版本
-python scripts/ue_python.py "import unreal; print(unreal.SystemLibrary.get_engine_version())"
+python .claude/scripts/ue_python.py "import unreal; print(unreal.SystemLibrary.get_engine_version())"
 
 # 保存未提交的资产
-python scripts/ue_python.py "
+python .claude/scripts/ue_python.py "
 import unreal
 result = unreal.EditorLoadingAndSavingUtils.save_dirty_packages(True, True)
 print('Saved:', result)
