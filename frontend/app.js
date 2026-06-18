@@ -1245,9 +1245,24 @@ function selectPackItem(idx) {
         </div>
         <div id="packDetailMdBody" style="font-size:13px;line-height:1.7;"></div>`;
 
-    // 用 marked 渲染 markdown
+    // 按扩展名选渲染模式
     const mdBody = document.getElementById('packDetailMdBody');
-    if (window.marked && bodyText) {
+    const fileExt = (item.file || '').split('.').pop().toLowerCase();
+    const CODE_EXTS = { py: 'python', js: 'javascript', ts: 'typescript', sh: 'bash', json: 'json', cpp: 'cpp', cs: 'csharp', gd: 'gdscript', rs: 'rust', go: 'go', yaml: 'yaml', yml: 'yaml', toml: 'toml', html: 'html', css: 'css' };
+    const codeLang = CODE_EXTS[fileExt];
+
+    if (codeLang) {
+        // 代码文件：用 hljs 语法高亮
+        const pre = document.createElement('pre');
+        const code = document.createElement('code');
+        code.className = `language-${codeLang} hljs`;
+        code.textContent = rawContent;
+        pre.appendChild(code);
+        pre.style.cssText = 'margin:0;border-radius:6px;border:1px solid var(--border-color);overflow-x:auto;';
+        mdBody.appendChild(pre);
+        if (window.hljs) hljs.highlightElement(code);
+    } else if (window.marked && bodyText) {
+        // Markdown 文件：用 marked 渲染
         try {
             mdBody.innerHTML = marked.parse(bodyText);
         } catch (e) {
