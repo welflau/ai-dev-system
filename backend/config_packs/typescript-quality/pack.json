@@ -5,6 +5,6 @@
   "version": "1.0.0",
   "tags": ["typescript", "type-safety", "zod", "state", "frontend"],
   "auto_traits": ["lang:typescript", "framework:react", "framework:vue"],
-  "contains": ["rules"],
+  "contains": ["rules", "skills"],
   "targets": ["claude", "codebuddy"]
 }
