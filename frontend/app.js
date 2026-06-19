@@ -955,49 +955,76 @@ async function loadMCPStatus() {
     if (!container) return;
     container.innerHTML = '<div class="empty-state-sm">加载中...</div>';
     try {
-        // /api/mcp/status 是全局路由（不带 project_id 前缀）
-        const resp = await fetch('/api/mcp/status');
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        const data = await resp.json();
-        const servers = data.servers || {};
-        const names = Object.keys(servers);
-        if (names.length === 0) {
-            container.innerHTML = '<div class="empty-state-sm">暂无 MCP server 配置（编辑 backend/mcp_servers.json 后重启服务）</div>';
-            return;
+        if (currentProjectId) {
+            const data = await api(`/projects/${currentProjectId}/mcp/all`);
+            const wrapper = container.closest('.settings-card') || container.parentElement;
+            _injectSourceFilter(wrapper, 'mcpServerList', data.counts, 'switchMcpSourceFilter');
+            container._mcpData = data;
+            _renderMcpView(container, data, 'all');
+        } else {
+            const resp = await fetch('/api/mcp/status');
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const status = await resp.json();
+            _renderLegacyMcp(container, status.servers || {});
         }
-
-        const statusClass = (status) => ({
-            running: 'success', disabled: 'muted', not_started: 'warning', error: 'danger', stopped: 'muted',
-        }[status] || 'muted');
-        const statusLabel = (status, enabled) => ({
-            running: '✅ 运行中', disabled: '⚪ 未启用', not_started: '⚠️ 未启动',
-            error: '❌ 启动失败', stopped: '⏹️ 已停止',
-        }[status] || status);
-
-        container.innerHTML = names.map(name => {
-            const s = servers[name];
-            const tools = s.tools || [];
-            const toolsHtml = tools.length
-                ? `<div class="mcp-tools"><div class="mcp-tools-label">暴露工具 (${tools.length})</div>`
-                  + tools.map(t => `<code class="mcp-tool-tag">${escapeHtml(t)}</code>`).join('')
-                  + '</div>'
-                : '<div class="mcp-tools-empty">(无工具 / 未连接)</div>';
-            const errorHtml = s.error ? `<div class="mcp-error">⚠️ ${escapeHtml(s.error)}</div>` : '';
-            return `
-            <div class="mcp-server-card mcp-status-${statusClass(s.status)}">
-                <div class="mcp-server-header">
-                    <span class="mcp-server-name">🔌 ${escapeHtml(name)}</span>
-                    <span class="mcp-server-status mcp-badge-${statusClass(s.status)}">${statusLabel(s.status, s.enabled)}</span>
-                </div>
-                <div class="mcp-server-desc">${escapeHtml(s.description || '(无描述)')}</div>
-                ${errorHtml}
-                ${toolsHtml}
-            </div>`;
-        }).join('');
     } catch (e) {
         container.innerHTML = `<div class="empty-state-sm">加载失败: ${escapeHtml(e.message)}</div>`;
     }
 }
+
+function switchMcpSourceFilter(source) {
+    _setSourceFilter('mcpServerList', source);
+    const container = document.getElementById('mcpServerList');
+    if (container && container._mcpData) _renderMcpView(container, container._mcpData, source);
+}
+
+function _renderMcpView(container, data, source) {
+    const statusClass = (s) => ({running:'success',disabled:'muted',not_started:'warning',error:'danger',stopped:'muted'}[s]||'muted');
+    const statusLabel = (s) => ({running:'✅ 运行中',disabled:'⚪ 未启用',not_started:'⚠️ 未启动',error:'❌ 启动失败',stopped:'⏹️ 已停止'}[s]||s||'—');
+    const renderItem = (srv) => {
+        const sm = _SOURCE_META[srv.source] || _SOURCE_META.builtin;
+        const srcBadge = `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:${sm.bg};color:${sm.color};margin-left:4px;">${sm.label}${srv.pack_name ? ' · '+escapeHtml(srv.pack_name) : ''}</span>`;
+        const tools = srv.tools || [];
+        const toolsHtml = tools.length
+            ? `<div style="margin-top:4px;">${tools.map(t => `<code class="mcp-tool-tag">${escapeHtml(t)}</code>`).join('')}</div>` : '';
+        const statusHtml = srv.status
+            ? `<span class="mcp-server-status mcp-badge-${statusClass(srv.status)}" style="font-size:11px;margin-left:4px;">${statusLabel(srv.status)}</span>` : '';
+        const clickData = escapeHtml(JSON.stringify({name:srv.name, description:srv.description||'', source:srv.source, pack_name:srv.pack_name||null, file:srv.file||'', type:'MCP', emoji:'🔌', content:srv.command?'Command: '+srv.command:''}));
+        return `<div class="mcp-server-card" style="margin-bottom:6px;cursor:pointer;" onclick='showExtensionDetail(${clickData})'>
+            <div class="mcp-server-header">
+                <span class="mcp-server-name">🔌 ${escapeHtml(srv.name)}</span>${srcBadge}${statusHtml}
+            </div>
+            ${srv.description ? `<div class="mcp-server-desc">${escapeHtml(srv.description)}</div>` : ''}
+            ${srv.command ? `<code style="font-size:10px;color:var(--text-muted);">${escapeHtml(srv.command)}</code>` : ''}
+            ${toolsHtml}
+        </div>`;
+    };
+    _renderSourceGroups(container, data, source, renderItem, {
+        builtin: { icon: '🏠', title: '全局 MCP',  desc: '来自 backend/mcp_servers.json' },
+        user:    { icon: '👤', title: '用户 MCP',   desc: '来自项目 .claude/settings.json mcpServers' },
+        pack:    { icon: '📦', title: 'Pack MCP',   desc: '已安装 ConfigPack 声明的 MCP 服务器' },
+    });
+}
+
+function _renderLegacyMcp(container, servers) {
+    const names = Object.keys(servers);
+    if (!names.length) { container.innerHTML = '<div class="empty-state-sm">暂无 MCP server</div>'; return; }
+    const statusClass = (s) => ({running:'success',disabled:'muted',not_started:'warning',error:'danger',stopped:'muted'}[s]||'muted');
+    const statusLabel = (s) => ({running:'✅ 运行中',disabled:'⚪ 未启用',not_started:'⚠️ 未启动',error:'❌ 启动失败',stopped:'⏹️ 已停止'}[s]||s);
+    container.innerHTML = names.map(name => {
+        const s = servers[name];
+        const tools = s.tools || [];
+        const clickData = escapeHtml(JSON.stringify({name, description:s.description||'', source:'builtin', pack_name:null, type:'MCP', emoji:'🔌', content:s.error||''}));
+        return `<div class="mcp-server-card mcp-status-${statusClass(s.status)}" style="cursor:pointer;" onclick='showExtensionDetail(${clickData})'>
+            <div class="mcp-server-header"><span class="mcp-server-name">🔌 ${escapeHtml(name)}</span><span class="mcp-server-status mcp-badge-${statusClass(s.status)}">${statusLabel(s.status)}</span></div>
+            <div class="mcp-server-desc">${escapeHtml(s.description||'(无描述)')}</div>
+            ${s.error?`<div class="mcp-error">⚠️ ${escapeHtml(s.error)}</div>`:''}
+            ${tools.length?`<div class="mcp-tools"><div class="mcp-tools-label">暴露工具 (${tools.length})</div>${tools.map(t=>`<code class="mcp-tool-tag">${escapeHtml(t)}</code>`).join('')}</div>`:'<div class="mcp-tools-empty">(无工具)</div>'}
+        </div>`;
+    }).join('');
+}
+
+
 
 // ==================== Skills 列表（Agent 配置页 → Skills Tab） ====================
 
@@ -1450,15 +1477,16 @@ function _renderSkillView(container, data, source) {
                 <input type="checkbox" ${sk.enabled !== false ? 'checked' : ''} onchange="toggleProjectSkill('${escapeHtml(sk.id||sk.name)}', this.checked)">
                 <span class="toggle-slider"></span>
             </label>` : '';
-        const opacity = sk.enabled === false ? ' style="opacity:0.5"' : '';
-        return `<div class="skill-row"${opacity}>
+        const opacity = sk.enabled === false ? ' style="opacity:0.5;cursor:pointer;"' : ' style="cursor:pointer;"';
+        const clickData = escapeHtml(JSON.stringify({name:sk.name, description:sk.description||'', source:sk.source, pack_name:sk.pack_name||null, file:sk.id||sk.name, type:'Skill', emoji:'🎓', preview:sk.preview||'', content:sk.content||sk.preview||''}));
+        return `<div class="skill-row"${opacity} onclick='showExtensionDetail(${clickData})'>
             <div class="skill-row-info" style="flex:1;min-width:0;">
                 <div style="display:flex;align-items:center;flex-wrap:wrap;gap:2px;">
                     <span class="skill-row-name">🎓 ${escapeHtml(sk.name)}</span>${srcBadge}
                 </div>
                 ${sk.description ? `<span class="skill-row-desc">${escapeHtml(sk.description)}</span>` : ''}
             </div>
-            <div class="skill-row-actions">${toggleHtml}</div>
+            <div class="skill-row-actions" onclick="event.stopPropagation()">${toggleHtml}</div>
         </div>`;
     };
     _renderSourceGroups(container, data, source, renderItem, {
@@ -1520,8 +1548,9 @@ function _renderCommandView(container, data, source) {
         const srcBadge = `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:${sm.bg};color:${sm.color};margin-left:4px;">${sm.label}${cmd.pack_name ? ' · '+escapeHtml(cmd.pack_name) : ''}</span>`;
         const overrideBadge = cmd.is_active === false
             ? `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:rgba(239,68,68,.12);color:#ef4444;margin-left:4px;">被覆盖</span>` : '';
-        const opacity = cmd.is_active === false ? ' style="opacity:0.4"' : '';
-        return `<div class="skill-row"${opacity}>
+        const opacity = cmd.is_active === false ? ' style="opacity:0.4;cursor:pointer;"' : ' style="cursor:pointer;"';
+        const clickData = escapeHtml(JSON.stringify({name:cmd.name, description:cmd.description||'', source:cmd.source, pack_name:cmd.pack_name||null, file:(cmd.file||cmd.name+'.md'), type:'Command', emoji:'⚡', preview:cmd.preview||'', content:cmd.content||cmd.preview||''}));
+        return `<div class="skill-row"${opacity} onclick='showExtensionDetail(${clickData})'>
             <div class="skill-row-info" style="flex:1;min-width:0;">
                 <div style="display:flex;align-items:center;flex-wrap:wrap;gap:2px;">
                     <span class="skill-row-name">⚡ /${escapeHtml(cmd.name)}</span>${srcBadge}${overrideBadge}
@@ -1537,7 +1566,76 @@ function _renderCommandView(container, data, source) {
     });
 }
 
-// ── MCP ───────────────────────────────────────────────────────────────────────
+// ── 通用扩展详情 Modal ────────────────────────────────────────────────────────
+
+function showExtensionDetail(item) {
+    // item: { name, description, source, pack_name, content/preview, file?, type?, emoji?, color?, ... }
+    let modal = document.getElementById('extensionDetailModal');
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'extensionDetailModal';
+        modal.className = 'modal-overlay';
+        modal.innerHTML = `
+            <div class="modal" style="max-width:720px;width:90vw;max-height:84vh;display:flex;flex-direction:column;">
+                <div class="modal-header">
+                    <h3 id="extDetailTitle" style="margin:0;font-size:15px;">详情</h3>
+                    <button class="btn-icon" onclick="closeModal('extensionDetailModal')">&times;</button>
+                </div>
+                <div id="extDetailBody" class="modal-body" style="overflow-y:auto;flex:1;padding:16px 20px;"></div>
+            </div>`;
+        modal.addEventListener('click', e => { if (e.target === modal) closeModal('extensionDetailModal'); });
+        document.body.appendChild(modal);
+    }
+
+    const sm = _SOURCE_META[item.source] || _SOURCE_META.builtin;
+    const emojiHtml = item.emoji ? `${escapeHtml(item.emoji)} ` : '';
+    document.getElementById('extDetailTitle').textContent = `${item.emoji || '📄'} ${item.name}`;
+
+    const srcBadge = `<span style="font-size:11px;padding:2px 7px;border-radius:3px;background:${sm.bg};color:${sm.color};">${sm.label}${item.pack_name ? ' · '+escapeHtml(item.pack_name) : ''}</span>`;
+    const typeBadge = item.type ? `<span style="font-size:11px;padding:2px 7px;border-radius:3px;background:var(--bg-elevated);color:var(--text-muted);">${escapeHtml(item.type)}</span>` : '';
+    const filePath = item.file ? `<code style="font-size:10px;background:var(--bg-elevated);padding:2px 7px;border-radius:3px;color:var(--text-secondary);">${escapeHtml(item.file)}</code>` : '';
+
+    const rawContent = item.content || item.preview || '';
+    const bodyText = rawContent.replace(/^---[\s\S]*?---\r?\n?/, '').trim();
+
+    const bodyEl = document.getElementById('extDetailBody');
+    bodyEl.innerHTML = `
+        <div style="margin-bottom:12px;">
+            <div style="font-size:16px;font-weight:600;margin-bottom:4px;">${emojiHtml}${escapeHtml(item.name)}</div>
+            ${item.description ? `<div style="font-size:12px;color:var(--text-secondary);margin-bottom:6px;">${escapeHtml(item.description)}</div>` : ''}
+            <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">
+                ${srcBadge}${typeBadge}${filePath}
+            </div>
+        </div>
+        <hr style="border:none;border-top:1px solid var(--border-color);margin:10px 0;">
+        <div id="extDetailContent" style="font-size:13px;line-height:1.7;"></div>`;
+
+    const contentEl = document.getElementById('extDetailContent');
+    if (!bodyText) {
+        contentEl.innerHTML = '<div class="empty-state-sm">暂无内容</div>';
+    } else {
+        const ext = (item.file || '').split('.').pop().toLowerCase();
+        const CODE_EXTS = { py:'python', js:'javascript', ts:'typescript', sh:'bash', json:'json', cpp:'cpp', cs:'csharp', gd:'gdscript', rs:'rust', go:'go', yaml:'yaml', yml:'yaml', toml:'toml' };
+        const codeLang = CODE_EXTS[ext];
+        if (codeLang) {
+            const pre = document.createElement('pre');
+            const code = document.createElement('code');
+            code.className = `language-${codeLang} hljs`;
+            code.textContent = rawContent;
+            pre.style.cssText = 'margin:0;border-radius:6px;border:1px solid var(--border-color);overflow-x:auto;';
+            pre.appendChild(code);
+            contentEl.appendChild(pre);
+            if (window.hljs) hljs.highlightElement(code);
+        } else if (window.marked) {
+            try { contentEl.innerHTML = marked.parse(bodyText); }
+            catch (e) { contentEl.textContent = bodyText; }
+        } else {
+            contentEl.textContent = bodyText;
+        }
+    }
+
+    openModal('extensionDetailModal');
+}
 
 
 async function toggleProjectSkill(skillId, enabled) {
@@ -7778,8 +7876,12 @@ function _renderAgentView(container, allData, source) {
         const mode = ag.react_mode || '';
         const opacity = ag.is_active === false ? 'opacity:0.45;' : '';
 
+        const clickFn = ag.source === 'builtin'
+            ? `showAgentDetail('${escHtml(ag.name)}')`
+            : `showExtensionDetail(${escHtml(JSON.stringify({name:ag.name, description:ag.description||ag.role||'', source:ag.source, pack_name:ag.pack_name||null, file:ag.file||ag.name+'.md', type:'Agent', emoji:ag.emoji||'🤖', preview:ag.preview||'', content:ag.content||ag.preview||''}))})`;
+
         return `
-        <div class="agent-item" onclick="showAgentDetail('${escHtml(ag.name)}')" style="cursor:pointer;${opacity}">
+        <div class="agent-item" onclick="${clickFn}" style="cursor:pointer;${opacity}">
             <div class="agent-icon">${ag.emoji || ag.icon || '🤖'}</div>
             <div class="agent-info" style="flex:1;min-width:0;">
                 <div style="display:flex;align-items:center;flex-wrap:wrap;gap:2px;">
