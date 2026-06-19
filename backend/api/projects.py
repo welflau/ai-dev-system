@@ -2468,6 +2468,124 @@ async def get_project_mcp_all(project_id: str):
     }
 
 
+@router.get("/{project_id}/rules/all")
+async def get_project_rules_all(project_id: str):
+    """合并三来源 Rule：内置(backend/skills/rules/) / 用户(.claude/rules/) / Pack(rules/)。"""
+    from pack_installer import _PACKS_DIR
+    import re
+
+    proj = await db.fetch_one("SELECT git_repo_path FROM projects WHERE id = ?", (project_id,))
+    repo_path = (proj or {}).get("git_repo_path", "") if proj else ""
+
+    def _parse_rule_md(content: str, stem: str) -> dict:
+        fm: dict = {}
+        if content.startswith("---"):
+            end = content.find("\n---", 3)
+            if end != -1:
+                for line in content[3:end].splitlines():
+                    m = re.match(r'^([\w-]+)\s*:\s*(.+)$', line.strip())
+                    if m:
+                        fm[m.group(1)] = m.group(2).strip().strip('"\'')
+        body = re.sub(r'^---[\s\S]*?---\r?\n?', '', content, count=1).strip()
+        return {
+            "name": fm.get("name") or fm.get("title") or stem.replace("-", " ").replace("_", " ").title(),
+            "description": fm.get("description", ""),
+            "globs": fm.get("globs", ""),
+            "preview": body[:150],
+            "content": content,
+        }
+
+    def _scan_rules_dir(rules_dir: Path, source: str, pack_name=None, cli=None, scope=None) -> list:
+        items = []
+        if not rules_dir.exists():
+            return items
+        for f in sorted(rules_dir.rglob("*.md")):
+            try:
+                content = f.read_text(encoding="utf-8")
+                info = _parse_rule_md(content, f.stem)
+                info["file"] = str(f)
+                info["source"] = source
+                info["pack_name"] = pack_name
+                if cli:
+                    info["cli"] = cli
+                if scope:
+                    info["scope"] = scope
+                items.append(info)
+            except Exception:
+                pass
+        return items
+
+    # 1. 内置 rules（backend/skills/rules/*.md，排除 yaml）
+    builtin_rules = []
+    builtin_rules_dir = Path(__file__).resolve().parent.parent / "skills" / "rules"
+    for f in sorted(builtin_rules_dir.rglob("*.md")):
+        try:
+            content = f.read_text(encoding="utf-8")
+            info = _parse_rule_md(content, f.stem)
+            info["file"] = str(f)
+            info["source"] = "builtin"
+            info["pack_name"] = None
+            builtin_rules.append(info)
+        except Exception:
+            pass
+
+    # 2. 用户 rules（.claude/rules/ + .codebuddy/rules/）
+    user_rules = []
+    if repo_path:
+        for cli in ("claude", "codebuddy"):
+            user_rules += _scan_rules_dir(
+                Path(repo_path) / f".{cli}" / "rules",
+                source="user", cli=cli
+            )
+        # 也扫 CLAUDE.md / CODEBUDDY.md（主记忆文件）
+        for cli, fname in [("claude", "CLAUDE.md"), ("codebuddy", "CODEBUDDY.md")]:
+            f = Path(repo_path) / f".{cli}" / fname
+            if f.exists():
+                try:
+                    content = f.read_text(encoding="utf-8")
+                    user_rules.append({
+                        "name": fname, "description": "项目主记忆文件（Pack rules 追加于此）",
+                        "file": str(f), "source": "user", "cli": cli, "pack_name": None,
+                        "content": content, "preview": content[:150], "globs": "",
+                    })
+                except Exception:
+                    pass
+
+    # 3. Pack rules
+    pack_rules = []
+    installed_rows = await db.fetch_all(
+        "SELECT pack_name FROM project_packs WHERE project_id = ?", (project_id,)
+    )
+    for row in installed_rows:
+        pn = row["pack_name"]
+        for sub in ("shared", "claude", "codebuddy"):
+            # rules.md 单文件
+            rules_md = _PACKS_DIR / pn / sub / "rules.md"
+            if rules_md.exists():
+                try:
+                    content = rules_md.read_text(encoding="utf-8")
+                    info = _parse_rule_md(content, f"{pn}-rules")
+                    info["file"] = str(rules_md)
+                    info["source"] = "pack"
+                    info["pack_name"] = pn
+                    info["scope"] = sub
+                    pack_rules.append(info)
+                except Exception:
+                    pass
+            # rules/ 子目录
+            pack_rules += _scan_rules_dir(
+                _PACKS_DIR / pn / sub / "rules",
+                source="pack", pack_name=pn, scope=sub
+            )
+
+    all_rules = builtin_rules + user_rules + pack_rules
+    return {
+        "builtin": builtin_rules, "user": user_rules, "pack": pack_rules, "all": all_rules,
+        "counts": {"builtin": len(builtin_rules), "user": len(user_rules),
+                   "pack": len(pack_rules), "total": len(all_rules)},
+    }
+
+
 @router.post("/{project_id}/packs/{pack_name}/install")
 async def install_pack_for_project(project_id: str, pack_name: str):
     """手动安装指定 Pack 到项目。"""

@@ -945,6 +945,7 @@ function switchAgentConfigTab(inner) {
     if (inner === 'skills') loadProjectSkills();
     if (inner === 'packs') loadProjectPacks();
     if (inner === 'commands') loadProjectCommands();
+    if (inner === 'rules') loadProjectRules();
     // traits 已移到「系统设置」modal（showSystemSettingsModal('traits')）
 }
 
@@ -1568,7 +1569,53 @@ function _renderCommandView(container, data, source) {
     });
 }
 
-// ── 通用扩展详情 Modal（左右分栏） ─────────────────────────────────────────────
+// ── Rules ─────────────────────────────────────────────────────────────────────
+
+async function loadProjectRules() {
+    const container = document.getElementById('rulesListSettings');
+    if (!container) return;
+    container.innerHTML = '<div class="empty-state-sm">加载中...</div>';
+    if (!currentProjectId) return;
+    try {
+        const data = await api(`/projects/${currentProjectId}/rules/all`);
+        const wrapper = container.closest('.settings-card') || container.parentElement;
+        _injectSourceFilter(wrapper, 'rulesListSettings', data.counts, 'switchRuleSourceFilter');
+        container._ruleData = data;
+        _renderRulesView(container, data, 'all');
+    } catch (e) {
+        container.innerHTML = `<div class="empty-state-sm">加载失败: ${escapeHtml(e.message)}</div>`;
+    }
+}
+
+function switchRuleSourceFilter(source) {
+    _setSourceFilter('rulesListSettings', source);
+    const container = document.getElementById('rulesListSettings');
+    if (container && container._ruleData) _renderRulesView(container, container._ruleData, source);
+}
+
+function _renderRulesView(container, data, source) {
+    const renderItem = (rule) => {
+        const sm = _SOURCE_META[rule.source] || _SOURCE_META.builtin;
+        const srcBadge = `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:${sm.bg};color:${sm.color};margin-left:4px;">${sm.label}${rule.pack_name ? ' · '+escapeHtml(rule.pack_name) : ''}</span>`;
+        const globsBadge = rule.globs ? `<code style="font-size:10px;background:var(--bg);padding:1px 4px;border-radius:3px;color:var(--text-muted);margin-left:4px;">${escapeHtml(rule.globs)}</code>` : '';
+        const clickData = escapeHtml(JSON.stringify({name:rule.name, description:rule.description||'', source:rule.source, pack_name:rule.pack_name||null, file:rule.file||'', type:'Rule', emoji:'📋', preview:rule.preview||'', content:rule.content||rule.preview||''}));
+        return `<div class="skill-row" style="cursor:pointer;" onclick='showExtensionDetail(${clickData})'>
+            <div class="skill-row-info" style="flex:1;min-width:0;">
+                <div style="display:flex;align-items:center;flex-wrap:wrap;gap:2px;">
+                    <span class="skill-row-name">📋 ${escapeHtml(rule.name)}</span>${srcBadge}${globsBadge}
+                </div>
+                ${rule.description ? `<span class="skill-row-desc">${escapeHtml(rule.description)}</span>` : ''}
+            </div>
+        </div>`;
+    };
+    _renderSourceGroups(container, data, source, renderItem, {
+        builtin: { icon: '🏠', title: '内置 Rule',  desc: 'ADS 系统规则（backend/skills/rules/）' },
+        user:    { icon: '👤', title: '用户 Rule',   desc: '项目 .claude/rules/ 或主记忆 CLAUDE.md' },
+        pack:    { icon: '📦', title: 'Pack Rule',   desc: '已安装 ConfigPack 提供' },
+    });
+}
+
+
 
 // 注册当前面板的条目列表，供 showExtensionDetail 左侧列表使用
 // 每次 _renderSourceGroups 渲染时调用
