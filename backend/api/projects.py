@@ -2252,6 +2252,8 @@ async def get_project_skills_all(project_id: str):
                     info["cli"] = cli
                     info["pack_name"] = None
                     info["id"] = info["name"]
+                    info["file"] = str(skill_md)
+                    info["content"] = content
                     user_skills.append(info)
                 except Exception:
                     pass
@@ -2278,6 +2280,8 @@ async def get_project_skills_all(project_id: str):
                     info["pack_name"] = pn
                     info["scope"] = sub
                     info["id"] = info["name"]
+                    info["file"] = str(skill_md)
+                    info["content"] = content
                     pack_skills.append(info)
                 except Exception:
                     pass
@@ -2375,6 +2379,8 @@ async def get_project_commands_all(project_id: str):
                     info["source"] = "pack"
                     info["pack_name"] = pn
                     info["scope"] = sub
+                    info["file"] = str(f)
+                    info["content"] = content
                     pack_cmds.append(info)
                 except Exception:
                     pass
