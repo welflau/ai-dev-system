@@ -1366,6 +1366,8 @@ function _setSourceFilter(containerId, source) {
 }
 
 function _renderSourceGroups(container, data, source, renderItem, groupTitles) {
+    // 每次渲染全量视图时更新条目 registry（供详情列表使用）
+    if (source === 'all') _registerExtItems(data, groupTitles);
     // groupTitles: { builtin, user, pack }
     if (source !== 'all') {
         const list = data[source] || [];
@@ -1566,52 +1568,147 @@ function _renderCommandView(container, data, source) {
     });
 }
 
-// ── 通用扩展详情 Modal ────────────────────────────────────────────────────────
+// ── 通用扩展详情 Modal（左右分栏） ─────────────────────────────────────────────
 
-function showExtensionDetail(item) {
-    // item: { name, description, source, pack_name, content/preview, file?, type?, emoji?, color?, ... }
+// 注册当前面板的条目列表，供 showExtensionDetail 左侧列表使用
+// 每次 _renderSourceGroups 渲染时调用
+let _extDetailRegistry = [];  // [{ group, item }]
+
+function _registerExtItems(data, groupTitles) {
+    _extDetailRegistry = [];
+    for (const key of ['builtin', 'user', 'pack']) {
+        const list = data[key] || [];
+        if (!list.length) continue;
+        const gt = groupTitles[key] || { title: key, icon: '' };
+        if (key === 'pack') {
+            const byPack = {};
+            for (const item of list) {
+                const pn = item.pack_name || '未知';
+                if (!byPack[pn]) byPack[pn] = [];
+                byPack[pn].push(item);
+            }
+            for (const [pn, items] of Object.entries(byPack)) {
+                const groupLabel = `${gt.icon} ${gt.title} · ${pn}`;
+                for (const item of items) _extDetailRegistry.push({ group: groupLabel, item });
+            }
+        } else {
+            const groupLabel = `${gt.icon} ${gt.title}`;
+            for (const item of list) _extDetailRegistry.push({ group: groupLabel, item });
+        }
+    }
+}
+
+function showExtensionDetail(itemOrIdx) {
+    const isIdx = typeof itemOrIdx === 'number';
+    let item, activeIdx;
+
+    if (isIdx) {
+        const entry = _extDetailRegistry[itemOrIdx];
+        if (!entry) return;
+        item = entry.item;
+        activeIdx = itemOrIdx;
+    } else {
+        item = itemOrIdx;
+        // 在 registry 中找到匹配项
+        activeIdx = _extDetailRegistry.findIndex(e => e.item.name === item.name && e.item.source === item.source);
+    }
+
+    // 创建或复用 modal
     let modal = document.getElementById('extensionDetailModal');
     if (!modal) {
         modal = document.createElement('div');
         modal.id = 'extensionDetailModal';
         modal.className = 'modal-overlay';
         modal.innerHTML = `
-            <div class="modal" style="max-width:720px;width:90vw;max-height:84vh;display:flex;flex-direction:column;">
+            <div class="modal" style="max-width:920px;width:92vw;max-height:86vh;display:flex;flex-direction:column;">
                 <div class="modal-header">
                     <h3 id="extDetailTitle" style="margin:0;font-size:15px;">详情</h3>
                     <button class="btn-icon" onclick="closeModal('extensionDetailModal')">&times;</button>
                 </div>
-                <div id="extDetailBody" class="modal-body" style="overflow-y:auto;flex:1;padding:16px 20px;"></div>
+                <div style="display:flex;flex:1;min-height:0;">
+                    <div id="extDetailList" style="width:220px;flex-shrink:0;overflow-y:auto;border-right:1px solid var(--border-color);padding:6px;"></div>
+                    <div id="extDetailPane" style="flex:1;overflow-y:auto;padding:14px 18px;"></div>
+                </div>
             </div>`;
         modal.addEventListener('click', e => { if (e.target === modal) closeModal('extensionDetailModal'); });
         document.body.appendChild(modal);
     }
 
-    const sm = _SOURCE_META[item.source] || _SOURCE_META.builtin;
-    const emojiHtml = item.emoji ? `${escapeHtml(item.emoji)} ` : '';
+    openModal('extensionDetailModal');
+
+    // 渲染左侧列表
+    _renderExtDetailList(activeIdx);
+    // 渲染右侧内容
+    _renderExtDetailPane(item, activeIdx);
+}
+
+function _renderExtDetailList(activeIdx) {
+    const listEl = document.getElementById('extDetailList');
+    if (!listEl) return;
+
+    if (_extDetailRegistry.length === 0) {
+        listEl.innerHTML = '';
+        return;
+    }
+
+    // 按 group 分组
+    const groups = {};
+    const groupOrder = [];
+    for (let i = 0; i < _extDetailRegistry.length; i++) {
+        const { group, item } = _extDetailRegistry[i];
+        if (!groups[group]) { groups[group] = []; groupOrder.push(group); }
+        groups[group].push({ item, idx: i });
+    }
+
+    let html = '';
+    for (const g of groupOrder) {
+        html += `<div style="font-size:10px;color:var(--text-muted);padding:5px 4px 2px;font-weight:600;opacity:.7;text-transform:uppercase;letter-spacing:.05em;">${escapeHtml(g)}</div>`;
+        for (const { item, idx } of groups[g]) {
+            const isActive = idx === activeIdx;
+            const em = item.emoji || '';
+            html += `<div class="ext-list-item" data-idx="${idx}"
+                onclick="showExtensionDetail(${idx})"
+                style="padding:6px 7px;border-radius:4px;cursor:pointer;font-size:12px;margin-bottom:2px;
+                       background:${isActive ? 'var(--bg-elevated)' : 'transparent'};
+                       border-left:2px solid ${isActive ? 'var(--primary)' : 'transparent'};">
+                ${em ? `<span style="margin-right:3px;">${escapeHtml(em)}</span>` : ''}${escapeHtml(item.name)}
+            </div>`;
+        }
+    }
+    listEl.innerHTML = html;
+
+    // 滚动到选中项
+    setTimeout(() => {
+        const active = listEl.querySelector(`[data-idx="${activeIdx}"]`);
+        if (active) active.scrollIntoView({ block: 'nearest' });
+    }, 50);
+}
+
+function _renderExtDetailPane(item, activeIdx) {
     document.getElementById('extDetailTitle').textContent = `${item.emoji || '📄'} ${item.name}`;
 
+    const sm = _SOURCE_META[item.source] || _SOURCE_META.builtin;
     const srcBadge = `<span style="font-size:11px;padding:2px 7px;border-radius:3px;background:${sm.bg};color:${sm.color};">${sm.label}${item.pack_name ? ' · '+escapeHtml(item.pack_name) : ''}</span>`;
     const typeBadge = item.type ? `<span style="font-size:11px;padding:2px 7px;border-radius:3px;background:var(--bg-elevated);color:var(--text-muted);">${escapeHtml(item.type)}</span>` : '';
-    // 路径：优先显示从 backend/ 或 config_packs/ 起的相对部分，去掉绝对路径前缀
+
     const rawFile = item.file || '';
     const displayFile = rawFile
         .replace(/\\/g, '/')
         .replace(/^.*?(?=backend\/|config_packs\/|\.claude\/|\.codebuddy\/)/, '')
         || rawFile.replace(/\\/g, '/').split('/').slice(-3).join('/');
-    const filePath = displayFile ? `<code style="font-size:10px;background:var(--bg-elevated);padding:2px 7px;border-radius:3px;color:var(--text-secondary);" title="${escapeHtml(rawFile)}">${escapeHtml(displayFile)}</code>` : '';
+    const filePath = displayFile
+        ? `<code style="font-size:10px;background:var(--bg-elevated);padding:2px 7px;border-radius:3px;color:var(--text-secondary);" title="${escapeHtml(rawFile)}">${escapeHtml(displayFile)}</code>`
+        : '';
 
     const rawContent = item.content || item.preview || '';
     const bodyText = rawContent.replace(/^---[\s\S]*?---\r?\n?/, '').trim();
 
-    const bodyEl = document.getElementById('extDetailBody');
-    bodyEl.innerHTML = `
+    const pane = document.getElementById('extDetailPane');
+    pane.innerHTML = `
         <div style="margin-bottom:12px;">
-            <div style="font-size:16px;font-weight:600;margin-bottom:4px;">${emojiHtml}${escapeHtml(item.name)}</div>
+            <div style="font-size:15px;font-weight:600;margin-bottom:4px;">${item.emoji ? escapeHtml(item.emoji)+' ' : ''}${escapeHtml(item.name)}</div>
             ${item.description ? `<div style="font-size:12px;color:var(--text-secondary);margin-bottom:6px;">${escapeHtml(item.description)}</div>` : ''}
-            <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">
-                ${srcBadge}${typeBadge}${filePath}
-            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">${srcBadge}${typeBadge}${filePath}</div>
         </div>
         <hr style="border:none;border-top:1px solid var(--border-color);margin:10px 0;">
         <div id="extDetailContent" style="font-size:13px;line-height:1.7;"></div>`;
@@ -1619,28 +1716,26 @@ function showExtensionDetail(item) {
     const contentEl = document.getElementById('extDetailContent');
     if (!bodyText) {
         contentEl.innerHTML = '<div class="empty-state-sm">暂无内容</div>';
-    } else {
-        const ext = (item.file || '').split('.').pop().toLowerCase();
-        const CODE_EXTS = { py:'python', js:'javascript', ts:'typescript', sh:'bash', json:'json', cpp:'cpp', cs:'csharp', gd:'gdscript', rs:'rust', go:'go', yaml:'yaml', yml:'yaml', toml:'toml' };
-        const codeLang = CODE_EXTS[ext];
-        if (codeLang) {
-            const pre = document.createElement('pre');
-            const code = document.createElement('code');
-            code.className = `language-${codeLang} hljs`;
-            code.textContent = rawContent;
-            pre.style.cssText = 'margin:0;border-radius:6px;border:1px solid var(--border-color);overflow-x:auto;';
-            pre.appendChild(code);
-            contentEl.appendChild(pre);
-            if (window.hljs) hljs.highlightElement(code);
-        } else if (window.marked) {
-            try { contentEl.innerHTML = marked.parse(bodyText); }
-            catch (e) { contentEl.textContent = bodyText; }
-        } else {
-            contentEl.textContent = bodyText;
-        }
+        return;
     }
-
-    openModal('extensionDetailModal');
+    const ext = (item.file || '').split('.').pop().toLowerCase();
+    const CODE_EXTS = { py:'python', js:'javascript', ts:'typescript', sh:'bash', json:'json', cpp:'cpp', cs:'csharp', gd:'gdscript', rs:'rust', go:'go', yaml:'yaml', yml:'yaml', toml:'toml' };
+    const codeLang = CODE_EXTS[ext];
+    if (codeLang) {
+        const pre = document.createElement('pre');
+        const code = document.createElement('code');
+        code.className = `language-${codeLang} hljs`;
+        code.textContent = rawContent;
+        pre.style.cssText = 'margin:0;border-radius:6px;border:1px solid var(--border-color);overflow-x:auto;';
+        pre.appendChild(code);
+        contentEl.appendChild(pre);
+        if (window.hljs) hljs.highlightElement(code);
+    } else if (window.marked) {
+        try { contentEl.innerHTML = marked.parse(bodyText); }
+        catch (e) { contentEl.textContent = bodyText; }
+    } else {
+        contentEl.textContent = bodyText;
+    }
 }
 
 
