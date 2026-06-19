@@ -2200,15 +2200,36 @@ async def get_project_skills_all(project_id: str):
             "preview": body[:150],
         }
 
-    # 1. 内置 skills（现有接口数据）
+    # 1. 内置 skills（现有接口数据 + prompt 内容 + 文件路径）
     builtin_skills = []
     try:
         from skills import skill_loader
-        for sid, info in skill_loader.get_all_skills_status().items():
+        all_status = skill_loader.get_all_skills_status()
+        for sid, info in all_status.items():
+            # 读取 prompt 内容
+            content = ""
+            file_path = ""
+            try:
+                cfg = skill_loader.skills.get(sid, {})
+                if cfg.get("type") == "marketplace_item":
+                    fp = cfg.get("file_path", "")
+                    file_path = fp
+                    content = Path(fp).read_text(encoding="utf-8") if fp and Path(fp).exists() else ""
+                else:
+                    prompt_rel = cfg.get("prompt_file", "")
+                    if prompt_rel:
+                        fp = skill_loader.base_dir / prompt_rel
+                        file_path = str(fp)
+                        content = fp.read_text(encoding="utf-8") if fp.exists() else ""
+                if not content:
+                    content = skill_loader.get_skill_prompt(sid) or ""
+            except Exception:
+                pass
             builtin_skills.append({
                 "id": sid, "name": info["name"], "description": info["description"],
                 "source": "builtin", "pack_name": None,
                 "enabled": info["enabled"], "priority": info["priority"],
+                "file": file_path, "content": content, "preview": content[:150],
             })
     except Exception:
         pass
@@ -2294,16 +2315,39 @@ async def get_project_commands_all(project_id: str):
             "preview": body[:150],
         }
 
-    # 1. 内置 + 用户 commands（现有 get_all_commands）
+    # 1. 内置 + 用户 commands（现有 get_all_commands，补充 file 和 content）
     builtin_cmds, user_cmds = [], []
     try:
-        from api.commands import get_all_commands, _BUILTIN_COMMANDS
+        from api.commands import get_all_commands, _BUILTIN_COMMANDS, _load_disk_commands, _load_project_commands
+        from pathlib import Path as _Path
+
+        # 构建 name→文件路径映射
+        _cmd_file_map: dict = {}
+        _skills_cmds_dir = _Path(__file__).resolve().parent.parent / "skills" / "commands"
+        if _skills_cmds_dir.exists():
+            for f in _skills_cmds_dir.glob("*.md"):
+                _cmd_file_map[f.stem] = str(f)
+        if repo_path:
+            for cli, label in [(".claude/commands", "claude"), (".ads/commands", "ads")]:
+                d = _Path(repo_path) / cli
+                if d.exists():
+                    for f in d.glob("*.md"):
+                        _cmd_file_map[f.stem] = str(f)
+
         all_cmds = get_all_commands(repo_path=repo_path)
         builtin_names = set(_BUILTIN_COMMANDS.keys())
         for name, info in all_cmds.items():
             src = info.get("source", "system")
+            fp = _cmd_file_map.get(name, "")
+            content = ""
+            try:
+                if fp:
+                    content = _Path(fp).read_text(encoding="utf-8")
+            except Exception:
+                pass
             entry = {"name": name, "description": info.get("description", ""),
-                     "pack_name": None, "source": src}
+                     "pack_name": None, "source": src,
+                     "file": fp, "content": content, "preview": content[:150]}
             if src in ("claude", "ads") or name not in builtin_names:
                 entry["source"] = "user"
                 user_cmds.append(entry)

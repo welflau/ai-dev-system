@@ -1478,7 +1478,7 @@ function _renderSkillView(container, data, source) {
                 <span class="toggle-slider"></span>
             </label>` : '';
         const opacity = sk.enabled === false ? ' style="opacity:0.5;cursor:pointer;"' : ' style="cursor:pointer;"';
-        const clickData = escapeHtml(JSON.stringify({name:sk.name, description:sk.description||'', source:sk.source, pack_name:sk.pack_name||null, file:sk.id||sk.name, type:'Skill', emoji:'🎓', preview:sk.preview||'', content:sk.content||sk.preview||''}));
+        const clickData = escapeHtml(JSON.stringify({name:sk.name, description:sk.description||'', source:sk.source, pack_name:sk.pack_name||null, file:sk.file||sk.id||sk.name, type:'Skill', emoji:'🎓', preview:sk.preview||'', content:sk.content||sk.preview||''}));
         return `<div class="skill-row"${opacity} onclick='showExtensionDetail(${clickData})'>
             <div class="skill-row-info" style="flex:1;min-width:0;">
                 <div style="display:flex;align-items:center;flex-wrap:wrap;gap:2px;">
@@ -1593,7 +1593,13 @@ function showExtensionDetail(item) {
 
     const srcBadge = `<span style="font-size:11px;padding:2px 7px;border-radius:3px;background:${sm.bg};color:${sm.color};">${sm.label}${item.pack_name ? ' · '+escapeHtml(item.pack_name) : ''}</span>`;
     const typeBadge = item.type ? `<span style="font-size:11px;padding:2px 7px;border-radius:3px;background:var(--bg-elevated);color:var(--text-muted);">${escapeHtml(item.type)}</span>` : '';
-    const filePath = item.file ? `<code style="font-size:10px;background:var(--bg-elevated);padding:2px 7px;border-radius:3px;color:var(--text-secondary);">${escapeHtml(item.file)}</code>` : '';
+    // 路径：优先显示从 backend/ 或 config_packs/ 起的相对部分，去掉绝对路径前缀
+    const rawFile = item.file || '';
+    const displayFile = rawFile
+        .replace(/\\/g, '/')
+        .replace(/^.*?(?=backend\/|config_packs\/|\.claude\/|\.codebuddy\/)/, '')
+        || rawFile.replace(/\\/g, '/').split('/').slice(-3).join('/');
+    const filePath = displayFile ? `<code style="font-size:10px;background:var(--bg-elevated);padding:2px 7px;border-radius:3px;color:var(--text-secondary);" title="${escapeHtml(rawFile)}">${escapeHtml(displayFile)}</code>` : '';
 
     const rawContent = item.content || item.preview || '';
     const bodyText = rawContent.replace(/^---[\s\S]*?---\r?\n?/, '').trim();
