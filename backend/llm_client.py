@@ -209,15 +209,24 @@ CLI_MODEL_OPTIONS: Dict[str, list] = {
         "deepseek-v3-2-volc-ioa",
     ],
     "custom": [],   # 自定义工具不预设模型列表
+    "tclaude": [
+        # 腾讯内网 TClaude CLI 可用模型
+        "claude-sonnet-4-6",
+        "claude-sonnet-4-6-1m",
+        "claude-opus-4-8",
+        "claude-opus-4-8-1m",
+        "claude-haiku-4-5",
+    ],
 }
 
 _CLI_ADAPTERS: Dict[str, Dict] = {
     "claude": {
         "build_cmd": lambda cli, model, prompt: (
             [cli, "--print", "--output-format", "stream-json",
-             "--include-partial-messages", "--model", model]
+             "--include-partial-messages", "--dangerously-skip-permissions", "--model", model]
             if model else
-            [cli, "--print", "--output-format", "stream-json", "--include-partial-messages"]
+            [cli, "--print", "--output-format", "stream-json",
+             "--include-partial-messages", "--dangerously-skip-permissions"]
         ),
         "stdin": True,
         "streaming": True,
@@ -226,9 +235,10 @@ _CLI_ADAPTERS: Dict[str, Dict] = {
     "claude-internal": {
         "build_cmd": lambda cli, model, prompt: (
             [cli, "--print", "--output-format", "stream-json",
-             "--include-partial-messages", "--model", model]
+             "--include-partial-messages", "--dangerously-skip-permissions", "--model", model]
             if model else
-            [cli, "--print", "--output-format", "stream-json", "--include-partial-messages"]
+            [cli, "--print", "--output-format", "stream-json",
+             "--include-partial-messages", "--dangerously-skip-permissions"]
         ),
         "stdin": True,
         "streaming": True,
@@ -246,9 +256,10 @@ _CLI_ADAPTERS: Dict[str, Dict] = {
     "codebuddy": {
         "build_cmd": lambda cli, model, prompt: (
             [cli, "--print", "--output-format", "stream-json",
-             "--include-partial-messages", "--model", model]
+             "--include-partial-messages", "-y", "--model", model]
             if model else
-            [cli, "--print", "--output-format", "stream-json", "--include-partial-messages"]
+            [cli, "--print", "--output-format", "stream-json",
+             "--include-partial-messages", "-y"]
         ),
         "stdin": True,
         "streaming": True,
@@ -259,6 +270,19 @@ _CLI_ADAPTERS: Dict[str, Dict] = {
         "stdin": True,
         "streaming": False,
         "default_cmd": "",
+    },
+    "tclaude": {
+        # 腾讯内网 TClaude CLI，与 claude 二进制同格式
+        "build_cmd": lambda cli, model, prompt: (
+            [cli, "--print", "--output-format", "stream-json",
+             "--include-partial-messages", "--dangerously-skip-permissions", "--model", model]
+            if model else
+            [cli, "--print", "--output-format", "stream-json",
+             "--include-partial-messages", "--dangerously-skip-permissions"]
+        ),
+        "stdin": True,
+        "streaming": True,
+        "default_cmd": "tclaude",
     },
 }
 
@@ -414,12 +438,11 @@ class LLMClient:
 
     def _messages_to_prompt(self, messages: List[Dict]) -> str:
         """
-        将 messages 转为 CLI stdin 的用户消息文本（不含 system）。
-
-        策略：
-        - 只取最后一条 user 消息（system 已通过 --system-prompt 参数单独传递）
-        - 保持简单可靠
+        将 messages 转为 CLI stdin 的 prompt 文本。
+        system 消息以 <ads_context> 标签包裹注入，防止 AI 把它当成需要回显的内容。
+        只取最后一条 user 消息。
         """
+        system_text = ""
         last_user_text = ""
 
         for m in messages:
@@ -434,23 +457,18 @@ class LLMClient:
                 content = str(content)
             content = content.strip()
 
-            if role == "user":
+            if role == "system":
+                system_text = content
+            elif role == "user":
                 last_user_text = content  # 每次覆盖，只保留最后一条
 
-        return last_user_text
+        parts = []
+        if system_text:
+            parts.append(f"<ads_context>\n{system_text}\n</ads_context>")
+        if last_user_text:
+            parts.append(last_user_text)
 
-    def _extract_system_prompt(self, messages: List[Dict]) -> str:
-        """从 messages 中提取 system 消息文本（供 --system-prompt 参数使用）。"""
-        for m in messages:
-            if m.get("role") == "system":
-                content = m.get("content", "")
-                if isinstance(content, list):
-                    content = " ".join(
-                        b.get("text", "") for b in content
-                        if isinstance(b, dict) and b.get("type") == "text"
-                    )
-                return str(content).strip() if content else ""
-        return ""
+        return "\n\n".join(parts)
 
     def _messages_to_stdin(self, messages: List[Dict]) -> bytes:
         """
@@ -479,13 +497,19 @@ class LLMClient:
             return self._messages_to_prompt(messages).encode("utf-8")
 
         # 有图片：构建 JSON stdin
+        system_text = ""
         last_user_text = ""
         last_user_images = []
 
         for m in messages:
             role = m.get("role", "")
             content = m.get("content", "")
-            if role == "user":
+            if role == "system":
+                system_text = content if isinstance(content, str) else " ".join(
+                    b.get("text", "") for b in content
+                    if isinstance(b, dict) and b.get("type") == "text"
+                )
+            elif role == "user":
                 if isinstance(content, list):
                     last_user_text = " ".join(
                         b.get("text", "") for b in content
@@ -499,9 +523,11 @@ class LLMClient:
                     last_user_text = content or ""
                     last_user_images = []
 
-        # 构建 blocks：text + 图片（system 已通过 --system-prompt 参数单独传递）
+        # 构建 blocks：system(ads_context) + text + 图片
+        full_text = (f"<ads_context>\n{system_text}\n</ads_context>\n\n" + last_user_text).strip() \
+            if system_text else last_user_text
         user_blocks = []
-        if last_user_text:
+        if full_text:
             user_blocks.append({"type": "text", "text": last_user_text})
         user_blocks.extend(last_user_images)
 
@@ -519,7 +545,7 @@ class LLMClient:
 
         不支持 --settings 的 cli_type 或无 .ads 配置时返回 ([], None)。
         """
-        if cli_type not in ("claude", "claude-internal", "codebuddy"):
+        if cli_type not in ("claude", "claude-internal", "codebuddy", "tclaude"):
             logger.debug("🖥️  CLI MCP 注入跳过：cli_type=%s 不支持 --settings", cli_type)
             return [], None
         if not cwd:
@@ -629,17 +655,7 @@ class LLMClient:
         raw_args   = adapter["build_cmd"](self.cli_cmd, self.cli_model, prompt)
         cmd = cmd_prefix + raw_args[1:]
 
-        # 对支持 --system-prompt 的 CLI，把 system 消息通过参数传递而非拼入 stdin
-        _supports_system_param = self.cli_type in ("claude", "claude-internal", "codebuddy")
-        if _supports_system_param:
-            _sys_text = self._extract_system_prompt(messages)
-            if _sys_text:
-                cmd = cmd + ["--system-prompt", _sys_text]
-
-        _cmd_display = [
-            "<system-prompt>" if (i > 0 and cmd[i-1] == "--system-prompt") else c
-            for i, c in enumerate(cmd)
-        ]
+        _cmd_display = list(cmd)
         logger.info("🖥️  CLI 调用: %s (type=%s, stream=%s, prompt_len=%d)",
                     " ".join(_cmd_display), self.cli_type, use_stream, len(prompt))
         logger.info("🖥️  CLI stdin 末尾（用户消息区）:\n...%s\n---", prompt[-300:])
@@ -804,21 +820,12 @@ class LLMClient:
         cmd = cmd_prefix + raw_args[1:]
 
         # Session Resume：支持 --resume 的 CLI 类型追加参数
-        _RESUME_SUPPORTED = {"claude", "claude-internal", "codebuddy"}
+        _RESUME_SUPPORTED = {"claude", "claude-internal", "codebuddy", "tclaude"}
         if resume_session_id and self.cli_type in _RESUME_SUPPORTED:
             cmd += ["--resume", resume_session_id]
             logger.info("🖥️  CLI Resume: session_id=%s", resume_session_id)
-        elif self.cli_type in _RESUME_SUPPORTED:
-            # 首轮（无 resume）：通过 --system-prompt 传递 system 消息，而非拼入 stdin
-            # --resume 时跳过：CLI 会话已记录上一轮的 system prompt，重复传会被忽略或冲突
-            _sys_text = self._extract_system_prompt(messages)
-            if _sys_text:
-                cmd = cmd + ["--system-prompt", _sys_text]
 
-        _cmd_display = [
-            "<system-prompt>" if (i > 0 and cmd[i-1] == "--system-prompt") else c
-            for i, c in enumerate(cmd)
-        ]
+        _cmd_display = list(cmd)
         logger.info("🖥️  CLI 流式调用: %s (type=%s)", " ".join(_cmd_display), self.cli_type)
         logger.info("🖥️  CLI 流式 stdin 末尾（用户消息区）:\n...%s\n---", prompt[-300:])
 

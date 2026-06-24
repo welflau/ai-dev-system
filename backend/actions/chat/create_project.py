@@ -127,10 +127,27 @@ class CreateProjectAction(ActionBase):
 
         if not name:
             return ActionResult(success=False, data={"type": "error", "message": "项目名称不能为空"})
-        if not git_remote_url and not local_repo_path:
-            return ActionResult(success=False, data={"type": "error", "message": "Git 远程仓库 URL 不能为空"})
         if not traits:
             logger.warning("创建项目 '%s' 时 traits 为空 — 后续 skill/SOP 匹配会退化为通用流程", name)
+
+        # git_remote_url 为空且非本地路径模式时，自动在 AiDS-Projects 组织下创建 GitHub 仓库
+        if not git_remote_url and not local_repo_path:
+            try:
+                from actions.chat.create_github_repo import CreateGithubRepoAction
+                import re as _re_safe
+                safe_repo = _re_safe.sub(r'[^a-zA-Z0-9_\-]', '-', name).strip('-') or "new-project"
+                gh_result = await CreateGithubRepoAction().run({
+                    "repo_name": safe_repo,
+                    "description": description or name,
+                    "private": False,
+                })
+                if gh_result.success:
+                    git_remote_url = gh_result.data.get("clone_url") or gh_result.data.get("html_url") or ""
+                    logger.info("自动创建 GitHub 仓库: %s", git_remote_url)
+                else:
+                    logger.warning("自动创建 GitHub 仓库失败（忽略，继续本地初始化）: %s", gh_result.error)
+            except Exception as _ge:
+                logger.warning("自动创建 GitHub 仓库异常（忽略）: %s", _ge)
 
         try:
             project_id = generate_id("PRJ")

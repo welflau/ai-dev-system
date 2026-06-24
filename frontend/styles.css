@@ -1997,6 +1997,14 @@ body.chat-open .drawer.docked {
     overflow-y: auto;
 }
 .modal.modal-lg { width: 580px; }
+.modal.maximized {
+    max-width: 100vw !important;
+    max-height: 100vh !important;
+    width: 100vw !important;
+    height: 100vh !important;
+    border-radius: 0 !important;
+    border: none !important;
+}
 
 .modal-header {
     display: flex;
@@ -4101,6 +4109,12 @@ pre.hljs, .hljs pre { background: transparent !important; }
 /* 删除线 */
 .md-preview del { color: var(--text-muted); }
 
+/* modal 面板内紧凑模式 */
+.md-preview.md-compact {
+    padding: 0;
+    max-width: none;
+}
+
 /* ---- Git Log 右侧边栏 ---- */
 .git-log-sidebar {
     display: flex;
@@ -5705,10 +5719,21 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
 /* 聊天消息区 */
 .chat-panel-body {
     flex: 1;
-    overflow-y: auto;
     min-height: 0;
     padding: 0;
+    display: flex;
+    flex-direction: row;
+    overflow: hidden;
 }
+
+/* 聊天消息区：默认占满全部宽度，有任务侧面板时收缩 */
+.chat-panel-body > .chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    min-width: 0;
+    min-height: 0;
+}
+
 
 .chat-messages {
     padding: 12px;
@@ -5800,6 +5825,43 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
 
 .chat-msg.assistant .chat-msg-avatar {
     background: rgba(6, 182, 212, 0.15);
+}
+
+/* 带模型名的头像容器 */
+.chat-avatar-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    flex-shrink: 0;
+    margin-top: 2px;
+}
+.chat-avatar-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 15px;
+    background: rgba(6, 182, 212, 0.15);
+    overflow: hidden;
+}
+.chat-avatar-icon img {
+    width: 18px;
+    height: 18px;
+    object-fit: contain;
+    border-radius: 3px;
+}
+.chat-avatar-model {
+    font-size: 9px;
+    color: var(--text-muted);
+    max-width: 48px;
+    text-align: center;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    line-height: 1.2;
 }
 
 .chat-msg-content {
@@ -8311,24 +8373,76 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
 /* 轮次体（折叠/展开） */
 .crp-round-body {
     max-height: 0; overflow: hidden;
-    transition: max-height 0.25s ease-out;
+    transition: max-height 0.3s ease-out;
     padding: 0 10px 0 28px;
 }
 .crp-round-expanded > .crp-round-body {
-    max-height: 600px;
+    max-height: 4000px;
     padding-bottom: 6px;
 }
 
-/* 推理全文区（轮次体内） */
+/* 推理全文区（轮次体内）—— 复用 md-preview 样式 */
 .crp-round-thinking {
-    font-size: 11px; font-style: italic;
+    font-size: 11.5px;
     color: var(--text-muted, #718096);
-    white-space: pre-wrap; line-height: 1.6; word-break: break-word;
-    padding: 4px 0 8px;
+    line-height: 1.7; word-break: break-word;
+    padding: 6px 0 10px;
     border-bottom: 1px solid rgba(255,255,255,0.05);
     margin-bottom: 6px;
 }
 .crp-round-thinking:empty { display: none; }
+/* heading */
+.crp-round-thinking h1,.crp-round-thinking h2,.crp-round-thinking h3,
+.crp-round-thinking h4,.crp-round-thinking h5,.crp-round-thinking h6 {
+    font-weight: 600; margin: 0.9em 0 0.4em; color: var(--text-secondary);
+}
+.crp-round-thinking h1 { font-size: 1.15em; }
+.crp-round-thinking h2 { font-size: 1.05em; }
+.crp-round-thinking h3 { font-size: 0.98em; }
+/* paragraph */
+.crp-round-thinking p { margin: 0.5em 0; }
+/* bold / italic */
+.crp-round-thinking strong { color: var(--text); font-weight: 600; }
+.crp-round-thinking em { font-style: italic; }
+/* inline code */
+.crp-round-thinking code:not(pre code) {
+    font-family: 'JetBrains Mono', Consolas, monospace;
+    font-size: 0.9em;
+    background: rgba(255,255,255,0.07);
+    padding: 1px 4px; border-radius: 3px;
+    color: #e2c08d;
+}
+/* code block */
+.crp-round-thinking pre {
+    background: rgba(0,0,0,0.25);
+    border: 1px solid var(--border);
+    border-radius: 5px; margin: 6px 0; overflow-x: auto;
+}
+.crp-round-thinking pre code {
+    display: block; padding: 8px 12px;
+    font-size: 0.9em; line-height: 1.5; color: #e2e8f0;
+}
+/* list */
+.crp-round-thinking ul,.crp-round-thinking ol {
+    padding-left: 1.5em; margin: 0.4em 0;
+}
+.crp-round-thinking li { margin: 0.2em 0; }
+/* blockquote */
+.crp-round-thinking blockquote {
+    border-left: 3px solid var(--primary);
+    margin: 6px 0; padding: 4px 10px;
+    background: rgba(99,102,241,0.06);
+    border-radius: 0 4px 4px 0;
+}
+.crp-round-thinking blockquote p { margin: 0; }
+/* table */
+.crp-round-thinking table {
+    border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 0.95em;
+}
+.crp-round-thinking th { background: var(--bg-elevated); padding: 5px 10px; font-weight: 600; border-bottom: 1px solid var(--border); }
+.crp-round-thinking td { padding: 4px 10px; border-bottom: 1px solid rgba(255,255,255,0.04); }
+/* hr */
+.crp-round-thinking hr { border: none; border-top: 1px solid var(--border); margin: 10px 0; }
 
 /* 工具步骤容器 */
 .crp-round-steps { padding: 2px 0; }
@@ -8341,6 +8455,20 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
     padding: 0 4px;
 }
 .ctp-step-expanded .ctp-result-toggle { transform: rotate(90deg); }
+
+.ctp-full-btn {
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 0 4px;
+    opacity: 0.6;
+    transition: opacity 0.15s;
+    background: none;
+    border: none;
+    line-height: 1;
+}
+.ctp-full-btn:hover { opacity: 1; color: var(--accent); }
 
 .ctp-step-result {
     max-height: 0; overflow: hidden;

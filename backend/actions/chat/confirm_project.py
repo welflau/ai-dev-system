@@ -168,8 +168,6 @@ class ConfirmProjectAction(ActionBase):
         # ── 场景2：新建项目（原有逻辑）───────────────────
         if not name:
             return ActionResult(success=False, error="项目名称不能为空")
-        if not git_remote_url and not local_repo_path:
-            return ActionResult(success=False, error="Git 远程仓库 URL 不能为空")
 
         traits = [str(t).strip() for t in traits_raw if str(t).strip()]
         if not traits:

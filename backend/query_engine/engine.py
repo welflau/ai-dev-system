@@ -267,7 +267,7 @@ class QueryEngine:
                 _cli_tool_names: dict = {}   # tool_use_id → tool_name
                 _cli_tool_started: set = set()  # 已 yield ToolStartEvent 的 tool_use_id，防重复
 
-                # 把 system prompt 拼入 messages，供 _extract_system_prompt 提取后通过 --system-prompt 传递
+                # 把 system prompt 拼入 messages，_messages_to_prompt 会包裹为 <ads_context> 注入 stdin
                 cli_messages = current_messages
                 if system:
                     cli_messages = [{"role": "system", "content": system}] + current_messages
@@ -313,10 +313,47 @@ class QueryEngine:
 
                 if full_cli_text:
                     yield ThinkingDoneEvent(text="")  # 折叠思考面板
+
+                # CLI 文本里解析 [ACTION:xxx]...[/ACTION] 标签
+                _cli_action = None
+                _clean_text = full_cli_text
+                import re as _re_act, json as _json_act
+                _act_m = _re_act.search(
+                    r'\[ACTION:(\w+)\]([\s\S]*?)\[/ACTION\]', full_cli_text
+                )
+                if _act_m:
+                    _act_type = _act_m.group(1)
+                    _act_body = _act_m.group(2).strip()
+                    # 尝试 JSON 解析，失败则用 key: value 格式解析
+                    try:
+                        _cli_action = _json_act.loads(_act_body)
+                        _cli_action["type"] = _act_type
+                    except Exception:
+                        _parsed = {"type": _act_type}
+                        for _line in _act_body.splitlines():
+                            if ':' in _line:
+                                _k, _, _v = _line.partition(':')
+                                _k, _v = _k.strip(), _v.strip()
+                                if _k == "traits":
+                                    _parsed[_k] = [t.strip() for t in _v.split(',') if t.strip()]
+                                elif _k:
+                                    _parsed[_k] = _v
+                        _cli_action = _parsed if len(_parsed) > 1 else None
+                    # 从显示文本中去掉 action 块
+                    _clean_text = _re_act.sub(
+                        r'\[ACTION:\w+\][\s\S]*?\[/ACTION\]', '', full_cli_text
+                    ).strip()
+
+                if _cli_action:
+                    yield ActionEvent(action_data=_cli_action)
+
+                # action だけ出力で本文が空の場合、空吹き出しを防ぐ
+                _display_text = _clean_text or ('' if _cli_action else full_cli_text)
+
                 yield MessageDoneEvent(
-                    full_text=full_cli_text,
+                    full_text=_display_text,
                     thinking_steps=[],
-                    final_action=None,
+                    final_action=_cli_action,
                     rounds=1,
                     total_tokens=0,
                 )

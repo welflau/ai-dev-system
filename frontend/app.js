@@ -323,6 +323,35 @@ async function api(path, options = {}) {
 
 // ==================== LLM 状态 ====================
 
+// CLI 类型 → 头像图标（内联 SVG，不依赖外部资源）
+const _CLI_ICONS = {
+    'claude': `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="12" r="12" fill="#CC785C"/><text x="12" y="16" text-anchor="middle" font-size="11" fill="white" font-family="sans-serif">C</text></svg>`,
+    'claude-internal': `<svg viewBox="0 0 24 24" width="16" height="16"><circle cx="12" cy="12" r="12" fill="#CC785C"/><text x="12" y="16" text-anchor="middle" font-size="11" fill="white" font-family="sans-serif">C</text></svg>`,
+    'codebuddy': `<svg viewBox="0 0 24 24" width="16" height="16"><circle cx="12" cy="12" r="12" fill="#1677ff"/><text x="12" y="16" text-anchor="middle" font-size="10" fill="white" font-family="sans-serif">CB</text></svg>`,
+    'gemini-internal': `<svg viewBox="0 0 24 24" width="16" height="16"><circle cx="12" cy="12" r="12" fill="#4285f4"/><text x="12" y="16" text-anchor="middle" font-size="14" fill="white" font-family="sans-serif">✦</text></svg>`,
+    'tclaude': `<svg viewBox="0 0 24 24" width="16" height="16"><circle cx="12" cy="12" r="12" fill="#7B2FBE"/><text x="12" y="16" text-anchor="middle" font-size="10" fill="white" font-family="sans-serif">TC</text></svg>`,
+    'custom': `<svg viewBox="0 0 24 24" width="16" height="16"><circle cx="12" cy="12" r="12" fill="#64748b"/><text x="12" y="16" text-anchor="middle" font-size="11" fill="white" font-family="sans-serif">?</text></svg>`,
+};
+
+/**
+ * 构建 assistant 聊天头像 HTML。
+ * CLI 模式：显示对应工具图标 + 模型名；API 模式：显示 🤖 + 模型名。
+ */
+function _buildAssistantAvatar() {
+    const cfg = window._llmConfig || {};
+    const isCli = cfg.api_format === 'cli';
+    const rawModel = isCli ? (cfg.cli_model || cfg.model || '') : (cfg.model || '');
+    // 取最后一段短名：claude-sonnet-4-6 → sonnet-4-6，gemini-3.1-pro → 3.1-pro
+    const modelLabel = rawModel.replace(/^claude-/, '').replace(/^gemini-/, '').replace(/^gpt-/, '');
+    const shortModel = modelLabel.length > 10 ? modelLabel.slice(0, 9) + '…' : modelLabel;
+    const iconSvg = isCli ? (_CLI_ICONS[cfg.cli_type] || _CLI_ICONS['custom']) : null;
+    const iconHtml = iconSvg || '<span style="font-size:14px;">🤖</span>';
+    return `<div class="chat-avatar-wrap">
+        <div class="chat-avatar-icon">${iconHtml}</div>
+        ${shortModel ? `<div class="chat-avatar-model">${escapeHtml(shortModel)}</div>` : ''}
+    </div>`;
+}
+
 async function checkLLMStatus() {
     const el = document.getElementById('llmStatus');
     try {
@@ -10225,7 +10254,7 @@ async function _splitPaneSend(paneId) {
     const typingEl = document.createElement('div');
     typingEl.className = 'chat-msg assistant';
     typingEl.id = `chatTyping_${paneId}`;
-    typingEl.innerHTML = `<div class="chat-msg-avatar">🤖</div>
+    typingEl.innerHTML = `${_buildAssistantAvatar()}
         <div class="chat-msg-content"><div class="chat-msg-bubble" style="display:inline-block;">
         <div class="chat-typing"><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div></div>
         </div></div>`;
@@ -10261,7 +10290,7 @@ async function _sendChatStreamingToContainer(url, body, msgContainer, thinkingCt
     bubbleWrapper.className = 'chat-msg assistant _streaming';
     bubbleWrapper.style.display = 'none';
     bubbleWrapper.innerHTML = `
-        <div class="chat-msg-avatar">🤖</div>
+        ${_buildAssistantAvatar()}
         <div class="chat-msg-content">
             <div class="chat-msg-bubble"></div>
             <div class="chat-msg-time">${formatTime(new Date().toISOString())}</div>
@@ -11078,7 +11107,7 @@ async function _sendChatStreaming(url, body) {
     bubbleWrapper.className = 'chat-msg assistant _streaming';
     bubbleWrapper.style.display = 'none';
     bubbleWrapper.innerHTML = `
-        <div class="chat-msg-avatar">🤖</div>
+        ${_buildAssistantAvatar()}
         <div class="chat-msg-content">
             <div class="chat-msg-bubble _stream-bubble"></div>
             <div class="chat-msg-time"></div>
@@ -11231,21 +11260,23 @@ async function _sendChatStreaming(url, body) {
                             <span class="crp-round-reasoning crp-round-reasoning-placeholder crp-reasoning-hidden"></span>
                             <span class="crp-round-chevron">›</span>
                         </div>
-                        <div class="crp-round-body">
-                            <div class="crp-round-thinking"></div>
-                            <div class="crp-round-steps"></div>
-                        </div>`;
+                        <div class="crp-round-body"></div>`;
                     roundsBody.appendChild(_curRoundEl);
                     _curRoundBody = _curRoundEl.querySelector('.crp-round-body');
-                    _curRoundThinkingEl = _curRoundEl.querySelector('.crp-round-thinking');
-                    _curRoundStepsEl = _curRoundEl.querySelector('.crp-round-steps');
+                    // 穿插模式：thinking 和 tool 都直接追加到 body，不再用固定容器
+                    _curRoundThinkingEl = null;   // 当前活跃的 thinking 块
+                    _curRoundStepsEl = _curRoundBody; // tool 步骤直接加到 body
                     scrollChatToBottom();
 
                 } else if (eventName === 'thinking_delta') {
-                    // J-3b: 当前轮推理文字流入
                     _curRoundBuf += data.delta || '';
+                    // 穿插模式：没有活跃 thinking 块时新建一个（tool 后面继续思考时插入新块）
+                    if (!_curRoundThinkingEl && _curRoundBody) {
+                        _curRoundThinkingEl = document.createElement('div');
+                        _curRoundThinkingEl.className = 'crp-round-thinking';
+                        _curRoundBody.appendChild(_curRoundThinkingEl);
+                    }
                     if (_curRoundThinkingEl) {
-                        // body 内实时渲染 Markdown（每次全量替换）
                         if (window.marked) {
                             try { _curRoundThinkingEl.innerHTML = marked.parse(_curRoundBuf); }
                             catch(e) { _curRoundThinkingEl.textContent = _curRoundBuf; }
@@ -11253,7 +11284,6 @@ async function _sendChatStreaming(url, body) {
                             _curRoundThinkingEl.textContent = _curRoundBuf;
                         }
                     }
-                    // 摘要行：只显示前 120 字，末尾加省略号
                     const _reasoningEl = _curRoundEl?.querySelector('.crp-round-reasoning');
                     if (_reasoningEl) {
                         const _snippet = _curRoundBuf.replace(/\n+/g, ' ').slice(0, 120);
@@ -11272,7 +11302,6 @@ async function _sendChatStreaming(url, body) {
                         _reasoningEl.textContent = fullText_.length > 120 ? _snippet + '…' : _snippet;
                         _reasoningEl.classList.remove('crp-reasoning-hidden', 'crp-round-reasoning-placeholder');
                     }
-                    // body 内渲染完整 Markdown
                     if (_curRoundThinkingEl && fullText_) {
                         if (window.marked) {
                             try { _curRoundThinkingEl.innerHTML = marked.parse(fullText_); }
@@ -11283,13 +11312,13 @@ async function _sendChatStreaming(url, body) {
                         _curRoundEl?.classList.add('crp-round-expanded');
                     }
                     _curRoundBuf = '';
+                    _curRoundThinkingEl = null;  // 下一段思考或 tool 前重置，保证穿插顺序
 
                 } else if (eventName === 'tool_start') {
-                    // J-3b: 工具开始 — 在当前轮次里添加步骤（running 状态）
                     if (_typingBubble) _typingBubble.innerHTML = `<span class="chat-typing-text">正在调用工具…</span>`;
                     const _hint = _extractArgsHint(data.tool, data.input || {});
                     const toolLabel = _TOOL_LABELS[data.tool] || `🔧 ${data.tool}`;
-                    // 无推理文字时，用第一个工具标签作为本轮说明
+                    _curRoundThinkingEl = null;  // tool 插入后，后续 thinking_delta 新建块
                     const _reasoningEl2 = _curRoundEl?.querySelector('.crp-round-reasoning');
                     if (_reasoningEl2 && _reasoningEl2.classList.contains('crp-reasoning-hidden')) {
                         _reasoningEl2.textContent = toolLabel;
@@ -11335,7 +11364,24 @@ async function _sendChatStreaming(url, body) {
                             const toggleEl = stepEl.querySelector('.ctp-result-toggle');
                             if (resultEl && data.result) {
                                 resultEl.innerHTML = _formatToolResult(data.tool, data.result);
-                                if (toggleEl) toggleEl.style.display = '';
+                                // Bash/Shell 工具结果默认展开 + 加"全屏查看"按钮
+                                const _isShell = ['Bash', 'bash', 'shell', 'Shell',
+                                    'mcp__ide__executeCode'].includes(data.tool);
+                                if (_isShell) {
+                                    stepEl.classList.add('ctp-step-expanded');
+                                    // 存原始输出供弹窗使用
+                                    const _rawKey = 'toolRaw_' + Math.random().toString(36).slice(2);
+                                    window[_rawKey] = data.result;
+                                    const _fullBtn = document.createElement('button');
+                                    _fullBtn.className = 'btn-icon ctp-full-btn';
+                                    _fullBtn.title = '全屏查看输出';
+                                    _fullBtn.textContent = '⛶';
+                                    _fullBtn.onclick = () => showToolOutputModal(window[_rawKey], data.tool);
+                                    const row1 = stepEl.querySelector('.ctp-step-row1');
+                                    if (row1) row1.appendChild(_fullBtn);
+                                } else if (toggleEl) {
+                                    toggleEl.style.display = '';
+                                }
                             }
                         }
                     }
@@ -11436,7 +11482,7 @@ async function _sendChatStreaming(url, body) {
         if (_curRoundEl) {
             const hasReasoning = (_curRoundBuf || '').trim().length > 0
                 || _curRoundEl.querySelector('.crp-round-reasoning:not(.crp-round-reasoning-placeholder)');
-            const hasSteps = (_curRoundStepsEl?.children.length || 0) > 0;
+            const hasSteps = (_curRoundBody?.children.length || 0) > 0;
             if (!hasReasoning && !hasSteps) {
                 _curRoundEl.remove();  // 空轮次：静默移除
                 _roundCount = Math.max(0, _roundCount - 1);
@@ -11450,9 +11496,16 @@ async function _sendChatStreaming(url, body) {
         if (_roundsHeader) {
             const elapsed = _panelStartTime ? ((Date.now() - _panelStartTime) / 1000).toFixed(1) + 's' : '';
             const stepPart = _stepCount > 0 ? ` · ${_stepCount} 步` : '';
-            _roundsHeader.textContent = `思考了 ${_roundCount} 轮${stepPart}${elapsed ? ' · ' + elapsed : ''}`;
+            const roundPart = _roundCount > 0 ? `${_roundCount} 轮` : '0 步';
+            _roundsHeader.textContent = `思考了 ${roundPart}${stepPart}${elapsed ? ' · ' + elapsed : ''}`;
         }
-        _roundsPanel.classList.add('crp-collapsed');
+        // _roundsPanel 有内容（或有耗时）时才折叠显示，否则移除
+        const _bodyChildren = _roundsPanel.querySelector('.crp-rounds-body')?.children.length || 0;
+        if (_bodyChildren === 0 && _roundCount === 0) {
+            _roundsPanel.remove();
+        } else {
+            _roundsPanel.classList.add('crp-collapsed');
+        }
         // max_tokens 截断提示：在思考面板下方插入说明
         if (_stopReasonWarning === 'max_tokens') {
             const warn = document.createElement('div');
@@ -11620,7 +11673,9 @@ async function loadTicketConversations(ticketId) {
                 const msgEl = document.createElement('div');
                 msgEl.className = `chat-msg ${msg.role}`;
                 msgEl.innerHTML = `
-                    <div class="chat-msg-avatar">${msg.role === 'user' ? '📝' : '🤖'}</div>
+                    ${msg.role === 'user'
+                        ? '<div class="chat-msg-avatar">📝</div>'
+                        : _buildAssistantAvatar()}
                     <div class="chat-msg-content">
                         ${agentBadge}
                         <div class="chat-msg-bubble">${formatChatContent(msg.content)}</div>
@@ -11713,7 +11768,9 @@ async function loadAllTicketConversations() {
                         const msgEl = document.createElement('div');
                         msgEl.className = `chat-msg ${msg.role}`;
                         msgEl.innerHTML = `
-                            <div class="chat-msg-avatar">${msg.role === 'user' ? '📝' : '🤖'}</div>
+                            ${msg.role === 'user'
+                                ? '<div class="chat-msg-avatar">📝</div>'
+                                : _buildAssistantAvatar()}
                             <div class="chat-msg-content">
                                 ${agentBadge}
                                 <div class="chat-msg-bubble">${formatChatContent(msg.content)}</div>
@@ -11861,11 +11918,157 @@ function _formatAicrIssues(issues, suggestions) {
     return rows.join('') || '（无内容）';
 }
 
-/** 把工具 result JSON 格式化为可读 HTML（展开区用） */
+/** /tasks — 在聊天面板右侧打开后台任务侧面板（不进入全屏分屏模式）*/
+async function _openTasksPanel() {
+    // 如果当前处于全屏分屏状态，先退出（防止旧状态残留）
+    if (_chatFullscreen) {
+        toggleChatFullscreen();
+        await new Promise(r => setTimeout(r, 200));
+    }
+
+    const panel = document.getElementById('tasksSidePanel');
+    const body = document.getElementById('chatPanelBody');
+    if (!panel || !body) return;
+
+    // 채팅 패널이 닫혀있으면 열기
+    if (!chatPanelOpen) toggleChatPanel();
+
+    panel.style.display = 'flex';
+    body.classList.add('has-tasks-panel');
+    _refreshTasksPanel();
+}
+
+function _closeTasksSplitPane() {
+    const panel = document.getElementById('tasksSidePanel');
+    const body = document.getElementById('chatPanelBody');
+    if (panel) panel.style.display = 'none';
+    if (body) body.classList.remove('has-tasks-panel');
+}
+
+async function _refreshTasksPanel() {
+    const listEl = document.getElementById('tasksPanelList');
+    if (!listEl) return;
+    listEl.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);">加载中…</div>';
+
+    try {
+        const url = currentProjectId ? `/projects/${currentProjectId}/commands/tasks` : `/commands/tasks`;
+        const resp = await originalApi(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+        const tasks = resp?.data?.tasks || [];
+
+        if (!tasks.length) {
+            listEl.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);">✅ 无运行中任务</div>';
+            return;
+        }
+
+        const statusIcon = s => ({ running:'🔄', in_progress:'🔄', executing:'🔄', pending:'⏳', queued:'⏳' }[s] || '•');
+        listEl.innerHTML = tasks.map(t => `
+            <div class="tasks-panel-item" onclick="_selectTaskItem(${JSON.stringify(t).replace(/"/g,'&quot;')})"
+                 style="padding:8px 14px;cursor:pointer;border-bottom:1px solid var(--border-light,rgba(255,255,255,.06));
+                        transition:background .15s;">
+                <div style="display:flex;align-items:center;gap:6px;margin-bottom:2px;">
+                    <span>${statusIcon(t.status)}</span>
+                    <span style="font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(t.title)}</span>
+                </div>
+                <div style="color:var(--text-muted);font-size:10px;padding-left:20px;">
+                    ${t.agent ? escapeHtml(t.agent) + ' · ' : ''}${t.elapsed ? t.elapsed : ''}
+                    ${t.action ? ' · ' + escapeHtml(t.action.slice(0,30)) : ''}
+                </div>
+            </div>`).join('');
+
+        // 悬停效果
+        listEl.querySelectorAll('.tasks-panel-item').forEach(el => {
+            el.addEventListener('mouseenter', () => el.style.background = 'var(--bg-hover,rgba(255,255,255,.05))');
+            el.addEventListener('mouseleave', () => el.style.background = '');
+        });
+    } catch(e) {
+        listEl.innerHTML = `<div style="padding:20px;color:var(--danger);">加载失败: ${escapeHtml(String(e))}</div>`;
+    }
+}
+
+async function _selectTaskItem(task) {
+    const outputEl = document.getElementById('tasksPanelOutput');
+    if (!outputEl) return;
+
+    outputEl.textContent = '加载中…';
+
+    try {
+        if (task.type === 'ticket' && task.project_id) {
+            // 读取工单最近日志
+            const data = await api(`/tickets/${task.id}/logs?limit=200`);
+            const logs = data.logs || [];
+            if (!logs.length) { outputEl.textContent = '（暂无日志）'; return; }
+            outputEl.textContent = logs.map(l => {
+                const ts = l.created_at ? l.created_at.slice(11,19) : '';
+                const detail = typeof l.detail === 'string' ? l.detail
+                    : (l.detail?.message || JSON.stringify(l.detail || ''));
+                return `[${ts}] [${l.agent_type||'?'}] ${l.action||''}: ${detail}`;
+            }).join('\n');
+        } else if (task.type === 'ci_build') {
+            // 显示 CI 构建日志尾部
+            const tail = task.log_tail || '（无输出）';
+            outputEl.textContent = `# CI 构建: ${task.title}\n状态: ${task.status}\n耗时: ${task.elapsed}\n\n${tail}`;
+        } else {
+            outputEl.textContent = JSON.stringify(task, null, 2);
+        }
+        outputEl.scrollTop = outputEl.scrollHeight;
+    } catch(e) {
+        outputEl.textContent = `加载日志失败: ${e}`;
+    }
+}
+
+/** 全屏查看工具输出 Modal */
+function showToolOutputModal(resultRaw, toolName) {
+    let existing = document.getElementById('toolOutputModal');
+    if (existing) existing.remove();
+
+    const label = toolName || 'Bash';
+    let content = '';
+    if (typeof resultRaw === 'string') {
+        try {
+            const d = JSON.parse(resultRaw);
+            const out = (d.stdout || d.output || '').trim();
+            const err = (d.stderr || '').trim();
+            const code = d.exit_code !== undefined ? `exit ${d.exit_code}\n\n` : '';
+            content = code + (out || '') + (err ? '\n\n[stderr]\n' + err : '');
+        } catch { content = resultRaw; }
+    } else {
+        content = JSON.stringify(resultRaw, null, 2);
+    }
+
+    const modal = document.createElement('div');
+    modal.id = 'toolOutputModal';
+    modal.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;';
+    modal.innerHTML = `
+        <div style="background:var(--bg-secondary,#1e1e2e);border:1px solid var(--border);border-radius:10px;
+                    width:90vw;max-width:1000px;height:85vh;display:flex;flex-direction:column;overflow:hidden;">
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;
+                        border-bottom:1px solid var(--border);flex-shrink:0;">
+                <span style="font-size:13px;font-weight:600;color:var(--text);">🖥 ${escapeHtml(label)} 输出</span>
+                <button class="btn-icon" onclick="document.getElementById('toolOutputModal').remove()" style="font-size:16px;">&times;</button>
+            </div>
+            <pre style="flex:1;overflow:auto;margin:0;padding:14px 16px;font-family:monospace;font-size:12px;
+                        line-height:1.6;color:var(--text);white-space:pre-wrap;word-break:break-all;">${escapeHtml(content)}</pre>
+            <div style="padding:8px 16px;border-top:1px solid var(--border);display:flex;gap:8px;flex-shrink:0;">
+                <button class="btn btn-sm" onclick="navigator.clipboard.writeText(${JSON.stringify(content)}).then(()=>showToast('已复制','success'))">📋 复制</button>
+                <button class="btn btn-sm" onclick="document.getElementById('toolOutputModal').remove()">关闭</button>
+            </div>
+        </div>`;
+    modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+    document.body.appendChild(modal);
+}
+
 function _formatToolResult(toolName, resultRaw) {
     if (!resultRaw) return '<span style="opacity:.5">（无返回内容）</span>';
+
+    // Bash/Shell 工具：直接展示原始文本（不做 JSON 解析）
+    const _isShell = ['Bash', 'bash', 'shell', 'Shell', 'mcp__ide__executeCode'].includes(toolName);
+    if (_isShell) {
+        const _txt = typeof resultRaw === 'string' ? resultRaw : JSON.stringify(resultRaw);
+        return `<pre class="ctr-code ctr-shell-out" style="max-height:300px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;">${escHtml(_txt.slice(0, 5000))}${_txt.length > 5000 ? '\n… (输出过长，已截断)' : ''}</pre>`;
+    }
+
     let data;
-    try { data = JSON.parse(resultRaw); } catch { return `<pre>${escHtml(resultRaw.slice(0, 2000))}</pre>`; }
+    try { data = JSON.parse(resultRaw); } catch { return `<pre class="ctr-code" style="max-height:300px;overflow-y:auto;">${escHtml(resultRaw.slice(0, 3000))}</pre>`; }
 
     // web_search_result
     if (data?.type === 'web_search_result') {
@@ -12144,7 +12347,7 @@ async function sendChatMessage() {
     typingEl.className = 'chat-msg assistant';
     typingEl.id = 'chatTyping';
     typingEl.innerHTML = `
-        <div class="chat-msg-avatar">🤖</div>
+        ${_buildAssistantAvatar()}
         <div class="chat-msg-content">
             <div class="chat-msg-bubble" style="display:inline-block;">
                 <div class="chat-typing">
@@ -12534,7 +12737,7 @@ function _renderConfirmProjectCard(action) {
                 ${action.description ? `<div class="confirm-req-desc">${escHtml(action.description)}</div>` : ''}
                 ${action.git_remote_url ? `<div class="confirm-req-meta">Git 仓库：<code>${escHtml(action.git_remote_url)}</code></div>` : ''}
                 ${action.tech_stack ? `<div class="confirm-req-meta">技术栈：${escHtml(action.tech_stack)}</div>` : ''}
-                ${action.local_repo_path ? `<div class="confirm-req-meta">本地路径：<code>${escHtml(action.local_repo_path)}</code></div>` : `<div class="confirm-req-meta" style="color:var(--text-muted);font-size:11px;" id="confirmProjDefaultPath">本地路径：自动生成（加载中…）</div>`}
+                ${action.local_repo_path ? `<div class="confirm-req-meta">本地路径：<code>${escHtml(action.local_repo_path)}</code></div>` : `<div class="confirm-req-meta" style="color:var(--text-muted);font-size:11px;" id="confirmProjDefaultPath_${safeId}">本地路径：自动生成（加载中…）</div>`}
                 ${p4Html}${pathsHtml}${engineWarning}${traitChips}${presetBadge}${modeHtml}${packsHtml}
                 <div id="preview_${safeId}" style="margin-top:10px; padding:10px; background:var(--bg); border-radius:6px; font-size:12px;">
                     <div style="color:var(--text-muted);">🔄 预计组装...</div>
@@ -12559,7 +12762,7 @@ function _renderConfirmProjectCard(action) {
     setTimeout(() => updateProjRepoName(safeId), 80);
     if (!action.local_repo_path) {
         setTimeout(async () => {
-            const el = document.getElementById('confirmProjDefaultPath');
+            const el = document.getElementById(`confirmProjDefaultPath_${safeId}`);
             if (!el) return;
             try {
                 const d = await api('/system/settings/projects_default_dir');
@@ -12864,7 +13067,7 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
                         Git 仓库：<code>${escapeHtml(action.git_remote_url || '')}</code>
                     </div>
                     ${action.tech_stack ? `<div class="confirm-req-meta">技术栈：${escapeHtml(action.tech_stack)}</div>` : ''}
-                    ${action.local_repo_path ? `<div class="confirm-req-meta">本地路径：<code>${escapeHtml(action.local_repo_path)}</code></div>` : `<div class="confirm-req-meta" style="color:var(--text-muted);font-size:11px;" id="confirmProjDefaultPath">本地路径：自动生成（加载中…）</div>`}
+                    ${action.local_repo_path ? `<div class="confirm-req-meta">本地路径：<code>${escapeHtml(action.local_repo_path)}</code></div>` : `<div class="confirm-req-meta" style="color:var(--text-muted);font-size:11px;" id="confirmProjDefaultPath_${safeId}">本地路径：自动生成（加载中…）</div>`}
                     ${traitChips}
                     ${presetBadge}
                     <div id="preview_${safeId}" style="margin-top:10px; padding:10px; background:var(--bg); border-radius:6px; font-size:12px;">
@@ -12882,7 +13085,7 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
         setTimeout(() => updateProjRepoName(safeId), 80);
         if (!action.local_repo_path) {
             setTimeout(async () => {
-                const el = document.getElementById('confirmProjDefaultPath');
+                const el = document.getElementById(`confirmProjDefaultPath_${safeId}`);
                 if (!el) return;
                 try {
                     const d = await api('/system/settings/projects_default_dir');
@@ -13048,10 +13251,16 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
 
         if (isGrouped) {
             // 新格式：按轮次渲染
-            // 過濾空輪次（無推理+無工具，即答案生成輪）
-            const visibleRounds = thinking.filter(r => (r.reasoning || '').trim() || (r.steps?.length || 0) > 0);
-            const totalSteps = visibleRounds.reduce((n, r) => n + (r.steps?.length || 0), 0);
-            const roundsHtml = visibleRounds.map(r => {
+            // 過濾空輪次（無推理+無工具）
+            const visibleRounds = thinking.filter(r =>
+                (r.reasoning || '').trim() ||
+                (r.steps?.length || 0) > 0 ||
+                (r.tool_count || 0) > 0  // CLI 模式可能有 tool_count 但无 steps
+            );
+            // 如果全都被过滤，至少保留一个空轮次显示"思考了 N 轮"
+            const displayRounds = visibleRounds.length > 0 ? visibleRounds : thinking.slice(0, 1);
+            const totalSteps = displayRounds.reduce((n, r) => n + (r.steps?.length || 0), 0);
+            const roundsHtml = displayRounds.map(r => {
                 const reasoning = r.reasoning || '';
                 // 摘要行：去换行，截 120 字
                 const snippet = reasoning.replace(/\n+/g, ' ').slice(0, 120);
@@ -13094,13 +13303,13 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
             <div class="crp-rounds-panel crp-collapsed">
                 <div class="crp-rounds-header">
                     <span class="crp-rounds-icon">✦</span>
-                    <span class="crp-rounds-title">思考了 ${visibleRounds.length} 轮 · ${totalSteps} 步</span>
+                    <span class="crp-rounds-title">思考了 ${thinking.length} 轮 · ${totalSteps} 步</span>
                     <span class="crp-rounds-toggle" onclick="this.closest('.crp-rounds-panel').classList.toggle('crp-collapsed')">∨</span>
                 </div>
                 <div class="crp-rounds-body">${roundsHtml}</div>
             </div>`;
         } else {
-            // 旧格式（平铺）：向下兼容
+            // 旧格式（平铺）：转换成新格式的 crp-rounds-panel 渲染
             const steps = thinking.map(s => {
                 const label = _TOOL_LABELS[s.tool] || `🔧 ${s.tool}`;
                 const dur = (s.duration_ms > 0) ? ` (${s.duration_ms}ms)` : '';
@@ -13111,19 +13320,25 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
                 </div>`;
             }).join('');
             thinkingHtml = `
-            <div class="chat-thinking-panel ctp-history">
-                <div class="ctp-header" onclick="this.closest('.chat-thinking-panel').classList.toggle('ctp-expanded')">
-                    <span class="ctp-icon">✦</span>
-                    <span class="ctp-title">思考了 ${thinking.length} 步</span>
-                    <span class="ctp-toggle">∨</span>
+            <div class="crp-rounds-panel crp-collapsed">
+                <div class="crp-rounds-header">
+                    <span class="crp-rounds-icon">✦</span>
+                    <span class="crp-rounds-title">思考了 ${thinking.length} 步</span>
+                    <span class="crp-rounds-toggle" onclick="this.closest('.crp-rounds-panel').classList.toggle('crp-collapsed')">∨</span>
                 </div>
-                <div class="ctp-body">${steps}</div>
+                <div class="crp-rounds-body">
+                    <div class="crp-round-group crp-round-done crp-round-expanded">
+                        <div class="crp-round-body">${steps}</div>
+                    </div>
+                </div>
             </div>`;
         }
     }
 
     msgEl.innerHTML = `
-        <div class="chat-msg-avatar">${avatar}</div>
+        ${role === 'user'
+            ? '<div class="chat-msg-avatar">👤</div>'
+            : _buildAssistantAvatar()}
         <div class="chat-msg-content">
             ${imagesHtml}
             <div class="chat-msg-bubble">${formatChatContent(content)}</div>
@@ -13998,6 +14213,12 @@ async function _handleSlashCommand(input) {
     const parts = input.slice(1).split(/\s+/);
     const name = parts[0].toLowerCase();
     const args = parts.slice(1).join(' ');
+
+    // /tasks 特殊处理：打开分屏任务面板
+    if (name === 'tasks') {
+        _openTasksPanel();
+        return;
+    }
 
     // 显示执行中提示
     const container = document.getElementById('chatMessages');

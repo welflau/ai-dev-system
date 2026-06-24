@@ -1807,7 +1807,16 @@ async def _cmd_tasks(args: str, project_id: Optional[str], context: dict) -> Com
                 lines.append(f"- {title}")
             lines.append("")
 
-        if not running_tickets and not pending_tickets and not working_agents:
+        # CI 构建任务
+        ci_builds = await db.fetch_all(
+            """SELECT build_id, project_id, build_type, status, created_at, raw_output_tail
+               FROM ci_builds
+               WHERE status IN ('running','pending')
+               ORDER BY created_at DESC
+               LIMIT 10"""
+        )
+
+        if not running_tickets and not pending_tickets and not working_agents and not ci_builds:
             lines.append("✅ 当前无运行中任务\n")
             lines.append("> 进入项目查看工单详情，或提交新需求开始执行。")
 
@@ -1815,7 +1824,43 @@ async def _cmd_tasks(args: str, project_id: Optional[str], context: dict) -> Com
         if project_id:
             lines.append(f"\n> 仅显示项目 `{project_id[:8]}` 内工单，全局状态见各项目面板")
 
-        return CommandResult(success=True, output="\n".join(lines))
+        # 构建结构化任务列表供前端分屏使用
+        task_items = []
+        for t in running_tickets:
+            task_items.append({
+                "id": t["id"], "type": "ticket",
+                "title": (t.get("title") or "")[:60],
+                "status": t.get("status", ""),
+                "project_id": t.get("project_id", ""),
+                "action": t.get("current_action", ""),
+                "elapsed": elapsed(t.get("updated_at", "")),
+                "agent": t.get("assigned_agent", ""),
+            })
+        for t in pending_tickets:
+            task_items.append({
+                "id": t["id"], "type": "ticket",
+                "title": (t.get("title") or "")[:60],
+                "status": t.get("status", ""),
+                "project_id": t.get("project_id", ""),
+                "action": "", "elapsed": "", "agent": "",
+            })
+        for b in ci_builds:
+            task_items.append({
+                "id": b["build_id"], "type": "ci_build",
+                "title": f"CI: {b.get('build_type','build')}",
+                "status": b.get("status", ""),
+                "project_id": b.get("project_id", ""),
+                "action": b.get("build_type", ""),
+                "elapsed": elapsed(b.get("created_at", "")),
+                "agent": "CI Pipeline",
+                "log_tail": b.get("raw_output_tail", ""),
+            })
+
+        return CommandResult(
+            success=True,
+            output="\n".join(lines),
+            data={"type": "tasks_panel", "tasks": task_items},
+        )
 
     except Exception as e:
         return CommandResult(success=False, output=f"获取任务状态失败: {e}")

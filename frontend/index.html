@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI 自动开发系统</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260624">
+    <link rel="stylesheet" href="/static/styles.css?v=20260624p">
     <!-- highlight.js 语法高亮 -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
@@ -1354,6 +1354,26 @@
             </div>
             <!-- 群聊 Tab 独立容器，不被 loadChatHistory 覆盖 -->
             <div class="chat-messages" id="groupChatMessages" style="display:none;"></div>
+            <!-- 后台任务侧面板（/tasks 命令打开，与聊天并排） -->
+            <div id="tasksSidePanel" style="display:none;width:380px;flex-shrink:0;
+                 border-left:1px solid var(--border);display:none;flex-direction:column;overflow:hidden;">
+                <div style="display:flex;align-items:center;justify-content:space-between;
+                            padding:8px 12px;border-bottom:1px solid var(--border);flex-shrink:0;">
+                    <span style="font-size:12px;font-weight:600;">🔄 后台任务</span>
+                    <div style="display:flex;gap:4px;">
+                        <button class="btn-icon" onclick="_refreshTasksPanel()" title="刷新" style="font-size:12px;">↻</button>
+                        <button class="btn-icon" onclick="_closeTasksSplitPane()" style="font-size:14px;">✕</button>
+                    </div>
+                </div>
+                <div style="display:flex;flex:1;overflow:hidden;min-height:0;">
+                    <div id="tasksPanelList" style="width:160px;flex-shrink:0;border-right:1px solid var(--border);
+                         overflow-y:auto;font-size:11px;"></div>
+                    <div id="tasksPanelOutput" style="flex:1;overflow:auto;padding:8px 10px;font-family:monospace;
+                         font-size:11px;line-height:1.5;white-space:pre-wrap;word-break:break-all;color:var(--text);">
+                        <div style="color:var(--text-muted);padding-top:30px;text-align:center;font-family:inherit;font-size:11px;">← 选择任务</div>
+                    </div>
+                </div>
+            </div>
         </div>
         <!-- 全屏分屏容器（非全屏时隐藏） -->
         <div id="chatSplitContainer" style="display:none;"></div>
@@ -1708,6 +1728,7 @@
                                         style="width:100%; padding:8px; background:var(--bg); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text);">
                                     <option value="claude">Claude Code（claude）</option>
                                     <option value="claude-internal">Claude 内网版（claude-internal）</option>
+                                    <option value="tclaude">TClaude 内网版（tclaude）</option>
                                     <option value="gemini-internal">Gemini 内网版（gemini-internal）</option>
                                     <option value="codebuddy">CodeBuddy（codebuddy）</option>
                                     <option value="custom">自定义（stdin 传入）</option>
@@ -1842,7 +1863,7 @@
     <!-- ==================== Toast 通知 ==================== -->
     <div class="toast-container" id="toastContainer"></div>
 
-    <script src="/static/app.js?v=20260624"></script>
+    <script src="/static/app.js?v=20260624p"></script>
 </body>
 </html>
 
