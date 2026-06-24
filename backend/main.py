@@ -10,7 +10,7 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import settings
@@ -343,6 +343,36 @@ async def global_events_stream():
     from sse_starlette.sse import EventSourceResponse
     from events import event_manager
     return EventSourceResponse(event_manager.event_generator("global"))
+
+
+@app.post("/api/system/open_path")
+async def open_path_in_explorer(body: dict):
+    """在系统文件管理器中打开指定路径。"""
+    import os, sys, subprocess
+    from pathlib import Path
+    raw = (body.get("path") or "").strip()
+    if not raw:
+        from fastapi import HTTPException
+        raise HTTPException(400, "path 不能为空")
+    p = Path(raw)
+    target = p.parent if p.is_file() else p
+    if not target.exists():
+        from fastapi import HTTPException
+        raise HTTPException(404, f"路径不存在: {target}")
+    try:
+        if sys.platform == "win32":
+            if p.is_file():
+                subprocess.Popen(["explorer", "/select,", str(p)])
+            else:
+                os.startfile(str(target))
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", "-R" if p.is_file() else "", str(p if p.is_file() else target)])
+        else:
+            subprocess.Popen(["xdg-open", str(target)])
+        return {"ok": True, "opened": str(target)}
+    except Exception as e:
+        from fastapi import HTTPException
+        raise HTTPException(500, f"打开失败: {e}")
 
 
 @app.get("/api/health")
@@ -758,6 +788,16 @@ app.add_middleware(NoCacheStaticMiddleware)
 
 if frontend_dir.exists():
     app.mount("/static", StaticFiles(directory=str(frontend_dir)), name="static")
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">'
+        '<rect width="32" height="32" rx="6" fill="#7c6af7"/>'
+        '<text x="16" y="23" font-size="20" text-anchor="middle" fill="white">🤖</text>'
+        '</svg>'
+    )
+    return Response(content=svg, media_type="image/svg+xml")
 
 # 挂载聊天图片目录（用于历史消息图片回显）
 from config import BASE_DIR as _BASE_DIR

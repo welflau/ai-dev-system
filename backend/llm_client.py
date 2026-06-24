@@ -414,12 +414,12 @@ class LLMClient:
 
     def _messages_to_prompt(self, messages: List[Dict]) -> str:
         """
-        将 messages 转为 CLI 可接受的单段文本 prompt。
+        将 messages 转为 CLI stdin 的用户消息文本（不含 system）。
 
-        策略：只取最后一条 user 消息作为提问，system 消息作为前置上下文拼在最前面。
-        历史对话（多轮）不透传——CLI 工具无状态，传整段历史只会让它困惑。
+        策略：
+        - 只取最后一条 user 消息（system 已通过 --system-prompt 参数单独传递）
+        - 保持简单可靠
         """
-        system_text = ""
         last_user_text = ""
 
         for m in messages:
@@ -432,16 +432,165 @@ class LLMClient:
                 )
             if not isinstance(content, str):
                 content = str(content)
+            content = content.strip()
 
-            if role == "system":
-                # 系统提示词可能很长，截取关键部分（前 500 字）避免超长
-                system_text = content[:500].strip()
-            elif role == "user":
-                last_user_text = content.strip()
+            if role == "user":
+                last_user_text = content  # 每次覆盖，只保留最后一条
 
-        if system_text and last_user_text:
-            return f"{system_text}\n\n{last_user_text}"
-        return last_user_text or system_text
+        return last_user_text
+
+    def _extract_system_prompt(self, messages: List[Dict]) -> str:
+        """从 messages 中提取 system 消息文本（供 --system-prompt 参数使用）。"""
+        for m in messages:
+            if m.get("role") == "system":
+                content = m.get("content", "")
+                if isinstance(content, list):
+                    content = " ".join(
+                        b.get("text", "") for b in content
+                        if isinstance(b, dict) and b.get("type") == "text"
+                    )
+                return str(content).strip() if content else ""
+        return ""
+
+    def _messages_to_stdin(self, messages: List[Dict]) -> bytes:
+        """
+        将 messages 转为 CLI stdin bytes。
+        - 无图片：纯文本（兼容旧行为）
+        - 有图片：JSON 格式（claude/codebuddy 支持 JSON stdin 含 image blocks）
+
+        JSON 格式：单条 user 消息，content 为 blocks 数组。
+        system prompt 拼入最前面的 text block，图片 blocks 跟在文本后。
+        """
+        import json as _json
+
+        # 检查是否有图片 block
+        has_image = False
+        for m in messages:
+            content = m.get("content", "")
+            if isinstance(content, list):
+                for b in content:
+                    if isinstance(b, dict) and b.get("type") == "image":
+                        has_image = True
+                        break
+            if has_image:
+                break
+
+        if not has_image:
+            return self._messages_to_prompt(messages).encode("utf-8")
+
+        # 有图片：构建 JSON stdin
+        last_user_text = ""
+        last_user_images = []
+
+        for m in messages:
+            role = m.get("role", "")
+            content = m.get("content", "")
+            if role == "user":
+                if isinstance(content, list):
+                    last_user_text = " ".join(
+                        b.get("text", "") for b in content
+                        if isinstance(b, dict) and b.get("type") == "text"
+                    )
+                    last_user_images = [
+                        b for b in content
+                        if isinstance(b, dict) and b.get("type") == "image"
+                    ]
+                else:
+                    last_user_text = content or ""
+                    last_user_images = []
+
+        # 构建 blocks：text + 图片（system 已通过 --system-prompt 参数单独传递）
+        user_blocks = []
+        if last_user_text:
+            user_blocks.append({"type": "text", "text": last_user_text})
+        user_blocks.extend(last_user_images)
+
+        payload = {"role": "user", "content": user_blocks}
+        return _json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+    @staticmethod
+    def _build_settings_args(cli_type: str, cwd: Optional[str]) -> tuple:
+        """
+        为 claude/codebuddy CLI 构建 --settings 参数。
+
+        读取 <cwd>/.ads/mcp_servers.json，将其中 enabled=true 的 server 转换为
+        Claude/CodeBuddy settings.json 格式，写入临时文件并返回 (extra_args, tmp_path)。
+        extra_args 可直接追加到 cmd 中；tmp_path 用完后由调用方删除。
+
+        不支持 --settings 的 cli_type 或无 .ads 配置时返回 ([], None)。
+        """
+        if cli_type not in ("claude", "claude-internal", "codebuddy"):
+            logger.debug("🖥️  CLI MCP 注入跳过：cli_type=%s 不支持 --settings", cli_type)
+            return [], None
+        if not cwd:
+            logger.debug("🖥️  CLI MCP 注入跳过：cwd 为空")
+            return [], None
+
+        import json as _json
+        import os as _os
+        import tempfile
+        from pathlib import Path as _Path
+
+        ads_mcp = _Path(cwd) / ".ads" / "mcp_servers.json"
+        if not ads_mcp.exists():
+            logger.debug("🖥️  CLI MCP 注入跳过：%s 不存在", ads_mcp)
+            return [], None
+
+        try:
+            servers_cfg = _json.loads(ads_mcp.read_text(encoding="utf-8"))
+        except Exception as e:
+            logger.warning("🖥️  CLI MCP 注入：读取 %s 失败: %s", ads_mcp, e)
+            return [], None
+
+        # .ads/mcp_servers.json 格式：list of {name, command, args, env, enabled}
+        # 转为 Claude/CodeBuddy settings.json 的 mcpServers dict
+        mcp_servers = {}
+        entries = servers_cfg if isinstance(servers_cfg, list) else servers_cfg.get("servers", [])
+        skipped = []
+        for s in entries:
+            if not s.get("enabled", True):
+                skipped.append(s.get("name") or s.get("id") or "?")
+                continue
+            name = s.get("name") or s.get("id") or ""
+            if not name:
+                continue
+            entry: dict = {}
+            if s.get("command"):
+                entry["command"] = s["command"]
+            if s.get("args"):
+                entry["args"] = s["args"]
+            if s.get("env"):
+                entry["env"] = s["env"]
+            if entry.get("command"):
+                mcp_servers[name] = entry
+
+        if skipped:
+            logger.debug("🖥️  CLI MCP 注入：跳过已禁用 server: %s", skipped)
+
+        if not mcp_servers:
+            logger.info("🖥️  CLI MCP 注入：%s 中无可用 server（全部禁用或格式不符）", ads_mcp)
+            return [], None
+
+        # 构造 settings.json，allowedTools 放行所有 MCP 工具
+        settings_obj = {
+            "mcpServers": mcp_servers,
+        }
+
+        try:
+            tmp = tempfile.NamedTemporaryFile(
+                mode="w", suffix=".json", delete=False, encoding="utf-8"
+            )
+            _json.dump(settings_obj, tmp, ensure_ascii=False, indent=2)
+            tmp.close()
+            server_names = list(mcp_servers.keys())
+            logger.info(
+                "🖥️  CLI MCP 注入成功: %d 个 server [%s] → --settings %s",
+                len(mcp_servers), ", ".join(server_names), tmp.name,
+            )
+            return ["--settings", tmp.name], tmp.name
+        except Exception as e:
+            logger.warning("🖥️  CLI MCP 注入：生成临时 settings 文件失败: %s", e)
+            return [], None
 
     @staticmethod
     def _resolve_cmd(cli_cmd: str) -> list:
@@ -480,14 +629,50 @@ class LLMClient:
         raw_args   = adapter["build_cmd"](self.cli_cmd, self.cli_model, prompt)
         cmd = cmd_prefix + raw_args[1:]
 
-        logger.info("🖥️  CLI 调用: %s < stdin (type=%s, stream=%s, prompt_len=%d)",
-                    " ".join(cmd), self.cli_type, use_stream, len(prompt))
+        # 对支持 --system-prompt 的 CLI，把 system 消息通过参数传递而非拼入 stdin
+        _supports_system_param = self.cli_type in ("claude", "claude-internal", "codebuddy")
+        if _supports_system_param:
+            _sys_text = self._extract_system_prompt(messages)
+            if _sys_text:
+                cmd = cmd + ["--system-prompt", _sys_text]
+
+        _cmd_display = [
+            "<system-prompt>" if (i > 0 and cmd[i-1] == "--system-prompt") else c
+            for i, c in enumerate(cmd)
+        ]
+        logger.info("🖥️  CLI 调用: %s (type=%s, stream=%s, prompt_len=%d)",
+                    " ".join(_cmd_display), self.cli_type, use_stream, len(prompt))
+        logger.info("🖥️  CLI stdin 末尾（用户消息区）:\n...%s\n---", prompt[-300:])
 
         env = _os.environ.copy()
         if self.cli_type in ("codebuddy", "claude", "claude-internal"):
             env["CODEBUDDY_API_KEY_DISABLED"] = "1"
 
-        stdin_data = prompt.encode("utf-8") if use_stdin else None
+        stdin_data = self._messages_to_stdin(messages) if use_stdin else None
+
+        cwd = None
+        if _llm_ctx.project_id:
+            try:
+                from database import db as _db
+                proj = await _db.fetch_one(
+                    "SELECT git_repo_path FROM projects WHERE id = ?",
+                    (_llm_ctx.project_id,),
+                )
+                if proj and proj.get("git_repo_path"):
+                    import os as _os2
+                    if _os2.path.isdir(proj["git_repo_path"]):
+                        cwd = proj["git_repo_path"]
+                        logger.info("🖥️  CLI cwd → %s", cwd)
+            except Exception as _e:
+                logger.debug("CLI cwd 查询失败（忽略）: %s", _e)
+
+        # 注入 .ads/mcp_servers.json → --settings
+        _settings_args, _settings_tmp = self._build_settings_args(self.cli_type, cwd)
+        if _settings_args:
+            cmd = cmd + _settings_args
+            logger.info("🖥️  CLI 非流式：最终命令（含 --settings）: %s", " ".join(_cmd_display))
+        else:
+            logger.debug("🖥️  CLI 非流式：最终命令（无 MCP 注入）: %s", " ".join(_cmd_display))
 
         try:
             proc = await _asyncio.create_subprocess_exec(
@@ -496,10 +681,10 @@ class LLMClient:
                 stdout=_asyncio.subprocess.PIPE,
                 stderr=_asyncio.subprocess.PIPE,
                 env=env,
+                cwd=cwd,
             )
 
             if use_stream:
-                # 流式读取：逐行解析 stream-json，拼接文本
                 full_text = await self._parse_cli_stream(proc, stdin_data)
             else:
                 try:
@@ -530,6 +715,12 @@ class LLMClient:
         except Exception as e:
             logger.error("CLI 调用异常: %s", e)
             return self._fallback_response(messages), None
+        finally:
+            if _settings_tmp:
+                try:
+                    _os.unlink(_settings_tmp)
+                except Exception:
+                    pass
 
     async def _parse_cli_stream(self, proc, stdin_data: bytes) -> str:
         """
@@ -592,10 +783,13 @@ class LLMClient:
         messages: List[Dict],
         temperature: float,
         max_tokens: int,
+        resume_session_id: str = "",
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         流式版 CLI 调用，实时 yield text_delta 事件（供 QueryEngine CLI 模式使用）。
         stream-json 格式：每行一个 JSON，assistant 消息块里有文本。
+
+        resume_session_id: 非空时追加 --resume <id>，让 CLI 恢复上一轮对话上下文。
         """
         import asyncio as _asyncio
         import json as _json
@@ -609,13 +803,54 @@ class LLMClient:
         raw_args   = adapter["build_cmd"](self.cli_cmd, self.cli_model, prompt)
         cmd = cmd_prefix + raw_args[1:]
 
-        logger.info("🖥️  CLI 流式调用: %s (type=%s)", " ".join(cmd), self.cli_type)
+        # Session Resume：支持 --resume 的 CLI 类型追加参数
+        _RESUME_SUPPORTED = {"claude", "claude-internal", "codebuddy"}
+        if resume_session_id and self.cli_type in _RESUME_SUPPORTED:
+            cmd += ["--resume", resume_session_id]
+            logger.info("🖥️  CLI Resume: session_id=%s", resume_session_id)
+        elif self.cli_type in _RESUME_SUPPORTED:
+            # 首轮（无 resume）：通过 --system-prompt 传递 system 消息，而非拼入 stdin
+            # --resume 时跳过：CLI 会话已记录上一轮的 system prompt，重复传会被忽略或冲突
+            _sys_text = self._extract_system_prompt(messages)
+            if _sys_text:
+                cmd = cmd + ["--system-prompt", _sys_text]
+
+        _cmd_display = [
+            "<system-prompt>" if (i > 0 and cmd[i-1] == "--system-prompt") else c
+            for i, c in enumerate(cmd)
+        ]
+        logger.info("🖥️  CLI 流式调用: %s (type=%s)", " ".join(_cmd_display), self.cli_type)
+        logger.info("🖥️  CLI 流式 stdin 末尾（用户消息区）:\n...%s\n---", prompt[-300:])
 
         env = _os.environ.copy()
         if self.cli_type in ("codebuddy", "claude", "claude-internal"):
             env["CODEBUDDY_API_KEY_DISABLED"] = "1"
 
-        stdin_data = prompt.encode("utf-8") if use_stdin else None
+        stdin_data = self._messages_to_stdin(messages) if use_stdin else None
+
+        # CLI 模式：以项目 git_repo_path 作为工作目录，让 CLI 工具感知项目上下文
+        cwd = None
+        if _llm_ctx.project_id:
+            try:
+                from database import db as _db
+                proj = await _db.fetch_one(
+                    "SELECT git_repo_path FROM projects WHERE id = ?",
+                    (_llm_ctx.project_id,),
+                )
+                if proj and proj.get("git_repo_path"):
+                    import os as _os2
+                    if _os2.path.isdir(proj["git_repo_path"]):
+                        cwd = proj["git_repo_path"]
+            except Exception as _e:
+                logger.debug("CLI cwd 查询失败（忽略）: %s", _e)
+
+        # 注入 .ads/mcp_servers.json → --settings
+        _settings_args, _settings_tmp = self._build_settings_args(self.cli_type, cwd)
+        if _settings_args:
+            cmd = cmd + _settings_args
+            logger.info("🖥️  CLI 流式：最终命令（含 --settings）: %s", " ".join(cmd))
+        else:
+            logger.debug("🖥️  CLI 流式：最终命令（无 MCP 注入）: %s", " ".join(cmd))
 
         try:
             proc = await _asyncio.create_subprocess_exec(
@@ -624,6 +859,7 @@ class LLMClient:
                 stdout=_asyncio.subprocess.PIPE,
                 stderr=_asyncio.subprocess.PIPE,
                 env=env,
+                cwd=cwd,
             )
 
             if stdin_data and proc.stdin:
@@ -667,6 +903,38 @@ class LLMClient:
                                     chunk = delta.get("thinking", "")
                                     if chunk:
                                         await queue.put(("thinking", chunk))
+                        elif t == "assistant":
+                            # 完整 assistant 消息：提取 tool_use blocks
+                            msg = obj.get("message", {})
+                            for blk in msg.get("content", []):
+                                if blk.get("type") == "tool_use":
+                                    await queue.put(("tool_start", {
+                                        "tool_use_id": blk.get("id", ""),
+                                        "name": blk.get("name", ""),
+                                        "input": blk.get("input", {}),
+                                    }))
+                        elif t == "user":
+                            # tool_result blocks（工具执行完毕）
+                            msg = obj.get("message", {})
+                            for blk in msg.get("content", []):
+                                if blk.get("type") == "tool_result":
+                                    content = blk.get("content", [])
+                                    result_text = ""
+                                    if isinstance(content, list):
+                                        for c in content:
+                                            if isinstance(c, dict) and c.get("type") == "text":
+                                                result_text += c.get("text", "")
+                                    elif isinstance(content, str):
+                                        result_text = content
+                                    await queue.put(("tool_result", {
+                                        "tool_use_id": blk.get("tool_use_id", ""),
+                                        "result": result_text[:500],
+                                    }))
+                        elif t == "system" and obj.get("subtype") == "init":
+                            # Session Resume: CLI 输出的会话 ID，用于下次 --resume
+                            sid = obj.get("session_id", "")
+                            if sid:
+                                await queue.put(("session_id", sid))
                         elif t == "result" and obj.get("is_error"):
                             errors = obj.get("errors", [])
                             if errors and not full_text:
@@ -701,6 +969,15 @@ class LLMClient:
                             yield {"type": "text_delta", "delta": chunk}
                         elif kind == "thinking":
                             yield {"type": "thinking_delta", "delta": chunk}
+                        elif kind == "session_id":
+                            # Session Resume: 把 CLI session_id 上抛给调用层存 DB
+                            yield {"type": "cli_session_id", "session_id": chunk}
+                        elif kind == "tool_start":
+                            yield {"type": "cli_tool_start", "tool_use_id": chunk["tool_use_id"],
+                                   "name": chunk["name"], "input": chunk["input"]}
+                        elif kind == "tool_result":
+                            yield {"type": "cli_tool_result", "tool_use_id": chunk["tool_use_id"],
+                                   "result": chunk["result"]}
                 except Exception as ex:
                     logger.error("CLI 流式读取异常: %s", ex)
                 finally:
@@ -724,8 +1001,12 @@ class LLMClient:
             yield {"type": "text_delta", "delta": f"[CLI错误] 找不到可执行文件: {self.cli_cmd}"}
         except Exception as e:
             yield {"type": "text_delta", "delta": f"[CLI错误] {e}"}
-
-        # 流式结束后保存会话记录（推送日志到前端）
+        finally:
+            if _settings_tmp:
+                try:
+                    _os.unlink(_settings_tmp)
+                except Exception:
+                    pass
         try:
             await self._save_conversation(
                 messages, full_text,

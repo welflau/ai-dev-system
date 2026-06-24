@@ -416,7 +416,13 @@ async def _chat_via_agent(
         raise RuntimeError("ChatAssistant agent 未注册")
     agent = agent_cls()
 
-    history_list = [{"role": m.role, "content": m.content} for m in (req.history or [])]
+    _sid_for_history = req.chat_session_id
+    if _sid_for_history:
+        # Session Resume：从 DB 读持久化历史，刷新/切换后仍可恢复
+        history_list = await _load_session_history(_sid_for_history, project_id)
+    else:
+        # 兜底：用前端传来的 history（全局聊天、无 session_id 的旧版前端）
+        history_list = [{"role": m.role, "content": m.content} for m in (req.history or [])]
 
     agent_result = await agent.chat(
         user_message=req.message,
@@ -499,8 +505,12 @@ async def _chat_stream_generator(
         return
 
     agent = agent_cls()
-    history_list = [{"role": m.role, "content": m.content} for m in (req.history or [])]
     _sid = req.chat_session_id or "default"
+    # Session Resume：优先从 DB 读持久化历史；无 session_id 时用前端传来的兜底
+    if req.chat_session_id:
+        history_list = await _load_session_history(req.chat_session_id, project_id)
+    else:
+        history_list = [{"role": m.role, "content": m.content} for m in (req.history or [])]
     full_text = ""
     final_action = None
     thinking_steps = []
@@ -530,6 +540,7 @@ async def _chat_stream_generator(
             history=history_list,
             project=project,
             project_context=project_context,
+            session_id=_sid,
         ):
             etype = ev.get("type", "")
 
@@ -610,6 +621,11 @@ async def _chat_stream_generator(
                     await _save_chat_message(project_id, "assistant", full_text,
                                              action=final_action, session_id=_sid,
                                              thinking=save_thinking)
+                    # Session Resume：标记 session 为 completed
+                    await db.execute(
+                        "UPDATE chat_sessions SET last_status='completed', last_active_at=? WHERE id=?",
+                        (now_iso(), _sid),
+                    )
                 except Exception as _se:
                     logger.warning("流式消息保存失败: %s", _se)
                 yield _sse("message_done", {"rounds": ev.get("rounds", 1), "stop_reason": ev.get("stop_reason", "end_turn")})
@@ -617,6 +633,14 @@ async def _chat_stream_generator(
 
     except Exception as e:
         logger.error("流式聊天异常: %s", e)
+        # Session Resume：异常时标记 session poisoned，避免下次恢复到坏状态
+        try:
+            await db.execute(
+                "UPDATE chat_sessions SET last_status='poisoned', last_active_at=? WHERE id=?",
+                (now_iso(), _sid),
+            )
+        except Exception:
+            pass
         yield _sse("error", {"message": str(e)})
         return
 
@@ -840,6 +864,41 @@ async def _update_session_title_if_needed(session_id: str, first_message: str) -
     if row and row["title"] in ("新对话", "历史对话"):
         title = first_message[:30] + ("…" if len(first_message) > 30 else "")
         await db.update("chat_sessions", {"title": title, "updated_at": now_iso()}, "id = ?", (session_id,))
+
+
+async def _load_session_history(
+    session_id: str,
+    project_id: str,
+    limit: int = 30,
+) -> list:
+    """从 DB 加载 session 历史，用于 LLM 上下文组装（Session Resume 核心）。
+
+    - poisoned session 返回空列表，避免坏上下文污染新对话
+    - 每条 content 截断至 8000 字，防止历史占用过多 token
+    - 按 created_at 正序返回（最老→最新），符合 Anthropic messages 格式
+    """
+    sess = await db.fetch_one(
+        "SELECT last_status FROM chat_sessions WHERE id = ?", (session_id,)
+    )
+    if sess and sess.get("last_status") == "poisoned":
+        logger.info("Session %s is poisoned, skipping history load", session_id)
+        return []
+
+    rows = await db.fetch_all(
+        """SELECT role, content FROM chat_messages
+           WHERE session_id = ? AND project_id = ?
+             AND role IN ('user', 'assistant')
+           ORDER BY created_at ASC
+           LIMIT ?""",
+        (session_id, project_id, limit),
+    )
+    result = []
+    for r in rows:
+        content = r["content"] or ""
+        if len(content) > 8000:
+            content = content[:8000] + "\n…（内容已截断）"
+        result.append({"role": r["role"], "content": content})
+    return result
 
 
 @router.get("/sessions")
@@ -1798,8 +1857,11 @@ async def _save_chat_message(
         "session_id": eff_session,
         "created_at": now_iso(),
     })
-    # 更新会话的 updated_at
-    await db.update("chat_sessions", {"updated_at": now_iso()}, "id = ?", (eff_session,))
+    # 更新会话 updated_at + message_count
+    await db.execute(
+        "UPDATE chat_sessions SET updated_at = ?, message_count = message_count + 1 WHERE id = ?",
+        (now_iso(), eff_session),
+    )
 
 
 # ==================== 全局聊天 API（无需 project_id）====================
@@ -1846,7 +1908,10 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
 
     agent = agent_cls()
     _sid = req.chat_session_id or "default"
-    history_list = [{"role": m.role, "content": m.content} for m in (req.history or [])]
+    if req.chat_session_id:
+        history_list = await _load_session_history(req.chat_session_id, "__global__")
+    else:
+        history_list = [{"role": m.role, "content": m.content} for m in (req.history or [])]
     full_text = ""
     final_action = None
     thinking_steps = []
@@ -1877,8 +1942,17 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
         yield _sse("message_done", {"full_text": "", "final_action": _path_action, "rounds": 0})
         return
 
-    # 保存用户消息（异步 fire-and-forget，不阻塞 LLM 响应）
+    # ── 打开已有项目检测：「打开/进入 xxx 项目」直接跳转，跳过 LLM ──
     import asyncio as _asyncio
+    _open_action = await _detect_open_project(expanded_message_g, projects)
+    if _open_action:
+        _asyncio.create_task(_save_chat_message("__global__", "user", req.message,
+                                 images=req.images, session_id=_sid))
+        yield _sse("action", _open_action)
+        yield _sse("message_done", {"full_text": "", "final_action": _open_action, "rounds": 0})
+        return
+
+    # 保存用户消息（异步 fire-and-forget，不阻塞 LLM 响应）
     _asyncio.create_task(_save_chat_message("__global__", "user", req.message,
                              images=req.images, session_id=_sid))
 
@@ -1888,7 +1962,7 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
             images=req.images,
             history=history_list,
             projects_brief=projects,
-            session_id=None,
+            session_id=_sid,
         ):
             etype = ev.get("type", "")
 
@@ -1955,6 +2029,10 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
                     await _save_chat_message("__global__", "assistant", full_text,
                                              action=final_action, session_id=_sid,
                                              thinking=save_thinking_g)
+                    await db.execute(
+                        "UPDATE chat_sessions SET last_status='completed', last_active_at=? WHERE id=?",
+                        (now_iso(), _sid),
+                    )
                 except Exception as _se:
                     logger.warning("全局流式消息保存失败: %s", _se)
                 yield _sse("message_done", {"rounds": ev.get("rounds", 1), "stop_reason": ev.get("stop_reason", "end_turn")})
@@ -1962,6 +2040,13 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
 
     except Exception as e:
         logger.error("全局流式聊天异常: %s", e)
+        try:
+            await db.execute(
+                "UPDATE chat_sessions SET last_status='poisoned', last_active_at=? WHERE id=?",
+                (now_iso(), _sid),
+            )
+        except Exception:
+            pass
         yield _sse("error", {"message": str(e)})
         return
 
@@ -2303,6 +2388,50 @@ async def _detect_and_handle_path(message: str, projects: list) -> dict | None:
         "root_vcs": scan.get("root_vcs", "none"),
         "p4_info": scan.get("p4_info"),
         "scan_result": scan,
+    }
+
+
+import re as _re2
+
+_OPEN_PROJECT_RE = _re2.compile(
+    r'(?:打开|进入|切换到|切换至|跳转到|open|switch\s+to)\s*[「【\[]?(.+?)[」】\]]?\s*(?:项目)?$',
+    _re2.IGNORECASE,
+)
+
+
+async def _detect_open_project(message: str, projects: list) -> dict | None:
+    """检测「打开/进入 xxx 项目」意图，直接返回 open_project action，跳过 LLM。"""
+    text = message.strip()
+    m = _OPEN_PROJECT_RE.search(text)
+    if not m:
+        return None
+    name_hint = m.group(1).strip()
+    if not name_hint:
+        return None
+
+    # 精确匹配 → 模糊匹配
+    matched = None
+    name_lower = name_hint.lower()
+    for p in projects:
+        pname = (p.get("name") or "").lower()
+        if pname == name_lower:
+            matched = p
+            break
+    if not matched:
+        for p in projects:
+            pname = (p.get("name") or "").lower()
+            if name_lower in pname or pname in name_lower:
+                matched = p
+                break
+
+    if not matched:
+        return None
+
+    return {
+        "type": "open_project",
+        "project_id": matched["id"],
+        "name": matched.get("name", ""),
+        "message": f"正在打开项目「{matched.get('name', '')}」…",
     }
 
 

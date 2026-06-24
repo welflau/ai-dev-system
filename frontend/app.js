@@ -165,6 +165,10 @@ function generateLocalPath(projectName) {
 // ==================== 初始化 ====================
 
 document.addEventListener('DOMContentLoaded', () => {
+    // 统一配置 marked（GFM + 换行）
+    if (window.marked) {
+        marked.use({ gfm: true, breaks: true });
+    }
     checkLLMStatus();
     loadProjects();
     initLogPanel();
@@ -787,7 +791,7 @@ function _updateChatPanelForContext() {
             }
         } else {
             showChatWelcome();
-            if (currentProjectId && chatMode === 'global') {
+            if (currentProjectId) {
                 loadChatHistory();
             }
         }
@@ -1183,11 +1187,19 @@ async function showPackDetail(packName, displayName) {
             <div class="modal" style="max-width:900px;width:90vw;max-height:84vh;display:flex;flex-direction:column;">
                 <div class="modal-header">
                     <h3 id="packDetailTitle" style="margin:0;font-size:15px;">Pack 详情</h3>
-                    <button class="btn-icon" onclick="closeModal('packDetailModal')">&times;</button>
+                    <div style="display:flex;gap:4px;align-items:center;">
+                        <button class="btn-icon btn-maximize" title="最大化" onclick="toggleModalMaximize('packDetailModal')" style="font-size:14px;">&#x2922;</button>
+                        <button class="btn-icon" onclick="closeModal('packDetailModal')">&times;</button>
+                    </div>
                 </div>
                 <div id="packDetailMeta" style="padding:10px 20px 8px;border-bottom:1px solid var(--border-color);flex-shrink:0;"></div>
                 <div style="display:flex;flex:1;min-height:0;">
-                    <div id="packDetailList" style="width:260px;flex-shrink:0;overflow-y:auto;border-right:1px solid var(--border-color);padding:8px;"></div>
+                    <div style="width:260px;flex-shrink:0;display:flex;flex-direction:column;border-right:1px solid var(--border-color);">
+                        <div style="padding:5px 6px;flex-shrink:0;border-bottom:1px solid var(--border-color);">
+                            <input id="packDetailFilter" type="text" placeholder="过滤..." oninput="_filterPackDetailList()" style="width:100%;box-sizing:border-box;font-size:12px;padding:4px 7px;border:1px solid var(--border-color);border-radius:4px;background:var(--bg-elevated);color:var(--text-primary);outline:none;">
+                        </div>
+                        <div id="packDetailList" style="flex:1;overflow-y:auto;padding:8px;"></div>
+                    </div>
                     <div id="packDetailContent" style="flex:1;overflow-y:auto;padding:14px 18px;"></div>
                 </div>
             </div>`;
@@ -1294,8 +1306,9 @@ function selectPackItem(idx) {
             <span style="opacity:.6;">${cm.icon} ${escapeHtml(cm.label)}</span>
             <span style="opacity:.4;">·</span>
             <code style="font-size:10px;background:var(--bg-elevated);padding:2px 6px;border-radius:3px;color:var(--text-secondary);">config_packs/${escapeHtml(fullPath)}</code>
+            ${item.path ? `<button onclick="openPathInExplorer('${escapeHtml(item.path).replace(/'/g, '&#39;')}')" title="在文件管理器中打开" style="padding:2px 6px;font-size:10px;border:1px solid var(--border-color);border-radius:3px;background:var(--bg-elevated);color:var(--text-muted);cursor:pointer;line-height:1;">📂</button>` : ''}
         </div>
-        <div id="packDetailMdBody" style="font-size:13px;line-height:1.7;"></div>`;
+        <div id="packDetailMdBody" class="md-preview md-compact"></div>`;
 
     // 按扩展名选渲染模式
     const mdBody = document.getElementById('packDetailMdBody');
@@ -1325,7 +1338,42 @@ function selectPackItem(idx) {
     }
 }
 
-// ── 通用来源分组渲染 helper ──────────────────────────────────────────────────
+function _filterPackDetailList() {
+    const modal = document.getElementById('packDetailModal');
+    if (!modal || !modal._packItems) return;
+    const q = (document.getElementById('packDetailFilter')?.value || '').trim().toLowerCase();
+    const allItems = modal._packItems;
+
+    const catOrder = ['agents', 'commands', 'skills', 'rules', 'mcps', 'hooks', 'scripts'];
+    let listHtml = '';
+    let visibleCount = 0;
+    for (const catKey of catOrder) {
+        const filtered = [];
+        for (let i = 0; i < allItems.length; i++) {
+            if (allItems[i].catKey !== catKey) continue;
+            if (q && !allItems[i].item.name.toLowerCase().includes(q)) continue;
+            filtered.push({ item: allItems[i].item, idx: i });
+        }
+        if (!filtered.length) continue;
+        const cm = PACK_CATEGORY_META[catKey] || { label: catKey, icon: '📄' };
+        listHtml += `<div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;padding:6px 6px 3px;">${cm.icon} ${cm.label} (${filtered.length})</div>`;
+        for (const { item, idx } of filtered) {
+            const accentColor = COLOR_MAP[item.color] || 'var(--border-color)';
+            const emojiHtml = item.emoji ? `${escapeHtml(item.emoji)} ` : '';
+            listHtml += `
+                <div class="pack-detail-list-item" data-idx="${idx}"
+                     style="padding:7px 8px;border-radius:5px;cursor:pointer;border-left:3px solid ${accentColor};margin-bottom:3px;"
+                     onclick="selectPackItem(${idx})">
+                    <div style="font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${emojiHtml}${escapeHtml(item.name)}</div>
+                    <div style="font-size:10px;color:var(--text-muted);margin-top:1px;">${escapeHtml(item.file)}</div>
+                </div>`;
+            visibleCount++;
+        }
+    }
+    document.getElementById('packDetailList').innerHTML = visibleCount
+        ? listHtml
+        : '<div style="font-size:11px;color:var(--text-muted);padding:8px 6px;">无匹配结果</div>';
+}
 
 const _SOURCE_META = {
     builtin: { label: '内置', color: '#6366f1', bg: 'rgba(99,102,241,.12)' },
@@ -1620,6 +1668,7 @@ function _renderRulesView(container, data, source) {
 // 注册当前面板的条目列表，供 showExtensionDetail 左侧列表使用
 // 每次 _renderSourceGroups 渲染时调用
 let _extDetailRegistry = [];  // [{ group, item }]
+let _extDetailActiveIdx = 0;
 
 function _registerExtItems(data, groupTitles) {
     _extDetailRegistry = [];
@@ -1670,10 +1719,18 @@ function showExtensionDetail(itemOrIdx) {
             <div class="modal" style="max-width:920px;width:92vw;max-height:86vh;display:flex;flex-direction:column;">
                 <div class="modal-header">
                     <h3 id="extDetailTitle" style="margin:0;font-size:15px;">详情</h3>
-                    <button class="btn-icon" onclick="closeModal('extensionDetailModal')">&times;</button>
+                    <div style="display:flex;gap:4px;align-items:center;">
+                        <button class="btn-icon btn-maximize" title="最大化" onclick="toggleModalMaximize('extensionDetailModal')" style="font-size:14px;">&#x2922;</button>
+                        <button class="btn-icon" onclick="closeModal('extensionDetailModal')">&times;</button>
+                    </div>
                 </div>
                 <div style="display:flex;flex:1;min-height:0;">
-                    <div id="extDetailList" style="width:220px;flex-shrink:0;overflow-y:auto;border-right:1px solid var(--border-color);padding:6px;"></div>
+                    <div style="width:220px;flex-shrink:0;display:flex;flex-direction:column;border-right:1px solid var(--border-color);">
+                        <div style="padding:5px 6px;flex-shrink:0;border-bottom:1px solid var(--border-color);">
+                            <input id="extDetailFilter" type="text" placeholder="过滤..." oninput="_renderExtDetailList()" style="width:100%;box-sizing:border-box;font-size:12px;padding:4px 7px;border:1px solid var(--border-color);border-radius:4px;background:var(--bg-elevated);color:var(--text-primary);outline:none;">
+                        </div>
+                        <div id="extDetailList" style="flex:1;overflow-y:auto;padding:6px;"></div>
+                    </div>
                     <div id="extDetailPane" style="flex:1;overflow-y:auto;padding:14px 18px;"></div>
                 </div>
             </div>`;
@@ -1684,27 +1741,38 @@ function showExtensionDetail(itemOrIdx) {
     openModal('extensionDetailModal');
 
     // 渲染左侧列表
-    _renderExtDetailList(activeIdx);
+    _extDetailActiveIdx = activeIdx;
+    _renderExtDetailList();
     // 渲染右侧内容
     _renderExtDetailPane(item, activeIdx);
 }
 
-function _renderExtDetailList(activeIdx) {
+function _renderExtDetailList() {
     const listEl = document.getElementById('extDetailList');
     if (!listEl) return;
+
+    const activeIdx = _extDetailActiveIdx;
+    const filterEl = document.getElementById('extDetailFilter');
+    const q = filterEl ? filterEl.value.trim().toLowerCase() : '';
 
     if (_extDetailRegistry.length === 0) {
         listEl.innerHTML = '';
         return;
     }
 
-    // 按 group 分组
+    // 按 group 分组，同时应用过滤
     const groups = {};
     const groupOrder = [];
     for (let i = 0; i < _extDetailRegistry.length; i++) {
         const { group, item } = _extDetailRegistry[i];
+        if (q && !item.name.toLowerCase().includes(q)) continue;
         if (!groups[group]) { groups[group] = []; groupOrder.push(group); }
         groups[group].push({ item, idx: i });
+    }
+
+    if (groupOrder.length === 0) {
+        listEl.innerHTML = '<div style="font-size:11px;color:var(--text-muted);padding:8px 6px;">无匹配结果</div>';
+        return;
     }
 
     let html = '';
@@ -1743,9 +1811,7 @@ function _renderExtDetailPane(item, activeIdx) {
         .replace(/\\/g, '/')
         .replace(/^.*?(?=backend\/|config_packs\/|\.claude\/|\.codebuddy\/)/, '')
         || rawFile.replace(/\\/g, '/').split('/').slice(-3).join('/');
-    const filePath = displayFile
-        ? `<code style="font-size:10px;background:var(--bg-elevated);padding:2px 7px;border-radius:3px;color:var(--text-secondary);" title="${escapeHtml(rawFile)}">${escapeHtml(displayFile)}</code>`
-        : '';
+    const filePath = _renderFileBadge(rawFile, displayFile);
 
     const rawContent = item.content || item.preview || '';
     const bodyText = rawContent.replace(/^---[\s\S]*?---\r?\n?/, '').trim();
@@ -1758,7 +1824,7 @@ function _renderExtDetailPane(item, activeIdx) {
             <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">${srcBadge}${typeBadge}${filePath}</div>
         </div>
         <hr style="border:none;border-top:1px solid var(--border-color);margin:10px 0;">
-        <div id="extDetailContent" style="font-size:13px;line-height:1.7;"></div>`;
+        <div id="extDetailContent" class="md-preview md-compact"></div>`;
 
     const contentEl = document.getElementById('extDetailContent');
     if (!bodyText) {
@@ -3638,6 +3704,12 @@ async function loadProjectDetail() {
             { text: '项目列表', onClick: 'showProjectList()' },
             { text: data.name, onClick: '' },
         ]);
+        // 项目数据加载完成后更新聊天面板标题（此时 currentProject 已有值）
+        const titleEl = document.getElementById('chatPanelTitle');
+        if (titleEl && currentProjectId) {
+            titleEl.textContent = `AI 助手 · ${data.name}`;
+        }
+        _updateFullscreenProjectLabel();
         // 加载默认 tab
         switchTab('board');
         loadRequirementFilter();
@@ -7926,6 +7998,8 @@ function stopPolling() {
 // ==================== Agent 配置 ====================
 
 let agentRegistryCache = null;
+let _agentDetailRegistry = [];   // [{ group, agent }]  — 供详情面板左栏使用
+let _agentDetailActiveName = null;
 
 /** 加载 Agent 列表到设置页 */
 async function loadAgentList() {
@@ -7959,6 +8033,7 @@ async function loadAgentList() {
 
         if (!allData) {
             // 无项目：只显示内置
+            _agentDetailRegistry = agentRegistryCache.map(a => ({ group: '内置', agent: {...a, source: 'builtin'} }));
             _renderAgentGroup(container, agentRegistryCache.map(a => ({...a, source: 'builtin'})), 'all');
             filterBar.innerHTML = '';
             return;
@@ -7983,6 +8058,11 @@ async function loadAgentList() {
 
         // 缓存 allData 供切换 filter 使用
         container._agentData = allData;
+        // 构建详情面板左栏注册表
+        _agentDetailRegistry = [];
+        for (const ag of (allData.builtin || [])) _agentDetailRegistry.push({ group: '内置', agent: ag });
+        for (const ag of (allData.user    || [])) _agentDetailRegistry.push({ group: '用户', agent: ag });
+        for (const ag of (allData.pack    || [])) _agentDetailRegistry.push({ group: ag.pack_name || 'Pack', agent: ag });
         _renderAgentView(container, allData, 'all');
 
     } catch (e) {
@@ -8024,12 +8104,8 @@ function _renderAgentView(container, allData, source) {
         const mode = ag.react_mode || '';
         const opacity = ag.is_active === false ? 'opacity:0.45;' : '';
 
-        const clickFn = ag.source === 'builtin'
-            ? `showAgentDetail('${escHtml(ag.name)}')`
-            : `showExtensionDetail(${escHtml(JSON.stringify({name:ag.name, description:ag.description||ag.role||'', source:ag.source, pack_name:ag.pack_name||null, file:ag.file||ag.name+'.md', type:'Agent', emoji:ag.emoji||'🤖', preview:ag.preview||'', content:ag.content||ag.preview||''}))})`;
-
         return `
-        <div class="agent-item" onclick="${clickFn}" style="cursor:pointer;${opacity}">
+        <div class="agent-item" onclick='showAgentDetail(${JSON.stringify(ag).replace(/'/g, "&apos;")})' style="cursor:pointer;${opacity}">
             <div class="agent-icon">${ag.emoji || ag.icon || '🤖'}</div>
             <div class="agent-info" style="flex:1;min-width:0;">
                 <div style="display:flex;align-items:center;flex-wrap:wrap;gap:2px;">
@@ -8107,30 +8183,121 @@ function highlightPromptVars(text) {
     return escHtml(text).replace(/\{(\w+)\}/g, '<span class="prompt-var">{$1}</span>');
 }
 
-/** 显示 Agent 详情弹窗 */
-function showAgentDetail(agentName) {
-    if (!agentRegistryCache) return;
-    const agent = agentRegistryCache.find(a => a.name === agentName);
+/** 显示 Agent 详情弹窗 — 接受 agentName(string) 或 agent 对象 */
+function showAgentDetail(agentNameOrObj) {
+    let agent;
+    if (typeof agentNameOrObj === 'object' && agentNameOrObj !== null) {
+        agent = agentNameOrObj;
+        // 确保注册表里有该 agent
+        if (!_agentDetailRegistry.find(e => e.agent.name === agent.name)) {
+            const sm = agent.source || 'builtin';
+            const group = sm === 'builtin' ? '内置' : sm === 'user' ? '用户' : (agent.pack_name || 'Pack');
+            _agentDetailRegistry.push({ group, agent });
+        }
+    } else {
+        // 先在注册表找，其次降级到 agentRegistryCache
+        const entry = _agentDetailRegistry.find(e => e.agent.name === agentNameOrObj);
+        if (entry) {
+            agent = entry.agent;
+        } else if (agentRegistryCache) {
+            agent = agentRegistryCache.find(a => a.name === agentNameOrObj);
+        }
+    }
     if (!agent) return;
 
+    _agentDetailActiveName = agent.name;
+    openModal('agentDetailModal');
+    _renderAgentDetailList();
+    _renderAgentDetailPane(agent);
+}
+
+function _renderAgentDetailList() {
+    const listEl = document.getElementById('agentDetailList');
+    if (!listEl) return;
+
+    const q = (document.getElementById('agentDetailFilter')?.value || '').trim().toLowerCase();
+
+    const groups = {};
+    const groupOrder = [];
+    for (const { group, agent } of _agentDetailRegistry) {
+        if (q && !agent.name.toLowerCase().includes(q)) continue;
+        if (!groups[group]) { groups[group] = []; groupOrder.push(group); }
+        groups[group].push(agent);
+    }
+
+    if (groupOrder.length === 0) {
+        listEl.innerHTML = '<div style="font-size:11px;color:var(--text-muted);padding:8px 6px;">无匹配结果</div>';
+        return;
+    }
+
+    let html = '';
+    for (const g of groupOrder) {
+        html += `<div style="font-size:10px;color:var(--text-muted);padding:5px 4px 2px;font-weight:600;opacity:.7;text-transform:uppercase;letter-spacing:.05em;">${escHtml(g)}</div>`;
+        for (const ag of groups[g]) {
+            const isActive = ag.name === _agentDetailActiveName;
+            const safeObj = JSON.stringify({ name: ag.name, source: ag.source || 'builtin', pack_name: ag.pack_name || null });
+            html += `<div class="ext-list-item"
+                onclick='_showAgentDetailByEntry(${safeObj.replace(/'/g, "&apos;")})'
+                style="padding:6px 7px;border-radius:4px;cursor:pointer;font-size:12px;margin-bottom:2px;
+                       background:${isActive ? 'var(--bg-elevated)' : 'transparent'};
+                       border-left:2px solid ${isActive ? 'var(--primary)' : 'transparent'};">
+                <span style="margin-right:3px;">${ag.icon || ag.emoji || '🤖'}</span>${escHtml(ag.name)}
+            </div>`;
+        }
+    }
+    listEl.innerHTML = html;
+
+    setTimeout(() => {
+        const active = listEl.querySelector(`[style*="var(--bg-elevated)"]`);
+        if (active) active.scrollIntoView({ block: 'nearest' });
+    }, 50);
+}
+
+function _showAgentDetailByEntry(entryObj) {
+    const entry = _agentDetailRegistry.find(e =>
+        e.agent.name === entryObj.name &&
+        (e.agent.source || 'builtin') === (entryObj.source || 'builtin'));
+    if (!entry) return;
+    _agentDetailActiveName = entry.agent.name;
+    _renderAgentDetailList();
+    _renderAgentDetailPane(entry.agent);
+}
+
+function _renderAgentDetailPane(agent) {
     const titleEl = document.getElementById('agentDetailTitle');
-    const bodyEl = document.getElementById('agentDetailBody');
+    const bodyEl  = document.getElementById('agentDetailBody');
+    if (!titleEl || !bodyEl) return;
 
-    titleEl.textContent = `${agent.icon || '🤖'} ${agent.name}`;
+    titleEl.textContent = `${agent.icon || agent.emoji || '🤖'} ${agent.name}`;
 
-    const modeLabels = {single: '单步执行', by_order: '顺序执行', react: '自主决策(REACT)'};
-    const modeColors = {single: 'var(--text-muted)', by_order: 'var(--primary)', react: 'var(--success)'};
+    const SOURCE_META_LOCAL = {
+        builtin: { label: '内置', color: '#6366f1', bg: 'rgba(99,102,241,.12)' },
+        user:    { label: '用户', color: '#22c55e', bg: 'rgba(34,197,94,.12)'  },
+        pack:    { label: 'Pack', color: '#f97316', bg: 'rgba(249,115,22,.12)' },
+    };
+    const sm = SOURCE_META_LOCAL[agent.source] || SOURCE_META_LOCAL.builtin;
+    const sourceBadge = `<span style="font-size:10px;padding:2px 7px;border-radius:3px;background:${sm.bg};color:${sm.color};">${sm.label}${agent.pack_name ? ' · '+escHtml(agent.pack_name) : ''}</span>`;
+
+    const modeLabels = { single: '单步执行', by_order: '顺序执行', react: '自主决策(REACT)' };
+    const modeColors = { single: 'var(--text-muted)', by_order: 'var(--primary)', react: 'var(--success)' };
     const mode = agent.react_mode || 'single';
 
-    let html = `
-    <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
-        <span style="font-size:36px;">${agent.icon || '🤖'}</span>
-        <div>
-            <h3 style="margin:0;">${escHtml(agent.name)}</h3>
-            <p style="margin:2px 0;color:var(--text-muted);font-size:13px;">${escHtml(agent.role || '')}</p>
-        </div>
-    </div>
+    // 描述/role 文本
+    const descText = agent.description || agent.role || '';
+    // 文件路径：优先用完整 path，降级到 file
+    const rawPath = agent.path || agent.file || '';
+    const displayFile = rawPath.replace(/\\/g, '/')
+        .replace(/^.*?(?=\.claude\/|\.codebuddy\/|backend\/|config_packs\/)/, '')
+        || rawPath.replace(/\\/g, '/').split('/').slice(-4).join('/');
+    const filePath = _renderFileBadge(rawPath, displayFile);
 
+    let html = `
+    <div style="margin-bottom:12px;">
+        <div style="font-size:15px;font-weight:600;margin-bottom:4px;">${agent.icon || agent.emoji || '🤖'} ${escHtml(agent.name)}</div>
+        ${descText ? `<div style="font-size:12px;color:var(--text-secondary);margin-bottom:6px;">${escHtml(descText)}</div>` : ''}
+        <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">${sourceBadge}${filePath}</div>
+    </div>
+    <hr style="border:none;border-top:1px solid var(--border-color);margin:10px 0;">
     <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap;">
         <div class="agent-param-chip">
             <span class="param-label">执行模式</span>
@@ -8184,7 +8351,7 @@ function showAgentDetail(agentName) {
         html += `<div style="color:var(--text-muted);font-size:12px;padding:8px;">Legacy 模式（无独立 Action）</div>`;
     }
 
-    // Agent 整体 Prompt（ChatAssistant 等有 agent_prompt 字段的）
+    // 整体提示词
     if (agent.agent_prompt) {
         const apId = 'ap-' + Math.random().toString(36).slice(2);
         html += `
@@ -8197,8 +8364,28 @@ function showAgentDetail(agentName) {
         </div>`;
     }
 
+    // Markdown 内容（用户/Pack agent 有 content 字段）
+    const rawContent = agent.content || '';
+    if (rawContent) {
+        // 剥离 frontmatter (--- ... ---)
+        const bodyText = rawContent.startsWith('---')
+            ? rawContent.replace(/^---[\s\S]*?\n---\s*\n?/, '').trim()
+            : rawContent.trim();
+        if (bodyText) {
+            html += `<hr style="border:none;border-top:1px solid var(--border-color);margin:14px 0 10px;">
+            <div id="agentDetailMdBody" class="md-preview md-compact"></div>`;
+            bodyEl.innerHTML = html;
+            const mdEl = document.getElementById('agentDetailMdBody');
+            if (window.marked) {
+                try { mdEl.innerHTML = marked.parse(bodyText); } catch(e) { mdEl.textContent = bodyText; }
+            } else {
+                mdEl.textContent = bodyText;
+            }
+            return;
+        }
+    }
+
     bodyEl.innerHTML = html;
-    openModal('agentDetailModal');
 }
 
 function updateProjRepoName(cardId) {
@@ -8253,7 +8440,31 @@ function openModal(id) {
 }
 
 function closeModal(id) {
-    document.getElementById(id).classList.remove('active');
+    const overlay = document.getElementById(id);
+    if (overlay) overlay.classList.remove('active');
+    // 关闭时重置最大化状态
+    const modal = overlay && overlay.querySelector('.modal');
+    if (modal) {
+        modal.classList.remove('maximized');
+        const btn = modal.querySelector('.btn-maximize');
+        if (btn) { btn.title = '最大化'; btn.innerHTML = '&#x2922;'; }
+        // 重置过滤框
+        const filter = modal.querySelector('input[id$="Filter"]');
+        if (filter) filter.value = '';
+    }
+}
+
+function toggleModalMaximize(modalId) {
+    const overlay = document.getElementById(modalId);
+    if (!overlay) return;
+    const modal = overlay.querySelector('.modal');
+    if (!modal) return;
+    const isMax = modal.classList.toggle('maximized');
+    const btn = modal.querySelector('.btn-maximize');
+    if (btn) {
+        btn.innerHTML = isMax ? '&#x2921;' : '&#x2922;';
+        btn.title = isMax ? '还原大小' : '最大化';
+    }
 }
 
 // 点击 overlay 不关闭（只通过 ESC 或关闭按钮关闭）
@@ -9332,6 +9543,32 @@ function formatTime(dateStr) {
 function escapeHtml(str) {
     if (!str) return '';
     return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/** 渲染文件路径 badge + 打开目录按钮（共三处详情面板复用） */
+function _renderFileBadge(rawPath, displayText) {
+    if (!rawPath) return '';
+    const safeRaw  = escapeHtml(rawPath);
+    const safeDisp = escapeHtml(displayText || rawPath);
+    const openBtn  = `<button onclick="openPathInExplorer('${safeRaw.replace(/'/g, '&#39;')}')"
+        title="在文件管理器中打开"
+        style="margin-left:4px;padding:2px 6px;font-size:10px;border:1px solid var(--border-color);
+               border-radius:3px;background:var(--bg-elevated);color:var(--text-muted);
+               cursor:pointer;vertical-align:middle;line-height:1;">📂</button>`;
+    return `<code style="font-size:10px;background:var(--bg-elevated);padding:2px 7px;border-radius:3px;
+            color:var(--text-secondary);" title="${safeRaw}">${safeDisp}</code>${openBtn}`;
+}
+
+async function openPathInExplorer(path) {
+    try {
+        await fetch('/api/system/open_path', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ path }),
+        });
+    } catch(e) {
+        showToast('打开失败: ' + e.message, 'error');
+    }
 }
 
 
@@ -10995,6 +11232,7 @@ async function _sendChatStreaming(url, body) {
                             <span class="crp-round-chevron">›</span>
                         </div>
                         <div class="crp-round-body">
+                            <div class="crp-round-thinking"></div>
                             <div class="crp-round-steps"></div>
                         </div>`;
                     roundsBody.appendChild(_curRoundEl);
@@ -11006,11 +11244,20 @@ async function _sendChatStreaming(url, body) {
                 } else if (eventName === 'thinking_delta') {
                     // J-3b: 当前轮推理文字流入
                     _curRoundBuf += data.delta || '';
-                    if (_curRoundThinkingEl) _curRoundThinkingEl.textContent = _curRoundBuf;
-                    // 实时更新推理摘要（取前 50 字）
+                    if (_curRoundThinkingEl) {
+                        // body 内实时渲染 Markdown（每次全量替换）
+                        if (window.marked) {
+                            try { _curRoundThinkingEl.innerHTML = marked.parse(_curRoundBuf); }
+                            catch(e) { _curRoundThinkingEl.textContent = _curRoundBuf; }
+                        } else {
+                            _curRoundThinkingEl.textContent = _curRoundBuf;
+                        }
+                    }
+                    // 摘要行：只显示前 120 字，末尾加省略号
                     const _reasoningEl = _curRoundEl?.querySelector('.crp-round-reasoning');
                     if (_reasoningEl) {
-                        _reasoningEl.textContent = _curRoundBuf;
+                        const _snippet = _curRoundBuf.replace(/\n+/g, ' ').slice(0, 120);
+                        _reasoningEl.textContent = _curRoundBuf.length > 120 ? _snippet + '…' : _snippet;
                         _reasoningEl.classList.remove('crp-reasoning-hidden', 'crp-round-reasoning-placeholder');
                     }
                     scrollChatToBottom();
@@ -11018,10 +11265,22 @@ async function _sendChatStreaming(url, body) {
                 } else if (eventName === 'thinking_done') {
                     // J-3b: 当前轮推理完成
                     const fullText_ = data.text || _curRoundBuf;
+                    // 摘要行截断
                     const _reasoningEl = _curRoundEl?.querySelector('.crp-round-reasoning');
                     if (_reasoningEl && fullText_) {
-                        _reasoningEl.textContent = fullText_;
+                        const _snippet = fullText_.replace(/\n+/g, ' ').slice(0, 120);
+                        _reasoningEl.textContent = fullText_.length > 120 ? _snippet + '…' : _snippet;
                         _reasoningEl.classList.remove('crp-reasoning-hidden', 'crp-round-reasoning-placeholder');
+                    }
+                    // body 内渲染完整 Markdown
+                    if (_curRoundThinkingEl && fullText_) {
+                        if (window.marked) {
+                            try { _curRoundThinkingEl.innerHTML = marked.parse(fullText_); }
+                            catch(e) { _curRoundThinkingEl.textContent = fullText_; }
+                        } else {
+                            _curRoundThinkingEl.textContent = fullText_;
+                        }
+                        _curRoundEl?.classList.add('crp-round-expanded');
                     }
                     _curRoundBuf = '';
 
@@ -11971,16 +12230,16 @@ async function sendChatMessage() {
                 }
             }
         } else if (currentProjectId) {
-            // 项目内聊天 — 流式 API
+            // 项目内聊天 — 流式 API，服务端从 DB 读 history（Session Resume）
             const _sid = await _ensureChatSession();
             resp = await _sendChatStreaming(
                 `/projects/${currentProjectId}/chat/stream`,
-                { message: fullMessage, history: historyToSend,
+                { message: fullMessage,
                   images: images.length > 0 ? images : undefined,
                   chat_session_id: _sid }
             );
         } else {
-            // 全局聊天（无项目）— 走全局流式 API，与项目聊天体验一致
+            // 全局聊天（无项目）— 传 history 兜底（无 session_id 时服务端用前端传的）
             const _sid = await _ensureChatSession();
             resp = await _sendChatStreaming(
                 `/chat/stream`,
@@ -12036,6 +12295,13 @@ async function sendChatMessage() {
                     loadProjects();
                 }
             }, 1000);
+        }
+
+        if (action && action.type === 'open_project' && action.project_id) {
+            showProjectDetail(action.project_id);
+        }
+        if (action && action.type === 'switch_project' && action.project_id) {
+            showProjectDetail(action.project_id);
         }
 
         // 如果创建了需求，刷新需求列表
@@ -12403,6 +12669,14 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
                 <span class="action-link" onclick="switchTab('requirements')">查看需求列表 →</span>
             </div>
         `;
+    } else if (action && action.type === 'open_project') {
+        actionHtml = `
+            <div class="chat-action-card" style="border-left-color: var(--accent, #7c6af7);">
+                <div class="action-title">📂 打开项目</div>
+                <div class="action-detail"><strong>${escapeHtml(action.name || '')}</strong></div>
+                ${action.project_id ? `<span class="action-link" onclick="showProjectDetail('${escapeHtml(action.project_id)}')">进入项目 →</span>` : ''}
+            </div>
+        `;
     } else if (action && action.type === 'project_created') {
         actionHtml = `
             <div class="chat-action-card" style="border-left-color: var(--success, #34d058);">
@@ -12620,7 +12894,7 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
                 }
             }, 100);
         }
-        } // end else (not executed)
+        } // end else (!_state || pending)
     } else if (action && action.type === 'propose_ue_framework') {
         actionHtml = renderUEFrameworkCard(action);
     } else if (action && action.type === 'ue_screenshot_result') {
@@ -12779,7 +13053,13 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
             const totalSteps = visibleRounds.reduce((n, r) => n + (r.steps?.length || 0), 0);
             const roundsHtml = visibleRounds.map(r => {
                 const reasoning = r.reasoning || '';
-                const preview = reasoning;
+                // 摘要行：去换行，截 120 字
+                const snippet = reasoning.replace(/\n+/g, ' ').slice(0, 120);
+                const preview = reasoning.length > 120 ? snippet + '…' : snippet;
+                // 展开内容：Markdown 渲染
+                const thinkingHtmlInner = reasoning
+                    ? (window.marked ? (() => { try { return marked.parse(reasoning); } catch(e) { return escapeHtml(reasoning); } })() : escapeHtml(reasoning))
+                    : '';
                 const stepsHtml = (r.steps || []).map(s => {
                     const label = _TOOL_LABELS[s.tool] || `🔧 ${s.tool}`;
                     const dur = s.duration_ms > 0 ? ` (${s.duration_ms}ms)` : '';
@@ -12797,13 +13077,15 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
                         ${hasResult ? `<div class="ctp-step-result">${resultHtml}</div>` : ''}
                     </div>`;
                 }).join('');
+                const hasContent = thinkingHtmlInner || stepsHtml;
                 return `<div class="crp-round-group crp-round-done">
                     <div class="crp-round-header" onclick="this.closest('.crp-round-group').classList.toggle('crp-round-expanded')">
                         <span class="crp-round-dot"></span>
                         <span class="crp-round-reasoning ${!preview ? 'crp-round-reasoning-placeholder' : ''}">${escapeHtml(preview || (r.steps?.[0] ? (_TOOL_LABELS[r.steps[0].tool] || r.steps[0].tool) : ''))}</span>
-                        <span class="crp-round-chevron">›</span>
+                        ${hasContent ? `<span class="crp-round-chevron">›</span>` : ''}
                     </div>
                     <div class="crp-round-body">
+                        ${thinkingHtmlInner ? `<div class="crp-round-thinking">${thinkingHtmlInner}</div>` : ''}
                         <div class="crp-round-steps">${stepsHtml}</div>
                     </div>
                 </div>`;

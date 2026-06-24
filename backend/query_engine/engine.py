@@ -22,6 +22,7 @@ from query_engine.budget import Budget
 from query_engine.events import (
     ActionEvent,
     BudgetExceededEvent,
+    CliSessionIdEvent,
     ErrorEvent,
     MessageDoneEvent,
     RoundStartEvent,
@@ -187,6 +188,7 @@ class QueryEngine:
         max_rounds: int = 10,
         enable_thinking: bool = False,   # J-3 Extended Thinking
         thinking_budget: int = 8000,     # API 要求 >= 1024
+        resume_session_id: str = "",     # Session Resume: CLI --resume 参数
     ):
         self.llm = llm_client
         self.executor = tool_executor
@@ -194,7 +196,8 @@ class QueryEngine:
         self.hooks = hooks
         self.max_rounds = max_rounds
         self.enable_thinking = enable_thinking
-        self.thinking_budget = max(thinking_budget, 1024)  # API 最低限制
+        self.thinking_budget = max(thinking_budget, 1024)
+        self.resume_session_id = resume_session_id
 
     async def run(
         self,
@@ -260,9 +263,18 @@ class QueryEngine:
             # CLI 模式：使用 _call_cli_stream 实现真正的流式输出
             if getattr(self.llm, "api_format", "anthropic") == "cli":
                 full_cli_text = ""
+                _cli_tool_times: dict = {}   # tool_use_id → start_time
+                _cli_tool_names: dict = {}   # tool_use_id → tool_name
+                _cli_tool_started: set = set()  # 已 yield ToolStartEvent 的 tool_use_id，防重复
+
+                # 把 system prompt 拼入 messages，供 _extract_system_prompt 提取后通过 --system-prompt 传递
+                cli_messages = current_messages
+                if system:
+                    cli_messages = [{"role": "system", "content": system}] + current_messages
 
                 async for ev in self.llm._call_cli_stream(
-                    current_messages, temperature=0.7, max_tokens=4000
+                    cli_messages, temperature=0.7, max_tokens=4000,
+                    resume_session_id=self.resume_session_id,
                 ):
                     etype = ev.get("type", "")
                     if etype == "text_delta":
@@ -271,6 +283,31 @@ class QueryEngine:
                         yield TextDeltaEvent(delta=chunk)
                     elif etype == "thinking_delta":
                         yield ThinkingDeltaEvent(delta=ev.get("delta", ""))
+                    elif etype == "cli_session_id":
+                        # Session Resume: 上抛给 chat_assistant 存 DB
+                        yield CliSessionIdEvent(session_id=ev.get("session_id", ""))
+                    elif etype == "cli_tool_start":
+                        tid = ev["tool_use_id"]
+                        if tid not in _cli_tool_started:
+                            _cli_tool_started.add(tid)
+                            _cli_tool_times[tid] = __import__("time").time()
+                            _cli_tool_names[tid] = ev["name"]
+                            yield ToolStartEvent(
+                                tool=ev["name"],
+                                input=ev.get("input", {}),
+                                tool_use_id=tid,
+                            )
+                    elif etype == "cli_tool_result":
+                        tid = ev["tool_use_id"]
+                        elapsed = (__import__("time").time() - _cli_tool_times.pop(tid, __import__("time").time())) * 1000
+                        tool_name = _cli_tool_names.pop(tid, tid)
+                        yield ToolDoneEvent(
+                            tool=tool_name,
+                            summary="",
+                            args_hint="",
+                            duration_ms=elapsed,
+                            result=ev.get("result", ""),
+                        )
                     elif etype == "stop":
                         break
 

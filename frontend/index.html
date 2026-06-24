@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI 自动开发系统</title>
-    <link rel="stylesheet" href="/static/styles.css?v=202605111706">
+    <link rel="stylesheet" href="/static/styles.css?v=20260624">
     <!-- highlight.js 语法高亮 -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
@@ -1819,15 +1819,22 @@
 
     <!-- ==================== 模态框：Agent 详情 ==================== -->
     <div class="modal-overlay" id="agentDetailModal">
-        <div class="modal modal-agent">
+        <div class="modal modal-agent" style="max-width:960px;width:92vw;max-height:88vh;display:flex;flex-direction:column;">
             <div class="modal-header">
-                <h3 id="agentDetailTitle">Agent 详情</h3>
-                <button class="btn-icon" onclick="closeModal('agentDetailModal')">&times;</button>
+                <h3 id="agentDetailTitle" style="margin:0;font-size:15px;">Agent 详情</h3>
+                <div style="display:flex;gap:4px;align-items:center;">
+                    <button class="btn-icon btn-maximize" title="最大化" onclick="toggleModalMaximize('agentDetailModal')" style="font-size:14px;">&#x2922;</button>
+                    <button class="btn-icon" onclick="closeModal('agentDetailModal')">&times;</button>
+                </div>
             </div>
-            <div class="modal-body" id="agentDetailBody" style="max-height:70vh; overflow-y:auto;">
-            </div>
-            <div class="modal-footer">
-                <button class="btn" onclick="closeModal('agentDetailModal')">关闭</button>
+            <div style="display:flex;flex:1;min-height:0;">
+                <div style="width:220px;flex-shrink:0;display:flex;flex-direction:column;border-right:1px solid var(--border-color);">
+                    <div style="padding:5px 6px;flex-shrink:0;border-bottom:1px solid var(--border-color);">
+                        <input id="agentDetailFilter" type="text" placeholder="过滤..." oninput="_renderAgentDetailList()" style="width:100%;box-sizing:border-box;font-size:12px;padding:4px 7px;border:1px solid var(--border-color);border-radius:4px;background:var(--bg-elevated);color:var(--text-primary);outline:none;">
+                    </div>
+                    <div id="agentDetailList" style="flex:1;overflow-y:auto;padding:6px;"></div>
+                </div>
+                <div id="agentDetailBody" style="flex:1;overflow-y:auto;padding:14px 18px;"></div>
             </div>
         </div>
     </div>
@@ -1835,7 +1842,7 @@
     <!-- ==================== Toast 通知 ==================== -->
     <div class="toast-container" id="toastContainer"></div>
 
-    <script src="/static/app.js?v=202605111706"></script>
+    <script src="/static/app.js?v=20260624"></script>
 </body>
 </html>
 

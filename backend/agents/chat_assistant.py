@@ -20,6 +20,7 @@ from agents.base import BaseAgent, ReactMode
 from actions.chat.confirm_requirement import ConfirmRequirementAction, ConfirmRequirementsBatchAction
 from actions.chat.confirm_bug import ConfirmBugAction
 from actions.chat.confirm_project import ConfirmProjectAction
+from actions.chat.open_project import OpenProjectAction
 from actions.chat.create_requirement import CreateRequirementAction
 from actions.chat.pause_requirement import PauseRequirementAction, PauseRequirementsBatchAction
 from actions.chat.resume_requirement import ResumeRequirementAction
@@ -138,6 +139,7 @@ _TOOL_LABELS_PY: dict = {
     "confirm_requirements_batch": "📋 识别多个需求",
     "confirm_bug": "🐛 识别 BUG",
     "confirm_project": "🏗 识别新建项目",
+    "open_project": "📂 打开项目",
     "close_requirement": "🚫 关闭需求",
     "pause_requirement": "⏸ 暂停需求",
     "resume_requirement": "▶ 恢复需求",
@@ -177,7 +179,7 @@ _TOOL_LABELS_PY: dict = {
 }
 
 # 全局聊天下额外可用（仅在全局模式有意义）
-_GLOBAL_ONLY_TOOLS = {"confirm_project"}
+_GLOBAL_ONLY_TOOLS = {"confirm_project", "open_project"}
 
 # 需要 project_id 才能运行、全局模式下无意义的工具（即使暴露也会报错，直接隐藏）
 _PROJECT_ONLY_TOOLS = {
@@ -437,7 +439,8 @@ class ChatAssistantAgent(BaseAgent):
         ConfirmRequirementAction,
         ConfirmRequirementsBatchAction,
         ConfirmBugAction,
-        ConfirmProjectAction,          # 全局聊天用，暴露给 LLM
+        ConfirmProjectAction,
+        OpenProjectAction,          # 全局聊天用，暴露给 LLM
         CreateRequirementAction,       # 内部用，不暴露给 LLM
         PauseRequirementAction,
         PauseRequirementsBatchAction,
@@ -644,7 +647,7 @@ class ChatAssistantAgent(BaseAgent):
         from query_engine.events import (
             TextDeltaEvent, ToolStartEvent, ToolDoneEvent, ToolErrorEvent,
             ActionEvent, MessageDoneEvent, BudgetExceededEvent, ErrorEvent,
-            ThinkingDeltaEvent, ThinkingDoneEvent, RoundStartEvent,
+            ThinkingDeltaEvent, ThinkingDoneEvent, RoundStartEvent, CliSessionIdEvent,
         )
         from query_engine.executor import ChatToolExecutorAdapter
         from config import settings as _cfg
@@ -699,6 +702,21 @@ class ChatAssistantAgent(BaseAgent):
             max_turns=get_session_flag(_sid, "max_turns") or _cfg.CHAT_MAX_TURNS,
             max_seconds=_cfg.CHAT_MAX_SECONDS,
         )
+
+        # Session Resume (CLI 模式)：查 DB 取上一轮 CLI session_id，用于 --resume
+        _cli_resume_id = ""
+        if llm_client.api_format == "cli" and session_id:
+            try:
+                from database import db as _db
+                _row = await _db.fetch_one(
+                    "SELECT cli_session_id FROM chat_sessions WHERE id = ?", (session_id,)
+                )
+                if _row and _row.get("cli_session_id"):
+                    _cli_resume_id = _row["cli_session_id"]
+                    logger.info("CLI Resume: ads_session=%s cli_sid=%s", session_id, _cli_resume_id)
+            except Exception as _e:
+                logger.debug("CLI Resume 查询失败（忽略）: %s", _e)
+
         context = {"project_id": project["id"], "agent_type": self.agent_type}
         engine = QueryEngine(
             llm_client=llm_client,
@@ -708,6 +726,7 @@ class ChatAssistantAgent(BaseAgent):
             max_rounds=self.max_react_loop,
             enable_thinking=_resolve_thinking_enabled(_sid, llm_client.model),
             thinking_budget=max(1024, get_session_flag(_sid, "thinking_budget") or 8000),
+            resume_session_id=_cli_resume_id,
         )
 
         set_llm_context(project_id=project["id"], agent_type=self.agent_type, action="chat_stream")
@@ -741,6 +760,20 @@ class ChatAssistantAgent(BaseAgent):
                            "result": ""}
                 elif isinstance(event, ActionEvent):
                     yield {"type": "action", "payload": event.action_data}
+                elif isinstance(event, CliSessionIdEvent):
+                    # Session Resume: CLI 首次返回 session_id，写入 DB 供下次 --resume
+                    _new_cli_sid = event.session_id
+                    if _new_cli_sid and session_id:
+                        try:
+                            from database import db as _db2
+                            from utils import now_iso as _now
+                            await _db2.execute(
+                                "UPDATE chat_sessions SET cli_session_id=?, last_active_at=? WHERE id=?",
+                                (_new_cli_sid, _now(), session_id),
+                            )
+                            logger.info("CLI session_id pinned: %s → %s", session_id, _new_cli_sid)
+                        except Exception as _pe:
+                            logger.warning("CLI session_id 写入失败（忽略）: %s", _pe)
                 elif isinstance(event, MessageDoneEvent):
                     yield {
                         "type": "message_done",
@@ -840,7 +873,7 @@ class ChatAssistantAgent(BaseAgent):
         from query_engine.events import (
             TextDeltaEvent, ToolStartEvent, ToolDoneEvent, ToolErrorEvent,
             ActionEvent, MessageDoneEvent, BudgetExceededEvent, ErrorEvent,
-            ThinkingDeltaEvent, ThinkingDoneEvent, RoundStartEvent,
+            ThinkingDeltaEvent, ThinkingDoneEvent, RoundStartEvent, CliSessionIdEvent,
         )
         from query_engine.executor import ChatToolExecutorAdapter
         from config import settings as _cfg
@@ -860,6 +893,21 @@ class ChatAssistantAgent(BaseAgent):
             max_turns=get_session_flag(_sid, "max_turns") or _cfg.CHAT_MAX_TURNS,
             max_seconds=_cfg.CHAT_MAX_SECONDS,
         )
+
+        # Session Resume (CLI 模式)：查 DB 取上一轮 CLI session_id
+        _cli_resume_id_g = ""
+        if llm_client.api_format == "cli" and session_id:
+            try:
+                from database import db as _db
+                _row = await _db.fetch_one(
+                    "SELECT cli_session_id FROM chat_sessions WHERE id = ?", (session_id,)
+                )
+                if _row and _row.get("cli_session_id"):
+                    _cli_resume_id_g = _row["cli_session_id"]
+                    logger.info("CLI Resume (global): ads_session=%s cli_sid=%s", session_id, _cli_resume_id_g)
+            except Exception as _e:
+                logger.debug("CLI Resume (global) 查询失败（忽略）: %s", _e)
+
         context = {"agent_type": self.agent_type}
         engine = QueryEngine(
             llm_client=llm_client,
@@ -869,6 +917,7 @@ class ChatAssistantAgent(BaseAgent):
             max_rounds=self.max_react_loop,
             enable_thinking=_resolve_thinking_enabled(_sid, llm_client.model),
             thinking_budget=max(1024, get_session_flag(_sid, "thinking_budget") or 8000),
+            resume_session_id=_cli_resume_id_g,
         )
 
         set_llm_context(agent_type=self.agent_type, action="global_chat_stream")
@@ -897,6 +946,20 @@ class ChatAssistantAgent(BaseAgent):
                            "result": ""}
                 elif isinstance(event, ActionEvent):
                     yield {"type": "action", "payload": event.action_data}
+                elif isinstance(event, CliSessionIdEvent):
+                    # Session Resume: CLI 首次返回 session_id，写入 DB 供下次 --resume
+                    _new_cli_sid = event.session_id
+                    if _new_cli_sid and session_id:
+                        try:
+                            from database import db as _db2
+                            from utils import now_iso as _now
+                            await _db2.execute(
+                                "UPDATE chat_sessions SET cli_session_id=?, last_active_at=? WHERE id=?",
+                                (_new_cli_sid, _now(), session_id),
+                            )
+                            logger.info("CLI session_id pinned: %s → %s", session_id, _new_cli_sid)
+                        except Exception as _pe:
+                            logger.warning("CLI session_id 写入失败（忽略）: %s", _pe)
                 elif isinstance(event, MessageDoneEvent):
                     yield {
                         "type": "message_done",
@@ -1319,7 +1382,9 @@ class ChatAssistantAgent(BaseAgent):
 - "生成框架 / 创建骨架 / 初始化工程 / 基于 TP_* 模板 / 做个 FPS / TPS / TopDown 游戏 / 从模板开始" 等
   → **优先调 propose_ue_framework**（产出方案卡片让用户选引擎/模板/项目名后点确认才真落地）
   → ⚠️ 不要调 confirm_requirement 把这个当成"新需求"处理 —— 这是工程骨架生成，不是加功能需求
-- 用户在 UE 项目里提"加个武器系统 / 做个 AI / 实现倒计时"这种**具体功能** → 调 confirm_requirement（走需求流）
+- 用户在 UE 项目里提"加个武器系统 / 做个 AI / 实现倒计时 / 添加角色功能 / 实现 Locomotion" 这种**具体功能**
+  → **必须调 confirm_requirement（走需求流），绝对禁止直接用 MCP/脚本工具实现**
+  → ⚠️ 即使你有 UE MCP 工具能直接操作编辑器，也必须先走确认流程，不要自行判断"工具不可用"或"我来直接实现"
 - 简单说：**动"整个工程骨架"用 propose_ue_framework；动"某个功能模块"用 confirm_requirement**"""
 
         # <!--CACHE_BOUNDARY--> 之前为稳定内容（Prompt Cache 命中），之后为动态内容（每次不同）
@@ -1382,11 +1447,19 @@ class ChatAssistantAgent(BaseAgent):
 - 代码文件 → 审查逻辑，结合已有代码给出修改建议
 - **不要只复述文件内容**，要给出有价值的分析和下一步行动建议
 
+## ⛔ 严禁直接实现新功能
+
+**无论你是否有技术能力直接实现，只要用户提出新增功能的请求，你都必须先调 `confirm_requirement`，禁止跳过该步骤直接开始实现。**
+- `confirm_requirement` 工具始终可用，必须调用它生成需求草稿让用户确认
+- 不得以任何理由（"工具不可用"/"我直接实现更快"/"权限限制"）绕过该工具
+- 即使你有 MCP/文件工具能直接操作，**也必须先走确认流程**
+- 唯一例外：用户明确说"不用走流程，直接帮我改/做"，且这是对已有代码的微小修改
+
 ## 判断准则
 - 用户发送的消息**看起来是本地路径**（如 `F:/MyGame`、`/home/user/project`、`C:/Projects/xxx`、包含反斜杠或斜杠的路径格式）
   → **立即调用 confirm_project(local_path=该路径)**，不要询问用户意图，不要探索目录结构
   → 系统会自动扫描识别项目信息，生成确认卡片让用户选择
-- 用户**明确要求**新增/开发**单个**功能 → 调 confirm_requirement
+- 用户**明确要求**新增/开发**单个**功能 → 调 confirm_requirement（**必须，即使你有能力直接实现**）
 - 用户上传文档/让 AI 规划需求列表 → 提取所有独立需求点，调 **confirm_requirements_batch**（≥2 条时），不要逐条调 confirm_requirement
 - 用户描述已有功能的缺陷/报错/崩溃/白屏 → 调 confirm_bug（不是需求）
 - 用户单纯提问、描述现象、讨论方案 → 直接回答，不要调工具
@@ -1556,6 +1629,11 @@ class ChatAssistantAgent(BaseAgent):
   → **立即调用 confirm_project(local_path=该路径)**，无需追问，系统自动扫描识别
 - 当用户**明确表示想新建项目**时调用，产出草稿让用户确认。**不会直接建项目**。
 
+**2. open_project** — 打开已有项目
+- 当用户说**「打开 xxx」「进入 xxx 项目」「切换到 xxx」「帮我打开 xxx」**时调用。
+- 直接触发前端跳转，无需用户再操作。project_id 优先，只有名称时填 project_name。
+- ⚠️ 已有项目列表见上方「已有项目」，从中匹配 ID 填入。
+
 **2. search_knowledge** — 搜索知识库文档
 - 当用户询问**系统功能、版本更新、技术方案、开发日志、架构设计**等内容时，
   **主动调用**搜索知识库，包括系统的 docs/ 和 dev-notes/ 文档。
@@ -1589,7 +1667,7 @@ class ChatAssistantAgent(BaseAgent):
   - 信息足够时主动询问是否基于文档内容创建项目（调 confirm_project）
 - **不要只复述文件内容**，要结合内容给出具体的分析和建议。
 
-**对于查项目状态、涉及具体项目操作**：提示用户先点击进入那个项目再继续对话。
+**对于查项目状态、涉及具体项目操作**：用 open_project 工具直接打开该项目，无需让用户手动点击。
 
 ## 调 confirm_project 字段说明
 
