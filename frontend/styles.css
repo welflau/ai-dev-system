@@ -8300,6 +8300,7 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
     overflow: hidden;
     transition: border-color 0.2s;
     font-size: 12px;
+    flex-shrink: 0;  /* 防止在 flex 列容器中被压缩为 0 */
 }
 .crp-rounds-panel:hover { border-color: rgba(163,113,247,0.4); }
 

@@ -517,7 +517,7 @@ async def _chat_stream_generator(
     # J-3b: 分组结构（最终保存到 DB，支持历史分组渲染）
     _thinking_rounds: list = []   # [{round, reasoning, steps:[]}]
     _cur_round: dict | None = None
-
+    _thinking_buf: str = ""  # 当前思考段缓冲，tool_done 时 flush 到 events
     # A-4: @file 引用展開（在 LLM 調用前注入文件內容）
     expanded_message, _file_warnings = _expand_file_refs(req.message)
 
@@ -557,19 +557,26 @@ async def _chat_stream_generator(
                 # J-3b: 新轮开始，追加上一轮（已完成）到列表
                 if _cur_round is not None:
                     _thinking_rounds.append(_cur_round)
-                _cur_round = {"round": ev["round"], "reasoning": "", "steps": []}
+                _cur_round = {"round": ev["round"], "reasoning": "", "steps": [], "events": []}
+                _thinking_buf = ""
                 yield _sse("round_start", {"round": ev["round"]})
 
             elif etype == "thinking_delta":
-                # J-3b: 同步累積推理文字（保底：thinking_done 有時不觸發）
+                # 实时累积到缓冲区（tool_done 时 flush，保留穿插顺序）
+                _thinking_buf += ev.get("delta") or ""
                 if _cur_round is not None:
                     _cur_round["reasoning"] = (_cur_round.get("reasoning") or "") + (ev.get("delta") or "")
                 yield _sse("thinking_delta", {"delta": ev["delta"]})
 
             elif etype == "thinking_done":
-                # thinking_done 若包含完整文字則覆蓋（更準確）
-                if _cur_round is not None and ev.get("text"):
-                    _cur_round["reasoning"] = ev.get("text", "")
+                # thinking_done：更新 reasoning，flush 缓冲到 events
+                if _cur_round is not None:
+                    if ev.get("text"):
+                        _cur_round["reasoning"] = ev.get("text", "")
+                    text = ev.get("text") or _thinking_buf
+                    if text.strip():
+                        _cur_round["events"].append({"type": "thinking", "text": text})
+                    _thinking_buf = ""
                 yield _sse("thinking_done", {"text": ev.get("text", "")})
 
             elif etype == "tool_start":
@@ -586,7 +593,12 @@ async def _chat_stream_generator(
                         "result": result_raw}
                 thinking_steps.append(step)
                 if _cur_round is not None:
+                    # 先 flush 当前思考缓冲，再追加工具（保留穿插顺序）
+                    if _thinking_buf.strip():
+                        _cur_round["events"].append({"type": "thinking", "text": _thinking_buf})
+                        _thinking_buf = ""
                     _cur_round["steps"].append(step)
+                    _cur_round["events"].append({"type": "tool", **step})
                 yield _sse("tool_done", {"tool": ev["tool"], "summary": summary,
                                          "args_hint": args_hint, "duration_ms": duration_ms,
                                          "result": result_raw})
@@ -1918,6 +1930,7 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
     # J-3b: 分组结构
     _thinking_rounds_g: list = []
     _cur_round_g: dict | None = None
+    _thinking_buf_g: str = ""  # 全局聊天思考缓冲
 
     # DB 可能被 Orchestrator 鎖住，讀失敗時用空列表繼續（不阻斷聊天）
     try:
@@ -1973,17 +1986,24 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
             elif etype == "round_start":
                 if _cur_round_g is not None:
                     _thinking_rounds_g.append(_cur_round_g)
-                _cur_round_g = {"round": ev["round"], "reasoning": "", "steps": []}
+                _cur_round_g = {"round": ev["round"], "reasoning": "", "steps": [], "events": []}
+                _thinking_buf_g = ""
                 yield _sse("round_start", {"round": ev["round"]})
 
             elif etype == "thinking_delta":
+                _thinking_buf_g += ev.get("delta") or ""
                 if _cur_round_g is not None:
                     _cur_round_g["reasoning"] = (_cur_round_g.get("reasoning") or "") + (ev.get("delta") or "")
                 yield _sse("thinking_delta", {"delta": ev["delta"]})
 
             elif etype == "thinking_done":
-                if _cur_round_g is not None and ev.get("text"):
-                    _cur_round_g["reasoning"] = ev.get("text", "")
+                if _cur_round_g is not None:
+                    if ev.get("text"):
+                        _cur_round_g["reasoning"] = ev.get("text", "")
+                    text = ev.get("text") or _thinking_buf_g
+                    if text.strip():
+                        _cur_round_g["events"].append({"type": "thinking", "text": text})
+                    _thinking_buf_g = ""
                 yield _sse("thinking_done", {"text": ev.get("text", "")})
 
             elif etype == "tool_start":
@@ -1998,7 +2018,11 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
                         "summary": summary, "duration_ms": duration_ms}
                 thinking_steps.append(step)
                 if _cur_round_g is not None:
+                    if _thinking_buf_g.strip():
+                        _cur_round_g["events"].append({"type": "thinking", "text": _thinking_buf_g})
+                        _thinking_buf_g = ""
                     _cur_round_g["steps"].append(step)
+                    _cur_round_g["events"].append({"type": "tool", **step})
                 yield _sse("tool_done", {"tool": ev["tool"], "summary": summary,
                                          "args_hint": args_hint, "duration_ms": duration_ms})
 

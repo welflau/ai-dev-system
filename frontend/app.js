@@ -811,19 +811,8 @@ function _updateChatPanelForContext() {
     }
 
     if (chatPanelOpen) {
-        if (!currentProjectId && _globalChatDom) {
-            // 恢复全局聊天记录
-            chatHistory = [..._globalChatHistory];
-            if (msgContainer) {
-                msgContainer.innerHTML = _globalChatDom;
-                scrollChatToBottom();
-            }
-        } else {
-            showChatWelcome();
-            if (currentProjectId) {
-                loadChatHistory();
-            }
-        }
+        showChatWelcome();
+        loadChatHistory();
     }
 }
 
@@ -11000,9 +10989,6 @@ async function loadChatSessions() {
 
 /** 切换到指定会话 */
 async function switchChatSession(sessionId) {
-    _currentChatSessionId = sessionId;
-    const panel = document.getElementById('chatHistoryPanel');
-    if (panel) panel.style.display = 'none';
     const container = document.getElementById('chatMessages');
     if (!container) return;
     container.innerHTML = '';
@@ -11022,7 +11008,7 @@ async function switchChatSession(sessionId) {
                 actionObj._state = msg.action_state || 'pending';
                 actionObj._result = msg.action_result || null;
             }
-            appendChatBubble(msg.role, msg.content, msg.created_at, actionObj, msg.images || [], [], msg.thinking || []);
+            appendChatBubble(msg.role, msg.content, msg.created_at, actionObj, msg.images || [], [], msg.thinking || [], container);
         }
         scrollChatToBottom();
     } catch (e) {
@@ -11543,14 +11529,7 @@ async function _sendChatStreaming(url, body) {
 
 async function loadChatHistory() {
     if (!currentProjectId) {
-        // v0.20：优先从最近 session 加载（DB），保证和历史面板一致
-        // 若有内存快照（短暂切换项目又回来）直接用，避免多余 API 调用
-        if (_globalChatDom && _currentChatSessionId) {
-            chatHistory = [..._globalChatHistory];
-            const container = document.getElementById('chatMessages');
-            if (container) { container.innerHTML = _globalChatDom; scrollChatToBottom(); }
-            return;
-        }
+        // 始终从 DB 加载最新 session，确保思考面板等动态内容正确渲染
         try {
             const data = await api('/chat/sessions?limit=1');
             const latest = (data.sessions || [])[0];
@@ -11615,7 +11594,8 @@ async function loadChatHistory() {
                 actionObj,
                 msg.images || [],
                 [],
-                msg.thinking || []
+                msg.thinking || [],
+                container
             );
         }
         scrollChatToBottom();
@@ -13255,48 +13235,77 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
             const visibleRounds = thinking.filter(r =>
                 (r.reasoning || '').trim() ||
                 (r.steps?.length || 0) > 0 ||
-                (r.tool_count || 0) > 0  // CLI 模式可能有 tool_count 但无 steps
+                (r.events?.length || 0) > 0 ||
+                (r.tool_count || 0) > 0
             );
-            // 如果全都被过滤，至少保留一个空轮次显示"思考了 N 轮"
             const displayRounds = visibleRounds.length > 0 ? visibleRounds : thinking.slice(0, 1);
-            const totalSteps = displayRounds.reduce((n, r) => n + (r.steps?.length || 0), 0);
+            const totalSteps = displayRounds.reduce((n, r) => n + (r.steps?.length || r.events?.filter(e=>e.type==='tool').length || 0), 0);
             const roundsHtml = displayRounds.map(r => {
                 const reasoning = r.reasoning || '';
-                // 摘要行：去换行，截 120 字
                 const snippet = reasoning.replace(/\n+/g, ' ').slice(0, 120);
                 const preview = reasoning.length > 120 ? snippet + '…' : snippet;
-                // 展开内容：Markdown 渲染
-                const thinkingHtmlInner = reasoning
-                    ? (window.marked ? (() => { try { return marked.parse(reasoning); } catch(e) { return escapeHtml(reasoning); } })() : escapeHtml(reasoning))
-                    : '';
-                const stepsHtml = (r.steps || []).map(s => {
-                    const label = _TOOL_LABELS[s.tool] || `🔧 ${s.tool}`;
-                    const dur = s.duration_ms > 0 ? ` (${s.duration_ms}ms)` : '';
-                    const summary = s.summary ? `✓ ${s.summary.slice(0, 80)}${dur}` : `✓${dur}`;
-                    const resultHtml = s.result ? _formatToolResult(s.tool, s.result) : '';
-                    const hasResult = !!resultHtml;
-                    return `<div class="ctp-step ctp-step-done">
-                        <div class="ctp-step-row1">
-                            <span class="ctp-step-dot"></span>
-                            <span class="ctp-step-label">${escapeHtml(label)}</span>
-                            <span class="ctp-step-status">${escapeHtml(summary)}</span>
-                            ${hasResult ? `<span class="ctp-result-toggle" onclick="this.closest('.ctp-step').classList.toggle('ctp-step-expanded')">›</span>` : ''}
-                        </div>
-                        ${s.args_hint ? `<div class="ctp-step-row2">${escapeHtml(s.args_hint)}</div>` : ''}
-                        ${hasResult ? `<div class="ctp-step-result">${resultHtml}</div>` : ''}
-                    </div>`;
-                }).join('');
-                const hasContent = thinkingHtmlInner || stepsHtml;
-                return `<div class="crp-round-group crp-round-done">
+
+                let bodyHtml = '';
+                if (r.events && r.events.length > 0) {
+                    // 新格式：按 events 穿插顺序渲染
+                    bodyHtml = r.events.map(ev => {
+                        if (ev.type === 'thinking') {
+                            const html = window.marked
+                                ? (() => { try { return marked.parse(ev.text); } catch(e) { return escapeHtml(ev.text); } })()
+                                : escapeHtml(ev.text);
+                            return `<div class="crp-round-thinking">${html}</div>`;
+                        } else if (ev.type === 'tool') {
+                            const label = _TOOL_LABELS[ev.tool] || `🔧 ${ev.tool}`;
+                            const dur = ev.duration_ms > 0 ? ` (${ev.duration_ms}ms)` : '';
+                            const summary = ev.summary ? `✓ ${ev.summary.slice(0, 80)}${dur}` : `✓${dur}`;
+                            const resultHtml = ev.result ? _formatToolResult(ev.tool, ev.result) : '';
+                            const hasResult = !!resultHtml;
+                            return `<div class="ctp-step ctp-step-done">
+                                <div class="ctp-step-row1">
+                                    <span class="ctp-step-dot"></span>
+                                    <span class="ctp-step-label">${escapeHtml(label)}</span>
+                                    <span class="ctp-step-status">${escapeHtml(summary)}</span>
+                                    ${hasResult ? `<span class="ctp-result-toggle" onclick="this.closest('.ctp-step').classList.toggle('ctp-step-expanded')">›</span>` : ''}
+                                </div>
+                                ${ev.args_hint ? `<div class="ctp-step-row2">${escapeHtml(ev.args_hint)}</div>` : ''}
+                                ${hasResult ? `<div class="ctp-step-result">${resultHtml}</div>` : ''}
+                            </div>`;
+                        }
+                        return '';
+                    }).join('');
+                } else {
+                    // 旧格式兼容：先思考块，后工具列表
+                    const thinkingHtmlInner = reasoning
+                        ? (window.marked ? (() => { try { return marked.parse(reasoning); } catch(e) { return escapeHtml(reasoning); } })() : escapeHtml(reasoning))
+                        : '';
+                    const stepsHtml = (r.steps || []).map(s => {
+                        const label = _TOOL_LABELS[s.tool] || `🔧 ${s.tool}`;
+                        const dur = s.duration_ms > 0 ? ` (${s.duration_ms}ms)` : '';
+                        const summary = s.summary ? `✓ ${s.summary.slice(0, 80)}${dur}` : `✓${dur}`;
+                        const resultHtml = s.result ? _formatToolResult(s.tool, s.result) : '';
+                        const hasResult = !!resultHtml;
+                        return `<div class="ctp-step ctp-step-done">
+                            <div class="ctp-step-row1">
+                                <span class="ctp-step-dot"></span>
+                                <span class="ctp-step-label">${escapeHtml(label)}</span>
+                                <span class="ctp-step-status">${escapeHtml(summary)}</span>
+                                ${hasResult ? `<span class="ctp-result-toggle" onclick="this.closest('.ctp-step').classList.toggle('ctp-step-expanded')">›</span>` : ''}
+                            </div>
+                            ${s.args_hint ? `<div class="ctp-step-row2">${escapeHtml(s.args_hint)}</div>` : ''}
+                            ${hasResult ? `<div class="ctp-step-result">${resultHtml}</div>` : ''}
+                        </div>`;
+                    }).join('');
+                    bodyHtml = (thinkingHtmlInner ? `<div class="crp-round-thinking">${thinkingHtmlInner}</div>` : '') + stepsHtml;
+                }
+
+                const hasContent = !!bodyHtml;
+                return `<div class="crp-round-group crp-round-done crp-round-expanded">
                     <div class="crp-round-header" onclick="this.closest('.crp-round-group').classList.toggle('crp-round-expanded')">
                         <span class="crp-round-dot"></span>
                         <span class="crp-round-reasoning ${!preview ? 'crp-round-reasoning-placeholder' : ''}">${escapeHtml(preview || (r.steps?.[0] ? (_TOOL_LABELS[r.steps[0].tool] || r.steps[0].tool) : ''))}</span>
                         ${hasContent ? `<span class="crp-round-chevron">›</span>` : ''}
                     </div>
-                    <div class="crp-round-body">
-                        ${thinkingHtmlInner ? `<div class="crp-round-thinking">${thinkingHtmlInner}</div>` : ''}
-                        <div class="crp-round-steps">${stepsHtml}</div>
-                    </div>
+                    <div class="crp-round-body">${bodyHtml}</div>
                 </div>`;
             }).join('');
             thinkingHtml = `
@@ -14612,6 +14621,14 @@ function autoResizeChatInput() {
  * 滚动聊天到底部
  */
 function scrollChatToBottom() {
+    // chatMessages が実際にスクロールする要素（chat-panel-body は overflow:hidden）
+    const msgs = document.getElementById('chatMessages');
+    if (msgs) {
+        requestAnimationFrame(() => {
+            msgs.scrollTop = msgs.scrollHeight;
+        });
+        return;
+    }
     const body = document.getElementById('chatPanelBody');
     if (body) {
         requestAnimationFrame(() => {
