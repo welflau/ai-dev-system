@@ -307,6 +307,7 @@ class QueryEngine:
                             args_hint="",
                             duration_ms=elapsed,
                             result=ev.get("result", ""),
+                            tool_use_id=tid,
                         )
                     elif etype == "stop":
                         break

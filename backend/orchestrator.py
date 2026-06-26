@@ -1396,6 +1396,27 @@ class TicketOrchestrator:
             if sop_config:
                 context["sop_config"] = sop_config
 
+            # ===== 注入人工评论（最高优先级指令）=====
+            human_comments = await db.fetch_all(
+                "SELECT author, content, created_at FROM ticket_comments "
+                "WHERE ticket_id = ? AND author_type = 'human' ORDER BY created_at ASC",
+                (ticket_id,),
+            )
+            if human_comments:
+                lines = "\n".join(
+                    f"- [{c['created_at'][:16]}] {c['content']}"
+                    for c in human_comments
+                )
+                context["human_instructions"] = (
+                    "## ⚠️ 人工指令（最高优先级，必须严格遵循）\n"
+                    "以下是人工在工单中留下的评论和指令，执行时必须优先遵循，不得偏离：\n"
+                    + lines
+                )
+                logger.info(
+                    "📌 工单 %s 注入 %d 条人工评论到 Agent prompt",
+                    ticket_id[:12], len(human_comments),
+                )
+
             # Agent 执行
             await event_manager.publish_to_project(
                 project_id,
@@ -1669,6 +1690,11 @@ class TicketOrchestrator:
                 action, current_status, new_status,
                 f"HTML 原型已生成，核心循环：{result.get('core_mechanics','')[:80]}",
             )
+            await self._write_phase_comment(
+                project_id, ticket_id, agent_name,
+                f"✅ HTML 原型已生成。核心机制：{result.get('core_mechanics','无')[:120]}",
+                phase=new_status,
+            )
             return
 
         if agent_name == "ArtAgent":
@@ -1693,6 +1719,11 @@ class TicketOrchestrator:
                 action, current_status, new_status,
                 f"视觉规范完成，资产清单已生成",
             )
+            await self._write_phase_comment(
+                project_id, ticket_id, agent_name,
+                f"✅ 视觉规范完成，资产清单已生成。",
+                phase=new_status,
+            )
             return
 
         if agent_name == "UXAgent":
@@ -1716,6 +1747,11 @@ class TicketOrchestrator:
                 project_id, requirement_id, ticket_id, agent_name,
                 action, current_status, new_status,
                 f"UX 设计完成：{len(result.get('component_wireframe',''))} 字符",
+            )
+            await self._write_phase_comment(
+                project_id, ticket_id, agent_name,
+                f"✅ UX 设计完成，交互稿已输出。",
+                phase=new_status,
             )
             return
 
@@ -1743,6 +1779,11 @@ class TicketOrchestrator:
                 project_id, requirement_id, ticket_id, agent_name,
                 action, current_status, new_status,
                 f"PRD 已生成，验收标准：{len(result.get('acceptance_criteria',''))} 字符",
+            )
+            await self._write_phase_comment(
+                project_id, ticket_id, agent_name,
+                f"✅ PRD 已生成。验收标准：{str(result.get('acceptance_criteria','无'))[:200]}",
+                phase=new_status,
             )
             return
 
@@ -1781,6 +1822,12 @@ class TicketOrchestrator:
                     "git_commit": git_result.get("commit_hash") if git_result else None,
                     "git_files": git_result.get("files", []) if git_result else [],
                 },
+            )
+            await self._write_phase_comment(
+                project_id, ticket_id, agent_name,
+                f"✅ 架构设计完成，预计开发 {est_hours} 小时。"
+                + (f" 架构摘要：{str(result.get('architecture',''))[:150]}" if result.get("architecture") else ""),
+                phase=new_status,
             )
 
             # 写入 Agent Memory（架构决策记录）
@@ -1942,6 +1989,15 @@ class TicketOrchestrator:
                     "git_commit": git_result.get("commit_hash") if git_result else None,
                     "git_files": git_result.get("files", []) if git_result else [],
                 },
+            )
+            # 阶段完成评论：供时间轴展示和下游 Agent 感知
+            files_count = len(result.get("files", {}))
+            notes_brief = str(result.get("dev_result", {}).get("notes", ""))[:120]
+            await self._write_phase_comment(
+                project_id, ticket_id, agent_name,
+                f"✅ 开发完成，共提交 {files_count} 个文件。自测：{test_summary}"
+                + (f"\n备注：{notes_brief}" if notes_brief else ""),
+                phase=new_status,
             )
 
             # 保存代码产物
@@ -2380,11 +2436,18 @@ class TicketOrchestrator:
         }
         action_label = action_labels.get(action, action)
         commit_msg = f"[{agent_name}] {action_label}: {ticket_title} ({file_names})"
-        git_result = await git_manager.write_and_commit(
-            project_id, files, commit_msg, agent=agent_name
-        )
 
-        # 写入二进制媒体文件（截图等），并追加 commit
+        # 手动挡：只写文件，不自动 git commit
+        project_mode = (project or {}).get("mode", "auto") if project else "auto"
+        if project_mode == "manual":
+            logger.info("🔧 手动挡：跳过 git commit，直接写入文件 (%d 个)", len(files))
+            git_result = await git_manager.write_files_only(project_id, files)
+        else:
+            git_result = await git_manager.write_and_commit(
+                project_id, files, commit_msg, agent=agent_name
+            )
+
+        # 写入二进制媒体文件（截图等），手动挡也只写不 commit
         media_files: dict = result.pop("_media_files", {}) or {}
         if media_files:
             try:
@@ -2394,13 +2457,14 @@ class TicketOrchestrator:
                     dest.parent.mkdir(parents=True, exist_ok=True)
                     dest.write_bytes(img_bytes)
                     logger.info("🖼️ 媒体文件写入: %s (%d bytes)", media_path, len(img_bytes))
-                media_commit = await git_manager.commit(
-                    project_id,
-                    f"[{agent_name}] 测试截图: {ticket_title}",
-                    author=agent_name,
-                )
-                await git_manager.push(project_id)
-                logger.info("📸 测试截图已提交: %s", media_commit)
+                if project_mode != "manual":
+                    media_commit = await git_manager.commit(
+                        project_id,
+                        f"[{agent_name}] 测试截图: {ticket_title}",
+                        author=agent_name,
+                    )
+                    await git_manager.push(project_id)
+                    logger.info("📸 测试截图已提交: %s", media_commit)
             except Exception as me:
                 logger.warning("媒体文件提交失败（不影响主流程）: %s", me)
         # 记录当前分支名到 git_result
@@ -3513,6 +3577,122 @@ class TicketOrchestrator:
             )
         except Exception as e:
             logger.warning("SessionLogger.log_event 失败: %s", e)
+
+
+    async def _write_phase_comment(
+        self,
+        project_id: str,
+        ticket_id: str,
+        agent_type: str,
+        summary: str,
+        phase: Optional[str] = None,
+    ):
+        """Agent 阶段完成后写一条 agent 类型评论，供时间轴展示和下游 Agent 感知"""
+        try:
+            comment_id = "CMT-" + generate_id()
+            await db.insert("ticket_comments", {
+                "id": comment_id,
+                "ticket_id": ticket_id,
+                "project_id": project_id,
+                "author": agent_type,
+                "author_type": "agent",
+                "content": summary,
+                "phase": phase,
+                "created_at": now_iso(),
+            })
+            await event_manager.publish_to_project(project_id, "comment_added", {
+                "ticket_id": ticket_id,
+                "comment_id": comment_id,
+                "author_type": "agent",
+                "author": agent_type,
+                "content": summary,
+                "phase": phase,
+            })
+        except Exception as e:
+            logger.debug("_write_phase_comment 失败（忽略）: %s", e)
+
+
+    async def reply_to_comment(
+        self,
+        ticket_id: str,
+        project_id: str,
+        comment_content: str,
+    ):
+        """用户发评论后，由当前负责 Agent（或 ChatAssistant）立刻异步回复"""
+        try:
+            ticket = await db.fetch_one("SELECT * FROM tickets WHERE id = ?", (ticket_id,))
+            if not ticket:
+                return
+
+            # 读取完整评论历史（正序）
+            history = await db.fetch_all(
+                "SELECT author, author_type, content FROM ticket_comments "
+                "WHERE ticket_id = ? ORDER BY created_at ASC",
+                (ticket_id,),
+            )
+
+            # 选择回复的 Agent：优先用当前负责的 Agent，否则用 ChatAssistant
+            agent_name = ticket.get("assigned_agent") or "ChatAssistant"
+            # 对于终态工单（无 assigned_agent），也能回复
+            if agent_name not in self.agents:
+                agent_name = "ChatAssistant"
+
+            # 构建历史对话文本（不含最新一条，因为那就是 comment_content）
+            history_lines = []
+            for c in history:
+                if c["content"] == comment_content and c["author_type"] == "human":
+                    continue  # 跳过刚写入的这条，避免重复
+                role = "用户" if c["author_type"] == "human" else c["author"]
+                history_lines.append(f"[{role}] {c['content']}")
+            history_text = "\n".join(history_lines) if history_lines else "（无）"
+
+            # 工单基本信息
+            title = ticket.get("title", "")
+            status = ticket.get("status", "")
+            description = (ticket.get("description") or "")[:300]
+            result_brief = ""
+            try:
+                result_obj = json.loads(ticket.get("result") or "{}")
+                # 取各阶段 summary 字段
+                for key in ("notes", "prd_content", "architecture", "summary"):
+                    val = result_obj.get(key)
+                    if val:
+                        result_brief = str(val)[:200]
+                        break
+            except Exception:
+                pass
+
+            prompt = (
+                f"你是 {agent_name}，正在处理工单「{title}」。\n"
+                f"当前状态：{status}\n"
+                f"工单描述：{description}\n"
+                + (f"最新产出摘要：{result_brief}\n" if result_brief else "")
+                + f"\n== 历史对话 ==\n{history_text}\n"
+                f"\n== 用户最新评论 ==\n{comment_content}\n"
+                "\n请针对用户评论简洁回复（2-4句）。"
+                "如涉及修改要求，说明你将如何处理；"
+                "如是询问进展，直接说明当前状态和产出；"
+                "不要用 markdown 标题，直接用自然语言。"
+            )
+
+            from llm_client import llm_client
+            reply_text = await llm_client.generate(
+                prompt,
+                max_tokens=400,
+                temperature=0.5,
+            )
+
+            if reply_text and reply_text.strip():
+                await self._write_phase_comment(
+                    project_id, ticket_id, agent_name, reply_text.strip()
+                )
+                logger.info(
+                    "💬 %s 回复工单 %s 的评论（%d 字）",
+                    agent_name, ticket_id[:12], len(reply_text.strip()),
+                )
+
+        except Exception as e:
+            logger.warning("reply_to_comment 失败（忽略）: %s", e)
 
 
     # ── TODO G：uproject 自愈 ───────────────────────────────────────────────

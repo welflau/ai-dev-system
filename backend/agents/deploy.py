@@ -133,6 +133,21 @@ class DeployAgent(BaseAgent):
 
         config = ENV_CONFIG[env_type]
         repo_path = str(git_manager._repo_path(project_id))
+
+        # UE/game 项目体积巨大，test/prod 隔离 clone 会产生数 GB 的损坏副本，直接跳过
+        if env_type != "dev":
+            try:
+                from database import db as _db
+                proj = await _db.fetch_one("SELECT traits FROM projects WHERE id = ?", (project_id,))
+                if proj:
+                    import json as _j
+                    traits = _j.loads(proj.get("traits") or "[]")
+                    if any(t.startswith("engine:ue") or t.startswith("engine:unity") for t in traits):
+                        logger.info("跳过 %s 环境 clone：UE/Unity 项目不支持隔离部署（project_id=%s）", env_type, project_id)
+                        return None
+            except Exception:
+                pass
+
         base_port = 9000 + (abs(hash(project_id)) % 100)
         port = base_port + config["port_offset"]
 

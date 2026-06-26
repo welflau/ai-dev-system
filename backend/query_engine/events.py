@@ -50,6 +50,7 @@ class ToolDoneEvent:
     args_hint: str
     duration_ms: float
     result: str = ""   # 完整工具返回内容（用于前端展开显示）
+    tool_use_id: str = ""  # CLI 工具的 tool_use_id，用于 /tasks 面板追踪
 
 
 @dataclass
@@ -90,6 +91,12 @@ class ErrorEvent:
     message: str
 
 
+@dataclass
+class CliSessionIdEvent:
+    """CLI 模式：首次调用时 CLI 返回的 session_id，用于后续 --resume 恢复上下文"""
+    session_id: str
+
+
 # 联合类型，方便 isinstance 检查
 QueryEvent = Union[
     TextDeltaEvent,
@@ -103,4 +110,5 @@ QueryEvent = Union[
     MessageDoneEvent,
     BudgetExceededEvent,
     ErrorEvent,
+    CliSessionIdEvent,
 ]

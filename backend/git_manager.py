@@ -644,6 +644,27 @@ Thumbs.db
             "pushed": pushed,
         }
 
+    async def write_files_only(
+        self,
+        project_id: str,
+        files: Dict[str, str],
+    ) -> Optional[Dict]:
+        """
+        手动挡：只写入文件，不 commit、不 push。
+        文件写入 git_repo_path 对应目录（工作区直接修改）。
+        返回: {"files_count": N, "files": [...]}
+        """
+        if not files:
+            return None
+        written = await self.write_files(project_id, files)
+        return {
+            "commit_hash": None,
+            "files_count": len(written),
+            "files": list(files.keys()),
+            "pushed": False,
+            "manual_mode": True,
+        }
+
     # ==================== 查询 ====================
 
     async def get_commit_detail(self, project_id: str, sha: str) -> Optional[Dict]:

@@ -616,6 +616,13 @@ class ChatAssistantAgent(BaseAgent):
         # 多张确认卡片（文档分析批量提取需求场景）
         actions = executor.all_confirm_results if len(executor.all_confirm_results) > 1 else None
 
+        # CLI 降级路径：LLM 在文本里输出了 [ACTION:xxx {...}]，解析并执行
+        if result.get("cli_fallback") and not action:
+            cli_action = await _parse_cli_action_text(reply, executor)
+            if cli_action:
+                action = cli_action
+                reply = _strip_action_tags_from_reply(reply)
+
         # 兜底：LLM 啥也没说但工具执行了，用 action.message 或固定文案
         if not reply:
             if action:
@@ -750,7 +757,8 @@ class ChatAssistantAgent(BaseAgent):
                     yield {"type": "tool_done", "tool": event.tool,
                            "summary": event.summary, "args_hint": event.args_hint,
                            "duration_ms": round(event.duration_ms),
-                           "result": event.result}
+                           "result": event.result,
+                           **({"tool_use_id": event.tool_use_id} if event.tool_use_id else {})}
                     # AutoAICR：写文件后自动触发
                     if event.tool in ("write_file", "edit_file", "Write", "Edit") and event.result:
                         aicr_ev = await _maybe_autoaicr(event, project)
@@ -941,7 +949,8 @@ class ChatAssistantAgent(BaseAgent):
                     yield {"type": "tool_done", "tool": event.tool,
                            "summary": event.summary, "args_hint": event.args_hint,
                            "duration_ms": round(event.duration_ms),
-                           "result": event.result}
+                           "result": event.result,
+                           **({"tool_use_id": event.tool_use_id} if event.tool_use_id else {})}
                 elif isinstance(event, ToolErrorEvent):
                     yield {"type": "tool_done", "tool": event.tool,
                            "summary": f"错误: {event.error}",
@@ -1243,7 +1252,6 @@ class ChatAssistantAgent(BaseAgent):
                 if text:
                     return text
         return ""
-
 
     async def _build_system_prompt(self, project: dict, context: dict, history_len: int = 0) -> str:
         """
@@ -1868,4 +1876,38 @@ def _build_manual_mode_section(project: dict, history_len: int = 0) -> str:
 
 
 # ── ChatAssistantAgent._build_system_prompt 在类体内，见下方 ──
+
+
+async def _parse_cli_action_text(reply: str, executor) -> Optional[dict]:
+    """从 CLI 降级文本中解析 [ACTION:NAME]{...}[/ACTION]，调 executor 执行，返回 action result。"""
+    import re, json as _json
+    m = re.search(r'\[ACTION:(\w+)\]([\s\S]*?)\[/ACTION\]', reply, re.IGNORECASE)
+    if not m:
+        return None
+    action_name_raw = m.group(1).strip()
+    action_body = m.group(2).strip()
+
+    try:
+        params = _json.loads(action_body)
+    except Exception:
+        params = {}
+        for line in action_body.splitlines():
+            if ':' in line:
+                k, _, v = line.partition(':')
+                params[k.strip()] = v.strip()
+
+    tool_name = action_name_raw.lower()
+    try:
+        result = await executor.execute(tool_name, params)
+        return result if isinstance(result, dict) else None
+    except Exception as e:
+        logger.warning("CLI 降级 action 执行失败 [%s]: %s", tool_name, e)
+        return None
+
+
+def _strip_action_tags_from_reply(reply: str) -> str:
+    """从回复文本中去掉 [ACTION:...]...[/ACTION] 块，避免显示给用户。"""
+    import re
+    cleaned = re.sub(r'\[ACTION:\w+\][\s\S]*?\[/ACTION\]', '', reply, flags=re.IGNORECASE).strip()
+    return cleaned
 

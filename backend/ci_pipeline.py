@@ -51,7 +51,7 @@ class CIPipelineRunner:
     async def _scheduler_tick(self):
         """单次调度检查"""
         projects = await db.fetch_all(
-            "SELECT id FROM projects WHERE status = 'active'"
+            "SELECT id FROM projects WHERE status = 'active' AND (mode IS NULL OR mode != 'manual')"
         )
         for project in projects:
             project_id = project["id"]
@@ -137,6 +137,11 @@ class CIPipelineRunner:
 
     async def trigger_build(self, project_id: str, build_type: str, trigger: str = "manual") -> Dict:
         """触发一次构建，返回 build 记录"""
+        # 手动挡项目不参与 CI（不自动创建分支、不自动构建）
+        proj = await db.fetch_one("SELECT mode FROM projects WHERE id = ?", (project_id,))
+        if proj and proj.get("mode") == "manual":
+            return {"error": "手动挡项目不启用 CI 流水线"}
+
         if build_type in (CIBuildType.MASTER_BUILD.value, CIBuildType.DEPLOY.value):
             branch = await git_manager.get_primary_branch(project_id)
         else:

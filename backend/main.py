@@ -238,6 +238,11 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("MCP 客户端启动失败（ChatAssistant 仍可用内部工具）: %s", e)
 
+    # 启动自动化任务调度器
+    from automation_scheduler import automation_loop
+    auto_task = asyncio.create_task(automation_loop())
+    logger.info("自动化任务调度器已启动（60s 轮询）")
+
     logger.info("Server: http://localhost:%s", settings.PORT)
     logger.info("App:    http://localhost:%s/app", settings.PORT)
     logger.info("=" * 60)
@@ -248,6 +253,7 @@ async def lifespan(app: FastAPI):
     bus_task.cancel()
     poll_task.cancel()
     ci_task.cancel()
+    auto_task.cancel()
     try:
         from mcp_client import mcp_client
         await mcp_client.stop_all_servers()
@@ -305,6 +311,7 @@ from api.agent_test import router as agent_test_router, global_router as agent_t
 from api.permissions import router as permissions_router
 from api.hooks import router as hooks_router
 from api.system_settings import router as system_settings_router
+from api.automation import router as automation_router
 
 app.include_router(projects_router)
 app.include_router(requirements_router)
@@ -332,6 +339,7 @@ app.include_router(agent_test_global_router)
 app.include_router(permissions_router)
 app.include_router(hooks_router)
 app.include_router(system_settings_router)
+app.include_router(automation_router)
 
 
 # ==================== 系统端点 ====================

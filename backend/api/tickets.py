@@ -699,6 +699,134 @@ async def get_ticket_logs(ticket_id: str):
     return {"logs": logs, "total": len(logs)}
 
 
+# ==================== 统一时间轴 + 评论 ====================
+
+# 次级日志的 action 前缀（默认折叠）
+_SECONDARY_ACTIONS = {"chat:", "llm_call", "tool_call", "shell_exec"}
+
+
+def _classify_tier(item: dict) -> str:
+    """判断时间轴条目的展示级别：primary / secondary"""
+    if item.get("_type") == "comment":
+        return "primary"
+    action = item.get("action", "") or ""
+    # 状态变更 → primary
+    if item.get("from_status") or item.get("to_status"):
+        return "primary"
+    # LLM/工具调用 → secondary
+    for prefix in _SECONDARY_ACTIONS:
+        if action.startswith(prefix) or action == prefix:
+            return "secondary"
+    # phase_complete / artifact / 人工操作 → primary
+    if action in ("phase_complete", "manual_action", "verification_approved",
+                  "verification_rejected", "artifact_added"):
+        return "primary"
+    return "secondary"
+
+
+@router.get("/api/tickets/{ticket_id}/timeline")
+async def get_ticket_timeline(ticket_id: str):
+    """统一时间轴：ticket_logs + ticket_comments 按时间合并"""
+    logs = await db.fetch_all(
+        "SELECT * FROM ticket_logs WHERE ticket_id = ? ORDER BY created_at ASC",
+        (ticket_id,),
+    )
+    comments = await db.fetch_all(
+        "SELECT * FROM ticket_comments WHERE ticket_id = ? ORDER BY created_at ASC",
+        (ticket_id,),
+    )
+
+    items = []
+
+    # 处理日志条目
+    for log in logs:
+        item = dict(log)
+        item["_type"] = "log"
+        # 解析 detail JSON，把 message 提升到顶层方便前端使用
+        try:
+            detail_obj = json.loads(item.get("detail") or "{}")
+            item["_message"] = detail_obj.get("message", "")
+            item["_detail"] = detail_obj
+        except Exception:
+            item["_message"] = item.get("detail", "")
+            item["_detail"] = {}
+        item["_tier"] = _classify_tier(item)
+        items.append(item)
+
+    # 处理评论条目
+    for comment in comments:
+        item = dict(comment)
+        item["_type"] = "comment"
+        item["_tier"] = "primary"
+        items.append(item)
+
+    # 按时间升序合并
+    items.sort(key=lambda x: x.get("created_at") or "")
+
+    return {"timeline": items, "total": len(items)}
+
+
+@router.post("/api/tickets/{ticket_id}/comments")
+async def add_ticket_comment(ticket_id: str, body: dict, background_tasks: BackgroundTasks):
+    """新增人工评论，保存后立刻异步触发 Agent 回复"""
+    content = (body.get("content") or "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="评论内容不能为空")
+
+    # 获取工单，校验存在并拿到 project_id
+    ticket = await db.fetch_one("SELECT project_id FROM tickets WHERE id = ?", (ticket_id,))
+    if not ticket:
+        raise HTTPException(status_code=404, detail="工单不存在")
+
+    comment_id = "CMT-" + generate_id()
+    created_at = now_iso()
+    await db.insert("ticket_comments", {
+        "id": comment_id,
+        "ticket_id": ticket_id,
+        "project_id": ticket["project_id"],
+        "author": "你",
+        "author_type": "human",
+        "content": content,
+        "phase": body.get("phase"),
+        "created_at": created_at,
+    })
+
+    # SSE 推送
+    await event_manager.publish_to_project(ticket["project_id"], "comment_added", {
+        "ticket_id": ticket_id,
+        "comment_id": comment_id,
+        "author_type": "human",
+        "content": content,
+        "created_at": created_at,
+    })
+
+    # 立刻异步触发 Agent 回复（不阻塞接口响应）
+    from orchestrator import orchestrator as _orchestrator
+    background_tasks.add_task(
+        _orchestrator.reply_to_comment,
+        ticket_id=ticket_id,
+        project_id=ticket["project_id"],
+        comment_content=content,
+    )
+
+    return {"id": comment_id, "created_at": created_at}
+
+
+@router.delete("/api/tickets/{ticket_id}/comments/{comment_id}")
+async def delete_ticket_comment(ticket_id: str, comment_id: str):
+    """删除人工评论（仅允许删除 human 类型）"""
+    comment = await db.fetch_one(
+        "SELECT * FROM ticket_comments WHERE id = ? AND ticket_id = ?",
+        (comment_id, ticket_id),
+    )
+    if not comment:
+        raise HTTPException(status_code=404, detail="评论不存在")
+    if comment["author_type"] != "human":
+        raise HTTPException(status_code=403, detail="只能删除人工评论")
+    await db.delete("ticket_comments", "id = ?", (comment_id,))
+    return {"ok": True}
+
+
 @router.get("/api/requirements/{req_id}/logs")
 async def get_requirement_logs(req_id: str):
     """需求级日志"""

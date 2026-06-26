@@ -9241,3 +9241,549 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
     background: var(--primary, #6366f1);
     opacity: 0.5;
 }
+
+/* ==========================================
+   自动化面板
+   ========================================== */
+
+.automation-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 24px;
+}
+
+.automation-subtitle {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+.automation-section {
+    margin-bottom: 28px;
+}
+
+.automation-section-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.automation-count {
+    background: var(--bg-elevated);
+    color: var(--text-secondary);
+    border-radius: 10px;
+    padding: 1px 7px;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+/* 模板卡片 */
+.automation-templates-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 10px;
+}
+
+.automation-template-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+}
+
+.automation-template-card:hover {
+    border-color: var(--primary-light);
+    background: var(--bg-elevated);
+}
+
+.automation-template-icon {
+    font-size: 22px;
+    margin-bottom: 8px;
+}
+
+.automation-template-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 4px;
+}
+
+.automation-template-desc {
+    font-size: 12px;
+    color: var(--text-muted);
+    line-height: 1.4;
+}
+
+.automation-template-skeleton {
+    background: var(--bg-elevated);
+    border-radius: 10px;
+    height: 90px;
+    animation: skeleton-pulse 1.4s ease-in-out infinite;
+}
+
+/* 任务卡片 */
+.automation-task-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    transition: border-color 0.15s;
+}
+
+.automation-task-card:hover {
+    border-color: var(--border-light);
+}
+
+.automation-task-card.disabled {
+    opacity: 0.55;
+}
+
+.automation-task-status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--success);
+    flex-shrink: 0;
+}
+
+.automation-task-status-dot.disabled {
+    background: var(--text-muted);
+}
+
+.automation-task-status-dot.running {
+    background: var(--warning);
+    animation: pulse-dot 1s ease-in-out infinite;
+}
+
+@keyframes pulse-dot {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+
+.automation-task-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.automation-task-name {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.automation-task-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 3px;
+    flex-wrap: wrap;
+}
+
+.automation-task-project {
+    font-size: 11px;
+    background: rgba(79,70,229,0.18);
+    color: var(--primary-light);
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-weight: 500;
+}
+
+.automation-task-schedule {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.automation-task-next {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-left: auto;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.automation-task-actions {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.automation-task-btn {
+    font-size: 11px;
+    padding: 3px 8px;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+}
+
+.automation-task-btn:hover {
+    background: var(--bg-elevated);
+    color: var(--text);
+}
+
+.automation-task-btn.danger:hover {
+    background: rgba(239,68,68,0.12);
+    color: var(--error);
+    border-color: var(--error);
+}
+
+/* 运行记录 */
+.automation-run-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    border-radius: 8px;
+    font-size: 13px;
+    transition: background 0.12s;
+}
+
+.automation-run-row:hover {
+    background: var(--bg-elevated);
+}
+
+.automation-run-status {
+    width: 54px;
+    text-align: center;
+    flex-shrink: 0;
+}
+
+.automation-run-status.success { color: var(--success); }
+.automation-run-status.failed  { color: var(--error); }
+.automation-run-status.running { color: var(--warning); }
+
+.automation-run-name {
+    flex: 1;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.automation-run-project {
+    font-size: 11px;
+    background: rgba(79,70,229,0.18);
+    color: var(--primary-light);
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-weight: 500;
+    flex-shrink: 0;
+}
+
+.automation-run-time {
+    color: var(--text-muted);
+    font-size: 12px;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.automation-run-detail-btn {
+    font-size: 11px;
+    color: var(--primary-light);
+    cursor: pointer;
+    flex-shrink: 0;
+    background: none;
+    border: none;
+    padding: 0;
+}
+
+.automation-run-detail-btn:hover { text-decoration: underline; }
+
+.automation-empty {
+    color: var(--text-muted);
+    font-size: 13px;
+    padding: 16px 0;
+    text-align: center;
+}
+
+/* ==========================================
+   自动化：添加弹窗
+   ========================================== */
+
+.automation-modal {
+    width: 600px;
+    max-width: 96vw;
+    max-height: 90vh;
+    overflow-y: auto;
+    background: var(--bg-card);
+    border-radius: 14px;
+    padding: 28px;
+    border: 1px solid var(--border-light);
+}
+
+.automation-field {
+    margin-bottom: 18px;
+}
+
+.automation-label {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 8px;
+}
+
+.automation-input {
+    width: 100%;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    color: var(--text);
+    font-size: 14px;
+    box-sizing: border-box;
+    transition: border-color 0.15s;
+}
+
+.automation-input:focus {
+    outline: none;
+    border-color: var(--primary-light);
+}
+
+.automation-textarea {
+    width: 100%;
+    background: transparent;
+    border: none;
+    color: var(--text);
+    font-size: 14px;
+    resize: none;
+    line-height: 1.6;
+    box-sizing: border-box;
+    font-family: inherit;
+    padding: 0;
+}
+
+.automation-textarea:focus { outline: none; }
+
+.automation-prompt-wrap {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px 10px;
+    transition: border-color 0.15s;
+}
+
+.automation-prompt-wrap:focus-within {
+    border-color: var(--primary-light);
+}
+
+.automation-prompt-footer {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+}
+
+.automation-model-select {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 3px 8px;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+    position: relative;
+    user-select: none;
+}
+
+.automation-model-select:hover { background: var(--bg-hover); }
+
+.automation-model-dropdown {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-light);
+    border-radius: 8px;
+    min-width: 140px;
+    z-index: 100;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    overflow: hidden;
+}
+
+.automation-model-option {
+    padding: 8px 14px;
+    font-size: 13px;
+    color: var(--text);
+    cursor: pointer;
+}
+
+.automation-model-option:hover { background: var(--bg-hover); }
+
+/* 工作空间选择器 */
+.automation-workspace-selector {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    cursor: pointer;
+    position: relative;
+    color: var(--text-secondary);
+    font-size: 14px;
+    transition: border-color 0.15s;
+}
+
+.automation-workspace-selector:hover { border-color: var(--border-light); }
+
+.automation-workspace-dropdown {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-light);
+    border-radius: 8px;
+    max-height: 200px;
+    overflow-y: auto;
+    z-index: 100;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+}
+
+.automation-workspace-option {
+    padding: 9px 14px;
+    font-size: 13px;
+    color: var(--text);
+    cursor: pointer;
+}
+
+.automation-workspace-option:hover { background: var(--bg-hover); }
+
+/* 频率 Tab */
+.automation-freq-tabs {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 14px;
+    background: var(--bg-elevated);
+    border-radius: 8px;
+    padding: 4px;
+    width: fit-content;
+}
+
+.automation-freq-tab {
+    padding: 6px 16px;
+    border-radius: 6px;
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+}
+
+.automation-freq-tab.active {
+    background: var(--primary);
+    color: #fff;
+}
+
+.automation-freq-panel { margin-top: 4px; }
+
+.automation-time-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.automation-time-input {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 12px;
+    color: var(--text);
+    font-size: 14px;
+}
+
+.automation-weekdays {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.weekday-btn {
+    padding: 5px 10px;
+    border-radius: 20px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.weekday-btn.active {
+    background: rgba(79,70,229,0.25);
+    color: var(--primary-light);
+    border-color: var(--primary-light);
+}
+
+.automation-interval-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 14px;
+    color: var(--text);
+}
+
+.automation-interval-input {
+    width: 70px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    color: var(--text);
+    font-size: 14px;
+    text-align: center;
+}
+
+.automation-interval-select {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    color: var(--text);
+    font-size: 14px;
+}
+
+.automation-date-range {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.automation-date-range .automation-input {
+    flex: 1;
+}
+
+.automation-modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    margin-top: 24px;
+    padding-top: 20px;
+    border-top: 1px solid var(--border);
+}
+
+
+

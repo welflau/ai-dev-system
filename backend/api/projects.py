@@ -1955,6 +1955,7 @@ async def get_pack_detail(pack_name: str):
             categories[cat_key].append({
                 "name": fm.get("name") or src_file.stem.replace("-", " ").replace("_", " ").title(),
                 "file": str(rel).replace("\\", "/"),
+                "path": str(src_file).replace("\\", "/"),
                 "scope": scope or "shared",
                 "description": fm.get("description", ""),
                 "emoji": fm.get("emoji", ""),
@@ -2068,16 +2069,22 @@ async def get_project_agents_all(project_id: str):
             except Exception:
                 continue
             fm = _parse_frontmatter(content)
-            body = content.replace("---", "", 1)
-            body = re.sub(r'^[\s\S]*?---\s*\n', '', content, count=1).strip()
+            # 剥离 frontmatter（--- ... --- 块），取正文
+            if content.startswith("---"):
+                end = content.find("\n---", 3)
+                body = content[end + 4:].strip() if end != -1 else content
+            else:
+                body = content.strip()
             items.append({
                 "name": fm.get("name") or f.stem,
                 "file": f.name,
+                "path": str(f).replace("\\", "/"),
                 "description": fm.get("description", ""),
                 "model": fm.get("model", ""),
                 "color": fm.get("color", ""),
                 "emoji": fm.get("emoji", ""),
                 "preview": body[:200],
+                "content": content,
             })
         return items
 
@@ -2107,32 +2114,38 @@ async def get_project_agents_all(project_id: str):
     except Exception:
         pass
 
-    # ── 2. 用户 Agent（项目 .claude/agents/ + .codebuddy/agents/）──────────
+    # ── 2. 用户 Agent + Pack Agent（均扫项目目录，通过与 pack 库比对区分来源）────
     user_agents = []
+    pack_agents = []
     if repo_path:
+        installed_pack_names = [
+            r["pack_name"] for r in await db.fetch_all(
+                "SELECT pack_name FROM project_packs WHERE project_id = ?", (project_id,)
+            )
+        ]
         for cli in ("claude", "codebuddy"):
             agents_dir = Path(repo_path) / f".{cli}" / "agents"
             for item in _scan_agents_dir(agents_dir):
-                item["source"] = "user"
+                # 检查是否来自某个已安装 pack
+                pack_origin = None
+                stem = Path(item["file"]).stem
+                for pn in installed_pack_names:
+                    for sub in ("shared", "claude", "codebuddy"):
+                        candidate = _PACKS_DIR / pn / sub / "agents" / f"{stem}.md"
+                        if candidate.exists():
+                            pack_origin = pn
+                            break
+                    if pack_origin:
+                        break
                 item["cli"] = cli
-                item["pack_name"] = None
-                user_agents.append(item)
-
-    # ── 3. Pack Agent（已安装 pack 的 agents 目录）────────────────────────
-    pack_agents = []
-    installed_rows = await db.fetch_all(
-        "SELECT pack_name FROM project_packs WHERE project_id = ?", (project_id,)
-    )
-    for row in installed_rows:
-        pack_name = row["pack_name"]
-        pack_dir = _PACKS_DIR / pack_name
-        for sub in ("shared", "claude", "codebuddy"):
-            agents_dir = pack_dir / sub / "agents"
-            for item in _scan_agents_dir(agents_dir):
-                item["source"] = "pack"
-                item["pack_name"] = pack_name
-                item["scope"] = sub
-                pack_agents.append(item)
+                if pack_origin:
+                    item["source"] = "pack"
+                    item["pack_name"] = pack_origin
+                    pack_agents.append(item)
+                else:
+                    item["source"] = "user"
+                    item["pack_name"] = None
+                    user_agents.append(item)
 
     # ── 4. 覆盖关系检测（同名时：用户 > Pack > 内置）──────────────────────
     all_agents = builtin_agents + pack_agents + user_agents
@@ -2234,7 +2247,7 @@ async def get_project_skills_all(project_id: str):
     except Exception:
         pass
 
-    # 2. 用户 skills（.claude/skills/ + .codebuddy/skills/）
+    # 2. 用户 skills（.claude/skills/ + .codebuddy/skills/ — 用户手动创建）
     user_skills = []
     if repo_path:
         for cli in ("claude", "codebuddy"):
@@ -2245,46 +2258,41 @@ async def get_project_skills_all(project_id: str):
                 skill_md = skill_dir / "SKILL.md" if skill_dir.is_dir() else (skill_dir if skill_dir.suffix == ".md" else None)
                 if not skill_md or not skill_md.exists():
                     continue
+                # 如果能在某个已安装 pack 里找到同名文件，则归为 pack 来源
+                stem = skill_dir.stem if skill_dir.is_dir() else skill_dir.stem
+                pack_origin = None
+                for installed_row in await db.fetch_all(
+                    "SELECT pack_name FROM project_packs WHERE project_id = ?", (project_id,)
+                ):
+                    pn = installed_row["pack_name"]
+                    for sub in ("shared", "claude", "codebuddy"):
+                        candidate = _PACKS_DIR / pn / sub / "skills" / stem / "SKILL.md"
+                        if candidate.exists():
+                            pack_origin = pn
+                            break
+                    if pack_origin:
+                        break
                 try:
                     content = skill_md.read_text(encoding="utf-8")
-                    info = _parse_skill_md(content, skill_dir.stem if skill_dir.is_dir() else skill_dir.stem)
-                    info["source"] = "user"
+                    info = _parse_skill_md(content, stem)
+                    if pack_origin:
+                        info["source"] = "pack"
+                        info["pack_name"] = pack_origin
+                    else:
+                        info["source"] = "user"
+                        info["pack_name"] = None
                     info["cli"] = cli
-                    info["pack_name"] = None
                     info["id"] = info["name"]
                     info["file"] = str(skill_md)
+                    info["path"] = str(skill_md).replace("\\", "/")
                     info["content"] = content
                     user_skills.append(info)
                 except Exception:
                     pass
 
-    # 3. Pack skills
-    pack_skills = []
-    installed_rows = await db.fetch_all(
-        "SELECT pack_name FROM project_packs WHERE project_id = ?", (project_id,)
-    )
-    for row in installed_rows:
-        pn = row["pack_name"]
-        for sub in ("shared", "claude", "codebuddy"):
-            skills_dir = _PACKS_DIR / pn / sub / "skills"
-            if not skills_dir.exists():
-                continue
-            for skill_dir in sorted(skills_dir.iterdir()):
-                skill_md = skill_dir / "SKILL.md" if skill_dir.is_dir() else None
-                if not skill_md or not skill_md.exists():
-                    continue
-                try:
-                    content = skill_md.read_text(encoding="utf-8")
-                    info = _parse_skill_md(content, skill_dir.stem)
-                    info["source"] = "pack"
-                    info["pack_name"] = pn
-                    info["scope"] = sub
-                    info["id"] = info["name"]
-                    info["file"] = str(skill_md)
-                    info["content"] = content
-                    pack_skills.append(info)
-                except Exception:
-                    pass
+    # 3. Pack skills — 扫描项目目录里由 pack 安装的 skills（从 user_skills 中分拆）
+    pack_skills = [s for s in user_skills if s.get("source") == "pack"]
+    user_skills  = [s for s in user_skills if s.get("source") != "pack"]
 
     all_skills = builtin_skills + user_skills + pack_skills
     return {
@@ -2361,34 +2369,34 @@ async def get_project_commands_all(project_id: str):
     except Exception:
         pass
 
-    # 2. Pack commands（来自 pack 目录，安装后实际在 .claude/commands/）
+    # 2. Pack commands — 从 user_cmds 里识别来自 pack 的（对比 pack 库目录同名文件）
     pack_cmds = []
-    installed_rows = await db.fetch_all(
-        "SELECT pack_name FROM project_packs WHERE project_id = ?", (project_id,)
-    )
-    for row in installed_rows:
-        pn = row["pack_name"]
-        for sub in ("shared", "claude", "codebuddy"):
-            cmds_dir = _PACKS_DIR / pn / sub / "commands"
-            if not cmds_dir.exists():
-                continue
-            for f in sorted(cmds_dir.glob("*.md")):
-                try:
-                    content = f.read_text(encoding="utf-8")
-                    info = _parse_cmd_md(content, f.stem)
-                    info["source"] = "pack"
-                    info["pack_name"] = pn
-                    info["scope"] = sub
-                    info["file"] = str(f)
-                    info["content"] = content
-                    pack_cmds.append(info)
-                except Exception:
-                    pass
-
-    # 去重：pack 中与 user 同名的标注 is_active
-    user_names = {c["name"] for c in user_cmds}
-    for pc in pack_cmds:
-        pc["is_active"] = pc["name"] not in user_names
+    if repo_path:
+        installed_pack_names = [
+            r["pack_name"] for r in await db.fetch_all(
+                "SELECT pack_name FROM project_packs WHERE project_id = ?", (project_id,)
+            )
+        ]
+        # 重新分类 user_cmds：若同名文件存在于某个 pack 库目录，则归为 pack 来源
+        remaining_user = []
+        for entry in user_cmds:
+            pack_origin = None
+            name = entry["name"]
+            for pn in installed_pack_names:
+                for sub in ("shared", "claude", "codebuddy"):
+                    candidate = _PACKS_DIR / pn / sub / "commands" / f"{name}.md"
+                    if candidate.exists():
+                        pack_origin = pn
+                        break
+                if pack_origin:
+                    break
+            if pack_origin:
+                entry["source"] = "pack"
+                entry["pack_name"] = pack_origin
+                pack_cmds.append(entry)
+            else:
+                remaining_user.append(entry)
+        user_cmds = remaining_user
 
     all_cmds_list = builtin_cmds + user_cmds + pack_cmds
     return {

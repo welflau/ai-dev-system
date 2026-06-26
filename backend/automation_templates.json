@@ -1,0 +1,52 @@
+[
+  {
+    "id": "daily-standup",
+    "name": "每日站会摘要",
+    "description": "每天汇总昨日工单进展",
+    "icon": "📋",
+    "prompt": "请汇总今天所有工单的最新进展，输出简洁的站会摘要，按需求分组列出完成/进行中/阻塞的工单。",
+    "schedule_type": "daily",
+    "schedule_label": "每天 09:00 周一至周五",
+    "cron_expr": "0 9 * * 1-5"
+  },
+  {
+    "id": "weekly-report",
+    "name": "每周工作汇报",
+    "description": "每周五汇总本周开发成果",
+    "icon": "📊",
+    "prompt": "请生成本周开发工作汇报，包括：完成的需求列表、修复的 Bug、遇到的阻塞及解决方案、下周计划。格式要求简洁专业。",
+    "schedule_type": "daily",
+    "schedule_label": "每周五 18:00",
+    "cron_expr": "0 18 * * 5"
+  },
+  {
+    "id": "bug-patrol",
+    "name": "Bug 巡检",
+    "description": "定时扫描超时未处理的 Bug",
+    "icon": "🐛",
+    "prompt": "请检查项目中所有超过 48 小时仍未处理的 Bug，输出清单（包含 Bug 标题、创建时间、当前状态），并按优先级排序给出处理建议。",
+    "schedule_type": "interval",
+    "schedule_label": "每 6 小时",
+    "cron_expr": "0 */6 * * *"
+  },
+  {
+    "id": "progress-reminder",
+    "name": "进度提醒",
+    "description": "工作日下午提醒当日进度",
+    "icon": "⏰",
+    "prompt": "请检查今日各工单的执行进度，对超时风险（预计今日完成但尚未完成）的工单发出提醒，并列出下班前需重点跟进的事项。",
+    "schedule_type": "daily",
+    "schedule_label": "每天 17:00 周一至周五",
+    "cron_expr": "0 17 * * 1-5"
+  },
+  {
+    "id": "requirements-review",
+    "name": "需求积压分析",
+    "description": "分析未处理需求积压情况",
+    "icon": "📝",
+    "prompt": "请分析项目中积压的待处理需求，包括：积压数量、等待时长分布、优先级分布，并给出排期建议和风险提示。",
+    "schedule_type": "daily",
+    "schedule_label": "每周一 09:30",
+    "cron_expr": "30 9 * * 1"
+  }
+]

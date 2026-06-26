@@ -206,15 +206,18 @@ def _fragment_matches(
     rtt = frag.get("required_ticket_type")
     if rtt:
         if ticket_type is None:
-            # fragment 声明了对 ticket_type 的要求但当前未指定 → 默认不应用
-            # （保守策略；若想默认跑，可改成 return True）
             return False
-        any_of = rtt.get("any_of") or []
-        none_of = rtt.get("none_of") or []
-        if any_of and ticket_type not in any_of:
-            return False
-        if none_of and ticket_type in none_of:
-            return False
+        # 兼容两种格式：字符串 "feature" 或对象 {any_of: [...]}
+        if isinstance(rtt, str):
+            if ticket_type != rtt:
+                return False
+        else:
+            any_of = rtt.get("any_of") or []
+            none_of = rtt.get("none_of") or []
+            if any_of and ticket_type not in any_of:
+                return False
+            if none_of and ticket_type in none_of:
+                return False
     return True
 
 

@@ -116,6 +116,12 @@ class Database:
             ("projects", "extra_paths", "TEXT NOT NULL DEFAULT '[]'"),
             # ConfigPack：已安装 Pack 名称列表 JSON（冗余，便于快速展示）
             ("projects", "installed_packs", "TEXT NOT NULL DEFAULT '[]'"),
+            # Session Resume：会话状态跟踪（active / completed / poisoned）
+            ("chat_sessions", "last_status", "TEXT NOT NULL DEFAULT 'active'"),
+            ("chat_sessions", "last_active_at", "TEXT"),
+            ("chat_sessions", "message_count", "INTEGER NOT NULL DEFAULT 0"),
+            # Session Resume CLI 模式：存储 CLI 返回的 session_id，用于 --resume 恢复
+            ("chat_sessions", "cli_session_id", "TEXT"),
         ]
         async with self._write_lock:
             for table, column, col_def in migrations:
@@ -454,6 +460,48 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
     updated_at  TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_chat_sessions_project ON chat_sessions(project_id);
+
+-- ============================================================
+-- 自动化任务表
+-- ============================================================
+CREATE TABLE IF NOT EXISTS automation_tasks (
+    id              TEXT PRIMARY KEY,
+    project_id      TEXT NOT NULL REFERENCES projects(id),
+    name            TEXT NOT NULL,
+    description     TEXT,
+    prompt          TEXT NOT NULL,
+    model           TEXT NOT NULL DEFAULT 'auto',
+    schedule_type   TEXT NOT NULL DEFAULT 'daily',  -- daily | interval | once
+    cron_expr       TEXT,
+    schedule_label  TEXT,
+    valid_from      TEXT,
+    valid_until     TEXT,
+    enabled         INTEGER NOT NULL DEFAULT 1,
+    next_run_at     TEXT,
+    last_run_at     TEXT,
+    last_run_status TEXT,
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_automation_tasks_project ON automation_tasks(project_id);
+CREATE INDEX IF NOT EXISTS idx_automation_tasks_next_run ON automation_tasks(next_run_at, enabled);
+
+-- ============================================================
+-- 自动化执行记录表
+-- ============================================================
+CREATE TABLE IF NOT EXISTS automation_runs (
+    id           TEXT PRIMARY KEY,
+    task_id      TEXT NOT NULL REFERENCES automation_tasks(id) ON DELETE CASCADE,
+    status       TEXT NOT NULL DEFAULT 'running',  -- running | success | failed
+    triggered_by TEXT NOT NULL DEFAULT 'auto',     -- auto | manual
+    started_at   TEXT NOT NULL,
+    finished_at  TEXT,
+    duration_ms  INTEGER,
+    result_msg   TEXT,
+    error_msg    TEXT,
+    created_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_automation_runs_task ON automation_runs(task_id, created_at);
 
 -- ============================================================
 -- 聊天消息表（全局聊天历史）

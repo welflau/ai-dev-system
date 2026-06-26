@@ -22,6 +22,38 @@ from events import event_manager
 # 全局聊天思考日志：session_id → asyncio.Queue（fire-and-forget SSE 频道）
 _THINKING_QUEUES: Dict[str, asyncio.Queue] = {}
 
+# CLI 工具后台任务存储：task_id → {title, tool, status, output_lines, created_at, duration_ms}
+# 仅在内存中，重启后清空，最多保留 200 条
+_CLI_TASKS: Dict[str, Dict] = {}
+_CLI_TASKS_MAX = 200
+
+def _cli_task_add(task_id: str, title: str, tool: str) -> None:
+    """注册一个 CLI 工具任务"""
+    from utils import now_iso
+    _CLI_TASKS[task_id] = {
+        "id": task_id, "type": "cli_task",
+        "title": title, "tool": tool,
+        "status": "running",
+        "output_lines": [],
+        "created_at": now_iso(),
+        "duration_ms": 0,
+    }
+    # 超过上限时删掉最旧的已完成任务
+    if len(_CLI_TASKS) > _CLI_TASKS_MAX:
+        done = [k for k, v in _CLI_TASKS.items() if v["status"] != "running"]
+        for k in done[:len(_CLI_TASKS) - _CLI_TASKS_MAX]:
+            _CLI_TASKS.pop(k, None)
+
+def _cli_task_finish(task_id: str, result: str, duration_ms: float, success: bool) -> None:
+    """标记任务完成，存入输出"""
+    t = _CLI_TASKS.get(task_id)
+    if not t:
+        return
+    t["status"] = "success" if success else "error"
+    t["duration_ms"] = int(duration_ms)
+    if result:
+        t["output_lines"] = result.splitlines()[-500:]  # 最多保留 500 行
+
 
 def get_thinking_queue(session_id: str) -> asyncio.Queue:
     if session_id not in _THINKING_QUEUES:
@@ -581,7 +613,15 @@ async def _chat_stream_generator(
 
             elif etype == "tool_start":
                 label = _TOOL_LABELS_PY.get(ev["tool"], f"🔧 {ev['tool']}")
-                yield _sse("tool_start", {"tool": ev["tool"], "label": label, "input": ev.get("input", {})})
+                # CLI 工具任务：注册到内存，告知前端 task_id 以便 /tasks 面板追踪
+                _task_id = ev.get("tool_use_id") or ""
+                _is_cli_tool = bool(_task_id)
+                if _is_cli_tool:
+                    _cli_task_add(_task_id, label, ev["tool"])
+                yield _sse("tool_start", {
+                    "tool": ev["tool"], "label": label, "input": ev.get("input", {}),
+                    **({"task_id": _task_id} if _is_cli_tool else {}),
+                })
 
             elif etype == "tool_done":
                 summary     = ev.get("summary", "")
@@ -599,9 +639,17 @@ async def _chat_stream_generator(
                         _thinking_buf = ""
                     _cur_round["steps"].append(step)
                     _cur_round["events"].append({"type": "tool", **step})
-                yield _sse("tool_done", {"tool": ev["tool"], "summary": summary,
-                                         "args_hint": args_hint, "duration_ms": duration_ms,
-                                         "result": result_raw})
+                # CLI 工具：更新任务存储
+                _task_id2 = ev.get("tool_use_id") or ""
+                if _task_id2:
+                    _is_success = not (result_raw or "").startswith("[CLI错误]")
+                    _cli_task_finish(_task_id2, result_raw, duration_ms, _is_success)
+                yield _sse("tool_done", {
+                    "tool": ev["tool"], "summary": summary,
+                    "args_hint": args_hint, "duration_ms": duration_ms,
+                    "result": result_raw,
+                    **({"task_id": _task_id2} if _task_id2 else {}),
+                })
 
             elif etype == "action":
                 # payload key 防止 action_data.type 覆盖事件 type（QueryEngine 路径）
@@ -911,6 +959,22 @@ async def _load_session_history(
             content = content[:8000] + "\n…（内容已截断）"
         result.append({"role": r["role"], "content": content})
     return result
+
+
+@router.get("/cli-tasks")
+async def list_cli_tasks(project_id: str):
+    """列出当前内存中的 CLI 工具任务（供 /tasks 面板左侧列表使用）"""
+    tasks = sorted(_CLI_TASKS.values(), key=lambda t: t["created_at"], reverse=True)
+    return {"tasks": tasks[:50]}
+
+
+@router.get("/cli-tasks/{task_id}")
+async def get_cli_task(project_id: str, task_id: str):
+    """获取单个 CLI 工具任务详情（供 /tasks 面板右侧输出区使用）"""
+    t = _CLI_TASKS.get(task_id)
+    if not t:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return t
 
 
 @router.get("/sessions")
@@ -1893,6 +1957,22 @@ class GlobalChatResponse(BaseModel):
     actions: Optional[List[Dict[str, Any]]] = Field(default=None, description="批量操作卡片（文档分析等场景）")
 
 
+@global_chat_router.get("/cli-tasks")
+async def global_list_cli_tasks():
+    """全局聊天：列出 CLI 工具任务"""
+    tasks = sorted(_CLI_TASKS.values(), key=lambda t: t["created_at"], reverse=True)
+    return {"tasks": tasks[:50]}
+
+
+@global_chat_router.get("/cli-tasks/{task_id}")
+async def global_get_cli_task(task_id: str):
+    """全局聊天：获取单个 CLI 工具任务详情"""
+    t = _CLI_TASKS.get(task_id)
+    if not t:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    return t
+
+
 @global_chat_router.post("/stream")
 async def global_chat_stream(req: GlobalChatRequest):
     """全局聊天流式版：text/event-stream，逐 token 推送，与项目聊天流式接口同格式。"""
@@ -2008,12 +2088,19 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
 
             elif etype == "tool_start":
                 label = _TOOL_LABELS_PY.get(ev["tool"], f"🔧 {ev['tool']}")
-                yield _sse("tool_start", {"tool": ev["tool"], "label": label, "input": ev.get("input", {})})
+                _gtask_id = ev.get("tool_use_id") or ""
+                if _gtask_id:
+                    _cli_task_add(_gtask_id, label, ev["tool"])
+                yield _sse("tool_start", {
+                    "tool": ev["tool"], "label": label, "input": ev.get("input", {}),
+                    **({"task_id": _gtask_id} if _gtask_id else {}),
+                })
 
             elif etype == "tool_done":
                 summary     = ev.get("summary", "")
                 args_hint   = ev.get("args_hint", "")
                 duration_ms = ev.get("duration_ms", 0)
+                result_raw_g = ev.get("result", "")
                 step = {"tool": ev["tool"], "args_hint": args_hint,
                         "summary": summary, "duration_ms": duration_ms}
                 thinking_steps.append(step)
@@ -2023,8 +2110,14 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
                         _thinking_buf_g = ""
                     _cur_round_g["steps"].append(step)
                     _cur_round_g["events"].append({"type": "tool", **step})
-                yield _sse("tool_done", {"tool": ev["tool"], "summary": summary,
-                                         "args_hint": args_hint, "duration_ms": duration_ms})
+                _gtask_id2 = ev.get("tool_use_id") or ""
+                if _gtask_id2:
+                    _cli_task_finish(_gtask_id2, result_raw_g, duration_ms, not (result_raw_g or "").startswith("[CLI错误]"))
+                yield _sse("tool_done", {
+                    "tool": ev["tool"], "summary": summary,
+                    "args_hint": args_hint, "duration_ms": duration_ms,
+                    **({"task_id": _gtask_id2} if _gtask_id2 else {}),
+                })
 
             elif etype == "action":
                 final_action = ev.get("payload") or {k: v for k, v in ev.items() if k != "type"}
@@ -2545,3 +2638,37 @@ def _build_user_content(text: str, images: Optional[List[str]] = None):
 
     content.append({"type": "text", "text": text})
     return content
+
+
+# ── MCP Action 回调端点 ───────────────────────────────────────────────────────
+# ads_data_mcp_server 里的 confirm_requirement / confirm_bug 工具调用此接口
+# 将 action 数据通过 SSE 推送到前端，弹出确认卡片
+
+class _McpActionRequest(BaseModel):
+    action: str          # confirm_requirement | confirm_bug
+    data: dict           # action 参数
+
+@router.post("/mcp-action")
+async def mcp_action_callback(project_id: str, req: _McpActionRequest):
+    """接收 MCP tool 的回调，通过 SSE 把 action 推给前端显示确认卡片。"""
+    from events import event_manager
+
+    project = await db.fetch_one("SELECT id FROM projects WHERE id = ?", (project_id,))
+    if not project:
+        raise HTTPException(404, "项目不存在")
+
+    # 复用现有的 chat action 执行逻辑
+    action_result = await _parse_and_execute_action(
+        project_id,
+        dict(project),
+        f"[ACTION:{req.action.upper()}]\n{json.dumps(req.data, ensure_ascii=False)}\n[/ACTION]",
+    )
+
+    if action_result:
+        # 推 SSE 给前端（和普通 chat 回复的 action 事件格式一致）
+        await event_manager.publish_to_project(project_id, "chat_mcp_action", {
+            "action": action_result,
+        })
+        return {"status": "ok", "action_type": action_result.get("type")}
+
+    return {"status": "no_action"}

@@ -367,6 +367,7 @@ async function checkLLMStatus() {
         }
         // 缓存当前配置用于弹窗回填
         window._llmConfig = data;
+        window._currentCliType = data.cli_type || 'claude';
     } catch {
         el.classList.add('disconnected');
         el.querySelector('.text').textContent = 'LLM: 未连接';
@@ -861,6 +862,7 @@ function switchTab(tab) {
     if (tab === 'cicd') loadDeliveryPage();
     if (tab === 'logs') loadLogs();
     if (tab === 'bugs') loadBugs();
+    if (tab === 'automation') loadAutomationPanel();
     if (tab === 'settings-general') {
         loadSettingsGeneral();
         loadProjectTraitsEditor();   // v0.17: 项目特征合并进基本信息页
@@ -3215,6 +3217,7 @@ async function loadProjects() {
     try {
         const data = await api('/projects');
         const projects = data.projects || [];
+        window._projectList = projects;  // 自动化面板工作空间选择器使用
         if (projects.length === 0) {
             grid.innerHTML = `
                 <div class="empty-state" style="grid-column: 1 / -1;">
@@ -7602,6 +7605,33 @@ function connectSSE(projectId) {
             });
         });
 
+        // 自动化任务 SSE
+        eventSource.addEventListener('automation_task_started', (e) => {
+            try {
+                const data = JSON.parse(e.data);
+                onAutomationTaskStarted(data);
+            } catch {}
+        });
+        eventSource.addEventListener('automation_task_finished', (e) => {
+            try {
+                const data = JSON.parse(e.data);
+                onAutomationTaskFinished(data);
+            } catch {}
+        });
+
+        // MCP tool 回调：confirm_requirement / confirm_bug 等卡片
+        eventSource.addEventListener('chat_mcp_action', (e) => {
+            try {
+                const data = JSON.parse(e.data);
+                const action = data.action;
+                if (!action) return;
+                // 追加一条 assistant 消息气泡，内含确认卡片
+                appendMcpActionCard(action);
+            } catch (err) {
+                console.warn('[SSE] chat_mcp_action parse failed:', err);
+            }
+        });
+
         // v0.19.x 工单进度 SSE：后端 heartbeat_cb 关键行触发 → 更新 drawer 进度区
         eventSource.addEventListener('ticket_action_progress', (e) => {
             try {
@@ -11315,6 +11345,7 @@ async function _sendChatStreaming(url, body) {
                         const stepEl = document.createElement('div');
                         stepEl.className = 'ctp-step ctp-step-running';
                         stepEl.dataset.tool = data.tool;
+                        if (data.task_id) stepEl.dataset.taskId = data.task_id;
                         stepEl.innerHTML = `
                             <div class="ctp-step-row1">
                                 <span class="ctp-step-dot"></span>
@@ -11326,6 +11357,11 @@ async function _sendChatStreaming(url, body) {
                             <div class="ctp-step-result"></div>`;
                         _curRoundStepsEl.appendChild(stepEl);
                         _curRoundEl?.classList.add('crp-round-expanded');
+                    }
+                    // CLI 工具：自动打开 /tasks 面板并注册任务
+                    if (data.task_id) {
+                        _cliTaskRegister(data.task_id, toolLabel, data.tool, 'running');
+                        _openTasksPanel();
                     }
 
                 } else if (eventName === 'tool_done') {
@@ -11374,6 +11410,11 @@ async function _sendChatStreaming(url, body) {
                     // 更新整体标题
                     if (_roundsHeader) _roundsHeader.textContent = `思考了 ${_roundCount} 轮 · ${_stepCount} 步`;
                     if (_typingBubble) _typingBubble.innerHTML = `<span class="chat-typing-text">正在生成答案…</span>`;
+                    // CLI 工具：更新 /tasks 面板任务状态
+                    if (data.task_id) {
+                        const _isErr = (data.result || '').startsWith('[CLI错误]');
+                        _cliTaskUpdate(data.task_id, _isErr ? 'error' : 'success', data.result || '', data.duration_ms || 0);
+                    }
 
                 } else if (eventName === 'aicr_feedback') {
                     // AutoAICR 反馈：在思考面板末尾追加折叠提示
@@ -11900,17 +11941,10 @@ function _formatAicrIssues(issues, suggestions) {
 
 /** /tasks — 在聊天面板右侧打开后台任务侧面板（不进入全屏分屏模式）*/
 async function _openTasksPanel() {
-    // 如果当前处于全屏分屏状态，先退出（防止旧状态残留）
-    if (_chatFullscreen) {
-        toggleChatFullscreen();
-        await new Promise(r => setTimeout(r, 200));
-    }
-
     const panel = document.getElementById('tasksSidePanel');
     const body = document.getElementById('chatPanelBody');
     if (!panel || !body) return;
 
-    // 채팅 패널이 닫혀있으면 열기
     if (!chatPanelOpen) toggleChatPanel();
 
     panel.style.display = 'flex';
@@ -11925,6 +11959,57 @@ function _closeTasksSplitPane() {
     if (body) body.classList.remove('has-tasks-panel');
 }
 
+// 内存 CLI 任务表（与后端 _CLI_TASKS 镜像，用于列表渲染）
+const _CLI_TASKS_MEM = {};
+
+function _cliTaskRegister(taskId, title, tool, status) {
+    _CLI_TASKS_MEM[taskId] = { id: taskId, type: 'cli_task', title, tool, status, output: '', duration_ms: 0 };
+    _injectCliTaskToPanel(taskId);
+}
+
+function _cliTaskUpdate(taskId, status, output, duration_ms) {
+    const t = _CLI_TASKS_MEM[taskId];
+    if (t) { t.status = status; t.output = output; t.duration_ms = duration_ms; }
+    // 更新列表项状态图标
+    // 列表里直接更新图标（不重渲染，避免闪烁）
+    const listEl = document.getElementById('tasksPanelList');
+    if (listEl) {
+        const item = listEl.querySelector(`[data-task-id="${taskId}"]`);
+        if (item) {
+            const icon = item.querySelector('span:first-child');
+            if (icon) icon.textContent = status === 'error' ? '❌' : '✅';
+        } else {
+            // 任务项还不在列表里（_refreshTasksPanel 还没跑过），重建列表
+            _refreshTasksPanel();
+        }
+    }
+    // 若该任务当前被选中，刷新右侧输出
+    const outputEl = document.getElementById('tasksPanelOutput');
+    if (outputEl && outputEl.dataset.activeTaskId === taskId) {
+        _renderCliTaskOutput(taskId, outputEl);
+    }
+}
+
+function _renderCliTaskOutput(taskId, outputEl) {
+    const t = _CLI_TASKS_MEM[taskId];
+    if (!t) { outputEl.textContent = '任务不存在'; return; }
+    const statusLine = t.status === 'running' ? '🔄 运行中…'
+        : t.status === 'error' ? `❌ 失败 (${t.duration_ms}ms)` : `✓ 完成 (${t.duration_ms}ms)`;
+    outputEl.textContent = `# ${t.title}\n${statusLine}\n\n${t.output || '（等待输出…）'}`;
+    outputEl.scrollTop = outputEl.scrollHeight;
+}
+
+function _injectCliTaskToPanel(taskId) {
+    // 重渲染列表（含新任务）
+    _refreshTasksPanel();
+    // 自动选中新任务，显示右侧输出
+    const outputEl = document.getElementById('tasksPanelOutput');
+    if (outputEl) {
+        outputEl.dataset.activeTaskId = taskId;
+        _renderCliTaskOutput(taskId, outputEl);
+    }
+}
+
 async function _refreshTasksPanel() {
     const listEl = document.getElementById('tasksPanelList');
     if (!listEl) return;
@@ -11933,29 +12018,39 @@ async function _refreshTasksPanel() {
     try {
         const url = currentProjectId ? `/projects/${currentProjectId}/commands/tasks` : `/commands/tasks`;
         const resp = await originalApi(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-        const tasks = resp?.data?.tasks || [];
+        const ticketTasks = resp?.data?.tasks || [];
 
-        if (!tasks.length) {
-            listEl.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);">✅ 无运行中任务</div>';
+        // 合并内存 CLI 任务（全部历史，按时间倒序）
+        const cliTasks = Object.values(_CLI_TASKS_MEM).reverse();
+
+        const statusIcon = s => ({
+            running: '🔄', in_progress: '🔄', executing: '🔄', pending: '⏳', queued: '⏳',
+            success: '✅', error: '❌',
+        }[s] || '•');
+
+        const allTasks = [...cliTasks, ...ticketTasks];
+
+        if (!allTasks.length) {
+            listEl.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);">✅ 无任务记录</div>';
             return;
         }
 
-        const statusIcon = s => ({ running:'🔄', in_progress:'🔄', executing:'🔄', pending:'⏳', queued:'⏳' }[s] || '•');
-        listEl.innerHTML = tasks.map(t => `
-            <div class="tasks-panel-item" onclick="_selectTaskItem(${JSON.stringify(t).replace(/"/g,'&quot;')})"
-                 style="padding:8px 14px;cursor:pointer;border-bottom:1px solid var(--border-light,rgba(255,255,255,.06));
-                        transition:background .15s;">
+        listEl.innerHTML = allTasks.map(t => {
+            const isCli = t.type === 'cli_task';
+            const durText = isCli && t.duration_ms ? ` · ${t.duration_ms}ms` : (t.elapsed ? ` · ${t.elapsed}` : '');
+            const subText = isCli ? `CLI${durText}` : `${t.agent ? escapeHtml(t.agent) : ''}${durText}${t.action ? ' · ' + escapeHtml(t.action.slice(0,20)) : ''}`;
+            return `
+            <div class="tasks-panel-item" data-task-id="${escapeHtml(t.id)}" data-task-type="${escapeHtml(t.type)}"
+                 onclick="_selectTaskItem(${JSON.stringify(t).replace(/"/g,'&quot;')})"
+                 style="padding:8px 14px;cursor:pointer;border-bottom:1px solid var(--border-light,rgba(255,255,255,.06));transition:background .15s;">
                 <div style="display:flex;align-items:center;gap:6px;margin-bottom:2px;">
                     <span>${statusIcon(t.status)}</span>
                     <span style="font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(t.title)}</span>
                 </div>
-                <div style="color:var(--text-muted);font-size:10px;padding-left:20px;">
-                    ${t.agent ? escapeHtml(t.agent) + ' · ' : ''}${t.elapsed ? t.elapsed : ''}
-                    ${t.action ? ' · ' + escapeHtml(t.action.slice(0,30)) : ''}
-                </div>
-            </div>`).join('');
+                <div style="color:var(--text-muted);font-size:10px;padding-left:20px;">${subText}</div>
+            </div>`;
+        }).join('');
 
-        // 悬停效果
         listEl.querySelectorAll('.tasks-panel-item').forEach(el => {
             el.addEventListener('mouseenter', () => el.style.background = 'var(--bg-hover,rgba(255,255,255,.05))');
             el.addEventListener('mouseleave', () => el.style.background = '');
@@ -11987,6 +12082,19 @@ async function _selectTaskItem(task) {
             // 显示 CI 构建日志尾部
             const tail = task.log_tail || '（无输出）';
             outputEl.textContent = `# CI 构建: ${task.title}\n状态: ${task.status}\n耗时: ${task.elapsed}\n\n${tail}`;
+        } else if (task.type === 'cli_task') {
+            // CLI 工具任务：优先用内存，兜底拉 API
+            outputEl.dataset.activeTaskId = task.id;
+            if (_CLI_TASKS_MEM[task.id]) {
+                _renderCliTaskOutput(task.id, outputEl);
+            } else {
+                const apiBase = currentProjectId ? `/api/projects/${currentProjectId}/chat` : `/api/chat`;
+                const d = await fetch(`${apiBase}/cli-tasks/${task.id}`).then(r => r.json());
+                const statusLine = d.status === 'running' ? '🔄 运行中…'
+                    : d.status === 'error' ? `❌ 失败 (${d.duration_ms}ms)` : `✓ 完成 (${d.duration_ms}ms)`;
+                outputEl.textContent = `# ${d.title}\n${statusLine}\n\n${(d.output_lines || []).join('\n') || '（等待输出…）'}`;
+                outputEl.scrollTop = outputEl.scrollHeight;
+            }
         } else {
             outputEl.textContent = JSON.stringify(task, null, 2);
         }
@@ -17586,3 +17694,471 @@ function _relativeTime(isoStr) {
         if (count > 0) _updatePermBadge(count);
     } catch (_) {}
 })();
+
+// ==================== 自动化面板 ====================
+
+let _automationTasks = [];      // 当前已安排任务列表
+let _automationRuns  = [];      // 近期运行记录
+
+// ── 格式化工具 ──
+
+function _formatNextRun(nextRunAt) {
+    if (!nextRunAt) return '';
+    const diff = new Date(nextRunAt) - Date.now();
+    if (diff <= 0) return '即将运行';
+    const min = Math.floor(diff / 60000);
+    const hr  = Math.floor(min / 60);
+    const day = Math.floor(hr / 24);
+    if (day >= 1) return `${day} 天后运行`;
+    if (hr >= 1)  return `${hr} 小时后运行`;
+    return `${min} 分钟后运行`;
+}
+
+function _formatRunAgo(ts) {
+    if (!ts) return '';
+    const diff = Date.now() - new Date(ts);
+    const min  = Math.floor(diff / 60000);
+    const hr   = Math.floor(min / 60);
+    const day  = Math.floor(hr / 24);
+    if (day >= 1) return `${day} 天前`;
+    if (hr >= 1)  return `${hr} 小时前`;
+    if (min >= 1) return `${min} 分钟前`;
+    return '刚刚';
+}
+
+function _statusIcon(status) {
+    return status === 'success' ? '✅ 成功' : status === 'failed' ? '❌ 失败' : '⏳ 运行中';
+}
+
+// ── 加载面板 ──
+
+async function loadAutomationPanel() {
+    const pid = currentProject?.id;
+    if (!pid) return;
+    await Promise.all([
+        loadAutomationTemplates(),
+        loadAutomationTasks(pid),
+        loadAutomationRuns(pid),
+    ]);
+}
+
+async function loadAutomationTemplates() {
+    try {
+        const d = await fetch(`${API}/automation/templates`).then(r => r.json());
+        renderAutomationTemplates(d.templates || []);
+    } catch { renderAutomationTemplates([]); }
+}
+
+function renderAutomationTemplates(templates) {
+    const grid = document.getElementById('automationTemplatesGrid');
+    if (!grid) return;
+    if (!templates.length) { grid.innerHTML = ''; return; }
+    grid.innerHTML = templates.map(t => `
+        <div class="automation-template-card" onclick="showAddAutomationModal(${JSON.stringify(t).replace(/"/g,'&quot;')})">
+            <div class="automation-template-icon">${t.icon || '⚡'}</div>
+            <div class="automation-template-name">${t.name}</div>
+            <div class="automation-template-desc">${t.description || ''}</div>
+        </div>
+    `).join('');
+}
+
+async function loadAutomationTasks(projectId) {
+    try {
+        const d = await fetch(`${API}/automation/tasks?project_id=${projectId}`).then(r => r.json());
+        _automationTasks = d.tasks || [];
+        renderAutomationTasks(_automationTasks);
+    } catch { renderAutomationTasks([]); }
+}
+
+function renderAutomationTasks(tasks) {
+    const list  = document.getElementById('automationTaskList');
+    const empty = document.getElementById('automationTaskEmpty');
+    const count = document.getElementById('automationTaskCount');
+    if (!list) return;
+    if (count) count.textContent = tasks.length;
+    if (!tasks.length) {
+        list.innerHTML = '';
+        if (empty) empty.style.display = '';
+        return;
+    }
+    if (empty) empty.style.display = 'none';
+    list.innerHTML = tasks.map(t => {
+        const dotClass = !t.enabled ? 'disabled' : t.last_run_status === 'running' ? 'running' : '';
+        const cardClass = !t.enabled ? 'disabled' : '';
+        const projectName = _getProjectName(t.project_id);
+        return `
+        <div class="automation-task-card ${cardClass}" id="atask-${t.id}">
+            <div class="automation-task-status-dot ${dotClass}"></div>
+            <div class="automation-task-info">
+                <div class="automation-task-name">${t.name}</div>
+                <div class="automation-task-meta">
+                    <span class="automation-task-project">${projectName}</span>
+                    <span class="automation-task-schedule">${t.schedule_label || t.cron_expr || ''}</span>
+                </div>
+            </div>
+            <div class="automation-task-next">${_formatNextRun(t.next_run_at)}</div>
+            <div class="automation-task-actions">
+                <button class="automation-task-btn" onclick="runAutomationNow('${t.id}')" title="立即执行">▶ 立即</button>
+                <button class="automation-task-btn" onclick="toggleAutomationTask('${t.id}', ${t.enabled ? 0 : 1})">
+                    ${t.enabled ? '禁用' : '启用'}
+                </button>
+                <button class="automation-task-btn danger" onclick="deleteAutomationTask('${t.id}', '${t.name}')">删除</button>
+            </div>
+        </div>`;
+    }).join('');
+}
+
+async function loadAutomationRuns(projectId) {
+    try {
+        const d = await fetch(`${API}/automation/runs?project_id=${projectId}&limit=30`).then(r => r.json());
+        _automationRuns = d.runs || [];
+        renderAutomationRuns(_automationRuns);
+    } catch { renderAutomationRuns([]); }
+}
+
+function renderAutomationRuns(runs) {
+    const list  = document.getElementById('automationRunList');
+    const empty = document.getElementById('automationRunEmpty');
+    if (!list) return;
+    if (!runs.length) {
+        list.innerHTML = '';
+        if (empty) { empty.style.display = ''; empty.textContent = '暂无运行记录'; }
+        return;
+    }
+    if (empty) empty.style.display = 'none';
+    const projectName = id => _getProjectName(id);
+    list.innerHTML = runs.map(r => `
+        <div class="automation-run-row">
+            <span class="automation-run-status ${r.status}">${_statusIcon(r.status)}</span>
+            <span class="automation-run-name">${r.task_name || ''}</span>
+            <span class="automation-run-project">${projectName(r.project_id)}</span>
+            <span class="automation-run-time">${_formatRunAgo(r.started_at)}</span>
+            ${r.error_msg ? `<button class="automation-run-detail-btn" onclick="showAutomationRunDetail(${JSON.stringify(r).replace(/"/g,'&quot;')})">查看错误</button>` : ''}
+        </div>
+    `).join('');
+}
+
+function _getProjectName(projectId) {
+    const p = (window._projectList || []).find(p => p.id === projectId);
+    return p ? p.name : (projectId || '').slice(0, 8);
+}
+
+// ── 操作 ──
+
+async function runAutomationNow(taskId) {
+    // 乐观更新状态点为 running
+    const card = document.getElementById(`atask-${taskId}`);
+    if (card) {
+        const dot = card.querySelector('.automation-task-status-dot');
+        if (dot) { dot.className = 'automation-task-status-dot running'; }
+    }
+    try {
+        await fetch(`${API}/automation/tasks/${taskId}/run-now`, { method: 'POST' });
+        showToast('任务已触发执行', 'success');
+    } catch { showToast('触发失败', 'error'); }
+}
+
+async function toggleAutomationTask(taskId, enable) {
+    const endpoint = enable ? 'enable' : 'disable';
+    try {
+        await fetch(`${API}/automation/tasks/${taskId}/${endpoint}`, { method: 'POST' });
+        await loadAutomationTasks(currentProject?.id);
+    } catch { showToast('操作失败', 'error'); }
+}
+
+async function deleteAutomationTask(taskId, name) {
+    if (!confirm(`确定删除自动化任务「${name}」？此操作不可撤销。`)) return;
+    try {
+        await fetch(`${API}/automation/tasks/${taskId}`, { method: 'DELETE' });
+        showToast('任务已删除', 'success');
+        await loadAutomationTasks(currentProject?.id);
+    } catch { showToast('删除失败', 'error'); }
+}
+
+function showAutomationRunDetail(run) {
+    const msg = run.error_msg || run.result_msg || '无详情';
+    alert(`运行详情\n\n${msg}`);
+}
+
+// ── SSE 回调 ──
+
+function onAutomationTaskStarted(data) {
+    const card = document.getElementById(`atask-${data.task_id}`);
+    if (card) {
+        const dot = card.querySelector('.automation-task-status-dot');
+        if (dot) dot.className = 'automation-task-status-dot running';
+        const next = card.querySelector('.automation-task-next');
+        if (next) next.textContent = '运行中…';
+    }
+}
+
+function onAutomationTaskFinished(data) {
+    // 刷新任务卡片
+    const pid = currentProject?.id;
+    if (pid) {
+        loadAutomationTasks(pid);
+        // 在运行记录顶部插入新行
+        const list  = document.getElementById('automationRunList');
+        const empty = document.getElementById('automationRunEmpty');
+        if (list && document.getElementById('tab-automation')?.classList.contains('active')) {
+            if (empty) empty.style.display = 'none';
+            const row = document.createElement('div');
+            row.className = 'automation-run-row';
+            row.innerHTML = `
+                <span class="automation-run-status ${data.status}">${_statusIcon(data.status)}</span>
+                <span class="automation-run-name">${data.task_name || ''}</span>
+                <span class="automation-run-project">${_getProjectName(pid)}</span>
+                <span class="automation-run-time">刚刚</span>
+            `;
+            list.prepend(row);
+        }
+    }
+    showToast(`自动化任务「${data.task_name}」${data.status === 'success' ? '执行完成' : '执行失败'}`, data.status === 'success' ? 'success' : 'error');
+}
+
+// ── 添加弹窗 ──
+
+let _autoFreqType = 'daily';
+let _autoSelectedModel = 'auto';
+
+function showAddAutomationModal(template) {
+    // 先填充项目列表
+    _fillAutoWorkspaceDropdown();
+
+    // 重置表单
+    document.getElementById('autoName').value     = template?.name    || '';
+    document.getElementById('autoPrompt').value   = template?.prompt  || '';
+    document.getElementById('autoProjectId').value = currentProject?.id || '';
+    document.getElementById('autoWorkspaceLabel').textContent = currentProject?.name || '+ 选择项目';
+
+    // 频率
+    const freq = template?.schedule_type || 'daily';
+    switchAutoFreq(freq);
+
+    // 如果模板有 cron，解析填充
+    if (template?.cron_expr && freq === 'daily') {
+        _parseCronToDaily(template.cron_expr);
+    }
+    if (template?.cron_expr && freq === 'interval') {
+        _parseCronToInterval(template.cron_expr);
+    }
+
+    selectAutoModel('auto', 'Auto');
+    document.getElementById('autoValidFrom').value  = '';
+    document.getElementById('autoValidUntil').value = '';
+
+    document.getElementById('automationModal').style.display = 'flex';
+}
+
+function closeAutomationModal() {
+    document.getElementById('automationModal').style.display = 'none';
+}
+
+function _fillAutoWorkspaceDropdown() {
+    const dd = document.getElementById('autoWorkspaceDropdown');
+    if (!dd) return;
+    const projects = window._projectList || [];
+    dd.innerHTML = projects.map(p => `
+        <div class="automation-workspace-option" onclick="selectAutoWorkspace('${p.id}','${p.name}')">${p.name}</div>
+    `).join('') || '<div style="padding:10px;color:var(--text-muted);">暂无项目</div>';
+}
+
+function toggleAutoWorkspaceDropdown() {
+    const dd = document.getElementById('autoWorkspaceDropdown');
+    if (!dd) return;
+    dd.style.display = dd.style.display === 'none' ? 'block' : 'none';
+}
+
+function selectAutoWorkspace(id, name) {
+    document.getElementById('autoProjectId').value = id;
+    document.getElementById('autoWorkspaceLabel').textContent = name;
+    document.getElementById('autoWorkspaceDropdown').style.display = 'none';
+}
+
+function toggleAutoModelDropdown() {
+    const dd = document.getElementById('autoModelDropdown');
+    if (!dd) return;
+    dd.style.display = dd.style.display === 'none' ? 'block' : 'none';
+}
+
+function selectAutoModel(val, label) {
+    _autoSelectedModel = val;
+    document.getElementById('autoModel').value = val;
+    document.getElementById('autoModelLabel').textContent = label;
+    document.getElementById('autoModelDropdown').style.display = 'none';
+}
+
+function switchAutoFreq(type) {
+    _autoFreqType = type;
+    document.querySelectorAll('.automation-freq-tab').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.freq === type);
+    });
+    document.getElementById('autoFreqDaily').style.display    = type === 'daily'    ? '' : 'none';
+    document.getElementById('autoFreqInterval').style.display = type === 'interval' ? '' : 'none';
+    document.getElementById('autoFreqOnce').style.display     = type === 'once'     ? '' : 'none';
+}
+
+document.addEventListener('click', (e) => {
+    if (!e.target.closest('#autoWorkspaceSelector')) {
+        const dd = document.getElementById('autoWorkspaceDropdown');
+        if (dd) dd.style.display = 'none';
+    }
+    if (!e.target.closest('.automation-model-select')) {
+        const dd = document.getElementById('autoModelDropdown');
+        if (dd) dd.style.display = 'none';
+    }
+});
+
+// 周几按钮切换
+document.addEventListener('click', (e) => {
+    if (e.target.classList.contains('weekday-btn')) {
+        e.target.classList.toggle('active');
+    }
+});
+
+// ── cron 构造 ──
+
+function _buildCronExpr() {
+    if (_autoFreqType === 'daily') {
+        const time = document.getElementById('autoTimeDaily').value || '09:00';
+        const [hh, mm] = time.split(':');
+        const activeDays = [...document.querySelectorAll('.weekday-btn.active')].map(b => b.dataset.day);
+        const dayStr = activeDays.length === 7 || activeDays.length === 0
+            ? '*'
+            : activeDays.sort((a,b) => a-b).join(',');
+        return { cron_expr: `${parseInt(mm)} ${parseInt(hh)} * * ${dayStr}`, schedule_type: 'daily' };
+    }
+    if (_autoFreqType === 'interval') {
+        const val  = parseInt(document.getElementById('autoIntervalValue').value) || 1;
+        const unit = document.getElementById('autoIntervalUnit').value;
+        if (unit === 'minute') return { cron_expr: `*/${val} * * * *`,   schedule_type: 'interval' };
+        if (unit === 'hour')   return { cron_expr: `0 */${val} * * *`,   schedule_type: 'interval' };
+        if (unit === 'day')    return { cron_expr: `0 0 */${val} * *`,   schedule_type: 'interval' };
+    }
+    if (_autoFreqType === 'once') {
+        const dt = document.getElementById('autoOnceTime').value;
+        return { cron_expr: null, schedule_type: 'once', run_at: dt };
+    }
+    return { cron_expr: null, schedule_type: 'daily' };
+}
+
+function _buildScheduleLabel() {
+    if (_autoFreqType === 'daily') {
+        const time = document.getElementById('autoTimeDaily').value || '09:00';
+        const activeDays = [...document.querySelectorAll('.weekday-btn.active')].map(b => b.dataset.day);
+        const dayNames = {1:'周一',2:'周二',3:'周三',4:'周四',5:'周五',6:'周六',0:'周日'};
+        const dayStr = activeDays.length >= 7 ? '每天' : activeDays.map(d => dayNames[d]).join('、');
+        return `每天 ${time}  ${dayStr}`;
+    }
+    if (_autoFreqType === 'interval') {
+        const val  = document.getElementById('autoIntervalValue').value || 1;
+        const unit = document.getElementById('autoIntervalUnit').value;
+        const unitMap = { minute: '分钟', hour: '小时', day: '天' };
+        return `每 ${val} ${unitMap[unit] || unit}`;
+    }
+    if (_autoFreqType === 'once') {
+        return `单次：${document.getElementById('autoOnceTime').value || ''}`;
+    }
+    return '';
+}
+
+function _parseCronToDaily(cron) {
+    try {
+        const parts = cron.trim().split(/\s+/);
+        if (parts.length < 5) return;
+        const [min, hr] = parts;
+        const hh = String(parseInt(hr)).padStart(2,'0');
+        const mm = String(parseInt(min)).padStart(2,'0');
+        document.getElementById('autoTimeDaily').value = `${hh}:${mm}`;
+        if (parts[4] && parts[4] !== '*') {
+            const days = parts[4].split(',');
+            document.querySelectorAll('.weekday-btn').forEach(btn => {
+                btn.classList.toggle('active', days.includes(btn.dataset.day));
+            });
+        }
+    } catch {}
+}
+
+function _parseCronToInterval(cron) {
+    try {
+        const parts = cron.trim().split(/\s+/);
+        const minPart = parts[0];
+        const hrPart  = parts[1];
+        if (minPart.startsWith('*/')) {
+            document.getElementById('autoIntervalValue').value = minPart.slice(2);
+            document.getElementById('autoIntervalUnit').value  = 'minute';
+        } else if (hrPart && hrPart.startsWith('*/')) {
+            document.getElementById('autoIntervalValue').value = hrPart.slice(2);
+            document.getElementById('autoIntervalUnit').value  = 'hour';
+        }
+    } catch {}
+}
+
+async function submitAddAutomation() {
+    const name      = document.getElementById('autoName').value.trim();
+    const projectId = document.getElementById('autoProjectId').value;
+    const prompt    = document.getElementById('autoPrompt').value.trim();
+
+    if (!name)      { showToast('请填写名称', 'error'); return; }
+    if (!projectId) { showToast('请选择工作空间', 'error'); return; }
+    if (!prompt)    { showToast('请填写提示词', 'error'); return; }
+
+    const { cron_expr, schedule_type, run_at } = _buildCronExpr();
+    if (schedule_type !== 'once' && !cron_expr) {
+        showToast('请配置执行频率', 'error'); return;
+    }
+
+    const body = {
+        project_id:     projectId,
+        name,
+        prompt,
+        model:          _autoSelectedModel || 'auto',
+        schedule_type,
+        cron_expr:      cron_expr || run_at || null,
+        schedule_label: _buildScheduleLabel(),
+        valid_from:     document.getElementById('autoValidFrom').value  || null,
+        valid_until:    document.getElementById('autoValidUntil').value || null,
+        enabled:        1,
+    };
+
+    try {
+        const res = await fetch(`${API}/automation/tasks`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        if (!res.ok) {
+            const err = await res.json();
+            showToast(err.detail || '创建失败', 'error');
+            return;
+        }
+        showToast('自动化任务已创建', 'success');
+        closeAutomationModal();
+        await loadAutomationTasks(projectId);
+    } catch (e) {
+        showToast('请求失败: ' + e.message, 'error');
+    }
+}
+
+// ── MCP Action 卡片注入 ──────────────────────────────────────────────────────
+// SSE chat_mcp_action 事件收到后，在聊天窗口追加一个 assistant 气泡并渲染卡片
+
+function appendMcpActionCard(action) {
+    const container = document.getElementById('chatMessages');
+    if (!container) return;
+
+    const actionHtml = renderActionCard(action);
+    if (!actionHtml) return;
+
+    const bubble = document.createElement('div');
+    bubble.className = 'chat-msg assistant';
+    const avatarIcon = _CLI_ICONS[window._currentCliType || 'codebuddy'] || _CLI_ICONS['codebuddy'];
+    bubble.innerHTML = `
+        <div class="chat-msg-avatar">${avatarIcon}</div>
+        <div class="chat-msg-content">
+            <div class="chat-msg-bubble">${actionHtml}</div>
+        </div>
+    `;
+    container.appendChild(bubble);
+    scrollChatToBottom();
+}

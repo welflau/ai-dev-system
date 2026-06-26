@@ -216,6 +216,9 @@
                         <a class="nav-item" data-tab="logs" onclick="switchTab('logs')">
                             📝 操作日志
                         </a>
+                        <a class="nav-item" data-tab="automation" onclick="switchTab('automation')">
+                            ⚡ 自动化
+                        </a>
                     </nav>
                     <!-- 设置菜单（抽屉式折叠） -->
                     <div class="sidebar-settings">
@@ -609,6 +612,151 @@
                     <div id="tab-logs" class="tab-content">
                         <h2>操作日志</h2>
                         <div class="log-timeline" id="logTimeline"></div>
+                    </div>
+
+                    <!-- Tab: 自动化 -->
+                    <div id="tab-automation" class="tab-content">
+                        <div class="automation-header">
+                            <div>
+                                <h2 style="margin:0 0 4px;">自动化</h2>
+                                <p class="automation-subtitle">管理自动化任务并查看近期运行记录。</p>
+                            </div>
+                            <button class="btn-primary" onclick="showAddAutomationModal()">+ 添加</button>
+                        </div>
+
+                        <!-- 模板卡片区 -->
+                        <div class="automation-section">
+                            <div class="automation-section-title">从模板入手</div>
+                            <div class="automation-templates-grid" id="automationTemplatesGrid">
+                                <div class="automation-template-skeleton"></div>
+                                <div class="automation-template-skeleton"></div>
+                                <div class="automation-template-skeleton"></div>
+                            </div>
+                        </div>
+
+                        <!-- 已安排任务 -->
+                        <div class="automation-section">
+                            <div class="automation-section-title">
+                                已安排
+                                <span class="automation-count" id="automationTaskCount">0</span>
+                            </div>
+                            <div id="automationTaskList">
+                                <div class="automation-empty" style="display:none;" id="automationTaskEmpty">
+                                    暂无自动化任务，从模板入手或点击「+ 添加」创建。
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 近期运行记录 -->
+                        <div class="automation-section">
+                            <div class="automation-section-title">近期运行记录</div>
+                            <div id="automationRunList">
+                                <div class="automation-empty" id="automationRunEmpty">暂无运行记录</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 自动化：添加弹窗 -->
+                    <div id="automationModal" class="modal-overlay" style="display:none;" onclick="if(event.target===this)closeAutomationModal()">
+                        <div class="modal-content automation-modal">
+                            <h3 style="margin:0 0 20px;">添加自动化任务</h3>
+
+                            <!-- 名称 -->
+                            <div class="automation-field">
+                                <label class="automation-label">名称</label>
+                                <input type="text" id="autoName" class="automation-input" placeholder="每日 AI 新闻推送">
+                            </div>
+
+                            <!-- 工作空间 -->
+                            <div class="automation-field">
+                                <label class="automation-label">工作空间</label>
+                                <div class="automation-workspace-selector" id="autoWorkspaceSelector" onclick="toggleAutoWorkspaceDropdown()">
+                                    <span id="autoWorkspaceLabel">+ 选择项目</span>
+                                    <div class="automation-workspace-dropdown" id="autoWorkspaceDropdown" style="display:none;"></div>
+                                </div>
+                                <input type="hidden" id="autoProjectId">
+                            </div>
+
+                            <!-- 提示词 -->
+                            <div class="automation-field">
+                                <label class="automation-label">提示词</label>
+                                <div class="automation-prompt-wrap">
+                                    <textarea id="autoPrompt" class="automation-textarea" rows="5" placeholder="关注当天 AI 领域的重要动态，筛选 3-5 条有价值的信息，简要说明事件内容及值得关注的原因。"></textarea>
+                                    <div class="automation-prompt-footer">
+                                        <div class="automation-model-select" onclick="toggleAutoModelDropdown()">
+                                            <span id="autoModelLabel">Auto</span>
+                                            <span>∨</span>
+                                            <div class="automation-model-dropdown" id="autoModelDropdown" style="display:none;">
+                                                <div class="automation-model-option" onclick="selectAutoModel('auto','Auto')">Auto</div>
+                                                <div class="automation-model-option" onclick="selectAutoModel('claude-sonnet-4-6','Sonnet 4.6')">Sonnet 4.6</div>
+                                                <div class="automation-model-option" onclick="selectAutoModel('claude-opus-4-8','Opus 4.8')">Opus 4.8</div>
+                                                <div class="automation-model-option" onclick="selectAutoModel('claude-haiku-4-5-20251001','Haiku 4.5')">Haiku 4.5</div>
+                                            </div>
+                                        </div>
+                                        <input type="hidden" id="autoModel" value="auto">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- 执行频率 -->
+                            <div class="automation-field">
+                                <label class="automation-label">执行频率</label>
+                                <div class="automation-freq-tabs">
+                                    <button class="automation-freq-tab active" data-freq="daily" onclick="switchAutoFreq('daily')">每天</button>
+                                    <button class="automation-freq-tab" data-freq="interval" onclick="switchAutoFreq('interval')">按间隔</button>
+                                    <button class="automation-freq-tab" data-freq="once" onclick="switchAutoFreq('once')">单次</button>
+                                </div>
+
+                                <!-- 每天配置 -->
+                                <div class="automation-freq-panel" id="autoFreqDaily">
+                                    <div class="automation-time-row">
+                                        <input type="time" id="autoTimeDaily" class="automation-time-input" value="09:00">
+                                        <div class="automation-weekdays" id="autoWeekdays">
+                                            <button class="weekday-btn active" data-day="1">周一</button>
+                                            <button class="weekday-btn active" data-day="2">周二</button>
+                                            <button class="weekday-btn active" data-day="3">周三</button>
+                                            <button class="weekday-btn active" data-day="4">周四</button>
+                                            <button class="weekday-btn active" data-day="5">周五</button>
+                                            <button class="weekday-btn" data-day="6">周六</button>
+                                            <button class="weekday-btn" data-day="0">周日</button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- 按间隔配置 -->
+                                <div class="automation-freq-panel" id="autoFreqInterval" style="display:none;">
+                                    <div class="automation-interval-row">
+                                        <span>每</span>
+                                        <input type="number" id="autoIntervalValue" class="automation-interval-input" value="6" min="1">
+                                        <select id="autoIntervalUnit" class="automation-interval-select">
+                                            <option value="minute">分钟</option>
+                                            <option value="hour" selected>小时</option>
+                                            <option value="day">天</option>
+                                        </select>
+                                    </div>
+                                </div>
+
+                                <!-- 单次配置 -->
+                                <div class="automation-freq-panel" id="autoFreqOnce" style="display:none;">
+                                    <input type="datetime-local" id="autoOnceTime" class="automation-input">
+                                </div>
+                            </div>
+
+                            <!-- 生效日期区间 -->
+                            <div class="automation-field">
+                                <label class="automation-label">生效日期区间 <span style="color:var(--text-muted);font-weight:400;">（可选，留空表示始终生效。）</span></label>
+                                <div class="automation-date-range">
+                                    <input type="date" id="autoValidFrom" class="automation-input" placeholder="开始日期">
+                                    <span style="color:var(--text-muted);">—</span>
+                                    <input type="date" id="autoValidUntil" class="automation-input" placeholder="结束日期">
+                                </div>
+                            </div>
+
+                            <div class="automation-modal-actions">
+                                <button class="btn-secondary" onclick="closeAutomationModal()">取消</button>
+                                <button class="btn-primary" onclick="submitAddAutomation()">添加</button>
+                            </div>
+                        </div>
                     </div>
 
                     <!-- Tab: 设置 - 基本信息 -->

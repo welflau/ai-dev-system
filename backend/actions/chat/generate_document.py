@@ -79,20 +79,45 @@ class GenerateDocumentAction(ActionBase):
 
         try:
             from git_manager import git_manager
+            from database import db as _db
 
             if not git_manager.repo_exists(project_id):
-                project = await db.fetch_one("SELECT * FROM projects WHERE id = ?", (project_id,))
+                project = await _db.fetch_one("SELECT * FROM projects WHERE id = ?", (project_id,))
                 if project:
                     await git_manager.init_repo(project_id, project["name"])
 
+            # 手动挡：只写文件，不 commit/push
+            project_row = await _db.fetch_one("SELECT mode, git_repo_path FROM projects WHERE id = ?", (project_id,))
+            project_mode = (project_row or {}).get("mode", "auto")
+            repo_path = git_manager._repo_path(project_id)
+            abs_file = str(repo_path / file_path)
+
+            # 写前 VCS 检查（P4 路径自动 checkout）
+            from vcs_detector import ensure_writable
+            vcs_result = await ensure_writable(abs_file)
+            if not vcs_result["ok"] and vcs_result["action"] == "readonly":
+                return ActionResult(
+                    success=False,
+                    data={"type": "error", "message": f"文件位于只读路径，需用户确认才能修改：{abs_file}"},
+                )
+            if not vcs_result["ok"]:
+                return ActionResult(
+                    success=False,
+                    data={"type": "error", "message": f"写文件失败：{vcs_result['message']}"},
+                )
+
             await git_manager.write_file(project_id, file_path, content)
 
-            commit_hash = await git_manager.commit(
-                project_id,
-                f"[Doc] {title or filename}",
-                author="ChatAssistant",
-            )
-            await git_manager.push(project_id)
+            if project_mode == "manual":
+                # 手动挡不 commit，只写文件
+                commit_hash = None
+            else:
+                commit_hash = await git_manager.commit(
+                    project_id,
+                    f"[Doc] {title or filename}",
+                    author="ChatAssistant",
+                )
+                await git_manager.push(project_id)
 
             await db.insert("artifacts", {
                 "id": generate_id("ART"),

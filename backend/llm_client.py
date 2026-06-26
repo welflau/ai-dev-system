@@ -125,6 +125,80 @@ def _calc_cost_usd(model: str, input_tokens: int, output_tokens: int) -> float:
     return round(cost, 6)
 
 
+def _tools_to_action_protocol(tools: list) -> str:
+    """将 tool schemas 转换为 [ACTION:xxx] 文本协议说明，注入 CLI 降级时的 system prompt。
+
+    让不支持原生 tool_use 的模型（DeepSeek、Gemini 等）也能通过文本格式触发 Action。
+    格式与现有 QueryEngine 解析器对齐：[ACTION:NAME]\n{JSON}\n[/ACTION]
+    """
+    if not tools:
+        return ""
+
+    lines = [
+        "## 内置指令协议（重要）",
+        "",
+        "以下是系统内置指令。当触发条件满足时，**在回复末尾直接输出对应文本块**，",
+        "系统会自动解析并执行——这不是外部工具调用，就是普通文本，你直接写在回复里即可。",
+        "",
+        "格式（严格遵守，区分大小写）：",
+        "```",
+        "[ACTION:指令名]",
+        '{"参数名": "参数值"}',
+        "[/ACTION]",
+        "```",
+        "",
+        "**重要**：不要说「调用工具」「工具不可用」，直接写文本指令块即可。",
+        "",
+        "### 可用指令",
+        "",
+    ]
+
+    for tool in tools:
+        name = tool.get("name", "").upper()
+        desc = tool.get("description", "")
+        schema = tool.get("input_schema", {})
+        props = schema.get("properties", {})
+        required = schema.get("required", [])
+
+        # 构造参数说明
+        param_lines = []
+        example_obj = {}
+        for prop_name, prop_info in props.items():
+            prop_enum = prop_info.get("enum", [])
+            req_mark = "必填" if prop_name in required else "可选"
+            if prop_enum:
+                param_lines.append(f'  - `{prop_name}`（{req_mark}）：{" | ".join(prop_enum)}')
+                example_obj[prop_name] = prop_enum[0]
+            else:
+                param_lines.append(f'  - `{prop_name}`（{req_mark}）：{prop_info.get("description", "")}')
+                example_obj[prop_name] = "..."
+
+        import json as _json
+        example_json = _json.dumps(example_obj, ensure_ascii=False)
+
+        lines.append(f"**{name}**：{desc}")
+        lines.extend(param_lines)
+        lines.append(f"  示例：")
+        lines.append(f"  ```")
+        lines.append(f"  [ACTION:{name}]")
+        lines.append(f"  {example_json}")
+        lines.append(f"  [/ACTION]")
+        lines.append(f"  ```")
+        lines.append("")
+
+    lines += [
+        "### 触发时机",
+        "- 用户明确说要新增功能/需求（「帮我做…」「创建一个…」「新增…」「我需要…功能」）→ 输出 `CONFIRM_REQUIREMENT` 指令块",
+        "- 用户描述 Bug/报错/崩溃/功能异常 → 输出 `CONFIRM_BUG` 指令块",
+        "- 其他指令按各自描述中的时机使用",
+        "- **纯问答、解释代码、讨论方案时不输出任何指令块**",
+        "- **每次回复最多输出一个指令块，放在回复末尾**",
+        "- **绝对不要说「工具不可用」「无法调用」——直接写文本指令块**",
+    ]
+
+    return "\n".join(lines)
+
+
 def _ctx_label() -> str:
     """返回当前上下文标签，用于日志前缀"""
     parts = []
@@ -210,12 +284,13 @@ CLI_MODEL_OPTIONS: Dict[str, list] = {
     ],
     "custom": [],   # 自定义工具不预设模型列表
     "tclaude": [
-        # 腾讯内网 TClaude CLI 可用模型
-        "claude-sonnet-4-6",
-        "claude-sonnet-4-6-1m",
+        # 腾讯内网 TClaude CLI 可用模型（来源：tclaude v0.0.3 /model 命令）
+        "claude-sonnet-4-6[1m]",
         "claude-opus-4-8",
-        "claude-opus-4-8-1m",
-        "claude-haiku-4-5",
+        "claude-opus-4-7",
+        "claude-opus-4-6",
+        "claude-opus-4-6[1m]",
+        "hy3-preview-ioa",
     ],
 }
 
@@ -242,7 +317,7 @@ _CLI_ADAPTERS: Dict[str, Dict] = {
         ),
         "stdin": True,
         "streaming": True,
-        "default_cmd": "claude",
+        "default_cmd": "claude-internal",
     },
     "gemini-internal": {
         "build_cmd": lambda cli, model, prompt: (
@@ -272,12 +347,12 @@ _CLI_ADAPTERS: Dict[str, Dict] = {
         "default_cmd": "",
     },
     "tclaude": {
-        # 腾讯内网 TClaude CLI，与 claude 二进制同格式
+        # 腾讯内网 TClaude CLI — claude-code 2.1.170+ 要求 stream-json 时必须加 --verbose
         "build_cmd": lambda cli, model, prompt: (
-            [cli, "--print", "--output-format", "stream-json",
+            [cli, "--print", "--output-format", "stream-json", "--verbose",
              "--include-partial-messages", "--dangerously-skip-permissions", "--model", model]
             if model else
-            [cli, "--print", "--output-format", "stream-json",
+            [cli, "--print", "--output-format", "stream-json", "--verbose",
              "--include-partial-messages", "--dangerously-skip-permissions"]
         ),
         "stdin": True,
@@ -539,83 +614,93 @@ class LLMClient:
         """
         为 claude/codebuddy CLI 构建 --settings 参数。
 
-        读取 <cwd>/.ads/mcp_servers.json，将其中 enabled=true 的 server 转换为
-        Claude/CodeBuddy settings.json 格式，写入临时文件并返回 (extra_args, tmp_path)。
+        始终注入 ads-data MCP server（全局，提供 confirm_requirement 等工具）。
+        若 <cwd>/.ads/mcp_servers.json 存在，额外合并项目级 server。
         extra_args 可直接追加到 cmd 中；tmp_path 用完后由调用方删除。
 
-        不支持 --settings 的 cli_type 或无 .ads 配置时返回 ([], None)。
+        不支持 --settings 的 cli_type 时返回 ([], None)。
         """
         if cli_type not in ("claude", "claude-internal", "codebuddy", "tclaude"):
             logger.debug("🖥️  CLI MCP 注入跳过：cli_type=%s 不支持 --settings", cli_type)
-            return [], None
-        if not cwd:
-            logger.debug("🖥️  CLI MCP 注入跳过：cwd 为空")
             return [], None
 
         import json as _json
         import os as _os
         import tempfile
+        import sys as _sys
         from pathlib import Path as _Path
 
-        ads_mcp = _Path(cwd) / ".ads" / "mcp_servers.json"
-        if not ads_mcp.exists():
-            logger.debug("🖥️  CLI MCP 注入跳过：%s 不存在", ads_mcp)
-            return [], None
+        # ── 全局默认：始终注入 ads-data MCP server ──
+        _backend_dir = _Path(__file__).parent
+        _python_exe  = _sys.executable
+        # 取当前 LLM 上下文的 project_id，注入给 MCP server 作默认值
+        _ctx_project_id = _llm_ctx.project_id or ""
 
-        try:
-            servers_cfg = _json.loads(ads_mcp.read_text(encoding="utf-8"))
-        except Exception as e:
-            logger.warning("🖥️  CLI MCP 注入：读取 %s 失败: %s", ads_mcp, e)
-            return [], None
-
-        # .ads/mcp_servers.json 格式：list of {name, command, args, env, enabled}
-        # 转为 Claude/CodeBuddy settings.json 的 mcpServers dict
-        mcp_servers = {}
-        entries = servers_cfg if isinstance(servers_cfg, list) else servers_cfg.get("servers", [])
-        skipped = []
-        for s in entries:
-            if not s.get("enabled", True):
-                skipped.append(s.get("name") or s.get("id") or "?")
-                continue
-            name = s.get("name") or s.get("id") or ""
-            if not name:
-                continue
-            entry: dict = {}
-            if s.get("command"):
-                entry["command"] = s["command"]
-            if s.get("args"):
-                entry["args"] = s["args"]
-            if s.get("env"):
-                entry["env"] = s["env"]
-            if entry.get("command"):
-                mcp_servers[name] = entry
-
-        if skipped:
-            logger.debug("🖥️  CLI MCP 注入：跳过已禁用 server: %s", skipped)
-
-        if not mcp_servers:
-            logger.info("🖥️  CLI MCP 注入：%s 中无可用 server（全部禁用或格式不符）", ads_mcp)
-            return [], None
-
-        # 构造 settings.json，allowedTools 放行所有 MCP 工具
-        settings_obj = {
-            "mcpServers": mcp_servers,
+        mcp_servers: dict = {
+            "ads-data": {
+                "command": _python_exe,
+                "args": [str(_backend_dir / "ads_data_mcp_server.py")],
+                "env": {
+                    "ADS_DB_PATH": str(_backend_dir / "data" / "ai_dev_system.db"),
+                    "ADS_BASE_URL": "http://localhost:8000",
+                    "ADS_PROJECT_ID": _ctx_project_id,
+                },
+            }
         }
 
+        # ── 项目级：合并 .ads/mcp_servers.json（可选）──
+        if cwd:
+            ads_mcp = _Path(cwd) / ".ads" / "mcp_servers.json"
+            if ads_mcp.exists():
+                try:
+                    servers_cfg = _json.loads(ads_mcp.read_text(encoding="utf-8"))
+                    entries = servers_cfg if isinstance(servers_cfg, list) else servers_cfg.get("servers", [])
+                    skipped = []
+                    for s in entries:
+                        if not s.get("enabled", True):
+                            skipped.append(s.get("name") or s.get("id") or "?")
+                            continue
+                        name = s.get("name") or s.get("id") or ""
+                        if not name:
+                            continue
+                        entry: dict = {}
+                        if s.get("command"):
+                            entry["command"] = s["command"]
+                        if s.get("args"):
+                            entry["args"] = s["args"]
+                        if s.get("env"):
+                            entry["env"] = s["env"]
+                        if entry.get("command"):
+                            mcp_servers[name] = entry
+                    if skipped:
+                        logger.debug("🖥️  CLI MCP 注入：跳过已禁用 server: %s", skipped)
+                except Exception as e:
+                    logger.warning("🖥️  CLI MCP 注入：读取 %s 失败: %s", ads_mcp, e)
+
+        # 构造配置文件并返回参数
+        # claude/claude-internal/tclaude → --settings（mcpServers 格式）
+        # codebuddy → --mcp-config（mcpServers 格式相同，参数名不同）
         try:
             tmp = tempfile.NamedTemporaryFile(
                 mode="w", suffix=".json", delete=False, encoding="utf-8"
             )
+            settings_obj = {"mcpServers": mcp_servers}
             _json.dump(settings_obj, tmp, ensure_ascii=False, indent=2)
             tmp.close()
             server_names = list(mcp_servers.keys())
+
+            if cli_type == "codebuddy":
+                flag = "--mcp-config"
+            else:
+                flag = "--settings"
+
             logger.info(
-                "🖥️  CLI MCP 注入成功: %d 个 server [%s] → --settings %s",
-                len(mcp_servers), ", ".join(server_names), tmp.name,
+                "🖥️  CLI MCP 注入成功: %d 个 server [%s] → %s %s",
+                len(mcp_servers), ", ".join(server_names), flag, tmp.name,
             )
-            return ["--settings", tmp.name], tmp.name
+            return [flag, tmp.name], tmp.name
         except Exception as e:
-            logger.warning("🖥️  CLI MCP 注入：生成临时 settings 文件失败: %s", e)
+            logger.warning("🖥️  CLI MCP 注入：生成临时配置文件失败: %s", e)
             return [], None
 
     @staticmethod
@@ -886,13 +971,18 @@ class LLMClient:
 
                 async def _reader():
                     nonlocal full_text
+                    _raw_lines_seen = 0
                     async for raw_line in proc.stdout:
                         line = raw_line.decode("utf-8", errors="replace").strip()
                         if not line:
                             continue
+                        _raw_lines_seen += 1
+                        if _raw_lines_seen <= 5:
+                            logger.info("🖥️  CLI raw stdout[%d]: %s", _raw_lines_seen, line[:300])
                         try:
                             obj = _json.loads(line)
                         except _json.JSONDecodeError:
+                            logger.debug("🖥️  CLI non-JSON line: %s", line[:200])
                             continue
                         t = obj.get("type", "")
                         if t == "stream_event":
@@ -935,7 +1025,7 @@ class LLMClient:
                                         result_text = content
                                     await queue.put(("tool_result", {
                                         "tool_use_id": blk.get("tool_use_id", ""),
-                                        "result": result_text[:500],
+                                        "result": result_text[:50000],
                                     }))
                         elif t == "system" and obj.get("subtype") == "init":
                             # Session Resume: CLI 输出的会话 ID，用于下次 --resume
@@ -943,13 +1033,28 @@ class LLMClient:
                             if sid:
                                 await queue.put(("session_id", sid))
                         elif t == "result" and obj.get("is_error"):
-                            errors = obj.get("errors", [])
-                            if errors and not full_text:
-                                full_text = f"[CLI错误] {errors[0][:300]}"
+                            err_text = obj.get("result", "") or ""
+                            if not err_text:
+                                errors = obj.get("errors", [])
+                                err_text = errors[0] if errors else "未知错误"
+                            if not full_text:
+                                full_text = f"[CLI错误] {err_text[:300]}"
                                 await queue.put(("text", full_text))
                     await queue.put(None)  # 结束哨兵
 
+                async def _stderr_reader():
+                    """读取 stderr 并记录，帮助诊断 TClaude 等 CLI 的报错"""
+                    stderr_lines = []
+                    async for raw_line in proc.stderr:
+                        line = raw_line.decode("utf-8", errors="replace").strip()
+                        if line:
+                            stderr_lines.append(line)
+                    if stderr_lines:
+                        logger.warning("🖥️  CLI stderr (%d lines): %s", len(stderr_lines),
+                                       "\n".join(stderr_lines[:10]))
+
                 reader_task = _asyncio.create_task(_reader())
+                stderr_task = _asyncio.create_task(_stderr_reader())
                 deadline = _asyncio.get_event_loop().time() + self.cli_timeout
 
                 try:
@@ -990,6 +1095,8 @@ class LLMClient:
                 finally:
                     if not reader_task.done():
                         reader_task.cancel()
+                    if not stderr_task.done():
+                        stderr_task.cancel()
             else:
                 # 非流式 CLI：等待全部输出，一次性 yield
                 try:
@@ -1348,9 +1455,9 @@ class LLMClient:
             logger.warning("[%s] LLM 未配置，跳过 tool use", ctx)
             return {"messages": messages, "rounds": 0, "finished": False}
 
-        # CLI 模式不支持原生 tool_use block，降级为纯文本 chat（依赖 [ACTION:xxx] 文本协议）
+        # CLI 模式：tools 由 MCP server 提供，不需要文本协议注入
         if self.api_format == "cli":
-            logger.warning("[%s] CLI 模式不支持 tool use，降级为文本协议", ctx)
+            logger.info("[%s] CLI 模式降级（tools 由 MCP 提供）", ctx)
             if system:
                 all_messages = [{"role": "system", "content": system}] + list(messages)
             else:
@@ -1679,9 +1786,9 @@ class LLMClient:
             yield {"type": "message_done", "rounds": 0}
             return
 
-        # CLI 模式不支持流式 tool use，降级为非流式文本 chat 并逐字符 yield
+        # CLI 模式：tools 由 MCP server 提供，不需要文本协议注入
         if self.api_format == "cli":
-            logger.warning("[%s] CLI 模式不支持流式 tool use，降级为文本协议", ctx)
+            logger.info("[%s] CLI 模式流式降级（tools 由 MCP 提供）", ctx)
             if system:
                 all_messages = [{"role": "system", "content": system}] + list(messages)
             else:
