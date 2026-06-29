@@ -284,13 +284,14 @@ CLI_MODEL_OPTIONS: Dict[str, list] = {
     ],
     "custom": [],   # 自定义工具不预设模型列表
     "tclaude": [
-        # 腾讯内网 TClaude CLI 可用模型（来源：tclaude v0.0.3 /model 命令）
+        # 腾讯内网 TClaude CLI 可用模型（来源：tclaude v0.0.7 /model 命令）
+        "claude-sonnet-4-6",
         "claude-sonnet-4-6[1m]",
-        "claude-opus-4-8",
-        "claude-opus-4-7",
-        "claude-opus-4-6",
+        "claude-opus-4-8[1m]",
+        "claude-opus-4-7[1m]",
         "claude-opus-4-6[1m]",
-        "hy3-preview-ioa",
+        "claude-haiku-4-5",
+        "claude-hy3-preview",
     ],
 }
 
@@ -689,7 +690,7 @@ class LLMClient:
             tmp.close()
             server_names = list(mcp_servers.keys())
 
-            if cli_type == "codebuddy":
+            if cli_type in ("codebuddy", "tclaude", "claude-internal"):
                 flag = "--mcp-config"
             else:
                 flag = "--settings"
@@ -977,8 +978,10 @@ class LLMClient:
                         if not line:
                             continue
                         _raw_lines_seen += 1
-                        if _raw_lines_seen <= 5:
-                            logger.info("🖥️  CLI raw stdout[%d]: %s", _raw_lines_seen, line[:300])
+                        # 记录所有行（截断防止日志爆炸），帮助诊断格式差异
+                        logger.debug("🖥️  CLI stdout[%d]: %s", _raw_lines_seen, line[:400])
+                        if _raw_lines_seen <= 3 or _raw_lines_seen % 50 == 0:
+                            logger.info("🖥️  CLI stdout[%d]: %s", _raw_lines_seen, line[:400])
                         try:
                             obj = _json.loads(line)
                         except _json.JSONDecodeError:
@@ -1000,11 +1003,18 @@ class LLMClient:
                                     chunk = delta.get("thinking", "")
                                     if chunk:
                                         await queue.put(("thinking", chunk))
+                            # hy3 等模型的 message_delta 可能没有 type 字段
+                            # 但 event 里直接有 delta.stop_reason 表示结束
                         elif t == "assistant":
-                            # 完整 assistant 消息：提取 tool_use blocks
+                            # 完整 assistant 消息：提取文本和 tool_use blocks
                             msg = obj.get("message", {})
                             for blk in msg.get("content", []):
-                                if blk.get("type") == "tool_use":
+                                if blk.get("type") == "text":
+                                    chunk = blk.get("text", "")
+                                    if chunk and chunk not in full_text:
+                                        full_text += chunk
+                                        await queue.put(("text", chunk))
+                                elif blk.get("type") == "tool_use":
                                     await queue.put(("tool_start", {
                                         "tool_use_id": blk.get("id", ""),
                                         "name": blk.get("name", ""),
@@ -1032,14 +1042,21 @@ class LLMClient:
                             sid = obj.get("session_id", "")
                             if sid:
                                 await queue.put(("session_id", sid))
-                        elif t == "result" and obj.get("is_error"):
-                            err_text = obj.get("result", "") or ""
-                            if not err_text:
-                                errors = obj.get("errors", [])
-                                err_text = errors[0] if errors else "未知错误"
-                            if not full_text:
-                                full_text = f"[CLI错误] {err_text[:300]}"
-                                await queue.put(("text", full_text))
+                        elif t == "result":
+                            if obj.get("is_error"):
+                                err_text = obj.get("result", "") or ""
+                                if not err_text:
+                                    errors = obj.get("errors", [])
+                                    err_text = errors[0] if errors else "未知错误"
+                                if not full_text:
+                                    full_text = f"[CLI错误] {err_text[:300]}"
+                                    await queue.put(("text", full_text))
+                            else:
+                                # 成功的 result 块：hy3 等模型可能只在这里给出最终文本
+                                result_text = obj.get("result", "") or ""
+                                if result_text and not full_text:
+                                    full_text = result_text
+                                    await queue.put(("text", result_text))
                     await queue.put(None)  # 结束哨兵
 
                 async def _stderr_reader():

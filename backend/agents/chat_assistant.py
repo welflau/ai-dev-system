@@ -1542,6 +1542,18 @@ UnrealBuildTool.exe {ProjectName}Editor Win64 Development "{path/to/project.upro
 - 需求 ID 不明确时用标题关键词模糊匹配（工具本身支持）
 - 需求状态不允许当前操作时，工具会返回错误，据实告知用户
 
+## 长命令执行规范（重要）
+对于预期耗时超过 5 秒的命令，**必须使用 MCP 工具 `run_command`** 而非 Bash：
+- `run_command` 会将每一行输出实时推送到用户的后台任务面板，用户可全程看到进度
+- 返回结构化结果 `{{exit_code, success, duration_s, stdout_tail}}`，便于判断成功/失败
+- `stdout_tail` 包含最后 200 行，足够分析编译错误
+- 短命令（git status、ls、cat、find 等）继续用 Bash
+
+**必须用 `run_command` 的场景（不能用 Bash）：**
+- UBT 编译：`Build.bat`、`UnrealBuildTool.exe` 等
+- 打包：`RunUAT.bat`、`BuildCookRun` 等
+- 任何预计超过 5 秒的 shell 命令
+
 <!--CACHE_BOUNDARY-->
 ## 当前项目状态（实时）
 {memory_section}
@@ -1813,6 +1825,9 @@ name: 项目名
 - 用中文回复，简洁
 - 脑暴时语气轻松自然，不要像填表单
 - 反问时给 3-4 个有限选项，不让用户自由发挥
+
+## 长命令执行规范
+对于预期耗时超过 5 秒的命令（UBT 编译、打包等），优先使用 MCP 工具 `run_command` 而非 Bash，它会实时推送输出到用户的后台任务面板。
 - 不要自己编 Git URL
 - traits 的值必须从固定分类里选，不能自创
 """

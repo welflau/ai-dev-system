@@ -2672,3 +2672,49 @@ async def mcp_action_callback(project_id: str, req: _McpActionRequest):
         return {"status": "ok", "action_type": action_result.get("type")}
 
     return {"status": "no_action"}
+
+
+# ── 内部 API：MCP server 推 CLI 任务事件 ──────────────────────────────────────
+
+class _CliTaskEventRequest(BaseModel):
+    event_type: str   # cli_task_start / cli_task_line / cli_task_done
+    project_id: str = ""
+    data: Dict[str, Any] = {}
+
+
+# 内部路由（不需要 project_id path 参数，供 MCP server HTTP 回调）
+internal_router = APIRouter(prefix="/api/internal", tags=["internal"])
+
+
+@internal_router.post("/cli-task-event")
+async def cli_task_event(req: _CliTaskEventRequest):
+    """
+    MCP run_command 工具通过此接口推 CLI 任务事件。
+    后端更新内存任务表并通过 SSE 实时推送到前端。
+    """
+    etype = req.event_type
+    data  = req.data
+    pid   = req.project_id
+    task_id = data.get("task_id", "")
+
+    if etype == "cli_task_start":
+        _cli_task_add(task_id, data.get("title", task_id), "run_command")
+
+    elif etype == "cli_task_line":
+        t = _CLI_TASKS.get(task_id)
+        if t:
+            t["output_lines"].append(data.get("line", ""))
+            if len(t["output_lines"]) > 2000:
+                t["output_lines"] = t["output_lines"][-2000:]
+
+    elif etype == "cli_task_done":
+        t = _CLI_TASKS.get(task_id)
+        if t:
+            t["status"] = data.get("status", "success")
+            t["duration_ms"] = int(data.get("duration_s", 0) * 1000)
+
+    # 推 SSE 到前端
+    channel = f"project:{pid}" if pid else "global"
+    await event_manager.publish(channel, etype, data)
+
+    return {"ok": True}

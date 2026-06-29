@@ -514,5 +514,92 @@ async def confirm_bug(
         return json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)
 
 
+@mcp.tool()
+async def run_command(
+    command: str,
+    cwd: str = "",
+    timeout_s: int = 600,
+    project_id: str = "",
+) -> str:
+    """
+    执行 shell 命令并将输出实时推送到前端后台任务面板。
+    适合耗时超过 5 秒的命令：UBT 编译、打包、批处理脚本等。
+    短命令（ls、git status 等）直接用 Bash 工具即可，无需调用此工具。
+    返回结构化结果：{ exit_code, success, duration_s, stdout_tail(最后200行) }
+    AI 可根据 exit_code 和 stdout_tail 判断成功/失败并继续下一步。
+    """
+    import asyncio
+    import time
+    import httpx as _httpx
+
+    pid = project_id or ADS_PROJECT_ID
+    task_id = f"rc_{int(time.time() * 1000)}"
+    base = ADS_BASE_URL
+    headers = {"Content-Type": "application/json"}
+
+    async def _notify(event_type: str, data: dict):
+        try:
+            async with _httpx.AsyncClient(timeout=5) as c:
+                await c.post(f"{base}/api/internal/cli-task-event",
+                             json={"event_type": event_type, "project_id": pid, "data": data},
+                             headers=headers)
+        except Exception:
+            pass  # 推送失败不影响命令执行
+
+    title = command[:80]
+    await _notify("cli_task_start", {"task_id": task_id, "title": title, "status": "running"})
+
+    start = time.time()
+    lines: list[str] = []
+
+    try:
+        proc = await asyncio.create_subprocess_shell(
+            command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd=cwd or None,
+        )
+
+        async def _reader():
+            async for raw in proc.stdout:
+                line = raw.decode("utf-8", errors="replace").rstrip()
+                lines.append(line)
+                await _notify("cli_task_line", {"task_id": task_id, "line": line})
+
+        try:
+            await asyncio.wait_for(_reader(), timeout=timeout_s)
+        except asyncio.TimeoutError:
+            proc.kill()
+            lines.append(f"[超时] 命令执行超过 {timeout_s} 秒，已强制终止")
+            await _notify("cli_task_line", {"task_id": task_id, "line": lines[-1]})
+
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=5)
+        except asyncio.TimeoutError:
+            pass
+
+        exit_code = proc.returncode if proc.returncode is not None else -1
+
+    except Exception as e:
+        lines.append(f"[错误] {e}")
+        exit_code = -1
+
+    duration_s = round(time.time() - start, 1)
+    await _notify("cli_task_done", {
+        "task_id": task_id,
+        "status": "success" if exit_code == 0 else "error",
+        "exit_code": exit_code,
+        "duration_s": duration_s,
+    })
+
+    tail = "\n".join(lines[-200:])
+    return json.dumps({
+        "exit_code": exit_code,
+        "success": exit_code == 0,
+        "duration_s": duration_s,
+        "stdout_tail": tail,
+    }, ensure_ascii=False)
+
+
 if __name__ == "__main__":
     mcp.run()

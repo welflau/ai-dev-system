@@ -36,7 +36,7 @@ class Settings:
     LLM_CLI_TYPE:    str = os.getenv("LLM_CLI_TYPE",    "claude")   # claude / codebuddy / custom
     LLM_CLI_CMD:     str = os.getenv("LLM_CLI_CMD",     "claude")   # 可执行文件名或完整路径
     LLM_CLI_MODEL:   str = os.getenv("LLM_CLI_MODEL",   "")         # 留空则复用 LLM_MODEL
-    LLM_CLI_TIMEOUT: int = int(os.getenv("LLM_CLI_TIMEOUT", "600")) # 子进程超时（秒），复杂多工具任务需要更长时间
+    LLM_CLI_TIMEOUT: int = int(os.getenv("LLM_CLI_TIMEOUT", "1800")) # 子进程超时（秒），UBT/hy3等长任务需要更长时间
 
     # Agent 技能系统（Tool Use）
     ENABLE_AGENT_TOOLS: bool = os.getenv("ENABLE_AGENT_TOOLS", "false").lower() in ("1", "true", "yes")

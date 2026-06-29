@@ -7999,6 +7999,31 @@ function connectSSE(projectId) {
             _onAgentAlert(data);
         });
 
+        // MCP run_command 实时进度事件
+        eventSource.addEventListener('cli_task_start', (e) => {
+            const d = JSON.parse(e.data);
+            _cliTaskRegister(d.task_id, d.title, 'run_command', 'running');
+            _openTasksPanel();
+        });
+
+        eventSource.addEventListener('cli_task_line', (e) => {
+            const d = JSON.parse(e.data);
+            const t = _CLI_TASKS_MEM[d.task_id];
+            if (t) {
+                t.output = (t.output || '') + d.line + '\n';
+                const outputEl = document.getElementById('tasksPanelOutput');
+                if (outputEl && _cliActiveTaskId === d.task_id) {
+                    _renderCliTaskOutput(d.task_id, outputEl);
+                }
+            }
+        });
+
+        eventSource.addEventListener('cli_task_done', (e) => {
+            const d = JSON.parse(e.data);
+            const t = _CLI_TASKS_MEM[d.task_id];
+            _cliTaskUpdate(d.task_id, d.status, t?.output || '', (d.duration_s || 0) * 1000);
+        });
+
         eventSource.onerror = () => {
             console.warn('[SSE] 连接断开，30 秒后重连');
             disconnectSSE();
@@ -11360,7 +11385,7 @@ async function _sendChatStreaming(url, body) {
                     }
                     // CLI 工具：自动打开 /tasks 面板并注册任务
                     if (data.task_id) {
-                        _cliTaskRegister(data.task_id, toolLabel, data.tool, 'running');
+                        _cliTaskRegister(data.task_id, toolLabel, data.tool, 'running', data.input || {});
                         _openTasksPanel();
                     }
 
@@ -11961,9 +11986,15 @@ function _closeTasksSplitPane() {
 
 // 内存 CLI 任务表（与后端 _CLI_TASKS 镜像，用于列表渲染）
 const _CLI_TASKS_MEM = {};
+let _cliActiveTaskId = '';  // 当前选中的任务 ID，独立存储避免 DOM 重渲染后丢失
 
-function _cliTaskRegister(taskId, title, tool, status) {
-    _CLI_TASKS_MEM[taskId] = { id: taskId, type: 'cli_task', title, tool, status, output: '', duration_ms: 0 };
+function _cliTaskRegister(taskId, title, tool, status, input) {
+    const now = new Date();
+    const ts = now.toTimeString().slice(0, 8); // HH:MM:SS
+    // 从 input 提取有意义的指令摘要
+    const cmd = input?.command || input?.cmd || input?.path || input?.pattern
+        || (typeof input === 'object' ? Object.values(input||{})[0] : '') || '';
+    _CLI_TASKS_MEM[taskId] = { id: taskId, type: 'cli_task', title, tool, status, output: '', duration_ms: 0, ts, cmd: String(cmd) };
     _injectCliTaskToPanel(taskId);
 }
 
@@ -11985,7 +12016,7 @@ function _cliTaskUpdate(taskId, status, output, duration_ms) {
     }
     // 若该任务当前被选中，刷新右侧输出
     const outputEl = document.getElementById('tasksPanelOutput');
-    if (outputEl && outputEl.dataset.activeTaskId === taskId) {
+    if (outputEl && _cliActiveTaskId === taskId) {
         _renderCliTaskOutput(taskId, outputEl);
     }
 }
@@ -11995,7 +12026,9 @@ function _renderCliTaskOutput(taskId, outputEl) {
     if (!t) { outputEl.textContent = '任务不存在'; return; }
     const statusLine = t.status === 'running' ? '🔄 运行中…'
         : t.status === 'error' ? `❌ 失败 (${t.duration_ms}ms)` : `✓ 完成 (${t.duration_ms}ms)`;
-    outputEl.textContent = `# ${t.title}\n${statusLine}\n\n${t.output || '（等待输出…）'}`;
+    const cmdLine = t.cmd ? `$ ${t.cmd}\n` : '';
+    const sep = cmdLine ? '─'.repeat(40) + '\n' : '';
+    outputEl.textContent = `${statusLine}\n${cmdLine}${sep}${t.output || '（等待输出…）'}`;
     outputEl.scrollTop = outputEl.scrollHeight;
 }
 
@@ -12005,7 +12038,7 @@ function _injectCliTaskToPanel(taskId) {
     // 自动选中新任务，显示右侧输出
     const outputEl = document.getElementById('tasksPanelOutput');
     if (outputEl) {
-        outputEl.dataset.activeTaskId = taskId;
+        _cliActiveTaskId = taskId;
         _renderCliTaskOutput(taskId, outputEl);
     }
 }
@@ -12039,6 +12072,8 @@ async function _refreshTasksPanel() {
             const isCli = t.type === 'cli_task';
             const durText = isCli && t.duration_ms ? ` · ${t.duration_ms}ms` : (t.elapsed ? ` · ${t.elapsed}` : '');
             const subText = isCli ? `CLI${durText}` : `${t.agent ? escapeHtml(t.agent) : ''}${durText}${t.action ? ' · ' + escapeHtml(t.action.slice(0,20)) : ''}`;
+            const tsText = t.ts ? `<span style="opacity:.5;margin-left:4px;">${escapeHtml(t.ts)}</span>` : '';
+            const cmdText = isCli && t.cmd ? `<div style="color:var(--text-muted);font-size:10px;padding-left:20px;font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:.7;" title="${escapeHtml(t.cmd)}">$ ${escapeHtml(t.cmd.slice(0,60))}</div>` : '';
             return `
             <div class="tasks-panel-item" data-task-id="${escapeHtml(t.id)}" data-task-type="${escapeHtml(t.type)}"
                  onclick="_selectTaskItem(${JSON.stringify(t).replace(/"/g,'&quot;')})"
@@ -12047,7 +12082,8 @@ async function _refreshTasksPanel() {
                     <span>${statusIcon(t.status)}</span>
                     <span style="font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(t.title)}</span>
                 </div>
-                <div style="color:var(--text-muted);font-size:10px;padding-left:20px;">${subText}</div>
+                <div style="color:var(--text-muted);font-size:10px;padding-left:20px;">${subText}${tsText}</div>
+                ${cmdText}
             </div>`;
         }).join('');
 
@@ -12084,7 +12120,7 @@ async function _selectTaskItem(task) {
             outputEl.textContent = `# CI 构建: ${task.title}\n状态: ${task.status}\n耗时: ${task.elapsed}\n\n${tail}`;
         } else if (task.type === 'cli_task') {
             // CLI 工具任务：优先用内存，兜底拉 API
-            outputEl.dataset.activeTaskId = task.id;
+            _cliActiveTaskId = task.id;
             if (_CLI_TASKS_MEM[task.id]) {
                 _renderCliTaskOutput(task.id, outputEl);
             } else {
@@ -17303,6 +17339,27 @@ function connectGlobalSSE() {
         _globalEventSource.addEventListener('agent_alert', (e) => {
             const data = JSON.parse(e.data);
             _onAgentAlert(data);
+        });
+        _globalEventSource.addEventListener('cli_task_start', (e) => {
+            const d = JSON.parse(e.data);
+            _cliTaskRegister(d.task_id, d.title, 'run_command', 'running');
+            _openTasksPanel();
+        });
+        _globalEventSource.addEventListener('cli_task_line', (e) => {
+            const d = JSON.parse(e.data);
+            const t = _CLI_TASKS_MEM[d.task_id];
+            if (t) {
+                t.output = (t.output || '') + d.line + '\n';
+                const outputEl = document.getElementById('tasksPanelOutput');
+                if (outputEl && _cliActiveTaskId === d.task_id) {
+                    _renderCliTaskOutput(d.task_id, outputEl);
+                }
+            }
+        });
+        _globalEventSource.addEventListener('cli_task_done', (e) => {
+            const d = JSON.parse(e.data);
+            const t = _CLI_TASKS_MEM[d.task_id];
+            _cliTaskUpdate(d.task_id, d.status, t?.output || '', (d.duration_s || 0) * 1000);
         });
         _globalEventSource.onerror = () => {
             _globalEventSource?.close();
