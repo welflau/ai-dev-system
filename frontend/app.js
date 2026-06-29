@@ -3765,7 +3765,7 @@ async function refreshBoard() {
         const data = await api(url);
         const board = data.board || {};
 
-        const columns = ['pending', 'design', 'architecture', 'development', 'testing', 'done', 'deployed'];
+        const columns = ['pending', 'blocked', 'design', 'architecture', 'development', 'testing', 'done', 'deployed'];
         // Phase 4: waiting_subtasks 工单也加入 pending 列显示（附角标区分）
         if (board['waiting_subtasks']) {
             board['pending'] = [...(board['pending'] || []), ...board['waiting_subtasks']];
@@ -4085,86 +4085,117 @@ async function openTicketDrawer(ticketId) {
         const artifacts = data.artifacts || [];
         const ticketBranch = data.branch_name || '';
         if (artifacts.length > 0) {
-            html += `
-            <div class="drawer-section">
-                <h4>产出文件 (${artifacts.length})${ticketBranch ? ` <span class="req-branch-tag" style="font-size:11px;font-weight:normal;">🌿 ${escHtml(ticketBranch)}</span>` : ''}</h4>
-                ${artifacts.map(a => {
-                    // 从 metadata.git.files 或 content.files 提取文件列表
-                    let fileList = [];
+            // 按 name 分组，每组内按 created_at 升序，最新的排最后
+            const groups = new Map();
+            for (const a of artifacts) {
+                const key = a.name || a.type || a.id;
+                if (!groups.has(key)) groups.set(key, []);
+                groups.get(key).push(a);
+            }
+
+            const renderOneArtifact = (a, isHistory = false) => {
+                let fileList = [];
+                try {
+                    const meta = a.metadata ? (typeof a.metadata === 'string' ? JSON.parse(a.metadata) : a.metadata) : {};
+                    if (meta.git && meta.git.files) fileList = meta.git.files;
+                } catch {}
+                if (fileList.length === 0) {
                     try {
-                        const meta = a.metadata ? (typeof a.metadata === 'string' ? JSON.parse(a.metadata) : a.metadata) : {};
-                        if (meta.git && meta.git.files) {
-                            fileList = meta.git.files;
+                        const parsed = JSON.parse(a.content || '{}');
+                        if (parsed.files) {
+                            fileList = Array.isArray(parsed.files) ? parsed.files : Object.keys(parsed.files);
+                        } else if (parsed.dev_result && parsed.dev_result.files) {
+                            fileList = Object.keys(parsed.dev_result.files);
                         }
                     } catch {}
-                    if (fileList.length === 0) {
-                        try {
-                            const parsed = JSON.parse(a.content || '{}');
-                            if (parsed.files) {
-                                fileList = Array.isArray(parsed.files) ? parsed.files : Object.keys(parsed.files);
-                            } else if (parsed.dev_result && parsed.dev_result.files) {
-                                fileList = Object.keys(parsed.dev_result.files);
-                            }
-                        } catch {}
-                    }
-                    const commitHash = (() => { try { const m = a.metadata ? (typeof a.metadata === 'string' ? JSON.parse(a.metadata) : a.metadata) : {}; return m.git?.commit_hash || ''; } catch { return ''; } })();
+                }
+                const commitHash = (() => { try { const m = a.metadata ? (typeof a.metadata === 'string' ? JSON.parse(a.metadata) : a.metadata) : {}; return m.git?.commit_hash || ''; } catch { return ''; } })();
 
-                    let filesHtml = '';
-                    if (fileList.length > 0) {
-                        filesHtml = '<div class="artifact-file-list">';
-                        fileList.forEach(f => {
-                            const filePath = typeof f === 'string' ? f : (f.path || f.name || '');
-                            const fileName = filePath.split('/').pop();
-                            const dirPath = filePath.includes('/') ? filePath.substring(0, filePath.lastIndexOf('/') + 1) : '';
-                            filesHtml += `<a class="artifact-file-link" onclick="event.stopPropagation(); openArtifactFile('${escHtml(filePath)}', '${escHtml(ticketBranch)}')" title="${escHtml(filePath)}${ticketBranch ? ' (' + escHtml(ticketBranch) + ')' : ''}">
-                                <span class="file-icon">📄</span>
-                                <span class="file-dir">${escHtml(dirPath)}</span><span class="file-name">${escHtml(fileName)}</span>
-                            </a>`;
-                        });
-                        filesHtml += '</div>';
-                    }
+                let filesHtml = '';
+                if (fileList.length > 0) {
+                    filesHtml = '<div class="artifact-file-list">';
+                    fileList.forEach(f => {
+                        const filePath = typeof f === 'string' ? f : (f.path || f.name || '');
+                        const fileName = filePath.split('/').pop();
+                        const dirPath = filePath.includes('/') ? filePath.substring(0, filePath.lastIndexOf('/') + 1) : '';
+                        filesHtml += `<a class="artifact-file-link" onclick="event.stopPropagation(); openArtifactFile('${escHtml(filePath)}', '${escHtml(ticketBranch)}')" title="${escHtml(filePath)}${ticketBranch ? ' (' + escHtml(ticketBranch) + ')' : ''}">
+                            <span class="file-icon">📄</span>
+                            <span class="file-dir">${escHtml(dirPath)}</span><span class="file-name">${escHtml(fileName)}</span>
+                        </a>`;
+                    });
+                    filesHtml += '</div>';
+                }
 
-                    const isScreenshot = a.type === 'screenshot';
-                    const imgHtml = isScreenshot && a.path
-                        ? `<div class="artifact-screenshot"><img src="${escHtml(a.path)}" alt="${escHtml(a.name)}" style="max-width:100%;border-radius:4px;margin-top:8px;cursor:pointer;" onclick="event.stopPropagation();window.open(this.src,'_blank')"></div>`
-                        : '';
+                const isScreenshot = a.type === 'screenshot';
+                const imgHtml = isScreenshot && a.path
+                    ? `<div class="artifact-screenshot"><img src="${escHtml(a.path)}" alt="${escHtml(a.name)}" style="max-width:100%;border-radius:4px;margin-top:8px;cursor:pointer;" onclick="event.stopPropagation();window.open(this.src,'_blank')"></div>`
+                    : '';
 
-                    // 文件路径徽章（报告或有明确路径的产物）
-                    const pathBadge = (!isScreenshot && a.path)
-                        ? `<div style="margin-top:6px;" onclick="event.stopPropagation();">
-                               <span class="artifact-path-badge" title="${escHtml(a.path)}" onclick="event.stopPropagation();">
-                                   <span class="path-icon">📁</span>${escHtml(a.path)}
-                               </span>
-                           </div>`
-                        : '';
+                const pathBadge = (!isScreenshot && a.path)
+                    ? `<div style="margin-top:6px;" onclick="event.stopPropagation();">
+                           <span class="artifact-path-badge" title="${escHtml(a.path)}" onclick="event.stopPropagation();">
+                               <span class="path-icon">📁</span>${escHtml(a.path)}
+                           </span>
+                       </div>`
+                    : '';
 
-                    // 可折叠内容块
-                    const rawContent = tryFormatJson(a.content);
-                    const contentBlockId = 'acb-' + a.id;
-                    const contentBlock = (!isScreenshot && rawContent)
-                        ? `<div class="collapsible-block" onclick="event.stopPropagation();" id="${contentBlockId}">
-                               <div class="collapsible-preview" onclick="toggleCollapsible('${contentBlockId}')">${escHtml(rawContent)}</div>
-                               <div class="collapsible-toggle" onclick="toggleCollapsible('${contentBlockId}')">
-                                   <span>展开查看</span><span class="toggle-arrow">▼</span>
-                               </div>
-                           </div>`
-                        : '';
+                const rawContent = tryFormatJson(a.content);
+                const contentBlockId = 'acb-' + a.id;
+                const contentBlock = (!isScreenshot && rawContent)
+                    ? `<div class="collapsible-block" onclick="event.stopPropagation();" id="${contentBlockId}">
+                           <div class="collapsible-preview" onclick="toggleCollapsible('${contentBlockId}')">${escHtml(rawContent)}</div>
+                           <div class="collapsible-toggle" onclick="toggleCollapsible('${contentBlockId}')">
+                               <span>展开查看</span><span class="toggle-arrow">▼</span>
+                           </div>
+                       </div>`
+                    : '';
 
-                    return `
-                    <div class="artifact-card" onclick="">
-                        <div style="display:flex; align-items:center; gap:8px; font-size:13px;">
-                            <span>${getArtifactIcon(a.type)}</span>
-                            <span style="font-weight:500;">${escHtml(a.name || a.type)}</span>
-                            <span class="tag tag-module" style="font-size:11px;">${escHtml(a.type)}</span>
-                            ${commitHash ? `<span style="font-size:10px;color:var(--text-muted);font-family:monospace;">${escHtml(commitHash)}</span>` : ''}
-                            <span style="font-size:11px; color:var(--text-muted); margin-left:auto;">${formatDate(a.created_at)}</span>
-                        </div>
-                        ${pathBadge}
-                        ${filesHtml}
-                        ${imgHtml}
-                        ${contentBlock}
-                    </div>`;
-                }).join('')}
+                const historyStyle = isHistory ? 'margin-top:6px;opacity:0.7;border-left:2px solid var(--border-color);padding-left:8px;' : '';
+                return `
+                <div class="artifact-card" style="${historyStyle}" onclick="">
+                    <div style="display:flex; align-items:center; gap:8px; font-size:13px;">
+                        <span>${getArtifactIcon(a.type)}</span>
+                        <span style="font-weight:500;">${escHtml(a.name || a.type)}</span>
+                        <span class="tag tag-module" style="font-size:11px;">${escHtml(a.type)}</span>
+                        ${commitHash ? `<span style="font-size:10px;color:var(--text-muted);font-family:monospace;">${escHtml(commitHash)}</span>` : ''}
+                        ${isHistory ? `<span style="font-size:11px;color:var(--text-muted);">历史</span>` : ''}
+                        <span style="font-size:11px; color:var(--text-muted); margin-left:auto;">${formatDate(a.created_at)}</span>
+                    </div>
+                    ${pathBadge}
+                    ${filesHtml}
+                    ${imgHtml}
+                    ${contentBlock}
+                </div>`;
+            };
+
+            const groupsHtml = [...groups.values()].map(group => {
+                const latest = group[group.length - 1];
+                const older = group.slice(0, -1);
+                const histId = 'ahist-' + latest.id;
+
+                const historyHtml = older.length > 0
+                    ? `<div style="margin-top:4px;">
+                           <button class="btn-text-sm" style="font-size:11px;" onclick="event.stopPropagation();toggleBlock('${histId}')">
+                               ${older.length} 个历史版本 ▼
+                           </button>
+                           <div id="${histId}" style="display:none;">
+                               ${[...older].reverse().map(a => renderOneArtifact(a, true)).join('')}
+                           </div>
+                       </div>`
+                    : '';
+
+                return renderOneArtifact(latest) + historyHtml;
+            }).join('');
+
+            // 计算去重后的组数
+            const uniqueCount = groups.size;
+            const totalCount = artifacts.length;
+            const dupNote = totalCount > uniqueCount ? ` <span style="font-size:11px;color:var(--text-muted);font-weight:normal;">(${totalCount - uniqueCount} 个历史版本已折叠)</span>` : '';
+
+            html += `
+            <div class="drawer-section">
+                <h4>产出文件 (${uniqueCount})${dupNote}${ticketBranch ? ` <span class="req-branch-tag" style="font-size:11px;font-weight:normal;">🌿 ${escHtml(ticketBranch)}</span>` : ''}</h4>
+                ${groupsHtml}
             </div>`;
         }
 
@@ -4190,6 +4221,16 @@ async function openTicketDrawer(ticketId) {
             img.onclick = () => window.open(img.src, '_blank');
             img.title = '点击查看大图';
         });
+        // Enter 发送 / Shift+Enter 换行
+        const commentTa = drawerBody.querySelector('#commentInput');
+        if (commentTa) {
+            commentTa.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    submitTicketComment(data.id);
+                }
+            });
+        }
         // 打开抽屉
         document.getElementById('drawerOverlay').classList.add('active');
         document.getElementById('ticketDrawer').classList.add('active');
@@ -4275,6 +4316,31 @@ function renderCommentBubble(comment) {
     const deleteBtn = isHuman
         ? `<button class="comment-delete-btn" onclick="deleteTicketComment('${escHtml(comment.ticket_id)}','${escHtml(comment.id)}')" title="删除">✕</button>`
         : '';
+
+    // agent 评论：hover 时显示回复按钮 + 定位到工单对话面板按钮
+    const replyBoxId = 'cmtreply-' + escHtml(comment.id || Math.random().toString(36).slice(2));
+    const replyBtn = !isHuman
+        ? `<button class="comment-reply-btn" title="回复" onclick="event.stopPropagation();toggleLogCommentBox('${replyBoxId}')">💬</button>`
+        : '';
+    const locateBtn = !isHuman && comment.ticket_id
+        ? `<button class="comment-locate-btn" title="在工单对话中查看" onclick="event.stopPropagation();locateInTicketFeed('${escHtml(comment.ticket_id)}','${escHtml(comment.id)}')">↗</button>`
+        : '';
+    const replyBox = !isHuman ? `
+        <div id="${replyBoxId}" class="log-inline-comment-box" style="display:none;">
+            <textarea class="log-inline-comment-input" placeholder="回复这条评论…" rows="2"
+                onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();submitTicketComment('${escHtml(comment.ticket_id || '')}',document.getElementById('${replyBoxId}'))}"></textarea>
+            <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:4px;">
+                <button class="btn-sm" onclick="document.getElementById('${replyBoxId}').style.display='none'">取消</button>
+                <button class="comment-send-btn btn-sm" onclick="submitTicketComment('${escHtml(comment.ticket_id || '')}',document.getElementById('${replyBoxId}'))">发送</button>
+            </div>
+        </div>` : '';
+
+    // 嵌套 agent 回复
+    const replies = comment._replies || [];
+    const repliesHtml = replies.length > 0
+        ? `<div class="comment-replies">${replies.map(r => renderCommentBubble(r)).join('')}</div>`
+        : '';
+
     return `
     <div class="comment-bubble ${bubbleClass}" id="comment-${escHtml(comment.id)}">
         <div class="comment-meta">
@@ -4282,8 +4348,11 @@ function renderCommentBubble(comment) {
             ${comment.phase ? `<span class="log-action" style="font-size:11px;">${escHtml(comment.phase)}</span>` : ''}
             ${deleteBtn}
             <span class="comment-time">${formatTime(comment.created_at)}</span>
+            ${replyBtn}${locateBtn}
         </div>
         <div class="comment-content">${escHtml(comment.content)}</div>
+        ${repliesHtml}
+        ${replyBox}
     </div>`;
 }
 
@@ -4303,15 +4372,63 @@ function toggleSecondaryLogs() {
 }
 
 /**
+ * 切换 log 行内评论输入框
+ */
+function toggleLogCommentBox(boxId) {
+    const box = document.getElementById(boxId);
+    if (!box) return;
+    const isOpen = box.style.display !== 'none';
+    box.style.display = isOpen ? 'none' : '';
+    if (!isOpen) {
+        const ta = box.querySelector('textarea');
+        if (ta) { ta.focus(); }
+    }
+}
+
+/**
+ * 提交针对某条 log 的评论（带 reply_to_log_id）
+ */
+async function submitLogComment(ticketId, logId, boxId) {
+    const box = document.getElementById(boxId);
+    if (!box) return;
+    const ta = box.querySelector('textarea');
+    const content = (ta ? ta.value : '').trim();
+    if (!content) return;
+
+    const btn = box.querySelector('.comment-send-btn');
+    if (btn) btn.disabled = true;
+    try {
+        await api(`/tickets/${ticketId}/comments`, {
+            method: 'POST',
+            body: { content, reply_to_log_id: logId },
+        });
+        if (ta) ta.value = '';
+        box.style.display = 'none';
+        await _loadUnifiedTimeline(ticketId);
+    } catch (e) {
+        showToast(e.message || '发送失败', 'error');
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
+/**
  * 发送人工评论
  */
-async function submitTicketComment(ticketId) {
-    const input = document.getElementById('commentInput');
+async function submitTicketComment(ticketId, boxEl) {
+    // boxEl: 可选，传入自定义输入框容器（回复气泡场景）；否则用全局 #commentInput
+    let input, btn;
+    if (boxEl) {
+        input = boxEl.querySelector('textarea');
+        btn   = boxEl.querySelector('.comment-send-btn');
+    } else {
+        input = document.getElementById('commentInput');
+        btn   = document.querySelector('.comment-send-btn');
+    }
     if (!input) return;
     const content = input.value.trim();
     if (!content) return;
 
-    const btn = document.querySelector('.comment-send-btn');
     if (btn) btn.disabled = true;
     try {
         await api(`/tickets/${ticketId}/comments`, {
@@ -4319,6 +4436,7 @@ async function submitTicketComment(ticketId) {
             body: { content },
         });
         input.value = '';
+        if (boxEl) boxEl.style.display = 'none';
         // 刷新时间轴
         await _loadUnifiedTimeline(ticketId);
         showToast('评论已发送，Agent 下次执行时将优先参考', 'success');
@@ -7406,6 +7524,21 @@ function renderLogItem(log) {
             ${errorMsg      ? `<div class="log-expand-row"><span class="log-expand-label log-expand-err">错误</span><span class="log-expand-val log-expand-err">${escHtml(errorMsg)}</span></div>` : ''}
         </div>` : '';
 
+    // 内联评论（绑定到本条 log 的评论）
+    const inlineComments = (log._inline_comments || []);
+    const inlineHtml = inlineComments.map(c => renderCommentBubble(c)).join('');
+
+    // 评论输入框（折叠，点 💬 按钮展开）
+    const commentBoxId = 'logcmt-' + (log.id || Math.random().toString(36).slice(2));
+    const commentBox = `
+        <div id="${commentBoxId}" class="log-inline-comment-box" style="display:none;">
+            <textarea class="log-inline-comment-input" placeholder="回复这条记录…" rows="2"></textarea>
+            <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:4px;">
+                <button class="btn-sm" onclick="document.getElementById('${commentBoxId}').style.display='none'">取消</button>
+                <button class="comment-send-btn btn-sm" onclick="submitLogComment('${escHtml(_currentTimelineTicketId || log.ticket_id || '')}','${escHtml(log.id || '')}','${commentBoxId}')">发送</button>
+            </div>
+        </div>`;
+
     return `
         <div class="log-item ${log.level || 'info'}${log._isChatTool ? ' log-chat-tool' : ''}"${hasExpand ? ` onclick="toggleBlock('${expandId}')" style="cursor:pointer;" title="点击展开详情"` : ''}>
             <div class="log-header">
@@ -7417,9 +7550,13 @@ function renderLogItem(log) {
                         ${getStatusLabel(log.from_status)} <span class="arrow">→</span> ${getStatusLabel(log.to_status)}
                     </span>` : ''}
                 <span class="log-time">${formatTime(log.created_at)}</span>
+                <button class="log-comment-btn" title="评论此记录"
+                    onclick="event.stopPropagation();toggleLogCommentBox('${commentBoxId}')">💬</button>
             </div>
             ${messageHtml}
             ${expandHtml}
+            ${inlineHtml}
+            ${commentBox}
         </div>`;
 }
 
@@ -7470,6 +7607,10 @@ function connectSSE(projectId) {
             const data = JSON.parse(e.data);
             console.log('[SSE] comment_added:', data);
             if (data.ticket_id) refreshTimeline(data.ticket_id);
+            // 工单对话面板实时追加评论气泡
+            if (chatMode === 'job' && data.ticket_id) {
+                _appendCommentToTicketFeed(data);
+            }
         });
 
         eventSource.addEventListener('requirement_decomposed', (e) => {
@@ -11046,6 +11187,10 @@ async function loadChatSessions() {
 async function switchChatSession(sessionId) {
     const container = document.getElementById('chatMessages');
     if (!container) return;
+    _currentChatSessionId = sessionId;
+    // 关闭历史面板，让消息区可见
+    const panel = document.getElementById('chatHistoryPanel');
+    if (panel) panel.style.display = 'none';
     container.innerHTML = '';
     try {
         const data = await api(`${_sessionApiBase()}/sessions/${sessionId}/messages`);
@@ -11807,12 +11952,25 @@ async function loadAllTicketConversations() {
                         const actionLabel = {assign:'接单', complete:'完成', accept:'验收通过', reject:'验收不通过', error:'异常', start:'开始'}[msg.action] || msg.action;
                         logEl.innerHTML = `<span class="log-agent">${escapeHtml(msg.agent_type)}</span> <span class="log-action">${escapeHtml(actionLabel)}</span> ${msg.message ? '<span class="log-msg">'+escapeHtml(msg.message.substring(0,80))+'</span>' : ''} <span class="log-time">${formatTime(msg.created_at)}</span>`;
                         msgArea.appendChild(logEl);
+                    } else if (msg.type === 'comment') {
+                        // 评论气泡（人工评论 or Agent 回复）
+                        msgArea.appendChild(_buildTicketCommentEl(msg));
                     } else {
-                        // Agent 对话消息
-                        const agentBadge = msg.agent_type ? `<div class="chat-agent-badge">${msg.agent_type} / ${msg.action || ''}</div>` : '';
-                        const metaInfo = msg.model ? `<span style="font-size:10px;color:var(--text-muted)">${msg.model} · ${msg.duration_ms || 0}ms · ${(msg.input_tokens || 0)}→${(msg.output_tokens || 0)} tokens</span>` : '';
+                        // Agent 对话消息（LLM conversation）
+                        const agentBadge = msg.agent_type ? `<div class="chat-agent-badge">${escapeHtml(msg.agent_type)} / ${escapeHtml(msg.action || '')}</div>` : '';
+                        const metaInfo = msg.model ? `<span style="font-size:10px;color:var(--text-muted)">${escapeHtml(msg.model)} · ${msg.duration_ms || 0}ms · ${(msg.input_tokens || 0)}→${(msg.output_tokens || 0)} tokens</span>` : '';
+                        // thinking 步骤展示（assistant 回复前插入思考面板）
+                        if (msg.role === 'assistant') {
+                            const steps = msg.thinking_steps || msg.thinking || null;
+                            const text = msg.thinking_text || null;
+                            const thinkEl = _buildTicketThinkingEl(steps, text);
+                            if (thinkEl) msgArea.appendChild(thinkEl);
+                        }
                         const msgEl = document.createElement('div');
                         msgEl.className = `chat-msg ${msg.role}`;
+                        const replyBtn = msg.role === 'assistant'
+                            ? `<button class="tfc-reply-trigger" title="评论此回复" onclick="_openFeedReplyBox(this, '${escapeHtml(t.id)}')">💬</button>`
+                            : '';
                         msgEl.innerHTML = `
                             ${msg.role === 'user'
                                 ? '<div class="chat-msg-avatar">📝</div>'
@@ -11820,7 +11978,7 @@ async function loadAllTicketConversations() {
                             <div class="chat-msg-content">
                                 ${agentBadge}
                                 <div class="chat-msg-bubble">${formatChatContent(msg.content)}</div>
-                                <div class="chat-msg-time">${formatTime(msg.created_at)} ${metaInfo}</div>
+                                <div class="chat-msg-time">${formatTime(msg.created_at)} ${metaInfo}${replyBtn}</div>
                             </div>`;
                         msgArea.appendChild(msgEl);
                     }
@@ -11854,6 +12012,38 @@ function scrollToTicketSection(ticketId) {
         section.scrollIntoView({ behavior: 'smooth', block: 'start' });
         section.classList.add('ticket-section-highlight');
         setTimeout(() => section.classList.remove('ticket-section-highlight'), 2000);
+    }
+}
+
+/**
+ * 从工单属性面板的评论气泡定位到右侧工单对话面板中的对应条目
+ */
+async function locateInTicketFeed(ticketId, commentId) {
+    if (!chatPanelOpen) toggleChatPanel();
+
+    const doLocate = () => {
+        // 先滚到 ticket section
+        const section = document.getElementById(`ticket-section-${ticketId}`);
+        if (section) {
+            section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+        // 再找同 comment id 的气泡（data-comment-id）
+        const commentEl = document.querySelector(`[data-comment-id="${CSS.escape(commentId)}"]`);
+        if (commentEl) {
+            setTimeout(() => {
+                commentEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                commentEl.classList.add('tfc-comment-highlight');
+                setTimeout(() => commentEl.classList.remove('tfc-comment-highlight'), 2000);
+            }, 300);
+        }
+    };
+
+    if (chatMode === 'job') {
+        doLocate();
+    } else {
+        setChatMode('job');
+        // 等待 loadAllTicketConversations 渲染完成再定位
+        setTimeout(doLocate, 600);
     }
 }
 
@@ -11928,6 +12118,188 @@ function appendToTicketFeed(logData) {
         const dotEl = section.querySelector('.job-status-dot');
         if (dotEl) dotEl.style.background = getStatusColor(logData.to_status);
     }
+}
+
+/**
+ * 打开/关闭 feed 里 agent 消息/评论的行内评论输入框
+ */
+function _openFeedReplyBox(btn, ticketId) {
+    // 锚点：.chat-msg（LLM 对话）、.tfc-reply（子回复）、.ticket-feed-comment（顶层评论）
+    const anchor = btn.closest('.chat-msg') || btn.closest('.tfc-reply') || btn.closest('.ticket-feed-comment');
+    if (!anchor) return;
+    let box = anchor.nextElementSibling;
+    if (box && box.classList.contains('tfc-inline-reply-box')) {
+        box.style.display = box.style.display === 'none' ? '' : 'none';
+        if (box.style.display !== 'none') box.querySelector('textarea')?.focus();
+        return;
+    }
+    box = document.createElement('div');
+    box.className = 'tfc-inline-reply-box';
+    box.innerHTML = `
+        <textarea placeholder="输入评论，Agent 执行时将优先遵循…" rows="2"></textarea>
+        <div class="tfc-inline-reply-actions">
+            <button class="btn btn-sm btn-primary comment-send-btn" onclick="_submitFeedReply(this, '${escapeHtml(ticketId)}')">发送</button>
+            <button class="btn btn-sm" onclick="this.closest('.tfc-inline-reply-box').style.display='none'">取消</button>
+        </div>`;
+    box.querySelector('textarea').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            _submitFeedReply(box.querySelector('.comment-send-btn'), ticketId);
+        }
+    });
+    anchor.after(box);
+    box.querySelector('textarea').focus();
+}
+
+async function _submitFeedReply(btn, ticketId) {
+    const box = btn.closest('.tfc-inline-reply-box');
+    if (!box) return;
+    const ta = box.querySelector('textarea');
+    const content = ta ? ta.value.trim() : '';
+    if (!content) return;
+    btn.disabled = true;
+    try {
+        await api(`/tickets/${ticketId}/comments`, { method: 'POST', body: { content } });
+        ta.value = '';
+        box.style.display = 'none';
+        showToast('评论已发送', 'success');
+    } catch (e) {
+        showToast(e.message || '发送失败', 'error');
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+/**
+ * SSE comment_added → 实时追加评论气泡到工单对话面板对应 section
+ */
+function _appendCommentToTicketFeed(data) {
+    const section = document.getElementById(`ticket-section-${data.ticket_id}`);
+    if (!section) return;
+    const msgArea = section.querySelector('.ticket-section-messages');
+    if (!msgArea) return;
+
+    // 如果是 agent 回复（有 reply_to_comment_id），则找到父评论气泡并追加到其回复区
+    if (data.reply_to_comment_id) {
+        const parentEl = msgArea.querySelector(`[data-comment-id="${CSS.escape(data.reply_to_comment_id)}"]`);
+        if (parentEl) {
+            let repliesDiv = parentEl.querySelector('.tfc-replies');
+            if (!repliesDiv) {
+                repliesDiv = document.createElement('div');
+                repliesDiv.className = 'tfc-replies';
+                parentEl.appendChild(repliesDiv);
+            }
+            const rIcon = data.author_type === 'human' ? '👤' : '🤖';
+            const replyEl = document.createElement('div');
+            replyEl.className = 'tfc-reply';
+            replyEl.innerHTML = `
+                <div class="tfc-reply-meta">${rIcon} <span class="tfc-author">${escapeHtml(data.author || '')}</span> <span class="tfc-time">${formatTime(data.created_at || new Date().toISOString())}</span></div>
+                <div class="tfc-content">${formatChatContent(data.content || '')}</div>`;
+            repliesDiv.appendChild(replyEl);
+            return;
+        }
+    }
+
+    // 顶层评论：直接追加气泡
+    const commentData = {
+        id: data.comment_id || ('sse-' + Date.now()),
+        author: data.author || '',
+        author_type: data.author_type || 'agent',
+        content: data.content || '',
+        phase: data.phase || null,
+        created_at: data.created_at || new Date().toISOString(),
+        replies: [],
+    };
+    msgArea.appendChild(_buildTicketCommentEl(commentData));
+}
+
+/**
+ * 构建工单对话面板中的评论气泡 DOM 元素
+ */
+function _buildTicketCommentEl(comment) {
+    const isHuman = comment.author_type === 'human';
+    const el = document.createElement('div');
+    el.className = `ticket-feed-comment ${isHuman ? 'human' : 'agent'}`;
+    el.dataset.commentId = comment.id;
+
+    const authorIcon = isHuman ? '👤' : '🤖';
+    const phaseTag = comment.phase ? `<span class="tfc-phase">${escapeHtml(comment.phase)}</span>` : '';
+
+    // 顶层评论的 hover 评论按钮（仅 agent 评论显示）
+    const topReplyBtn = !isHuman
+        ? `<button class="tfc-reply-trigger" title="回复此评论" onclick="_openFeedReplyBox(this, '${escapeHtml(comment.ticket_id || '')}')">💬</button>`
+        : '';
+
+    let repliesHtml = '';
+    if (comment.replies && comment.replies.length > 0) {
+        repliesHtml = `<div class="tfc-replies">${comment.replies.map(r => {
+            const rIcon = r.author_type === 'human' ? '👤' : '🤖';
+            const rReplyBtn = r.author_type !== 'human'
+                ? `<button class="tfc-reply-trigger" title="回复此评论" onclick="_openFeedReplyBox(this, '${escapeHtml(comment.ticket_id || '')}')">💬</button>`
+                : '';
+            return `<div class="tfc-reply">
+                <div class="tfc-reply-meta">${rIcon} <span class="tfc-author">${escapeHtml(r.author)}</span> <span class="tfc-time">${formatTime(r.created_at)}</span>${rReplyBtn}</div>
+                <div class="tfc-content">${formatChatContent(r.content)}</div>
+            </div>`;
+        }).join('')}</div>`;
+    }
+
+    el.innerHTML = `
+        <div class="tfc-meta">
+            <span class="tfc-author">${authorIcon} ${escapeHtml(comment.author)}</span>
+            ${phaseTag}
+            <span class="tfc-time">${formatTime(comment.created_at)}</span>
+            ${topReplyBtn}
+        </div>
+        <div class="tfc-content">${formatChatContent(comment.content)}</div>
+        ${repliesHtml}`;
+    return el;
+}
+
+/**
+ * 构建工单对话面板中的思考过程折叠块（历史 thinking steps）
+ */
+function _buildTicketThinkingEl(thinkingSteps, thinkingText) {
+    const hasSteps = thinkingSteps && thinkingSteps.length > 0;
+    const hasText = thinkingText && thinkingText.trim().length > 0;
+    if (!hasSteps && !hasText) return null;
+
+    const el = document.createElement('div');
+    el.className = 'chat-thinking-panel';
+
+    let stepsHtml = '';
+    if (hasSteps) {
+        stepsHtml = thinkingSteps.map(s => {
+            const toolLabel = _TOOL_LABELS[s.tool] || (s.tool ? `🔧 ${escapeHtml(s.tool)}` : '');
+            const hint = s.args_hint ? `<div class="ctp-step-row2">${escapeHtml(s.args_hint)}</div>` : '';
+            const summary = s.summary ? `✓ ${escapeHtml(s.summary.slice(0, 100))}` : '✓';
+            return `<div class="ctp-step ctp-step-done">
+                <div class="ctp-step-row1">
+                    <span class="ctp-step-dot"></span>
+                    <span class="ctp-step-label">${toolLabel}</span>
+                    <span class="ctp-step-status">${summary}</span>
+                </div>${hint}
+            </div>`;
+        }).join('');
+    }
+
+    let textHtml = '';
+    if (hasText) {
+        textHtml = `<div class="ctp-thinking-text">${escapeHtml(thinkingText)}</div>`;
+    }
+
+    const title = hasSteps
+        ? `思考了 ${thinkingSteps.length} 步`
+        : '推理过程';
+
+    el.innerHTML = `
+        <div class="ctp-header" onclick="this.closest('.chat-thinking-panel').classList.toggle('ctp-expanded')">
+            <span class="ctp-icon">✦</span>
+            <span class="ctp-title">${title}</span>
+            <span class="ctp-toggle">∨</span>
+        </div>
+        <div class="ctp-body">${textHtml}${stepsHtml}</div>`;
+    return el;
 }
 
 // ==================== 思考面板 ====================

@@ -1247,7 +1247,7 @@ async def get_all_ticket_conversations(project_id: str):
     # 批量查 LLM 会话记录
     conversations = await db.fetch_all(
         """SELECT id, ticket_id, agent_type, action, model, input_tokens, output_tokens,
-                  duration_ms, status, created_at, messages, response
+                  duration_ms, status, created_at, messages, response, tools_json
            FROM llm_conversations
            WHERE project_id = ? AND ticket_id IS NOT NULL
            ORDER BY created_at ASC""",
@@ -1264,6 +1264,15 @@ async def get_all_ticket_conversations(project_id: str):
         (project_id,),
     )
 
+    # 批量查 ticket_comments（人工评论 + Agent 回复）
+    comments = await db.fetch_all(
+        """SELECT id, ticket_id, author, author_type, content, phase, reply_to_comment_id, created_at
+           FROM ticket_comments
+           WHERE project_id = ?
+           ORDER BY created_at ASC""",
+        (project_id,),
+    )
+
     # 按 ticket_id 分组
     conv_by_ticket = {}
     for conv in conversations:
@@ -1271,15 +1280,75 @@ async def get_all_ticket_conversations(project_id: str):
         if tid not in conv_by_ticket:
             conv_by_ticket[tid] = []
 
-        # 提取 user prompt
+        # 解析 messages 字段，提取 user prompt、thinking 块、tool_use 步骤
         try:
             msgs = json.loads(conv["messages"]) if conv["messages"] else []
         except (json.JSONDecodeError, TypeError):
             msgs = []
+
         user_msg = ""
+        thinking_steps = []   # [{tool, args_hint, summary}]
+        thinking_text = ""    # 原始思考文本（<thinking>）
+
+        # 优先从 tools_json 读取完整工具步骤（_save_tools_conversation 写入）
+        if conv.get("tools_json"):
+            try:
+                thinking_steps = json.loads(conv["tools_json"]) or []
+            except (json.JSONDecodeError, TypeError):
+                thinking_steps = []
+
+        # 从 messages（最后4条）提取 user_msg、thinking_text，并补充 thinking_steps（旧数据）
+        _KEY_MAP = {
+            "shell": "command", "grep": "pattern", "glob": "pattern",
+            "read_files": "paths", "read_local_file": "path",
+            "web_search": "query", "fetch_url": "url",
+            "git_read_file": "path", "git_log": "branch",
+            "search_knowledge": "query", "ue_call": "function",
+            "list_directory": "path", "save_memory": "title",
+        }
+        _fallback_steps = []   # 仅当 tools_json 为空时使用
+        _fallback_tid_idx: dict = {}
+
         for m in msgs:
-            if m.get("role") == "user":
-                user_msg = _content_to_display_text(m.get("content", ""))
+            role = m.get("role")
+            content = m.get("content", "")
+
+            if role == "user":
+                text = _content_to_display_text(content)
+                if text:
+                    user_msg = text
+
+            elif role == "assistant":
+                blocks = content if isinstance(content, list) else []
+                for blk in blocks:
+                    btype = blk.get("type")
+                    if btype == "thinking":
+                        thinking_text = (blk.get("thinking") or blk.get("text") or "")[:500]
+                    elif btype == "tool_use" and not thinking_steps:
+                        tool_name = blk.get("name", "")
+                        inp = blk.get("input", {}) or {}
+                        hint_key = _KEY_MAP.get(tool_name)
+                        hint_val = inp.get(hint_key, "") if hint_key else ""
+                        if isinstance(hint_val, list):
+                            hint_val = ", ".join(str(v) for v in hint_val[:3])
+                        step = {"tool": tool_name, "args_hint": str(hint_val)[:120] if hint_val else ""}
+                        _fallback_tid_idx[blk.get("id", "")] = len(_fallback_steps)
+                        _fallback_steps.append(step)
+
+        # 如果没有 tools_json，用 fallback_steps + tool_result 补摘要
+        if not thinking_steps and _fallback_steps:
+            for m in msgs:
+                if m.get("role") == "user":
+                    for blk in (m.get("content") or []):
+                        if isinstance(blk, dict) and blk.get("type") == "tool_result":
+                            tid_ref = blk.get("tool_use_id", "")
+                            idx = _fallback_tid_idx.get(tid_ref)
+                            if idx is not None:
+                                res_text = blk.get("content", "")
+                                if isinstance(res_text, list):
+                                    res_text = " ".join(b.get("text", "") for b in res_text if isinstance(b, dict))
+                                _fallback_steps[idx]["summary"] = str(res_text)[:150]
+            thinking_steps = _fallback_steps
 
         conv_by_ticket[tid].append({
             "type": "conversation",
@@ -1305,6 +1374,8 @@ async def get_all_ticket_conversations(project_id: str):
             "status": conv["status"],
             "created_at": conv["created_at"],
             "is_agent": True,
+            "thinking_steps": thinking_steps if thinking_steps else None,
+            "thinking_text": thinking_text if thinking_text else None,
         })
 
     # 合并 logs
@@ -1329,6 +1400,40 @@ async def get_all_ticket_conversations(project_id: str):
             "message": detail_msg,
             "level": log["level"],
             "created_at": log["created_at"],
+        })
+
+    # 合并 comments（顶层评论 + agent 回复，reply_to_comment_id 的作为子回复内联）
+    top_comments = [c for c in comments if not c["reply_to_comment_id"]]
+    reply_map = {}
+    for c in comments:
+        if c["reply_to_comment_id"]:
+            reply_map.setdefault(c["reply_to_comment_id"], []).append(c)
+
+    for c in top_comments:
+        tid = c["ticket_id"]
+        if tid not in conv_by_ticket:
+            conv_by_ticket[tid] = []
+        replies = reply_map.get(c["id"], [])
+        conv_by_ticket[tid].append({
+            "type": "comment",
+            "id": c["id"],
+            "author": c["author"],
+            "author_type": c["author_type"],
+            "content": c["content"],
+            "phase": c["phase"],
+            "created_at": c["created_at"],
+            "replies": [
+                {
+                    "type": "comment",
+                    "id": r["id"],
+                    "author": r["author"],
+                    "author_type": r["author_type"],
+                    "content": r["content"],
+                    "phase": r["phase"],
+                    "created_at": r["created_at"],
+                }
+                for r in sorted(replies, key=lambda x: x["created_at"])
+            ],
         })
 
     # 每个 ticket 内按时间排序
@@ -1366,7 +1471,7 @@ async def get_ticket_conversations(project_id: str, ticket_id: str):
     # 获取 LLM 会话记录
     conversations = await db.fetch_all(
         """SELECT id, agent_type, action, model, input_tokens, output_tokens,
-                  duration_ms, status, created_at, messages, response
+                  duration_ms, status, created_at, messages, response, tools_json
            FROM llm_conversations
            WHERE ticket_id = ?
            ORDER BY created_at ASC""",
@@ -1382,13 +1487,26 @@ async def get_ticket_conversations(project_id: str, ticket_id: str):
         except (json.JSONDecodeError, TypeError):
             msgs = []
 
-        # 取最后一条 user 消息作为用户输入
-        # 注意：tool_use 场景下 content 可能是 list of blocks（Anthropic 多段格式），
-        # 需展平成纯文本给前端显示
         user_msg = ""
+        thinking_text = ""
         for m in msgs:
-            if m.get("role") == "user":
-                user_msg = _content_to_display_text(m.get("content", ""))
+            role = m.get("role")
+            if role == "user":
+                text = _content_to_display_text(m.get("content", ""))
+                if text:
+                    user_msg = text
+            elif role == "assistant":
+                for blk in (m.get("content") or []):
+                    if isinstance(blk, dict) and blk.get("type") == "thinking":
+                        thinking_text = (blk.get("thinking") or blk.get("text") or "")[:500]
+
+        # 工具步骤：优先 tools_json，回退 messages 解析（旧数据）
+        thinking_steps = []
+        if conv.get("tools_json"):
+            try:
+                thinking_steps = json.loads(conv["tools_json"]) or []
+            except (json.JSONDecodeError, TypeError):
+                pass
 
         chat_messages.append({
             "id": conv["id"],
@@ -1413,6 +1531,8 @@ async def get_ticket_conversations(project_id: str, ticket_id: str):
             "status": conv["status"],
             "created_at": conv["created_at"],
             "is_agent": True,
+            "thinking_steps": thinking_steps if thinking_steps else None,
+            "thinking_text": thinking_text if thinking_text else None,
         })
 
     return {

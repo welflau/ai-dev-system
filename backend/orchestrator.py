@@ -953,7 +953,7 @@ class TicketOrchestrator:
                 await self._log(
                     project_id, requirement_id, None, "ProductAgent",
                     "consistency_vote", None, None,
-                    f"🗳️ 拆单投票: {vote['n_candidates']} 候选 → 选 #{vote['best_index']}"
+                    f"🗳️ 拆单投票: {vote.get('n_candidates')} 候选 → 选 #{vote.get('best_index')}"
                     f"{' (judge fallback)' if vote.get('fallback') else ''} | {vote.get('reasoning', '')[:150]}",
                     "info", detail_data={"consistency_vote": vote},
                 )
@@ -972,7 +972,7 @@ class TicketOrchestrator:
                 )
 
             # 创建工单（两遍：先创建所有工单，再回填依赖 ID）
-            tickets_data = result.get("tickets", [])
+            tickets_data = [tk for tk in (result.get("tickets") or []) if isinstance(tk, dict)]
             created_tickets = []        # [ticket_id, ...]
             idx_to_id = {}              # 索引 → TK-ID 映射
 
@@ -984,24 +984,24 @@ class TicketOrchestrator:
 
                 # 需求规模自适应：按复杂度跳过不必要的阶段
                 complexity = result.get("complexity", "medium")
-                ticket_count = len(result.get("tickets", []))
+                ticket_count = len(result.get("tickets") or [])
                 initial_status = TicketStatus.PENDING.value
 
                 if complexity == "simple" or ticket_count <= 1:
                     # XS：改颜色/改文案/小 Bug 修复 → 跳过 Planner + Architect，直接开发
                     initial_status = TicketStatus.ARCHITECTURE_DONE.value
-                    logger.info("规模 XS：跳过策划+架构阶段 → 直接开发 (%s)", tk["title"][:20])
+                    logger.info("规模 XS：跳过策划+架构阶段 → 直接开发 (%s)", (tk.get("title") or "")[:20])
                 elif complexity == "medium" and ticket_count <= 2:
                     # S：小功能 → 跳过 Planner（策划已在需求层面做），直接架构
                     initial_status = TicketStatus.PLANNING_DONE.value
-                    logger.info("规模 S：跳过策划阶段 → 直接架构 (%s)", tk["title"][:20])
+                    logger.info("规模 S：跳过策划阶段 → 直接架构 (%s)", (tk.get("title") or "")[:20])
 
                 ticket = {
                     "id": ticket_id,
                     "requirement_id": requirement_id,
                     "project_id": project_id,
                     "parent_ticket_id": None,
-                    "title": tk["title"],
+                    "title": tk.get("title") or f"工单 {idx + 1}",
                     "description": tk.get("description", ""),
                     "type": tk.get("type", "feature"),
                     "module": tk.get("module", "other"),
@@ -1057,7 +1057,7 @@ class TicketOrchestrator:
                         "requirement_id": requirement_id,
                         "project_id": project_id,
                         "parent_ticket_id": ticket_id,
-                        "title": ch["title"],
+                        "title": ch.get("title") or f"子工单 {ch_idx + 1}",
                         "description": ch.get("description", ""),
                         "type": ch.get("type", tk.get("type", "feature")),
                         "module": ch.get("module", tk.get("module", "other")),
@@ -1082,14 +1082,14 @@ class TicketOrchestrator:
                 dep_info = ""
                 raw_deps = tk.get("dependencies", [])
                 if raw_deps:
-                    dep_titles = [tickets_data[d]["title"] for d in raw_deps if isinstance(d, int) and 0 <= d < len(tickets_data)]
+                    dep_titles = [tickets_data[d].get("title") or f"工单{d}" for d in raw_deps if isinstance(d, int) and 0 <= d < len(tickets_data)]
                     if dep_titles:
                         dep_info = f"，依赖: {', '.join(dep_titles)}"
                 children_info = f"，含 {len(children_data)} 个子工单" if children_data else ""
                 await self._log(
                     project_id, requirement_id, ticket_id, "ProductAgent",
                     "create", None, "pending",
-                    f"工单「{tk['title']}」已创建，模块: {tk.get('module', 'other')}{dep_info}{children_info}"
+                    f"工单「{tk.get('title') or ticket_id}」已创建，模块: {tk.get('module', 'other')}{dep_info}{children_info}"
                 )
 
             # === 第二遍：回填依赖 ID（索引 → 真实 TK-ID）===
@@ -2497,7 +2497,7 @@ class TicketOrchestrator:
                 # push 失败：写日志 + 通过 HookRegistry emit TOOL_ERROR
                 push_err_msg = (
                     f"{agent_name}.{action} git push 失败，代码已 commit 但未推送到远端。"
-                    f" 工单: {ticket_id[-8:]} | 请检查仓库是否存在及网络连通性。"
+                    f" 工单: {(ticket_id or '')[-8:] or '(需求级)'} | 请检查仓库是否存在及网络连通性。"
                 )
                 logger.warning("⚠️ %s", push_err_msg)
                 await self._log(
@@ -3586,6 +3586,7 @@ class TicketOrchestrator:
         agent_type: str,
         summary: str,
         phase: Optional[str] = None,
+        reply_to_comment_id: Optional[str] = None,
     ):
         """Agent 阶段完成后写一条 agent 类型评论，供时间轴展示和下游 Agent 感知"""
         try:
@@ -3598,6 +3599,7 @@ class TicketOrchestrator:
                 "author_type": "agent",
                 "content": summary,
                 "phase": phase,
+                "reply_to_comment_id": reply_to_comment_id,
                 "created_at": now_iso(),
             })
             await event_manager.publish_to_project(project_id, "comment_added", {
@@ -3617,6 +3619,7 @@ class TicketOrchestrator:
         ticket_id: str,
         project_id: str,
         comment_content: str,
+        comment_id: str = None,
     ):
         """用户发评论后，由当前负责 Agent（或 ChatAssistant）立刻异步回复"""
         try:
@@ -3684,7 +3687,8 @@ class TicketOrchestrator:
 
             if reply_text and reply_text.strip():
                 await self._write_phase_comment(
-                    project_id, ticket_id, agent_name, reply_text.strip()
+                    project_id, ticket_id, agent_name, reply_text.strip(),
+                    reply_to_comment_id=comment_id,
                 )
                 logger.info(
                     "💬 %s 回复工单 %s 的评论（%d 字）",

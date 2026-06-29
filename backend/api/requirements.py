@@ -665,6 +665,8 @@ async def decompose_requirement(project_id: str, req_id: str, background_tasks: 
     if not existing:
         raise HTTPException(404, "需求不存在")
 
+    if existing["status"] == "analyzing":
+        return {"message": "需求正在分析中，请稍候", "status": "analyzing"}
     if existing["status"] not in ("submitted",):
         raise HTTPException(400, f"当前状态「{existing['status']}」不允许拆单")
 

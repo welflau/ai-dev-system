@@ -122,6 +122,12 @@ class Database:
             ("chat_sessions", "message_count", "INTEGER NOT NULL DEFAULT 0"),
             # Session Resume CLI 模式：存储 CLI 返回的 session_id，用于 --resume 恢复
             ("chat_sessions", "cli_session_id", "TEXT"),
+            # 时间轴评论关联到具体 log 条目
+            ("ticket_comments", "reply_to_log_id", "TEXT"),
+            # agent 回复关联到被回复的 human 评论
+            ("ticket_comments", "reply_to_comment_id", "TEXT"),
+            # 工具调用步骤摘要（chat_with_tools 全程记录，避免 messages 截断丢失）
+            ("llm_conversations", "tools_json", "TEXT"),
         ]
         async with self._write_lock:
             for table, column, col_def in migrations:
@@ -361,14 +367,15 @@ CREATE TABLE IF NOT EXISTS ticket_logs (
 -- 工单评论表（人工指令 + Agent 阶段总结）
 -- ============================================================
 CREATE TABLE IF NOT EXISTS ticket_comments (
-    id          TEXT PRIMARY KEY,
-    ticket_id   TEXT NOT NULL REFERENCES tickets(id),
-    project_id  TEXT NOT NULL REFERENCES projects(id),
-    author      TEXT NOT NULL,
-    author_type TEXT NOT NULL DEFAULT 'human',
-    content     TEXT NOT NULL,
-    phase       TEXT,
-    created_at  TEXT NOT NULL
+    id               TEXT PRIMARY KEY,
+    ticket_id        TEXT NOT NULL REFERENCES tickets(id),
+    project_id       TEXT NOT NULL REFERENCES projects(id),
+    author           TEXT NOT NULL,
+    author_type      TEXT NOT NULL DEFAULT 'human',
+    content          TEXT NOT NULL,
+    phase            TEXT,
+    reply_to_log_id  TEXT,
+    created_at       TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_ticket_comments_ticket
     ON ticket_comments(ticket_id, created_at);

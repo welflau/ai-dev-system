@@ -508,17 +508,23 @@ def _infer_target_name(uproject: Path, prefer_editor: bool = True) -> Optional[s
 
     注意：.Target.cs 是双点后缀，Path.stem 只剥一层只能剩 '<Name>.Target'，
     必须手动剥 '.Target.cs' 才能拿到纯名字。
+    递归搜索 Source/ 及其子目录，兼容 Target.cs 放在子目录的情况。
+    同时用 .uproject 文件名作为 fallback（<ProjectName>Editor）。
     """
     src = uproject.parent / "Source"
-    if not src.is_dir():
-        return None
     candidates: List[str] = []
-    for f in src.glob("*.Target.cs"):
-        name = f.name
-        if name.endswith(".Target.cs"):
-            candidates.append(name[: -len(".Target.cs")])
+    if src.is_dir():
+        # 递归搜索（rglob），兼容 Source/ProjectName/Foo.Target.cs
+        for f in src.rglob("*.Target.cs"):
+            name = f.name
+            if name.endswith(".Target.cs"):
+                candidates.append(name[: -len(".Target.cs")])
 
     if not candidates:
+        # Fallback：用 .uproject 文件名推断（如 TestFPS.uproject → TestFPSEditor）
+        project_name = uproject.stem
+        if project_name:
+            return f"{project_name}Editor" if prefer_editor else project_name
         return None
     # 优先 Editor target（开发态编译，支持热重载）
     if prefer_editor:

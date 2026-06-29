@@ -737,12 +737,14 @@ async def get_ticket_timeline(ticket_id: str):
     )
 
     items = []
+    # 建 log_id → item 索引快查表，用于把 reply 评论注入到对应 log 下方
+    log_id_to_idx: dict = {}
 
     # 处理日志条目
     for log in logs:
         item = dict(log)
         item["_type"] = "log"
-        # 解析 detail JSON，把 message 提升到顶层方便前端使用
+        item["_inline_comments"] = []   # 该 log 下挂的评论
         try:
             detail_obj = json.loads(item.get("detail") or "{}")
             item["_message"] = detail_obj.get("message", "")
@@ -751,14 +753,44 @@ async def get_ticket_timeline(ticket_id: str):
             item["_message"] = item.get("detail", "")
             item["_detail"] = {}
         item["_tier"] = _classify_tier(item)
+        log_id_to_idx[item["id"]] = len(items)
         items.append(item)
 
-    # 处理评论条目
+    # 处理评论条目：先建索引，再做两次遍历
+    # 第一遍：收集所有 human 评论和未绑定的 loose 评论
+    comment_id_to_item: dict = {}
+    log_bound: list = []      # 绑定到 log 的评论
+    loose_comments: list = [] # 独立评论（含 human 评论和无父的 agent 评论）
+
     for comment in comments:
         item = dict(comment)
         item["_type"] = "comment"
         item["_tier"] = "primary"
-        items.append(item)
+        item["_replies"] = []   # agent 回复将注入到这里
+        comment_id_to_item[item["id"]] = item
+
+        reply_log_id = item.get("reply_to_log_id")
+        if reply_log_id and reply_log_id in log_id_to_idx:
+            log_bound.append(item)
+        else:
+            loose_comments.append(item)
+
+    # 第二遍：把有 reply_to_comment_id 的 agent 评论嵌入到父评论的 _replies
+    standalone_loose: list = []
+    for item in loose_comments:
+        parent_id = item.get("reply_to_comment_id")
+        if parent_id and parent_id in comment_id_to_item:
+            comment_id_to_item[parent_id]["_replies"].append(item)
+            # agent 回复不再独立出现，不加入主列表
+        else:
+            standalone_loose.append(item)
+
+    # 把绑定到 log 的评论注入
+    for item in log_bound:
+        items[log_id_to_idx[item["reply_to_log_id"]]]["_inline_comments"].append(item)
+
+    # 把无绑定评论加入主列表
+    items.extend(standalone_loose)
 
     # 按时间升序合并
     items.sort(key=lambda x: x.get("created_at") or "")
@@ -780,6 +812,7 @@ async def add_ticket_comment(ticket_id: str, body: dict, background_tasks: Backg
 
     comment_id = "CMT-" + generate_id()
     created_at = now_iso()
+    reply_to_log_id = body.get("reply_to_log_id") or None
     await db.insert("ticket_comments", {
         "id": comment_id,
         "ticket_id": ticket_id,
@@ -788,6 +821,7 @@ async def add_ticket_comment(ticket_id: str, body: dict, background_tasks: Backg
         "author_type": "human",
         "content": content,
         "phase": body.get("phase"),
+        "reply_to_log_id": reply_to_log_id,
         "created_at": created_at,
     })
 
@@ -807,6 +841,7 @@ async def add_ticket_comment(ticket_id: str, body: dict, background_tasks: Backg
         ticket_id=ticket_id,
         project_id=ticket["project_id"],
         comment_content=content,
+        comment_id=comment_id,
     )
 
     return {"id": comment_id, "created_at": created_at}

@@ -1377,6 +1377,49 @@ class LLMClient:
                     parts = [b.get("text", "") for b in c if isinstance(b, dict) and b.get("type") == "text"]
                     response_text = " ".join(parts)
 
+            # 提取完整工具调用步骤（从全量 messages 中解析，不受 [-4:] 截断影响）
+            _KEY_MAP = {
+                "shell": "command", "grep": "pattern", "glob": "pattern",
+                "read_files": "paths", "read_local_file": "path",
+                "web_search": "query", "fetch_url": "url",
+                "git_read_file": "path", "git_log": "branch",
+                "search_knowledge": "query", "ue_call": "function",
+                "list_directory": "path", "save_memory": "title",
+            }
+            tools_steps = []
+            tool_id_to_idx: dict = {}
+            for m in messages:
+                role = m.get("role")
+                content = m.get("content", [])
+                if role == "assistant" and isinstance(content, list):
+                    for blk in content:
+                        if blk.get("type") == "tool_use":
+                            tool_name = blk.get("name", "")
+                            inp = blk.get("input", {}) or {}
+                            hint_key = _KEY_MAP.get(tool_name)
+                            hint_val = inp.get(hint_key, "") if hint_key else ""
+                            if isinstance(hint_val, list):
+                                hint_val = ", ".join(str(v) for v in hint_val[:3])
+                            step = {
+                                "tool": tool_name,
+                                "args_hint": str(hint_val)[:150] if hint_val else "",
+                                "summary": "",
+                            }
+                            tool_id_to_idx[blk.get("id", "")] = len(tools_steps)
+                            tools_steps.append(step)
+                elif role == "user" and isinstance(content, list):
+                    for blk in content:
+                        if blk.get("type") == "tool_result":
+                            tid = blk.get("tool_use_id", "")
+                            res = blk.get("content", "")
+                            if isinstance(res, list):
+                                res = " ".join(b.get("text", "") for b in res if isinstance(b, dict))
+                            idx = tool_id_to_idx.get(tid)
+                            if idx is not None and idx < len(tools_steps):
+                                tools_steps[idx]["summary"] = str(res)[:150]
+
+            tools_json = _json.dumps(tools_steps, ensure_ascii=False) if tools_steps else None
+
             await db.insert("llm_conversations", {
                 "id": generate_id("LLM"),
                 "ticket_id": _llm_ctx.ticket_id,
@@ -1394,6 +1437,7 @@ class LLMClient:
                 "status": "success",
                 "error": None,
                 "created_at": now_iso(),
+                "tools_json": tools_json,
             })
         except Exception as e:
             logger.warning("[tool-use] 保存会话记录失败: %s", e)

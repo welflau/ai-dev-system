@@ -370,6 +370,7 @@ BOARD_COLUMNS = {
     ],
     "done": [TicketStatus.TESTING_DONE],
     "deployed": [TicketStatus.DEPLOYING, TicketStatus.DEPLOYED],  # 兼容旧数据
+    "blocked": [TicketStatus.BLOCKED],
 }
 
 # 状态 → 中文展示名

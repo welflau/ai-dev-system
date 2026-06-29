@@ -97,6 +97,22 @@ class WriteCodeAction(ActionBase):
         module = context.get("module", "other")
         existing_code = context.get("existing_code", {})
 
+        # UE/C++ \u5de5\u5355\u4e0d\u9002\u5408\u901a\u7528\u964d\u7ea7\u6a21\u677f\uff0c\u76f4\u63a5\u6807\u8bb0\u5931\u8d25\u8ba9 orchestrator \u91cd\u8bd5
+        traits = context.get("traits") or context.get("project_traits") or []
+        is_ue = (
+            any(t in str(traits) for t in ("engine:ue", "lang:cpp"))
+            or module in ("ue", "cpp", "c++", "unreal")
+            or any(kw in title.lower() for kw in ("c++", ".h", ".cpp", "actor", "component", "uclass", "npc"))
+        )
+        if is_ue:
+            logger.warning("\u26a0\ufe0f WriteCodeAction \u964d\u7ea7\u8df3\u8fc7\uff1aUE/C++ \u9879\u76ee\u4e0d\u9002\u5408\u901a\u7528\u6a21\u677f\uff0c\u6807\u8bb0\u5931\u8d25")
+            return ActionResult(
+                success=False,
+                data={"dev_result": {"files": {}, "notes": "[\u964d\u7ea7] LLM \u8fd4\u56de\u65e0\u6548\uff0cUE/C++ \u5de5\u5355\u9700\u91cd\u8bd5"}, "estimated_hours": 0},
+                message="LLM \u8f93\u51fa\u65e0\u6548\uff0cUE/C++ \u5de5\u5355\u65e0\u6cd5\u4f7f\u7528\u901a\u7528\u964d\u7ea7\u6a21\u677f\uff0c\u8bf7\u91cd\u8bd5",
+                error="LLM \u8fd4\u56de\u65e0\u6548\uff08NoneType\uff09",
+            )
+
         safe = re.sub(r'[^a-zA-Z0-9_]', '', re.sub(r'[\u4e00-\u9fff]+', '', title.replace(" ", "_")))[:30].lower()
         if not safe:
             safe = f"feature_{abs(hash(title)) % 10000}"
