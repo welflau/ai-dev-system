@@ -8698,7 +8698,7 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
     transition: max-height 0.25s ease-out;
 }
 .ctp-expanded .ctp-body {
-    max-height: 300px; overflow-y: auto;
+    max-height: 600px; overflow-y: auto;
 }
 .ctp-thinking-text {
     padding: 6px 14px;

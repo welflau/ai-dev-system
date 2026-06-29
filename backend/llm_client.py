@@ -1428,7 +1428,7 @@ class LLMClient:
                 "agent_type": _llm_ctx.agent_type,
                 "action": _llm_ctx.action,
                 "messages": _json.dumps(messages[-4:], ensure_ascii=False),  # 只存最后4条节省空间
-                "response": response_text[:2000],
+                "response": response_text[:8000],
                 "model": self.model,
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,

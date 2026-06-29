@@ -1323,7 +1323,7 @@ async def get_all_ticket_conversations(project_id: str):
                 for blk in blocks:
                     btype = blk.get("type")
                     if btype == "thinking":
-                        thinking_text = (blk.get("thinking") or blk.get("text") or "")[:500]
+                        thinking_text = (blk.get("thinking") or blk.get("text") or "")[:5000]
                     elif btype == "tool_use" and not thinking_steps:
                         tool_name = blk.get("name", "")
                         inp = blk.get("input", {}) or {}
@@ -1498,7 +1498,7 @@ async def get_ticket_conversations(project_id: str, ticket_id: str):
             elif role == "assistant":
                 for blk in (m.get("content") or []):
                     if isinstance(blk, dict) and blk.get("type") == "thinking":
-                        thinking_text = (blk.get("thinking") or blk.get("text") or "")[:500]
+                        thinking_text = (blk.get("thinking") or blk.get("text") or "")[:5000]
 
         # 工具步骤：优先 tools_json，回退 messages 解析（旧数据）
         thinking_steps = []

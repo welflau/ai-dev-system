@@ -14822,6 +14822,10 @@ async function _onChatInputChange(val) {
     if (!val.startsWith('/') || val.startsWith('/ ')) {
         _hideSlashSuggestions(); return;
     }
+    // 排除 UE 资产路径（/Script/、/Game/ 等：/ 后紧跟大写字母，或含多段 /）
+    if (/^\/[A-Z]/.test(val) || (val.match(/\//g) || []).length > 1) {
+        _hideSlashSuggestions(); return;
+    }
     const query = val.slice(1).toLowerCase();
     if (query.includes(' ')) { _hideSlashSuggestions(); return; }  // 已输入参数，不补全
 
@@ -15066,8 +15070,9 @@ function handleChatKeydown(e) {
         if (/\bultrathink\b/i.test(val)) {
             _activateUltrathink();
         }
-        // 通用斜杠命令路由
-        if (val.startsWith('/') && val.length > 1 && !val.startsWith('/ ')) {
+        // 通用斜杠命令路由：只匹配 /字母开头的命令（如 /help、/ue-run），
+        // 排除 UE 资产路径（/Script/...、/Game/... 等含大写或多段路径的情况）
+        if (val.startsWith('/') && val.length > 1 && !val.startsWith('/ ') && /^\/[a-zA-Z][a-zA-Z0-9\-]*(\s|$)/.test(val)) {
             _handleSlashCommand(val);
             if (input) input.value = '';
             _hideSlashSuggestions();

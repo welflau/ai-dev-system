@@ -244,6 +244,24 @@ async def execute_project_command(project_id: str, name: str, body: dict = {}):
     return await _dispatch_command(name, args=body.get("args", ""), project_id=project_id, context=body)
 
 
+@router.post("/api/projects/{project_id}/commands/{name:path}")
+async def execute_project_command_path(project_id: str, name: str, body: dict = {}):
+    """捕获命令名含 / 的错误请求（如 AI 误将 UE object path 拼入 URL），返回明确错误"""
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        status_code=400,
+        content={
+            "success": False,
+            "output": (
+                f"无效命令路径 '/{name}'。\n"
+                "如需调用 UE Editor，请使用 ue_call 工具（TCP UCP 协议），"
+                "不要将 UE object 路径拼入 HTTP URL。\n"
+                f"收到的路径: /commands/{name}"
+            ),
+        },
+    )
+
+
 # ── 命令分发 ──────────────────────────────────────────────────────────────────
 
 async def _dispatch_command(
