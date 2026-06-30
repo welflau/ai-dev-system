@@ -35,7 +35,12 @@ class RequirementStatus(str, Enum):
 
 class TicketStatus(str, Enum):
     # 初始
-    PENDING = "pending"                                    # 待启动
+    PENDING = "pending"                                    # 待规划
+    # UI 精简展示状态（手动跳转用，DB 也存这些值）
+    TODO = "todo"                                          # 待办
+    IN_PROGRESS = "in_progress"                            # 进行中
+    IN_REVIEW = "in_review"                                # 审核中
+    DONE = "done"                                          # 已完成
     # HTML 原型阶段
     HTML_PROTOTYPE_IN_PROGRESS = "html_prototype_in_progress"  # HTML原型开发中
     HTML_PROTOTYPE_DONE = "html_prototype_done"                # HTML原型完成
@@ -209,7 +214,23 @@ TICKET_TRANSITIONS = {
         TicketStatus.TESTING_FAILED,
         TicketStatus.DEPLOYING,
         TicketStatus.DEPLOYED,
+        # 展示状态
+        TicketStatus.TODO,
+        TicketStatus.IN_PROGRESS,
+        TicketStatus.IN_REVIEW,
+        TicketStatus.DONE,
     ],
+}
+
+# 展示状态集合（手动跳转，任意当前状态均可跳）
+_DISPLAY_STATUSES = {
+    TicketStatus.PENDING,
+    TicketStatus.TODO,
+    TicketStatus.IN_PROGRESS,
+    TicketStatus.IN_REVIEW,
+    TicketStatus.DONE,
+    TicketStatus.BLOCKED,
+    TicketStatus.CANCELLED,
 }
 
 # 需求状态转换表
@@ -242,10 +263,19 @@ REQUIREMENT_TRANSITIONS = {
 
 
 def validate_ticket_transition(from_status: str, to_status: str) -> bool:
-    """验证工单状态转换是否合法"""
+    """验证工单状态转换是否合法。
+    跳转到展示状态（pending/todo/in_progress/in_review/done/blocked/cancelled）时无条件放行，
+    方便用户手动调整；细粒度状态之间走状态机规则。
+    """
+    try:
+        to_s = TicketStatus(to_status)
+    except ValueError:
+        return False
+    # 跳到展示状态：始终允许
+    if to_s in _DISPLAY_STATUSES:
+        return True
     try:
         from_s = TicketStatus(from_status)
-        to_s = TicketStatus(to_status)
     except ValueError:
         return False
     allowed = TICKET_TRANSITIONS.get(from_s, [])
@@ -384,6 +414,12 @@ BOARD_COLUMNS = {
 
 # 状态 → 中文展示名
 STATUS_LABELS = {
+    # UI 展示状态
+    "pending":     "待规划",
+    "todo":        "待办",
+    "in_progress": "进行中",
+    "in_review":   "审核中",
+    "done":        "已完成",
     # 工单状态 — HTML 原型阶段
     "html_prototype_in_progress": "🌐 HTML原型开发中",
     "html_prototype_done": "HTML原型完成",
@@ -396,7 +432,6 @@ STATUS_LABELS = {
     "art_design_in_progress": "美术设计中",
     "art_design_done": "美术设计完成",
     # 工单状态
-    "pending": "待启动",
     "architecture_in_progress": "架构中",
     "architecture_done": "架构完成",
     "development_in_progress": "开发中",

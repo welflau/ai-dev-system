@@ -3944,6 +3944,7 @@ function renderTicketCard(t) {
     // 所有工单状态选项（精简为 7 个展示状态，写入真实值）
     const allStatuses = [
         { value: 'pending',      label: '○ 待规划' },
+        { value: 'todo',         label: '○ 待办' },
         { value: 'in_progress',  label: '● 进行中' },
         { value: 'in_review',    label: '◑ 审核中' },
         { value: 'done',         label: '✓ 已完成' },
@@ -3955,6 +3956,7 @@ function renderTicketCard(t) {
     const statusOptions = allStatuses.map(s =>
         `<option value="${s.value}" ${curDisplay === s.value ? 'selected' : ''}>${s.label}</option>`
     ).join('');
+
 
     return `
         <div class="${cardClass}${t.type === 'bug' ? ' bug-ticket' : ''}${t.parent_ticket_id ? ' child-ticket' : ''}" style="cursor:pointer;" onclick="openTicketDrawer('${t.id}')">
@@ -5275,8 +5277,9 @@ function toggleCollapsible(blockId) {
 function closeDrawer() {
     document.getElementById('drawerOverlay').classList.remove('active');
     document.getElementById('ticketDrawer').classList.remove('active');
-    // Dock 模式下关闭也要去掉 body 的占位 class
+    // Dock 模式下关闭也要去掉 body 的占位 class 和 CSS 变量，让主内容区回弹
     document.body.classList.remove('has-docked-drawer');
+    document.body.style.removeProperty('--docked-drawer-width');
     // v0.19.x：停掉进度区 ticker
     _stopTicketActionProgress();
 }
@@ -9145,6 +9148,11 @@ const STATUS_LABELS = {
 // 细粒度状态 → 7 个展示状态的映射
 const DISPLAY_STATUS_MAP = {
     pending:                    'pending',
+    todo:                       'todo',
+    // 展示状态自映射
+    in_progress:                'in_progress',
+    in_review:                  'in_review',
+    done:                       'done',
     // 进行中：所有 _in_progress + deploying + analyzing
     planning_in_progress:       'in_progress',
     ux_design_in_progress:      'in_progress',
@@ -9180,6 +9188,7 @@ const DISPLAY_STATUS_MAP = {
 
 const DISPLAY_STATUS_LABELS = {
     pending:     '待规划',
+    todo:        '待办',
     in_progress: '进行中',
     in_review:   '审核中',
     done:        '已完成',
@@ -10683,7 +10692,7 @@ async function _sendChatStreamingToContainer(url, body, msgContainer, thinkingCt
                 }
             } else if (curEvent === 'tool_start') {
                 const hint = _extractArgsHint(data.tool, data.input);
-                thinkingCtx?.append({ step: 'start', tool: data.tool, args_hint: hint });
+                thinkingCtx?.append({ step: 'start', tool: data.tool, args_hint: hint, task_id: data.task_id || '' });
             } else if (curEvent === 'thinking_delta') {
                 // J-3: 推理链流式文本 — 追加到推理面板
                 reasoningBuf += data.delta || '';
@@ -11463,6 +11472,7 @@ async function _sendChatStreaming(url, body) {
     let _curRoundThinkingEl = null;   // 当前轮次推理文本元素
     let _curRoundStepsEl = null;      // 当前轮次工具步骤容器
     let _curRoundBuf = '';            // 当前轮次推理缓冲
+    let _curRoundToolTaskIds = {};    // tool → task_id 映射（当前轮次）
     let _roundCount = 0;              // 已开始的轮次数
     let _stepCount = 0;               // 总工具调用步骤数
     let _panelStartTime = 0;          // 面板开始时间（计算总耗时）
@@ -11601,6 +11611,7 @@ async function _sendChatStreaming(url, body) {
                     // 穿插模式：thinking 和 tool 都直接追加到 body，不再用固定容器
                     _curRoundThinkingEl = null;   // 当前活跃的 thinking 块
                     _curRoundStepsEl = _curRoundBody; // tool 步骤直接加到 body
+                    _curRoundToolTaskIds = {};    // 重置 tool→task_id 映射
                     scrollChatToBottom();
 
                 } else if (eventName === 'thinking_delta') {
@@ -11653,6 +11664,9 @@ async function _sendChatStreaming(url, body) {
                     if (_typingBubble) _typingBubble.innerHTML = `<span class="chat-typing-text">正在调用工具…</span>`;
                     const _hint = _extractArgsHint(data.tool, data.input || {});
                     const toolLabel = _TOOL_LABELS[data.tool] || `🔧 ${data.tool}`;
+                    // 暂存 tool → task_id，供 tool_done 时写入 step 记录
+                    if (!_curRoundToolTaskIds) _curRoundToolTaskIds = {};
+                    if (data.task_id) _curRoundToolTaskIds[data.tool] = data.task_id;
                     _curRoundThinkingEl = null;  // tool 插入后，后续 thinking_delta 新建块
                     const _reasoningEl2 = _curRoundEl?.querySelector('.crp-round-reasoning');
                     if (_reasoningEl2 && _reasoningEl2.classList.contains('crp-reasoning-hidden')) {
@@ -11661,16 +11675,30 @@ async function _sendChatStreaming(url, body) {
                         _reasoningEl2.classList.add('crp-round-reasoning-placeholder');
                     }
                     if (_curRoundStepsEl) {
+                        const taskId  = data.task_id || '';
+                        // 序号：若有 task_id，取其在 _CLI_TASKS_MEM 的全局位置（与后台面板对应）
+                        // 否则用轮次内局部序号
+                        const stepNum = taskId ? (() => {
+                            const keys = Object.keys(_CLI_TASKS_MEM).sort((a,b) =>
+                                (_CLI_TASKS_MEM[a].created_at||'').localeCompare(_CLI_TASKS_MEM[b].created_at||''));
+                            const idx = keys.indexOf(taskId);
+                            return idx >= 0 ? idx + 1 : (_curRoundStepsEl.querySelectorAll('.ctp-step').length + 1);
+                        })() : (_curRoundStepsEl.querySelectorAll('.ctp-step').length + 1);
+                        const jumpBtn = taskId
+                            ? `<span class="ctp-step-jump" title="跳转到后台任务 #${stepNum}" onclick="event.stopPropagation();_jumpToCliTask('${taskId}')">↗</span>`
+                            : '';
                         const stepEl = document.createElement('div');
                         stepEl.className = 'ctp-step ctp-step-running';
                         stepEl.dataset.tool = data.tool;
-                        if (data.task_id) stepEl.dataset.taskId = data.task_id;
+                        if (taskId) stepEl.dataset.taskId = taskId;
                         stepEl.innerHTML = `
                             <div class="ctp-step-row1">
+                                <span class="ctp-step-seq">${stepNum}</span>
                                 <span class="ctp-step-dot"></span>
                                 <span class="ctp-step-label">${escHtml(toolLabel)}</span>
                                 <span class="ctp-step-status">…</span>
                                 <span class="ctp-result-toggle" style="display:none" onclick="this.closest('.ctp-step').classList.toggle('ctp-step-expanded')">›</span>
+                                ${jumpBtn}
                             </div>
                             ${_hint ? `<div class="ctp-step-row2">${escHtml(_hint)}</div>` : ''}
                             <div class="ctp-step-result"></div>`;
@@ -11688,7 +11716,8 @@ async function _sendChatStreaming(url, body) {
                     const _dur = data.duration_ms || 0;
                     _stepCount++;
                     _roundSteps.push({ tool: data.tool, summary: data.summary || '',
-                                       duration_ms: _dur, args_hint: data.args_hint || '' });
+                                       duration_ms: _dur, args_hint: data.args_hint || '',
+                                       task_id: (_curRoundToolTaskIds || {})[data.tool] || '' });
                     if (_curRoundStepsEl) {
                         const stepEl = [..._curRoundStepsEl.querySelectorAll('.ctp-step-running')]
                             .reverse().find(el => el.dataset.tool === data.tool);
@@ -12418,12 +12447,13 @@ function _buildTicketThinkingEl(thinkingSteps, thinkingText) {
 
     let stepsHtml = '';
     if (hasSteps) {
-        stepsHtml = thinkingSteps.map(s => {
+        stepsHtml = thinkingSteps.map((s, idx) => {
             const toolLabel = _TOOL_LABELS[s.tool] || (s.tool ? `🔧 ${escapeHtml(s.tool)}` : '');
             const hint = s.args_hint ? `<div class="ctp-step-row2">${escapeHtml(s.args_hint)}</div>` : '';
             const summary = s.summary ? `✓ ${escapeHtml(s.summary.slice(0, 100))}` : '✓';
             return `<div class="ctp-step ctp-step-done">
                 <div class="ctp-step-row1">
+                    <span class="ctp-step-seq">${idx + 1}</span>
                     <span class="ctp-step-dot"></span>
                     <span class="ctp-step-label">${toolLabel}</span>
                     <span class="ctp-step-status">${summary}</span>
@@ -12508,14 +12538,33 @@ function _closeTasksSplitPane() {
 // 内存 CLI 任务表（与后端 _CLI_TASKS 镜像，用于列表渲染）
 const _CLI_TASKS_MEM = {};
 let _cliActiveTaskId = '';  // 当前选中的任务 ID，独立存储避免 DOM 重渲染后丢失
+let _cliCurrentSession = null;  // 当前对话的 session key { key, label, seq }
+let _cliSessionSeq = 0;         // 全局对话序号（每次发消息递增）
+
+/** 每次发送新对话时调用，生成新 session 分组 */
+function _cliSessionBegin(labelHint) {
+    _cliSessionSeq++;
+    _cliCurrentSession = {
+        key: `sess_${Date.now()}`,
+        label: labelHint ? labelHint.slice(0, 30) : `对话 ${_cliSessionSeq}`,
+        seq: _cliSessionSeq,
+    };
+}
 
 function _cliTaskRegister(taskId, title, tool, status, input) {
     const now = new Date();
     const ts = now.toTimeString().slice(0, 8); // HH:MM:SS
+    const created_at = now.toISOString();
     // 从 input 提取有意义的指令摘要
     const cmd = input?.command || input?.cmd || input?.path || input?.pattern
         || (typeof input === 'object' ? Object.values(input||{})[0] : '') || '';
-    _CLI_TASKS_MEM[taskId] = { id: taskId, type: 'cli_task', title, tool, status, output: '', duration_ms: 0, ts, cmd: String(cmd) };
+    _CLI_TASKS_MEM[taskId] = {
+        id: taskId, type: 'cli_task', title, tool, status, output: '', duration_ms: 0,
+        ts, created_at, cmd: String(cmd),
+        session_key:   _cliCurrentSession?.key   || '',
+        session_label: _cliCurrentSession?.label || '',
+        session_seq:   _cliCurrentSession?.seq   || 0,
+    };
     _injectCliTaskToPanel(taskId);
 }
 
@@ -12542,6 +12591,28 @@ function _cliTaskUpdate(taskId, status, output, duration_ms) {
     }
 }
 
+/** 从思考面板跳转到后台任务面板并选中对应任务 */
+function _jumpToCliTask(taskId) {
+    _openTasksPanel();
+    // 等面板渲染完再选中
+    setTimeout(() => {
+        const t = _CLI_TASKS_MEM[taskId];
+        if (!t) return;
+        _cliActiveTaskId = taskId;
+        // 高亮列表项
+        document.querySelectorAll('.tasks-panel-item').forEach(el => {
+            el.style.background = el.dataset.taskId === taskId ? 'var(--bg-elevated)' : '';
+            el.style.borderLeft = el.dataset.taskId === taskId ? '2px solid var(--primary)' : '';
+        });
+        // 滚动到选中项
+        const item = document.querySelector(`.tasks-panel-item[data-task-id="${taskId}"]`);
+        item?.scrollIntoView({ block: 'nearest' });
+        // 渲染输出
+        const outputEl = document.getElementById('tasksPanelOutput');
+        if (outputEl) _renderCliTaskOutput(taskId, outputEl);
+    }, 80);
+}
+
 function _renderCliTaskOutput(taskId, outputEl) {
     const t = _CLI_TASKS_MEM[taskId];
     if (!t) { outputEl.textContent = '任务不存在'; return; }
@@ -12549,7 +12620,9 @@ function _renderCliTaskOutput(taskId, outputEl) {
         : t.status === 'error' ? `❌ 失败 (${t.duration_ms}ms)` : `✓ 完成 (${t.duration_ms}ms)`;
     const cmdLine = t.cmd ? `$ ${t.cmd}\n` : '';
     const sep = cmdLine ? '─'.repeat(40) + '\n' : '';
-    outputEl.textContent = `${statusLine}\n${cmdLine}${sep}${t.output || '（等待输出…）'}`;
+    // 兼容 output（字符串）和 output_lines（数组）两种来源
+    const outputText = t.output || (Array.isArray(t.output_lines) ? t.output_lines.join('\n') : '');
+    outputEl.textContent = `${statusLine}\n${cmdLine}${sep}${outputText || '（暂无输出）'}`;
     outputEl.scrollTop = outputEl.scrollHeight;
 }
 
@@ -12580,7 +12653,11 @@ async function _refreshTasksPanel() {
             cliTasksFromApi = (cliResp?.tasks || []).map(t => ({...t, type: 'cli_task'}));
             // 同步到内存（避免和 SSE 实时更新冲突：内存中 running 的优先）
             for (const t of cliTasksFromApi) {
-                if (!_CLI_TASKS_MEM[t.id]) _CLI_TASKS_MEM[t.id] = t;
+                if (!_CLI_TASKS_MEM[t.id]) {
+                    // output_lines → output 字符串，方便 _renderCliTaskOutput 统一读取
+                    const outputText = Array.isArray(t.output_lines) ? t.output_lines.join('\n') : (t.output || '');
+                    _CLI_TASKS_MEM[t.id] = { ...t, output: outputText };
+                }
             }
         } catch(_) {}
 
@@ -12588,8 +12665,8 @@ async function _refreshTasksPanel() {
         const resp = await originalApi(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
         const ticketTasks = resp?.data?.tasks || [];
 
-        // 合并内存 CLI 任务（全部历史，按时间倒序）
-        const cliTasks = Object.values(_CLI_TASKS_MEM).sort((a,b) => (b.created_at||'').localeCompare(a.created_at||''));
+        // 合并内存 CLI 任务（按时间正序，#1 = 最早执行）
+        const cliTasks = Object.values(_CLI_TASKS_MEM).sort((a,b) => (a.created_at||a.ts||'').localeCompare(b.created_at||b.ts||''));
 
         const statusIcon = s => ({
             running: '🔄', in_progress: '🔄', executing: '🔄', pending: '⏳', queued: '⏳',
@@ -12603,28 +12680,77 @@ async function _refreshTasksPanel() {
             return;
         }
 
-        listEl.innerHTML = allTasks.map(t => {
-            const isCli = t.type === 'cli_task';
-            const durText = isCli && t.duration_ms ? ` · ${t.duration_ms}ms` : (t.elapsed ? ` · ${t.elapsed}` : '');
-            const subText = isCli ? `CLI${durText}` : `${t.agent ? escapeHtml(t.agent) : ''}${durText}${t.action ? ' · ' + escapeHtml(t.action.slice(0,20)) : ''}`;
-            const tsText = t.ts ? `<span style="opacity:.5;margin-left:4px;">${escapeHtml(t.ts)}</span>` : '';
-            const cmdText = isCli && t.cmd ? `<div style="color:var(--text-muted);font-size:10px;padding-left:20px;font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:.7;" title="${escapeHtml(t.cmd)}">$ ${escapeHtml(t.cmd.slice(0,60))}</div>` : '';
-            return `
-            <div class="tasks-panel-item" data-task-id="${escapeHtml(t.id)}" data-task-type="${escapeHtml(t.type)}"
-                 onclick="_selectTaskItem(${JSON.stringify(t).replace(/"/g,'&quot;')})"
-                 style="padding:8px 14px;cursor:pointer;border-bottom:1px solid var(--border-light,rgba(255,255,255,.06));transition:background .15s;">
-                <div style="display:flex;align-items:center;gap:6px;margin-bottom:2px;">
-                    <span>${statusIcon(t.status)}</span>
-                    <span style="font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(t.title)}</span>
-                </div>
-                <div style="color:var(--text-muted);font-size:10px;padding-left:20px;">${subText}${tsText}</div>
-                ${cmdText}
-            </div>`;
+        // 按时间间隔自动分组：相邻任务间隔 > 120 秒视为新对话
+        // 内存中实时任务优先用 session_key；DB 恢复的任务按时间切割
+        const SESSION_GAP_MS = 120 * 1000;
+        const sessionGroups = [];
+        let curGroup = null;
+        let globalIdx = 0;
+        let grpCounter = 0;
+        for (const t of allTasks) {
+            globalIdx++;
+            const tMs = t.created_at ? new Date(t.created_at).getTime() : 0;
+            const sk = t.session_key || null;
+
+            let needNewGroup = false;
+            if (!curGroup) {
+                needNewGroup = true;
+            } else if (sk && sk !== curGroup._sk) {
+                // 实时任务有 session_key，切组
+                needNewGroup = true;
+            } else if (!sk && curGroup._lastMs && tMs && (tMs - curGroup._lastMs) > SESSION_GAP_MS) {
+                // DB 恢复任务按时间间隔切组
+                needNewGroup = true;
+            }
+
+            if (needNewGroup) {
+                grpCounter++;
+                const tsStr = t.created_at ? t.created_at.slice(0, 16).replace('T', ' ') : '';
+                const label = t.session_label || (tsStr ? `对话 · ${tsStr}` : `对话 ${grpCounter}`);
+                curGroup = { key: sk || `auto_${grpCounter}`, _sk: sk, label, items: [], _lastMs: tMs };
+                sessionGroups.push(curGroup);
+            }
+            curGroup.items.push({ t, idx: globalIdx });
+            if (tMs) curGroup._lastMs = tMs;
+        }
+
+        listEl.innerHTML = sessionGroups.map(grp => {
+            const header = `<div style="font-size:10px;color:var(--text-muted);padding:6px 14px 3px;font-weight:600;opacity:.7;letter-spacing:.03em;border-top:1px solid var(--border-light,rgba(255,255,255,.06));">${escapeHtml(grp.label)}</div>`;
+            const items = grp.items.map(({ t, idx }) => {
+                const isCli = t.type === 'cli_task';
+                const isActive = t.id === _cliActiveTaskId;
+                const durText = isCli && t.duration_ms ? ` · ${t.duration_ms}ms` : (t.elapsed ? ` · ${t.elapsed}` : '');
+                const subText = isCli ? `CLI${durText}` : `${t.agent ? escapeHtml(t.agent) : ''}${durText}${t.action ? ' · ' + escapeHtml(t.action.slice(0,20)) : ''}`;
+                const tsRaw = t.created_at ? t.created_at.slice(11, 19) : (t.ts || '');
+                const tsText = tsRaw ? `<span style="opacity:.5;margin-left:4px;">${escapeHtml(tsRaw)}</span>` : '';
+                const cmd = t.cmd || '';
+                const cmdText = isCli && cmd ? `<div style="color:var(--text-muted);font-size:10px;padding-left:24px;font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:.7;" title="${escapeHtml(cmd)}">$ ${escapeHtml(cmd.slice(0,60))}</div>` : '';
+                return `
+                <div class="tasks-panel-item" data-task-id="${escapeHtml(t.id)}" data-task-type="${escapeHtml(t.type)}"
+                     onclick="_selectTaskItem(${JSON.stringify(t).replace(/"/g,'&quot;')})"
+                     style="padding:8px 14px;cursor:pointer;border-bottom:1px solid var(--border-light,rgba(255,255,255,.06));transition:background .15s;
+                            ${isActive ? 'background:var(--bg-elevated);border-left:2px solid var(--primary);' : ''}">
+                    <div style="display:flex;align-items:center;gap:6px;margin-bottom:2px;">
+                        <span style="font-size:10px;color:var(--text-muted);opacity:.6;min-width:18px;text-align:right;flex-shrink:0;">#${idx}</span>
+                        <span>${statusIcon(t.status)}</span>
+                        <span style="font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(t.title)}</span>
+                    </div>
+                    <div style="color:var(--text-muted);font-size:10px;padding-left:24px;">${subText}${tsText}</div>
+                    ${cmdText}
+                </div>`;
+            }).join('');
+            return header + items;
         }).join('');
 
         listEl.querySelectorAll('.tasks-panel-item').forEach(el => {
-            el.addEventListener('mouseenter', () => el.style.background = 'var(--bg-hover,rgba(255,255,255,.05))');
-            el.addEventListener('mouseleave', () => el.style.background = '');
+            const isActive = el.dataset.taskId === _cliActiveTaskId;
+            el.addEventListener('mouseenter', () => {
+                if (el.dataset.taskId !== _cliActiveTaskId)
+                    el.style.background = 'var(--bg-hover,rgba(255,255,255,.05))';
+            });
+            el.addEventListener('mouseleave', () => {
+                if (el.dataset.taskId !== _cliActiveTaskId) el.style.background = '';
+            });
         });
     } catch(e) {
         listEl.innerHTML = `<div style="padding:20px;color:var(--danger);">加载失败: ${escapeHtml(String(e))}</div>`;
@@ -12634,6 +12760,14 @@ async function _refreshTasksPanel() {
 async function _selectTaskItem(task) {
     const outputEl = document.getElementById('tasksPanelOutput');
     if (!outputEl) return;
+
+    // 更新选中高亮
+    _cliActiveTaskId = task.id;
+    document.querySelectorAll('.tasks-panel-item').forEach(el => {
+        const active = el.dataset.taskId === task.id;
+        el.style.background = active ? 'var(--bg-elevated)' : '';
+        el.style.borderLeft = active ? '2px solid var(--primary)' : '';
+    });
 
     outputEl.textContent = '加载中…';
 
@@ -12661,10 +12795,14 @@ async function _selectTaskItem(task) {
             } else {
                 const apiBase = currentProjectId ? `/api/projects/${currentProjectId}/chat` : `/api/chat`;
                 const d = await fetch(`${apiBase}/cli-tasks/${task.id}`).then(r => r.json());
-                const statusLine = d.status === 'running' ? '🔄 运行中…'
-                    : d.status === 'error' ? `❌ 失败 (${d.duration_ms}ms)` : `✓ 完成 (${d.duration_ms}ms)`;
-                outputEl.textContent = `# ${d.title}\n${statusLine}\n\n${(d.output_lines || []).join('\n') || '（等待输出…）'}`;
-                outputEl.scrollTop = outputEl.scrollHeight;
+                // 把 API 返回的任务同步到内存，使后续 _renderCliTaskOutput 可以直接用
+                const outputText = (d.output_lines || []).join('\n') || d.output || '';
+                _CLI_TASKS_MEM[task.id] = {
+                    ...d, type: 'cli_task',
+                    output: outputText,
+                    cmd: d.cmd || '',
+                };
+                _renderCliTaskOutput(task.id, outputEl);
             }
         } else {
             outputEl.textContent = JSON.stringify(task, null, 2);
@@ -12894,18 +13032,34 @@ function createThinkingContext(msgContainer) {
             const toolLabel = _TOOL_LABELS[data.tool] || `🔧 ${data.tool}`;
 
             if (data.step === 'start') {
+                const taskId  = data.task_id || '';
+                // 序号：若有 task_id，取全局位置与后台面板对应；否则用局部序号
+                const taskSeq = taskId ? (() => {
+                    const keys = Object.keys(_CLI_TASKS_MEM).sort((a,b) =>
+                        (_CLI_TASKS_MEM[a].created_at||'').localeCompare(_CLI_TASKS_MEM[b].created_at||''));
+                    const idx = keys.indexOf(taskId);
+                    return idx >= 0 ? idx + 1 : 0;
+                })() : 0;
+                const stepNum = taskSeq || (steps.length + 1);
+                const jumpBtn = taskId
+                    ? `<span class="ctp-step-jump" title="跳转到后台任务 #${stepNum}" onclick="event.stopPropagation();_jumpToCliTask('${taskId}')">↗</span>`
+                    : '';
+                const seqBadge = `<span class="ctp-step-seq">${stepNum}</span>`;
                 const step = document.createElement('div');
                 step.className = 'ctp-step ctp-step-running';
                 step.dataset.tool = data.tool;
+                step.dataset.taskId = taskId;
                 step.innerHTML = `
                     <div class="ctp-step-row1">
+                        ${seqBadge}
                         <span class="ctp-step-dot"></span>
                         <span class="ctp-step-label">${escHtml(toolLabel)}</span>
                         <span class="ctp-step-status">…</span>
+                        ${jumpBtn}
                     </div>
                     ${data.args_hint ? `<div class="ctp-step-row2">${escHtml(data.args_hint)}</div>` : ''}`;
                 body.appendChild(step);
-                steps.push({ tool: data.tool, el: step });
+                steps.push({ tool: data.tool, el: step, taskId });
             } else {
                 const existing = [...steps].reverse().find(s => s.tool === data.tool);
                 if (existing?.el) {
@@ -12965,6 +13119,8 @@ async function sendChatMessage() {
 
     // 记住发送时的 context，回调时若已切换则丢弃响应（防止跨 context 串台）
     const _sendContextId = currentProjectId;
+    // 新一轮对话开始，创建任务分组
+    _cliSessionBegin(message);
 
     const images = [...chatPendingImages];
     const docs = [...chatPendingDocs];
@@ -13927,6 +14083,7 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
                 let bodyHtml = '';
                 if (r.events && r.events.length > 0) {
                     // 新格式：按 events 穿插顺序渲染
+                    let toolCounter = 0;
                     bodyHtml = r.events.map(ev => {
                         if (ev.type === 'thinking') {
                             const html = window.marked
@@ -13934,17 +14091,22 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
                                 : escapeHtml(ev.text);
                             return `<div class="crp-round-thinking">${html}</div>`;
                         } else if (ev.type === 'tool') {
+                            toolCounter++;
                             const label = _TOOL_LABELS[ev.tool] || `🔧 ${ev.tool}`;
                             const dur = ev.duration_ms > 0 ? ` (${ev.duration_ms}ms)` : '';
                             const summary = ev.summary ? `✓ ${ev.summary.slice(0, 80)}${dur}` : `✓${dur}`;
                             const resultHtml = ev.result ? _formatToolResult(ev.tool, ev.result) : '';
                             const hasResult = !!resultHtml;
+                            const taskId = ev.task_id || '';
+                            const jumpBtn = taskId ? `<span class="ctp-step-jump" title="跳转到后台任务" onclick="event.stopPropagation();_jumpToCliTask('${taskId}')">↗</span>` : '';
                             return `<div class="ctp-step ctp-step-done">
                                 <div class="ctp-step-row1">
+                                    <span class="ctp-step-seq">${toolCounter}</span>
                                     <span class="ctp-step-dot"></span>
                                     <span class="ctp-step-label">${escapeHtml(label)}</span>
                                     <span class="ctp-step-status">${escapeHtml(summary)}</span>
                                     ${hasResult ? `<span class="ctp-result-toggle" onclick="this.closest('.ctp-step').classList.toggle('ctp-step-expanded')">›</span>` : ''}
+                                    ${jumpBtn}
                                 </div>
                                 ${ev.args_hint ? `<div class="ctp-step-row2">${escapeHtml(ev.args_hint)}</div>` : ''}
                                 ${hasResult ? `<div class="ctp-step-result">${resultHtml}</div>` : ''}
@@ -13957,18 +14119,22 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
                     const thinkingHtmlInner = reasoning
                         ? (window.marked ? (() => { try { return marked.parse(reasoning); } catch(e) { return escapeHtml(reasoning); } })() : escapeHtml(reasoning))
                         : '';
-                    const stepsHtml = (r.steps || []).map(s => {
+                    const stepsHtml = (r.steps || []).map((s, idx) => {
                         const label = _TOOL_LABELS[s.tool] || `🔧 ${s.tool}`;
                         const dur = s.duration_ms > 0 ? ` (${s.duration_ms}ms)` : '';
                         const summary = s.summary ? `✓ ${s.summary.slice(0, 80)}${dur}` : `✓${dur}`;
                         const resultHtml = s.result ? _formatToolResult(s.tool, s.result) : '';
                         const hasResult = !!resultHtml;
+                        const taskId = s.task_id || '';
+                        const jumpBtn = taskId ? `<span class="ctp-step-jump" title="跳转到后台任务" onclick="event.stopPropagation();_jumpToCliTask('${taskId}')">↗</span>` : '';
                         return `<div class="ctp-step ctp-step-done">
                             <div class="ctp-step-row1">
+                                <span class="ctp-step-seq">${idx + 1}</span>
                                 <span class="ctp-step-dot"></span>
                                 <span class="ctp-step-label">${escapeHtml(label)}</span>
                                 <span class="ctp-step-status">${escapeHtml(summary)}</span>
                                 ${hasResult ? `<span class="ctp-result-toggle" onclick="this.closest('.ctp-step').classList.toggle('ctp-step-expanded')">›</span>` : ''}
+                                ${jumpBtn}
                             </div>
                             ${s.args_hint ? `<div class="ctp-step-row2">${escapeHtml(s.args_hint)}</div>` : ''}
                             ${hasResult ? `<div class="ctp-step-result">${resultHtml}</div>` : ''}

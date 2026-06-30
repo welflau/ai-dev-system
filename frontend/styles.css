@@ -224,6 +224,7 @@ body {
 .main-container {
     margin-top: calc(var(--topbar-height) + 26px);
     min-height: calc(100vh - var(--topbar-height) - 26px);
+    transition: padding-right 0.3s ease;
 }
 
 .page { display: none; padding: 24px; }
@@ -8767,9 +8768,9 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
 .ctp-step-done .ctp-step-dot { background: var(--success, #34d058); }
 @keyframes ctp-pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
 
-.ctp-step-label { color: var(--text-secondary, #a0aec0); font-size: 11px; }
+.ctp-step-label { color: var(--text-secondary, #a0aec0); font-size: 11px; flex: 1; min-width: 0; }
 .ctp-step-hint { color: var(--text-muted, #718096); font-size: 10px; font-family: monospace; }
-.ctp-step-status { color: var(--text-muted, #718096); font-size: 10px; margin-left: auto; flex-shrink: 0; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ctp-step-status { color: var(--text-muted, #718096); font-size: 10px; flex-shrink: 0; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ctp-step-done .ctp-step-status { color: var(--success, #34d058); }
 
 /* ==================== Agent 测试面板 ==================== */
@@ -8840,6 +8841,29 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
     margin-bottom: 4px;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+/* 思考步骤序号 */
+.ctp-step-seq {
+    font-size: 10px;
+    color: var(--text-muted);
+    opacity: .55;
+    min-width: 14px;
+    text-align: right;
+    flex-shrink: 0;
+    font-variant-numeric: tabular-nums;
+}
+/* 跳转到后台任务按钮 */
+.ctp-step-jump {
+    font-size: 11px;
+    color: var(--primary, #6366f1);
+    opacity: .45;
+    cursor: pointer;
+    padding: 1px 4px;
+    border-radius: 3px;
+    margin-left: auto;
+    flex-shrink: 0;
+    transition: opacity .15s, background .15s;
+}
+.ctp-step-jump:hover { opacity: 1 !important; background: rgba(99,102,241,.12); }
 
 /* ==================== AI 回复 Nudge 提示 ====================*/
 .chat-nudge {
