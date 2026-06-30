@@ -349,28 +349,37 @@ class MilestoneUpdate(BaseModel):
 # 工单看板的 5 列对应的状态
 BOARD_COLUMNS = {
     "pending": [TicketStatus.PENDING],
-    # 设计阶段列（策划 + UX + 美术）
-    "design": [
-        TicketStatus.PLANNING_IN_PROGRESS, TicketStatus.PLANNING_DONE,
-        TicketStatus.UX_DESIGN_IN_PROGRESS, TicketStatus.UX_DESIGN_DONE,
-        TicketStatus.ART_DESIGN_IN_PROGRESS, TicketStatus.ART_DESIGN_DONE,
-    ],
-    "architecture": [TicketStatus.ARCHITECTURE_IN_PROGRESS, TicketStatus.ARCHITECTURE_DONE],
-    "development": [
+    "in_progress": [
+        TicketStatus.PLANNING_IN_PROGRESS,
+        TicketStatus.UX_DESIGN_IN_PROGRESS,
+        TicketStatus.ART_DESIGN_IN_PROGRESS,
+        TicketStatus.HTML_PROTOTYPE_IN_PROGRESS,
+        TicketStatus.ARCHITECTURE_IN_PROGRESS,
         TicketStatus.DEVELOPMENT_IN_PROGRESS,
+        TicketStatus.REVIEW_IN_PROGRESS,
+        TicketStatus.TESTING_IN_PROGRESS,
+        TicketStatus.DEPLOYING,
+    ],
+    "in_review": [
+        TicketStatus.PLANNING_DONE,
+        TicketStatus.UX_DESIGN_DONE,
+        TicketStatus.ART_DESIGN_DONE,
+        TicketStatus.HTML_PROTOTYPE_DONE,
+        TicketStatus.ARCHITECTURE_DONE,
         TicketStatus.DEVELOPMENT_DONE,
-        TicketStatus.REVIEW_IN_PROGRESS,   # code_review 阶段归入开发列
         TicketStatus.REVIEW_PASSED,
-        TicketStatus.ACCEPTANCE_REJECTED,
         TicketStatus.ACCEPTANCE_PASSED,
     ],
-    "testing": [
-        TicketStatus.TESTING_IN_PROGRESS,
-        TicketStatus.TESTING_FAILED,
+    "done": [
+        TicketStatus.TESTING_DONE,
+        TicketStatus.DEPLOYED,
     ],
-    "done": [TicketStatus.TESTING_DONE],
-    "deployed": [TicketStatus.DEPLOYING, TicketStatus.DEPLOYED],  # 兼容旧数据
-    "blocked": [TicketStatus.BLOCKED],
+    "blocked": [
+        TicketStatus.BLOCKED,
+        TicketStatus.ACCEPTANCE_REJECTED,
+        TicketStatus.TESTING_FAILED,
+        TicketStatus.HTML_PROTOTYPE_FAILED,
+    ],
 }
 
 # 状态 → 中文展示名

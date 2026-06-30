@@ -970,6 +970,7 @@ function switchAgentConfigTab(inner) {
     if (inner === 'packs') loadProjectPacks();
     if (inner === 'commands') loadProjectCommands();
     if (inner === 'rules') loadProjectRules();
+    if (inner === 'hooks') loadProjectHooks();
     // traits 已移到「系统设置」modal（showSystemSettingsModal('traits')）
 }
 
@@ -1397,7 +1398,8 @@ function _filterPackDetailList() {
 
 const _SOURCE_META = {
     builtin: { label: '内置', color: '#6366f1', bg: 'rgba(99,102,241,.12)' },
-    user:    { label: '用户', color: '#22c55e', bg: 'rgba(34,197,94,.12)'  },
+    project: { label: '项目', color: '#22c55e', bg: 'rgba(34,197,94,.12)'  },
+    user:    { label: '用户', color: '#0ea5e9', bg: 'rgba(14,165,233,.12)'  },
     pack:    { label: 'Pack', color: '#f97316', bg: 'rgba(249,115,22,.12)' },
 };
 
@@ -1413,8 +1415,9 @@ function _injectSourceFilter(wrapper, containerId, counts, switchFn) {
     const chips = [
         { key: 'all',     label: `全部 ${counts.total}` },
         { key: 'builtin', label: `内置 ${counts.builtin}` },
-        { key: 'user',    label: `用户 ${counts.user}`,  hide: counts.user === 0 },
-        { key: 'pack',    label: `Pack ${counts.pack}`,  hide: counts.pack === 0 },
+        { key: 'project', label: `项目 ${counts.project}`, hide: !counts.project },
+        { key: 'user',    label: `用户 ${counts.user}`,    hide: !counts.user },
+        { key: 'pack',    label: `Pack ${counts.pack}`,    hide: counts.pack === 0 },
     ].filter(c => !c.hide);
     bar.innerHTML = chips.map(c => `
         <button class="src-filter-chip" data-panel="${containerId}" data-source="${c.key}"
@@ -1448,7 +1451,7 @@ function _renderSourceGroups(container, data, source, renderItem, groupTitles) {
         return;
     }
     let html = '';
-    for (const key of ['builtin', 'user', 'pack']) {
+    for (const key of ['builtin', 'project', 'user', 'pack']) {
         const list = data[key] || [];
         if (!list.length) continue;
         const sm = _SOURCE_META[key];
@@ -1562,7 +1565,8 @@ function _renderSkillView(container, data, source) {
     };
     _renderSourceGroups(container, data, source, renderItem, {
         builtin: { icon: '🏠', title: '内置 Skill', desc: 'ADS 系统内置，可按项目开关' },
-        user:    { icon: '👤', title: '用户 Skill',  desc: '.claude/skills/ 或上传的自定义 Skill' },
+        project: { icon: '📁', title: '项目 Skill',  desc: '项目仓库 .claude/skills/ 或 .codebuddy/skills/' },
+        user:    { icon: '👤', title: '用户 Skill',  desc: '系统用户主目录 ~/.claude/skills/ 或 ~/.codebuddy/skills/' },
         pack:    { icon: '📦', title: 'Pack Skill',   desc: '已安装 ConfigPack 提供' },
     });
 }
@@ -1678,8 +1682,78 @@ function _renderRulesView(container, data, source) {
     };
     _renderSourceGroups(container, data, source, renderItem, {
         builtin: { icon: '🏠', title: '内置 Rule',  desc: 'ADS 系统规则（backend/skills/rules/）' },
-        user:    { icon: '👤', title: '用户 Rule',   desc: '项目 .claude/rules/ 或主记忆 CLAUDE.md' },
-        pack:    { icon: '📦', title: 'Pack Rule',   desc: '已安装 ConfigPack 提供' },
+        project: { icon: '📁', title: '项目 Rule',  desc: '项目仓库 .claude/rules/ 或 CLAUDE.md' },
+        user:    { icon: '👤', title: '用户 Rule',  desc: '系统用户主目录 ~/.claude/rules/' },
+        pack:    { icon: '📦', title: 'Pack Rule',  desc: '已安装 ConfigPack 提供' },
+    });
+}
+
+
+// ── Hooks ──────────────────────────────────────────────────────────────────────
+
+async function loadProjectHooks() {
+    const container = document.getElementById('hooksListSettings');
+    if (!container) return;
+    container.innerHTML = '<div class="empty-state-sm">加载中...</div>';
+    if (!currentProjectId) return;
+    try {
+        const data = await api(`/projects/${currentProjectId}/hooks/all`);
+        const wrapper = container.closest('.settings-card') || container.parentElement;
+        _injectSourceFilter(wrapper, 'hooksListSettings', data.counts, 'switchHookSourceFilter');
+        container._hookData = data;
+        _renderHooksView(container, data, 'all');
+    } catch (e) {
+        container.innerHTML = `<div class="empty-state-sm">加载失败: ${escapeHtml(e.message)}</div>`;
+    }
+}
+
+function switchHookSourceFilter(source) {
+    _setSourceFilter('hooksListSettings', source);
+    const container = document.getElementById('hooksListSettings');
+    if (container && container._hookData) _renderHooksView(container, container._hookData, source);
+}
+
+function _renderHooksView(container, data, source) {
+    const EVENT_COLOR = {
+        PreToolUse:       '#f97316',
+        PostToolUse:      '#22c55e',
+        ToolError:        '#ef4444',
+        SessionStart:     '#6366f1',
+        SessionEnd:       '#8b5cf6',
+        Stop:             '#8b5cf6',
+        UserPromptSubmit: '#0ea5e9',
+        AssistantStop:    '#0ea5e9',
+    };
+    const renderItem = (h) => {
+        const sm = _SOURCE_META[h.source] || _SOURCE_META.builtin;
+        const srcBadge = `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:${sm.bg};color:${sm.color};margin-left:4px;">${sm.label}${h.pack_name ? ' · '+escapeHtml(h.pack_name) : ''}</span>`;
+        const evtColor = EVENT_COLOR[h.event] || 'var(--text-muted)';
+        const evtBadge = `<span style="font-size:10px;padding:1px 6px;border-radius:3px;background:${evtColor}22;color:${evtColor};font-weight:600;">${escapeHtml(h.event)}</span>`;
+        const matcherBadge = h.matcher ? `<code style="font-size:10px;background:var(--bg);padding:1px 4px;border-radius:3px;color:var(--text-muted);margin-left:4px;">${escapeHtml(h.matcher)}</code>` : '';
+        const filePath = h.rel_path || h.file || '';
+        const displayFile = filePath.replace(/\\/g, '/');
+        const fileBadge = displayFile ? _renderFileBadge(h.file || '', displayFile) : '';
+        const clickData = escapeHtml(JSON.stringify({
+            name: h.name, description: h.command || '', source: h.source,
+            pack_name: h.pack_name || null, file: h.file || '',
+            rel_path: h.rel_path || '',
+            type: 'Hook', emoji: '🪝',
+            preview: h.command || '', content: h.content || h.command || '',
+        }));
+        return `<div class="skill-row" style="cursor:pointer;" onclick='showExtensionDetail(${clickData})'>
+            <div class="skill-row-info" style="flex:1;min-width:0;">
+                <div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;margin-bottom:2px;">
+                    ${evtBadge}${matcherBadge}${srcBadge}
+                </div>
+                <div style="font-size:11px;color:var(--text-secondary);font-family:monospace;word-break:break-all;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;">${escapeHtml((h.command || '').slice(0, 120))}</div>
+                ${displayFile ? `<div style="margin-top:2px;">${fileBadge}</div>` : ''}
+            </div>
+        </div>`;
+    };
+    _renderSourceGroups(container, data, source, renderItem, {
+        builtin: { icon: '🏠', title: '内置 Hook',  desc: '系统用户目录 ~/.claude/settings.json 中的 hooks' },
+        project: { icon: '📁', title: '项目 Hook',  desc: '项目 .claude/.codebuddy/settings.json 中的 hooks' },
+        pack:    { icon: '📦', title: 'Pack Hook',  desc: '已安装 ConfigPack 提供的 hooks' },
     });
 }
 
@@ -1692,7 +1766,7 @@ let _extDetailActiveIdx = 0;
 
 function _registerExtItems(data, groupTitles) {
     _extDetailRegistry = [];
-    for (const key of ['builtin', 'user', 'pack']) {
+    for (const key of ['builtin', 'project', 'user', 'pack']) {
         const list = data[key] || [];
         if (!list.length) continue;
         const gt = groupTitles[key] || { title: key, icon: '' };
@@ -1827,9 +1901,8 @@ function _renderExtDetailPane(item, activeIdx) {
     const typeBadge = item.type ? `<span style="font-size:11px;padding:2px 7px;border-radius:3px;background:var(--bg-elevated);color:var(--text-muted);">${escapeHtml(item.type)}</span>` : '';
 
     const rawFile = item.file || '';
-    const displayFile = rawFile
-        .replace(/\\/g, '/')
-        .replace(/^.*?(?=backend\/|config_packs\/|\.claude\/|\.codebuddy\/)/, '')
+    const displayFile = (item.rel_path || '')
+        || rawFile.replace(/\\/g, '/').replace(/^.*?(?=backend\/|config_packs\/|\.claude\/|\.codebuddy\/)/, '')
         || rawFile.replace(/\\/g, '/').split('/').slice(-3).join('/');
     const filePath = _renderFileBadge(rawFile, displayFile);
 
@@ -2395,12 +2468,59 @@ async function loadSettingsRepo() {
     const p = currentProject;
     document.getElementById('settingsRepoPath').value = p.git_repo_path || '默认路径';
 
+    // 渲染工作路径列表
+    _renderWorkingPaths(p);
+
     // 并行加载三个独立区域
     await Promise.all([
         loadRemotes(),
         refreshRepoStatus(),
         loadBranchInfo(),
     ]);
+}
+
+/** 渲染工作路径列表（主路径 + extra_paths） */
+function _renderWorkingPaths(p) {
+    const el = document.getElementById('workingPathsList');
+    if (!el) return;
+
+    const mainPath = p.git_repo_path || '';
+    let extraPaths = [];
+    try {
+        extraPaths = JSON.parse(p.extra_paths || '[]') || [];
+    } catch { extraPaths = []; }
+
+    if (!mainPath && extraPaths.length === 0) {
+        el.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">暂无工作路径</div>';
+        return;
+    }
+
+    const rows = [];
+
+    if (mainPath) {
+        rows.push(`
+            <div class="working-path-row primary">
+                <span class="wp-badge">主路径</span>
+                <span class="wp-path" title="${escapeHtml(mainPath)}">${escapeHtml(mainPath)}</span>
+                <button class="wp-copy btn btn-xs" onclick="copyToClipboard('${escapeHtml(mainPath)}')" title="复制">📋</button>
+            </div>`);
+    }
+
+    for (const ep of extraPaths) {
+        const path  = ep.path || ep;
+        const label = ep.label || '';
+        const vcs   = ep.vcs || '';
+        const rw    = ep.writable === false ? '只读' : '';
+        const meta  = [label, vcs, rw].filter(Boolean).join(' · ');
+        rows.push(`
+            <div class="working-path-row extra">
+                <span class="wp-badge extra">${escapeHtml(meta || '附加')}</span>
+                <span class="wp-path" title="${escapeHtml(path)}">${escapeHtml(path)}</span>
+                <button class="wp-copy btn btn-xs" onclick="copyToClipboard('${escapeHtml(path)}')" title="复制">📋</button>
+            </div>`);
+    }
+
+    el.innerHTML = rows.join('');
 }
 
 /** 加载 Remote 列表（GET /git/remotes） */
@@ -3765,8 +3885,8 @@ async function refreshBoard() {
         const data = await api(url);
         const board = data.board || {};
 
-        const columns = ['pending', 'blocked', 'design', 'architecture', 'development', 'testing', 'done', 'deployed'];
-        // Phase 4: waiting_subtasks 工单也加入 pending 列显示（附角标区分）
+        const columns = ['pending', 'in_progress', 'in_review', 'done', 'blocked'];
+        // waiting_subtasks 工单合并到 pending 列（附角标区分）
         if (board['waiting_subtasks']) {
             board['pending'] = [...(board['pending'] || []), ...board['waiting_subtasks']];
         }
@@ -3792,11 +3912,12 @@ async function refreshBoard() {
 function renderTicketCard(t) {
     // 判断卡片状态样式
     let cardClass = 'ticket-card';
-    if (t.status === 'blocked') cardClass += ' rejected';   // 复用红色样式
-    else if (t.status.includes('_in_progress') || t.status === 'deploying') cardClass += ' running';
-    else if (t.status === 'deployed') cardClass += ' done';
-    else if (t.status.includes('rejected') || t.status.includes('failed')) cardClass += ' rejected';
-    else if (t.status === 'waiting_subtasks') cardClass += ' waiting-subtasks';
+    const _ds = toDisplayStatus(t.status);
+    if (_ds === 'blocked')     cardClass += ' rejected';
+    else if (_ds === 'in_progress') cardClass += ' running';
+    else if (_ds === 'done')        cardClass += ' done';
+    else if (_ds === 'cancelled')   cardClass += ' rejected';
+    if (t.status === 'waiting_subtasks') cardClass += ' waiting-subtasks';
 
     const priorityLabel = {1: 'P1', 2: 'P2', 3: 'P3', 4: 'P4', 5: 'P5'};
     const pLabel = priorityLabel[t.priority] || `P${t.priority}`;
@@ -3820,33 +3941,19 @@ function renderTicketCard(t) {
         ? ` <span class="ticket-status-badge subtask-badge" title="子任务，父: #${(t.parent_ticket_id||'').slice(-6)}">↳ 子任务</span>`
         : '';
 
-    // 所有工单状态选项（含新 Agent 阶段）
+    // 所有工单状态选项（精简为 7 个展示状态，写入真实值）
     const allStatuses = [
-        { value: 'pending', label: '待启动' },
-        { value: 'planning_in_progress', label: '📋 策划中' },
-        { value: 'planning_done', label: '策划完成' },
-        { value: 'ux_design_in_progress', label: '🎨 UX设计中' },
-        { value: 'ux_design_done', label: 'UX设计完成' },
-        { value: 'art_design_in_progress', label: '🖼️ 美术设计中' },
-        { value: 'art_design_done', label: '美术设计完成' },
-        { value: 'architecture_in_progress', label: '🏗️ 架构中' },
-        { value: 'architecture_done', label: '架构完成' },
-        { value: 'development_in_progress', label: '开发中' },
-        { value: 'development_done', label: '开发完成' },
-        { value: 'review_in_progress', label: '审查中' },
-        { value: 'review_passed', label: '审查通过' },
-        { value: 'acceptance_passed', label: '验收通过' },
-        { value: 'acceptance_rejected', label: '验收不通过' },
-        { value: 'testing_in_progress', label: '测试中' },
-        { value: 'testing_done', label: '测试通过' },
-        { value: 'testing_failed', label: '测试不通过' },
-        { value: 'deploying', label: '部署中' },
-        { value: 'deployed', label: '已部署' },
-        { value: 'blocked', label: '🚧 已卡住' },
-        { value: 'cancelled', label: '已取消' },
+        { value: 'pending',      label: '○ 待规划' },
+        { value: 'in_progress',  label: '● 进行中' },
+        { value: 'in_review',    label: '◑ 审核中' },
+        { value: 'done',         label: '✓ 已完成' },
+        { value: 'blocked',      label: '⊘ 已阻塞' },
+        { value: 'cancelled',    label: '⊗ 已取消' },
     ];
+    // 当前展示状态（细粒度 → 简化）
+    const curDisplay = toDisplayStatus(t.status);
     const statusOptions = allStatuses.map(s =>
-        `<option value="${s.value}" ${t.status === s.value ? 'selected' : ''}>${s.label}</option>`
+        `<option value="${s.value}" ${curDisplay === s.value ? 'selected' : ''}>${s.label}</option>`
     ).join('');
 
     return `
@@ -3862,6 +3969,7 @@ function renderTicketCard(t) {
                 <select class="status-select" onchange="updateTicketStatus('${t.id}', this.value, this)" onclick="event.stopPropagation()">
                     ${statusOptions}
                 </select>
+                ${t.status !== curDisplay ? `<span style="font-size:10px;color:var(--text-muted);opacity:.7;" title="当前阶段">${escHtml(STATUS_LABELS[t.status] || t.status)}</span>` : ''}
                 ${t.estimated_hours ? `<span>${t.estimated_hours}h</span>` : ''}
             </div>
         </div>`;
@@ -3909,7 +4017,7 @@ async function openTicketDrawer(ticketId) {
             <h4>基本信息</h4>
             <div class="detail-grid">
                 <span class="detail-label">状态</span>
-                <span class="detail-value"><span class="tag tag-module">${escHtml(data.status_label || data.status)}</span></span>
+                <span class="detail-value"><span class="tag tag-module" title="${escHtml(data.status_label || data.status)}">${escHtml(DISPLAY_STATUS_LABELS[toDisplayStatus(data.status)] || data.status_label || data.status)}</span></span>
                 <span class="detail-label">模块</span>
                 <span class="detail-value">${escHtml(data.module || '-')}</span>
                 <span class="detail-label">类型</span>
@@ -5991,7 +6099,7 @@ async function loadTicketList() {
 
         // 过滤
         if (statusFilter) {
-            allTickets = allTickets.filter(t => t.status === statusFilter || t.status.includes(statusFilter));
+            allTickets = allTickets.filter(t => toDisplayStatus(t.status) === statusFilter);
         }
         if (moduleFilter) {
             allTickets = allTickets.filter(t => t.module === moduleFilter);
@@ -6043,27 +6151,18 @@ function _renderTicketRow(t, isChild) {
         titleHtml += `<span class="tl-title-desc">${escHtml(t.description)}</span>`;
     }
 
-    // 状态下拉选项
+    // 状态下拉选项（精简为 7 个展示状态）
     const allStatuses = [
-        { value: 'pending', label: '待启动' },
-        { value: 'architecture_in_progress', label: '架构中' },
-        { value: 'architecture_done', label: '架构完成' },
-        { value: 'development_in_progress', label: '开发中' },
-        { value: 'development_done', label: '开发完成' },
-        { value: 'review_in_progress', label: '审查中' },
-        { value: 'review_passed', label: '审查通过' },
-        { value: 'acceptance_passed', label: '验收通过' },
-        { value: 'acceptance_rejected', label: '验收不通过' },
-        { value: 'testing_in_progress', label: '测试中' },
-        { value: 'testing_done', label: '测试通过' },
-        { value: 'testing_failed', label: '测试不通过' },
-        { value: 'deploying', label: '部署中' },
-        { value: 'deployed', label: '已部署' },
-        { value: 'blocked', label: '🚧 已卡住' },
-        { value: 'cancelled', label: '已取消' },
+        { value: 'pending',      label: '○ 待规划' },
+        { value: 'in_progress',  label: '● 进行中' },
+        { value: 'in_review',    label: '◑ 审核中' },
+        { value: 'done',         label: '✓ 已完成' },
+        { value: 'blocked',      label: '⊘ 已阻塞' },
+        { value: 'cancelled',    label: '⊗ 已取消' },
     ];
+    const curDisplay = toDisplayStatus(t.status);
     const statusOptions = allStatuses.map(s =>
-        `<option value="${s.value}" ${t.status === s.value ? 'selected' : ''}>${s.label}</option>`
+        `<option value="${s.value}" ${curDisplay === s.value ? 'selected' : ''}>${s.label}</option>`
     ).join('');
 
     const rowBlockedCls = t.status === 'blocked' ? ' tl-row-blocked' : '';
@@ -6169,14 +6268,13 @@ function renderTicketListBoard(container, tickets) {
     // 看板只展示父工单（子工单在父工单详情中查看）
     const parentOnly = tickets.filter(t => !t.parent_ticket_id);
     parentOnly.forEach(t => {
-        const s = t.status;
-        if (s === 'blocked') statusGroups.blocked.tickets.push(t);
-        else if (s === 'pending') statusGroups.pending.tickets.push(t);
-        else if (s.includes('_in_progress') || s === 'deploying' || s === 'analyzing') statusGroups.in_progress.tickets.push(t);
-        else if (s.includes('review') || s.includes('rejected')) statusGroups.review.tickets.push(t);
-        else if (s.includes('testing')) statusGroups.testing.tickets.push(t);
-        else if (s === 'deployed' || s === 'completed' || s === 'acceptance_passed' || s === 'testing_done') statusGroups.done.tickets.push(t);
-        else statusGroups.pending.tickets.push(t);
+        const ds = toDisplayStatus(t.status);
+        if (ds === 'blocked')     statusGroups.blocked.tickets.push(t);
+        else if (ds === 'in_progress') statusGroups.in_progress.tickets.push(t);
+        else if (ds === 'in_review')   statusGroups.review.tickets.push(t);
+        else if (ds === 'done')        statusGroups.done.tickets.push(t);
+        else if (ds === 'cancelled')   statusGroups.done.tickets.push(t);
+        else                           statusGroups.pending.tickets.push(t);
     });
 
     let html = '<div class="tl-board">';
@@ -9033,28 +9131,79 @@ const STATUS_LABELS = {
     ux_design_in_progress: '🎨 UX设计中', ux_design_done: 'UX设计完成',
     art_design_in_progress: '🖼️ 美术设计中', art_design_done: '美术设计完成',
     // 原有阶段
-    pending: '待启动', architecture_in_progress: '🏗️ 架构中', architecture_done: '架构完成',
+    pending: '待规划', architecture_in_progress: '🏗️ 架构中', architecture_done: '架构完成',
     development_in_progress: '💻 开发中', development_done: '开发完成',
     review_in_progress: '🔍 审查中', review_passed: '审查通过',
     acceptance_passed: '✅ 验收通过', acceptance_rejected: '❌ 验收不通过',
     testing_in_progress: '🧪 测试中', testing_done: '测试通过', testing_failed: '测试不通过',
     deploying: '🚀 部署中', deployed: '已部署', cancelled: '已取消',
-    blocked: '🚧 已卡住',
+    blocked: '🚧 已阻塞',
     submitted: '已提交', analyzing: '分析中', decomposed: '已拆单',
     in_progress: '进行中', paused: '⏸️ 已暂停', completed: '已完成',
 };
+
+// 细粒度状态 → 7 个展示状态的映射
+const DISPLAY_STATUS_MAP = {
+    pending:                    'pending',
+    // 进行中：所有 _in_progress + deploying + analyzing
+    planning_in_progress:       'in_progress',
+    ux_design_in_progress:      'in_progress',
+    art_design_in_progress:     'in_progress',
+    html_prototype_in_progress: 'in_progress',
+    architecture_in_progress:   'in_progress',
+    development_in_progress:    'in_progress',
+    review_in_progress:         'in_progress',
+    testing_in_progress:        'in_progress',
+    deploying:                  'in_progress',
+    analyzing:                  'in_progress',
+    // 审核中：各阶段 done/passed 等待下一步确认
+    planning_done:              'in_review',
+    ux_design_done:             'in_review',
+    art_design_done:            'in_review',
+    html_prototype_done:        'in_review',
+    architecture_done:          'in_review',
+    development_done:           'in_review',
+    acceptance_passed:          'in_review',
+    review_passed:              'in_review',
+    // 已阻塞：拒绝/失败/卡住
+    acceptance_rejected:        'blocked',
+    testing_failed:             'blocked',
+    html_prototype_failed:      'blocked',
+    blocked:                    'blocked',
+    // 已完成
+    testing_done:               'done',
+    deployed:                   'done',
+    completed:                  'done',
+    // 已取消
+    cancelled:                  'cancelled',
+};
+
+const DISPLAY_STATUS_LABELS = {
+    pending:     '待规划',
+    in_progress: '进行中',
+    in_review:   '审核中',
+    done:        '已完成',
+    blocked:     '已阻塞',
+    cancelled:   '已取消',
+};
+
+/** 把细粒度状态映射到展示状态 */
+function toDisplayStatus(status) {
+    return DISPLAY_STATUS_MAP[status] || (status ? 'in_progress' : 'pending');
+}
 
 function getStatusLabel(status) {
     return STATUS_LABELS[status] || status || '-';
 }
 
 function getStatusColor(status) {
-    if (status === 'blocked') return 'var(--error)';
-    if (['deployed','completed','testing_done','acceptance_passed','planning_done','ux_design_done','art_design_done','architecture_done','development_done','review_passed'].includes(status)) return 'var(--success)';
-    if (status.includes('_in_progress') || ['deploying','analyzing','in_progress'].includes(status)) return 'var(--info)';
-    if (status.includes('rejected') || status.includes('failed') || status === 'cancelled') return 'var(--error)';
-    if (['pending','submitted','paused'].includes(status)) return 'var(--text-muted)';
-    return 'var(--primary)';
+    const ds = toDisplayStatus(status);
+    if (ds === 'blocked')     return 'var(--error)';
+    if (ds === 'done')        return 'var(--success)';
+    if (ds === 'in_progress') return 'var(--info)';
+    if (ds === 'in_review')   return '#f97316';   // 橙色
+    if (ds === 'cancelled')   return 'var(--text-muted)';
+    return 'var(--text-muted)';  // pending
 }
 
 function getArtifactIcon(type) {
@@ -12421,12 +12570,26 @@ async function _refreshTasksPanel() {
     listEl.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);">加载中…</div>';
 
     try {
+        // 从 API 拉 cli-tasks 历史（含 DB 持久化记录）
+        const cliUrl = currentProjectId
+            ? `/projects/${currentProjectId}/chat/cli-tasks`
+            : `/commands/chat/cli-tasks`;
+        let cliTasksFromApi = [];
+        try {
+            const cliResp = await api(cliUrl);
+            cliTasksFromApi = (cliResp?.tasks || []).map(t => ({...t, type: 'cli_task'}));
+            // 同步到内存（避免和 SSE 实时更新冲突：内存中 running 的优先）
+            for (const t of cliTasksFromApi) {
+                if (!_CLI_TASKS_MEM[t.id]) _CLI_TASKS_MEM[t.id] = t;
+            }
+        } catch(_) {}
+
         const url = currentProjectId ? `/projects/${currentProjectId}/commands/tasks` : `/commands/tasks`;
         const resp = await originalApi(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
         const ticketTasks = resp?.data?.tasks || [];
 
         // 合并内存 CLI 任务（全部历史，按时间倒序）
-        const cliTasks = Object.values(_CLI_TASKS_MEM).reverse();
+        const cliTasks = Object.values(_CLI_TASKS_MEM).sort((a,b) => (b.created_at||'').localeCompare(a.created_at||''));
 
         const statusIcon = s => ({
             running: '🔄', in_progress: '🔄', executing: '🔄', pending: '⏳', queued: '⏳',

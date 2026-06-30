@@ -2193,9 +2193,17 @@ async def get_project_skills_all(project_id: str):
     """合并三来源 Skill：内置(global/custom) / 用户(.claude/.codebuddy skills/) / Pack。"""
     from pack_installer import _PACKS_DIR
     import re
+    import json as _json
 
-    proj = await db.fetch_one("SELECT git_repo_path FROM projects WHERE id = ?", (project_id,))
+    proj = await db.fetch_one("SELECT git_repo_path, extra_paths FROM projects WHERE id = ?", (project_id,))
     repo_path = (proj or {}).get("git_repo_path", "") if proj else ""
+    # 合并所有项目路径（git_repo_path + extra_paths）
+    all_repo_paths = [repo_path] if repo_path else []
+    try:
+        extra = _json.loads((proj or {}).get("extra_paths") or "[]")
+        all_repo_paths += [p["path"] for p in extra if isinstance(p, dict) and p.get("path")]
+    except Exception:
+        pass
 
     def _parse_skill_md(content: str, stem: str) -> dict:
         fm: dict = {}
@@ -2242,63 +2250,114 @@ async def get_project_skills_all(project_id: str):
                 "id": sid, "name": info["name"], "description": info["description"],
                 "source": "builtin", "pack_name": None,
                 "enabled": info["enabled"], "priority": info["priority"],
-                "file": file_path, "content": content, "preview": content[:150],
+                "file": file_path, "content": content[:4000], "preview": content[:150],
             })
     except Exception:
         pass
 
-    # 2. 用户 skills（.claude/skills/ + .codebuddy/skills/ — 用户手动创建）
-    user_skills = []
-    if repo_path:
-        for cli in ("claude", "codebuddy"):
-            skills_dir = Path(repo_path) / f".{cli}" / "skills"
-            if not skills_dir.exists():
+    # ── 通用：扫描某个 skills 目录，返回 skill 条目列表 ──────────────────────
+    # pack 来源判断：提前查一次，避免 N+1
+    _installed_packs = [r["pack_name"] for r in await db.fetch_all(
+        "SELECT pack_name FROM project_packs WHERE project_id = ?", (project_id,)
+    )]
+
+    async def _scan_skills_dir(skills_dir: Path, default_source: str, base_path: Path | None = None) -> list:
+        result = []
+        if not skills_dir.exists():
+            return result
+        try:
+            entries = sorted(skills_dir.iterdir())
+        except PermissionError:
+            return result
+        for skill_dir in entries:
+            skill_md = (skill_dir / "SKILL.md" if skill_dir.is_dir()
+                        else (skill_dir if skill_dir.suffix == ".md" else None))
+            if not skill_md or not skill_md.exists():
                 continue
-            for skill_dir in sorted(skills_dir.iterdir()):
-                skill_md = skill_dir / "SKILL.md" if skill_dir.is_dir() else (skill_dir if skill_dir.suffix == ".md" else None)
-                if not skill_md or not skill_md.exists():
-                    continue
-                # 如果能在某个已安装 pack 里找到同名文件，则归为 pack 来源
-                stem = skill_dir.stem if skill_dir.is_dir() else skill_dir.stem
-                pack_origin = None
-                for installed_row in await db.fetch_all(
-                    "SELECT pack_name FROM project_packs WHERE project_id = ?", (project_id,)
-                ):
-                    pn = installed_row["pack_name"]
-                    for sub in ("shared", "claude", "codebuddy"):
-                        candidate = _PACKS_DIR / pn / sub / "skills" / stem / "SKILL.md"
-                        if candidate.exists():
-                            pack_origin = pn
-                            break
-                    if pack_origin:
+            stem = skill_dir.stem
+            pack_origin = None
+            for pn in _installed_packs:
+                for sub in ("shared", "claude", "codebuddy"):
+                    candidate = _PACKS_DIR / pn / sub / "skills" / stem / "SKILL.md"
+                    if candidate.exists():
+                        pack_origin = pn
                         break
+                if pack_origin:
+                    break
+            try:
+                content = skill_md.read_text(encoding="utf-8")
+                info = _parse_skill_md(content, stem)
+                info["source"] = "pack" if pack_origin else default_source
+                info["pack_name"] = pack_origin
+                info["id"] = info["name"]
+                info["file"] = str(skill_md)
+                info["path"] = str(skill_md).replace("\\", "/")
+                info["content"] = content[:4000]   # 截断避免响应过大
+                # 相对路径：优先相对 base_path，否则相对 skills_dir 父目录
                 try:
-                    content = skill_md.read_text(encoding="utf-8")
-                    info = _parse_skill_md(content, stem)
-                    if pack_origin:
-                        info["source"] = "pack"
-                        info["pack_name"] = pack_origin
-                    else:
-                        info["source"] = "user"
-                        info["pack_name"] = None
-                    info["cli"] = cli
-                    info["id"] = info["name"]
-                    info["file"] = str(skill_md)
-                    info["path"] = str(skill_md).replace("\\", "/")
-                    info["content"] = content
-                    user_skills.append(info)
-                except Exception:
-                    pass
+                    rel_base = base_path or skills_dir.parent.parent
+                    info["rel_path"] = str(skill_md.relative_to(rel_base)).replace("\\", "/")
+                except ValueError:
+                    info["rel_path"] = str(skill_md).replace("\\", "/")
+                result.append(info)
+            except Exception:
+                pass
+        return result
 
-    # 3. Pack skills — 扫描项目目录里由 pack 安装的 skills（从 user_skills 中分拆）
-    pack_skills = [s for s in user_skills if s.get("source") == "pack"]
-    user_skills  = [s for s in user_skills if s.get("source") != "pack"]
+    # 2. 项目 skills（所有项目路径 .claude/skills/ + .codebuddy/skills/）
+    project_skills = []
+    for rp in all_repo_paths:
+        rp_path = Path(rp)
+        for cli in ("claude", "codebuddy"):
+            project_skills += await _scan_skills_dir(
+                rp_path / f".{cli}" / "skills", "project", base_path=rp_path
+            )
 
-    all_skills = builtin_skills + user_skills + pack_skills
+    # 3. 用户 skills（系统用户主目录 ~/.claude/skills/ + ~/.codebuddy/skills/）
+    user_skills = []
+    home = Path.home()
+    for cli in ("claude", "codebuddy"):
+        user_skills += await _scan_skills_dir(
+            home / f".{cli}" / "skills", "user", base_path=home
+        )
+
+    # 4. Pack skills — 从 project_skills / user_skills 中分拆
+    pack_skills = (
+        [s for s in project_skills if s.get("source") == "pack"] +
+        [s for s in user_skills    if s.get("source") == "pack"]
+    )
+    project_skills = [s for s in project_skills if s.get("source") != "pack"]
+    user_skills    = [s for s in user_skills    if s.get("source") != "pack"]
+
+    # 去重：同一文件路径可能因 .claude/.codebuddy 双目录或 extra_paths 重复扫描
+    def _dedup(lst: list) -> list:
+        seen: set = set()
+        out = []
+        for s in lst:
+            key = s.get("file") or s.get("name")
+            if key not in seen:
+                seen.add(key)
+                out.append(s)
+        return out
+
+    project_skills = _dedup(project_skills)
+    user_skills    = _dedup(user_skills)
+    pack_skills    = _dedup(pack_skills)
+
+    all_skills = builtin_skills + project_skills + user_skills + pack_skills
     return {
-        "builtin": builtin_skills, "user": user_skills, "pack": pack_skills, "all": all_skills,
-        "counts": {"builtin": len(builtin_skills), "user": len(user_skills),
-                   "pack": len(pack_skills), "total": len(all_skills)},
+        "builtin":  builtin_skills,
+        "project":  project_skills,
+        "user":     user_skills,
+        "pack":     pack_skills,
+        "all":      all_skills,
+        "counts": {
+            "builtin":  len(builtin_skills),
+            "project":  len(project_skills),
+            "user":     len(user_skills),
+            "pack":     len(pack_skills),
+            "total":    len(all_skills),
+        },
     }
 
 
@@ -2543,13 +2602,13 @@ async def get_project_rules_all(project_id: str):
         except Exception:
             pass
 
-    # 2. 用户 rules（.claude/rules/ + .codebuddy/rules/）
-    user_rules = []
+    # 2. 项目 rules（仓库 .claude/rules/ + .codebuddy/rules/）
+    project_rules = []
     if repo_path:
         for cli in ("claude", "codebuddy"):
-            user_rules += _scan_rules_dir(
+            project_rules += _scan_rules_dir(
                 Path(repo_path) / f".{cli}" / "rules",
-                source="user", cli=cli
+                source="project", cli=cli
             )
         # 也扫 CLAUDE.md / CODEBUDDY.md（主记忆文件）
         for cli, fname in [("claude", "CLAUDE.md"), ("codebuddy", "CODEBUDDY.md")]:
@@ -2557,9 +2616,9 @@ async def get_project_rules_all(project_id: str):
             if f.exists():
                 try:
                     content = f.read_text(encoding="utf-8")
-                    user_rules.append({
+                    project_rules.append({
                         "name": fname, "description": "项目主记忆文件（Pack rules 追加于此）",
-                        "file": str(f), "source": "user", "cli": cli, "pack_name": None,
+                        "file": str(f), "source": "project", "cli": cli, "pack_name": None,
                         "content": content, "preview": content[:150], "globs": "",
                     })
                 except Exception:
@@ -2592,11 +2651,139 @@ async def get_project_rules_all(project_id: str):
                 source="pack", pack_name=pn, scope=sub
             )
 
-    all_rules = builtin_rules + user_rules + pack_rules
+    all_rules = builtin_rules + project_rules + pack_rules
     return {
-        "builtin": builtin_rules, "user": user_rules, "pack": pack_rules, "all": all_rules,
-        "counts": {"builtin": len(builtin_rules), "user": len(user_rules),
+        "builtin": builtin_rules, "project": project_rules, "pack": pack_rules, "all": all_rules,
+        "counts": {"builtin": len(builtin_rules), "project": len(project_rules),
                    "pack": len(pack_rules), "total": len(all_rules)},
+    }
+
+
+@router.get("/{project_id}/hooks/all")
+async def get_project_hooks_all(project_id: str):
+    """合并三来源 Hook 配置：内置(全局 settings.json) / 用户(项目 .claude/.codebuddy settings.json) / Pack。
+    每个条目表示一个 hook 事件绑定，字段：event / matcher / command / source / pack_name / file。
+    """
+    from pack_installer import _PACKS_DIR
+    import json as _json
+
+    proj = await db.fetch_one("SELECT git_repo_path, extra_paths FROM projects WHERE id = ?", (project_id,))
+    repo_path = (proj or {}).get("git_repo_path", "") if proj else ""
+    all_repo_paths = [repo_path] if repo_path else []
+    try:
+        extra = _json.loads((proj or {}).get("extra_paths") or "[]")
+        all_repo_paths += [p["path"] for p in extra if isinstance(p, dict) and p.get("path")]
+    except Exception:
+        pass
+
+    def _flatten_hooks(hooks_obj: dict, source: str, file: str, pack_name=None) -> list:
+        """将 settings.json hooks 对象展开为条目列表。
+        格式：{ "EventName": [ { "matcher": "...", "hooks": [ {"type":"command","command":"..."} ] } ] }
+        """
+        items = []
+        if not isinstance(hooks_obj, dict):
+            return items
+        for event, bindings in hooks_obj.items():
+            if not isinstance(bindings, list):
+                continue
+            for binding in bindings:
+                if not isinstance(binding, dict):
+                    continue
+                matcher = binding.get("matcher") or binding.get("tool_name") or ""
+                for h in (binding.get("hooks") or []):
+                    cmd = h.get("command", "")
+                    items.append({
+                        "name": f"{event}" + (f" [{matcher}]" if matcher else ""),
+                        "event": event,
+                        "matcher": matcher,
+                        "command": cmd,
+                        "hook_type": h.get("type", "command"),
+                        "timeout": h.get("timeout"),
+                        "description": cmd[:120] if cmd else "",
+                        "source": source,
+                        "pack_name": pack_name,
+                        "file": file,
+                        "rel_path": "",
+                        "content": _json.dumps(h, ensure_ascii=False),
+                        "preview": cmd[:150],
+                    })
+        return items
+
+    def _read_settings_hooks(settings_path: Path, source: str, base_path: Path | None = None, pack_name=None) -> list:
+        if not settings_path.exists():
+            return []
+        try:
+            data = _json.loads(settings_path.read_text(encoding="utf-8"))
+            hooks_obj = data.get("hooks", {})
+            items = _flatten_hooks(hooks_obj, source, str(settings_path), pack_name)
+            for item in items:
+                try:
+                    rel = settings_path.relative_to(base_path or settings_path.parent)
+                    item["rel_path"] = str(rel).replace("\\", "/")
+                except ValueError:
+                    item["rel_path"] = str(settings_path).replace("\\", "/")
+            return items
+        except Exception:
+            return []
+
+    # 1. 内置 hooks：系统用户主目录 ~/.claude/settings.json + ~/.codebuddy/settings.json
+    home = Path.home()
+    builtin_hooks: list = []
+    for cli in ("claude", "codebuddy"):
+        builtin_hooks += _read_settings_hooks(
+            home / f".{cli}" / "settings.json",
+            source="builtin", base_path=home,
+        )
+
+    # 2. 项目 hooks：项目仓库 .claude/settings.json + .codebuddy/settings.json
+    project_hooks: list = []
+    seen_files: set = set()
+    for rp in all_repo_paths:
+        rp_path = Path(rp)
+        for cli in ("claude", "codebuddy"):
+            sf = rp_path / f".{cli}" / "settings.json"
+            if str(sf) in seen_files:
+                continue
+            seen_files.add(str(sf))
+            project_hooks += _read_settings_hooks(sf, source="project", base_path=rp_path)
+
+    # 3. Pack hooks：pack shared/hooks/*.json
+    pack_hooks: list = []
+    installed_rows = await db.fetch_all(
+        "SELECT pack_name FROM project_packs WHERE project_id = ?", (project_id,)
+    )
+    for row in installed_rows:
+        pn = row["pack_name"]
+        for sub in ("shared", "claude", "codebuddy"):
+            hooks_dir = _PACKS_DIR / pn / sub / "hooks"
+            if not hooks_dir.exists():
+                continue
+            for hf in sorted(hooks_dir.glob("*.json")):
+                try:
+                    data = _json.loads(hf.read_text(encoding="utf-8"))
+                    hooks_obj = data.get("hooks", data)  # 有些直接是 hooks 对象
+                    items = _flatten_hooks(hooks_obj, "pack", str(hf), pack_name=pn)
+                    for item in items:
+                        try:
+                            item["rel_path"] = str(hf.relative_to(_PACKS_DIR / pn)).replace("\\", "/")
+                        except ValueError:
+                            pass
+                    pack_hooks += items
+                except Exception:
+                    pass
+
+    all_hooks = builtin_hooks + project_hooks + pack_hooks
+    return {
+        "builtin": builtin_hooks,
+        "project": project_hooks,
+        "pack": pack_hooks,
+        "all": all_hooks,
+        "counts": {
+            "builtin": len(builtin_hooks),
+            "project": len(project_hooks),
+            "pack": len(pack_hooks),
+            "total": len(all_hooks),
+        },
     }
 
 

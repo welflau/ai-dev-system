@@ -893,8 +893,23 @@ CREATE INDEX IF NOT EXISTS idx_tool_audit_log_ticket  ON tool_audit_log(ticket_i
 CREATE INDEX IF NOT EXISTS idx_tool_audit_log_created ON tool_audit_log(created_at);
 
 -- ============================================================
--- 权限审批请求表（Phase 3 异步权限审批）
+-- CLI 后台任务日志（持久化，刷新后可恢复）
 -- ============================================================
+CREATE TABLE IF NOT EXISTS cli_task_log (
+    id          TEXT PRIMARY KEY,          -- task_id
+    project_id  TEXT,
+    title       TEXT NOT NULL,
+    tool        TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'running',  -- running / success / error
+    output      TEXT,                      -- 最终输出（最多 500 行）
+    duration_ms INTEGER DEFAULT 0,
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cli_task_log_project ON cli_task_log(project_id);
+CREATE INDEX IF NOT EXISTS idx_cli_task_log_created ON cli_task_log(created_at DESC);
+
+
 CREATE TABLE IF NOT EXISTS permission_requests (
     id                TEXT PRIMARY KEY,
     tool_name         TEXT NOT NULL,

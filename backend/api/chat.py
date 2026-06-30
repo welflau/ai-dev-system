@@ -27,32 +27,72 @@ _THINKING_QUEUES: Dict[str, asyncio.Queue] = {}
 _CLI_TASKS: Dict[str, Dict] = {}
 _CLI_TASKS_MAX = 200
 
-def _cli_task_add(task_id: str, title: str, tool: str) -> None:
-    """注册一个 CLI 工具任务"""
+def _cli_task_add(task_id: str, title: str, tool: str, project_id: str = "") -> None:
+    """注册一个 CLI 工具任务（内存 + DB）"""
     from utils import now_iso
+    ts = now_iso()
     _CLI_TASKS[task_id] = {
         "id": task_id, "type": "cli_task",
         "title": title, "tool": tool,
         "status": "running",
         "output_lines": [],
-        "created_at": now_iso(),
+        "created_at": ts,
         "duration_ms": 0,
+        "project_id": project_id,
     }
     # 超过上限时删掉最旧的已完成任务
     if len(_CLI_TASKS) > _CLI_TASKS_MAX:
         done = [k for k, v in _CLI_TASKS.items() if v["status"] != "running"]
         for k in done[:len(_CLI_TASKS) - _CLI_TASKS_MAX]:
             _CLI_TASKS.pop(k, None)
+    # 异步写 DB（fire-and-forget）
+    import asyncio
+    try:
+        loop = asyncio.get_event_loop()
+        loop.create_task(_cli_task_db_upsert(task_id, title, tool, "running", "", 0, ts, project_id))
+    except Exception:
+        pass
+
 
 def _cli_task_finish(task_id: str, result: str, duration_ms: float, success: bool) -> None:
-    """标记任务完成，存入输出"""
+    """标记任务完成，存入输出（内存 + DB）"""
+    from utils import now_iso
     t = _CLI_TASKS.get(task_id)
     if not t:
         return
-    t["status"] = "success" if success else "error"
+    status = "success" if success else "error"
+    t["status"] = status
     t["duration_ms"] = int(duration_ms)
-    if result:
-        t["output_lines"] = result.splitlines()[-500:]  # 最多保留 500 行
+    lines = result.splitlines()[-500:] if result else []
+    t["output_lines"] = lines
+    output_text = "\n".join(lines)
+    # 异步写 DB（fire-and-forget）
+    import asyncio
+    try:
+        loop = asyncio.get_event_loop()
+        loop.create_task(_cli_task_db_upsert(
+            task_id, t["title"], t["tool"], status,
+            output_text, int(duration_ms), t["created_at"], t.get("project_id", ""),
+        ))
+    except Exception:
+        pass
+
+
+async def _cli_task_db_upsert(task_id: str, title: str, tool: str, status: str,
+                               output: str, duration_ms: int, created_at: str,
+                               project_id: str = "") -> None:
+    from utils import now_iso
+    try:
+        await db.execute(
+            """INSERT INTO cli_task_log (id, project_id, title, tool, status, output, duration_ms, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET
+                   status=excluded.status, output=excluded.output,
+                   duration_ms=excluded.duration_ms, updated_at=excluded.updated_at""",
+            (task_id, project_id or "", title, tool, status, output, duration_ms, created_at, now_iso()),
+        )
+    except Exception as e:
+        logger.debug("cli_task_db_upsert failed: %s", e)
 
 
 def get_thinking_queue(session_id: str) -> asyncio.Queue:
@@ -617,7 +657,7 @@ async def _chat_stream_generator(
                 _task_id = ev.get("tool_use_id") or ""
                 _is_cli_tool = bool(_task_id)
                 if _is_cli_tool:
-                    _cli_task_add(_task_id, label, ev["tool"])
+                    _cli_task_add(_task_id, label, ev["tool"], project_id=project_id)
                 yield _sse("tool_start", {
                     "tool": ev["tool"], "label": label, "input": ev.get("input", {}),
                     **({"task_id": _task_id} if _is_cli_tool else {}),
@@ -963,18 +1003,56 @@ async def _load_session_history(
 
 @router.get("/cli-tasks")
 async def list_cli_tasks(project_id: str):
-    """列出当前内存中的 CLI 工具任务（供 /tasks 面板左侧列表使用）"""
-    tasks = sorted(_CLI_TASKS.values(), key=lambda t: t["created_at"], reverse=True)
-    return {"tasks": tasks[:50]}
+    """列出 CLI 工具任务，优先从 DB 读（含历史），兜底内存"""
+    try:
+        rows = await db.fetch_all(
+            """SELECT id, project_id, title, tool, status, output, duration_ms, created_at, updated_at
+               FROM cli_task_log WHERE project_id=? ORDER BY created_at DESC LIMIT 100""",
+            (project_id,),
+        )
+        tasks = []
+        for r in rows:
+            lines = (r["output"] or "").splitlines()
+            mem = _CLI_TASKS.get(r["id"], {})
+            tasks.append({
+                "id": r["id"], "type": "cli_task",
+                "title": r["title"], "tool": r["tool"],
+                "status": mem.get("status") or r["status"],
+                "output_lines": mem.get("output_lines") or lines,
+                "created_at": r["created_at"],
+                "duration_ms": mem.get("duration_ms") or r["duration_ms"],
+            })
+        # 补上内存中尚未落库的 running 任务
+        db_ids = {t["id"] for t in tasks}
+        for tid, t in _CLI_TASKS.items():
+            if tid not in db_ids and t.get("project_id", "") == project_id:
+                tasks.insert(0, {**t, "type": "cli_task"})
+        return {"tasks": tasks[:100]}
+    except Exception:
+        # 纯内存兜底
+        tasks = [t for t in _CLI_TASKS.values() if t.get("project_id", "") == project_id]
+        return {"tasks": sorted(tasks, key=lambda t: t["created_at"], reverse=True)[:50]}
 
 
 @router.get("/cli-tasks/{task_id}")
 async def get_cli_task(project_id: str, task_id: str):
-    """获取单个 CLI 工具任务详情（供 /tasks 面板右侧输出区使用）"""
+    """获取单个 CLI 工具任务详情，优先内存（有实时输出），兜底 DB"""
     t = _CLI_TASKS.get(task_id)
-    if not t:
-        raise HTTPException(status_code=404, detail="任务不存在")
-    return t
+    if t:
+        return t
+    try:
+        row = await db.fetch_one(
+            "SELECT * FROM cli_task_log WHERE id=? AND project_id=?", (task_id, project_id)
+        )
+        if row:
+            lines = (row["output"] or "").splitlines()
+            return {"id": row["id"], "type": "cli_task", "title": row["title"],
+                    "tool": row["tool"], "status": row["status"],
+                    "output_lines": lines, "created_at": row["created_at"],
+                    "duration_ms": row["duration_ms"]}
+    except Exception:
+        pass
+    raise HTTPException(status_code=404, detail="任务不存在")
 
 
 @router.get("/sessions")
@@ -2079,18 +2157,49 @@ class GlobalChatResponse(BaseModel):
 
 @global_chat_router.get("/cli-tasks")
 async def global_list_cli_tasks():
-    """全局聊天：列出 CLI 工具任务"""
-    tasks = sorted(_CLI_TASKS.values(), key=lambda t: t["created_at"], reverse=True)
-    return {"tasks": tasks[:50]}
+    """全局聊天：列出 CLI 工具任务（DB + 内存）"""
+    try:
+        rows = await db.fetch_all(
+            """SELECT id, project_id, title, tool, status, output, duration_ms, created_at
+               FROM cli_task_log WHERE project_id='' ORDER BY created_at DESC LIMIT 100""",
+        )
+        tasks = []
+        for r in rows:
+            mem = _CLI_TASKS.get(r["id"], {})
+            tasks.append({
+                "id": r["id"], "type": "cli_task",
+                "title": r["title"], "tool": r["tool"],
+                "status": mem.get("status") or r["status"],
+                "output_lines": mem.get("output_lines") or (r["output"] or "").splitlines(),
+                "created_at": r["created_at"],
+                "duration_ms": mem.get("duration_ms") or r["duration_ms"],
+            })
+        db_ids = {t["id"] for t in tasks}
+        for tid, t in _CLI_TASKS.items():
+            if tid not in db_ids and not t.get("project_id"):
+                tasks.insert(0, {**t, "type": "cli_task"})
+        return {"tasks": tasks[:100]}
+    except Exception:
+        tasks = sorted(_CLI_TASKS.values(), key=lambda t: t["created_at"], reverse=True)
+        return {"tasks": tasks[:50]}
 
 
 @global_chat_router.get("/cli-tasks/{task_id}")
 async def global_get_cli_task(task_id: str):
     """全局聊天：获取单个 CLI 工具任务详情"""
     t = _CLI_TASKS.get(task_id)
-    if not t:
-        raise HTTPException(status_code=404, detail="任务不存在")
-    return t
+    if t:
+        return t
+    try:
+        row = await db.fetch_one("SELECT * FROM cli_task_log WHERE id=?", (task_id,))
+        if row:
+            return {"id": row["id"], "type": "cli_task", "title": row["title"],
+                    "tool": row["tool"], "status": row["status"],
+                    "output_lines": (row["output"] or "").splitlines(),
+                    "created_at": row["created_at"], "duration_ms": row["duration_ms"]}
+    except Exception:
+        pass
+    raise HTTPException(status_code=404, detail="任务不存在")
 
 
 @global_chat_router.post("/stream")
@@ -2210,7 +2319,7 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
                 label = _TOOL_LABELS_PY.get(ev["tool"], f"🔧 {ev['tool']}")
                 _gtask_id = ev.get("tool_use_id") or ""
                 if _gtask_id:
-                    _cli_task_add(_gtask_id, label, ev["tool"])
+                    _cli_task_add(_gtask_id, label, ev["tool"], project_id="")
                 yield _sse("tool_start", {
                     "tool": ev["tool"], "label": label, "input": ev.get("input", {}),
                     **({"task_id": _gtask_id} if _gtask_id else {}),
@@ -2818,7 +2927,7 @@ async def cli_task_event(req: _CliTaskEventRequest):
     task_id = data.get("task_id", "")
 
     if etype == "cli_task_start":
-        _cli_task_add(task_id, data.get("title", task_id), "run_command")
+        _cli_task_add(task_id, data.get("title", task_id), "run_command", project_id=pid or "")
 
     elif etype == "cli_task_line":
         t = _CLI_TASKS.get(task_id)

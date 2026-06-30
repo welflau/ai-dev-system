@@ -290,59 +290,43 @@
                         <div class="board" id="kanbanBoard">
                             <div class="board-column" data-status="pending">
                                 <div class="column-header">
-                                    <span class="column-title">待启动</span>
+                                    <span class="column-status-dot" style="border:2px solid var(--text-muted);border-radius:50%;width:10px;height:10px;display:inline-block;"></span>
+                                    <span class="column-title">待规划</span>
                                     <span class="column-count" id="count-pending">0</span>
                                 </div>
                                 <div class="column-body" id="col-pending"></div>
                             </div>
-                            <div class="board-column board-column-blocked" data-status="blocked">
+                            <div class="board-column" data-status="in_progress">
                                 <div class="column-header">
-                                    <span class="column-title">🚧 已阻塞</span>
-                                    <span class="column-count" id="count-blocked">0</span>
+                                    <span class="column-status-dot" style="background:var(--warning,#f97316);border-radius:50%;width:10px;height:10px;display:inline-block;"></span>
+                                    <span class="column-title">进行中</span>
+                                    <span class="column-count" id="count-in_progress">0</span>
                                 </div>
-                                <div class="column-body" id="col-blocked"></div>
+                                <div class="column-body" id="col-in_progress"></div>
                             </div>
-                            <div class="board-column" data-status="design">
+                            <div class="board-column" data-status="in_review">
                                 <div class="column-header">
-                                    <span class="column-title">🎨 设计中</span>
-                                    <span class="column-count" id="count-design">0</span>
+                                    <span class="column-status-dot" style="background:var(--success);border-radius:50%;width:10px;height:10px;display:inline-block;"></span>
+                                    <span class="column-title">审核中</span>
+                                    <span class="column-count" id="count-in_review">0</span>
                                 </div>
-                                <div class="column-body" id="col-design"></div>
-                            </div>
-                            <div class="board-column" data-status="architecture">
-                                <div class="column-header">
-                                    <span class="column-title">架构中</span>
-                                    <span class="column-count" id="count-architecture">0</span>
-                                </div>
-                                <div class="column-body" id="col-architecture"></div>
-                            </div>
-                            <div class="board-column" data-status="development">
-                                <div class="column-header">
-                                    <span class="column-title">开发中</span>
-                                    <span class="column-count" id="count-development">0</span>
-                                </div>
-                                <div class="column-body" id="col-development"></div>
-                            </div>
-                            <div class="board-column" data-status="testing">
-                                <div class="column-header">
-                                    <span class="column-title">测试中</span>
-                                    <span class="column-count" id="count-testing">0</span>
-                                </div>
-                                <div class="column-body" id="col-testing"></div>
+                                <div class="column-body" id="col-in_review"></div>
                             </div>
                             <div class="board-column" data-status="done">
                                 <div class="column-header">
-                                    <span class="column-title">测试通过</span>
+                                    <span class="column-status-dot" style="background:var(--primary);border-radius:50%;width:10px;height:10px;display:inline-block;"></span>
+                                    <span class="column-title">已完成</span>
                                     <span class="column-count" id="count-done">0</span>
                                 </div>
                                 <div class="column-body" id="col-done"></div>
                             </div>
-                            <div class="board-column" data-status="deployed">
+                            <div class="board-column board-column-blocked" data-status="blocked">
                                 <div class="column-header">
-                                    <span class="column-title">已部署</span>
-                                    <span class="column-count" id="count-deployed">0</span>
+                                    <span class="column-status-dot" style="background:var(--error);border-radius:50%;width:10px;height:10px;display:inline-block;"></span>
+                                    <span class="column-title">已阻塞</span>
+                                    <span class="column-count" id="count-blocked">0</span>
                                 </div>
-                                <div class="column-body" id="col-deployed"></div>
+                                <div class="column-body" id="col-blocked"></div>
                             </div>
                         </div>
                     </div>
@@ -364,18 +348,11 @@
                                 <div class="ticket-list-filters">
                                     <select id="ticketListStatusFilter" onchange="loadTicketList()">
                                         <option value="">全部状态</option>
-                                        <option value="pending">待启动</option>
-                                        <option value="architecture_in_progress">架构中</option>
-                                        <option value="architecture_done">架构完成</option>
-                                        <option value="development_in_progress">开发中</option>
-                                        <option value="development_done">开发完成</option>
-                                        <option value="acceptance_passed">验收通过</option>
-                                        <option value="acceptance_rejected">验收不通过</option>
-                                        <option value="testing_in_progress">测试中</option>
-                                        <option value="testing_done">测试通过</option>
-                                        <option value="testing_failed">测试不通过</option>
-                                        <option value="deploying">部署中</option>
-                                        <option value="deployed">已部署</option>
+                                        <option value="pending">待规划</option>
+                                        <option value="in_progress">进行中</option>
+                                        <option value="in_review">审核中</option>
+                                        <option value="done">已完成</option>
+                                        <option value="blocked">已阻塞</option>
                                         <option value="cancelled">已取消</option>
                                     </select>
                                     <select id="ticketListModuleFilter" onchange="loadTicketList()">
@@ -953,6 +930,13 @@
                                     <small class="form-hint">仓库在本地磁盘的绝对路径</small>
                                 </div>
                             </div>
+                            <!-- 工作路径（主路径 + extra_paths） -->
+                            <div class="settings-card">
+                                <h3 class="settings-card-title">🗂 工作路径</h3>
+                                <div id="workingPathsList">
+                                    <div style="color:var(--text-muted);font-size:12px;">加载中...</div>
+                                </div>
+                            </div>
                             <div class="settings-card">
                                 <h3 class="settings-card-title">仓库状态</h3>
                                 <div class="repo-status-grid" id="repoStatusGrid">
@@ -1114,6 +1098,9 @@
                                 <button class="inner-tab" data-inner-tab="rules" onclick="switchAgentConfigTab('rules')">
                                     📋 Rules
                                 </button>
+                                <button class="inner-tab" data-inner-tab="hooks" onclick="switchAgentConfigTab('hooks')">
+                                    🪝 Hooks
+                                </button>
                             </div>
 
                             <!-- 面板：Agent 列表 -->
@@ -1235,6 +1222,20 @@
                                         内置规则 + 项目 .claude/rules/ + 已安装 ConfigPack 提供的规则。
                                     </p>
                                     <div id="rulesListSettings"><div class="empty-state-sm">加载中...</div></div>
+                                </div>
+                            </div>
+
+                            <!-- 面板：Hooks -->
+                            <div class="inner-tab-panel" id="inner-panel-hooks">
+                                <div class="settings-card">
+                                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+                                        <h3 class="settings-card-title" style="margin:0;">Hooks</h3>
+                                        <button class="btn btn-sm btn-ghost" onclick="loadProjectHooks()">🔄 刷新</button>
+                                    </div>
+                                    <p class="settings-description" style="margin-bottom:12px;">
+                                        内置（~/.claude/settings.json）+ 项目（.claude/.codebuddy/settings.json）+ ConfigPack 提供的 Hook 配置。
+                                    </p>
+                                    <div id="hooksListSettings"><div class="empty-state-sm">加载中...</div></div>
                                 </div>
                             </div>
 

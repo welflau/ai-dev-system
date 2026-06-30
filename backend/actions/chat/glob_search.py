@@ -3,6 +3,7 @@ GlobAction — 用 glob 通配符在项目目录里查找文件
 GrepAction — 用正则表达式搜索文件内容
 ListDirectoryAction — 列出目录树结构
 """
+import asyncio
 import fnmatch
 import logging
 import os
@@ -16,6 +17,7 @@ logger = logging.getLogger("actions.chat.glob_search")
 
 MAX_RESULTS = 100
 MAX_CONTENT_CHARS = 8000
+FILE_IO_TIMEOUT = 20  # 秒，网络盘超时保护
 _IGNORE_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv",
                 "dist", "build", "DerivedDataCache", "Binaries", "Intermediate"}
 
@@ -103,12 +105,11 @@ class GlobAction(ActionBase):
         if not _is_safe_path(search_dir, base):
             return ActionResult(success=False, error="base_dir 超出项目目录范围")
 
-        try:
+        def _do_glob():
             matches = []
             for p in sorted(search_dir.rglob(pattern),
                             key=lambda x: x.stat().st_mtime if x.exists() else 0,
                             reverse=True):
-                # 跳过忽略目录
                 if any(part in _IGNORE_DIRS for part in p.parts):
                     continue
                 if p.is_file():
@@ -118,6 +119,16 @@ class GlobAction(ActionBase):
                         matches.append(str(p))
                 if len(matches) >= MAX_RESULTS:
                     break
+            return matches
+
+        loop = asyncio.get_event_loop()
+        try:
+            matches = await asyncio.wait_for(
+                loop.run_in_executor(None, _do_glob),
+                timeout=FILE_IO_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            return ActionResult(success=False, error=f"Glob 搜索超时（>{FILE_IO_TIMEOUT}s），目录可能在慢速网络盘上")
         except Exception as e:
             return ActionResult(success=False, error=f"glob 搜索失败: {e}")
 
@@ -213,37 +224,49 @@ class GrepAction(ActionBase):
         except re.error as e:
             return ActionResult(success=False, error=f"正则表达式无效: {e}")
 
-        results = []
-        files_to_search = []
+        def _do_grep():
+            results = []
+            files_to_search = []
+            if search_path.is_file():
+                files_to_search = [search_path]
+            else:
+                for fp in search_path.rglob("*"):
+                    if any(part in _IGNORE_DIRS for part in fp.parts):
+                        continue
+                    if not fp.is_file():
+                        continue
+                    if include and not fnmatch.fnmatch(fp.name, include):
+                        continue
+                    files_to_search.append(fp)
 
-        if search_path.is_file():
-            files_to_search = [search_path]
-        else:
-            for fp in search_path.rglob("*"):
-                if any(part in _IGNORE_DIRS for part in fp.parts):
+            for fp in files_to_search:
+                if len(results) >= MAX_RESULTS:
+                    break
+                try:
+                    text = fp.read_text(encoding="utf-8", errors="replace")
+                    for lineno, line in enumerate(text.splitlines(), 1):
+                        if regex.search(line):
+                            try:
+                                rel = str(fp.relative_to(base))
+                            except ValueError:
+                                rel = str(fp)
+                            results.append({"file": rel, "line": lineno, "content": line.rstrip()[:200]})
+                            if len(results) >= MAX_RESULTS:
+                                break
+                except Exception:
                     continue
-                if not fp.is_file():
-                    continue
-                if include and not fnmatch.fnmatch(fp.name, include):
-                    continue
-                files_to_search.append(fp)
+            return results
 
-        for fp in files_to_search:
-            if len(results) >= MAX_RESULTS:
-                break
-            try:
-                text = fp.read_text(encoding="utf-8", errors="replace")
-                for lineno, line in enumerate(text.splitlines(), 1):
-                    if regex.search(line):
-                        try:
-                            rel = str(fp.relative_to(base))
-                        except ValueError:
-                            rel = str(fp)
-                        results.append({"file": rel, "line": lineno, "content": line.rstrip()[:200]})
-                        if len(results) >= MAX_RESULTS:
-                            break
-            except Exception:
-                continue
+        loop = asyncio.get_event_loop()
+        try:
+            results = await asyncio.wait_for(
+                loop.run_in_executor(None, _do_grep),
+                timeout=FILE_IO_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            return ActionResult(success=False, error=f"Grep 搜索超时（>{FILE_IO_TIMEOUT}s），目录可能在慢速网络盘上")
+        except Exception as e:
+            return ActionResult(success=False, error=f"grep 搜索失败: {e}")
 
         if not results:
             return ActionResult(
