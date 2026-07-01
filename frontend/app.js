@@ -1926,7 +1926,8 @@ function _renderExtDetailList() {
     const filterEl = document.getElementById('extDetailFilter');
     const q = filterEl ? filterEl.value.trim().toLowerCase() : '';
     // 搜索时自动展开所有分组
-    if (q && modal._collapsedGroups) modal._collapsedGroups = new Set();
+    const modal = document.getElementById('extensionDetailModal');
+    if (q && modal && modal._collapsedGroups) modal._collapsedGroups = new Set();
 
     if (_extDetailRegistry.length === 0) {
         listEl.innerHTML = '';
@@ -1951,7 +1952,7 @@ function _renderExtDetailList() {
     let html = '';
     for (const g of groupOrder) {
         const gKey = g; // 用 group 标签作 key
-        const isCollapsed = modal._collapsedGroups && modal._collapsedGroups.has(gKey);
+        const isCollapsed = modal && modal._collapsedGroups && modal._collapsedGroups.has(gKey);
         const chevronStyle = isCollapsed ? 'transform:rotate(-90deg);' : '';
         html += `<div class="ext-grp-header" data-grp="${escapeHtml(gKey)}" onclick="_toggleExtGroup(this)"
             style="font-size:10px;color:var(--text-muted);padding:5px 4px 2px;font-weight:600;opacity:.8;text-transform:uppercase;letter-spacing:.05em;cursor:pointer;user-select:none;display:flex;align-items:center;gap:3px;">
