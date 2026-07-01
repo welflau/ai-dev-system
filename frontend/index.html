@@ -1102,6 +1102,9 @@
                                 <button class="inner-tab" data-inner-tab="packs" onclick="switchAgentConfigTab('packs')">
                                     📦 ConfigPack
                                 </button>
+                                <button class="inner-tab" data-inner-tab="openspec" onclick="switchAgentConfigTab('openspec')">
+                                    📐 OpenSpec
+                                </button>
                             </div>
 
                             <!-- 面板：Agent 列表 -->
@@ -1241,6 +1244,23 @@
                             </div>
 
                             <!-- Traits 已移到项目列表页「⚙️ 系统设置」Modal 里（系统级配置，跟具体项目无关） -->
+
+                            <!-- 面板：OpenSpec -->
+                            <div class="inner-tab-panel" id="inner-panel-openspec">
+                                <div class="settings-card">
+                                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+                                        <h3 class="settings-card-title" style="margin:0;">📐 OpenSpec</h3>
+                                    </div>
+                                    <p class="settings-description" style="margin-bottom:12px;">
+                                        项目接口规范与技术文档。
+                                    </p>
+                                    <div id="openspecContent" style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:60px 20px;color:var(--text-muted);gap:10px;">
+                                        <span style="font-size:40px;">📐</span>
+                                        <span style="font-size:15px;font-weight:500;color:var(--text-secondary);">OpenSpec</span>
+                                        <span style="font-size:13px;">即将推出</span>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     </div>
 
