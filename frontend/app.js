@@ -1015,11 +1015,16 @@ function _renderMcpView(container, data, source) {
         const toolsHtml = tools.length
             ? `<div style="margin-top:4px;">${tools.map(t => `<code class="mcp-tool-tag">${escapeHtml(t)}</code>`).join('')}</div>` : '';
         const statusHtml = srv.status
-            ? `<span class="mcp-server-status mcp-badge-${statusClass(srv.status)}" style="font-size:11px;margin-left:4px;">${statusLabel(srv.status)}</span>` : '';
+            ? `<span class="mcp-server-status mcp-badge-${statusClass(srv.status)}" style="font-size:11px;margin-left:4px;">${statusLabel(srv.status)}</span>`
+            : (typeof srv.enabled === 'boolean'
+                ? `<span class="mcp-server-status mcp-badge-${srv.enabled?'success':'muted'}" style="font-size:11px;margin-left:4px;">${srv.enabled?'✅ 已启用':'⚪ 未启用'}</span>`
+                : '');
+        const transportBadge = srv.transport
+            ? `<span style="font-size:10px;color:var(--text-muted);margin-left:4px;">${escapeHtml(srv.transport)}</span>` : '';
         const clickData = escapeHtml(JSON.stringify({name:srv.name, description:srv.description||'', source:srv.source, pack_name:srv.pack_name||null, file:srv.file||'', type:'MCP', emoji:'🔌', content:srv.command?'Command: '+srv.command:''}));
         return `<div class="mcp-server-card" style="margin-bottom:6px;cursor:pointer;" onclick='showExtensionDetail(${clickData})'>
             <div class="mcp-server-header">
-                <span class="mcp-server-name">🔌 ${escapeHtml(srv.name)}</span>${srcBadge}${statusHtml}
+                <span class="mcp-server-name">🔌 ${escapeHtml(srv.name)}</span>${srcBadge}${statusHtml}${transportBadge}
             </div>
             ${srv.description ? `<div class="mcp-server-desc">${escapeHtml(srv.description)}</div>` : ''}
             ${srv.command ? `<code style="font-size:10px;color:var(--text-muted);">${escapeHtml(srv.command)}</code>` : ''}
@@ -1028,7 +1033,7 @@ function _renderMcpView(container, data, source) {
     };
     _renderSourceGroups(container, data, source, renderItem, {
         builtin: { icon: '🏠', title: '全局 MCP',  desc: '来自 backend/mcp_servers.json' },
-        user:    { icon: '👤', title: '用户 MCP',   desc: '来自项目 .claude/settings.json mcpServers' },
+        user:    { icon: '👤', title: '用户 MCP',   desc: '来自 ~/.codebuddy、~/.claude 及项目 .claude/.codebuddy/.ads 配置' },
         pack:    { icon: '📦', title: 'Pack MCP',   desc: '已安装 ConfigPack 声明的 MCP 服务器' },
     });
 }

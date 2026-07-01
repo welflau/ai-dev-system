@@ -2487,27 +2487,34 @@ async def get_project_mcp_all(project_id: str):
     except Exception:
         pass
 
-    # 2. 用户 MCP（.claude/settings.json + .codebuddy/settings.json mcpServers）
+    # 2. 用户 / 项目 MCP —— 复用 mcp_client 的多路解析
+    #    （用户级 ~/.codebuddy、~/.claude + 项目 .claude/.codebuddy/.ads）
+    #    敏感值（headers/env/token）不返回给前端。
     user_mcps = []
-    if repo_path:
-        for cli in ("claude", "codebuddy"):
-            settings_file = Path(repo_path) / f".{cli}" / "settings.json"
-            if not settings_file.exists():
-                continue
-            try:
-                settings = json.loads(settings_file.read_text(encoding="utf-8"))
-                for name, cfg in (settings.get("mcpServers") or {}).items():
-                    builtin_names = {m["name"] for m in builtin_mcps}
-                    if name in builtin_names:
-                        continue  # 已在内置中
-                    user_mcps.append({
-                        "name": name,
-                        "description": cfg.get("description", ""),
-                        "command": cfg.get("command", ""),
-                        "source": "user", "cli": cli, "pack_name": None,
-                    })
-            except Exception:
-                pass
+    try:
+        from mcp_client import _load_project_mcp_config
+        builtin_names = {m["name"] for m in builtin_mcps}
+        merged = _load_project_mcp_config(repo_path or "")
+        for name, cfg in merged.items():
+            if name in builtin_names:
+                continue  # 已在内置中
+            src = cfg.get("_source", "user")
+            transport = (cfg.get("type") or cfg.get("transportType")
+                         or ("stdio" if cfg.get("command") else "http"))
+            user_mcps.append({
+                "name": name,
+                "description": cfg.get("description", ""),
+                "command": cfg.get("command", ""),      # 命令本身非敏感
+                "transport": transport,
+                "enabled": bool(cfg.get("enabled", True)),
+                "source": "user",
+                "cli": "codebuddy" if "codebuddy" in src else ("claude" if "claude" in src else src),
+                "config_source": src,                   # user:codebuddy / claude / ads ...
+                "pack_name": None,
+                # 注意：不返回 headers / env / url token 等敏感字段
+            })
+    except Exception as e:
+        logger.debug("加载用户/项目 MCP 失败: %s", e)
 
     # 3. Pack MCP（pack 的 shared/mcps/*.json 声明）
     pack_mcps = []
