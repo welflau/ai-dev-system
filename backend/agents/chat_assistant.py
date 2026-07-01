@@ -1358,13 +1358,15 @@ class ChatAssistantAgent(BaseAgent):
                 _skills_index += f"\n| `{_r['skill_id']}` | {_r['custom_name'] or _r['skill_id']} | 项目自定义 Skill |"
         except Exception:
             pass
-        # 追加项目 .Agent/skills/ 目录下的 Skill（agent.* 系列）
+        # 追加项目本地 Skill 目录（.ads / .Agent / .codebuddy / .claude）（agent.* 系列）
         try:
-            from actions.chat.load_skill import _get_project_agent_skills_dir, _load_agent_skill
-            _agent_dir = await _get_project_agent_skills_dir(project.get("id", ""))
-            if _agent_dir.exists():
+            from actions.chat.load_skill import _enum_project_skill_dirs, _load_agent_skill
+            _seen_skill_names = set()
+            for _agent_dir in await _enum_project_skill_dirs(project.get("id", "")):
                 for _skill_dir in sorted(_agent_dir.iterdir()):
-                    if _skill_dir.is_dir() and (_skill_dir / "SKILL.md").exists():
+                    if (_skill_dir.is_dir() and (_skill_dir / "SKILL.md").exists()
+                            and _skill_dir.name not in _seen_skill_names):
+                        _seen_skill_names.add(_skill_dir.name)
                         _, _skill_name = await _load_agent_skill(
                             f"agent.{_skill_dir.name}", project.get("id", "")
                         )

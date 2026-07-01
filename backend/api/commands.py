@@ -218,18 +218,63 @@ async def list_commands(project_id: Optional[str] = None):
         except Exception:
             pass
     cmds = get_all_commands(repo_path=repo_path)
-    return {
-        "commands": [
-            {
-                "name": name,
-                "description": info["description"],
-                "args_hint": info.get("args_hint", ""),
-                "requires_project": info.get("requires_project", False),
-                "source": info.get("source", "system"),
-            }
-            for name, info in sorted(cmds.items())
-        ]
-    }
+    result = [
+        {
+            "name": name,
+            "description": info["description"],
+            "args_hint": info.get("args_hint", ""),
+            "requires_project": info.get("requires_project", False),
+            "source": info.get("source", "system"),
+        }
+        for name, info in sorted(cmds.items())
+    ]
+    # 合并项目本地 Skill（.ads / .Agent / .codebuddy / .claude），可用 / 触发
+    if project_id:
+        try:
+            existing = {c["name"] for c in result}
+            for sk in await _list_project_skills_as_commands(project_id):
+                if sk["name"] not in existing:
+                    result.append(sk)
+                    existing.add(sk["name"])
+        except Exception as e:
+            logger.debug("合并项目 Skill 到命令列表失败: %s", e)
+    return {"commands": result}
+
+
+async def _list_project_skills_as_commands(project_id: str) -> List[Dict[str, Any]]:
+    """把项目本地 Skill 暴露成「伪命令」，供斜杠补全与触发。source=skill。"""
+    from actions.chat.load_skill import _enum_project_skill_dirs, _load_agent_skill
+    out: List[Dict[str, Any]] = []
+    seen: set = set()
+    for skill_dir_base in await _enum_project_skill_dirs(project_id):
+        for skill_dir in sorted(skill_dir_base.iterdir()):
+            if not (skill_dir.is_dir() and (skill_dir / "SKILL.md").exists()):
+                continue
+            if skill_dir.name in seen:
+                continue
+            seen.add(skill_dir.name)
+            desc = skill_dir.name
+            try:
+                _content, _name = await _load_agent_skill(
+                    f"agent.{skill_dir.name}", project_id
+                )
+                # 从 frontmatter 提取 description
+                import re as _re
+                m = _re.match(r"^---\s*\n(.*?)\n---", (_content or ""), _re.DOTALL)
+                if m:
+                    import yaml as _yaml
+                    fm = _yaml.safe_load(m.group(1)) or {}
+                    desc = fm.get("description") or _name or skill_dir.name
+            except Exception:
+                pass
+            out.append({
+                "name": skill_dir.name,
+                "description": (desc or "")[:200],
+                "args_hint": "[任务描述]",
+                "requires_project": True,
+                "source": "skill",
+            })
+    return out
 
 
 @router.post("/api/commands/{name}")
@@ -311,6 +356,23 @@ async def _dispatch_command(
 
     handler = handlers.get(name)
     if not handler:
+        # 回退：若匹配到项目本地 Skill，返回 run_skill 指令，让前端转成聊天消息触发 AI 加载执行
+        if project_id:
+            try:
+                skill_id = await _match_project_skill(name, project_id)
+                if skill_id:
+                    return CommandResult(
+                        success=True,
+                        output=f"📚 通过 Skill `{name}` 执行…",
+                        data={
+                            "type": "run_skill",
+                            "skill_id": skill_id,
+                            "skill_name": name,
+                            "args": args,
+                        },
+                    )
+            except Exception as e:
+                logger.debug("run_skill 回退匹配失败: %s", e)
         return CommandResult(success=False, output=f"未知命令：/{name}。输入 /help 查看可用命令。")
 
     try:
@@ -318,6 +380,16 @@ async def _dispatch_command(
     except Exception as e:
         logger.error("命令 /%s 执行失败: %s", name, e, exc_info=True)
         return CommandResult(success=False, output=f"命令执行失败: {e}")
+
+
+async def _match_project_skill(name: str, project_id: str) -> Optional[str]:
+    """按命令名匹配项目本地 Skill，命中返回其 skill_id（agent.<name>），否则 None。"""
+    from actions.chat.load_skill import _enum_project_skill_dirs
+    for skill_dir_base in await _enum_project_skill_dirs(project_id):
+        candidate = skill_dir_base / name / "SKILL.md"
+        if candidate.exists():
+            return f"agent.{name}"
+    return None
 
 
 # ── 内置命令实现 ──────────────────────────────────────────────────────────────

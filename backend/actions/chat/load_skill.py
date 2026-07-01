@@ -145,19 +145,22 @@ async def _get_available_skill_ids(project_id: str = None) -> list:
         except Exception:
             pass
 
-        # Layer 4: 项目 .Agent/skills/ 目录
-        agent_dir = await _get_project_agent_skills_dir(project_id)
-        if agent_dir.exists():
+        # Layer 4: 项目本地 Skill 目录（.ads / .Agent / .codebuddy / .claude）
+        seen_names: set = set()
+        for agent_dir in await _enum_project_skill_dirs(project_id):
             for skill_dir in agent_dir.iterdir():
-                if skill_dir.is_dir() and (skill_dir / "SKILL.md").exists():
+                if (skill_dir.is_dir() and (skill_dir / "SKILL.md").exists()
+                        and skill_dir.name not in seen_names):
+                    seen_names.add(skill_dir.name)
                     enabled_map[f"agent.{skill_dir.name}"] = True
 
     return [sid for sid, enabled in enabled_map.items() if enabled]
 
 
 async def _get_project_agent_skills_dir(project_id: str):
-    """返回项目 Skills 目录路径。
+    """返回项目 Skills 的「写入」目录路径（install 用）。
     P2: 优先读 .ads/skills/，降级到 .Agent/skills/（向后兼容）。
+    仅用于安装写入；「读取/枚举」请用 _enum_project_skill_dirs。
     """
     from pathlib import Path
     from database import db
@@ -176,12 +179,66 @@ async def _get_project_agent_skills_dir(project_id: str):
     return Path(__file__).parent.parent.parent / "data" / "project_skills" / project_id / ".Agent" / "skills"
 
 
+async def _enum_project_skill_dirs(project_id: str) -> list:
+    """枚举项目所有 Skill「读取」目录（存在才返回，按优先级去重）。
+
+    覆盖多套 CLI 约定：.ads/skills、.Agent/skills、.codebuddy/skills、.claude/skills。
+    这样 .codebuddy/skills/ 里的 Skill（如 ue-py-run）也能被 agent.* 索引与加载。
+    同时并入 extra_paths 里的项目路径。
+    """
+    from pathlib import Path
+    from database import db
+    import json as _json
+
+    dirs: list = []
+    repo_paths: list = []
+    try:
+        row = await db.fetch_one(
+            "SELECT git_repo_path, extra_paths FROM projects WHERE id=?", (project_id,)
+        )
+        if row:
+            if row.get("git_repo_path"):
+                repo_paths.append(row["git_repo_path"])
+            try:
+                extra = _json.loads(row.get("extra_paths") or "[]")
+                repo_paths += [
+                    p["path"] for p in extra
+                    if isinstance(p, dict) and p.get("path")
+                ]
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    for rp in repo_paths:
+        base = Path(rp)
+        for sub in (".ads/skills", ".Agent/skills", ".codebuddy/skills", ".claude/skills"):
+            d = base / sub
+            if d.exists() and d not in dirs:
+                dirs.append(d)
+
+    # 兜底：无仓库路径时的 data 目录
+    if not repo_paths:
+        fallback = (Path(__file__).parent.parent.parent / "data"
+                    / "project_skills" / project_id / ".Agent" / "skills")
+        if fallback.exists():
+            dirs.append(fallback)
+    return dirs
+
+
 async def _load_agent_skill(skill_id: str, project_id: str):
-    """加载项目 .Agent/skills/{dir_name}/SKILL.md 内容。返回 (content, name)。"""
+    """加载项目本地 Skill 的 SKILL.md 内容。返回 (content, name)。
+
+    在所有项目 Skill 目录（.ads / .Agent / .codebuddy / .claude）中按 dir_name 查找。
+    """
     dir_name = skill_id.removeprefix("agent.")
-    agent_dir = await _get_project_agent_skills_dir(project_id)
-    skill_md = agent_dir / dir_name / "SKILL.md"
-    if not skill_md.exists():
+    skill_md = None
+    for agent_dir in await _enum_project_skill_dirs(project_id):
+        candidate = agent_dir / dir_name / "SKILL.md"
+        if candidate.exists():
+            skill_md = candidate
+            break
+    if skill_md is None:
         return None, skill_id
     try:
         content = skill_md.read_text(encoding="utf-8").strip()

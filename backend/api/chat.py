@@ -27,7 +27,8 @@ _THINKING_QUEUES: Dict[str, asyncio.Queue] = {}
 _CLI_TASKS: Dict[str, Dict] = {}
 _CLI_TASKS_MAX = 200
 
-def _cli_task_add(task_id: str, title: str, tool: str, project_id: str = "") -> None:
+def _cli_task_add(task_id: str, title: str, tool: str, project_id: str = "",
+                  session_key: str = "", session_label: str = "") -> None:
     """注册一个 CLI 工具任务（内存 + DB）"""
     from utils import now_iso
     ts = now_iso()
@@ -39,6 +40,8 @@ def _cli_task_add(task_id: str, title: str, tool: str, project_id: str = "") -> 
         "created_at": ts,
         "duration_ms": 0,
         "project_id": project_id,
+        "session_key": session_key,
+        "session_label": session_label,
     }
     # 超过上限时删掉最旧的已完成任务
     if len(_CLI_TASKS) > _CLI_TASKS_MAX:
@@ -49,7 +52,8 @@ def _cli_task_add(task_id: str, title: str, tool: str, project_id: str = "") -> 
     import asyncio
     try:
         loop = asyncio.get_event_loop()
-        loop.create_task(_cli_task_db_upsert(task_id, title, tool, "running", "", 0, ts, project_id))
+        loop.create_task(_cli_task_db_upsert(task_id, title, tool, "running", "", 0, ts,
+                                             project_id, session_key, session_label))
     except Exception:
         pass
 
@@ -73,6 +77,7 @@ def _cli_task_finish(task_id: str, result: str, duration_ms: float, success: boo
         loop.create_task(_cli_task_db_upsert(
             task_id, t["title"], t["tool"], status,
             output_text, int(duration_ms), t["created_at"], t.get("project_id", ""),
+            t.get("session_key", ""), t.get("session_label", ""),
         ))
     except Exception:
         pass
@@ -80,16 +85,19 @@ def _cli_task_finish(task_id: str, result: str, duration_ms: float, success: boo
 
 async def _cli_task_db_upsert(task_id: str, title: str, tool: str, status: str,
                                output: str, duration_ms: int, created_at: str,
-                               project_id: str = "") -> None:
+                               project_id: str = "", session_key: str = "",
+                               session_label: str = "") -> None:
     from utils import now_iso
     try:
         await db.execute(
-            """INSERT INTO cli_task_log (id, project_id, title, tool, status, output, duration_ms, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """INSERT INTO cli_task_log (id, project_id, title, tool, status, output, duration_ms, created_at, updated_at, session_key, session_label)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(id) DO UPDATE SET
                    status=excluded.status, output=excluded.output,
-                   duration_ms=excluded.duration_ms, updated_at=excluded.updated_at""",
-            (task_id, project_id or "", title, tool, status, output, duration_ms, created_at, now_iso()),
+                   duration_ms=excluded.duration_ms, updated_at=excluded.updated_at,
+                   session_key=excluded.session_key, session_label=excluded.session_label""",
+            (task_id, project_id or "", title, tool, status, output, duration_ms, created_at,
+             now_iso(), session_key or "", session_label or ""),
         )
     except Exception as e:
         logger.debug("cli_task_db_upsert failed: %s", e)
@@ -657,7 +665,8 @@ async def _chat_stream_generator(
                 _task_id = ev.get("tool_use_id") or ""
                 _is_cli_tool = bool(_task_id)
                 if _is_cli_tool:
-                    _cli_task_add(_task_id, label, ev["tool"], project_id=project_id)
+                    _cli_task_add(_task_id, label, ev["tool"], project_id=project_id,
+                                  session_key=_sid)
                 yield _sse("tool_start", {
                     "tool": ev["tool"], "label": label, "input": ev.get("input", {}),
                     **({"task_id": _task_id} if _is_cli_tool else {}),
@@ -668,9 +677,13 @@ async def _chat_stream_generator(
                 args_hint   = ev.get("args_hint", "")
                 duration_ms = ev.get("duration_ms", 0)
                 result_raw = ev.get("result", "")
+                _task_id2 = ev.get("tool_use_id") or ""
                 step = {"tool": ev["tool"], "args_hint": args_hint,
                         "summary": summary, "duration_ms": duration_ms,
                         "result": result_raw}
+                # 持久化 task_id，使历史对话重载后仍能显示"跳转后台任务"按钮
+                if _task_id2:
+                    step["task_id"] = _task_id2
                 thinking_steps.append(step)
                 if _cur_round is not None:
                     # 先 flush 当前思考缓冲，再追加工具（保留穿插顺序）
@@ -680,7 +693,6 @@ async def _chat_stream_generator(
                     _cur_round["steps"].append(step)
                     _cur_round["events"].append({"type": "tool", **step})
                 # CLI 工具：更新任务存储
-                _task_id2 = ev.get("tool_use_id") or ""
                 if _task_id2:
                     _is_success = not (result_raw or "").startswith("[CLI错误]")
                     _cli_task_finish(_task_id2, result_raw, duration_ms, _is_success)
@@ -1002,14 +1014,22 @@ async def _load_session_history(
 
 
 @router.get("/cli-tasks")
-async def list_cli_tasks(project_id: str):
-    """列出 CLI 工具任务，优先从 DB 读（含历史），兜底内存"""
+async def list_cli_tasks(project_id: str, session_id: str = ""):
+    """列出 CLI 工具任务，优先从 DB 读（含历史），兜底内存。
+    传 session_id 时只返回该会话的任务（会话级绑定）。"""
     try:
-        rows = await db.fetch_all(
-            """SELECT id, project_id, title, tool, status, output, duration_ms, created_at, updated_at
-               FROM cli_task_log WHERE project_id=? ORDER BY created_at DESC LIMIT 100""",
-            (project_id,),
-        )
+        if session_id:
+            rows = await db.fetch_all(
+                """SELECT id, project_id, title, tool, status, output, duration_ms, created_at, updated_at, session_key, session_label
+                   FROM cli_task_log WHERE project_id=? AND session_key=? ORDER BY created_at DESC LIMIT 100""",
+                (project_id, session_id),
+            )
+        else:
+            rows = await db.fetch_all(
+                """SELECT id, project_id, title, tool, status, output, duration_ms, created_at, updated_at, session_key, session_label
+                   FROM cli_task_log WHERE project_id=? ORDER BY created_at DESC LIMIT 100""",
+                (project_id,),
+            )
         tasks = []
         for r in rows:
             lines = (r["output"] or "").splitlines()
@@ -1021,16 +1041,25 @@ async def list_cli_tasks(project_id: str):
                 "output_lines": mem.get("output_lines") or lines,
                 "created_at": r["created_at"],
                 "duration_ms": mem.get("duration_ms") or r["duration_ms"],
+                "session_key": r["session_key"] or "",
+                "session_label": r["session_label"] or "",
             })
         # 补上内存中尚未落库的 running 任务
         db_ids = {t["id"] for t in tasks}
         for tid, t in _CLI_TASKS.items():
-            if tid not in db_ids and t.get("project_id", "") == project_id:
-                tasks.insert(0, {**t, "type": "cli_task"})
+            if tid in db_ids or t.get("project_id", "") != project_id:
+                continue
+            if session_id and t.get("session_key", "") != session_id:
+                continue
+            tasks.insert(0, {**t, "type": "cli_task"})
         return {"tasks": tasks[:100]}
     except Exception:
         # 纯内存兜底
-        tasks = [t for t in _CLI_TASKS.values() if t.get("project_id", "") == project_id]
+        tasks = [
+            t for t in _CLI_TASKS.values()
+            if t.get("project_id", "") == project_id
+            and (not session_id or t.get("session_key", "") == session_id)
+        ]
         return {"tasks": sorted(tasks, key=lambda t: t["created_at"], reverse=True)[:50]}
 
 
@@ -2156,13 +2185,20 @@ class GlobalChatResponse(BaseModel):
 
 
 @global_chat_router.get("/cli-tasks")
-async def global_list_cli_tasks():
-    """全局聊天：列出 CLI 工具任务（DB + 内存）"""
+async def global_list_cli_tasks(session_id: str = ""):
+    """全局聊天：列出 CLI 工具任务（DB + 内存）。传 session_id 时按会话过滤。"""
     try:
-        rows = await db.fetch_all(
-            """SELECT id, project_id, title, tool, status, output, duration_ms, created_at
-               FROM cli_task_log WHERE project_id='' ORDER BY created_at DESC LIMIT 100""",
-        )
+        if session_id:
+            rows = await db.fetch_all(
+                """SELECT id, project_id, title, tool, status, output, duration_ms, created_at, session_key, session_label
+                   FROM cli_task_log WHERE project_id='' AND session_key=? ORDER BY created_at DESC LIMIT 100""",
+                (session_id,),
+            )
+        else:
+            rows = await db.fetch_all(
+                """SELECT id, project_id, title, tool, status, output, duration_ms, created_at, session_key, session_label
+                   FROM cli_task_log WHERE project_id='' ORDER BY created_at DESC LIMIT 100""",
+            )
         tasks = []
         for r in rows:
             mem = _CLI_TASKS.get(r["id"], {})
@@ -2173,15 +2209,24 @@ async def global_list_cli_tasks():
                 "output_lines": mem.get("output_lines") or (r["output"] or "").splitlines(),
                 "created_at": r["created_at"],
                 "duration_ms": mem.get("duration_ms") or r["duration_ms"],
+                "session_key": r["session_key"] or "",
+                "session_label": r["session_label"] or "",
             })
         db_ids = {t["id"] for t in tasks}
         for tid, t in _CLI_TASKS.items():
-            if tid not in db_ids and not t.get("project_id"):
-                tasks.insert(0, {**t, "type": "cli_task"})
+            if tid in db_ids or t.get("project_id"):
+                continue
+            if session_id and t.get("session_key", "") != session_id:
+                continue
+            tasks.insert(0, {**t, "type": "cli_task"})
         return {"tasks": tasks[:100]}
     except Exception:
-        tasks = sorted(_CLI_TASKS.values(), key=lambda t: t["created_at"], reverse=True)
-        return {"tasks": tasks[:50]}
+        tasks = [
+            t for t in _CLI_TASKS.values()
+            if not t.get("project_id")
+            and (not session_id or t.get("session_key", "") == session_id)
+        ]
+        return {"tasks": sorted(tasks, key=lambda t: t["created_at"], reverse=True)[:50]}
 
 
 @global_chat_router.get("/cli-tasks/{task_id}")
@@ -2319,7 +2364,8 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
                 label = _TOOL_LABELS_PY.get(ev["tool"], f"🔧 {ev['tool']}")
                 _gtask_id = ev.get("tool_use_id") or ""
                 if _gtask_id:
-                    _cli_task_add(_gtask_id, label, ev["tool"], project_id="")
+                    _cli_task_add(_gtask_id, label, ev["tool"], project_id="",
+                                  session_key=_sid)
                 yield _sse("tool_start", {
                     "tool": ev["tool"], "label": label, "input": ev.get("input", {}),
                     **({"task_id": _gtask_id} if _gtask_id else {}),
@@ -2330,8 +2376,12 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
                 args_hint   = ev.get("args_hint", "")
                 duration_ms = ev.get("duration_ms", 0)
                 result_raw_g = ev.get("result", "")
+                _gtask_id2 = ev.get("tool_use_id") or ""
                 step = {"tool": ev["tool"], "args_hint": args_hint,
                         "summary": summary, "duration_ms": duration_ms}
+                # 持久化 task_id，使历史对话重载后仍能显示"跳转后台任务"按钮
+                if _gtask_id2:
+                    step["task_id"] = _gtask_id2
                 thinking_steps.append(step)
                 if _cur_round_g is not None:
                     if _thinking_buf_g.strip():
@@ -2339,7 +2389,6 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
                         _thinking_buf_g = ""
                     _cur_round_g["steps"].append(step)
                     _cur_round_g["events"].append({"type": "tool", **step})
-                _gtask_id2 = ev.get("tool_use_id") or ""
                 if _gtask_id2:
                     _cli_task_finish(_gtask_id2, result_raw_g, duration_ms, not (result_raw_g or "").startswith("[CLI错误]"))
                 yield _sse("tool_done", {
@@ -2927,7 +2976,9 @@ async def cli_task_event(req: _CliTaskEventRequest):
     task_id = data.get("task_id", "")
 
     if etype == "cli_task_start":
-        _cli_task_add(task_id, data.get("title", task_id), "run_command", project_id=pid or "")
+        _cli_task_add(task_id, data.get("title", task_id), "run_command", project_id=pid or "",
+                      session_key=data.get("session_key", ""),
+                      session_label=data.get("session_label", ""))
 
     elif etype == "cli_task_line":
         t = _CLI_TASKS.get(task_id)

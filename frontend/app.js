@@ -775,6 +775,7 @@ function _updateChatPanelForContext() {
 
     // v0.20：切换 context 时重置当前会话（新 context 会懒加载最近会话）
     _currentChatSessionId = null;
+    _cliClearMem();  // 切项目时清空内存任务，避免跨项目串台
     const histPanel = document.getElementById('chatHistoryPanel');
     if (histPanel) histPanel.style.display = 'none';
 
@@ -11346,6 +11347,7 @@ async function switchChatSession(sessionId) {
     const container = document.getElementById('chatMessages');
     if (!container) return;
     _currentChatSessionId = sessionId;
+    _cliClearMem();  // 切会话时清空内存任务，后台任务面板跟着切
     // 关闭历史面板，让消息区可见
     const panel = document.getElementById('chatHistoryPanel');
     if (panel) panel.style.display = 'none';
@@ -11373,6 +11375,9 @@ async function switchChatSession(sessionId) {
         console.warn('[session] 切换会话失败', e);
         showChatWelcome();
     }
+    // 若后台任务面板开着，刷新为当前会话的任务
+    const _tp = document.getElementById('tasksSidePanel');
+    if (_tp && _tp.style.display !== 'none') _refreshTasksPanel();
 }
 
 /** 删除单个会话 */
@@ -12541,6 +12546,15 @@ let _cliActiveTaskId = '';  // 当前选中的任务 ID，独立存储避免 DOM
 let _cliCurrentSession = null;  // 当前对话的 session key { key, label, seq }
 let _cliSessionSeq = 0;         // 全局对话序号（每次发消息递增）
 
+/** 切换项目 / 切换历史会话时调用：清空内存任务表，避免上一个 context 的任务串台 */
+function _cliClearMem() {
+    for (const k in _CLI_TASKS_MEM) delete _CLI_TASKS_MEM[k];
+    _cliActiveTaskId = '';
+    _cliCurrentSession = null;
+    const outputEl = document.getElementById('tasksPanelOutput');
+    if (outputEl) outputEl.textContent = '选择任务查看输出';
+}
+
 /** 每次发送新对话时调用，生成新 session 分组 */
 function _cliSessionBegin(labelHint) {
     _cliSessionSeq++;
@@ -12643,10 +12657,12 @@ async function _refreshTasksPanel() {
     listEl.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);">加载中…</div>';
 
     try {
-        // 从 API 拉 cli-tasks 历史（含 DB 持久化记录）
+        // 从 API 拉 cli-tasks 历史（含 DB 持久化记录），按当前会话过滤
+        const _sid = _currentChatSessionId || '';
+        const _sq = _sid ? `?session_id=${encodeURIComponent(_sid)}` : '';
         const cliUrl = currentProjectId
-            ? `/projects/${currentProjectId}/chat/cli-tasks`
-            : `/commands/chat/cli-tasks`;
+            ? `/projects/${currentProjectId}/chat/cli-tasks${_sq}`
+            : `/chat/cli-tasks${_sq}`;
         let cliTasksFromApi = [];
         try {
             const cliResp = await api(cliUrl);
@@ -12685,10 +12701,8 @@ async function _refreshTasksPanel() {
         const SESSION_GAP_MS = 120 * 1000;
         const sessionGroups = [];
         let curGroup = null;
-        let globalIdx = 0;
         let grpCounter = 0;
         for (const t of allTasks) {
-            globalIdx++;
             const tMs = t.created_at ? new Date(t.created_at).getTime() : 0;
             const sk = t.session_key || null;
 
@@ -12710,7 +12724,8 @@ async function _refreshTasksPanel() {
                 curGroup = { key: sk || `auto_${grpCounter}`, _sk: sk, label, items: [], _lastMs: tMs };
                 sessionGroups.push(curGroup);
             }
-            curGroup.items.push({ t, idx: globalIdx });
+            // 序号按会话组内重新从 1 编号（不跨会话累加）
+            curGroup.items.push({ t, idx: curGroup.items.length + 1 });
             if (tMs) curGroup._lastMs = tMs;
         }
 
@@ -15094,6 +15109,20 @@ async function _handleSlashCommand(input) {
 
         bubble.remove();
 
+        // Skill 触发：把 skill 全文交给 AI 加载并执行（转成一条聊天消息）
+        if (resp.success && resp.data && resp.data.type === 'run_skill') {
+            const sk = resp.data;
+            const task = (sk.args || '').trim();
+            const input2 = document.getElementById('chatInput');
+            if (input2) {
+                input2.value = task
+                    ? `请使用 ${sk.skill_name} skill 完成以下任务：${task}`
+                    : `请加载并使用 ${sk.skill_name} skill，先向我说明它能做什么。`;
+                sendChatMessage();
+            }
+            return;
+        }
+
         // 渲染结果
         const out = document.createElement('div');
         out.className = 'chat-msg system-msg';
@@ -15176,7 +15205,7 @@ function _showSlashSuggestions(cmds) {
     box.innerHTML = cmds.map((c, i) => `
         <div class="slash-suggest-item${i === 0 ? ' slash-suggest-active' : ''}"
              onclick="_selectSlashSuggestion('/${c.name}')">
-            <span class="slash-cmd-name">/${c.name}</span>
+            <span class="slash-cmd-name">${c.source === 'skill' ? '📚 ' : ''}/${c.name}</span>
             ${c.args_hint ? `<span class="slash-cmd-hint">${escapeHtml(c.args_hint)}</span>` : ''}
             <span class="slash-cmd-desc">${escapeHtml(c.description)}</span>
         </div>`).join('');
