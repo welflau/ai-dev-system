@@ -2449,11 +2449,14 @@ async def get_project_commands_all(project_id: str):
             entry = {"name": name, "description": info.get("description", ""),
                      "pack_name": None, "source": src,
                      "file": fp, "content": content, "preview": content[:150]}
-            if src in ("claude", "ads", "codebuddy") or name not in builtin_names:
-                if src == "openspec":
-                    entry["source"] = "openspec"
-                else:
-                    entry["source"] = "user"
+            if src == "openspec":
+                entry["source"] = "openspec"
+                user_cmds.append(entry)
+            elif src in ("claude", "ads", "codebuddy"):
+                entry["source"] = "project"
+                user_cmds.append(entry)
+            elif name not in builtin_names:
+                entry["source"] = "user"
                 user_cmds.append(entry)
             else:
                 entry["source"] = "builtin"
@@ -2490,16 +2493,17 @@ async def get_project_commands_all(project_id: str):
                 remaining_user.append(entry)
         user_cmds = remaining_user
 
+    project_cmds  = [e for e in user_cmds if e.get("source") == "project"]
     openspec_cmds = [e for e in user_cmds if e.get("source") == "openspec"]
-    user_cmds     = [e for e in user_cmds if e.get("source") != "openspec"]
+    user_cmds     = [e for e in user_cmds if e.get("source") not in ("project", "openspec")]
 
-    all_cmds_list = builtin_cmds + user_cmds + pack_cmds + openspec_cmds
+    all_cmds_list = builtin_cmds + project_cmds + user_cmds + pack_cmds + openspec_cmds
     return {
-        "builtin": builtin_cmds, "user": user_cmds, "pack": pack_cmds,
-        "openspec": openspec_cmds, "all": all_cmds_list,
-        "counts": {"builtin": len(builtin_cmds), "user": len(user_cmds),
-                   "pack": len(pack_cmds), "openspec": len(openspec_cmds),
-                   "total": len(all_cmds_list)},
+        "builtin": builtin_cmds, "project": project_cmds, "user": user_cmds,
+        "pack": pack_cmds, "openspec": openspec_cmds, "all": all_cmds_list,
+        "counts": {"builtin": len(builtin_cmds), "project": len(project_cmds),
+                   "user": len(user_cmds), "pack": len(pack_cmds),
+                   "openspec": len(openspec_cmds), "total": len(all_cmds_list)},
     }
 
 

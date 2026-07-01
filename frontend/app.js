@@ -1698,7 +1698,8 @@ function _renderCommandView(container, data, source) {
     };
     _renderSourceGroups(container, data, source, renderItem, {
         builtin:  { icon: '🏠', title: '内置 Command',    desc: 'ADS 系统硬编码命令' },
-        user:     { icon: '👤', title: '用户 Command',    desc: '.claude/commands/ 或 .codebuddy/commands/ 或 .ads/commands/' },
+        project:  { icon: '📁', title: '项目 Command',    desc: '项目 .claude/commands/ 或 .codebuddy/commands/ 或 .ads/commands/' },
+        user:     { icon: '👤', title: '用户 Command',    desc: '系统用户主目录 ~/.claude/commands/' },
         pack:     { icon: '📦', title: 'Pack Command',    desc: '已安装 ConfigPack 提供（安装后在 .claude/commands/）' },
         openspec: { icon: '📐', title: 'OpenSpec Command', desc: '由 OpenSpec 工具提供（.codebuddy/commands/opsx/）' },
     });
