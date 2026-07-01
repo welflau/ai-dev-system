@@ -1083,11 +1083,22 @@ async function loadProjectPacks() {
         if (installed.length === 0) {
             installedEl.innerHTML = '<div class="empty-state-sm">未安装任何 ConfigPack</div>';
         } else {
-            installedEl.innerHTML = installed.map(p => `
+            installedEl.innerHTML = installed.map(p => {
+                const ruleIds = p.enabled_rules || [];
+                const skillIds = p.enabled_skills || [];
+                let gatingBadge = '';
+                if (ruleIds.length || skillIds.length) {
+                    const parts = [];
+                    if (ruleIds.length) parts.push(`rules: ${ruleIds.join(', ')}`);
+                    if (skillIds.length) parts.push(`skills: ${skillIds.length}个`);
+                    gatingBadge = `<span style="font-size:10px;padding:1px 6px;border-radius:3px;background:rgba(34,197,94,.12);color:#22c55e;font-weight:500;" title="${escapeHtml(parts.join(' | '))}" >🎓 已激活</span>`;
+                }
+                return `
                 <div class="skill-row pack-row-clickable" onclick="showPackDetail('${escapeHtml(p.pack_name)}', '${escapeHtml(p.display_name || p.pack_name)}')" style="cursor:pointer;" title="点击查看详情">
                     <div class="skill-row-info">
                         <div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;">
                             <span class="skill-row-name">📦 ${escapeHtml(p.display_name || p.name)}</span>
+                            ${gatingBadge}
                             ${(p.contains || []).map(c => `<code class="mcp-tool-tag" style="font-size:10px;">${escapeHtml(c)}</code>`).join('')}
                         </div>
                         <span class="skill-row-id">${escapeHtml(p.pack_name)}</span>
@@ -1098,7 +1109,8 @@ async function loadProjectPacks() {
                         <button class="btn btn-xs btn-secondary" onclick="reinstallPack('${escapeHtml(p.pack_name)}')" title="重新安装（覆盖）">↩ 重装</button>
                         <button class="btn btn-xs btn-ghost" onclick="removePack('${escapeHtml(p.pack_name)}', '${escapeHtml(p.display_name || p.pack_name)}')" title="移除记录（不删文件）">✕</button>
                     </div>
-                </div>`).join('');
+                </div>`;
+            }).join('');
         }
 
         // 可安装列表

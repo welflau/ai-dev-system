@@ -1975,11 +1975,25 @@ async def get_pack_detail(pack_name: str):
 async def get_project_packs(project_id: str):
     """获取项目已安装的 ConfigPack 列表。"""
     from pack_installer import list_packs
+    from skills import skill_loader
     rows = await db.fetch_all(
         "SELECT * FROM project_packs WHERE project_id = ? ORDER BY installed_at DESC",
         (project_id,)
     )
     all_packs = {p["name"]: p for p in list_packs()}
+
+    # 预先汇总每个 pack 贡献哪些内置 rule/skill
+    pack_rules: dict = {}
+    for rid, rcfg in skill_loader.rules.items():
+        pk = rcfg.get("pack") or ""
+        if pk:
+            pack_rules.setdefault(pk, []).append(rid)
+    pack_skills: dict = {}
+    for sid, scfg in skill_loader.skills.items():
+        pk = scfg.get("pack") or ""
+        if pk:
+            pack_skills.setdefault(pk, []).append(sid)
+
     result = []
     for row in rows:
         meta = all_packs.get(row["pack_name"], {})
@@ -1992,6 +2006,8 @@ async def get_project_packs(project_id: str):
             "contains": meta.get("contains", []),
             "targets": json.loads(row.get("targets") or "[]"),
             "installed_at": row["installed_at"],
+            "enabled_rules": pack_rules.get(row["pack_name"], []),
+            "enabled_skills": pack_skills.get(row["pack_name"], []),
         })
     return {"packs": result}
 

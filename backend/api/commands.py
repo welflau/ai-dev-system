@@ -487,7 +487,8 @@ async def _cmd_skills(args: str, project_id: Optional[str], context: dict) -> Co
             name = cfg.get("name", sid)
             desc = cfg.get("description", "")[:60]
             src = "market" if cfg.get("source") == "marketplace" else "built-in"
-            skill_lines.append(f"  • **{name}** `[{src}]` — {desc}")
+            pack_tag = f" `pack:{skill_loader.skills[sid].get('pack')}`" if skill_loader.skills[sid].get("pack") else ""
+            skill_lines.append(f"  • **{name}** `[{src}]`{pack_tag} — {desc}")
 
         # 全局 Rules（当前生效）
         rule_ids = skill_loader.get_rules_for_context(traits=traits, enabled_packs=_enabled_packs)
@@ -496,7 +497,8 @@ async def _cmd_skills(args: str, project_id: Optional[str], context: dict) -> Co
             cfg = skill_loader.rules.get(rid, {})
             desc = cfg.get("description", "")[:60]
             tag = "always" if cfg.get("alwaysApply") else ("scene:" + cfg.get("scene", "")) if cfg.get("scene") else "traits"
-            rule_lines.append(f"  • `{rid}` `[{tag}]` — {desc}")
+            pack_tag = f" `pack:{cfg['pack']}`" if cfg.get("pack") else ""
+            rule_lines.append(f"  • `{rid}` `[{tag}]`{pack_tag} — {desc}")
 
         # 项目规则来源
         proj_rule_summary = ""
