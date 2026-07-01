@@ -1277,7 +1277,9 @@ async function showPackDetail(packName, displayName) {
             const items = categories[catKey];
             if (!items || items.length === 0) continue;
             const cm = PACK_CATEGORY_META[catKey] || { label: catKey, icon: '📄' };
-            listHtml += `<div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;padding:6px 6px 3px;">${cm.icon} ${cm.label} (${items.length})</div>`;
+            listHtml += `<div class="pack-cat-header" data-cat="${catKey}" onclick="togglePackCat('${catKey}')" style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;padding:6px 6px 3px;cursor:pointer;user-select:none;display:flex;align-items:center;gap:4px;">
+                <span class="pack-cat-chevron" style="font-size:10px;transition:transform .15s;">▾</span>${cm.icon} ${cm.label} (${items.length})</div>`;
+            listHtml += `<div class="pack-cat-items" data-cat="${catKey}">`;
             for (const item of items) {
                 const idx = allItems.length;
                 allItems.push({ catKey, item });
@@ -1291,6 +1293,7 @@ async function showPackDetail(packName, displayName) {
                         <div style="font-size:10px;color:var(--text-muted);margin-top:1px;">${escapeHtml(item.file)}</div>
                     </div>`;
             }
+            listHtml += `</div>`;
         }
 
         if (allItems.length === 0) {
@@ -1301,12 +1304,32 @@ async function showPackDetail(packName, displayName) {
         // 存到 modal 上供 selectPackItem 使用
         modal._packItems = allItems;
         modal._packName = packName;
+        modal._collapsedCats = new Set();  // 初始全展开
 
         // 默认选中第一项
         if (allItems.length > 0) selectPackItem(0);
 
     } catch (e) {
         document.getElementById('packDetailList').innerHTML = `<div class="empty-state-sm">加载失败: ${escapeHtml(e.message)}</div>`;
+    }
+}
+
+function togglePackCat(catKey) {
+    const modal = document.getElementById('packDetailModal');
+    if (!modal) return;
+    if (!modal._collapsedCats) modal._collapsedCats = new Set();
+    const itemsEl = modal.querySelector(`.pack-cat-items[data-cat="${catKey}"]`);
+    const chevron = modal.querySelector(`.pack-cat-header[data-cat="${catKey}"] .pack-cat-chevron`);
+    if (!itemsEl) return;
+    const collapsed = modal._collapsedCats.has(catKey);
+    if (collapsed) {
+        modal._collapsedCats.delete(catKey);
+        itemsEl.style.display = '';
+        if (chevron) chevron.style.transform = '';
+    } else {
+        modal._collapsedCats.add(catKey);
+        itemsEl.style.display = 'none';
+        if (chevron) chevron.style.transform = 'rotate(-90deg)';
     }
 }
 
@@ -1382,6 +1405,9 @@ function _filterPackDetailList() {
     if (!modal || !modal._packItems) return;
     const q = (document.getElementById('packDetailFilter')?.value || '').trim().toLowerCase();
     const allItems = modal._packItems;
+    const collapsed = modal._collapsedCats || new Set();
+    // 过滤时自动展开（重置折叠状态）
+    if (q) modal._collapsedCats = new Set();
 
     const catOrder = ['agents', 'commands', 'skills', 'rules', 'mcps', 'hooks', 'scripts'];
     let listHtml = '';
@@ -1395,7 +1421,11 @@ function _filterPackDetailList() {
         }
         if (!filtered.length) continue;
         const cm = PACK_CATEGORY_META[catKey] || { label: catKey, icon: '📄' };
-        listHtml += `<div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;padding:6px 6px 3px;">${cm.icon} ${cm.label} (${filtered.length})</div>`;
+        const isCollapsed = !q && collapsed.has(catKey);
+        const chevronStyle = isCollapsed ? 'transform:rotate(-90deg);' : '';
+        listHtml += `<div class="pack-cat-header" data-cat="${catKey}" onclick="togglePackCat('${catKey}')" style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;padding:6px 6px 3px;cursor:pointer;user-select:none;display:flex;align-items:center;gap:4px;">
+            <span class="pack-cat-chevron" style="font-size:10px;transition:transform .15s;${chevronStyle}">▾</span>${cm.icon} ${cm.label} (${filtered.length})</div>`;
+        listHtml += `<div class="pack-cat-items" data-cat="${catKey}"${isCollapsed ? ' style="display:none;"' : ''}>`;
         for (const { item, idx } of filtered) {
             const accentColor = COLOR_MAP[item.color] || 'var(--border-color)';
             const emojiHtml = item.emoji ? `${escapeHtml(item.emoji)} ` : '';
@@ -1408,6 +1438,7 @@ function _filterPackDetailList() {
                 </div>`;
             visibleCount++;
         }
+        listHtml += `</div>`;
     }
     document.getElementById('packDetailList').innerHTML = visibleCount
         ? listHtml
