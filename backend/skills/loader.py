@@ -684,7 +684,7 @@ async def get_enabled_packs(project_id: str) -> Set[str]:
     if not project_id:
         return set()
     try:
-        from db import db
+        from database import db
         rows = await db.fetch_all(
             "SELECT pack_name FROM project_packs WHERE project_id = ?",
             (project_id,),
