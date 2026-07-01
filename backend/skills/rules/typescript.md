@@ -1,5 +1,6 @@
 ---
 alwaysApply: false
+pack: typescript-quality
 paths:
   - "**/*.ts"
   - "**/*.tsx"

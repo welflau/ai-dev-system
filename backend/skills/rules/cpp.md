@@ -1,5 +1,6 @@
 ---
 alwaysApply: false
+pack: code-quality
 paths:
   - "**/*.cpp"
   - "**/*.h"

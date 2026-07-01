@@ -1,5 +1,6 @@
 ---
 alwaysApply: false
+pack: vibe-workflow
 scene: autoaicr
 priority: high
 description: AutoAICR 场景规则：AI 完成编辑后的行为约束检查

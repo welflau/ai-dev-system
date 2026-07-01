@@ -463,9 +463,10 @@ async def _cmd_skills(args: str, project_id: Optional[str], context: dict) -> Co
         from skills import skill_loader
         import json as _j
 
-        # 获取项目 traits
+        # 获取项目 traits + enabled_packs
         traits = []
         repo_path = ""
+        _enabled_packs = None
         if project_id:
             from database import db
             row = await db.fetch_one("SELECT traits, git_repo_path FROM projects WHERE id = ?", (project_id,))
@@ -473,9 +474,11 @@ async def _cmd_skills(args: str, project_id: Optional[str], context: dict) -> Co
                 raw = row.get("traits") or "[]"
                 traits = _j.loads(raw) if isinstance(raw, str) else list(raw or [])
                 repo_path = row.get("git_repo_path") or ""
+            from skills.loader import get_enabled_packs as _gep
+            _enabled_packs = await _gep(project_id)
 
         # Skills
-        skill_ids = skill_loader.get_skills_for_agent("ChatAssistant", traits=traits)
+        skill_ids = skill_loader.get_skills_for_agent("ChatAssistant", traits=traits, enabled_packs=_enabled_packs)
         all_status = skill_loader.get_all_skills_status()
 
         skill_lines = []
@@ -487,7 +490,7 @@ async def _cmd_skills(args: str, project_id: Optional[str], context: dict) -> Co
             skill_lines.append(f"  • **{name}** `[{src}]` — {desc}")
 
         # 全局 Rules（当前生效）
-        rule_ids = skill_loader.get_rules_for_context(traits=traits)
+        rule_ids = skill_loader.get_rules_for_context(traits=traits, enabled_packs=_enabled_packs)
         rule_lines = []
         for rid in rule_ids:
             cfg = skill_loader.rules.get(rid, {})

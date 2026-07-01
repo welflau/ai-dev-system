@@ -1,5 +1,6 @@
 ---
 alwaysApply: false
+pack: vibe-workflow
 scene: precommit
 priority: high
 description: PreCommit 场景规则：提交前的完整 Bug Pattern 扫描

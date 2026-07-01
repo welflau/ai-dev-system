@@ -93,9 +93,10 @@ class SkillLoader:
                 "alwaysApply": bool(frontmatter.get("alwaysApply", False)),
                 "traits_match": frontmatter.get("traits_match") or {},
                 "paths": frontmatter.get("paths") or [],
-                "scene": frontmatter.get("scene") or "",   # 新增：触发场景过滤
+                "scene": frontmatter.get("scene") or "",
                 "priority": frontmatter.get("priority", "medium"),
                 "description": frontmatter.get("description", ""),
+                "pack": frontmatter.get("pack") or "",
             }
         if self.rules:
             always = [k for k, v in self.rules.items() if v["alwaysApply"]]
@@ -108,16 +109,24 @@ class SkillLoader:
         agent_type: str,
         traits: Optional[Iterable[str]] = None,
         current_file: Optional[str] = None,
+        enabled_packs: Optional[Set[str]] = None,
     ) -> List[str]:
         """返回适用于指定 Agent + traits + file 的 skill_id 列表。
 
         三层过滤 + 分组压制 + priority 排序。
+        enabled_packs=None  → 不做套件门控（旧行为）
+        enabled_packs=set() → 只加载无 pack 标注的常驻 skill
+        enabled_packs={...} → 核心 + 已启用套件
         """
         traits_set = set(traits or [])
         applicable: List[str] = []
 
         for skill_id, cfg in self.skills.items():
             if not cfg.get("enabled", False):
+                continue
+            # Pack 门控：标了 pack 且未启用 → 跳过
+            skill_pack = cfg.get("pack") or ""
+            if skill_pack and enabled_packs is not None and skill_pack not in enabled_packs:
                 continue
             # Layer 1: Agent 级
             if agent_type not in cfg.get("inject_to", []):
@@ -174,15 +183,21 @@ class SkillLoader:
         traits: Optional[Iterable[str]] = None,
         current_file: Optional[str] = None,
         scene: Optional[str] = None,
+        enabled_packs: Optional[Set[str]] = None,
     ) -> List[str]:
         """返回适用于当前 traits + file + scene 的 rule_id 列表。
 
-        alwaysApply=true 的 rule 始终生效（scene 字段为空时也生效）。
-        scene 字段非空的 rule，只在指定场景触发时注入。
+        enabled_packs=None  → 不做套件门控（旧行为）
+        enabled_packs=set() → 只加载无 pack 标注的常驻 rule（如 global.md）
+        enabled_packs={...} → 核心 + 已启用套件
         """
         traits_set = set(traits or [])
         applicable: List[str] = []
         for rule_id, cfg in self.rules.items():
+            # Pack 门控：标了 pack 且未启用 → 跳过；未标 pack（核心）→ 放行
+            rule_pack = cfg.get("pack") or ""
+            if rule_pack and enabled_packs is not None and rule_pack not in enabled_packs:
+                continue
             rule_scene = cfg.get("scene") or ""
             # scene 约束：规则声明了 scene，必须当前 scene 匹配才注入
             if rule_scene and rule_scene != (scene or ""):
@@ -327,19 +342,22 @@ class SkillLoader:
         traits: Optional[Iterable[str]] = None,
         current_file: Optional[str] = None,
         scene: Optional[str] = None,
+        enabled_packs: Optional[Set[str]] = None,
     ) -> str:
         """组合规则 + skills，返回注入 system prompt 的文本。
 
         scene 参数用于场景过滤（如 "autoaicr" / "precommit"）。
+        enabled_packs=None 保持旧行为（不门控）；set() 或 {...} 按套件过滤。
         空字符串表示这个 Agent 在此上下文下没有任何可注入内容。
         """
         traits_tuple = tuple(sorted(traits or []))
-        cache_key = (agent_type, traits_tuple, current_file or "", scene or "")
+        packs_key = tuple(sorted(enabled_packs)) if enabled_packs is not None else None
+        cache_key = (agent_type, traits_tuple, current_file or "", scene or "", packs_key)
         if cache_key in self._agent_prompt_cache:
             return self._agent_prompt_cache[cache_key]
 
-        rule_ids = self.get_rules_for_context(traits, current_file, scene=scene)
-        skill_ids = self.get_skills_for_agent(agent_type, traits, current_file)
+        rule_ids = self.get_rules_for_context(traits, current_file, scene=scene, enabled_packs=enabled_packs)
+        skill_ids = self.get_skills_for_agent(agent_type, traits, current_file, enabled_packs=enabled_packs)
 
         sections: List[str] = []
         loaded_rules: List[str] = []
@@ -379,13 +397,14 @@ class SkillLoader:
         self,
         agent_type: str,
         traits: Optional[Iterable[str]] = None,
+        enabled_packs: Optional[Set[str]] = None,
     ) -> str:
         """生成 Skill 索引表（只含名称+描述+触发场景，不含全文）。
 
         用于主动触发架构：system prompt 只注入索引，AI 按需调用 load_skill 加载全文。
         返回空字符串表示无可用 Skill。
         """
-        skill_ids = self.get_skills_for_agent(agent_type, traits)
+        skill_ids = self.get_skills_for_agent(agent_type, traits, enabled_packs=enabled_packs)
         if not skill_ids:
             return ""
 
@@ -654,6 +673,28 @@ def _match_paths(current_file: str, patterns: List[str]) -> bool:
 
 
 _FM_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n(.*)$", re.DOTALL)
+
+
+async def get_enabled_packs(project_id: str) -> Set[str]:
+    """查询项目已启用的套件名称集合（查 project_packs 表）。
+
+    SkillLoader 是同步单例，异步查询放在调用方（async 上下文）解析后
+    以 enabled_packs 参数传入 loader 的同步方法。
+    """
+    if not project_id:
+        return set()
+    try:
+        from db import db
+        rows = await db.fetch_all(
+            "SELECT pack_name FROM project_packs WHERE project_id = ?",
+            (project_id,),
+        )
+        return {r["pack_name"] for r in rows}
+    except Exception as e:
+        logger.warning("get_enabled_packs 查询失败 project_id=%s: %s", project_id, e)
+        return set()
+
+
 
 
 def _parse_frontmatter(text: str) -> Tuple[dict, str]:

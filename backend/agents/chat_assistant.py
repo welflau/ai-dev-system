@@ -1310,12 +1310,20 @@ class ChatAssistantAgent(BaseAgent):
             project_traits = []
         project_traits = [str(t) for t in project_traits]
 
+        # 套件门控：查项目已启用的套件，按需过滤 rules/skills
+        _enabled_packs: set = set()
+        try:
+            from skills.loader import get_enabled_packs as _get_enabled_packs
+            _enabled_packs = await _get_enabled_packs(project.get("id", ""))
+        except Exception:
+            pass
+
         # Rules 层：全局编码准则（alwaysApply=true）放在 system prompt 最前面
         # rules/global.md 包含语言一致性 / 命名 / 安全红线等，对所有项目生效
         rules_content = ""
         try:
             from skills import skill_loader as _sl
-            rule_ids = _sl.get_rules_for_context(traits=project_traits)
+            rule_ids = _sl.get_rules_for_context(traits=project_traits, enabled_packs=_enabled_packs)
             rules_parts = []
             for rid in rule_ids:
                 content = _sl.rules.get(rid, {}).get("content", "")
@@ -1344,7 +1352,7 @@ class ChatAssistantAgent(BaseAgent):
         # AI 按需调用 load_skill 工具加载具体内容。
         try:
             from skills import skill_loader as _sl
-            _skills_index = _sl.build_index_for_agent(self.agent_type, traits=project_traits)
+            _skills_index = _sl.build_index_for_agent(self.agent_type, traits=project_traits, enabled_packs=_enabled_packs)
         except Exception:
             _skills_index = ""
         # 追加项目自定义 Skill（custom.* 系列）
@@ -1605,7 +1613,7 @@ UnrealBuildTool.exe {ProjectName}Editor Win64 Development "{path/to/project.upro
         global_rules_content = ""
         try:
             from skills import skill_loader as _sl
-            rule_ids = _sl.get_rules_for_context(traits=[])
+            rule_ids = _sl.get_rules_for_context(traits=[], enabled_packs=set())
             rules_parts = []
             for rid in rule_ids:
                 content = _sl.rules.get(rid, {}).get("content", "")
@@ -1619,7 +1627,7 @@ UnrealBuildTool.exe {ProjectName}Editor Win64 Development "{path/to/project.upro
         # v0.20 主动触发：全局聊天同样只注入索引
         try:
             from skills import skill_loader as _sl
-            _skills_index = _sl.build_index_for_agent(self.agent_type)
+            _skills_index = _sl.build_index_for_agent(self.agent_type, enabled_packs=set())
         except Exception:
             _skills_index = ""
         skills_section = f"""
