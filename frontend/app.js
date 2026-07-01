@@ -1447,10 +1447,11 @@ function _filterPackDetailList() {
 }
 
 const _SOURCE_META = {
-    builtin: { label: '内置', color: '#6366f1', bg: 'rgba(99,102,241,.12)' },
-    project: { label: '项目', color: '#22c55e', bg: 'rgba(34,197,94,.12)'  },
-    user:    { label: '用户', color: '#0ea5e9', bg: 'rgba(14,165,233,.12)'  },
-    pack:    { label: 'Pack', color: '#f97316', bg: 'rgba(249,115,22,.12)' },
+    builtin:  { label: '内置',     color: '#6366f1', bg: 'rgba(99,102,241,.12)' },
+    project:  { label: '项目',     color: '#22c55e', bg: 'rgba(34,197,94,.12)'  },
+    user:     { label: '用户',     color: '#0ea5e9', bg: 'rgba(14,165,233,.12)'  },
+    pack:     { label: 'Pack',     color: '#f97316', bg: 'rgba(249,115,22,.12)' },
+    openspec: { label: 'OpenSpec', color: '#a855f7', bg: 'rgba(168,85,247,.12)' },
 };
 
 function _injectSourceFilter(wrapper, containerId, counts, switchFn) {
@@ -1463,11 +1464,12 @@ function _injectSourceFilter(wrapper, containerId, counts, switchFn) {
         wrapper.insertBefore(bar, container);
     }
     const chips = [
-        { key: 'all',     label: `全部 ${counts.total}` },
-        { key: 'builtin', label: `内置 ${counts.builtin}` },
-        { key: 'project', label: `项目 ${counts.project}`, hide: !counts.project },
-        { key: 'user',    label: `用户 ${counts.user}`,    hide: !counts.user },
-        { key: 'pack',    label: `Pack ${counts.pack}`,    hide: counts.pack === 0 },
+        { key: 'all',      label: `全部 ${counts.total}` },
+        { key: 'builtin',  label: `内置 ${counts.builtin}` },
+        { key: 'project',  label: `项目 ${counts.project}`,    hide: !counts.project },
+        { key: 'user',     label: `用户 ${counts.user}`,       hide: !counts.user },
+        { key: 'pack',     label: `Pack ${counts.pack}`,       hide: !counts.pack },
+        { key: 'openspec', label: `OpenSpec ${counts.openspec || 0}`, hide: !counts.openspec },
     ].filter(c => !c.hide);
     bar.innerHTML = chips.map(c => `
         <button class="src-filter-chip" data-panel="${containerId}" data-source="${c.key}"
@@ -1510,7 +1512,7 @@ function _renderSourceGroups(container, data, source, renderItem, groupTitles) {
         return;
     }
     let html = '';
-    for (const key of ['builtin', 'project', 'user', 'pack']) {
+    for (const key of ['builtin', 'project', 'user', 'pack', 'openspec']) {
         const list = data[key] || [];
         if (!list.length) continue;
         const sm = _SOURCE_META[key];
@@ -1623,10 +1625,11 @@ function _renderSkillView(container, data, source) {
         </div>`;
     };
     _renderSourceGroups(container, data, source, renderItem, {
-        builtin: { icon: '🏠', title: '内置 Skill', desc: 'ADS 系统内置，可按项目开关' },
-        project: { icon: '📁', title: '项目 Skill',  desc: '项目仓库 .claude/skills/ 或 .codebuddy/skills/' },
-        user:    { icon: '👤', title: '用户 Skill',  desc: '系统用户主目录 ~/.claude/skills/ 或 ~/.codebuddy/skills/' },
-        pack:    { icon: '📦', title: 'Pack Skill',   desc: '已安装 ConfigPack 提供' },
+        builtin:  { icon: '🏠', title: '内置 Skill',    desc: 'ADS 系统内置，可按项目开关' },
+        project:  { icon: '📁', title: '项目 Skill',    desc: '项目仓库 .claude/skills/ 或 .codebuddy/skills/' },
+        user:     { icon: '👤', title: '用户 Skill',    desc: '系统用户主目录 ~/.claude/skills/ 或 ~/.codebuddy/skills/' },
+        pack:     { icon: '📦', title: 'Pack Skill',    desc: '已安装 ConfigPack 提供' },
+        openspec: { icon: '📐', title: 'OpenSpec Skill', desc: '由 OpenSpec 工具提供（.codebuddy/skills/openspec-*/）' },
     });
 }
 
@@ -1694,9 +1697,10 @@ function _renderCommandView(container, data, source) {
         </div>`;
     };
     _renderSourceGroups(container, data, source, renderItem, {
-        builtin: { icon: '🏠', title: '内置 Command', desc: 'ADS 系统硬编码命令' },
-        user:    { icon: '👤', title: '用户 Command',  desc: '.claude/commands/ 或 .ads/commands/' },
-        pack:    { icon: '📦', title: 'Pack Command',   desc: '已安装 ConfigPack 提供（安装后在 .claude/commands/）' },
+        builtin:  { icon: '🏠', title: '内置 Command',    desc: 'ADS 系统硬编码命令' },
+        user:     { icon: '👤', title: '用户 Command',    desc: '.claude/commands/ 或 .codebuddy/commands/ 或 .ads/commands/' },
+        pack:     { icon: '📦', title: 'Pack Command',    desc: '已安装 ConfigPack 提供（安装后在 .claude/commands/）' },
+        openspec: { icon: '📐', title: 'OpenSpec Command', desc: '由 OpenSpec 工具提供（.codebuddy/commands/opsx/）' },
     });
 }
 
@@ -1825,7 +1829,7 @@ let _extDetailActiveIdx = 0;
 
 function _registerExtItems(data, groupTitles) {
     _extDetailRegistry = [];
-    for (const key of ['builtin', 'project', 'user', 'pack']) {
+    for (const key of ['builtin', 'project', 'user', 'pack', 'openspec']) {
         const list = data[key] || [];
         if (!list.length) continue;
         const gt = groupTitles[key] || { title: key, icon: '' };

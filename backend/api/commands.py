@@ -177,9 +177,15 @@ def _load_project_commands(repo_path: str) -> Dict[str, Dict[str, Any]]:
             parts = list(rel.parts)
             parts[-1] = md_file.stem
             name = "/".join(parts)
+            # 子目录含 openspec/opsx 的归为 openspec 来源
+            first_part = parts[0].lower() if len(parts) > 1 else ""
+            effective_source = (
+                "openspec" if "openspec" in first_part or first_part == "opsx"
+                else source_label
+            )
             try:
                 result[name] = _parse_command_md(
-                    md_file.read_text(encoding="utf-8"), name, source=source_label
+                    md_file.read_text(encoding="utf-8"), name, source=effective_source
                 )
             except Exception as e:
                 logger.warning("加载项目命令失败 %s: %s", md_file.name, e)

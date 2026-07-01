@@ -2303,7 +2303,10 @@ async def get_project_skills_all(project_id: str):
             try:
                 content = skill_md.read_text(encoding="utf-8")
                 info = _parse_skill_md(content, stem)
-                info["source"] = "pack" if pack_origin else default_source
+                info["source"] = "pack" if pack_origin else (
+                    "openspec" if stem.lower().startswith("openspec") or "openspec" in str(skills_dir).lower()
+                    else default_source
+                )
                 info["pack_name"] = pack_origin
                 info["id"] = info["name"]
                 info["file"] = str(skill_md)
@@ -2337,13 +2340,17 @@ async def get_project_skills_all(project_id: str):
             home / f".{cli}" / "skills", "user", base_path=home
         )
 
-    # 4. Pack skills — 从 project_skills / user_skills 中分拆
+    # 4. Pack + OpenSpec skills — 从 project_skills / user_skills 中分拆
     pack_skills = (
         [s for s in project_skills if s.get("source") == "pack"] +
         [s for s in user_skills    if s.get("source") == "pack"]
     )
-    project_skills = [s for s in project_skills if s.get("source") != "pack"]
-    user_skills    = [s for s in user_skills    if s.get("source") != "pack"]
+    openspec_skills = (
+        [s for s in project_skills if s.get("source") == "openspec"] +
+        [s for s in user_skills    if s.get("source") == "openspec"]
+    )
+    project_skills = [s for s in project_skills if s.get("source") not in ("pack", "openspec")]
+    user_skills    = [s for s in user_skills    if s.get("source") not in ("pack", "openspec")]
 
     # 去重：同一文件路径可能因 .claude/.codebuddy 双目录或 extra_paths 重复扫描
     def _dedup(lst: list) -> list:
@@ -2356,22 +2363,25 @@ async def get_project_skills_all(project_id: str):
                 out.append(s)
         return out
 
-    project_skills = _dedup(project_skills)
-    user_skills    = _dedup(user_skills)
-    pack_skills    = _dedup(pack_skills)
+    project_skills  = _dedup(project_skills)
+    user_skills     = _dedup(user_skills)
+    pack_skills     = _dedup(pack_skills)
+    openspec_skills = _dedup(openspec_skills)
 
-    all_skills = builtin_skills + project_skills + user_skills + pack_skills
+    all_skills = builtin_skills + project_skills + user_skills + pack_skills + openspec_skills
     return {
         "builtin":  builtin_skills,
         "project":  project_skills,
         "user":     user_skills,
         "pack":     pack_skills,
+        "openspec": openspec_skills,
         "all":      all_skills,
         "counts": {
             "builtin":  len(builtin_skills),
             "project":  len(project_skills),
             "user":     len(user_skills),
             "pack":     len(pack_skills),
+            "openspec": len(openspec_skills),
             "total":    len(all_skills),
         },
     }
@@ -2439,8 +2449,11 @@ async def get_project_commands_all(project_id: str):
             entry = {"name": name, "description": info.get("description", ""),
                      "pack_name": None, "source": src,
                      "file": fp, "content": content, "preview": content[:150]}
-            if src in ("claude", "ads") or name not in builtin_names:
-                entry["source"] = "user"
+            if src in ("claude", "ads", "codebuddy") or name not in builtin_names:
+                if src == "openspec":
+                    entry["source"] = "openspec"
+                else:
+                    entry["source"] = "user"
                 user_cmds.append(entry)
             else:
                 entry["source"] = "builtin"
@@ -2477,11 +2490,16 @@ async def get_project_commands_all(project_id: str):
                 remaining_user.append(entry)
         user_cmds = remaining_user
 
-    all_cmds_list = builtin_cmds + user_cmds + pack_cmds
+    openspec_cmds = [e for e in user_cmds if e.get("source") == "openspec"]
+    user_cmds     = [e for e in user_cmds if e.get("source") != "openspec"]
+
+    all_cmds_list = builtin_cmds + user_cmds + pack_cmds + openspec_cmds
     return {
-        "builtin": builtin_cmds, "user": user_cmds, "pack": pack_cmds, "all": all_cmds_list,
+        "builtin": builtin_cmds, "user": user_cmds, "pack": pack_cmds,
+        "openspec": openspec_cmds, "all": all_cmds_list,
         "counts": {"builtin": len(builtin_cmds), "user": len(user_cmds),
-                   "pack": len(pack_cmds), "total": len(all_cmds_list)},
+                   "pack": len(pack_cmds), "openspec": len(openspec_cmds),
+                   "total": len(all_cmds_list)},
     }
 
 
