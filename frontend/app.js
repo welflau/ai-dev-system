@@ -1486,6 +1486,15 @@ function _setSourceFilter(containerId, source) {
     });
 }
 
+function _toggleSourceGroup(headerEl) {
+    const itemsEl = headerEl.nextElementSibling;
+    const chevron = headerEl.querySelector('.src-grp-chevron');
+    if (!itemsEl) return;
+    const collapsed = itemsEl.style.display === 'none';
+    itemsEl.style.display = collapsed ? '' : 'none';
+    if (chevron) chevron.style.transform = collapsed ? '' : 'rotate(-90deg)';
+}
+
 function _renderSourceGroups(container, data, source, renderItem, groupTitles) {
     // 每次渲染全量视图时更新条目 registry（供详情列表使用）
     if (source === 'all') _registerExtItems(data, groupTitles);
@@ -1521,14 +1530,14 @@ function _renderSourceGroups(container, data, source, renderItem, groupTitles) {
             cardsHtml = list.map(renderItem).join('');
         }
         html += `<div style="margin-bottom:14px;">
-            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;padding:6px 8px;background:var(--bg-elevated);border-radius:6px;cursor:pointer;"
-                 onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'':'none'">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;padding:6px 8px;background:var(--bg-elevated);border-radius:6px;cursor:pointer;user-select:none;"
+                 onclick="_toggleSourceGroup(this)">
+                <span style="font-size:10px;transition:transform .15s;" class="src-grp-chevron">▾</span>
                 <span style="font-size:13px;font-weight:600;">${escapeHtml(gt.icon)} ${escapeHtml(gt.title)}</span>
                 <span style="font-size:11px;padding:1px 6px;border-radius:10px;background:${sm.bg};color:${sm.color};">${list.length}</span>
                 <span style="font-size:11px;color:var(--text-muted);flex:1;">${escapeHtml(gt.desc)}</span>
-                <span style="font-size:11px;color:var(--text-muted);">▾</span>
             </div>
-            <div>${cardsHtml}</div>
+            <div class="src-grp-items">${cardsHtml}</div>
         </div>`;
     }
     container.innerHTML = html || '<div class="empty-state-sm">暂无数据</div>';
@@ -1837,6 +1846,25 @@ function _registerExtItems(data, groupTitles) {
     }
 }
 
+function _toggleExtGroup(headerEl) {
+    const modal = document.getElementById('extensionDetailModal');
+    if (!modal._collapsedGroups) modal._collapsedGroups = new Set();
+    const grpKey = headerEl.dataset.grp;
+    const itemsEl = headerEl.nextElementSibling;
+    const chevron = headerEl.querySelector('.ext-grp-chevron');
+    if (!itemsEl) return;
+    const collapsed = modal._collapsedGroups.has(grpKey);
+    if (collapsed) {
+        modal._collapsedGroups.delete(grpKey);
+        itemsEl.style.display = '';
+        if (chevron) chevron.style.transform = '';
+    } else {
+        modal._collapsedGroups.add(grpKey);
+        itemsEl.style.display = 'none';
+        if (chevron) chevron.style.transform = 'rotate(-90deg)';
+    }
+}
+
 function showExtensionDetail(itemOrIdx) {
     const isIdx = typeof itemOrIdx === 'number';
     let item, activeIdx;
@@ -1897,6 +1925,8 @@ function _renderExtDetailList() {
     const activeIdx = _extDetailActiveIdx;
     const filterEl = document.getElementById('extDetailFilter');
     const q = filterEl ? filterEl.value.trim().toLowerCase() : '';
+    // 搜索时自动展开所有分组
+    if (q && modal._collapsedGroups) modal._collapsedGroups = new Set();
 
     if (_extDetailRegistry.length === 0) {
         listEl.innerHTML = '';
@@ -1920,7 +1950,13 @@ function _renderExtDetailList() {
 
     let html = '';
     for (const g of groupOrder) {
-        html += `<div style="font-size:10px;color:var(--text-muted);padding:5px 4px 2px;font-weight:600;opacity:.7;text-transform:uppercase;letter-spacing:.05em;">${escapeHtml(g)}</div>`;
+        const gKey = g; // 用 group 标签作 key
+        const isCollapsed = modal._collapsedGroups && modal._collapsedGroups.has(gKey);
+        const chevronStyle = isCollapsed ? 'transform:rotate(-90deg);' : '';
+        html += `<div class="ext-grp-header" data-grp="${escapeHtml(gKey)}" onclick="_toggleExtGroup(this)"
+            style="font-size:10px;color:var(--text-muted);padding:5px 4px 2px;font-weight:600;opacity:.8;text-transform:uppercase;letter-spacing:.05em;cursor:pointer;user-select:none;display:flex;align-items:center;gap:3px;">
+            <span class="ext-grp-chevron" style="font-size:9px;transition:transform .15s;${chevronStyle}">▾</span>${escapeHtml(g)}</div>`;
+        html += `<div class="ext-grp-items"${isCollapsed ? ' style="display:none;"' : ''}>`;
         for (const { item, idx } of groups[g]) {
             const isActive = idx === activeIdx;
             const em = item.emoji || '';
@@ -1932,6 +1968,7 @@ function _renderExtDetailList() {
                 ${em ? `<span style="margin-right:3px;">${escapeHtml(em)}</span>` : ''}${escapeHtml(item.name)}
             </div>`;
         }
+        html += `</div>`;
     }
     listEl.innerHTML = html;
 
