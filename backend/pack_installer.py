@@ -209,7 +209,11 @@ def install_pack(
           mcps/*.json    → claude: merge 到 settings.json；codebuddy: .codebuddy/mcps/ 直接 copy
           hooks/*.json   → claude: merge 到 settings.json hooks 节；codebuddy: .codebuddy/hooks/ 直接 copy
         """
-        dst_root.mkdir(parents=True, exist_ok=True)
+        try:
+            dst_root.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            errors.append(f".{target}/: 创建目录失败 ({e})")
+            return
         for src_file in sorted(src_dir.rglob("*")):
             if src_file.is_dir():
                 continue
@@ -290,9 +294,12 @@ def install_pack(
                 _merge_json(dst, json.loads(content))
                 copied_files.append(f"{display} [merge]")
             else:
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                dst.write_text(content, encoding="utf-8")
-                copied_files.append(display)
+                try:
+                    dst.parent.mkdir(parents=True, exist_ok=True)
+                    dst.write_text(content, encoding="utf-8")
+                    copied_files.append(display)
+                except Exception as e:
+                    errors.append(f"{display}: 写入失败 ({e})")
 
     # 1. 安装 shared/（安装到所有目标 CLI）
     shared_dir = pack_dir / "shared"
