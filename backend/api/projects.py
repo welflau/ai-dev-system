@@ -2340,8 +2340,27 @@ async def get_project_skills_all(project_id: str):
             home / f".{cli}" / "skills", "user", base_path=home
         )
 
-    # 4. Pack + OpenSpec skills — 从 project_skills / user_skills 中分拆
-    pack_skills = (
+    # 4. Pack + OpenSpec skills — 先从项目 packs/ 子目录直接扫，再从 project_skills 中分拆旧格式
+    pack_skills = []
+    for rp in all_repo_paths:
+        rp_path = Path(rp)
+        for cli in ("claude", "codebuddy"):
+            packs_root = rp_path / f".{cli}" / "packs"
+            if not packs_root.exists():
+                continue
+            for pack_dir in sorted(packs_root.iterdir()):
+                if not pack_dir.is_dir():
+                    continue
+                pn = pack_dir.name
+                skills_dir = pack_dir / "skills"
+                if skills_dir.exists():
+                    found = await _scan_skills_dir(skills_dir, "pack", base_path=rp_path)
+                    for s in found:
+                        s["pack_name"] = pn
+                    pack_skills += found
+
+    # 旧格式兼容：从 project_skills / user_skills 里分拆（source == "pack" by stem match）
+    pack_skills += (
         [s for s in project_skills if s.get("source") == "pack"] +
         [s for s in user_skills    if s.get("source") == "pack"]
     )
@@ -2464,7 +2483,7 @@ async def get_project_commands_all(project_id: str):
     except Exception:
         pass
 
-    # 2. Pack commands — 从 user_cmds 里识别来自 pack 的（对比 pack 库目录同名文件）
+    # 2. Pack commands — 优先查项目 packs/ 子目录，再回退到库路径匹配
     pack_cmds = []
     if repo_path:
         installed_pack_names = [
@@ -2472,9 +2491,32 @@ async def get_project_commands_all(project_id: str):
                 "SELECT pack_name FROM project_packs WHERE project_id = ?", (project_id,)
             )
         ]
-        # 重新分类 user_cmds：若同名文件存在于某个 pack 库目录，则归为 pack 来源
+
+        # 直接扫项目 packs/ 子目录（新格式）
+        for pn in installed_pack_names:
+            for cli in ("claude", "codebuddy"):
+                pack_cmd_dir = _Path(repo_path) / f".{cli}" / "packs" / pn / "commands"
+                if pack_cmd_dir.exists():
+                    for f in sorted(pack_cmd_dir.rglob("*.md")):
+                        rel = f.relative_to(pack_cmd_dir)
+                        parts = list(rel.parts); parts[-1] = f.stem
+                        name = "/".join(parts)
+                        try:
+                            content = f.read_text(encoding="utf-8")
+                            from api.commands import _parse_command_md
+                            entry = _parse_command_md(content, name, source="pack")
+                            entry.update({"name": name, "pack_name": pn, "source": "pack",
+                                          "file": str(f), "content": content, "preview": content[:150]})
+                            pack_cmds.append(entry)
+                        except Exception:
+                            pass
+
+        # 旧格式兼容：从 user_cmds 里按库路径反查
         remaining_user = []
         for entry in user_cmds:
+            if entry.get("source") in ("project", "openspec"):
+                remaining_user.append(entry)
+                continue
             pack_origin = None
             name = entry["name"]
             for pn in installed_pack_names:
@@ -2673,32 +2715,50 @@ async def get_project_rules_all(project_id: str):
                 except Exception:
                     pass
 
-    # 3. Pack rules
+    # 3. Pack rules — 优先从项目 packs/ 副本读，无副本时回退到库路径
     pack_rules = []
     installed_rows = await db.fetch_all(
         "SELECT pack_name FROM project_packs WHERE project_id = ?", (project_id,)
     )
     for row in installed_rows:
         pn = row["pack_name"]
-        for sub in ("shared", "claude", "codebuddy"):
-            # rules.md 单文件
-            rules_md = _PACKS_DIR / pn / sub / "rules.md"
-            if rules_md.exists():
-                try:
-                    content = rules_md.read_text(encoding="utf-8")
-                    info = _parse_rule_md(content, f"{pn}-rules")
-                    info["file"] = str(rules_md)
-                    info["source"] = "pack"
-                    info["pack_name"] = pn
-                    info["scope"] = sub
-                    pack_rules.append(info)
-                except Exception:
-                    pass
-            # rules/ 子目录
-            pack_rules += _scan_rules_dir(
-                _PACKS_DIR / pn / sub / "rules",
-                source="pack", pack_name=pn, scope=sub
-            )
+        found_in_project = False
+        # 先查项目 .claude/packs/{pn}/ 和 .codebuddy/packs/{pn}/
+        if repo_path:
+            for cli in ("claude", "codebuddy"):
+                proj_pack_rules = Path(repo_path) / f".{cli}" / "packs" / pn / "rules"
+                if proj_pack_rules.exists():
+                    pack_rules += _scan_rules_dir(proj_pack_rules, source="pack", pack_name=pn, cli=cli)
+                    found_in_project = True
+                # rules.md（旧格式单文件，直接在 packs/{pn}/）
+                proj_rules_md = Path(repo_path) / f".{cli}" / "packs" / pn / "rules.md"
+                if proj_rules_md.exists():
+                    try:
+                        content = proj_rules_md.read_text(encoding="utf-8")
+                        info = _parse_rule_md(content, f"{pn}-rules")
+                        info.update({"file": str(proj_rules_md), "source": "pack",
+                                     "pack_name": pn, "cli": cli})
+                        pack_rules.append(info)
+                        found_in_project = True
+                    except Exception:
+                        pass
+        # 无项目副本则回退到库路径（兼容旧安装）
+        if not found_in_project:
+            for sub in ("shared", "claude", "codebuddy"):
+                rules_md = _PACKS_DIR / pn / sub / "rules.md"
+                if rules_md.exists():
+                    try:
+                        content = rules_md.read_text(encoding="utf-8")
+                        info = _parse_rule_md(content, f"{pn}-rules")
+                        info.update({"file": str(rules_md), "source": "pack",
+                                     "pack_name": pn, "scope": sub})
+                        pack_rules.append(info)
+                    except Exception:
+                        pass
+                pack_rules += _scan_rules_dir(
+                    _PACKS_DIR / pn / sub / "rules",
+                    source="pack", pack_name=pn, scope=sub
+                )
 
     all_rules = builtin_rules + project_rules + pack_rules
     return {

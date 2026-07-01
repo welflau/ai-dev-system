@@ -283,9 +283,9 @@ def install_pack(
                 continue
 
             # ── 其余文件（commands / skills / agents / scripts / rules/子目录）
-            # 路径原样保留，直接 copy 到 dst_root/rel
-            dst = dst_root / rel
-            display = f".{target}/{rel}"
+            # 安装到 .{target}/packs/{pack_name}/ 子目录，与用户自己的文件分开
+            dst = dst_root / "packs" / pack_name / rel
+            display = f".{target}/packs/{pack_name}/{rel}"
 
             if src_file.name in ("CLAUDE.md", "CODEBUDDY.md"):
                 _append_to_main_md(dst, pack_name, content)

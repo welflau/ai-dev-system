@@ -1084,7 +1084,10 @@ async function loadProjectPacks() {
         if (installed.length === 0) {
             installedEl.innerHTML = '<div class="empty-state-sm">未安装任何 ConfigPack</div>';
         } else {
-            installedEl.innerHTML = installed.map(p => {
+            const migrationHint = `<div style="font-size:11px;padding:6px 10px;border-radius:6px;background:rgba(249,115,22,.08);color:#f97316;margin-bottom:8px;">
+                ⚠️ 套件文件现在安装到 <code>.codebuddy/packs/{pack名}/</code> 子目录。点击 <strong>↩ 重装</strong> 可将已有套件迁移到新路径。
+            </div>`;
+            installedEl.innerHTML = migrationHint + installed.map(p => {
                 const ruleIds = p.enabled_rules || [];
                 const skillIds = p.enabled_skills || [];
                 let gatingBadge = '';
@@ -1104,7 +1107,7 @@ async function loadProjectPacks() {
                         </div>
                         <span class="skill-row-id">${escapeHtml(p.pack_name)}</span>
                         ${p.description ? `<span class="skill-row-desc">${escapeHtml(p.description)}</span>` : ''}
-                        <span style="font-size:10px;color:var(--text-muted);">安装于 ${escapeHtml((p.installed_at||'').slice(0,16).replace('T',' '))} · 目标: ${escapeHtml((p.targets||[]).join(', ') || '—')}</span>
+                        <span style="font-size:10px;color:var(--text-muted);">安装于 ${escapeHtml((p.installed_at||'').slice(0,16).replace('T',' '))} · 目标: ${escapeHtml((p.targets||[]).join(', ') || '—')} · 路径: <code>.codebuddy/packs/${escapeHtml(p.pack_name)}/</code></span>
                     </div>
                     <div class="skill-row-actions" onclick="event.stopPropagation()">
                         <button class="btn btn-xs btn-secondary" onclick="reinstallPack('${escapeHtml(p.pack_name)}')" title="重新安装（覆盖）">↩ 重装</button>
