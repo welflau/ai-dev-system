@@ -151,10 +151,13 @@ def _load_disk_commands() -> Dict[str, Dict[str, Any]]:
 
 
 def _load_project_commands(repo_path: str) -> Dict[str, Dict[str, Any]]:
-    """ClaudeCompat Phase C：扫描项目级命令定义，两路合并（低→高优先级）：
+    """ClaudeCompat Phase C：扫描项目级命令定义，三路合并（低→高优先级）：
 
-    1. {repo}/.claude/commands/*.md  — Claude Code 标准路径
-    2. {repo}/.ads/commands/*.md     — ADS 扩展路径（同名覆盖）
+    1. {repo}/.claude/commands/**/*.md   — Claude Code 标准路径
+    2. {repo}/.codebuddy/commands/**/*.md — CodeBuddy 路径
+    3. {repo}/.ads/commands/**/*.md      — ADS 扩展路径（同名覆盖）
+
+    子目录中的命令以相对路径作为 name（如 opsx/deploy）。
     """
     if not repo_path:
         return {}
@@ -163,14 +166,20 @@ def _load_project_commands(repo_path: str) -> Dict[str, Dict[str, Any]]:
 
     for src_dir, source_label in [
         (repo / ".claude" / "commands", "claude"),
+        (repo / ".codebuddy" / "commands", "codebuddy"),
         (repo / ".ads" / "commands", "ads"),
     ]:
         if not src_dir.exists():
             continue
-        for md_file in sorted(src_dir.glob("*.md")):
+        for md_file in sorted(src_dir.rglob("*.md")):
+            rel = md_file.relative_to(src_dir)
+            # name: subdir/stem（顶层直接用 stem）
+            parts = list(rel.parts)
+            parts[-1] = md_file.stem
+            name = "/".join(parts)
             try:
-                result[md_file.stem] = _parse_command_md(
-                    md_file.read_text(encoding="utf-8"), md_file.stem, source=source_label
+                result[name] = _parse_command_md(
+                    md_file.read_text(encoding="utf-8"), name, source=source_label
                 )
             except Exception as e:
                 logger.warning("加载项目命令失败 %s: %s", md_file.name, e)

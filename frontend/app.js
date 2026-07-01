@@ -2136,6 +2136,28 @@ function _renderOpenSpecStatus(data) {
 
     if (installedCard) {
         installedCard.style.display = data.initialized ? '' : 'none';
+        if (data.initialized) {
+            const content = document.getElementById('openspecInstalledContent');
+            if (content) {
+                const rules = data.installed_rules || [];
+                const skills = data.installed_skills || [];
+                const parts = [];
+                if (rules.length) {
+                    parts.push(`<div style="margin-bottom:8px;"><span style="font-size:12px;font-weight:500;color:var(--text-secondary);">📋 Rules</span><div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:4px;">${
+                        rules.map(r => `<code style="font-size:11px;padding:1px 6px;border-radius:3px;background:var(--bg-tertiary);">${escapeHtml(r)}</code>`).join('')
+                    }</div></div>`);
+                }
+                if (skills.length) {
+                    parts.push(`<div><span style="font-size:12px;font-weight:500;color:var(--text-secondary);">⚡ Skills</span><div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:4px;">${
+                        skills.map(s => `<code style="font-size:11px;padding:1px 6px;border-radius:3px;background:var(--bg-tertiary);">${escapeHtml(s)}</code>`).join('')
+                    }</div></div>`);
+                }
+                if (!parts.length) {
+                    parts.push(`<div style="font-size:12px;color:var(--text-muted);">openspec/ 目录已存在，Rules 与 Skills 将在各面板中以「来源：OpenSpec」标注显示。</div>`);
+                }
+                content.innerHTML = parts.join('');
+            }
+        }
     }
 }
 

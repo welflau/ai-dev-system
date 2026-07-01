@@ -2408,18 +2408,22 @@ async def get_project_commands_all(project_id: str):
         from api.commands import get_all_commands, _BUILTIN_COMMANDS, _load_disk_commands, _load_project_commands
         from pathlib import Path as _Path
 
-        # 构建 name→文件路径映射
+        # 构建 name→文件路径映射（支持子目录，name 用相对路径 subdir/stem）
         _cmd_file_map: dict = {}
         _skills_cmds_dir = _Path(__file__).resolve().parent.parent / "skills" / "commands"
         if _skills_cmds_dir.exists():
             for f in _skills_cmds_dir.glob("*.md"):
                 _cmd_file_map[f.stem] = str(f)
         if repo_path:
-            for cli, label in [(".claude/commands", "claude"), (".ads/commands", "ads")]:
-                d = _Path(repo_path) / cli
+            for cli_dir in [".claude/commands", ".codebuddy/commands", ".ads/commands"]:
+                d = _Path(repo_path) / cli_dir
                 if d.exists():
-                    for f in d.glob("*.md"):
-                        _cmd_file_map[f.stem] = str(f)
+                    for f in d.rglob("*.md"):
+                        rel = f.relative_to(d)
+                        parts = list(rel.parts)
+                        parts[-1] = f.stem
+                        name_key = "/".join(parts)
+                        _cmd_file_map[name_key] = str(f)
 
         all_cmds = get_all_commands(repo_path=repo_path)
         builtin_names = set(_BUILTIN_COMMANDS.keys())
