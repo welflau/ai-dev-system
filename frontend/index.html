@@ -1247,18 +1247,95 @@
 
                             <!-- 面板：OpenSpec -->
                             <div class="inner-tab-panel" id="inner-panel-openspec">
-                                <div class="settings-card">
+                                <!-- 已安装的 Skills / Commands -->
+                                <div class="settings-card" id="openspecInstalledCard" style="display:none;">
                                     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
-                                        <h3 class="settings-card-title" style="margin:0;">📐 OpenSpec</h3>
+                                        <h3 class="settings-card-title" style="margin:0;">📐 已安装的 OpenSpec 内容</h3>
+                                        <button class="btn btn-sm btn-ghost" onclick="loadOpenSpecStatus()">🔄 刷新</button>
                                     </div>
                                     <p class="settings-description" style="margin-bottom:12px;">
-                                        项目接口规范与技术文档。
+                                        OpenSpec 初始化后提供的 Skills 与 Commands 已标注「来源：OpenSpec」显示在各面板中。
                                     </p>
-                                    <div id="openspecContent" style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:60px 20px;color:var(--text-muted);gap:10px;">
-                                        <span style="font-size:40px;">📐</span>
-                                        <span style="font-size:15px;font-weight:500;color:var(--text-secondary);">OpenSpec</span>
-                                        <span style="font-size:13px;">即将推出</span>
+                                    <div id="openspecInstalledContent"><div class="empty-state-sm">加载中...</div></div>
+                                </div>
+
+                                <!-- 指令按钮 -->
+                                <div class="settings-card" style="margin-top:0;" id="openspecActionsCard">
+                                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+                                        <h3 class="settings-card-title" style="margin:0;">📐 OpenSpec</h3>
+                                        <button class="btn btn-sm btn-ghost" onclick="loadOpenSpecStatus()">🔄 刷新</button>
                                     </div>
+                                    <p class="settings-description" style="margin-bottom:12px;">
+                                        OpenSpec 为项目提供接口规范与技术文档能力，通过 npm 全局安装后在项目中初始化使用。
+                                    </p>
+
+                                    <!-- 状态提示 -->
+                                    <div id="openspecStatusBar" style="margin-bottom:14px;font-size:12px;color:var(--text-muted);display:flex;flex-wrap:wrap;gap:8px;">
+                                        <span>加载中...</span>
+                                    </div>
+
+                                    <!-- 安装按钮 -->
+                                    <div style="margin-bottom:16px;">
+                                        <div style="font-size:13px;font-weight:500;color:var(--text-primary);margin-bottom:8px;">安装 OpenSpec</div>
+                                        <p class="settings-description" style="margin-bottom:8px;">
+                                            通过 npm 全局安装 openspec CLI 工具。安装过也可以重新运行以更新到最新版本。
+                                        </p>
+                                        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                                            <button class="btn btn-sm btn-primary" onclick="runOpenSpecCmd('install_en')" id="openspecInstallEnBtn">
+                                                🌐 安装（英文版）
+                                            </button>
+                                            <button class="btn btn-sm btn-secondary" onclick="runOpenSpecCmd('install_cn')" id="openspecInstallCnBtn">
+                                                🇨🇳 安装（中文版）
+                                            </button>
+                                        </div>
+                                        <div style="margin-top:6px;font-size:11px;color:var(--text-muted);">
+                                            英文版：<code>npm install -g @fission-ai/openspec@latest</code><br>
+                                            中文版：<code>npm install -g @studyzy/openspec-cn@latest</code>
+                                        </div>
+                                    </div>
+
+                                    <!-- 初始化按钮 -->
+                                    <div>
+                                        <div style="font-size:13px;font-weight:500;color:var(--text-primary);margin-bottom:8px;">初始化项目</div>
+                                        <p class="settings-description" style="margin-bottom:8px;">
+                                            在当前项目根目录执行初始化，生成 <code>openspec/</code> 目录及配置文件。
+                                            <span id="openspecInitHint" style="color:var(--success);"></span>
+                                        </p>
+                                        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                                            <button class="btn btn-sm btn-primary" onclick="runOpenSpecCmd('init_en')" id="openspecInitEnBtn">
+                                                🌐 初始化（英文版）
+                                            </button>
+                                            <button class="btn btn-sm btn-secondary" onclick="runOpenSpecCmd('init_cn')" id="openspecInitCnBtn">
+                                                🇨🇳 初始化（中文版）
+                                            </button>
+                                        </div>
+                                        <div style="margin-top:6px;font-size:11px;color:var(--text-muted);">
+                                            英文版：<code>openspec init</code><br>
+                                            中文版：<code>openspec-cn init</code>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- 控制台输出 -->
+                                <div class="settings-card" id="openspecConsoleCard" style="margin-top:16px;display:none;">
+                                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                                        <h3 class="settings-card-title" style="margin:0;">控制台输出</h3>
+                                        <button class="btn btn-xs btn-ghost" onclick="clearOpenSpecConsole()">清空</button>
+                                    </div>
+                                    <pre id="openspecConsole" style="
+                                        background:var(--bg-tertiary,#1e1e1e);
+                                        color:var(--text-primary);
+                                        font-family:monospace;
+                                        font-size:12px;
+                                        padding:12px;
+                                        border-radius:6px;
+                                        min-height:80px;
+                                        max-height:320px;
+                                        overflow-y:auto;
+                                        white-space:pre-wrap;
+                                        word-break:break-all;
+                                        margin:0;
+                                    "></pre>
                                 </div>
                             </div>
                         </div>

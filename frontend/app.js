@@ -972,6 +972,7 @@ function switchAgentConfigTab(inner) {
     if (inner === 'commands') loadProjectCommands();
     if (inner === 'rules') loadProjectRules();
     if (inner === 'hooks') loadProjectHooks();
+    if (inner === 'openspec') loadOpenSpecStatus();
     // traits 已移到「系统设置」modal（showSystemSettingsModal('traits')）
 }
 
@@ -2086,6 +2087,164 @@ async function deleteCustomSkill(skillId, name) {
     } catch (e) {
         showToast(`删除失败: ${e.message}`, 'error');
     }
+}
+
+// ── OpenSpec ───────────────────────────────────────────────────────────────────
+
+async function loadOpenSpecStatus() {
+    if (!currentProjectId) return;
+    try {
+        const data = await api(`/projects/${currentProjectId}/openspec/status`);
+        _renderOpenSpecStatus(data);
+    } catch (e) {
+        const bar = document.getElementById('openspecStatusBar');
+        if (bar) bar.innerHTML = `<span style="color:var(--danger);">加载状态失败: ${escapeHtml(e.message)}</span>`;
+    }
+}
+
+function _renderOpenSpecStatus(data) {
+    const bar = document.getElementById('openspecStatusBar');
+    const initHint = document.getElementById('openspecInitHint');
+    const installedCard = document.getElementById('openspecInstalledCard');
+
+    if (bar) {
+        const chips = [];
+        if (!data.npm_available) {
+            chips.push(`<span style="color:var(--danger);">⚠️ npm 未找到</span>`);
+        }
+        if (data.installed_en) {
+            chips.push(`<span style="color:var(--success);">✓ openspec (英文版) 已安装</span>`);
+        } else {
+            chips.push(`<span style="color:var(--text-muted);">○ openspec (英文版) 未安装</span>`);
+        }
+        if (data.installed_cn) {
+            chips.push(`<span style="color:var(--success);">✓ openspec-cn (中文版) 已安装</span>`);
+        } else {
+            chips.push(`<span style="color:var(--text-muted);">○ openspec-cn (中文版) 未安装</span>`);
+        }
+        if (data.initialized) {
+            chips.push(`<span style="color:var(--success);">✓ 项目已初始化</span>`);
+        } else {
+            chips.push(`<span style="color:var(--text-muted);">○ 项目未初始化</span>`);
+        }
+        bar.innerHTML = chips.join('<span style="color:var(--border);">|</span>');
+    }
+
+    if (initHint) {
+        initHint.textContent = data.initialized ? '（检测到 openspec/ 目录，可重复初始化更新配置）' : '';
+    }
+
+    if (installedCard) {
+        installedCard.style.display = data.initialized ? '' : 'none';
+    }
+}
+
+let _openspecRunning = false;
+
+async function runOpenSpecCmd(command) {
+    if (!currentProjectId) { showToast('请先选择项目', 'error'); return; }
+    if (_openspecRunning) { showToast('已有命令运行中，请稍候', 'warning'); return; }
+
+    const consoleCard = document.getElementById('openspecConsoleCard');
+    const consoleEl = document.getElementById('openspecConsole');
+    if (consoleCard) consoleCard.style.display = '';
+    if (consoleEl) consoleEl.textContent = '';
+
+    const LABEL = {
+        install_en: '安装（英文版）',
+        install_cn: '安装（中文版）',
+        init_en: '初始化（英文版）',
+        init_cn: '初始化（中文版）',
+    };
+
+    _openspecRunning = true;
+    _appendOpenSpecLine(`> ${LABEL[command] || command}\n`);
+
+    // 禁用按钮
+    ['openspecInstallEnBtn','openspecInstallCnBtn','openspecInitEnBtn','openspecInitCnBtn'].forEach(id => {
+        const btn = document.getElementById(id);
+        if (btn) btn.disabled = true;
+    });
+
+    try {
+        const resp = await fetch(`/api/projects/${currentProjectId}/openspec/run`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ command }),
+        });
+
+        if (!resp.ok) {
+            const err = await resp.text();
+            _appendOpenSpecLine(`错误: ${err}\n`);
+            return;
+        }
+
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += decoder.decode(value, { stream: true });
+
+            // 解析 SSE 事件
+            const parts = buf.split('\n\n');
+            buf = parts.pop();
+            for (const part of parts) {
+                const lines = part.split('\n');
+                let event = 'message', dataStr = '';
+                for (const l of lines) {
+                    if (l.startsWith('event: ')) event = l.slice(7).trim();
+                    if (l.startsWith('data: ')) dataStr = l.slice(6);
+                }
+                if (!dataStr) continue;
+                try {
+                    const d = JSON.parse(dataStr);
+                    if (event === 'start') {
+                        _appendOpenSpecLine(`$ ${d.cmd}\n`);
+                    } else if (event === 'line') {
+                        _appendOpenSpecLine(d.text + '\n');
+                    } else if (event === 'done') {
+                        const icon = d.success ? '✓' : '✗';
+                        _appendOpenSpecLine(`\n${icon} 退出码: ${d.exit_code}\n`);
+                        if (d.success) {
+                            showToast(`${LABEL[command]} 成功`, 'success');
+                            loadOpenSpecStatus();
+                        } else {
+                            showToast(`${LABEL[command]} 失败（退出码 ${d.exit_code}）`, 'error');
+                        }
+                    } else if (event === 'error') {
+                        _appendOpenSpecLine(`错误: ${d.message}\n`);
+                        showToast(`执行错误: ${d.message}`, 'error');
+                    }
+                } catch (_) {}
+            }
+        }
+    } catch (e) {
+        _appendOpenSpecLine(`请求失败: ${e.message}\n`);
+        showToast(`请求失败: ${e.message}`, 'error');
+    } finally {
+        _openspecRunning = false;
+        ['openspecInstallEnBtn','openspecInstallCnBtn','openspecInitEnBtn','openspecInitCnBtn'].forEach(id => {
+            const btn = document.getElementById(id);
+            if (btn) btn.disabled = false;
+        });
+    }
+}
+
+function _appendOpenSpecLine(text) {
+    const el = document.getElementById('openspecConsole');
+    if (!el) return;
+    el.textContent += text;
+    el.scrollTop = el.scrollHeight;
+}
+
+function clearOpenSpecConsole() {
+    const el = document.getElementById('openspecConsole');
+    if (el) el.textContent = '';
+    const card = document.getElementById('openspecConsoleCard');
+    if (card) card.style.display = 'none';
 }
 
 // ==================== Traits 查看器（Agent 配置页 → Traits Tab，v0.17 Phase A.6） ====================

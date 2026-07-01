@@ -313,6 +313,7 @@ from api.hooks import router as hooks_router
 from api.system_settings import router as system_settings_router
 from api.automation import router as automation_router
 from api.chat import internal_router as internal_router
+from api.openspec import router as openspec_router
 
 app.include_router(projects_router)
 app.include_router(requirements_router)
@@ -342,6 +343,7 @@ app.include_router(hooks_router)
 app.include_router(system_settings_router)
 app.include_router(automation_router)
 app.include_router(internal_router)
+app.include_router(openspec_router)
 
 
 # ==================== 系统端点 ====================
