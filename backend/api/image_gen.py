@@ -154,14 +154,7 @@ async def refresh_lightai_key(body: dict = {}):
         return StreamingResponse(_not_found(), media_type="text/event-stream")
 
     async def _run(args: list):
-        if sys.platform == "win32":
-            cmd = " ".join(f'"{a}"' for a in [sys.executable] + args)
-            return await asyncio.create_subprocess_shell(
-                cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-                env={**__import__("os").environ},
-            )
+        # 始终用 exec（不走 shell），避免 URL 中的 & 被 cmd.exe 截断
         return await asyncio.create_subprocess_exec(
             sys.executable, *args,
             stdout=asyncio.subprocess.PIPE,
