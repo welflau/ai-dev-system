@@ -673,6 +673,7 @@ async function refreshLightAIKey() {
 }
 
 
+async function testLLMConnection() {
     const resultEl = document.getElementById('llmTestResult');
     const testBtn  = document.getElementById('llmTestBtn');
     if (!resultEl || !testBtn) return;
