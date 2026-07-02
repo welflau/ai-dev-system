@@ -116,9 +116,31 @@ async def test_lightai_connection():
         return {"status": "error", "message": str(e)[:200]}
 
 
+@router.get("/config/refresh-key/urls")
+async def get_lightai_community_urls():
+    """读取 refresh_key.py 已配置的社区 URL 列表"""
+    for base in [".codebuddy", ".claude"]:
+        env_json = Path.home() / base / "skills" / "lightai-skill" / "scripts" / "env.json"
+        if env_json.exists():
+            try:
+                data = json.loads(env_json.read_text(encoding="utf-8"))
+                urls = data.get("SKILL_COMMUNITY_URLS", [])
+                if isinstance(urls, str):
+                    urls = [urls] if urls else []
+                old = data.get("SKILL_COMMUNITY_URL", "")
+                if old and old not in urls:
+                    urls.append(old)
+                return {"urls": urls}
+            except Exception:
+                pass
+    return {"urls": []}
+
+
 @router.post("/config/refresh-key")
-async def refresh_lightai_key():
+async def refresh_lightai_key(body: dict = {}):
     """执行 refresh_key.py 自动刷新 LightAI API Key，SSE 流式输出日志"""
+    community_url = (body or {}).get("community_url", "").strip()
+
     skill_refresh = (
         Path.home() / ".codebuddy" / "skills" / "lightai-skill" / "scripts" / "refresh_key.py"
     )
@@ -131,39 +153,47 @@ async def refresh_lightai_key():
             yield f"data: {json.dumps({'type': 'error', 'text': 'lightai-skill 未安装，找不到 refresh_key.py'})}\n\n"
         return StreamingResponse(_not_found(), media_type="text/event-stream")
 
+    async def _run(args: list):
+        if sys.platform == "win32":
+            cmd = " ".join(f'"{a}"' for a in [sys.executable] + args)
+            return await asyncio.create_subprocess_shell(
+                cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                env={**__import__("os").environ},
+            )
+        return await asyncio.create_subprocess_exec(
+            sys.executable, *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+
     async def _stream():
         env_json = skill_refresh.parent / "env.json"
         try:
-            if sys.platform == "win32":
-                proc = await asyncio.create_subprocess_shell(
-                    f'"{sys.executable}" "{skill_refresh}"',
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.STDOUT,
-                    env={**__import__("os").environ},
-                )
-            else:
-                proc = await asyncio.create_subprocess_exec(
-                    sys.executable, str(skill_refresh),
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.STDOUT,
-                )
+            # 若传入 URL 且尚未配置，先 --add-url
+            if community_url:
+                add_proc = await _run([str(skill_refresh), "--add-url", community_url])
+                async for raw in add_proc.stdout:
+                    line = raw.decode("utf-8", errors="replace").rstrip()
+                    yield f"data: {json.dumps({'type': 'line', 'text': line})}\n\n"
+                await add_proc.wait()
+
             yield f"data: {json.dumps({'type': 'start'})}\n\n"
+            proc = await _run([str(skill_refresh)])
             new_key = ""
             async for raw in proc.stdout:
                 line = raw.decode("utf-8", errors="replace").rstrip()
                 yield f"data: {json.dumps({'type': 'line', 'text': line})}\n\n"
-                # refresh_key.py 成功时输出 "UPDATED:<key>" 或 "NO_CHANGE:<key>"
                 if line.startswith("UPDATED:") or line.startswith("NO_CHANGE:"):
                     new_key = line.split(":", 1)[1].strip()
             await proc.wait()
-            # 若没从 stdout 拿到 key，尝试从 env.json 读
             if not new_key and env_json.exists():
                 try:
                     new_key = json.loads(env_json.read_text(encoding="utf-8")).get("LIGHTAI_API_KEY", "")
                 except Exception:
                     pass
             if proc.returncode == 0 and new_key:
-                # 更新 settings 和 .env
                 from config import BASE_DIR
                 settings.LIGHTAI_API_KEY = new_key
                 env_path = BASE_DIR / ".env"

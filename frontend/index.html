@@ -2061,7 +2061,9 @@
                             </div>
                         </div>
                         <div id="lightaiTestResult" style="display:none; padding:10px; border-radius:var(--radius-sm); font-size:13px; margin-top:4px; margin-bottom:8px;"></div>
-                        <div id="lightaiRefreshCard" style="display:none; margin-bottom:8px;">
+                        <div id="lightaiRefreshCard" style="display:none; margin-bottom:8px; padding:10px; background:rgba(251,191,36,0.06); border:1px solid rgba(251,191,36,0.25); border-radius:var(--radius-sm);">
+                            <div style="font-size:12px; color:var(--text-muted); margin-bottom:8px;">Key 已过期，可自动刷新。首次使用需填入社区页面 URL（之后无需再填）：</div>
+                            <input type="text" id="lightaiCommunityUrl" placeholder="https://lightai-skill-community-xxx.lightai.woa.com/?k=..." style="width:100%; margin-bottom:6px; font-size:12px;">
                             <div id="lightaiRefreshConsole" style="display:none; background:var(--bg-dark,#0d0d0d); border:1px solid var(--border); border-radius:var(--radius-sm); padding:10px; margin-bottom:6px; max-height:140px; overflow-y:auto;">
                                 <pre id="lightaiRefreshPre" style="margin:0; font-size:11px; color:#a0a0a0; white-space:pre-wrap; word-break:break-all;"></pre>
                             </div>

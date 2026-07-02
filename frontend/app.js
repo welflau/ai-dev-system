@@ -590,7 +590,16 @@ async function testLightAIConnection() {
             resultEl.style.background = 'rgba(255,90,90,0.1)';
             resultEl.style.color = 'var(--error)';
             resultEl.textContent = `❌ ${data.message}`;
-            if (refreshCard) refreshCard.style.display = 'block';
+            if (refreshCard) {
+                refreshCard.style.display = 'block';
+                // 读取已配置的社区 URL 回填
+                fetch(`${API}/image-gen/config/refresh-key/urls`)
+                    .then(r => r.json())
+                    .then(d => {
+                        const inp = document.getElementById('lightaiCommunityUrl');
+                        if (inp && d.urls && d.urls.length > 0) inp.value = d.urls[0];
+                    }).catch(() => {});
+            }
         }
     } catch (e) {
         resultEl.style.display = 'block';
@@ -612,8 +621,13 @@ async function refreshLightAIKey() {
     pre.textContent = '';
     if (consoleEl) consoleEl.style.display = 'block';
 
+    const communityUrl = document.getElementById('lightaiCommunityUrl')?.value.trim() || '';
     try {
-        const resp = await fetch(`${API}/image-gen/config/refresh-key`, { method: 'POST' });
+        const resp = await fetch(`${API}/image-gen/config/refresh-key`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ community_url: communityUrl }),
+        });
         const reader = resp.body.getReader();
         const dec = new TextDecoder();
         let buf = '';
