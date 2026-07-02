@@ -82,17 +82,31 @@ async def test_lightai_connection():
     if not settings.LIGHTAI_API_KEY:
         return {"status": "not_configured", "message": "LIGHTAI_API_KEY 未配置"}
     try:
-        import ssl, urllib.request
+        import json as _json, ssl, urllib.request, urllib.error
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
-        url = f"{settings.LIGHTAI_API_BASE.rstrip('/')}/api/lightai/engines"
-        req = urllib.request.Request(
-            url, method="GET",
-            headers={"Authorization": f"Bearer {settings.LIGHTAI_API_KEY}"}
-        )
-        with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
-            resp.read()
-        return {"status": "ok", "message": "LightAI 连接正常"}
+        # 用 create_async_task 做鉴权探针：服务端先验 Key 再验参数，
+        # 所以 401/403 = Key 无效，其余状态码（400/422/500）= Key 有效
+        url = f"{settings.LIGHTAI_API_BASE.rstrip('/')}/api/lightai/create_async_task"
+        payload = _json.dumps({
+            "service_name": "_validate_", "api_name": "_test_",
+            "app_info": {"model": "", "mode": ""},
+            "task_query": {"path": {}, "params": {}, "json": {}, "data": {}, "file": {}},
+            "custom_data": {},
+        }).encode()
+        req = urllib.request.Request(url, data=payload, method="POST", headers={
+            "Authorization": f"Bearer {settings.LIGHTAI_API_KEY}",
+            "Content-Type": "application/json",
+        })
+        try:
+            with urllib.request.urlopen(req, timeout=10, context=ctx):
+                pass
+            return {"status": "ok", "message": "LightAI 连接正常"}
+        except urllib.error.HTTPError as e:
+            if e.code in (401, 403):
+                return {"status": "error", "message": f"API Key 无效或已过期 (HTTP {e.code})"}
+            # 400/404/422/500 等表示 Key 有效，只是参数校验失败
+            return {"status": "ok", "message": "LightAI 连接正常"}
     except Exception as e:
         return {"status": "error", "message": str(e)[:200]}
