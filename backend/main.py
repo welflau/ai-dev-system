@@ -601,6 +601,53 @@ async def llm_config(body: dict):
         encoding="utf-8",
     )
 
+    # 同步 LIGHTAI_API_KEY 到已安装 ue5-dev（含 LightAI 集成）的项目 scripts/env.json
+    _lightai_key_to_sync = settings.LIGHTAI_API_KEY
+    if _lightai_key_to_sync:
+        try:
+            import json as _json
+            from database import db as _db
+            from pathlib import Path as _Path
+            _rows = await _db.fetch_all(
+                "SELECT p.git_repo_path FROM projects p "
+                "JOIN project_packs pp ON pp.project_id = p.id "
+                "WHERE pp.pack_name = 'ue5-dev' AND p.git_repo_path IS NOT NULL AND p.git_repo_path != ''"
+            )
+            _synced = []
+            for _row in _rows:
+                _repo = _Path(_row["git_repo_path"])
+                # 新格式：.codebuddy/packs/ue5-dev/scripts/env.json
+                # 旧格式：.codebuddy/scripts/env.json（兼容）
+                for _env_path in [
+                    _repo / ".codebuddy" / "packs" / "ue5-dev" / "scripts" / "env.json",
+                    _repo / ".claude"    / "packs" / "ue5-dev" / "scripts" / "env.json",
+                    _repo / ".codebuddy" / "scripts" / "env.json",
+                    _repo / ".claude"    / "scripts" / "env.json",
+                ]:
+                    if _env_path.exists():
+                        try:
+                            _cfg = _json.loads(_env_path.read_text(encoding="utf-8"))
+                            _cfg["LIGHTAI_API_KEY"] = _lightai_key_to_sync
+                            _env_path.write_text(_json.dumps(_cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+                            _synced.append(str(_env_path))
+                        except Exception as _e:
+                            logger.warning("同步 LightAI key 到 %s 失败: %s", _env_path, _e)
+            if _synced:
+                logger.info("LightAI API key 已同步到 %d 个 skill env.json: %s", len(_synced), _synced)
+
+            # 同步到系统用户 lightai-skill（~/.codebuddy/skills/lightai-skill/scripts/env.json）
+            _skill_env = _Path.home() / ".codebuddy" / "skills" / "lightai-skill" / "scripts" / "env.json"
+            if _skill_env.exists():
+                try:
+                    _skill_cfg = _json.loads(_skill_env.read_text(encoding="utf-8"))
+                    _skill_cfg["LIGHTAI_API_KEY"] = _lightai_key_to_sync
+                    _skill_env.write_text(_json.dumps(_skill_cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+                    logger.info("LightAI API key 已同步到 lightai-skill: %s", _skill_env)
+                except Exception as _e:
+                    logger.warning("同步 LightAI key 到 lightai-skill 失败: %s", _e)
+        except Exception as _e:
+            logger.warning("LightAI key 同步失败: %s", _e)
+
     return {
         "status": "ok",
         "configured":         llm_client.is_configured,
