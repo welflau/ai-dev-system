@@ -635,16 +635,19 @@ async def llm_config(body: dict):
             if _synced:
                 logger.info("LightAI API key 已同步到 %d 个 skill env.json: %s", len(_synced), _synced)
 
-            # 同步到系统用户 lightai-skill（~/.codebuddy/skills/lightai-skill/scripts/env.json）
-            _skill_env = _Path.home() / ".codebuddy" / "skills" / "lightai-skill" / "scripts" / "env.json"
-            if _skill_env.exists():
-                try:
-                    _skill_cfg = _json.loads(_skill_env.read_text(encoding="utf-8"))
-                    _skill_cfg["LIGHTAI_API_KEY"] = _lightai_key_to_sync
-                    _skill_env.write_text(_json.dumps(_skill_cfg, ensure_ascii=False, indent=2), encoding="utf-8")
-                    logger.info("LightAI API key 已同步到 lightai-skill: %s", _skill_env)
-                except Exception as _e:
-                    logger.warning("同步 LightAI key 到 lightai-skill 失败: %s", _e)
+            # 同步到系统用户 lightai-skill（.codebuddy 和 .claude 两端）
+            for _skill_env in [
+                _Path.home() / ".codebuddy" / "skills" / "lightai-skill" / "scripts" / "env.json",
+                _Path.home() / ".claude"    / "skills" / "lightai-skill" / "scripts" / "env.json",
+            ]:
+                if _skill_env.exists():
+                    try:
+                        _skill_cfg = _json.loads(_skill_env.read_text(encoding="utf-8"))
+                        _skill_cfg["LIGHTAI_API_KEY"] = _lightai_key_to_sync
+                        _skill_env.write_text(_json.dumps(_skill_cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+                        logger.info("LightAI API key 已同步到 lightai-skill: %s", _skill_env)
+                    except Exception as _e:
+                        logger.warning("同步 LightAI key 到 lightai-skill 失败: %s", _e)
         except Exception as _e:
             logger.warning("LightAI key 同步失败: %s", _e)
 
