@@ -567,10 +567,12 @@ async function saveLLMConfig() {
 async function testLightAIConnection() {
     const resultEl = document.getElementById('lightaiTestResult');
     const btn = document.getElementById('lightaiTestBtn');
+    const refreshCard = document.getElementById('lightaiRefreshCard');
     if (!resultEl || !btn) return;
 
     btn.disabled = true; btn.textContent = '测试中...';
     resultEl.style.display = 'none';
+    if (refreshCard) refreshCard.style.display = 'none';
 
     try {
         const data = await fetch(`${API}/image-gen/config/test`, { method: 'POST' }).then(r => r.json());
@@ -579,6 +581,7 @@ async function testLightAIConnection() {
             resultEl.style.background = 'rgba(52,211,153,0.1)';
             resultEl.style.color = 'var(--success)';
             resultEl.textContent = `✅ ${data.message}`;
+            if (refreshCard) refreshCard.style.display = 'none';
         } else if (data.status === 'not_configured') {
             resultEl.style.background = 'rgba(251,191,36,0.1)';
             resultEl.style.color = 'var(--warning)';
@@ -587,6 +590,7 @@ async function testLightAIConnection() {
             resultEl.style.background = 'rgba(255,90,90,0.1)';
             resultEl.style.color = 'var(--error)';
             resultEl.textContent = `❌ ${data.message}`;
+            if (refreshCard) refreshCard.style.display = 'block';
         }
     } catch (e) {
         resultEl.style.display = 'block';
@@ -597,7 +601,64 @@ async function testLightAIConnection() {
     }
 }
 
-async function testLLMConnection() {
+async function refreshLightAIKey() {
+    const btn = document.getElementById('lightaiRefreshBtn');
+    const consoleEl = document.getElementById('lightaiRefreshConsole');
+    const pre = document.getElementById('lightaiRefreshPre');
+    const resultEl = document.getElementById('lightaiTestResult');
+    if (!btn || !pre) return;
+
+    btn.disabled = true; btn.textContent = '刷新中...';
+    pre.textContent = '';
+    if (consoleEl) consoleEl.style.display = 'block';
+
+    try {
+        const resp = await fetch(`${API}/image-gen/config/refresh-key`, { method: 'POST' });
+        const reader = resp.body.getReader();
+        const dec = new TextDecoder();
+        let buf = '';
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += dec.decode(value, { stream: true });
+            const parts = buf.split('\n\n');
+            buf = parts.pop();
+            for (const part of parts) {
+                const line = part.replace(/^data: /, '').trim();
+                if (!line) continue;
+                try {
+                    const ev = JSON.parse(line);
+                    if (ev.type === 'line' && ev.text) {
+                        pre.textContent += ev.text + '\n';
+                        consoleEl.scrollTop = consoleEl.scrollHeight;
+                    } else if (ev.type === 'done') {
+                        // 新 key 写入输入框并自动保存
+                        const keyInput = document.getElementById('lightaiApiKey');
+                        if (keyInput && ev.new_key) keyInput.value = ev.new_key;
+                        pre.textContent += '\n✅ Key 已刷新并更新到配置\n';
+                        consoleEl.scrollTop = consoleEl.scrollHeight;
+                        if (resultEl) {
+                            resultEl.style.display = 'block';
+                            resultEl.style.background = 'rgba(52,211,153,0.1)';
+                            resultEl.style.color = 'var(--success)';
+                            resultEl.textContent = '✅ API Key 已自动刷新';
+                        }
+                        document.getElementById('lightaiRefreshCard').style.display = 'none';
+                    } else if (ev.type === 'error') {
+                        pre.textContent += `\n❌ ${ev.text}\n`;
+                        consoleEl.scrollTop = consoleEl.scrollHeight;
+                    }
+                } catch {}
+            }
+        }
+    } catch (e) {
+        pre.textContent += `\n❌ 请求失败: ${e.message}\n`;
+    } finally {
+        btn.disabled = false; btn.textContent = '🔄 自动刷新 API Key';
+    }
+}
+
+
     const resultEl = document.getElementById('llmTestResult');
     const testBtn  = document.getElementById('llmTestBtn');
     if (!resultEl || !testBtn) return;

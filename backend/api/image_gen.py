@@ -1,6 +1,10 @@
 """图片生成 API — LightAI 图片请求管理"""
+import asyncio
 import json
+import sys
+from pathlib import Path
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Optional
 from database import db
@@ -110,3 +114,75 @@ async def test_lightai_connection():
             return {"status": "ok", "message": "LightAI 连接正常"}
     except Exception as e:
         return {"status": "error", "message": str(e)[:200]}
+
+
+@router.post("/config/refresh-key")
+async def refresh_lightai_key():
+    """执行 refresh_key.py 自动刷新 LightAI API Key，SSE 流式输出日志"""
+    skill_refresh = (
+        Path.home() / ".codebuddy" / "skills" / "lightai-skill" / "scripts" / "refresh_key.py"
+    )
+    if not skill_refresh.exists():
+        skill_refresh = (
+            Path.home() / ".claude" / "skills" / "lightai-skill" / "scripts" / "refresh_key.py"
+        )
+    if not skill_refresh.exists():
+        async def _not_found():
+            yield f"data: {json.dumps({'type': 'error', 'text': 'lightai-skill 未安装，找不到 refresh_key.py'})}\n\n"
+        return StreamingResponse(_not_found(), media_type="text/event-stream")
+
+    async def _stream():
+        env_json = skill_refresh.parent / "env.json"
+        try:
+            if sys.platform == "win32":
+                proc = await asyncio.create_subprocess_shell(
+                    f'"{sys.executable}" "{skill_refresh}"',
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                    env={**__import__("os").environ},
+                )
+            else:
+                proc = await asyncio.create_subprocess_exec(
+                    sys.executable, str(skill_refresh),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.STDOUT,
+                )
+            yield f"data: {json.dumps({'type': 'start'})}\n\n"
+            new_key = ""
+            async for raw in proc.stdout:
+                line = raw.decode("utf-8", errors="replace").rstrip()
+                yield f"data: {json.dumps({'type': 'line', 'text': line})}\n\n"
+                # refresh_key.py 成功时输出 "UPDATED:<key>" 或 "NO_CHANGE:<key>"
+                if line.startswith("UPDATED:") or line.startswith("NO_CHANGE:"):
+                    new_key = line.split(":", 1)[1].strip()
+            await proc.wait()
+            # 若没从 stdout 拿到 key，尝试从 env.json 读
+            if not new_key and env_json.exists():
+                try:
+                    new_key = json.loads(env_json.read_text(encoding="utf-8")).get("LIGHTAI_API_KEY", "")
+                except Exception:
+                    pass
+            if proc.returncode == 0 and new_key:
+                # 更新 settings 和 .env
+                from config import BASE_DIR
+                settings.LIGHTAI_API_KEY = new_key
+                env_path = BASE_DIR / ".env"
+                env_lines = {}
+                if env_path.exists():
+                    for line in env_path.read_text(encoding="utf-8").splitlines():
+                        line = line.strip()
+                        if line and not line.startswith("#") and "=" in line:
+                            k, v = line.split("=", 1)
+                            env_lines[k.strip()] = v.strip()
+                env_lines["LIGHTAI_API_KEY"] = new_key
+                env_path.write_text(
+                    "\n".join(f"{k}={v}" for k, v in env_lines.items()) + "\n",
+                    encoding="utf-8",
+                )
+                yield f"data: {json.dumps({'type': 'done', 'new_key': new_key})}\n\n"
+            else:
+                yield f"data: {json.dumps({'type': 'error', 'text': f'刷新失败 (exit={proc.returncode})'})}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'text': str(e)})}\n\n"
+
+    return StreamingResponse(_stream(), media_type="text/event-stream")

@@ -2061,6 +2061,12 @@
                             </div>
                         </div>
                         <div id="lightaiTestResult" style="display:none; padding:10px; border-radius:var(--radius-sm); font-size:13px; margin-top:4px; margin-bottom:8px;"></div>
+                        <div id="lightaiRefreshCard" style="display:none; margin-bottom:8px;">
+                            <div id="lightaiRefreshConsole" style="display:none; background:var(--bg-dark,#0d0d0d); border:1px solid var(--border); border-radius:var(--radius-sm); padding:10px; margin-bottom:6px; max-height:140px; overflow-y:auto;">
+                                <pre id="lightaiRefreshPre" style="margin:0; font-size:11px; color:#a0a0a0; white-space:pre-wrap; word-break:break-all;"></pre>
+                            </div>
+                            <button class="btn btn-secondary" onclick="refreshLightAIKey()" id="lightaiRefreshBtn" style="width:100%; font-size:13px;">🔄 自动刷新 API Key</button>
+                        </div>
                         <button class="btn" onclick="testLightAIConnection()" id="lightaiTestBtn" style="width:100%;">🖼️ 测试 LightAI 连接</button>
                     </div>
 
