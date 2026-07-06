@@ -97,6 +97,12 @@ class CliSessionIdEvent:
     session_id: str
 
 
+@dataclass
+class CliResumeFailedEvent:
+    """CLI --resume 失败（session 已过期），携带旧 session_id 供上层清除"""
+    old_session_id: str
+
+
 # 联合类型，方便 isinstance 检查
 QueryEvent = Union[
     TextDeltaEvent,
@@ -111,4 +117,5 @@ QueryEvent = Union[
     BudgetExceededEvent,
     ErrorEvent,
     CliSessionIdEvent,
+    CliResumeFailedEvent,
 ]

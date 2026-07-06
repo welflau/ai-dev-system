@@ -793,6 +793,37 @@ class ConfirmBugRequest(BaseModel):
     images: Optional[List[str]] = None  # 已保存的图片 URL 列表
 
 
+class ConfirmGenerateImageRequest(BaseModel):
+    prompt: str
+    engine: str = ""
+    aspect_ratio: str = "1:1"
+    image_size: str = "2K"
+    message_id: Optional[str] = None
+
+
+@router.post("/confirm-generate-image")
+async def confirm_generate_image(project_id: str, req: ConfirmGenerateImageRequest):
+    """用户确认后将生图请求入队"""
+    if not req.prompt.strip():
+        raise HTTPException(400, "prompt 不能为空")
+    from image_processor import request_image
+    tag = await request_image(
+        prompt=req.prompt,
+        project_id=project_id,
+        engine=req.engine,
+        aspect_ratio=req.aspect_ratio,
+        image_size=req.image_size,
+        requester="chat",
+    )
+    if req.message_id:
+        import json as _json
+        await db.execute(
+            "UPDATE chat_messages SET action_state=?, action_result=? WHERE id=?",
+            ("executed", _json.dumps({"tag": tag}), req.message_id),
+        )
+    return {"tag": tag, "message": "生图请求已入队"}
+
+
 @router.post("/confirm-create-bug")
 async def confirm_create_bug(project_id: str, req: ConfirmBugRequest):
     """用户确认后真正创建 BUG 并触发修复工作流"""
@@ -1798,7 +1829,20 @@ title: 文档标题
 
 priority 可选值：critical, high, medium, low
 
-## 注意事项
+### 生成图片
+当用户明确说"生成/画/出/做一张图"、"帮我生图"、"生成一张..."时使用。先展示参数卡片让用户确认，不自动入队：
+[ACTION:GENERATE_IMAGE]
+{{"prompt": "详细英文 prompt，描述画面内容、风格、光线、色调等", "engine": "", "aspect_ratio": "1:1", "image_size": "2K"}}
+[/ACTION]
+
+注意：
+- prompt 请用英文，尽量详细（如 a cyberpunk city at night, neon lights, rainy streets, cinematic lighting）
+- engine 可为空（用系统默认）；可选值：gemini / gemini2 / jimeng / midjourney
+- aspect_ratio 可选值：1:1 / 16:9 / 9:16 / 4:3 / 3:4；默认 1:1
+- image_size 可选值：2K / 4K；默认 2K
+- 只有用户在界面点「确认生图」后才会真正入队，不要直接跳过卡片
+
+## 说到做到（重要）
 - 用中文回复
 - 回答简洁但有信息量
 - 当用户询问项目文件、代码、文档内容时，直接引用上面的文件树和文档内容来回答，不要说"无法访问"
@@ -2064,10 +2108,12 @@ async def _parse_and_execute_action(project_id: str, project: dict, response: st
     from actions.chat.git_switch_branch import GitSwitchBranchAction
     from actions.chat.git_read_file import GitReadFileAction
     from actions.chat.git_merge import GitMergeAction
+    from actions.chat.generate_image import GenerateImageAction
 
     _ACTION_MAP = {
         "CONFIRM_REQUIREMENT": ConfirmRequirementAction,
         "CONFIRM_BUG": ConfirmBugAction,
+        "GENERATE_IMAGE": GenerateImageAction,
         "CREATE_REQUIREMENT": CreateRequirementAction,
         "PAUSE_REQUIREMENT": PauseRequirementAction,
         "RESUME_REQUIREMENT": ResumeRequirementAction,

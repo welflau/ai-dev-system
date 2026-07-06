@@ -658,6 +658,7 @@ class ChatAssistantAgent(BaseAgent):
             TextDeltaEvent, ToolStartEvent, ToolDoneEvent, ToolErrorEvent,
             ActionEvent, MessageDoneEvent, BudgetExceededEvent, ErrorEvent,
             ThinkingDeltaEvent, ThinkingDoneEvent, RoundStartEvent, CliSessionIdEvent,
+            CliResumeFailedEvent,
         )
         from query_engine.executor import ChatToolExecutorAdapter
         from config import settings as _cfg
@@ -785,6 +786,53 @@ class ChatAssistantAgent(BaseAgent):
                             logger.info("CLI session_id pinned: %s → %s", session_id, _new_cli_sid)
                         except Exception as _pe:
                             logger.warning("CLI session_id 写入失败（忽略）: %s", _pe)
+                elif isinstance(event, CliResumeFailedEvent):
+                    # Session 已过期：清除旧 session_id，重建 engine（不带 --resume）直接重跑
+                    if session_id:
+                        try:
+                            from database import db as _db3
+                            await _db3.execute(
+                                "UPDATE chat_sessions SET cli_session_id=NULL WHERE id=?",
+                                (session_id,),
+                            )
+                            logger.info("CLI resume 失败，已清除旧 session_id，不带 resume 重试")
+                        except Exception as _ce:
+                            logger.warning("清除 cli_session_id 失败: %s", _ce)
+                    engine2 = QueryEngine(
+                        llm_client=llm_client,
+                        tool_executor=executor,
+                        budget=budget,
+                        hooks=hook_registry,
+                        max_rounds=self.max_react_loop,
+                        enable_thinking=_resolve_thinking_enabled(_sid, llm_client.model),
+                        thinking_budget=max(1024, get_session_flag(_sid, "thinking_budget") or 8000),
+                        resume_session_id="",
+                    )
+                    async for event2 in engine2.run(messages, system_prompt, tools, context):
+                        if isinstance(event2, TextDeltaEvent):
+                            yield {"type": "text_delta", "delta": event2.delta}
+                        elif isinstance(event2, CliSessionIdEvent):
+                            _new_sid = event2.session_id
+                            if _new_sid and session_id:
+                                try:
+                                    from database import db as _db4
+                                    from utils import now_iso as _now2
+                                    await _db4.execute(
+                                        "UPDATE chat_sessions SET cli_session_id=?, last_active_at=? WHERE id=?",
+                                        (_new_sid, _now2(), session_id),
+                                    )
+                                except Exception:
+                                    pass
+                        elif isinstance(event2, MessageDoneEvent):
+                            yield {
+                                "type": "message_done",
+                                "rounds": event2.rounds,
+                                "thinking_steps": event2.thinking_steps or [],
+                                "action": event2.final_action,
+                                "actions": event2.all_confirm_results if len(event2.all_confirm_results) > 1 else None,
+                                "stop_reason": event2.stop_reason,
+                            }
+                    return
                 elif isinstance(event, MessageDoneEvent):
                     yield {
                         "type": "message_done",
@@ -885,6 +933,7 @@ class ChatAssistantAgent(BaseAgent):
             TextDeltaEvent, ToolStartEvent, ToolDoneEvent, ToolErrorEvent,
             ActionEvent, MessageDoneEvent, BudgetExceededEvent, ErrorEvent,
             ThinkingDeltaEvent, ThinkingDoneEvent, RoundStartEvent, CliSessionIdEvent,
+            CliResumeFailedEvent,
         )
         from query_engine.executor import ChatToolExecutorAdapter
         from config import settings as _cfg
@@ -972,6 +1021,57 @@ class ChatAssistantAgent(BaseAgent):
                             logger.info("CLI session_id pinned: %s → %s", session_id, _new_cli_sid)
                         except Exception as _pe:
                             logger.warning("CLI session_id 写入失败（忽略）: %s", _pe)
+                elif isinstance(event, CliResumeFailedEvent):
+                    # Session 已过期：清除旧 session_id，重建 engine（不带 --resume）直接在本函数内重跑
+                    if session_id:
+                        try:
+                            from database import db as _db3
+                            await _db3.execute(
+                                "UPDATE chat_sessions SET cli_session_id=NULL WHERE id=?",
+                                (session_id,),
+                            )
+                            logger.info("CLI global resume 失败，已清除旧 session_id，不带 resume 重试")
+                        except Exception as _ce:
+                            logger.warning("清除 cli_session_id 失败: %s", _ce)
+                    # 重建 engine，不带 resume_session_id，立即重跑
+                    engine2 = QueryEngine(
+                        llm_client=llm_client,
+                        tool_executor=executor,
+                        budget=budget,
+                        hooks=hook_registry,
+                        max_rounds=self.max_react_loop,
+                        enable_thinking=_resolve_thinking_enabled(_sid, llm_client.model),
+                        thinking_budget=max(1024, get_session_flag(_sid, "thinking_budget") or 8000),
+                        resume_session_id="",
+                    )
+                    async for event2 in engine2.run(messages, system_prompt, tools, context):
+                        if isinstance(event2, TextDeltaEvent):
+                            yield {"type": "text_delta", "delta": event2.delta}
+                        elif isinstance(event2, CliSessionIdEvent):
+                            _new_sid = event2.session_id
+                            if _new_sid and session_id:
+                                try:
+                                    from database import db as _db4
+                                    from utils import now_iso as _now2
+                                    await _db4.execute(
+                                        "UPDATE chat_sessions SET cli_session_id=?, last_active_at=? WHERE id=?",
+                                        (_new_sid, _now2(), session_id),
+                                    )
+                                except Exception:
+                                    pass
+                        elif isinstance(event2, MessageDoneEvent):
+                            yield {
+                                "type": "message_done",
+                                "rounds": event2.rounds,
+                                "thinking_steps": event2.thinking_steps or [],
+                                "action": event2.final_action,
+                                "actions": event2.all_confirm_results if len(event2.all_confirm_results) > 1 else None,
+                                "stop_reason": event2.stop_reason,
+                            }
+                        elif not isinstance(event2, (CliResumeFailedEvent,)):
+                            # 转发其他事件（ToolStartEvent 等）
+                            pass
+                    return
                 elif isinstance(event, MessageDoneEvent):
                     yield {
                         "type": "message_done",
@@ -981,16 +1081,6 @@ class ChatAssistantAgent(BaseAgent):
                         "actions": event.all_confirm_results if len(event.all_confirm_results) > 1 else None,
                         "stop_reason": event.stop_reason,
                     }
-                    # 手动挡：会话结束后推送文件改动汇报
-                    _pid = project_id if 'project_id' in dir() else None
-                    _proj = project if 'project' in dir() else None
-                    changes = _session_file_changes.pop(_pid, []) if _pid else []
-                    if changes and _proj and _proj.get("mode") == "manual":
-                        change_text = "\n".join(f"  - `{f}`" for f in changes)
-                        yield {
-                            "type": "text_delta",
-                            "delta": f"\n\n---\n📝 **本次共修改 {len(changes)} 个文件：**\n{change_text}\n\n请自行决定提交时机（git commit / p4 submit）。",
-                        }
                 elif isinstance(event, BudgetExceededEvent):
                     yield {"type": "budget_exceeded", "reason": event.reason}
                 elif isinstance(event, ErrorEvent):

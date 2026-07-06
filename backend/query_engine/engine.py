@@ -286,6 +286,11 @@ class QueryEngine:
                     elif etype == "cli_session_id":
                         # Session Resume: 上抛给 chat_assistant 存 DB
                         yield CliSessionIdEvent(session_id=ev.get("session_id", ""))
+                    elif etype == "cli_resume_failed":
+                        # Session 已过期：上抛给 chat_assistant 清除旧 session_id 并重试
+                        from query_engine.events import CliResumeFailedEvent
+                        yield CliResumeFailedEvent(old_session_id=ev.get("old_session_id", ""))
+                        return  # 终止本次流，由上层重跑
                     elif etype == "cli_tool_start":
                         tid = ev["tool_use_id"]
                         if tid not in _cli_tool_started:

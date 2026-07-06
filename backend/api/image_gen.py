@@ -80,10 +80,17 @@ async def get_lightai_config_status():
     }
 
 
+class TestLightAIRequest(BaseModel):
+    api_key: Optional[str] = None
+    api_base: Optional[str] = None
+
+
 @router.post("/config/test")
-async def test_lightai_connection():
-    """测试 LightAI API 连接"""
-    if not settings.LIGHTAI_API_KEY:
+async def test_lightai_connection(body: TestLightAIRequest = None):
+    """测试 LightAI API 连接；优先使用请求体中的 Key（未保存也能测试）"""
+    api_key  = (body.api_key  if body else None) or settings.LIGHTAI_API_KEY
+    api_base = (body.api_base if body else None) or settings.LIGHTAI_API_BASE
+    if not api_key:
         return {"status": "not_configured", "message": "LIGHTAI_API_KEY 未配置"}
     try:
         import json as _json, ssl, urllib.request, urllib.error
@@ -92,15 +99,15 @@ async def test_lightai_connection():
         ctx.verify_mode = ssl.CERT_NONE
         # 用 create_async_task 做鉴权探针：服务端先验 Key 再验参数，
         # 所以 401/403 = Key 无效，其余状态码（400/422/500）= Key 有效
-        url = f"{settings.LIGHTAI_API_BASE.rstrip('/')}/api/lightai/create_async_task"
+        url = f"{api_base.rstrip('/')}/api/lightai/create_async_task"
         payload = _json.dumps({
-            "service_name": "_validate_", "api_name": "_test_",
-            "app_info": {"model": "", "mode": ""},
+            "service_name": "connectivity_check", "api_name": "connectivity_check",
+            "app_info": {"model": "check", "mode": ""},
             "task_query": {"path": {}, "params": {}, "json": {}, "data": {}, "file": {}},
             "custom_data": {},
         }).encode()
         req = urllib.request.Request(url, data=payload, method="POST", headers={
-            "Authorization": f"Bearer {settings.LIGHTAI_API_KEY}",
+            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         })
         try:

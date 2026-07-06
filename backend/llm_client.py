@@ -1042,13 +1042,38 @@ class LLMClient:
                             sid = obj.get("session_id", "")
                             if sid:
                                 await queue.put(("session_id", sid))
+                        elif t == "error":
+                            # codebuddy/claude CLI 直接返回 {"type":"error","error":"..."} 的错误
+                            err_text = obj.get("error", "") or obj.get("message", "") or "未知错误"
+                            _resume_fail_kws = (
+                                "No conversation found",
+                                "conversation not found",
+                                "session not found",
+                                "invalid session",
+                            )
+                            if resume_session_id and any(kw.lower() in err_text.lower() for kw in _resume_fail_kws):
+                                logger.warning("🖥️  CLI Resume 失败（session 已过期），清除并重试: %s", err_text[:200])
+                                await queue.put(("resume_failed", resume_session_id))
+                            elif not full_text:
+                                full_text = f"[CLI错误] {err_text[:300]}"
+                                await queue.put(("text", full_text))
                         elif t == "result":
                             if obj.get("is_error"):
                                 err_text = obj.get("result", "") or ""
                                 if not err_text:
                                     errors = obj.get("errors", [])
                                     err_text = errors[0] if errors else "未知错误"
-                                if not full_text:
+                                # Session resume 失败：通知上层清除旧 session_id 并重试
+                                _resume_fail_kws = (
+                                    "No conversation found",
+                                    "conversation not found",
+                                    "session not found",
+                                    "invalid session",
+                                )
+                                if resume_session_id and any(kw.lower() in err_text.lower() for kw in _resume_fail_kws):
+                                    logger.warning("🖥️  CLI Resume 失败（session 已过期），清除并重试: %s", err_text[:200])
+                                    await queue.put(("resume_failed", resume_session_id))
+                                elif not full_text:
                                     full_text = f"[CLI错误] {err_text[:300]}"
                                     await queue.put(("text", full_text))
                             else:
@@ -1098,6 +1123,10 @@ class LLMClient:
                             yield {"type": "text_delta", "delta": chunk}
                         elif kind == "thinking":
                             yield {"type": "thinking_delta", "delta": chunk}
+                        elif kind == "resume_failed":
+                            # Session 已过期，通知上层清除旧 session_id，不再继续本次流
+                            yield {"type": "cli_resume_failed", "old_session_id": chunk}
+                            break
                         elif kind == "session_id":
                             # Session Resume: 把 CLI session_id 上抛给调用层存 DB
                             yield {"type": "cli_session_id", "session_id": chunk}

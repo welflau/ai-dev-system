@@ -872,6 +872,11 @@ _screenshots_dir = _BASE_DIR / "screenshots"
 _screenshots_dir.mkdir(exist_ok=True)
 app.mount("/screenshots", StaticFiles(directory=str(_screenshots_dir)), name="screenshots")
 
+# 挂载生成图片目录（AI 生图结果访问）
+_generated_images_dir = _BASE_DIR / "generated-images"
+_generated_images_dir.mkdir(exist_ok=True)
+app.mount("/generated-images", StaticFiles(directory=str(_generated_images_dir)), name="generated-images")
+
 
 @app.get("/app")
 @app.get("/app/{path:path}")

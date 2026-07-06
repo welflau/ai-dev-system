@@ -575,7 +575,13 @@ async function testLightAIConnection() {
     if (refreshCard) refreshCard.style.display = 'none';
 
     try {
-        const data = await fetch(`${API}/image-gen/config/test`, { method: 'POST' }).then(r => r.json());
+        const testKey  = document.getElementById('lightaiApiKey')?.value.trim() || '';
+        const testBase = document.getElementById('lightaiBaseUrl')?.value.trim() || '';
+        const data = await fetch(`${API}/image-gen/config/test`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ api_key: testKey || undefined, api_base: testBase || undefined }),
+        }).then(r => r.json());
         resultEl.style.display = 'block';
         if (data.status === 'ok') {
             resultEl.style.background = 'rgba(52,211,153,0.1)';
@@ -5158,6 +5164,11 @@ function renderActionStateSummary(action) {
         summary = `需求 <strong>${escapeHtml(action.title || '?')}</strong> 已创建`;
     } else if (action.type === 'confirm_bug' && isExec) {
         summary = `Bug <strong>${escapeHtml(action.title || '?')}</strong> 已上报`;
+    } else if (action.type === 'generate_image' && isExec) {
+        const tag = action._result?.tag || '';
+        const promptPreview = escapeHtml((action.prompt || '').slice(0, 40));
+        summary = `生图已入队：${promptPreview}${(action.prompt || '').length > 40 ? '…' : ''}` +
+                  (tag ? ` <code style="font-size:11px;">${escapeHtml(tag)}</code>` : '');
     } else if (!isExec && result.reason) {
         summary = `取消原因：${escapeHtml(result.reason)}`;
     }
@@ -5212,6 +5223,86 @@ function runAutoNextAfterProjectCreated(projectId, autoNext) {
 
     if (typeof showToast === 'function') {
         showToast('检测到 UE 项目，已自动生成框架方案卡片', 'info');
+    }
+}
+
+/**
+ * 生图参数确认卡片
+ */
+function renderGenerateImageCard(action) {
+    if (action._message_id && action._state && action._state !== 'pending') {
+        return renderActionStateSummary(action);
+    }
+    const safeId = _nextCardId('genimg');
+    const engines = ['', 'gemini', 'gemini2', 'jimeng', 'midjourney'];
+    const engineLabels = {'': '系统默认', gemini: 'Gemini（推荐）', gemini2: 'Gemini 2', jimeng: '即梦', midjourney: 'Midjourney'};
+    const engineOptions = engines.map(e =>
+        `<option value="${e}" ${(action.engine || '') === e ? 'selected' : ''}>${engineLabels[e] || e}</option>`
+    ).join('');
+    const ratios = ['1:1', '16:9', '9:16', '4:3', '3:4'];
+    const ratioOptions = ratios.map(r =>
+        `<option value="${r}" ${(action.aspect_ratio || '1:1') === r ? 'selected' : ''}>${r}</option>`
+    ).join('');
+    const sizes = ['2K', '4K', '1K'];
+    const sizeOptions = sizes.map(s =>
+        `<option value="${s}" ${(action.image_size || '2K') === s ? 'selected' : ''}>${s}</option>`
+    ).join('');
+    return `
+    <div class="chat-action-card chat-confirm-card" id="${safeId}"
+         data-message-id="${escapeHtml(action._message_id || '')}"
+         style="border-left-color: var(--accent, #a371f7);">
+        <div class="action-title">🖼️ 生图参数确认</div>
+        <div class="action-detail">
+            <div class="confirm-req-meta" style="margin-bottom:6px;">Prompt</div>
+            <textarea id="${safeId}_prompt" class="chat-genimg-prompt"
+                style="width:100%;min-height:64px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:12px;resize:vertical;"
+                >${escapeHtml(action.prompt || '')}</textarea>
+            <div style="display:flex;gap:10px;margin-top:8px;flex-wrap:wrap;">
+                <label style="font-size:12px;color:var(--text-muted);display:flex;flex-direction:column;gap:3px;">
+                    引擎<select id="${safeId}_engine" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:12px;">${engineOptions}</select>
+                </label>
+                <label style="font-size:12px;color:var(--text-muted);display:flex;flex-direction:column;gap:3px;">
+                    比例<select id="${safeId}_ratio" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:12px;">${ratioOptions}</select>
+                </label>
+                <label style="font-size:12px;color:var(--text-muted);display:flex;flex-direction:column;gap:3px;">
+                    尺寸<select id="${safeId}_size" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:12px;">${sizeOptions}</select>
+                </label>
+            </div>
+        </div>
+        <div class="confirm-req-btns" style="margin-top:10px;">
+            <button class="btn btn-sm btn-primary" onclick="doConfirmGenerateImage('${safeId}')">🖼️ 确认生图</button>
+            <button class="btn btn-sm" onclick="this.closest('.chat-action-card').style.opacity='0.5';this.closest('.chat-action-card').querySelectorAll('button').forEach(b=>b.disabled=true)">✗ 取消</button>
+        </div>
+    </div>`;
+}
+
+async function doConfirmGenerateImage(cardId) {
+    const card = document.getElementById(cardId);
+    if (!card || !currentProjectId) return;
+    const prompt = document.getElementById(`${cardId}_prompt`)?.value.trim() || '';
+    if (!prompt) { showToast('prompt 不能为空', 'error'); return; }
+    const engine = document.getElementById(`${cardId}_engine`)?.value || '';
+    const ratio  = document.getElementById(`${cardId}_ratio`)?.value  || '1:1';
+    const size   = document.getElementById(`${cardId}_size`)?.value   || '2K';
+    const msgId  = card.dataset.messageId || '';
+
+    card.querySelectorAll('button').forEach(b => b.disabled = true);
+    const btns = card.querySelector('.confirm-req-btns');
+    if (btns) btns.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">⏳ 提交中...</span>';
+
+    try {
+        const res = await api(`/projects/${currentProjectId}/chat/confirm-generate-image`, {
+            method: 'POST',
+            body: { prompt, engine, aspect_ratio: ratio, image_size: size, message_id: msgId || undefined },
+        });
+        showToast('生图已入队 ' + (res.tag || ''), 'success');
+        if (btns) btns.innerHTML = `<span style="color:var(--success);">✅ 已入队：<code style="font-size:11px;">${escapeHtml(res.tag || '')}</code></span>
+            <a class="action-link" onclick="switchTab('images')">查看图片队列 →</a>`;
+        if (msgId) patchActionState(msgId, 'executed', { tag: res.tag });
+    } catch (e) {
+        showToast(`提交失败: ${e.message}`, 'error');
+        if (btns) btns.innerHTML = `<button class="btn btn-sm btn-primary" onclick="doConfirmGenerateImage('${cardId}')">🖼️ 确认生图</button>
+            <button class="btn btn-sm" onclick="this.closest('.chat-action-card').style.opacity='0.5';this.closest('.chat-action-card').querySelectorAll('button').forEach(b=>b.disabled=true)">✗ 取消</button>`;
     }
 }
 
@@ -14395,6 +14486,11 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
                 </div>
             </div>
         `;
+    } else if (action && action._state && action._state !== 'pending'
+               && action.type === 'generate_image') {
+        actionHtml = renderActionStateSummary(action);
+    } else if (action && action.type === 'generate_image') {
+        actionHtml = renderGenerateImageCard(action);
     }
 
     // 图片展示（用户发送的图片）
@@ -15028,6 +15124,13 @@ function formatChatContent(content) {
     content = content.replace(/\[ACTION:\w+\][\s\S]*$/g, '').trim();
     if (!content) return '';
 
+    // 将服务端本地绝对路径替换为可访问的相对 URL
+    // 匹配 generated-images 和 chat_images 目录下的文件
+    content = content.replace(/[a-zA-Z]:[\\\/][^\s\)\]"']*\\generated-images\\([^\s\)\]"']+)/g,
+        (_, fname) => '/generated-images/' + fname.replace(/\\/g, '/'));
+    content = content.replace(/[a-zA-Z]:[\\\/][^\s\)\]"']*\/generated-images\/([^\s\)\]"']+)/g,
+        (_, fname) => '/generated-images/' + fname);
+
     let result = '';
     // 按代码块分割，逐段处理
     const parts = content.split(/(```[\w]*\n[\s\S]*?```)/g);
@@ -15143,12 +15246,18 @@ function _renderMarkdownText(text) {
     return html;
 }
 
-/** 行内格式：加粗 / 斜体 / 行内代码 */
+/** 行内格式：加粗 / 斜体 / 行内代码 / 图片 */
 function _inlineFormat(text) {
     return text
         .replace(/`([^`\n]+)`/g, '<code class="chat-inline-code">$1</code>')
         .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-        .replace(/\*(.+?)\*/g, '<em>$1</em>');
+        .replace(/\*(.+?)\*/g, '<em>$1</em>')
+        .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_, alt, src) => {
+            // 对路径中非 ASCII 字符做 URL encode，保留 / 分隔符
+            const encodedSrc = src.split('/').map(seg => encodeURIComponent(seg)).join('/');
+            const safeAlt = escapeHtml(alt);
+            return `<img src="${encodedSrc}" alt="${safeAlt}" class="chat-md-img" style="max-width:100%;border-radius:6px;margin:4px 0;cursor:pointer;" onclick="window.open(this.src,'_blank')" onerror="this.style.display='none'">`;
+        });
 }
 
 /** 生成可折叠的代码文件卡片 */
