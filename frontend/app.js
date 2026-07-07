@@ -8277,6 +8277,37 @@ function connectSSE(projectId) {
             } catch {}
         });
 
+        eventSource.addEventListener('ue_editor_offline', (e) => {
+            try {
+                // 当 MCP tool 执行时检测到 Editor 未运行，弹出启动提示
+                const existing = document.getElementById('ue-editor-offline-toast');
+                if (existing) return; // 避免重复弹出
+                const toast = document.createElement('div');
+                toast.id = 'ue-editor-offline-toast';
+                toast.style.cssText = `
+                    position:fixed; bottom:80px; right:20px; z-index:9999;
+                    background:var(--bg-secondary, #1e2030); border:1px solid var(--warning, #f0a020);
+                    border-radius:10px; padding:14px 18px; max-width:280px;
+                    box-shadow:0 4px 20px rgba(0,0,0,0.4); animation:fadeIn .2s ease;
+                `;
+                toast.innerHTML = `
+                    <div style="font-weight:600;color:var(--warning,#f0a020);margin-bottom:6px;">⚠️ UE Editor 未运行</div>
+                    <div style="font-size:13px;color:var(--text-muted);margin-bottom:10px;">当前操作需要 UE Editor 在线，是否现在启动？</div>
+                    <div style="display:flex;gap:8px;">
+                        <button class="btn btn-sm btn-primary" onclick="launchUEEditor();document.getElementById('ue-editor-offline-toast')?.remove()">
+                            🚀 启动 Editor
+                        </button>
+                        <button class="btn btn-sm" onclick="document.getElementById('ue-editor-offline-toast')?.remove()">
+                            稍后
+                        </button>
+                    </div>
+                `;
+                document.body.appendChild(toast);
+                // 30 秒后自动消失
+                setTimeout(() => toast.remove(), 30000);
+            } catch {}
+        });
+
         // v0.18 基线编译：启动 + 流式 log + 最终结果
         eventSource.addEventListener('ue_compile_started', (e) => {
             const data = JSON.parse(e.data);
