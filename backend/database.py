@@ -129,6 +129,8 @@ class Database:
             ("ticket_comments", "reply_to_comment_id", "TEXT"),
             # 工具调用步骤摘要（chat_with_tools 全程记录，避免 messages 截断丢失）
             ("llm_conversations", "tools_json", "TEXT"),
+            # AI 生图导入 UE 后的内部路径，如 /Game/Textures/AI/T_IMG_abc
+            ("art_assets", "ue_path", "TEXT NOT NULL DEFAULT ''"),
         ]
         async with self._write_lock:
             for table, column, col_def in migrations:
