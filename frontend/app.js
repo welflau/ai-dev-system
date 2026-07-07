@@ -8359,6 +8359,26 @@ function connectSSE(projectId) {
             });
         });
 
+        eventSource.addEventListener('ue_asset_imported', (e) => {
+            try {
+                const data = JSON.parse(e.data);
+                if (data.success) {
+                    showToast(`🎮 已自动导入 UE：${data.ue_path || data.asset_id}`, 'success');
+                    appendLogEntry({
+                        agent_type: 'UE', action: 'import_asset',
+                        detail: JSON.stringify({message: `资产已导入 UE：${data.ue_path || ''}`}),
+                        level: 'info', created_at: new Date().toISOString(),
+                    });
+                } else {
+                    appendLogEntry({
+                        agent_type: 'UE', action: 'import_asset',
+                        detail: JSON.stringify({message: `UE 导入失败：${data.message || ''}`}),
+                        level: 'warn', created_at: new Date().toISOString(),
+                    });
+                }
+            } catch {}
+        });
+
         eventSource.addEventListener('ue_baseline_compile_result', (e) => {
             const data = JSON.parse(e.data);
             const ok = data.status === 'success';

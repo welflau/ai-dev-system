@@ -301,6 +301,56 @@ async def process_image_request(req_id: str) -> None:
 
     logger.info("图片生成完成: %s → %s", req_id, result_path or image_url[:60])
 
+    # 若 result_path 有效且项目是 UE 项目，尝试自动导入
+    if result_path and req.get("project_id"):
+        asyncio.create_task(_maybe_import_to_ue(req_id, dict(req), result_path))
+
+
+async def _maybe_import_to_ue(req_id: str, req: dict, result_path: str) -> None:
+    """
+    图片生成完成后，检测 UE Editor 是否在线；若是，自动导入到 /Game/Textures/AI。
+    失败时静默忽略，不影响主流程。
+    """
+    try:
+        project_id = req.get("project_id", "")
+        if not project_id:
+            return
+
+        # 检查项目是否为 UE 项目（有 uproject_path 字段）
+        proj = await db.fetch_one(
+            "SELECT uproject_path FROM projects WHERE id = ?", (project_id,)
+        )
+        if not proj or not proj.get("uproject_path"):
+            return  # 非 UE 项目，跳过
+
+        # 快速探活：3 秒超时，避免阻塞
+        from engines.ue_python_bridge import run_python as _ue_run_py
+        probe = await _ue_run_py("print('online')", project_id=project_id, timeout=5.0)
+        if not probe.get("success"):
+            logger.debug("UE Editor 离线，跳过自动导入: project=%s", project_id)
+            return
+
+        # 执行导入
+        from ue_mcp_server import _ue_import_asset_impl
+        result = await _ue_import_asset_impl(
+            asset_id=req_id,
+            project_id=project_id,
+            ue_dest_path="/Game/Textures/AI",
+        )
+        logger.info("UE 自动导入: asset=%s result=%s", req_id, result.get("message", ""))
+
+        # 推 SSE 通知前端
+        from events import event_manager
+        await event_manager.publish_to_project(project_id, "ue_asset_imported", {
+            "asset_id": req_id,
+            "ue_path": result.get("ue_path", ""),
+            "success": result.get("success", False),
+            "message": result.get("message", ""),
+            "local_path": result.get("local_path", result_path),
+        })
+    except Exception as e:
+        logger.debug("UE 自动导入检测失败（已忽略）: %s", e)
+
 
 async def _finish_with_ascii(req: dict) -> None:
     """ASCII 兜底 + 替换占位符"""
