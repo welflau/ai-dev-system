@@ -1,83 +1,95 @@
 ---
-description: 用 AI 生成纹理或 3D Mesh 并自动导入 UE
+description: 用 AI 生成图片并导入 UE，或将资产库中已有图片导入 UE Content Browser
 ---
 
 # /ue-asset
 
-用自然语言描述资产，调用 AI 生成服务生成纹理或 3D Mesh，自动导入 UE Content Browser。
+管理 AI 生图与 UE 资产导入的全流程。支持两种模式：
+- **生成并导入**：描述画面 → AI 生图（LightAI）→ 自动导入 UE
+- **导入已有资产**：从 `art_assets` 库中选取已生成的图片，导入 UE Content Browser
 
 ## 用法
 
 ```
-/ue-asset <资产描述> --name <资产名> [--type texture|mesh] [--ue-path <路径>]
-```
-
-## 执行前置
-
-读取 `.claude/ue-config.json` 获取脚本绝对路径：
-
-```python
-config = json.loads(open('.claude/ue-config.json').read())
-generate_texture = config['generate_texture_script']
-generate_mesh    = config['generate_mesh_script']
-ue_python        = config['ue_python_script']
+/ue-asset generate <图片描述> [--ue-path <路径>] [--name <资产名>] [--engine gemini|jimeng|midjourney]
+/ue-asset import <asset_id> [--ue-path <路径>] [--name <资产名>]
+/ue-asset list [--type ai_generated|pexels] [--limit 10]
 ```
 
 ## 行为
 
-1. 根据 `--type` 选择生成脚本：
-   - `texture` → `{generate_texture_script}`
-   - `mesh` → `{generate_mesh_script}`
-2. 调用 AI 服务生成资产（本地缓存到 `assets/cache/`）
-3. 若 UE Editor 在线且指定了 `--ue-path`，通过 `{ue_python_script}` 导入 Content Browser
-4. 报告资产路径和导入状态
+### 模式一：generate（生成并导入）
 
-## 前置条件
+1. 调用 `POST /api/image-gen` 提交生图请求，引擎默认 `gemini`
+2. 轮询 `GET /api/image-gen/{req_id}` 直到 `status=done`（超时 300s）
+3. 取得 `result` 中的 `asset_id`，调用 MCP tool `ue_import_asset`：
+   ```
+   ue_import_asset(
+     asset_id  = <req_id>,
+     project_id = <当前项目 ID>,
+     ue_dest_path = <--ue-path 参数，默认 /Game/Textures/AI>,
+     asset_name   = <--name 参数，默认自动生成 T_{短ID}>,
+   )
+   ```
+4. 展示导入结果（UE 内部路径 + 本地文件路径）
 
-默认使用 LightAI 内部平台，设置 API Key（二选一）：
+### 模式二：import（导入已有资产）
 
-```bash
-# 方式1：环境变量
-export LIGHTAI_API_KEY="your-key"
+1. 若未指定 `asset_id`，调用 `GET /api/art-assets?source=ai_generated&limit=10` 列出最近生成的图片供选择
+2. 调用 MCP tool `ue_import_asset`：
+   ```
+   ue_import_asset(
+     asset_id  = <asset_id>,
+     project_id = <当前项目 ID>,
+     ue_dest_path = <--ue-path 参数，默认 /Game/Textures/AI>,
+     asset_name   = <--name 参数>,
+   )
+   ```
+3. 展示 UE 内部路径
 
-# 方式2：在 scripts/env.json 配置（与 LightAI Skill 共用）
-{"LIGHTAI_API_KEY": "your-key"}
-```
+### 模式三：list（查看可导入资产）
 
-外部服务备选：
+调用 `GET /api/art-assets?source=ai_generated` 列出资产库中 AI 生成的图片，显示：
+- asset_id、文件名、生成时间
+- `ue_path`（非空表示已导入 UE，显示路径）
 
-| Provider | 环境变量 | 服务 |
-|----------|---------|------|
-| `lightai`（默认）| `LIGHTAI_API_KEY` | LightAI 平台（nano-banana/即梦/Tripo）|
-| `dalle` | `OPENAI_API_KEY` | DALL-E 3 |
-| `sd` | — | 本地 Stable Diffusion WebUI |
-| `meshy` | `MESHY_API_KEY` | Meshy.ai |
+## 前提条件
+
+- UE Editor 已启动
+- Editor 已启用 Remote Execution Server：  
+  `Project Settings → Plugins → Python → Enable Remote Execution Server`
+- `ART_ASSETS_LOCAL_PATH` 已配置（图片需有本地文件才能导入）
 
 ## 资产命名规范
 
-名称需遵循 `rules/ue-asset-naming.md`：
-- 纹理：`T_<名称>_<类型>`（`_D` Diffuse / `_N` Normal / `_M` Mask）
-- 静态网格：`SM_<名称>_<编号>`
+遵循 `rules.md` 中 UE 资产命名约定：
+- 纹理：`T_<描述>_<类型后缀>`（如 `T_Forest_D`、`T_UI_Button_01`）
+- 留空时系统自动生成 `T_{asset_id 前8位}`
 
 ## 示例
 
 ```
-/ue-asset 潮湿的青苔石块地面纹理，绿色为主 --name T_Stone_Mossy_D --type texture --ue-path /Game/Environment/Terrain/Textures
+# 生成一张森林场景纹理并导入
+/ue-asset generate 茂密森林地面，湿润土壤与落叶，俯视图 --ue-path /Game/Environment/Textures --name T_Forest_Ground_D
 
-/ue-asset 废弃的生锈铁桶，带破洞 --name SM_Barrel_Rusty_01 --type mesh --ue-path /Game/Environment/Props/Meshes
+# 生成 UI 背景图并导入
+/ue-asset generate 赛博朋克风格 HUD 背景，深蓝色渐变 --ue-path /Game/UI/Textures --engine jimeng
 
-/ue-asset 火焰粒子所需的噪声纹理，黑白灰渐变 --name T_Fire_Noise --type texture --ue-path /Game/VFX/Textures
+# 导入已有资产（知道 ID）
+/ue-asset import IMG-abc12345 --ue-path /Game/Textures/Characters
+
+# 列出最近 AI 生成的图片
+/ue-asset list --limit 20
+
+# 查看哪些资产已导入 UE
+/ue-asset list --type ai_generated
 ```
 
-## 生成耗时参考
+## 错误处理
 
-| 类型 | Provider | 预计时间 |
-|------|---------|--------|
-| 纹理 | DALL-E 3 | 15–30s |
-| 纹理 | SD 本地 | 10–20s |
-| 3D Mesh | Meshy | 3–5min |
-| 3D Mesh | Tripo3D | 2–4min |
-
-## 本地缓存
-
-所有生成资产缓存在 `assets/cache/`，重复生成时优先使用缓存（如需强制重新生成，加 `--force`）。
+| 错误 | 原因 | 解决方式 |
+|------|------|----------|
+| `UE Editor 未启动` | Editor 未运行或 Remote Execution 未开 | 先启动 Editor，开启 Remote Execution Server |
+| `资产无本地文件` | `ART_ASSETS_LOCAL_PATH` 未配置 | 在 `.env` 中配置 `ART_ASSETS_LOCAL_PATH` |
+| `ue_dest_path 须以 /Game/ 开头` | 路径格式错误 | 改为 `/Game/Textures/AI` 等合法路径 |
+| `导入超时` | 大文件或 Editor 繁忙 | 等待片刻后重试，或手动拖入 Content Browser |
