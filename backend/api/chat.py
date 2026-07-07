@@ -133,6 +133,7 @@ class ChatRequest(BaseModel):
     history: Optional[List[ChatMessage]] = Field(default=None, description="历史消息（可选）")
     images: Optional[List[str]] = Field(default=None, description="图片列表，base64 data URL，如 data:image/png;base64,...")
     chat_session_id: Optional[str] = Field(default=None, description="v0.20 会话 ID")
+    msg_group_key: Optional[str] = Field(default=None, description="消息级任务分组 key，每次发送唯一，用于后台任务面板按对话分组")
 
 
 class ChatResponse(BaseModel):
@@ -598,6 +599,8 @@ async def _chat_stream_generator(
     _thinking_rounds: list = []   # [{round, reasoning, steps:[]}]
     _cur_round: dict | None = None
     _thinking_buf: str = ""  # 当前思考段缓冲，tool_done 时 flush 到 events
+    # 消息级分组 key：每次发消息唯一，用于后台任务面板按对话分组
+    _msg_group_key = req.msg_group_key or _sid
     # A-4: @file 引用展開（在 LLM 調用前注入文件內容）
     expanded_message, _file_warnings = _expand_file_refs(req.message)
 
@@ -666,7 +669,8 @@ async def _chat_stream_generator(
                 _is_cli_tool = bool(_task_id)
                 if _is_cli_tool:
                     _cli_task_add(_task_id, label, ev["tool"], project_id=project_id,
-                                  session_key=_sid)
+                                  session_key=_msg_group_key,
+                                  session_label=req.message[:30])
                 yield _sse("tool_start", {
                     "tool": ev["tool"], "label": label, "input": ev.get("input", {}),
                     **({"task_id": _task_id} if _is_cli_tool else {}),
@@ -2222,6 +2226,7 @@ class GlobalChatRequest(BaseModel):
     images: Optional[List[str]] = Field(default=None, description="图片列表，base64 data URL")
     session_id: Optional[str] = Field(default=None, description="思考日志 SSE session ID（可选）")
     chat_session_id: Optional[str] = Field(default=None, description="v0.20 多会话 session ID")
+    msg_group_key: Optional[str] = Field(default=None, description="消息级任务分组 key，每次发送唯一")
 
 
 class GlobalChatResponse(BaseModel):
@@ -2331,6 +2336,7 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
     _thinking_rounds_g: list = []
     _cur_round_g: dict | None = None
     _thinking_buf_g: str = ""  # 全局聊天思考缓冲
+    _msg_group_key_g = req.msg_group_key or _sid
 
     # DB 可能被 Orchestrator 鎖住，讀失敗時用空列表繼續（不阻斷聊天）
     try:
@@ -2411,7 +2417,8 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
                 _gtask_id = ev.get("tool_use_id") or ""
                 if _gtask_id:
                     _cli_task_add(_gtask_id, label, ev["tool"], project_id="",
-                                  session_key=_sid)
+                                  session_key=_msg_group_key_g,
+                                  session_label=req.message[:30])
                 yield _sse("tool_start", {
                     "tool": ev["tool"], "label": label, "input": ev.get("input", {}),
                     **({"task_id": _gtask_id} if _gtask_id else {}),

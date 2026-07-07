@@ -12174,12 +12174,13 @@ async function _sendChatStreaming(url, body) {
                     }
                     if (_curRoundStepsEl) {
                         const taskId  = data.task_id || '';
-                        // 序号：若有 task_id，取其在 _CLI_TASKS_MEM 的全局位置（与后台面板对应）
-                        // 否则用轮次内局部序号
+                        // 序号：取当前对话组内的位置（与后台任务面板 # 编号对应）
                         const stepNum = taskId ? (() => {
-                            const keys = Object.keys(_CLI_TASKS_MEM).sort((a,b) =>
-                                (_CLI_TASKS_MEM[a].created_at||'').localeCompare(_CLI_TASKS_MEM[b].created_at||''));
-                            const idx = keys.indexOf(taskId);
+                            const curKey = _cliCurrentSession?.key || '';
+                            const sessionTasks = Object.values(_CLI_TASKS_MEM)
+                                .filter(t => (t.session_key || '') === curKey)
+                                .sort((a,b) => (a.created_at||'').localeCompare(b.created_at||''));
+                            const idx = sessionTasks.findIndex(t => t.id === taskId);
                             return idx >= 0 ? idx + 1 : (_curRoundStepsEl.querySelectorAll('.ctp-step').length + 1);
                         })() : (_curRoundStepsEl.querySelectorAll('.ctp-step').length + 1);
                         const jumpBtn = taskId
@@ -13541,11 +13542,13 @@ function createThinkingContext(msgContainer) {
 
             if (data.step === 'start') {
                 const taskId  = data.task_id || '';
-                // 序号：若有 task_id，取全局位置与后台面板对应；否则用局部序号
+                // 序号：取当前对话组内的位置（与后台任务面板 # 编号对应）
                 const taskSeq = taskId ? (() => {
-                    const keys = Object.keys(_CLI_TASKS_MEM).sort((a,b) =>
-                        (_CLI_TASKS_MEM[a].created_at||'').localeCompare(_CLI_TASKS_MEM[b].created_at||''));
-                    const idx = keys.indexOf(taskId);
+                    const curKey = _cliCurrentSession?.key || '';
+                    const sessionTasks = Object.values(_CLI_TASKS_MEM)
+                        .filter(t => (t.session_key || '') === curKey)
+                        .sort((a,b) => (a.created_at||'').localeCompare(b.created_at||''));
+                    const idx = sessionTasks.findIndex(t => t.id === taskId);
                     return idx >= 0 ? idx + 1 : 0;
                 })() : 0;
                 const stepNum = taskSeq || (steps.length + 1);
@@ -13762,7 +13765,8 @@ async function sendChatMessage() {
                 `/projects/${currentProjectId}/chat/stream`,
                 { message: fullMessage,
                   images: images.length > 0 ? images : undefined,
-                  chat_session_id: _sid }
+                  chat_session_id: _sid,
+                  msg_group_key: _cliCurrentSession?.key || undefined }
             );
         } else {
             // 全局聊天（无项目）— 传 history 兜底（无 session_id 时服务端用前端传的）
@@ -13771,7 +13775,8 @@ async function sendChatMessage() {
                 `/chat/stream`,
                 { message: fullMessage, history: historyToSend,
                   images: images.length > 0 ? images : undefined,
-                  chat_session_id: _sid }
+                  chat_session_id: _sid,
+                  msg_group_key: _cliCurrentSession?.key || undefined }
             );
         }
 
