@@ -8442,7 +8442,8 @@ function connectSSE(projectId) {
                              onerror="this.style.display='none'">
                         <div style="font-size:11px;color:var(--text-muted);">
                             <a href="#" title="${escapeHtml(path||url)}"
-                               onclick="event.preventDefault();${path ? `fetch('/api/system/open_path',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:'${escapeHtml(path)}'})}).catch(()=>{});showToast('已打开文件夹','success')` : `navigator.clipboard?.writeText('${escapeHtml(url)}');showToast('URL已复制','success')`}"
+                               data-filepath="${escapeHtml(path||url)}"
+                               onclick="event.preventDefault();_openLocalImageFile(this.dataset.filepath)"
                                style="color:var(--accent);">📂 ${escapeHtml(fname)}</a>
                         </div>
                     </div>`;
@@ -13364,6 +13365,23 @@ async function _refreshTasksPanel() {
     }
 }
 
+function _openLocalImageFile(filePath) {
+    if (!filePath) return;
+    // 本地路径：用 /api/system/open_path 在 Explorer 中选中文件
+    // 远端 URL：复制到剪贴板
+    if (/^[a-zA-Z]:[\\\/]/.test(filePath) || filePath.startsWith('/')) {
+        fetch('/api/system/open_path', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({path: filePath}),
+        }).then(() => showToast('已在文件管理器中打开', 'success'))
+          .catch(() => { navigator.clipboard?.writeText(filePath); showToast('路径已复制', 'success'); });
+    } else {
+        navigator.clipboard?.writeText(filePath);
+        showToast('URL 已复制', 'success');
+    }
+}
+
 function _toggleTaskGroup(headerEl) {
     const grpKey = headerEl.dataset.grpKey;
     const bodyId  = headerEl.dataset.grpId;
@@ -15354,7 +15372,8 @@ function formatChatContent(content) {
                          onclick="window.open(this.src,'_blank')"
                          onerror="this.style.display='none'">
                     <a href="#" title="${escapeHtml(trimmed)}"
-                       onclick="event.preventDefault();fetch('/api/system/open_path',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:${JSON.stringify(trimmed)}})}).catch(()=>{});navigator.clipboard?.writeText(${JSON.stringify(trimmed)});showToast('已打开文件夹','success')"
+                       data-filepath="${escapeHtml(trimmed)}"
+                       onclick="event.preventDefault();_openLocalImageFile(this.dataset.filepath)"
                        style="font-size:11px;color:var(--accent);font-family:monospace;">📂 ${escapeHtml(fname)}</a>
                 </div>`;
             } else {
