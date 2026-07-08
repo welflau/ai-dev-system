@@ -15397,6 +15397,12 @@ function formatChatContent(content) {
 
 /** 将 Markdown 文本渲染成 HTML（支持标题/列表/加粗/行内代码/分割线/表格） */
 function _renderMarkdownText(text) {
+    // 合并被换行截断的 ![alt](url 被折行 query-string) 情况
+    // 如：![x](https://foo.png\n?q-sign=...) → 拼成完整的 ![x](https://foo.png?q-sign=...)
+    text = text.replace(/(\!\[[^\]]*\]\([^\)]*)\n(\?[^\)]*\))/g, '$1$2');
+    // 过滤纯 CDN query-string 行（?q-sign-algorithm=... 独立成行，无实际意义）
+    text = text.replace(/^(\?q-sign-algorithm=[^\n]*)\n?/gm, '');
+
     const lines = text.split('\n');
     let html = '';
     let inList = false;
