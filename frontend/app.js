@@ -165,6 +165,10 @@ function generateLocalPath(projectName) {
 // ==================== 初始化 ====================
 
 document.addEventListener('DOMContentLoaded', () => {
+    // 注入全局动画样式
+    const _styleEl = document.createElement('style');
+    _styleEl.textContent = `@keyframes spin{to{transform:rotate(360deg)}}`;
+    document.head.appendChild(_styleEl);
     // 统一配置 marked（GFM + 换行）
     if (window.marked) {
         marked.use({ gfm: true, breaks: true });
@@ -8410,6 +8414,53 @@ function connectSSE(projectId) {
             } catch {}
         });
 
+        eventSource.addEventListener('image_generated', (e) => {
+            try {
+                const data = JSON.parse(e.data);
+                const reqId  = data.request_id || '';
+                const url    = data.result_url  || '';
+                const path   = data.result_path || '';
+                // 从 result_path 或 result_url 取文件名
+                const fname  = (path || url).replace(/\\/g, '/').split('/').pop() || reqId;
+                // 构造可访问的图片 URL
+                let imgSrc = '';
+                if (path) {
+                    // 尝试 /generated-images/ 静态路由（文件在 backend/generated-images/）
+                    const inGenDir = path.replace(/\\/g, '/').includes('/generated-images/');
+                    imgSrc = inGenDir
+                        ? '/generated-images/' + fname
+                        : `/api/local-file?path=${encodeURIComponent(path)}`;
+                } else if (url) {
+                    imgSrc = url;
+                }
+                // 在聊天中追加一条图片预览消息
+                if (imgSrc && currentProjectId) {
+                    const html = `<div class="chat-genimg-result" style="margin-top:8px;">
+                        <img src="${escapeHtml(imgSrc)}" alt="${escapeHtml(fname)}"
+                             style="max-width:100%;border-radius:8px;cursor:pointer;display:block;margin-bottom:6px;"
+                             onclick="window.open(this.src,'_blank')"
+                             onerror="this.style.display='none'">
+                        <div style="font-size:11px;color:var(--text-muted);">
+                            <a href="#" onclick="event.preventDefault();navigator.clipboard?.writeText('${escapeHtml(path||url)}');showToast('路径已复制','success')" style="color:var(--accent);">📋 ${escapeHtml(fname)}</a>
+                        </div>
+                    </div>`;
+                    // 找到最后一条 assistant 气泡，追加图片；找不到则新建气泡
+                    const container = document.getElementById('chatMessages');
+                    const lastAssistant = container?.querySelector('.chat-msg.assistant:last-of-type .chat-msg-bubble');
+                    if (lastAssistant) {
+                        const div = document.createElement('div');
+                        div.innerHTML = html;
+                        lastAssistant.appendChild(div.firstElementChild);
+                    } else {
+                        appendChatBubble('assistant', `![${fname}](${imgSrc})\n📁 \`${path || url}\``);
+                    }
+                    scrollChatToBottom();
+                }
+                // 更新占位 spinner（如有）
+                document.querySelectorAll(`.chat-genimg-spinner[data-req-id="${reqId}"]`).forEach(el => el.remove());
+            } catch {}
+        });
+
         eventSource.addEventListener('ue_baseline_compile_result', (e) => {
             const data = JSON.parse(e.data);
             const ok = data.status === 'success';
@@ -12166,6 +12217,28 @@ async function _sendChatStreaming(url, body) {
                     if (!_curRoundToolTaskIds) _curRoundToolTaskIds = {};
                     if (data.task_id) _curRoundToolTaskIds[data.tool] = data.task_id;
                     _curRoundThinkingEl = null;  // tool 插入后，后续 thinking_delta 新建块
+
+                    // 检测生图命令：Bash 且命令包含 generate_image.py 或 lightai-skill
+                    const _cmdStr = JSON.stringify(data.input || '');
+                    const _isGenImg = (data.tool === 'Bash' || data.tool === 'bash') &&
+                        (_cmdStr.includes('generate_image') || _cmdStr.includes('lightai-skill') || _cmdStr.includes('lightai_skill'));
+                    if (_isGenImg && data.task_id) {
+                        // 在聊天流气泡里插入生图转圈占位卡
+                        const _spinId = `genimg_spin_${data.task_id}`;
+                        if (!document.getElementById(_spinId)) {
+                            const _spinEl = document.createElement('div');
+                            _spinEl.id = _spinId;
+                            _spinEl.className = 'chat-genimg-spinner';
+                            _spinEl.dataset.reqId = data.task_id;
+                            _spinEl.style.cssText = 'display:flex;align-items:center;gap:8px;padding:10px 14px;background:var(--bg-secondary);border-radius:8px;margin:6px 0;border:1px solid var(--border);';
+                            _spinEl.innerHTML = `
+                                <div style="width:20px;height:20px;border:2px solid var(--primary);border-top-color:transparent;border-radius:50%;animation:spin 0.8s linear infinite;flex-shrink:0;"></div>
+                                <span style="font-size:13px;color:var(--text-muted);">🖼️ 生图中…（通常需要 30–60 秒）</span>
+                            `;
+                            bubbleEl?.appendChild(_spinEl);
+                            scrollChatToBottom();
+                        }
+                    }
                     const _reasoningEl2 = _curRoundEl?.querySelector('.crp-round-reasoning');
                     if (_reasoningEl2 && _reasoningEl2.classList.contains('crp-reasoning-hidden')) {
                         _reasoningEl2.textContent = toolLabel;
