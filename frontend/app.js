@@ -13151,12 +13151,11 @@ async function _refreshTasksPanel() {
     listEl.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);">加载中…</div>';
 
     try {
-        // 从 API 拉 cli-tasks 历史（含 DB 持久化记录），按当前会话过滤
-        const _sid = _currentChatSessionId || '';
-        const _sq = _sid ? `?session_id=${encodeURIComponent(_sid)}` : '';
+        // 从 API 拉 cli-tasks 历史（含 DB 持久化记录），不按 session_id 过滤
+        // session_key 现在是消息级 msg_group_key，与 chat_session_id 不同
         const cliUrl = currentProjectId
-            ? `/projects/${currentProjectId}/chat/cli-tasks${_sq}`
-            : `/chat/cli-tasks${_sq}`;
+            ? `/projects/${currentProjectId}/chat/cli-tasks`
+            : `/chat/cli-tasks`;
         let cliTasksFromApi = [];
         try {
             const cliResp = await api(cliUrl);
