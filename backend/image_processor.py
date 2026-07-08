@@ -323,11 +323,10 @@ async def _maybe_import_to_ue(req_id: str, req: dict, result_path: str) -> None:
         if not proj or not proj.get("uproject_path"):
             return  # 非 UE 项目，跳过
 
-        # 快速探活：3 秒超时，避免阻塞
-        from engines.ue_python_bridge import run_python as _ue_run_py
-        probe = await _ue_run_py("print('online')", project_id=project_id, timeout=5.0)
-        if not probe.get("success"):
-            logger.debug("UE Editor 离线，跳过自动导入: project=%s", project_id)
+        # 用 TCP socket 探活 UCP 9876 端口，不 spawn subprocess，快速不阻塞
+        from actions.ue_editor_control import probe_ucp
+        if not await probe_ucp(timeout=2.0):
+            logger.debug("UE Editor 离线（UCP 9876 不可达），跳过自动导入: project=%s", project_id)
             return
 
         # 执行导入
