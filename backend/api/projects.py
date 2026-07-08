@@ -2560,8 +2560,12 @@ async def get_project_mcp_all(project_id: str):
     # 1. 内置 MCP（全局 mcp_client）
     builtin_mcps = []
     try:
+        import asyncio as _asyncio
         from mcp_client import mcp_client
-        status = mcp_client.get_status()
+        status = await _asyncio.wait_for(
+            _asyncio.get_event_loop().run_in_executor(None, mcp_client.get_status),
+            timeout=3.0,
+        )
         for name, info in (status.get("servers") or {}).items():
             builtin_mcps.append({
                 "name": name, "description": info.get("description", ""),
