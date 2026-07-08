@@ -13230,7 +13230,9 @@ async function _refreshTasksPanel() {
                 const isActive = t.id === _cliActiveTaskId;
                 const durText = isCli && t.duration_ms ? ` · ${t.duration_ms}ms` : (t.elapsed ? ` · ${t.elapsed}` : '');
                 const subText = isCli ? `CLI${durText}` : `${t.agent ? escapeHtml(t.agent) : ''}${durText}${t.action ? ' · ' + escapeHtml(t.action.slice(0,20)) : ''}`;
-                const tsRaw = t.created_at ? t.created_at.slice(11, 19) : (t.ts || '');
+                const tsRaw = t.created_at
+                    ? (() => { try { return new Date(t.created_at).toLocaleTimeString('zh-CN', {hour12:false}); } catch { return t.created_at.slice(11,19); } })()
+                    : (t.ts || '');
                 const tsText = tsRaw ? `<span style="opacity:.5;margin-left:4px;">${escapeHtml(tsRaw)}</span>` : '';
                 const cmd = t.cmd || '';
                 const cmdText = isCli && cmd ? `<div style="color:var(--text-muted);font-size:10px;padding-left:24px;font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:.7;" title="${escapeHtml(cmd)}">$ ${escapeHtml(cmd.slice(0,60))}</div>` : '';
