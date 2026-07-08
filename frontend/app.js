@@ -15290,17 +15290,13 @@ function formatChatContent(content) {
     if (!content) return '';
 
     // 将服务端本地绝对路径替换为可访问的相对 URL
-    // 只在代码块外做替换，代码块内保持原样
+    // 先提取代码块占位保护，只对文本段做路径替换，避免破坏代码内容
     const _imgExts = /\.(png|jpg|jpeg|webp|gif|bmp)$/i;
-    const _codeBlockRe = /(```[\w]*\n[\s\S]*?```)/g;
-    content = content.replace(_codeBlockRe, '\x00CODEBLOCK\x00').split('\x00CODEBLOCK\x00').map((seg, i) => {
-        // 奇数 index 是代码块，偶数是文本；但替换后都是文本段，需要还原
-        return seg;
-    }).join('\x00CODEBLOCK\x00');
-    // 重新提取代码块，只对非代码块部分替换
     const _codeBlocks = [];
-    content = content.replace(_codeBlockRe, (m) => { _codeBlocks.push(m); return `\x00CB${_codeBlocks.length - 1}\x00`; });
-
+    content = content.replace(/(```[\w]*\n[\s\S]*?```)/g, (m) => {
+        _codeBlocks.push(m);
+        return `\x02CB${_codeBlocks.length - 1}\x03`;
+    });
     // 1. generated-images 目录 → /generated-images/ 静态路由
     content = content.replace(/[a-zA-Z]:[\\\/][^\s\)\]"']*\\generated-images\\([^\s\)\]"']+)/g,
         (_, fname) => '/generated-images/' + fname.replace(/\\/g, '/'));
@@ -15315,9 +15311,8 @@ function formatChatContent(content) {
     content = content.replace(/(?<!\()((?:[a-zA-Z]:[\\\/])[^\s\])"',;]+\.(?:png|jpg|jpeg|webp|gif|bmp))(?!\))/gi, (m, p) => {
         return `![图片](/api/local-file?path=${encodeURIComponent(p)})`;
     });
-
     // 还原代码块
-    content = content.replace(/\x00CB(\d+)\x00/g, (_, idx) => _codeBlocks[+idx] || '');
+    content = content.replace(/\x02CB(\d+)\x03/g, (_, idx) => _codeBlocks[+idx] || '');
 
     let result = '';
     // 按代码块分割，逐段处理
