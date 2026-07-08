@@ -13203,10 +13203,8 @@ async function _refreshTasksPanel() {
             if (!curGroup) {
                 needNewGroup = true;
             } else if (sk && sk !== curGroup._sk) {
-                // 实时任务有 session_key，切组
                 needNewGroup = true;
             } else if (!sk && curGroup._lastMs && tMs && (tMs - curGroup._lastMs) > SESSION_GAP_MS) {
-                // DB 恢复任务按时间间隔切组
                 needNewGroup = true;
             }
 
@@ -13214,16 +13212,40 @@ async function _refreshTasksPanel() {
                 grpCounter++;
                 const tsStr = t.created_at ? t.created_at.slice(0, 16).replace('T', ' ') : '';
                 const label = t.session_label || (tsStr ? `对话 · ${tsStr}` : `对话 ${grpCounter}`);
-                curGroup = { key: sk || `auto_${grpCounter}`, _sk: sk, label, items: [], _lastMs: tMs };
+                curGroup = { key: sk || `auto_${grpCounter}`, _sk: sk, label, items: [], _lastMs: tMs, _firstMs: tMs };
                 sessionGroups.push(curGroup);
             }
-            // 序号按会话组内重新从 1 编号（不跨会话累加）
             curGroup.items.push({ t, idx: curGroup.items.length + 1 });
             if (tMs) curGroup._lastMs = tMs;
         }
 
-        listEl.innerHTML = sessionGroups.map(grp => {
-            const header = `<div style="font-size:10px;color:var(--text-muted);padding:6px 14px 3px;font-weight:600;opacity:.7;letter-spacing:.03em;border-top:1px solid var(--border-light,rgba(255,255,255,.06));">${escapeHtml(grp.label)}</div>`;
+        // 按组内最后一条任务时间倒序（最新会话在顶部）
+        sessionGroups.sort((a, b) => (b._lastMs || 0) - (a._lastMs || 0));
+
+        // 读取折叠状态（key → collapsed bool），默认只展开最新一组
+        const _grpCollapsed = {};
+        sessionGroups.forEach((grp, i) => {
+            const stored = sessionStorage.getItem(`tasks_grp_${grp.key}`);
+            _grpCollapsed[grp.key] = stored !== null ? stored === '1' : i > 0;
+        });
+
+        listEl.innerHTML = sessionGroups.map((grp, gi) => {
+            const collapsed = _grpCollapsed[grp.key];
+            const grpId = `tasks_grp_body_${gi}`;
+            const headerTs = grp._lastMs
+                ? (() => { try { return new Date(grp._lastMs).toLocaleTimeString('zh-CN',{hour12:false}); } catch { return ''; } })()
+                : '';
+            const headerLabel = escapeHtml(grp.label) + (headerTs ? ` <span style="opacity:.4;font-weight:400;">${escapeHtml(headerTs)}</span>` : '');
+            const arrow = collapsed ? '▶' : '▼';
+            const header = `<div class="tasks-grp-header" data-grp-key="${escapeHtml(grp.key)}" data-grp-id="${grpId}"
+                onclick="_toggleTaskGroup(this)"
+                style="font-size:10px;color:var(--text-muted);padding:6px 14px 5px;font-weight:600;opacity:.8;
+                       letter-spacing:.03em;border-top:1px solid var(--border-light,rgba(255,255,255,.06));
+                       cursor:pointer;display:flex;align-items:center;gap:5px;user-select:none;">
+                <span style="font-size:8px;opacity:.6;">${arrow}</span>
+                <span>${headerLabel}</span>
+                <span style="margin-left:auto;opacity:.4;font-weight:400;">${grp.items.length} 步</span>
+            </div>`;
             const items = grp.items.map(({ t, idx }) => {
                 const isCli = t.type === 'cli_task';
                 const isActive = t.id === _cliActiveTaskId;
@@ -13249,7 +13271,7 @@ async function _refreshTasksPanel() {
                     ${cmdText}
                 </div>`;
             }).join('');
-            return header + items;
+            return header + `<div id="${grpId}" style="${collapsed ? 'display:none;' : ''}">${items}</div>`;
         }).join('');
 
         listEl.querySelectorAll('.tasks-panel-item').forEach(el => {
@@ -13265,6 +13287,19 @@ async function _refreshTasksPanel() {
     } catch(e) {
         listEl.innerHTML = `<div style="padding:20px;color:var(--danger);">加载失败: ${escapeHtml(String(e))}</div>`;
     }
+}
+
+function _toggleTaskGroup(headerEl) {
+    const grpKey = headerEl.dataset.grpKey;
+    const bodyId  = headerEl.dataset.grpId;
+    const body = document.getElementById(bodyId);
+    if (!body) return;
+    const collapsed = body.style.display === 'none';
+    body.style.display = collapsed ? '' : 'none';
+    const arrow = headerEl.querySelector('span:first-child');
+    if (arrow) arrow.textContent = collapsed ? '▼' : '▶';
+    // 持久化折叠状态
+    sessionStorage.setItem(`tasks_grp_${grpKey}`, collapsed ? '0' : '1');
 }
 
 async function _selectTaskItem(task) {
