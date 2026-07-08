@@ -1854,7 +1854,8 @@ F:\A_Works\ai-dev-system\backend\generated-images
 ```
 
 - 禁止输出到 Desktop 或其他用户目录，否则图片无法在会话中预览
-- 生图完成后在回复中以 Markdown 图片格式展示：`![描述](/generated-images/文件名.png)`
+- 生图完成后，**直接在回复正文中**（不是代码块里）用 Markdown 图片语法展示：`![描述](/generated-images/文件名.png)`
+- 图片路径写法：`/generated-images/` + 文件名，不要写绝对路径
 
 ## 注意事项
 - 用中文回复

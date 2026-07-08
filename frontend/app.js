@@ -15290,22 +15290,34 @@ function formatChatContent(content) {
     if (!content) return '';
 
     // 将服务端本地绝对路径替换为可访问的相对 URL
+    // 只在代码块外做替换，代码块内保持原样
+    const _imgExts = /\.(png|jpg|jpeg|webp|gif|bmp)$/i;
+    const _codeBlockRe = /(```[\w]*\n[\s\S]*?```)/g;
+    content = content.replace(_codeBlockRe, '\x00CODEBLOCK\x00').split('\x00CODEBLOCK\x00').map((seg, i) => {
+        // 奇数 index 是代码块，偶数是文本；但替换后都是文本段，需要还原
+        return seg;
+    }).join('\x00CODEBLOCK\x00');
+    // 重新提取代码块，只对非代码块部分替换
+    const _codeBlocks = [];
+    content = content.replace(_codeBlockRe, (m) => { _codeBlocks.push(m); return `\x00CB${_codeBlocks.length - 1}\x00`; });
+
     // 1. generated-images 目录 → /generated-images/ 静态路由
     content = content.replace(/[a-zA-Z]:[\\\/][^\s\)\]"']*\\generated-images\\([^\s\)\]"']+)/g,
         (_, fname) => '/generated-images/' + fname.replace(/\\/g, '/'));
     content = content.replace(/[a-zA-Z]:[\\\/][^\s\)\]"']*\/generated-images\/([^\s\)\]"']+)/g,
         (_, fname) => '/generated-images/' + fname);
-    // 2. 其他本地图片绝对路径（Windows C:\... 或 Unix /home/...）→ /api/local-file?path=
-    //    仅限图片扩展名，避免误处理其他路径
-    const _imgExts = /\.(png|jpg|jpeg|webp|gif|bmp)$/i;
+    // 2. markdown 图片语法中的本地绝对路径 → /api/local-file?path=
     content = content.replace(/!\[([^\]]*)\]\(([a-zA-Z]:[\\\/][^)]+)\)/g, (m, alt, p) => {
         if (!_imgExts.test(p)) return m;
         return `![${alt}](/api/local-file?path=${encodeURIComponent(p)})`;
     });
-    // 裸路径（不在 markdown 图片语法内）也处理：C:\...\xxx.png 或 C:/...xxx.png
+    // 3. 裸本地图片路径 → ![图片]()
     content = content.replace(/(?<!\()((?:[a-zA-Z]:[\\\/])[^\s\])"',;]+\.(?:png|jpg|jpeg|webp|gif|bmp))(?!\))/gi, (m, p) => {
         return `![图片](/api/local-file?path=${encodeURIComponent(p)})`;
     });
+
+    // 还原代码块
+    content = content.replace(/\x00CB(\d+)\x00/g, (_, idx) => _codeBlocks[+idx] || '');
 
     let result = '';
     // 按代码块分割，逐段处理
