@@ -8441,7 +8441,9 @@ function connectSSE(projectId) {
                              onclick="window.open(this.src,'_blank')"
                              onerror="this.style.display='none'">
                         <div style="font-size:11px;color:var(--text-muted);">
-                            <a href="#" onclick="event.preventDefault();navigator.clipboard?.writeText('${escapeHtml(path||url)}');showToast('路径已复制','success')" style="color:var(--accent);">📋 ${escapeHtml(fname)}</a>
+                            <a href="#" title="${escapeHtml(path||url)}"
+                               onclick="event.preventDefault();${path ? `fetch('/api/system/open_path',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:'${escapeHtml(path)}'})}).catch(()=>{});showToast('已打开文件夹','success')` : `navigator.clipboard?.writeText('${escapeHtml(url)}');showToast('URL已复制','success')`}"
+                               style="color:var(--accent);">📂 ${escapeHtml(fname)}</a>
                         </div>
                     </div>`;
                     // 找到最后一条 assistant 气泡，追加图片；找不到则新建气泡
@@ -15351,8 +15353,9 @@ function formatChatContent(content) {
                          style="max-width:100%;border-radius:8px;cursor:pointer;display:block;margin-bottom:4px;"
                          onclick="window.open(this.src,'_blank')"
                          onerror="this.style.display='none'">
-                    <a href="#" onclick="event.preventDefault();navigator.clipboard?.writeText(${JSON.stringify(trimmed)});showToast('路径已复制','success')"
-                       style="font-size:11px;color:var(--accent);font-family:monospace;">📋 ${escapeHtml(fname)}</a>
+                    <a href="#" title="${escapeHtml(trimmed)}"
+                       onclick="event.preventDefault();fetch('/api/system/open_path',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:${JSON.stringify(trimmed)}})}).catch(()=>{});navigator.clipboard?.writeText(${JSON.stringify(trimmed)});showToast('已打开文件夹','success')"
+                       style="font-size:11px;color:var(--accent);font-family:monospace;">📂 ${escapeHtml(fname)}</a>
                 </div>`;
             } else {
                 const looksLikeMarkdown = !lang && /^(#{1,3} |[*-] )/m.test(code);
