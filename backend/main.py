@@ -878,6 +878,22 @@ _generated_images_dir.mkdir(exist_ok=True)
 app.mount("/generated-images", StaticFiles(directory=str(_generated_images_dir)), name="generated-images")
 
 
+@app.get("/api/local-file")
+async def serve_local_file(path: str):
+    """按需读取本地文件并以图片形式返回（仅限图片格式，供前端预览 AI 生成图片）"""
+    import pathlib, mimetypes
+    from fastapi.responses import FileResponse
+    from fastapi import HTTPException
+    fp = pathlib.Path(path)
+    if not fp.exists() or not fp.is_file():
+        raise HTTPException(404, "文件不存在")
+    ext = fp.suffix.lower()
+    if ext not in (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"):
+        raise HTTPException(400, "不支持的文件类型")
+    mt = mimetypes.types_map.get(ext, "image/png")
+    return FileResponse(str(fp), media_type=mt)
+
+
 @app.get("/app")
 @app.get("/app/{path:path}")
 async def serve_frontend(path: str = ""):

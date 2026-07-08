@@ -15217,11 +15217,22 @@ function formatChatContent(content) {
     if (!content) return '';
 
     // 将服务端本地绝对路径替换为可访问的相对 URL
-    // 匹配 generated-images 和 chat_images 目录下的文件
+    // 1. generated-images 目录 → /generated-images/ 静态路由
     content = content.replace(/[a-zA-Z]:[\\\/][^\s\)\]"']*\\generated-images\\([^\s\)\]"']+)/g,
         (_, fname) => '/generated-images/' + fname.replace(/\\/g, '/'));
     content = content.replace(/[a-zA-Z]:[\\\/][^\s\)\]"']*\/generated-images\/([^\s\)\]"']+)/g,
         (_, fname) => '/generated-images/' + fname);
+    // 2. 其他本地图片绝对路径（Windows C:\... 或 Unix /home/...）→ /api/local-file?path=
+    //    仅限图片扩展名，避免误处理其他路径
+    const _imgExts = /\.(png|jpg|jpeg|webp|gif|bmp)$/i;
+    content = content.replace(/!\[([^\]]*)\]\(([a-zA-Z]:[\\\/][^)]+)\)/g, (m, alt, p) => {
+        if (!_imgExts.test(p)) return m;
+        return `![${alt}](/api/local-file?path=${encodeURIComponent(p)})`;
+    });
+    // 裸路径（不在 markdown 图片语法内）也处理：C:\...\xxx.png 或 C:/...xxx.png
+    content = content.replace(/(?<!\()((?:[a-zA-Z]:[\\\/])[^\s\])"',;]+\.(?:png|jpg|jpeg|webp|gif|bmp))(?!\))/gi, (m, p) => {
+        return `![图片](/api/local-file?path=${encodeURIComponent(p)})`;
+    });
 
     let result = '';
     // 按代码块分割，逐段处理
