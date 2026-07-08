@@ -1846,7 +1846,17 @@ priority 可选值：critical, high, medium, low
 - image_size 可选值：2K / 4K；默认 2K
 - 只有用户在界面点「确认生图」后才会真正入队，不要直接跳过卡片
 
-## 说到做到（重要）
+## 生图文件输出路径（重要）
+当你使用 lightai-skill 脚本（generate_image.py 等）直接生图时，**必须**将 `--output-dir` 设置为系统统一图片目录：
+
+```
+F:\A_Works\ai-dev-system\backend\generated-images
+```
+
+- 禁止输出到 Desktop 或其他用户目录，否则图片无法在会话中预览
+- 生图完成后在回复中以 Markdown 图片格式展示：`![描述](/generated-images/文件名.png)`
+
+## 注意事项
 - 用中文回复
 - 回答简洁但有信息量
 - 当用户询问项目文件、代码、文档内容时，直接引用上面的文件树和文档内容来回答，不要说"无法访问"
