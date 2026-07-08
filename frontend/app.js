@@ -15324,8 +15324,40 @@ function formatChatContent(content) {
         if (codeBlockMatch) {
             const lang = codeBlockMatch[1] || '';
             const code = codeBlockMatch[2];
-            const looksLikeMarkdown = !lang && /^(#{1,3} |[*-] )/m.test(code);
-            result += looksLikeMarkdown ? _renderMarkdownText(code) : buildCodeFileCard(lang, code);
+            // 单行图片路径/URL：含 ✅❌ 前缀或裸路径，直接渲染为图片+文件名
+            const trimmed = code.trim().replace(/^[✅❌✓×\s]+/, '').trim();
+            const _imgExtsRe = /\.(png|jpg|jpeg|webp|gif|bmp)(\)|$)/i;
+            const _isImgLine = !trimmed.includes('\n') && (
+                _imgExtsRe.test(trimmed) ||
+                (/!\[/.test(trimmed) && /\(https?:/.test(trimmed))
+            );
+            if (_isImgLine) {
+                // 提取路径/URL
+                let imgSrc = trimmed;
+                const _mdMatch = trimmed.match(/!\[[^\]]*\]\(([^)]+)\)/);
+                if (_mdMatch) {
+                    imgSrc = _mdMatch[1];
+                } else if (/^[a-zA-Z]:[\\\/]/.test(imgSrc)) {
+                    // Windows 绝对路径
+                    const inGenDir = imgSrc.replace(/\\/g, '/').includes('/generated-images/');
+                    const fname = imgSrc.replace(/\\/g, '/').split('/').pop();
+                    imgSrc = inGenDir
+                        ? '/generated-images/' + fname
+                        : `/api/local-file?path=${encodeURIComponent(imgSrc)}`;
+                }
+                const fname = trimmed.replace(/\\/g, '/').split('/').pop().split('?')[0];
+                result += `<div style="margin:6px 0;">
+                    <img src="${escapeHtml(imgSrc)}" alt="${escapeHtml(fname)}"
+                         style="max-width:100%;border-radius:8px;cursor:pointer;display:block;margin-bottom:4px;"
+                         onclick="window.open(this.src,'_blank')"
+                         onerror="this.style.display='none'">
+                    <a href="#" onclick="event.preventDefault();navigator.clipboard?.writeText(${JSON.stringify(trimmed)});showToast('路径已复制','success')"
+                       style="font-size:11px;color:var(--accent);font-family:monospace;">📋 ${escapeHtml(fname)}</a>
+                </div>`;
+            } else {
+                const looksLikeMarkdown = !lang && /^(#{1,3} |[*-] )/m.test(code);
+                result += looksLikeMarkdown ? _renderMarkdownText(code) : buildCodeFileCard(lang, code);
+            }
         } else {
             // 代码块相邻的文本部分：去掉首尾多余换行，避免代码卡前后大量空白
             let txt = part;
