@@ -658,6 +658,7 @@ class ChatAssistantAgent(BaseAgent):
             TextDeltaEvent, ToolStartEvent, ToolDoneEvent, ToolErrorEvent,
             ActionEvent, MessageDoneEvent, BudgetExceededEvent, ErrorEvent,
             ThinkingDeltaEvent, ThinkingDoneEvent, RoundStartEvent, CliSessionIdEvent,
+            CliResumeFailedEvent,
         )
         from query_engine.executor import ChatToolExecutorAdapter
         from config import settings as _cfg
@@ -785,6 +786,53 @@ class ChatAssistantAgent(BaseAgent):
                             logger.info("CLI session_id pinned: %s → %s", session_id, _new_cli_sid)
                         except Exception as _pe:
                             logger.warning("CLI session_id 写入失败（忽略）: %s", _pe)
+                elif isinstance(event, CliResumeFailedEvent):
+                    # Session 已过期：清除旧 session_id，重建 engine（不带 --resume）直接重跑
+                    if session_id:
+                        try:
+                            from database import db as _db3
+                            await _db3.execute(
+                                "UPDATE chat_sessions SET cli_session_id=NULL WHERE id=?",
+                                (session_id,),
+                            )
+                            logger.info("CLI resume 失败，已清除旧 session_id，不带 resume 重试")
+                        except Exception as _ce:
+                            logger.warning("清除 cli_session_id 失败: %s", _ce)
+                    engine2 = QueryEngine(
+                        llm_client=llm_client,
+                        tool_executor=executor,
+                        budget=budget,
+                        hooks=hook_registry,
+                        max_rounds=self.max_react_loop,
+                        enable_thinking=_resolve_thinking_enabled(_sid, llm_client.model),
+                        thinking_budget=max(1024, get_session_flag(_sid, "thinking_budget") or 8000),
+                        resume_session_id="",
+                    )
+                    async for event2 in engine2.run(messages, system_prompt, tools, context):
+                        if isinstance(event2, TextDeltaEvent):
+                            yield {"type": "text_delta", "delta": event2.delta}
+                        elif isinstance(event2, CliSessionIdEvent):
+                            _new_sid = event2.session_id
+                            if _new_sid and session_id:
+                                try:
+                                    from database import db as _db4
+                                    from utils import now_iso as _now2
+                                    await _db4.execute(
+                                        "UPDATE chat_sessions SET cli_session_id=?, last_active_at=? WHERE id=?",
+                                        (_new_sid, _now2(), session_id),
+                                    )
+                                except Exception:
+                                    pass
+                        elif isinstance(event2, MessageDoneEvent):
+                            yield {
+                                "type": "message_done",
+                                "rounds": event2.rounds,
+                                "thinking_steps": event2.thinking_steps or [],
+                                "action": event2.final_action,
+                                "actions": event2.all_confirm_results if len(event2.all_confirm_results) > 1 else None,
+                                "stop_reason": event2.stop_reason,
+                            }
+                    return
                 elif isinstance(event, MessageDoneEvent):
                     yield {
                         "type": "message_done",
@@ -885,6 +933,7 @@ class ChatAssistantAgent(BaseAgent):
             TextDeltaEvent, ToolStartEvent, ToolDoneEvent, ToolErrorEvent,
             ActionEvent, MessageDoneEvent, BudgetExceededEvent, ErrorEvent,
             ThinkingDeltaEvent, ThinkingDoneEvent, RoundStartEvent, CliSessionIdEvent,
+            CliResumeFailedEvent,
         )
         from query_engine.executor import ChatToolExecutorAdapter
         from config import settings as _cfg
@@ -972,6 +1021,57 @@ class ChatAssistantAgent(BaseAgent):
                             logger.info("CLI session_id pinned: %s → %s", session_id, _new_cli_sid)
                         except Exception as _pe:
                             logger.warning("CLI session_id 写入失败（忽略）: %s", _pe)
+                elif isinstance(event, CliResumeFailedEvent):
+                    # Session 已过期：清除旧 session_id，重建 engine（不带 --resume）直接在本函数内重跑
+                    if session_id:
+                        try:
+                            from database import db as _db3
+                            await _db3.execute(
+                                "UPDATE chat_sessions SET cli_session_id=NULL WHERE id=?",
+                                (session_id,),
+                            )
+                            logger.info("CLI global resume 失败，已清除旧 session_id，不带 resume 重试")
+                        except Exception as _ce:
+                            logger.warning("清除 cli_session_id 失败: %s", _ce)
+                    # 重建 engine，不带 resume_session_id，立即重跑
+                    engine2 = QueryEngine(
+                        llm_client=llm_client,
+                        tool_executor=executor,
+                        budget=budget,
+                        hooks=hook_registry,
+                        max_rounds=self.max_react_loop,
+                        enable_thinking=_resolve_thinking_enabled(_sid, llm_client.model),
+                        thinking_budget=max(1024, get_session_flag(_sid, "thinking_budget") or 8000),
+                        resume_session_id="",
+                    )
+                    async for event2 in engine2.run(messages, system_prompt, tools, context):
+                        if isinstance(event2, TextDeltaEvent):
+                            yield {"type": "text_delta", "delta": event2.delta}
+                        elif isinstance(event2, CliSessionIdEvent):
+                            _new_sid = event2.session_id
+                            if _new_sid and session_id:
+                                try:
+                                    from database import db as _db4
+                                    from utils import now_iso as _now2
+                                    await _db4.execute(
+                                        "UPDATE chat_sessions SET cli_session_id=?, last_active_at=? WHERE id=?",
+                                        (_new_sid, _now2(), session_id),
+                                    )
+                                except Exception:
+                                    pass
+                        elif isinstance(event2, MessageDoneEvent):
+                            yield {
+                                "type": "message_done",
+                                "rounds": event2.rounds,
+                                "thinking_steps": event2.thinking_steps or [],
+                                "action": event2.final_action,
+                                "actions": event2.all_confirm_results if len(event2.all_confirm_results) > 1 else None,
+                                "stop_reason": event2.stop_reason,
+                            }
+                        elif not isinstance(event2, (CliResumeFailedEvent,)):
+                            # 转发其他事件（ToolStartEvent 等）
+                            pass
+                    return
                 elif isinstance(event, MessageDoneEvent):
                     yield {
                         "type": "message_done",
@@ -981,16 +1081,6 @@ class ChatAssistantAgent(BaseAgent):
                         "actions": event.all_confirm_results if len(event.all_confirm_results) > 1 else None,
                         "stop_reason": event.stop_reason,
                     }
-                    # 手动挡：会话结束后推送文件改动汇报
-                    _pid = project_id if 'project_id' in dir() else None
-                    _proj = project if 'project' in dir() else None
-                    changes = _session_file_changes.pop(_pid, []) if _pid else []
-                    if changes and _proj and _proj.get("mode") == "manual":
-                        change_text = "\n".join(f"  - `{f}`" for f in changes)
-                        yield {
-                            "type": "text_delta",
-                            "delta": f"\n\n---\n📝 **本次共修改 {len(changes)} 个文件：**\n{change_text}\n\n请自行决定提交时机（git commit / p4 submit）。",
-                        }
                 elif isinstance(event, BudgetExceededEvent):
                     yield {"type": "budget_exceeded", "reason": event.reason}
                 elif isinstance(event, ErrorEvent):
@@ -1310,12 +1400,20 @@ class ChatAssistantAgent(BaseAgent):
             project_traits = []
         project_traits = [str(t) for t in project_traits]
 
+        # 套件门控：查项目已启用的套件，按需过滤 rules/skills
+        _enabled_packs: set = set()
+        try:
+            from skills.loader import get_enabled_packs as _get_enabled_packs
+            _enabled_packs = await _get_enabled_packs(project.get("id", ""))
+        except Exception:
+            pass
+
         # Rules 层：全局编码准则（alwaysApply=true）放在 system prompt 最前面
         # rules/global.md 包含语言一致性 / 命名 / 安全红线等，对所有项目生效
         rules_content = ""
         try:
             from skills import skill_loader as _sl
-            rule_ids = _sl.get_rules_for_context(traits=project_traits)
+            rule_ids = _sl.get_rules_for_context(traits=project_traits, enabled_packs=_enabled_packs)
             rules_parts = []
             for rid in rule_ids:
                 content = _sl.rules.get(rid, {}).get("content", "")
@@ -1344,7 +1442,7 @@ class ChatAssistantAgent(BaseAgent):
         # AI 按需调用 load_skill 工具加载具体内容。
         try:
             from skills import skill_loader as _sl
-            _skills_index = _sl.build_index_for_agent(self.agent_type, traits=project_traits)
+            _skills_index = _sl.build_index_for_agent(self.agent_type, traits=project_traits, enabled_packs=_enabled_packs)
         except Exception:
             _skills_index = ""
         # 追加项目自定义 Skill（custom.* 系列）
@@ -1358,13 +1456,15 @@ class ChatAssistantAgent(BaseAgent):
                 _skills_index += f"\n| `{_r['skill_id']}` | {_r['custom_name'] or _r['skill_id']} | 项目自定义 Skill |"
         except Exception:
             pass
-        # 追加项目 .Agent/skills/ 目录下的 Skill（agent.* 系列）
+        # 追加项目本地 Skill 目录（.ads / .Agent / .codebuddy / .claude）（agent.* 系列）
         try:
-            from actions.chat.load_skill import _get_project_agent_skills_dir, _load_agent_skill
-            _agent_dir = await _get_project_agent_skills_dir(project.get("id", ""))
-            if _agent_dir.exists():
+            from actions.chat.load_skill import _enum_project_skill_dirs, _load_agent_skill
+            _seen_skill_names = set()
+            for _agent_dir in await _enum_project_skill_dirs(project.get("id", "")):
                 for _skill_dir in sorted(_agent_dir.iterdir()):
-                    if _skill_dir.is_dir() and (_skill_dir / "SKILL.md").exists():
+                    if (_skill_dir.is_dir() and (_skill_dir / "SKILL.md").exists()
+                            and _skill_dir.name not in _seen_skill_names):
+                        _seen_skill_names.add(_skill_dir.name)
                         _, _skill_name = await _load_agent_skill(
                             f"agent.{_skill_dir.name}", project.get("id", "")
                         )
@@ -1603,7 +1703,7 @@ UnrealBuildTool.exe {ProjectName}Editor Win64 Development "{path/to/project.upro
         global_rules_content = ""
         try:
             from skills import skill_loader as _sl
-            rule_ids = _sl.get_rules_for_context(traits=[])
+            rule_ids = _sl.get_rules_for_context(traits=[], enabled_packs=set())
             rules_parts = []
             for rid in rule_ids:
                 content = _sl.rules.get(rid, {}).get("content", "")
@@ -1617,7 +1717,7 @@ UnrealBuildTool.exe {ProjectName}Editor Win64 Development "{path/to/project.upro
         # v0.20 主动触发：全局聊天同样只注入索引
         try:
             from skills import skill_loader as _sl
-            _skills_index = _sl.build_index_for_agent(self.agent_type)
+            _skills_index = _sl.build_index_for_agent(self.agent_type, enabled_packs=set())
         except Exception:
             _skills_index = ""
         skills_section = f"""

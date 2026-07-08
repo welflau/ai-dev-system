@@ -236,6 +236,16 @@ async def run_python(
             }
 
         if data.get("error") == "no_node":
+            # 推 SSE 通知前端弹出"启动 Editor"提示
+            if project_id:
+                try:
+                    from events import event_manager
+                    import asyncio as _asyncio
+                    _asyncio.create_task(event_manager.publish_to_project(
+                        project_id, "ue_editor_offline", {"project_id": project_id}
+                    ))
+                except Exception:
+                    pass
             return {
                 "success": False, "stdout": "", "result": "",
                 "error": (

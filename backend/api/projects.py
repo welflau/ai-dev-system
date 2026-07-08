@@ -1975,11 +1975,25 @@ async def get_pack_detail(pack_name: str):
 async def get_project_packs(project_id: str):
     """获取项目已安装的 ConfigPack 列表。"""
     from pack_installer import list_packs
+    from skills import skill_loader
     rows = await db.fetch_all(
         "SELECT * FROM project_packs WHERE project_id = ? ORDER BY installed_at DESC",
         (project_id,)
     )
     all_packs = {p["name"]: p for p in list_packs()}
+
+    # 预先汇总每个 pack 贡献哪些内置 rule/skill
+    pack_rules: dict = {}
+    for rid, rcfg in skill_loader.rules.items():
+        pk = rcfg.get("pack") or ""
+        if pk:
+            pack_rules.setdefault(pk, []).append(rid)
+    pack_skills: dict = {}
+    for sid, scfg in skill_loader.skills.items():
+        pk = scfg.get("pack") or ""
+        if pk:
+            pack_skills.setdefault(pk, []).append(sid)
+
     result = []
     for row in rows:
         meta = all_packs.get(row["pack_name"], {})
@@ -1992,6 +2006,8 @@ async def get_project_packs(project_id: str):
             "contains": meta.get("contains", []),
             "targets": json.loads(row.get("targets") or "[]"),
             "installed_at": row["installed_at"],
+            "enabled_rules": pack_rules.get(row["pack_name"], []),
+            "enabled_skills": pack_skills.get(row["pack_name"], []),
         })
     return {"packs": result}
 
@@ -2287,7 +2303,10 @@ async def get_project_skills_all(project_id: str):
             try:
                 content = skill_md.read_text(encoding="utf-8")
                 info = _parse_skill_md(content, stem)
-                info["source"] = "pack" if pack_origin else default_source
+                info["source"] = "pack" if pack_origin else (
+                    "openspec" if stem.lower().startswith("openspec") or "openspec" in str(skills_dir).lower()
+                    else default_source
+                )
                 info["pack_name"] = pack_origin
                 info["id"] = info["name"]
                 info["file"] = str(skill_md)
@@ -2321,13 +2340,36 @@ async def get_project_skills_all(project_id: str):
             home / f".{cli}" / "skills", "user", base_path=home
         )
 
-    # 4. Pack skills — 从 project_skills / user_skills 中分拆
-    pack_skills = (
+    # 4. Pack + OpenSpec skills — 先从项目 packs/ 子目录直接扫，再从 project_skills 中分拆旧格式
+    pack_skills = []
+    for rp in all_repo_paths:
+        rp_path = Path(rp)
+        for cli in ("claude", "codebuddy"):
+            packs_root = rp_path / f".{cli}" / "packs"
+            if not packs_root.exists():
+                continue
+            for pack_dir in sorted(packs_root.iterdir()):
+                if not pack_dir.is_dir():
+                    continue
+                pn = pack_dir.name
+                skills_dir = pack_dir / "skills"
+                if skills_dir.exists():
+                    found = await _scan_skills_dir(skills_dir, "pack", base_path=rp_path)
+                    for s in found:
+                        s["pack_name"] = pn
+                    pack_skills += found
+
+    # 旧格式兼容：从 project_skills / user_skills 里分拆（source == "pack" by stem match）
+    pack_skills += (
         [s for s in project_skills if s.get("source") == "pack"] +
         [s for s in user_skills    if s.get("source") == "pack"]
     )
-    project_skills = [s for s in project_skills if s.get("source") != "pack"]
-    user_skills    = [s for s in user_skills    if s.get("source") != "pack"]
+    openspec_skills = (
+        [s for s in project_skills if s.get("source") == "openspec"] +
+        [s for s in user_skills    if s.get("source") == "openspec"]
+    )
+    project_skills = [s for s in project_skills if s.get("source") not in ("pack", "openspec")]
+    user_skills    = [s for s in user_skills    if s.get("source") not in ("pack", "openspec")]
 
     # 去重：同一文件路径可能因 .claude/.codebuddy 双目录或 extra_paths 重复扫描
     def _dedup(lst: list) -> list:
@@ -2340,22 +2382,25 @@ async def get_project_skills_all(project_id: str):
                 out.append(s)
         return out
 
-    project_skills = _dedup(project_skills)
-    user_skills    = _dedup(user_skills)
-    pack_skills    = _dedup(pack_skills)
+    project_skills  = _dedup(project_skills)
+    user_skills     = _dedup(user_skills)
+    pack_skills     = _dedup(pack_skills)
+    openspec_skills = _dedup(openspec_skills)
 
-    all_skills = builtin_skills + project_skills + user_skills + pack_skills
+    all_skills = builtin_skills + project_skills + user_skills + pack_skills + openspec_skills
     return {
         "builtin":  builtin_skills,
         "project":  project_skills,
         "user":     user_skills,
         "pack":     pack_skills,
+        "openspec": openspec_skills,
         "all":      all_skills,
         "counts": {
             "builtin":  len(builtin_skills),
             "project":  len(project_skills),
             "user":     len(user_skills),
             "pack":     len(pack_skills),
+            "openspec": len(openspec_skills),
             "total":    len(all_skills),
         },
     }
@@ -2392,18 +2437,22 @@ async def get_project_commands_all(project_id: str):
         from api.commands import get_all_commands, _BUILTIN_COMMANDS, _load_disk_commands, _load_project_commands
         from pathlib import Path as _Path
 
-        # 构建 name→文件路径映射
+        # 构建 name→文件路径映射（支持子目录，name 用相对路径 subdir/stem）
         _cmd_file_map: dict = {}
         _skills_cmds_dir = _Path(__file__).resolve().parent.parent / "skills" / "commands"
         if _skills_cmds_dir.exists():
             for f in _skills_cmds_dir.glob("*.md"):
                 _cmd_file_map[f.stem] = str(f)
         if repo_path:
-            for cli, label in [(".claude/commands", "claude"), (".ads/commands", "ads")]:
-                d = _Path(repo_path) / cli
+            for cli_dir in [".claude/commands", ".codebuddy/commands", ".ads/commands"]:
+                d = _Path(repo_path) / cli_dir
                 if d.exists():
-                    for f in d.glob("*.md"):
-                        _cmd_file_map[f.stem] = str(f)
+                    for f in d.rglob("*.md"):
+                        rel = f.relative_to(d)
+                        parts = list(rel.parts)
+                        parts[-1] = f.stem
+                        name_key = "/".join(parts)
+                        _cmd_file_map[name_key] = str(f)
 
         all_cmds = get_all_commands(repo_path=repo_path)
         builtin_names = set(_BUILTIN_COMMANDS.keys())
@@ -2419,7 +2468,13 @@ async def get_project_commands_all(project_id: str):
             entry = {"name": name, "description": info.get("description", ""),
                      "pack_name": None, "source": src,
                      "file": fp, "content": content, "preview": content[:150]}
-            if src in ("claude", "ads") or name not in builtin_names:
+            if src == "openspec":
+                entry["source"] = "openspec"
+                user_cmds.append(entry)
+            elif src in ("claude", "ads", "codebuddy"):
+                entry["source"] = "project"
+                user_cmds.append(entry)
+            elif name not in builtin_names:
                 entry["source"] = "user"
                 user_cmds.append(entry)
             else:
@@ -2428,7 +2483,7 @@ async def get_project_commands_all(project_id: str):
     except Exception:
         pass
 
-    # 2. Pack commands — 从 user_cmds 里识别来自 pack 的（对比 pack 库目录同名文件）
+    # 2. Pack commands — 优先查项目 packs/ 子目录，再回退到库路径匹配
     pack_cmds = []
     if repo_path:
         installed_pack_names = [
@@ -2436,9 +2491,32 @@ async def get_project_commands_all(project_id: str):
                 "SELECT pack_name FROM project_packs WHERE project_id = ?", (project_id,)
             )
         ]
-        # 重新分类 user_cmds：若同名文件存在于某个 pack 库目录，则归为 pack 来源
+
+        # 直接扫项目 packs/ 子目录（新格式）
+        for pn in installed_pack_names:
+            for cli in ("claude", "codebuddy"):
+                pack_cmd_dir = _Path(repo_path) / f".{cli}" / "packs" / pn / "commands"
+                if pack_cmd_dir.exists():
+                    for f in sorted(pack_cmd_dir.rglob("*.md")):
+                        rel = f.relative_to(pack_cmd_dir)
+                        parts = list(rel.parts); parts[-1] = f.stem
+                        name = "/".join(parts)
+                        try:
+                            content = f.read_text(encoding="utf-8")
+                            from api.commands import _parse_command_md
+                            entry = _parse_command_md(content, name, source="pack")
+                            entry.update({"name": name, "pack_name": pn, "source": "pack",
+                                          "file": str(f), "content": content, "preview": content[:150]})
+                            pack_cmds.append(entry)
+                        except Exception:
+                            pass
+
+        # 旧格式兼容：从 user_cmds 里按库路径反查
         remaining_user = []
         for entry in user_cmds:
+            if entry.get("source") in ("project", "openspec"):
+                remaining_user.append(entry)
+                continue
             pack_origin = None
             name = entry["name"]
             for pn in installed_pack_names:
@@ -2457,11 +2535,17 @@ async def get_project_commands_all(project_id: str):
                 remaining_user.append(entry)
         user_cmds = remaining_user
 
-    all_cmds_list = builtin_cmds + user_cmds + pack_cmds
+    project_cmds  = [e for e in user_cmds if e.get("source") == "project"]
+    openspec_cmds = [e for e in user_cmds if e.get("source") == "openspec"]
+    user_cmds     = [e for e in user_cmds if e.get("source") not in ("project", "openspec")]
+
+    all_cmds_list = builtin_cmds + project_cmds + user_cmds + pack_cmds + openspec_cmds
     return {
-        "builtin": builtin_cmds, "user": user_cmds, "pack": pack_cmds, "all": all_cmds_list,
-        "counts": {"builtin": len(builtin_cmds), "user": len(user_cmds),
-                   "pack": len(pack_cmds), "total": len(all_cmds_list)},
+        "builtin": builtin_cmds, "project": project_cmds, "user": user_cmds,
+        "pack": pack_cmds, "openspec": openspec_cmds, "all": all_cmds_list,
+        "counts": {"builtin": len(builtin_cmds), "project": len(project_cmds),
+                   "user": len(user_cmds), "pack": len(pack_cmds),
+                   "openspec": len(openspec_cmds), "total": len(all_cmds_list)},
     }
 
 
@@ -2487,27 +2571,34 @@ async def get_project_mcp_all(project_id: str):
     except Exception:
         pass
 
-    # 2. 用户 MCP（.claude/settings.json + .codebuddy/settings.json mcpServers）
+    # 2. 用户 / 项目 MCP —— 复用 mcp_client 的多路解析
+    #    （用户级 ~/.codebuddy、~/.claude + 项目 .claude/.codebuddy/.ads）
+    #    敏感值（headers/env/token）不返回给前端。
     user_mcps = []
-    if repo_path:
-        for cli in ("claude", "codebuddy"):
-            settings_file = Path(repo_path) / f".{cli}" / "settings.json"
-            if not settings_file.exists():
-                continue
-            try:
-                settings = json.loads(settings_file.read_text(encoding="utf-8"))
-                for name, cfg in (settings.get("mcpServers") or {}).items():
-                    builtin_names = {m["name"] for m in builtin_mcps}
-                    if name in builtin_names:
-                        continue  # 已在内置中
-                    user_mcps.append({
-                        "name": name,
-                        "description": cfg.get("description", ""),
-                        "command": cfg.get("command", ""),
-                        "source": "user", "cli": cli, "pack_name": None,
-                    })
-            except Exception:
-                pass
+    try:
+        from mcp_client import _load_project_mcp_config
+        builtin_names = {m["name"] for m in builtin_mcps}
+        merged = _load_project_mcp_config(repo_path or "")
+        for name, cfg in merged.items():
+            if name in builtin_names:
+                continue  # 已在内置中
+            src = cfg.get("_source", "user")
+            transport = (cfg.get("type") or cfg.get("transportType")
+                         or ("stdio" if cfg.get("command") else "http"))
+            user_mcps.append({
+                "name": name,
+                "description": cfg.get("description", ""),
+                "command": cfg.get("command", ""),      # 命令本身非敏感
+                "transport": transport,
+                "enabled": bool(cfg.get("enabled", True)),
+                "source": "user",
+                "cli": "codebuddy" if "codebuddy" in src else ("claude" if "claude" in src else src),
+                "config_source": src,                   # user:codebuddy / claude / ads ...
+                "pack_name": None,
+                # 注意：不返回 headers / env / url token 等敏感字段
+            })
+    except Exception as e:
+        logger.debug("加载用户/项目 MCP 失败: %s", e)
 
     # 3. Pack MCP（pack 的 shared/mcps/*.json 声明）
     pack_mcps = []
@@ -2624,32 +2715,50 @@ async def get_project_rules_all(project_id: str):
                 except Exception:
                     pass
 
-    # 3. Pack rules
+    # 3. Pack rules — 优先从项目 packs/ 副本读，无副本时回退到库路径
     pack_rules = []
     installed_rows = await db.fetch_all(
         "SELECT pack_name FROM project_packs WHERE project_id = ?", (project_id,)
     )
     for row in installed_rows:
         pn = row["pack_name"]
-        for sub in ("shared", "claude", "codebuddy"):
-            # rules.md 单文件
-            rules_md = _PACKS_DIR / pn / sub / "rules.md"
-            if rules_md.exists():
-                try:
-                    content = rules_md.read_text(encoding="utf-8")
-                    info = _parse_rule_md(content, f"{pn}-rules")
-                    info["file"] = str(rules_md)
-                    info["source"] = "pack"
-                    info["pack_name"] = pn
-                    info["scope"] = sub
-                    pack_rules.append(info)
-                except Exception:
-                    pass
-            # rules/ 子目录
-            pack_rules += _scan_rules_dir(
-                _PACKS_DIR / pn / sub / "rules",
-                source="pack", pack_name=pn, scope=sub
-            )
+        found_in_project = False
+        # 先查项目 .claude/packs/{pn}/ 和 .codebuddy/packs/{pn}/
+        if repo_path:
+            for cli in ("claude", "codebuddy"):
+                proj_pack_rules = Path(repo_path) / f".{cli}" / "packs" / pn / "rules"
+                if proj_pack_rules.exists():
+                    pack_rules += _scan_rules_dir(proj_pack_rules, source="pack", pack_name=pn, cli=cli)
+                    found_in_project = True
+                # rules.md（旧格式单文件，直接在 packs/{pn}/）
+                proj_rules_md = Path(repo_path) / f".{cli}" / "packs" / pn / "rules.md"
+                if proj_rules_md.exists():
+                    try:
+                        content = proj_rules_md.read_text(encoding="utf-8")
+                        info = _parse_rule_md(content, f"{pn}-rules")
+                        info.update({"file": str(proj_rules_md), "source": "pack",
+                                     "pack_name": pn, "cli": cli})
+                        pack_rules.append(info)
+                        found_in_project = True
+                    except Exception:
+                        pass
+        # 无项目副本则回退到库路径（兼容旧安装）
+        if not found_in_project:
+            for sub in ("shared", "claude", "codebuddy"):
+                rules_md = _PACKS_DIR / pn / sub / "rules.md"
+                if rules_md.exists():
+                    try:
+                        content = rules_md.read_text(encoding="utf-8")
+                        info = _parse_rule_md(content, f"{pn}-rules")
+                        info.update({"file": str(rules_md), "source": "pack",
+                                     "pack_name": pn, "scope": sub})
+                        pack_rules.append(info)
+                    except Exception:
+                        pass
+                pack_rules += _scan_rules_dir(
+                    _PACKS_DIR / pn / sub / "rules",
+                    source="pack", pack_name=pn, scope=sub
+                )
 
     all_rules = builtin_rules + project_rules + pack_rules
     return {

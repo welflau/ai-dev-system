@@ -6,6 +6,7 @@
     "inject_to": ["DevAgent"],
     "priority": "high",
     "enabled": true,
+    "pack": "web-dev",
     "traits_match": {
       "any_of": ["framework:react", "platform:web"]
     },
@@ -18,6 +19,7 @@
     "inject_to": ["DevAgent"],
     "priority": "high",
     "enabled": true,
+    "pack": "web-dev",
     "traits_match": {
       "any_of": ["framework:fastapi"]
     }
@@ -29,6 +31,7 @@
     "inject_to": ["TestAgent", "ProductAgent"],
     "priority": "high",
     "enabled": true,
+    "pack": "web-dev",
     "traits_match": {
       "any_of": ["platform:web", "platform:wechat"]
     }
@@ -40,6 +43,7 @@
     "inject_to": ["DevAgent", "DeployAgent", "ChatAssistant"],
     "priority": "medium",
     "enabled": true,
+    "pack": "vibe-workflow",
     "traits_match": {
       "any_of": ["vcs:git"]
     }
@@ -51,6 +55,7 @@
     "inject_to": ["DevAgent", "ChatAssistant"],
     "priority": "high",
     "enabled": true,
+    "pack": "ue5-dev",
     "traits_match": {
       "any_of": ["engine:ue5", "engine:ue4"]
     },
@@ -63,6 +68,7 @@
     "inject_to": ["DevAgent", "TestAgent", "ChatAssistant"],
     "priority": "high",
     "enabled": true,
+    "pack": "ue5-dev",
     "traits_match": {
       "any_of": ["engine:ue5", "engine:ue4"]
     }
@@ -74,6 +80,7 @@
     "inject_to": ["DevAgent", "ArchitectAgent", "ChatAssistant"],
     "priority": "medium",
     "enabled": true,
+    "pack": "ue5-dev",
     "traits_match": {
       "any_of": ["engine:ue5", "engine:ue4"]
     }

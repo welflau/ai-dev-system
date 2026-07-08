@@ -151,10 +151,13 @@ def _load_disk_commands() -> Dict[str, Dict[str, Any]]:
 
 
 def _load_project_commands(repo_path: str) -> Dict[str, Dict[str, Any]]:
-    """ClaudeCompat Phase C：扫描项目级命令定义，两路合并（低→高优先级）：
+    """ClaudeCompat Phase C：扫描项目级命令定义，三路合并（低→高优先级）：
 
-    1. {repo}/.claude/commands/*.md  — Claude Code 标准路径
-    2. {repo}/.ads/commands/*.md     — ADS 扩展路径（同名覆盖）
+    1. {repo}/.claude/commands/**/*.md   — Claude Code 标准路径
+    2. {repo}/.codebuddy/commands/**/*.md — CodeBuddy 路径
+    3. {repo}/.ads/commands/**/*.md      — ADS 扩展路径（同名覆盖）
+
+    子目录中的命令以相对路径作为 name（如 opsx/deploy）。
     """
     if not repo_path:
         return {}
@@ -163,14 +166,26 @@ def _load_project_commands(repo_path: str) -> Dict[str, Dict[str, Any]]:
 
     for src_dir, source_label in [
         (repo / ".claude" / "commands", "claude"),
+        (repo / ".codebuddy" / "commands", "codebuddy"),
         (repo / ".ads" / "commands", "ads"),
     ]:
         if not src_dir.exists():
             continue
-        for md_file in sorted(src_dir.glob("*.md")):
+        for md_file in sorted(src_dir.rglob("*.md")):
+            rel = md_file.relative_to(src_dir)
+            # name: subdir/stem（顶层直接用 stem）
+            parts = list(rel.parts)
+            parts[-1] = md_file.stem
+            name = "/".join(parts)
+            # 子目录含 openspec/opsx 的归为 openspec 来源
+            first_part = parts[0].lower() if len(parts) > 1 else ""
+            effective_source = (
+                "openspec" if "openspec" in first_part or first_part == "opsx"
+                else source_label
+            )
             try:
-                result[md_file.stem] = _parse_command_md(
-                    md_file.read_text(encoding="utf-8"), md_file.stem, source=source_label
+                result[name] = _parse_command_md(
+                    md_file.read_text(encoding="utf-8"), name, source=effective_source
                 )
             except Exception as e:
                 logger.warning("加载项目命令失败 %s: %s", md_file.name, e)
@@ -218,18 +233,63 @@ async def list_commands(project_id: Optional[str] = None):
         except Exception:
             pass
     cmds = get_all_commands(repo_path=repo_path)
-    return {
-        "commands": [
-            {
-                "name": name,
-                "description": info["description"],
-                "args_hint": info.get("args_hint", ""),
-                "requires_project": info.get("requires_project", False),
-                "source": info.get("source", "system"),
-            }
-            for name, info in sorted(cmds.items())
-        ]
-    }
+    result = [
+        {
+            "name": name,
+            "description": info["description"],
+            "args_hint": info.get("args_hint", ""),
+            "requires_project": info.get("requires_project", False),
+            "source": info.get("source", "system"),
+        }
+        for name, info in sorted(cmds.items())
+    ]
+    # 合并项目本地 Skill（.ads / .Agent / .codebuddy / .claude），可用 / 触发
+    if project_id:
+        try:
+            existing = {c["name"] for c in result}
+            for sk in await _list_project_skills_as_commands(project_id):
+                if sk["name"] not in existing:
+                    result.append(sk)
+                    existing.add(sk["name"])
+        except Exception as e:
+            logger.debug("合并项目 Skill 到命令列表失败: %s", e)
+    return {"commands": result}
+
+
+async def _list_project_skills_as_commands(project_id: str) -> List[Dict[str, Any]]:
+    """把项目本地 Skill 暴露成「伪命令」，供斜杠补全与触发。source=skill。"""
+    from actions.chat.load_skill import _enum_project_skill_dirs, _load_agent_skill
+    out: List[Dict[str, Any]] = []
+    seen: set = set()
+    for skill_dir_base in await _enum_project_skill_dirs(project_id):
+        for skill_dir in sorted(skill_dir_base.iterdir()):
+            if not (skill_dir.is_dir() and (skill_dir / "SKILL.md").exists()):
+                continue
+            if skill_dir.name in seen:
+                continue
+            seen.add(skill_dir.name)
+            desc = skill_dir.name
+            try:
+                _content, _name = await _load_agent_skill(
+                    f"agent.{skill_dir.name}", project_id
+                )
+                # 从 frontmatter 提取 description
+                import re as _re
+                m = _re.match(r"^---\s*\n(.*?)\n---", (_content or ""), _re.DOTALL)
+                if m:
+                    import yaml as _yaml
+                    fm = _yaml.safe_load(m.group(1)) or {}
+                    desc = fm.get("description") or _name or skill_dir.name
+            except Exception:
+                pass
+            out.append({
+                "name": skill_dir.name,
+                "description": (desc or "")[:200],
+                "args_hint": "[任务描述]",
+                "requires_project": True,
+                "source": "skill",
+            })
+    return out
 
 
 @router.post("/api/commands/{name}")
@@ -311,6 +371,23 @@ async def _dispatch_command(
 
     handler = handlers.get(name)
     if not handler:
+        # 回退：若匹配到项目本地 Skill，返回 run_skill 指令，让前端转成聊天消息触发 AI 加载执行
+        if project_id:
+            try:
+                skill_id = await _match_project_skill(name, project_id)
+                if skill_id:
+                    return CommandResult(
+                        success=True,
+                        output=f"📚 通过 Skill `{name}` 执行…",
+                        data={
+                            "type": "run_skill",
+                            "skill_id": skill_id,
+                            "skill_name": name,
+                            "args": args,
+                        },
+                    )
+            except Exception as e:
+                logger.debug("run_skill 回退匹配失败: %s", e)
         return CommandResult(success=False, output=f"未知命令：/{name}。输入 /help 查看可用命令。")
 
     try:
@@ -318,6 +395,16 @@ async def _dispatch_command(
     except Exception as e:
         logger.error("命令 /%s 执行失败: %s", name, e, exc_info=True)
         return CommandResult(success=False, output=f"命令执行失败: {e}")
+
+
+async def _match_project_skill(name: str, project_id: str) -> Optional[str]:
+    """按命令名匹配项目本地 Skill，命中返回其 skill_id（agent.<name>），否则 None。"""
+    from actions.chat.load_skill import _enum_project_skill_dirs
+    for skill_dir_base in await _enum_project_skill_dirs(project_id):
+        candidate = skill_dir_base / name / "SKILL.md"
+        if candidate.exists():
+            return f"agent.{name}"
+    return None
 
 
 # ── 内置命令实现 ──────────────────────────────────────────────────────────────
@@ -391,9 +478,10 @@ async def _cmd_skills(args: str, project_id: Optional[str], context: dict) -> Co
         from skills import skill_loader
         import json as _j
 
-        # 获取项目 traits
+        # 获取项目 traits + enabled_packs
         traits = []
         repo_path = ""
+        _enabled_packs = None
         if project_id:
             from database import db
             row = await db.fetch_one("SELECT traits, git_repo_path FROM projects WHERE id = ?", (project_id,))
@@ -401,9 +489,11 @@ async def _cmd_skills(args: str, project_id: Optional[str], context: dict) -> Co
                 raw = row.get("traits") or "[]"
                 traits = _j.loads(raw) if isinstance(raw, str) else list(raw or [])
                 repo_path = row.get("git_repo_path") or ""
+            from skills.loader import get_enabled_packs as _gep
+            _enabled_packs = await _gep(project_id)
 
         # Skills
-        skill_ids = skill_loader.get_skills_for_agent("ChatAssistant", traits=traits)
+        skill_ids = skill_loader.get_skills_for_agent("ChatAssistant", traits=traits, enabled_packs=_enabled_packs)
         all_status = skill_loader.get_all_skills_status()
 
         skill_lines = []
@@ -412,16 +502,18 @@ async def _cmd_skills(args: str, project_id: Optional[str], context: dict) -> Co
             name = cfg.get("name", sid)
             desc = cfg.get("description", "")[:60]
             src = "market" if cfg.get("source") == "marketplace" else "built-in"
-            skill_lines.append(f"  • **{name}** `[{src}]` — {desc}")
+            pack_tag = f" `pack:{skill_loader.skills[sid].get('pack')}`" if skill_loader.skills[sid].get("pack") else ""
+            skill_lines.append(f"  • **{name}** `[{src}]`{pack_tag} — {desc}")
 
         # 全局 Rules（当前生效）
-        rule_ids = skill_loader.get_rules_for_context(traits=traits)
+        rule_ids = skill_loader.get_rules_for_context(traits=traits, enabled_packs=_enabled_packs)
         rule_lines = []
         for rid in rule_ids:
             cfg = skill_loader.rules.get(rid, {})
             desc = cfg.get("description", "")[:60]
             tag = "always" if cfg.get("alwaysApply") else ("scene:" + cfg.get("scene", "")) if cfg.get("scene") else "traits"
-            rule_lines.append(f"  • `{rid}` `[{tag}]` — {desc}")
+            pack_tag = f" `pack:{cfg['pack']}`" if cfg.get("pack") else ""
+            rule_lines.append(f"  • `{rid}` `[{tag}]`{pack_tag} — {desc}")
 
         # 项目规则来源
         proj_rule_summary = ""

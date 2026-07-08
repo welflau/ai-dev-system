@@ -1,5 +1,6 @@
 ---
 alwaysApply: false
+pack: ue5-dev
 traits_match:
   any_of: [ue5, unreal, game-ue]
 priority: high

@@ -567,18 +567,27 @@ async function saveLLMConfig() {
 async function testLightAIConnection() {
     const resultEl = document.getElementById('lightaiTestResult');
     const btn = document.getElementById('lightaiTestBtn');
+    const refreshCard = document.getElementById('lightaiRefreshCard');
     if (!resultEl || !btn) return;
 
     btn.disabled = true; btn.textContent = '测试中...';
     resultEl.style.display = 'none';
+    if (refreshCard) refreshCard.style.display = 'none';
 
     try {
-        const data = await fetch(`${API}/image-gen/config/test`, { method: 'POST' }).then(r => r.json());
+        const testKey  = document.getElementById('lightaiApiKey')?.value.trim() || '';
+        const testBase = document.getElementById('lightaiBaseUrl')?.value.trim() || '';
+        const data = await fetch(`${API}/image-gen/config/test`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ api_key: testKey || undefined, api_base: testBase || undefined }),
+        }).then(r => r.json());
         resultEl.style.display = 'block';
         if (data.status === 'ok') {
             resultEl.style.background = 'rgba(52,211,153,0.1)';
             resultEl.style.color = 'var(--success)';
             resultEl.textContent = `✅ ${data.message}`;
+            if (refreshCard) refreshCard.style.display = 'none';
         } else if (data.status === 'not_configured') {
             resultEl.style.background = 'rgba(251,191,36,0.1)';
             resultEl.style.color = 'var(--warning)';
@@ -587,6 +596,16 @@ async function testLightAIConnection() {
             resultEl.style.background = 'rgba(255,90,90,0.1)';
             resultEl.style.color = 'var(--error)';
             resultEl.textContent = `❌ ${data.message}`;
+            if (refreshCard) {
+                refreshCard.style.display = 'block';
+                // 读取已配置的社区 URL 回填
+                fetch(`${API}/image-gen/config/refresh-key/urls`)
+                    .then(r => r.json())
+                    .then(d => {
+                        const inp = document.getElementById('lightaiCommunityUrl');
+                        if (inp && d.urls && d.urls.length > 0) inp.value = d.urls[0];
+                    }).catch(() => {});
+            }
         }
     } catch (e) {
         resultEl.style.display = 'block';
@@ -596,6 +615,69 @@ async function testLightAIConnection() {
         btn.disabled = false; btn.textContent = '🖼️ 测试 LightAI';
     }
 }
+
+async function refreshLightAIKey() {
+    const btn = document.getElementById('lightaiRefreshBtn');
+    const consoleEl = document.getElementById('lightaiRefreshConsole');
+    const pre = document.getElementById('lightaiRefreshPre');
+    const resultEl = document.getElementById('lightaiTestResult');
+    if (!btn || !pre) return;
+
+    btn.disabled = true; btn.textContent = '刷新中...';
+    pre.textContent = '';
+    if (consoleEl) consoleEl.style.display = 'block';
+
+    const communityUrl = document.getElementById('lightaiCommunityUrl')?.value.trim() || '';
+    try {
+        const resp = await fetch(`${API}/image-gen/config/refresh-key`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ community_url: communityUrl }),
+        });
+        const reader = resp.body.getReader();
+        const dec = new TextDecoder();
+        let buf = '';
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += dec.decode(value, { stream: true });
+            const parts = buf.split('\n\n');
+            buf = parts.pop();
+            for (const part of parts) {
+                const line = part.replace(/^data: /, '').trim();
+                if (!line) continue;
+                try {
+                    const ev = JSON.parse(line);
+                    if (ev.type === 'line' && ev.text) {
+                        pre.textContent += ev.text + '\n';
+                        consoleEl.scrollTop = consoleEl.scrollHeight;
+                    } else if (ev.type === 'done') {
+                        // 新 key 写入输入框并自动保存
+                        const keyInput = document.getElementById('lightaiApiKey');
+                        if (keyInput && ev.new_key) keyInput.value = ev.new_key;
+                        pre.textContent += '\n✅ Key 已刷新并更新到配置\n';
+                        consoleEl.scrollTop = consoleEl.scrollHeight;
+                        if (resultEl) {
+                            resultEl.style.display = 'block';
+                            resultEl.style.background = 'rgba(52,211,153,0.1)';
+                            resultEl.style.color = 'var(--success)';
+                            resultEl.textContent = '✅ API Key 已自动刷新';
+                        }
+                        document.getElementById('lightaiRefreshCard').style.display = 'none';
+                    } else if (ev.type === 'error') {
+                        pre.textContent += `\n❌ ${ev.text}\n`;
+                        consoleEl.scrollTop = consoleEl.scrollHeight;
+                    }
+                } catch {}
+            }
+        }
+    } catch (e) {
+        pre.textContent += `\n❌ 请求失败: ${e.message}\n`;
+    } finally {
+        btn.disabled = false; btn.textContent = '🔄 自动刷新 API Key';
+    }
+}
+
 
 async function testLLMConnection() {
     const resultEl = document.getElementById('llmTestResult');
@@ -775,6 +857,7 @@ function _updateChatPanelForContext() {
 
     // v0.20：切换 context 时重置当前会话（新 context 会懒加载最近会话）
     _currentChatSessionId = null;
+    _cliClearMem();  // 切项目时清空内存任务，避免跨项目串台
     const histPanel = document.getElementById('chatHistoryPanel');
     if (histPanel) histPanel.style.display = 'none';
 
@@ -971,6 +1054,7 @@ function switchAgentConfigTab(inner) {
     if (inner === 'commands') loadProjectCommands();
     if (inner === 'rules') loadProjectRules();
     if (inner === 'hooks') loadProjectHooks();
+    if (inner === 'openspec') loadOpenSpecStatus();
     // traits 已移到「系统设置」modal（showSystemSettingsModal('traits')）
 }
 
@@ -1014,11 +1098,16 @@ function _renderMcpView(container, data, source) {
         const toolsHtml = tools.length
             ? `<div style="margin-top:4px;">${tools.map(t => `<code class="mcp-tool-tag">${escapeHtml(t)}</code>`).join('')}</div>` : '';
         const statusHtml = srv.status
-            ? `<span class="mcp-server-status mcp-badge-${statusClass(srv.status)}" style="font-size:11px;margin-left:4px;">${statusLabel(srv.status)}</span>` : '';
+            ? `<span class="mcp-server-status mcp-badge-${statusClass(srv.status)}" style="font-size:11px;margin-left:4px;">${statusLabel(srv.status)}</span>`
+            : (typeof srv.enabled === 'boolean'
+                ? `<span class="mcp-server-status mcp-badge-${srv.enabled?'success':'muted'}" style="font-size:11px;margin-left:4px;">${srv.enabled?'✅ 已启用':'⚪ 未启用'}</span>`
+                : '');
+        const transportBadge = srv.transport
+            ? `<span style="font-size:10px;color:var(--text-muted);margin-left:4px;">${escapeHtml(srv.transport)}</span>` : '';
         const clickData = escapeHtml(JSON.stringify({name:srv.name, description:srv.description||'', source:srv.source, pack_name:srv.pack_name||null, file:srv.file||'', type:'MCP', emoji:'🔌', content:srv.command?'Command: '+srv.command:''}));
         return `<div class="mcp-server-card" style="margin-bottom:6px;cursor:pointer;" onclick='showExtensionDetail(${clickData})'>
             <div class="mcp-server-header">
-                <span class="mcp-server-name">🔌 ${escapeHtml(srv.name)}</span>${srcBadge}${statusHtml}
+                <span class="mcp-server-name">🔌 ${escapeHtml(srv.name)}</span>${srcBadge}${statusHtml}${transportBadge}
             </div>
             ${srv.description ? `<div class="mcp-server-desc">${escapeHtml(srv.description)}</div>` : ''}
             ${srv.command ? `<code style="font-size:10px;color:var(--text-muted);">${escapeHtml(srv.command)}</code>` : ''}
@@ -1027,7 +1116,7 @@ function _renderMcpView(container, data, source) {
     };
     _renderSourceGroups(container, data, source, renderItem, {
         builtin: { icon: '🏠', title: '全局 MCP',  desc: '来自 backend/mcp_servers.json' },
-        user:    { icon: '👤', title: '用户 MCP',   desc: '来自项目 .claude/settings.json mcpServers' },
+        user:    { icon: '👤', title: '用户 MCP',   desc: '来自 ~/.codebuddy、~/.claude 及项目 .claude/.codebuddy/.ads 配置' },
         pack:    { icon: '📦', title: 'Pack MCP',   desc: '已安装 ConfigPack 声明的 MCP 服务器' },
     });
 }
@@ -1077,22 +1166,37 @@ async function loadProjectPacks() {
         if (installed.length === 0) {
             installedEl.innerHTML = '<div class="empty-state-sm">未安装任何 ConfigPack</div>';
         } else {
-            installedEl.innerHTML = installed.map(p => `
+            const migrationHint = `<div style="font-size:11px;padding:6px 10px;border-radius:6px;background:rgba(249,115,22,.08);color:#f97316;margin-bottom:8px;">
+                ⚠️ 套件文件现在安装到 <code>.codebuddy/packs/{pack名}/</code> 子目录。点击 <strong>↩ 重装</strong> 可将已有套件迁移到新路径。
+            </div>`;
+            installedEl.innerHTML = migrationHint + installed.map(p => {
+                const ruleIds = p.enabled_rules || [];
+                const skillIds = p.enabled_skills || [];
+                let gatingBadge = '';
+                if (ruleIds.length || skillIds.length) {
+                    const parts = [];
+                    if (ruleIds.length) parts.push(`rules: ${ruleIds.join(', ')}`);
+                    if (skillIds.length) parts.push(`skills: ${skillIds.length}个`);
+                    gatingBadge = `<span style="font-size:10px;padding:1px 6px;border-radius:3px;background:rgba(34,197,94,.12);color:#22c55e;font-weight:500;" title="${escapeHtml(parts.join(' | '))}" >🎓 已激活</span>`;
+                }
+                return `
                 <div class="skill-row pack-row-clickable" onclick="showPackDetail('${escapeHtml(p.pack_name)}', '${escapeHtml(p.display_name || p.pack_name)}')" style="cursor:pointer;" title="点击查看详情">
                     <div class="skill-row-info">
                         <div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;">
                             <span class="skill-row-name">📦 ${escapeHtml(p.display_name || p.name)}</span>
+                            ${gatingBadge}
                             ${(p.contains || []).map(c => `<code class="mcp-tool-tag" style="font-size:10px;">${escapeHtml(c)}</code>`).join('')}
                         </div>
                         <span class="skill-row-id">${escapeHtml(p.pack_name)}</span>
                         ${p.description ? `<span class="skill-row-desc">${escapeHtml(p.description)}</span>` : ''}
-                        <span style="font-size:10px;color:var(--text-muted);">安装于 ${escapeHtml((p.installed_at||'').slice(0,16).replace('T',' '))} · 目标: ${escapeHtml((p.targets||[]).join(', ') || '—')}</span>
+                        <span style="font-size:10px;color:var(--text-muted);">安装于 ${escapeHtml((p.installed_at||'').slice(0,16).replace('T',' '))} · 目标: ${escapeHtml((p.targets||[]).join(', ') || '—')} · 路径: <code>.codebuddy/packs/${escapeHtml(p.pack_name)}/</code></span>
                     </div>
                     <div class="skill-row-actions" onclick="event.stopPropagation()">
                         <button class="btn btn-xs btn-secondary" onclick="reinstallPack('${escapeHtml(p.pack_name)}')" title="重新安装（覆盖）">↩ 重装</button>
                         <button class="btn btn-xs btn-ghost" onclick="removePack('${escapeHtml(p.pack_name)}', '${escapeHtml(p.display_name || p.pack_name)}')" title="移除记录（不删文件）">✕</button>
                     </div>
-                </div>`).join('');
+                </div>`;
+            }).join('');
         }
 
         // 可安装列表
@@ -1259,7 +1363,9 @@ async function showPackDetail(packName, displayName) {
             const items = categories[catKey];
             if (!items || items.length === 0) continue;
             const cm = PACK_CATEGORY_META[catKey] || { label: catKey, icon: '📄' };
-            listHtml += `<div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;padding:6px 6px 3px;">${cm.icon} ${cm.label} (${items.length})</div>`;
+            listHtml += `<div class="pack-cat-header" data-cat="${catKey}" onclick="togglePackCat('${catKey}')" style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;padding:6px 6px 3px;cursor:pointer;user-select:none;display:flex;align-items:center;gap:4px;">
+                <span class="pack-cat-chevron" style="font-size:10px;transition:transform .15s;">▾</span>${cm.icon} ${cm.label} (${items.length})</div>`;
+            listHtml += `<div class="pack-cat-items" data-cat="${catKey}">`;
             for (const item of items) {
                 const idx = allItems.length;
                 allItems.push({ catKey, item });
@@ -1273,6 +1379,7 @@ async function showPackDetail(packName, displayName) {
                         <div style="font-size:10px;color:var(--text-muted);margin-top:1px;">${escapeHtml(item.file)}</div>
                     </div>`;
             }
+            listHtml += `</div>`;
         }
 
         if (allItems.length === 0) {
@@ -1283,12 +1390,32 @@ async function showPackDetail(packName, displayName) {
         // 存到 modal 上供 selectPackItem 使用
         modal._packItems = allItems;
         modal._packName = packName;
+        modal._collapsedCats = new Set();  // 初始全展开
 
         // 默认选中第一项
         if (allItems.length > 0) selectPackItem(0);
 
     } catch (e) {
         document.getElementById('packDetailList').innerHTML = `<div class="empty-state-sm">加载失败: ${escapeHtml(e.message)}</div>`;
+    }
+}
+
+function togglePackCat(catKey) {
+    const modal = document.getElementById('packDetailModal');
+    if (!modal) return;
+    if (!modal._collapsedCats) modal._collapsedCats = new Set();
+    const itemsEl = modal.querySelector(`.pack-cat-items[data-cat="${catKey}"]`);
+    const chevron = modal.querySelector(`.pack-cat-header[data-cat="${catKey}"] .pack-cat-chevron`);
+    if (!itemsEl) return;
+    const collapsed = modal._collapsedCats.has(catKey);
+    if (collapsed) {
+        modal._collapsedCats.delete(catKey);
+        itemsEl.style.display = '';
+        if (chevron) chevron.style.transform = '';
+    } else {
+        modal._collapsedCats.add(catKey);
+        itemsEl.style.display = 'none';
+        if (chevron) chevron.style.transform = 'rotate(-90deg)';
     }
 }
 
@@ -1364,6 +1491,9 @@ function _filterPackDetailList() {
     if (!modal || !modal._packItems) return;
     const q = (document.getElementById('packDetailFilter')?.value || '').trim().toLowerCase();
     const allItems = modal._packItems;
+    const collapsed = modal._collapsedCats || new Set();
+    // 过滤时自动展开（重置折叠状态）
+    if (q) modal._collapsedCats = new Set();
 
     const catOrder = ['agents', 'commands', 'skills', 'rules', 'mcps', 'hooks', 'scripts'];
     let listHtml = '';
@@ -1377,7 +1507,11 @@ function _filterPackDetailList() {
         }
         if (!filtered.length) continue;
         const cm = PACK_CATEGORY_META[catKey] || { label: catKey, icon: '📄' };
-        listHtml += `<div style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;padding:6px 6px 3px;">${cm.icon} ${cm.label} (${filtered.length})</div>`;
+        const isCollapsed = !q && collapsed.has(catKey);
+        const chevronStyle = isCollapsed ? 'transform:rotate(-90deg);' : '';
+        listHtml += `<div class="pack-cat-header" data-cat="${catKey}" onclick="togglePackCat('${catKey}')" style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;padding:6px 6px 3px;cursor:pointer;user-select:none;display:flex;align-items:center;gap:4px;">
+            <span class="pack-cat-chevron" style="font-size:10px;transition:transform .15s;${chevronStyle}">▾</span>${cm.icon} ${cm.label} (${filtered.length})</div>`;
+        listHtml += `<div class="pack-cat-items" data-cat="${catKey}"${isCollapsed ? ' style="display:none;"' : ''}>`;
         for (const { item, idx } of filtered) {
             const accentColor = COLOR_MAP[item.color] || 'var(--border-color)';
             const emojiHtml = item.emoji ? `${escapeHtml(item.emoji)} ` : '';
@@ -1390,6 +1524,7 @@ function _filterPackDetailList() {
                 </div>`;
             visibleCount++;
         }
+        listHtml += `</div>`;
     }
     document.getElementById('packDetailList').innerHTML = visibleCount
         ? listHtml
@@ -1397,10 +1532,11 @@ function _filterPackDetailList() {
 }
 
 const _SOURCE_META = {
-    builtin: { label: '内置', color: '#6366f1', bg: 'rgba(99,102,241,.12)' },
-    project: { label: '项目', color: '#22c55e', bg: 'rgba(34,197,94,.12)'  },
-    user:    { label: '用户', color: '#0ea5e9', bg: 'rgba(14,165,233,.12)'  },
-    pack:    { label: 'Pack', color: '#f97316', bg: 'rgba(249,115,22,.12)' },
+    builtin:  { label: '内置',     color: '#6366f1', bg: 'rgba(99,102,241,.12)' },
+    project:  { label: '项目',     color: '#22c55e', bg: 'rgba(34,197,94,.12)'  },
+    user:     { label: '用户',     color: '#0ea5e9', bg: 'rgba(14,165,233,.12)'  },
+    pack:     { label: 'Pack',     color: '#f97316', bg: 'rgba(249,115,22,.12)' },
+    openspec: { label: 'OpenSpec', color: '#a855f7', bg: 'rgba(168,85,247,.12)' },
 };
 
 function _injectSourceFilter(wrapper, containerId, counts, switchFn) {
@@ -1413,11 +1549,12 @@ function _injectSourceFilter(wrapper, containerId, counts, switchFn) {
         wrapper.insertBefore(bar, container);
     }
     const chips = [
-        { key: 'all',     label: `全部 ${counts.total}` },
-        { key: 'builtin', label: `内置 ${counts.builtin}` },
-        { key: 'project', label: `项目 ${counts.project}`, hide: !counts.project },
-        { key: 'user',    label: `用户 ${counts.user}`,    hide: !counts.user },
-        { key: 'pack',    label: `Pack ${counts.pack}`,    hide: counts.pack === 0 },
+        { key: 'all',      label: `全部 ${counts.total}` },
+        { key: 'builtin',  label: `内置 ${counts.builtin}` },
+        { key: 'project',  label: `项目 ${counts.project}`,    hide: !counts.project },
+        { key: 'user',     label: `用户 ${counts.user}`,       hide: !counts.user },
+        { key: 'pack',     label: `Pack ${counts.pack}`,       hide: !counts.pack },
+        { key: 'openspec', label: `OpenSpec ${counts.openspec || 0}`, hide: !counts.openspec },
     ].filter(c => !c.hide);
     bar.innerHTML = chips.map(c => `
         <button class="src-filter-chip" data-panel="${containerId}" data-source="${c.key}"
@@ -1437,6 +1574,15 @@ function _setSourceFilter(containerId, source) {
     });
 }
 
+function _toggleSourceGroup(headerEl) {
+    const itemsEl = headerEl.nextElementSibling;
+    const chevron = headerEl.querySelector('.src-grp-chevron');
+    if (!itemsEl) return;
+    const collapsed = itemsEl.style.display === 'none';
+    itemsEl.style.display = collapsed ? '' : 'none';
+    if (chevron) chevron.style.transform = collapsed ? '' : 'rotate(-90deg)';
+}
+
 function _renderSourceGroups(container, data, source, renderItem, groupTitles) {
     // 每次渲染全量视图时更新条目 registry（供详情列表使用）
     if (source === 'all') _registerExtItems(data, groupTitles);
@@ -1451,7 +1597,7 @@ function _renderSourceGroups(container, data, source, renderItem, groupTitles) {
         return;
     }
     let html = '';
-    for (const key of ['builtin', 'project', 'user', 'pack']) {
+    for (const key of ['builtin', 'project', 'user', 'pack', 'openspec']) {
         const list = data[key] || [];
         if (!list.length) continue;
         const sm = _SOURCE_META[key];
@@ -1472,14 +1618,14 @@ function _renderSourceGroups(container, data, source, renderItem, groupTitles) {
             cardsHtml = list.map(renderItem).join('');
         }
         html += `<div style="margin-bottom:14px;">
-            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;padding:6px 8px;background:var(--bg-elevated);border-radius:6px;cursor:pointer;"
-                 onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'':'none'">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;padding:6px 8px;background:var(--bg-elevated);border-radius:6px;cursor:pointer;user-select:none;"
+                 onclick="_toggleSourceGroup(this)">
+                <span style="font-size:10px;transition:transform .15s;" class="src-grp-chevron">▾</span>
                 <span style="font-size:13px;font-weight:600;">${escapeHtml(gt.icon)} ${escapeHtml(gt.title)}</span>
                 <span style="font-size:11px;padding:1px 6px;border-radius:10px;background:${sm.bg};color:${sm.color};">${list.length}</span>
                 <span style="font-size:11px;color:var(--text-muted);flex:1;">${escapeHtml(gt.desc)}</span>
-                <span style="font-size:11px;color:var(--text-muted);">▾</span>
             </div>
-            <div>${cardsHtml}</div>
+            <div class="src-grp-items">${cardsHtml}</div>
         </div>`;
     }
     container.innerHTML = html || '<div class="empty-state-sm">暂无数据</div>';
@@ -1564,10 +1710,11 @@ function _renderSkillView(container, data, source) {
         </div>`;
     };
     _renderSourceGroups(container, data, source, renderItem, {
-        builtin: { icon: '🏠', title: '内置 Skill', desc: 'ADS 系统内置，可按项目开关' },
-        project: { icon: '📁', title: '项目 Skill',  desc: '项目仓库 .claude/skills/ 或 .codebuddy/skills/' },
-        user:    { icon: '👤', title: '用户 Skill',  desc: '系统用户主目录 ~/.claude/skills/ 或 ~/.codebuddy/skills/' },
-        pack:    { icon: '📦', title: 'Pack Skill',   desc: '已安装 ConfigPack 提供' },
+        builtin:  { icon: '🏠', title: '内置 Skill',    desc: 'ADS 系统内置，可按项目开关' },
+        project:  { icon: '📁', title: '项目 Skill',    desc: '项目仓库 .claude/skills/ 或 .codebuddy/skills/' },
+        user:     { icon: '👤', title: '用户 Skill',    desc: '系统用户主目录 ~/.claude/skills/ 或 ~/.codebuddy/skills/' },
+        pack:     { icon: '📦', title: 'Pack Skill',    desc: '已安装 ConfigPack 提供' },
+        openspec: { icon: '📐', title: 'OpenSpec Skill', desc: '由 OpenSpec 工具提供（.codebuddy/skills/openspec-*/）' },
     });
 }
 
@@ -1635,9 +1782,11 @@ function _renderCommandView(container, data, source) {
         </div>`;
     };
     _renderSourceGroups(container, data, source, renderItem, {
-        builtin: { icon: '🏠', title: '内置 Command', desc: 'ADS 系统硬编码命令' },
-        user:    { icon: '👤', title: '用户 Command',  desc: '.claude/commands/ 或 .ads/commands/' },
-        pack:    { icon: '📦', title: 'Pack Command',   desc: '已安装 ConfigPack 提供（安装后在 .claude/commands/）' },
+        builtin:  { icon: '🏠', title: '内置 Command',    desc: 'ADS 系统硬编码命令' },
+        project:  { icon: '📁', title: '项目 Command',    desc: '项目 .claude/commands/ 或 .codebuddy/commands/ 或 .ads/commands/' },
+        user:     { icon: '👤', title: '用户 Command',    desc: '系统用户主目录 ~/.claude/commands/' },
+        pack:     { icon: '📦', title: 'Pack Command',    desc: '已安装 ConfigPack 提供（安装后在 .claude/commands/）' },
+        openspec: { icon: '📐', title: 'OpenSpec Command', desc: '由 OpenSpec 工具提供（.codebuddy/commands/opsx/）' },
     });
 }
 
@@ -1766,7 +1915,7 @@ let _extDetailActiveIdx = 0;
 
 function _registerExtItems(data, groupTitles) {
     _extDetailRegistry = [];
-    for (const key of ['builtin', 'project', 'user', 'pack']) {
+    for (const key of ['builtin', 'project', 'user', 'pack', 'openspec']) {
         const list = data[key] || [];
         if (!list.length) continue;
         const gt = groupTitles[key] || { title: key, icon: '' };
@@ -1785,6 +1934,25 @@ function _registerExtItems(data, groupTitles) {
             const groupLabel = `${gt.icon} ${gt.title}`;
             for (const item of list) _extDetailRegistry.push({ group: groupLabel, item });
         }
+    }
+}
+
+function _toggleExtGroup(headerEl) {
+    const modal = document.getElementById('extensionDetailModal');
+    if (!modal._collapsedGroups) modal._collapsedGroups = new Set();
+    const grpKey = headerEl.dataset.grp;
+    const itemsEl = headerEl.nextElementSibling;
+    const chevron = headerEl.querySelector('.ext-grp-chevron');
+    if (!itemsEl) return;
+    const collapsed = modal._collapsedGroups.has(grpKey);
+    if (collapsed) {
+        modal._collapsedGroups.delete(grpKey);
+        itemsEl.style.display = '';
+        if (chevron) chevron.style.transform = '';
+    } else {
+        modal._collapsedGroups.add(grpKey);
+        itemsEl.style.display = 'none';
+        if (chevron) chevron.style.transform = 'rotate(-90deg)';
     }
 }
 
@@ -1848,6 +2016,9 @@ function _renderExtDetailList() {
     const activeIdx = _extDetailActiveIdx;
     const filterEl = document.getElementById('extDetailFilter');
     const q = filterEl ? filterEl.value.trim().toLowerCase() : '';
+    // 搜索时自动展开所有分组
+    const modal = document.getElementById('extensionDetailModal');
+    if (q && modal && modal._collapsedGroups) modal._collapsedGroups = new Set();
 
     if (_extDetailRegistry.length === 0) {
         listEl.innerHTML = '';
@@ -1871,7 +2042,13 @@ function _renderExtDetailList() {
 
     let html = '';
     for (const g of groupOrder) {
-        html += `<div style="font-size:10px;color:var(--text-muted);padding:5px 4px 2px;font-weight:600;opacity:.7;text-transform:uppercase;letter-spacing:.05em;">${escapeHtml(g)}</div>`;
+        const gKey = g; // 用 group 标签作 key
+        const isCollapsed = modal && modal._collapsedGroups && modal._collapsedGroups.has(gKey);
+        const chevronStyle = isCollapsed ? 'transform:rotate(-90deg);' : '';
+        html += `<div class="ext-grp-header" data-grp="${escapeHtml(gKey)}" onclick="_toggleExtGroup(this)"
+            style="font-size:10px;color:var(--text-muted);padding:5px 4px 2px;font-weight:600;opacity:.8;text-transform:uppercase;letter-spacing:.05em;cursor:pointer;user-select:none;display:flex;align-items:center;gap:3px;">
+            <span class="ext-grp-chevron" style="font-size:9px;transition:transform .15s;${chevronStyle}">▾</span>${escapeHtml(g)}</div>`;
+        html += `<div class="ext-grp-items"${isCollapsed ? ' style="display:none;"' : ''}>`;
         for (const { item, idx } of groups[g]) {
             const isActive = idx === activeIdx;
             const em = item.emoji || '';
@@ -1883,6 +2060,7 @@ function _renderExtDetailList() {
                 ${em ? `<span style="margin-right:3px;">${escapeHtml(em)}</span>` : ''}${escapeHtml(item.name)}
             </div>`;
         }
+        html += `</div>`;
     }
     listEl.innerHTML = html;
 
@@ -1999,6 +2177,186 @@ async function deleteCustomSkill(skillId, name) {
     } catch (e) {
         showToast(`删除失败: ${e.message}`, 'error');
     }
+}
+
+// ── OpenSpec ───────────────────────────────────────────────────────────────────
+
+async function loadOpenSpecStatus() {
+    if (!currentProjectId) return;
+    try {
+        const data = await api(`/projects/${currentProjectId}/openspec/status`);
+        _renderOpenSpecStatus(data);
+    } catch (e) {
+        const bar = document.getElementById('openspecStatusBar');
+        if (bar) bar.innerHTML = `<span style="color:var(--danger);">加载状态失败: ${escapeHtml(e.message)}</span>`;
+    }
+}
+
+function _renderOpenSpecStatus(data) {
+    const bar = document.getElementById('openspecStatusBar');
+    const initHint = document.getElementById('openspecInitHint');
+    const installedCard = document.getElementById('openspecInstalledCard');
+
+    if (bar) {
+        const chips = [];
+        if (!data.npm_available) {
+            chips.push(`<span style="color:var(--danger);">⚠️ npm 未找到</span>`);
+        }
+        if (data.installed_en) {
+            chips.push(`<span style="color:var(--success);">✓ openspec (英文版) 已安装</span>`);
+        } else {
+            chips.push(`<span style="color:var(--text-muted);">○ openspec (英文版) 未安装</span>`);
+        }
+        if (data.installed_cn) {
+            chips.push(`<span style="color:var(--success);">✓ openspec-cn (中文版) 已安装</span>`);
+        } else {
+            chips.push(`<span style="color:var(--text-muted);">○ openspec-cn (中文版) 未安装</span>`);
+        }
+        if (data.initialized) {
+            chips.push(`<span style="color:var(--success);">✓ 项目已初始化</span>`);
+        } else {
+            chips.push(`<span style="color:var(--text-muted);">○ 项目未初始化</span>`);
+        }
+        bar.innerHTML = chips.join('<span style="color:var(--border);">|</span>');
+    }
+
+    if (initHint) {
+        initHint.textContent = data.initialized ? '（检测到 openspec/ 目录，可重复初始化更新配置）' : '';
+    }
+
+    if (installedCard) {
+        installedCard.style.display = data.initialized ? '' : 'none';
+        if (data.initialized) {
+            const content = document.getElementById('openspecInstalledContent');
+            if (content) {
+                const rules = data.installed_rules || [];
+                const skills = data.installed_skills || [];
+                const parts = [];
+                if (rules.length) {
+                    parts.push(`<div style="margin-bottom:8px;"><span style="font-size:12px;font-weight:500;color:var(--text-secondary);">📋 Rules</span><div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:4px;">${
+                        rules.map(r => `<code style="font-size:11px;padding:1px 6px;border-radius:3px;background:var(--bg-tertiary);">${escapeHtml(r)}</code>`).join('')
+                    }</div></div>`);
+                }
+                if (skills.length) {
+                    parts.push(`<div><span style="font-size:12px;font-weight:500;color:var(--text-secondary);">⚡ Skills</span><div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:4px;">${
+                        skills.map(s => `<code style="font-size:11px;padding:1px 6px;border-radius:3px;background:var(--bg-tertiary);">${escapeHtml(s)}</code>`).join('')
+                    }</div></div>`);
+                }
+                if (!parts.length) {
+                    parts.push(`<div style="font-size:12px;color:var(--text-muted);">openspec/ 目录已存在，Rules 与 Skills 将在各面板中以「来源：OpenSpec」标注显示。</div>`);
+                }
+                content.innerHTML = parts.join('');
+            }
+        }
+    }
+}
+
+let _openspecRunning = false;
+
+async function runOpenSpecCmd(command) {
+    if (!currentProjectId) { showToast('请先选择项目', 'error'); return; }
+    if (_openspecRunning) { showToast('已有命令运行中，请稍候', 'warning'); return; }
+
+    const consoleCard = document.getElementById('openspecConsoleCard');
+    const consoleEl = document.getElementById('openspecConsole');
+    if (consoleCard) consoleCard.style.display = '';
+    if (consoleEl) consoleEl.textContent = '';
+
+    const LABEL = {
+        install_en: '安装（英文版）',
+        install_cn: '安装（中文版）',
+        init_en: '初始化（英文版）',
+        init_cn: '初始化（中文版）',
+    };
+
+    _openspecRunning = true;
+    _appendOpenSpecLine(`> ${LABEL[command] || command}\n`);
+
+    // 禁用按钮
+    ['openspecInstallEnBtn','openspecInstallCnBtn','openspecInitEnBtn','openspecInitCnBtn'].forEach(id => {
+        const btn = document.getElementById(id);
+        if (btn) btn.disabled = true;
+    });
+
+    try {
+        const resp = await fetch(`/api/projects/${currentProjectId}/openspec/run`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ command }),
+        });
+
+        if (!resp.ok) {
+            const err = await resp.text();
+            _appendOpenSpecLine(`错误: ${err}\n`);
+            return;
+        }
+
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += decoder.decode(value, { stream: true });
+
+            // 解析 SSE 事件
+            const parts = buf.split('\n\n');
+            buf = parts.pop();
+            for (const part of parts) {
+                const lines = part.split('\n');
+                let event = 'message', dataStr = '';
+                for (const l of lines) {
+                    if (l.startsWith('event: ')) event = l.slice(7).trim();
+                    if (l.startsWith('data: ')) dataStr = l.slice(6);
+                }
+                if (!dataStr) continue;
+                try {
+                    const d = JSON.parse(dataStr);
+                    if (event === 'start') {
+                        _appendOpenSpecLine(`$ ${d.cmd}\n`);
+                    } else if (event === 'line') {
+                        _appendOpenSpecLine(d.text + '\n');
+                    } else if (event === 'done') {
+                        const icon = d.success ? '✓' : '✗';
+                        _appendOpenSpecLine(`\n${icon} 退出码: ${d.exit_code}\n`);
+                        if (d.success) {
+                            showToast(`${LABEL[command]} 成功`, 'success');
+                            loadOpenSpecStatus();
+                        } else {
+                            showToast(`${LABEL[command]} 失败（退出码 ${d.exit_code}）`, 'error');
+                        }
+                    } else if (event === 'error') {
+                        _appendOpenSpecLine(`错误: ${d.message}\n`);
+                        showToast(`执行错误: ${d.message}`, 'error');
+                    }
+                } catch (_) {}
+            }
+        }
+    } catch (e) {
+        _appendOpenSpecLine(`请求失败: ${e.message}\n`);
+        showToast(`请求失败: ${e.message}`, 'error');
+    } finally {
+        _openspecRunning = false;
+        ['openspecInstallEnBtn','openspecInstallCnBtn','openspecInitEnBtn','openspecInitCnBtn'].forEach(id => {
+            const btn = document.getElementById(id);
+            if (btn) btn.disabled = false;
+        });
+    }
+}
+
+function _appendOpenSpecLine(text) {
+    const el = document.getElementById('openspecConsole');
+    if (!el) return;
+    el.textContent += text;
+    el.scrollTop = el.scrollHeight;
+}
+
+function clearOpenSpecConsole() {
+    const el = document.getElementById('openspecConsole');
+    if (el) el.textContent = '';
+    const card = document.getElementById('openspecConsoleCard');
+    if (card) card.style.display = 'none';
 }
 
 // ==================== Traits 查看器（Agent 配置页 → Traits Tab，v0.17 Phase A.6） ====================
@@ -4806,6 +5164,11 @@ function renderActionStateSummary(action) {
         summary = `需求 <strong>${escapeHtml(action.title || '?')}</strong> 已创建`;
     } else if (action.type === 'confirm_bug' && isExec) {
         summary = `Bug <strong>${escapeHtml(action.title || '?')}</strong> 已上报`;
+    } else if (action.type === 'generate_image' && isExec) {
+        const tag = action._result?.tag || '';
+        const promptPreview = escapeHtml((action.prompt || '').slice(0, 40));
+        summary = `生图已入队：${promptPreview}${(action.prompt || '').length > 40 ? '…' : ''}` +
+                  (tag ? ` <code style="font-size:11px;">${escapeHtml(tag)}</code>` : '');
     } else if (!isExec && result.reason) {
         summary = `取消原因：${escapeHtml(result.reason)}`;
     }
@@ -4860,6 +5223,86 @@ function runAutoNextAfterProjectCreated(projectId, autoNext) {
 
     if (typeof showToast === 'function') {
         showToast('检测到 UE 项目，已自动生成框架方案卡片', 'info');
+    }
+}
+
+/**
+ * 生图参数确认卡片
+ */
+function renderGenerateImageCard(action) {
+    if (action._message_id && action._state && action._state !== 'pending') {
+        return renderActionStateSummary(action);
+    }
+    const safeId = _nextCardId('genimg');
+    const engines = ['', 'gemini', 'gemini2', 'jimeng', 'midjourney'];
+    const engineLabels = {'': '系统默认', gemini: 'Gemini（推荐）', gemini2: 'Gemini 2', jimeng: '即梦', midjourney: 'Midjourney'};
+    const engineOptions = engines.map(e =>
+        `<option value="${e}" ${(action.engine || '') === e ? 'selected' : ''}>${engineLabels[e] || e}</option>`
+    ).join('');
+    const ratios = ['1:1', '16:9', '9:16', '4:3', '3:4'];
+    const ratioOptions = ratios.map(r =>
+        `<option value="${r}" ${(action.aspect_ratio || '1:1') === r ? 'selected' : ''}>${r}</option>`
+    ).join('');
+    const sizes = ['2K', '4K', '1K'];
+    const sizeOptions = sizes.map(s =>
+        `<option value="${s}" ${(action.image_size || '2K') === s ? 'selected' : ''}>${s}</option>`
+    ).join('');
+    return `
+    <div class="chat-action-card chat-confirm-card" id="${safeId}"
+         data-message-id="${escapeHtml(action._message_id || '')}"
+         style="border-left-color: var(--accent, #a371f7);">
+        <div class="action-title">🖼️ 生图参数确认</div>
+        <div class="action-detail">
+            <div class="confirm-req-meta" style="margin-bottom:6px;">Prompt</div>
+            <textarea id="${safeId}_prompt" class="chat-genimg-prompt"
+                style="width:100%;min-height:64px;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:12px;resize:vertical;"
+                >${escapeHtml(action.prompt || '')}</textarea>
+            <div style="display:flex;gap:10px;margin-top:8px;flex-wrap:wrap;">
+                <label style="font-size:12px;color:var(--text-muted);display:flex;flex-direction:column;gap:3px;">
+                    引擎<select id="${safeId}_engine" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:12px;">${engineOptions}</select>
+                </label>
+                <label style="font-size:12px;color:var(--text-muted);display:flex;flex-direction:column;gap:3px;">
+                    比例<select id="${safeId}_ratio" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:12px;">${ratioOptions}</select>
+                </label>
+                <label style="font-size:12px;color:var(--text-muted);display:flex;flex-direction:column;gap:3px;">
+                    尺寸<select id="${safeId}_size" style="background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:12px;">${sizeOptions}</select>
+                </label>
+            </div>
+        </div>
+        <div class="confirm-req-btns" style="margin-top:10px;">
+            <button class="btn btn-sm btn-primary" onclick="doConfirmGenerateImage('${safeId}')">🖼️ 确认生图</button>
+            <button class="btn btn-sm" onclick="this.closest('.chat-action-card').style.opacity='0.5';this.closest('.chat-action-card').querySelectorAll('button').forEach(b=>b.disabled=true)">✗ 取消</button>
+        </div>
+    </div>`;
+}
+
+async function doConfirmGenerateImage(cardId) {
+    const card = document.getElementById(cardId);
+    if (!card || !currentProjectId) return;
+    const prompt = document.getElementById(`${cardId}_prompt`)?.value.trim() || '';
+    if (!prompt) { showToast('prompt 不能为空', 'error'); return; }
+    const engine = document.getElementById(`${cardId}_engine`)?.value || '';
+    const ratio  = document.getElementById(`${cardId}_ratio`)?.value  || '1:1';
+    const size   = document.getElementById(`${cardId}_size`)?.value   || '2K';
+    const msgId  = card.dataset.messageId || '';
+
+    card.querySelectorAll('button').forEach(b => b.disabled = true);
+    const btns = card.querySelector('.confirm-req-btns');
+    if (btns) btns.innerHTML = '<span style="color:var(--text-muted);font-size:12px;">⏳ 提交中...</span>';
+
+    try {
+        const res = await api(`/projects/${currentProjectId}/chat/confirm-generate-image`, {
+            method: 'POST',
+            body: { prompt, engine, aspect_ratio: ratio, image_size: size, message_id: msgId || undefined },
+        });
+        showToast('生图已入队 ' + (res.tag || ''), 'success');
+        if (btns) btns.innerHTML = `<span style="color:var(--success);">✅ 已入队：<code style="font-size:11px;">${escapeHtml(res.tag || '')}</code></span>
+            <a class="action-link" onclick="switchTab('images')">查看图片队列 →</a>`;
+        if (msgId) patchActionState(msgId, 'executed', { tag: res.tag });
+    } catch (e) {
+        showToast(`提交失败: ${e.message}`, 'error');
+        if (btns) btns.innerHTML = `<button class="btn btn-sm btn-primary" onclick="doConfirmGenerateImage('${cardId}')">🖼️ 确认生图</button>
+            <button class="btn btn-sm" onclick="this.closest('.chat-action-card').style.opacity='0.5';this.closest('.chat-action-card').querySelectorAll('button').forEach(b=>b.disabled=true)">✗ 取消</button>`;
     }
 }
 
@@ -7834,6 +8277,37 @@ function connectSSE(projectId) {
             } catch {}
         });
 
+        eventSource.addEventListener('ue_editor_offline', (e) => {
+            try {
+                // 当 MCP tool 执行时检测到 Editor 未运行，弹出启动提示
+                const existing = document.getElementById('ue-editor-offline-toast');
+                if (existing) return; // 避免重复弹出
+                const toast = document.createElement('div');
+                toast.id = 'ue-editor-offline-toast';
+                toast.style.cssText = `
+                    position:fixed; bottom:80px; right:20px; z-index:9999;
+                    background:var(--bg-secondary, #1e2030); border:1px solid var(--warning, #f0a020);
+                    border-radius:10px; padding:14px 18px; max-width:280px;
+                    box-shadow:0 4px 20px rgba(0,0,0,0.4); animation:fadeIn .2s ease;
+                `;
+                toast.innerHTML = `
+                    <div style="font-weight:600;color:var(--warning,#f0a020);margin-bottom:6px;">⚠️ UE Editor 未运行</div>
+                    <div style="font-size:13px;color:var(--text-muted);margin-bottom:10px;">当前操作需要 UE Editor 在线，是否现在启动？</div>
+                    <div style="display:flex;gap:8px;">
+                        <button class="btn btn-sm btn-primary" onclick="launchUEEditor();document.getElementById('ue-editor-offline-toast')?.remove()">
+                            🚀 启动 Editor
+                        </button>
+                        <button class="btn btn-sm" onclick="document.getElementById('ue-editor-offline-toast')?.remove()">
+                            稍后
+                        </button>
+                    </div>
+                `;
+                document.body.appendChild(toast);
+                // 30 秒后自动消失
+                setTimeout(() => toast.remove(), 30000);
+            } catch {}
+        });
+
         // v0.18 基线编译：启动 + 流式 log + 最终结果
         eventSource.addEventListener('ue_compile_started', (e) => {
             const data = JSON.parse(e.data);
@@ -7914,6 +8388,26 @@ function connectSSE(projectId) {
                 level: level,
                 created_at: new Date().toISOString(),
             });
+        });
+
+        eventSource.addEventListener('ue_asset_imported', (e) => {
+            try {
+                const data = JSON.parse(e.data);
+                if (data.success) {
+                    showToast(`🎮 已自动导入 UE：${data.ue_path || data.asset_id}`, 'success');
+                    appendLogEntry({
+                        agent_type: 'UE', action: 'import_asset',
+                        detail: JSON.stringify({message: `资产已导入 UE：${data.ue_path || ''}`}),
+                        level: 'info', created_at: new Date().toISOString(),
+                    });
+                } else {
+                    appendLogEntry({
+                        agent_type: 'UE', action: 'import_asset',
+                        detail: JSON.stringify({message: `UE 导入失败：${data.message || ''}`}),
+                        level: 'warn', created_at: new Date().toISOString(),
+                    });
+                }
+            } catch {}
         });
 
         eventSource.addEventListener('ue_baseline_compile_result', (e) => {
@@ -11346,6 +11840,7 @@ async function switchChatSession(sessionId) {
     const container = document.getElementById('chatMessages');
     if (!container) return;
     _currentChatSessionId = sessionId;
+    _cliClearMem();  // 切会话时清空内存任务，后台任务面板跟着切
     // 关闭历史面板，让消息区可见
     const panel = document.getElementById('chatHistoryPanel');
     if (panel) panel.style.display = 'none';
@@ -11373,6 +11868,9 @@ async function switchChatSession(sessionId) {
         console.warn('[session] 切换会话失败', e);
         showChatWelcome();
     }
+    // 若后台任务面板开着，刷新为当前会话的任务
+    const _tp = document.getElementById('tasksSidePanel');
+    if (_tp && _tp.style.display !== 'none') _refreshTasksPanel();
 }
 
 /** 删除单个会话 */
@@ -11676,12 +12174,13 @@ async function _sendChatStreaming(url, body) {
                     }
                     if (_curRoundStepsEl) {
                         const taskId  = data.task_id || '';
-                        // 序号：若有 task_id，取其在 _CLI_TASKS_MEM 的全局位置（与后台面板对应）
-                        // 否则用轮次内局部序号
+                        // 序号：取当前对话组内的位置（与后台任务面板 # 编号对应）
                         const stepNum = taskId ? (() => {
-                            const keys = Object.keys(_CLI_TASKS_MEM).sort((a,b) =>
-                                (_CLI_TASKS_MEM[a].created_at||'').localeCompare(_CLI_TASKS_MEM[b].created_at||''));
-                            const idx = keys.indexOf(taskId);
+                            const curKey = _cliCurrentSession?.key || '';
+                            const sessionTasks = Object.values(_CLI_TASKS_MEM)
+                                .filter(t => (t.session_key || '') === curKey)
+                                .sort((a,b) => (a.created_at||'').localeCompare(b.created_at||''));
+                            const idx = sessionTasks.findIndex(t => t.id === taskId);
                             return idx >= 0 ? idx + 1 : (_curRoundStepsEl.querySelectorAll('.ctp-step').length + 1);
                         })() : (_curRoundStepsEl.querySelectorAll('.ctp-step').length + 1);
                         const jumpBtn = taskId
@@ -12541,6 +13040,15 @@ let _cliActiveTaskId = '';  // 当前选中的任务 ID，独立存储避免 DOM
 let _cliCurrentSession = null;  // 当前对话的 session key { key, label, seq }
 let _cliSessionSeq = 0;         // 全局对话序号（每次发消息递增）
 
+/** 切换项目 / 切换历史会话时调用：清空内存任务表，避免上一个 context 的任务串台 */
+function _cliClearMem() {
+    for (const k in _CLI_TASKS_MEM) delete _CLI_TASKS_MEM[k];
+    _cliActiveTaskId = '';
+    _cliCurrentSession = null;
+    const outputEl = document.getElementById('tasksPanelOutput');
+    if (outputEl) outputEl.textContent = '选择任务查看输出';
+}
+
 /** 每次发送新对话时调用，生成新 session 分组 */
 function _cliSessionBegin(labelHint) {
     _cliSessionSeq++;
@@ -12643,10 +13151,11 @@ async function _refreshTasksPanel() {
     listEl.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);">加载中…</div>';
 
     try {
-        // 从 API 拉 cli-tasks 历史（含 DB 持久化记录）
+        // 从 API 拉 cli-tasks 历史（含 DB 持久化记录），不按 session_id 过滤
+        // session_key 现在是消息级 msg_group_key，与 chat_session_id 不同
         const cliUrl = currentProjectId
             ? `/projects/${currentProjectId}/chat/cli-tasks`
-            : `/commands/chat/cli-tasks`;
+            : `/chat/cli-tasks`;
         let cliTasksFromApi = [];
         try {
             const cliResp = await api(cliUrl);
@@ -12685,10 +13194,8 @@ async function _refreshTasksPanel() {
         const SESSION_GAP_MS = 120 * 1000;
         const sessionGroups = [];
         let curGroup = null;
-        let globalIdx = 0;
         let grpCounter = 0;
         for (const t of allTasks) {
-            globalIdx++;
             const tMs = t.created_at ? new Date(t.created_at).getTime() : 0;
             const sk = t.session_key || null;
 
@@ -12710,7 +13217,8 @@ async function _refreshTasksPanel() {
                 curGroup = { key: sk || `auto_${grpCounter}`, _sk: sk, label, items: [], _lastMs: tMs };
                 sessionGroups.push(curGroup);
             }
-            curGroup.items.push({ t, idx: globalIdx });
+            // 序号按会话组内重新从 1 编号（不跨会话累加）
+            curGroup.items.push({ t, idx: curGroup.items.length + 1 });
             if (tMs) curGroup._lastMs = tMs;
         }
 
@@ -12721,7 +13229,9 @@ async function _refreshTasksPanel() {
                 const isActive = t.id === _cliActiveTaskId;
                 const durText = isCli && t.duration_ms ? ` · ${t.duration_ms}ms` : (t.elapsed ? ` · ${t.elapsed}` : '');
                 const subText = isCli ? `CLI${durText}` : `${t.agent ? escapeHtml(t.agent) : ''}${durText}${t.action ? ' · ' + escapeHtml(t.action.slice(0,20)) : ''}`;
-                const tsRaw = t.created_at ? t.created_at.slice(11, 19) : (t.ts || '');
+                const tsRaw = t.created_at
+                    ? (() => { try { return new Date(t.created_at).toLocaleTimeString('zh-CN', {hour12:false}); } catch { return t.created_at.slice(11,19); } })()
+                    : (t.ts || '');
                 const tsText = tsRaw ? `<span style="opacity:.5;margin-left:4px;">${escapeHtml(tsRaw)}</span>` : '';
                 const cmd = t.cmd || '';
                 const cmdText = isCli && cmd ? `<div style="color:var(--text-muted);font-size:10px;padding-left:24px;font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:.7;" title="${escapeHtml(cmd)}">$ ${escapeHtml(cmd.slice(0,60))}</div>` : '';
@@ -13033,11 +13543,13 @@ function createThinkingContext(msgContainer) {
 
             if (data.step === 'start') {
                 const taskId  = data.task_id || '';
-                // 序号：若有 task_id，取全局位置与后台面板对应；否则用局部序号
+                // 序号：取当前对话组内的位置（与后台任务面板 # 编号对应）
                 const taskSeq = taskId ? (() => {
-                    const keys = Object.keys(_CLI_TASKS_MEM).sort((a,b) =>
-                        (_CLI_TASKS_MEM[a].created_at||'').localeCompare(_CLI_TASKS_MEM[b].created_at||''));
-                    const idx = keys.indexOf(taskId);
+                    const curKey = _cliCurrentSession?.key || '';
+                    const sessionTasks = Object.values(_CLI_TASKS_MEM)
+                        .filter(t => (t.session_key || '') === curKey)
+                        .sort((a,b) => (a.created_at||'').localeCompare(b.created_at||''));
+                    const idx = sessionTasks.findIndex(t => t.id === taskId);
                     return idx >= 0 ? idx + 1 : 0;
                 })() : 0;
                 const stepNum = taskSeq || (steps.length + 1);
@@ -13254,7 +13766,8 @@ async function sendChatMessage() {
                 `/projects/${currentProjectId}/chat/stream`,
                 { message: fullMessage,
                   images: images.length > 0 ? images : undefined,
-                  chat_session_id: _sid }
+                  chat_session_id: _sid,
+                  msg_group_key: _cliCurrentSession?.key || undefined }
             );
         } else {
             // 全局聊天（无项目）— 传 history 兜底（无 session_id 时服务端用前端传的）
@@ -13263,7 +13776,8 @@ async function sendChatMessage() {
                 `/chat/stream`,
                 { message: fullMessage, history: historyToSend,
                   images: images.length > 0 ? images : undefined,
-                  chat_session_id: _sid }
+                  chat_session_id: _sid,
+                  msg_group_key: _cliCurrentSession?.key || undefined }
             );
         }
 
@@ -14029,6 +14543,11 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
                 </div>
             </div>
         `;
+    } else if (action && action._state && action._state !== 'pending'
+               && action.type === 'generate_image') {
+        actionHtml = renderActionStateSummary(action);
+    } else if (action && action.type === 'generate_image') {
+        actionHtml = renderGenerateImageCard(action);
     }
 
     // 图片展示（用户发送的图片）
@@ -14662,6 +15181,13 @@ function formatChatContent(content) {
     content = content.replace(/\[ACTION:\w+\][\s\S]*$/g, '').trim();
     if (!content) return '';
 
+    // 将服务端本地绝对路径替换为可访问的相对 URL
+    // 匹配 generated-images 和 chat_images 目录下的文件
+    content = content.replace(/[a-zA-Z]:[\\\/][^\s\)\]"']*\\generated-images\\([^\s\)\]"']+)/g,
+        (_, fname) => '/generated-images/' + fname.replace(/\\/g, '/'));
+    content = content.replace(/[a-zA-Z]:[\\\/][^\s\)\]"']*\/generated-images\/([^\s\)\]"']+)/g,
+        (_, fname) => '/generated-images/' + fname);
+
     let result = '';
     // 按代码块分割，逐段处理
     const parts = content.split(/(```[\w]*\n[\s\S]*?```)/g);
@@ -14777,12 +15303,18 @@ function _renderMarkdownText(text) {
     return html;
 }
 
-/** 行内格式：加粗 / 斜体 / 行内代码 */
+/** 行内格式：加粗 / 斜体 / 行内代码 / 图片 */
 function _inlineFormat(text) {
     return text
         .replace(/`([^`\n]+)`/g, '<code class="chat-inline-code">$1</code>')
         .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-        .replace(/\*(.+?)\*/g, '<em>$1</em>');
+        .replace(/\*(.+?)\*/g, '<em>$1</em>')
+        .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_, alt, src) => {
+            // 对路径中非 ASCII 字符做 URL encode，保留 / 分隔符
+            const encodedSrc = src.split('/').map(seg => encodeURIComponent(seg)).join('/');
+            const safeAlt = escapeHtml(alt);
+            return `<img src="${encodedSrc}" alt="${safeAlt}" class="chat-md-img" style="max-width:100%;border-radius:6px;margin:4px 0;cursor:pointer;" onclick="window.open(this.src,'_blank')" onerror="this.style.display='none'">`;
+        });
 }
 
 /** 生成可折叠的代码文件卡片 */
@@ -15094,6 +15626,20 @@ async function _handleSlashCommand(input) {
 
         bubble.remove();
 
+        // Skill 触发：把 skill 全文交给 AI 加载并执行（转成一条聊天消息）
+        if (resp.success && resp.data && resp.data.type === 'run_skill') {
+            const sk = resp.data;
+            const task = (sk.args || '').trim();
+            const input2 = document.getElementById('chatInput');
+            if (input2) {
+                input2.value = task
+                    ? `请使用 ${sk.skill_name} skill 完成以下任务：${task}`
+                    : `请加载并使用 ${sk.skill_name} skill，先向我说明它能做什么。`;
+                sendChatMessage();
+            }
+            return;
+        }
+
         // 渲染结果
         const out = document.createElement('div');
         out.className = 'chat-msg system-msg';
@@ -15176,7 +15722,7 @@ function _showSlashSuggestions(cmds) {
     box.innerHTML = cmds.map((c, i) => `
         <div class="slash-suggest-item${i === 0 ? ' slash-suggest-active' : ''}"
              onclick="_selectSlashSuggestion('/${c.name}')">
-            <span class="slash-cmd-name">/${c.name}</span>
+            <span class="slash-cmd-name">${c.source === 'skill' ? '📚 ' : ''}/${c.name}</span>
             ${c.args_hint ? `<span class="slash-cmd-hint">${escapeHtml(c.args_hint)}</span>` : ''}
             <span class="slash-cmd-desc">${escapeHtml(c.description)}</span>
         </div>`).join('');

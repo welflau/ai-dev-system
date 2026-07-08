@@ -54,6 +54,8 @@ class UEEditorAgent(BaseAgent):
             return await self._do_level_gen(context)
         elif task_name == "ue_run_python":
             return await self._do_run_python(context)
+        elif task_name == "ue_import_asset":
+            return await self._do_import_asset(context)
         elif task_name == "ue_content":
             # 通用入口：自動判斷類型
             return await self._do_auto_dispatch(context)
@@ -98,6 +100,11 @@ class UEEditorAgent(BaseAgent):
         desc = (context.get("description") or context.get("ticket_title", "")).lower()
         ue_task_type = context.get("ue_task_type", "")
 
+        if ue_task_type == "import_asset" or any(kw in desc for kw in
+                ["import", "导入", "贴图导入", "texture", "纹理", "生图导入", "art_import"]):
+            logger.info("UEEditorAgent: 判定為資產導入任務")
+            return await self._do_import_asset(context)
+
         if ue_task_type == "blueprint" or any(kw in desc for kw in
                 ["blueprint", "bp_", "藍圖", "蓝图"]):
             logger.info("UEEditorAgent: 判定為 Blueprint 生成任務")
@@ -115,3 +122,41 @@ class UEEditorAgent(BaseAgent):
         # 默認走 Blueprint 生成
         logger.info("UEEditorAgent: 無法判定類型，默認 Blueprint 生成")
         return await self._do_bp_gen(context)
+
+    async def _do_import_asset(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """資產導入：從 context 提取 asset_id 列表，批量調 ue_import_asset"""
+        import re
+        from ue_mcp_server import _ue_import_asset_impl
+
+        project_id = context.get("project_id", "")
+        asset_ids = context.get("asset_ids") or []
+        ue_dest_path = context.get("ue_dest_path", "/Game/Textures/AI")
+
+        if not asset_ids:
+            desc = context.get("description", "") + " " + context.get("ticket_title", "")
+            asset_ids = re.findall(r"IMG-[a-f0-9]{8}", desc)
+
+        if not asset_ids:
+            return {
+                "status": "error",
+                "message": "工單中未找到可導入的資產 ID（需包含 IMG-xxxxxxxx 格式）",
+            }
+
+        results = []
+        for aid in asset_ids:
+            r = await _ue_import_asset_impl(
+                asset_id=aid,
+                project_id=project_id,
+                ue_dest_path=ue_dest_path,
+            )
+            results.append(r)
+
+        ok = [r for r in results if r.get("success")]
+        fail = [r for r in results if not r.get("success")]
+
+        return {
+            "status": "success" if ok else "error",
+            "imported": [r.get("ue_path", "") for r in ok],
+            "failed": [r.get("message", "") for r in fail],
+            "message": f"導入完成：{len(ok)} 成功，{len(fail)} 失敗",
+        }

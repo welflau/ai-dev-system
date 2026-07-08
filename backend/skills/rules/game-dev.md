@@ -1,5 +1,6 @@
 ---
 alwaysApply: false
+pack: game-dev
 traits_match:
   any_of: [game, game-ue, godot, unity]
 priority: medium

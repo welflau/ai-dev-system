@@ -122,3 +122,37 @@ async def search_web_and_store(req: SearchWebRequest):
     ids = await search_and_store(req.query, req.asset_type, req.limit)
     return {"stored": len(ids), "asset_ids": ids,
             "message": f"已入库 {len(ids)} 条资产" if ids else "未找到匹配资产（检查 API Key 配置）"}
+
+
+@router.get("/ue-imported")
+async def get_ue_imported_assets(ue_path_prefix: str = "/Game/", limit: int = 50):
+    """查询已导入 UE 的资产列表"""
+    rows = await db.fetch_all(
+        "SELECT * FROM art_assets WHERE ue_path != '' AND ue_path LIKE ? ORDER BY last_used_at DESC LIMIT ?",
+        (f"{ue_path_prefix}%", limit),
+    )
+    assets = []
+    for r in rows:
+        d = dict(r)
+        try:
+            d["tags"] = json.loads(d.get("tags") or "[]")
+        except Exception:
+            d["tags"] = []
+        assets.append(d)
+    return {"assets": assets, "total": len(assets)}
+
+
+@router.patch("/{asset_id}/ue-path")
+async def update_asset_ue_path(asset_id: str, body: dict):
+    """手动更新或清除资产的 UE 内部路径（用于修正错误导入记录）"""
+    row = await db.fetch_one("SELECT id FROM art_assets WHERE id = ?", (asset_id,))
+    if not row:
+        raise HTTPException(404, "资产不存在")
+    ue_path = body.get("ue_path", "")
+    from utils import now_iso
+    await db.execute(
+        "UPDATE art_assets SET ue_path=?, last_used_at=? WHERE id=?",
+        (ue_path, now_iso(), asset_id),
+    )
+    return {"ok": True, "asset_id": asset_id, "ue_path": ue_path}
+

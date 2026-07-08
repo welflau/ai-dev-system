@@ -1,6 +1,10 @@
 """图片生成 API — LightAI 图片请求管理"""
+import asyncio
 import json
+import sys
+from pathlib import Path
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Optional
 from database import db
@@ -76,23 +80,139 @@ async def get_lightai_config_status():
     }
 
 
+class TestLightAIRequest(BaseModel):
+    api_key: Optional[str] = None
+    api_base: Optional[str] = None
+
+
 @router.post("/config/test")
-async def test_lightai_connection():
-    """测试 LightAI API 连接"""
-    if not settings.LIGHTAI_API_KEY:
+async def test_lightai_connection(body: TestLightAIRequest = None):
+    """测试 LightAI API 连接；优先使用请求体中的 Key（未保存也能测试）"""
+    api_key  = (body.api_key  if body else None) or settings.LIGHTAI_API_KEY
+    api_base = (body.api_base if body else None) or settings.LIGHTAI_API_BASE
+    if not api_key:
         return {"status": "not_configured", "message": "LIGHTAI_API_KEY 未配置"}
     try:
-        import ssl, urllib.request
+        import json as _json, ssl, urllib.request, urllib.error
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
-        url = f"{settings.LIGHTAI_API_BASE.rstrip('/')}/api/lightai/engines"
-        req = urllib.request.Request(
-            url, method="GET",
-            headers={"Authorization": f"Bearer {settings.LIGHTAI_API_KEY}"}
-        )
-        with urllib.request.urlopen(req, timeout=10, context=ctx) as resp:
-            resp.read()
-        return {"status": "ok", "message": "LightAI 连接正常"}
+        # 用 create_async_task 做鉴权探针：服务端先验 Key 再验参数，
+        # 所以 401/403 = Key 无效，其余状态码（400/422/500）= Key 有效
+        url = f"{api_base.rstrip('/')}/api/lightai/create_async_task"
+        payload = _json.dumps({
+            "service_name": "connectivity_check", "api_name": "connectivity_check",
+            "app_info": {"model": "check", "mode": ""},
+            "task_query": {"path": {}, "params": {}, "json": {}, "data": {}, "file": {}},
+            "custom_data": {},
+        }).encode()
+        req = urllib.request.Request(url, data=payload, method="POST", headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        })
+        try:
+            with urllib.request.urlopen(req, timeout=10, context=ctx):
+                pass
+            return {"status": "ok", "message": "LightAI 连接正常"}
+        except urllib.error.HTTPError as e:
+            if e.code in (401, 403):
+                return {"status": "error", "message": f"API Key 无效或已过期 (HTTP {e.code})"}
+            # 400/404/422/500 等表示 Key 有效，只是参数校验失败
+            return {"status": "ok", "message": "LightAI 连接正常"}
     except Exception as e:
         return {"status": "error", "message": str(e)[:200]}
+
+
+@router.get("/config/refresh-key/urls")
+async def get_lightai_community_urls():
+    """读取 refresh_key.py 已配置的社区 URL 列表"""
+    for base in [".codebuddy", ".claude"]:
+        env_json = Path.home() / base / "skills" / "lightai-skill" / "scripts" / "env.json"
+        if env_json.exists():
+            try:
+                data = json.loads(env_json.read_text(encoding="utf-8"))
+                urls = data.get("SKILL_COMMUNITY_URLS", [])
+                if isinstance(urls, str):
+                    urls = [urls] if urls else []
+                old = data.get("SKILL_COMMUNITY_URL", "")
+                if old and old not in urls:
+                    urls.append(old)
+                return {"urls": urls}
+            except Exception:
+                pass
+    return {"urls": []}
+
+
+@router.post("/config/refresh-key")
+async def refresh_lightai_key(body: dict = {}):
+    """执行 refresh_key.py 自动刷新 LightAI API Key，SSE 流式输出日志"""
+    community_url = (body or {}).get("community_url", "").strip()
+
+    skill_refresh = (
+        Path.home() / ".codebuddy" / "skills" / "lightai-skill" / "scripts" / "refresh_key.py"
+    )
+    if not skill_refresh.exists():
+        skill_refresh = (
+            Path.home() / ".claude" / "skills" / "lightai-skill" / "scripts" / "refresh_key.py"
+        )
+    if not skill_refresh.exists():
+        async def _not_found():
+            yield f"data: {json.dumps({'type': 'error', 'text': 'lightai-skill 未安装，找不到 refresh_key.py'})}\n\n"
+        return StreamingResponse(_not_found(), media_type="text/event-stream")
+
+    async def _run(args: list):
+        # 始终用 exec（不走 shell），避免 URL 中的 & 被 cmd.exe 截断
+        return await asyncio.create_subprocess_exec(
+            sys.executable, *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+
+    async def _stream():
+        env_json = skill_refresh.parent / "env.json"
+        try:
+            # 若传入 URL 且尚未配置，先 --add-url
+            if community_url:
+                add_proc = await _run([str(skill_refresh), "--add-url", community_url])
+                async for raw in add_proc.stdout:
+                    line = raw.decode("utf-8", errors="replace").rstrip()
+                    yield f"data: {json.dumps({'type': 'line', 'text': line})}\n\n"
+                await add_proc.wait()
+
+            yield f"data: {json.dumps({'type': 'start'})}\n\n"
+            proc = await _run([str(skill_refresh)])
+            new_key = ""
+            async for raw in proc.stdout:
+                line = raw.decode("utf-8", errors="replace").rstrip()
+                yield f"data: {json.dumps({'type': 'line', 'text': line})}\n\n"
+                if line.startswith("UPDATED:") or line.startswith("NO_CHANGE:"):
+                    new_key = line.split(":", 1)[1].strip()
+            await proc.wait()
+            if not new_key and env_json.exists():
+                try:
+                    new_key = json.loads(env_json.read_text(encoding="utf-8")).get("LIGHTAI_API_KEY", "")
+                except Exception:
+                    pass
+            if proc.returncode == 0 and new_key:
+                from config import BASE_DIR
+                settings.LIGHTAI_API_KEY = new_key
+                env_path = BASE_DIR / ".env"
+                env_lines = {}
+                if env_path.exists():
+                    for line in env_path.read_text(encoding="utf-8").splitlines():
+                        line = line.strip()
+                        if line and not line.startswith("#") and "=" in line:
+                            k, v = line.split("=", 1)
+                            env_lines[k.strip()] = v.strip()
+                env_lines["LIGHTAI_API_KEY"] = new_key
+                env_path.write_text(
+                    "\n".join(f"{k}={v}" for k, v in env_lines.items()) + "\n",
+                    encoding="utf-8",
+                )
+                yield f"data: {json.dumps({'type': 'done', 'new_key': new_key})}\n\n"
+            else:
+                yield f"data: {json.dumps({'type': 'error', 'text': f'刷新失败 (exit={proc.returncode})'})}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'text': str(e)})}\n\n"
+
+    return StreamingResponse(_stream(), media_type="text/event-stream")

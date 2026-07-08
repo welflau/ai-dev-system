@@ -33,49 +33,102 @@ _TOOL_PREFIX = "mcp__"
 _PROJECT_MCP_RELPATH = Path(".ads") / "mcp_servers.json"  # 相对于项目 repo 根
 
 
-def _load_project_mcp_config(repo_path: str) -> Dict[str, Any]:
-    """两路合并加载项目级 MCP 配置（ClaudeCompat Phase B）：
+def _normalize_enabled(cfg: Dict[str, Any]) -> bool:
+    """归一化 server 启用状态。
 
-    1. {repo}/.claude/settings.json ["mcpServers"]  — Claude Code 标准格式
-       Claude Code 格式中出现的 server 视为 enabled:true（无此字段）
-    2. {repo}/.ads/mcp_servers.json                 — ADS 格式（优先级高，覆盖步骤 1）
-
-    同名 server：.ads/ 字段逐一覆盖 .claude/settings.json 的值。
+    兼容三种约定：
+    - ADS/内置：`enabled: true/false`
+    - CodeBuddy：`disabled: true/false`（disabled 优先级更高）
+    - Claude Code：两者都无 → 出现即视为启用
     """
-    if not repo_path:
+    if "disabled" in cfg:
+        return not bool(cfg["disabled"])
+    if "enabled" in cfg:
+        return bool(cfg["enabled"])
+    return True
+
+
+def _read_mcp_servers_file(path: Path, source: str,
+                           top_level: bool = False) -> Dict[str, Any]:
+    """读取一个 MCP 配置文件，返回归一化后的 {name: cfg}（含 enabled + _source）。
+
+    - top_level=False：读 JSON 里的 `mcpServers` 字段（settings.json / mcp.json）
+    - top_level=True ：整个 JSON 顶层即 {name: cfg}（.ads/mcp_servers.json 风格）
+    """
+    if not path.exists():
         return {}
-    repo = Path(repo_path)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as e:
+        logger.warning("解析 MCP 配置失败 %s: %s", path, e)
+        return {}
+    servers = data if top_level else (data.get("mcpServers") or {})
+    result: Dict[str, Any] = {}
+    for name, cfg in (servers or {}).items():
+        if name.startswith("_") or not isinstance(cfg, dict):
+            continue
+        result[name] = {**cfg, "enabled": _normalize_enabled(cfg), "_source": source}
+    return result
+
+
+def _load_user_mcp_config() -> Dict[str, Any]:
+    """加载用户主目录级 MCP 配置（跨项目共享，优先级最低）。
+
+    覆盖 CodeBuddy / Claude Code 的用户级约定：
+      ~/.codebuddy/mcp.json        ["mcpServers"]
+      ~/.codebuddy/settings.json   ["mcpServers"]
+      ~/.claude/.mcp.json          ["mcpServers"]
+      ~/.claude/mcp.json           ["mcpServers"]
+      ~/.claude/settings.json      ["mcpServers"]
+    后者覆盖前者的同名 server。
+    """
+    home = Path.home()
+    result: Dict[str, Any] = {}
+    for rel, source in [
+        (".codebuddy/mcp.json", "user:codebuddy"),
+        (".codebuddy/settings.json", "user:codebuddy"),
+        (".claude/.mcp.json", "user:claude"),
+        (".claude/mcp.json", "user:claude"),
+        (".claude/settings.json", "user:claude"),
+    ]:
+        for name, cfg in _read_mcp_servers_file(home / rel, source).items():
+            result[name] = {**result.get(name, {}), **cfg}
+    return result
+
+
+def _load_project_mcp_config(repo_path: str, include_user: bool = True) -> Dict[str, Any]:
+    """多路合并加载 MCP 配置，优先级从低到高：
+
+    0. 用户级 ~/.codebuddy、~/.claude（include_user=True 时）
+    1. {repo}/.claude/settings.json  ["mcpServers"]
+    2. {repo}/.codebuddy/settings.json + {repo}/.codebuddy/mcp.json  ["mcpServers"]
+    3. {repo}/.ads/mcp_servers.json  （ADS 格式，顶层即 servers，优先级最高）
+
+    同名 server：高优先级的字段逐一覆盖低优先级。
+    兼容 CodeBuddy 的 `disabled` 与 ADS/内置的 `enabled`。
+    """
     result: Dict[str, Any] = {}
 
-    # ── 1. .claude/settings.json ["mcpServers"] ────────────────
-    claude_settings = repo / ".claude" / "settings.json"
-    if claude_settings.exists():
-        try:
-            data = json.loads(claude_settings.read_text(encoding="utf-8"))
-            for name, cfg in (data.get("mcpServers") or {}).items():
-                # Claude Code 格式无 enabled 字段，出现即视为启用
-                result[name] = {**cfg, "enabled": True, "_source": "claude"}
-            if result:
-                logger.debug("从 .claude/settings.json 加载 %d 个 MCP server", len(result))
-        except Exception as e:
-            logger.warning("解析 .claude/settings.json 失败: %s", e)
+    def _merge(src: Dict[str, Any]) -> None:
+        for name, cfg in src.items():
+            result[name] = {**result.get(name, {}), **cfg}
 
-    # ── 2. .ads/mcp_servers.json （覆盖 .claude/settings.json 同名条目）
-    ads_mcp = repo / _PROJECT_MCP_RELPATH
-    if ads_mcp.exists():
-        try:
-            raw = json.loads(ads_mcp.read_text(encoding="utf-8"))
-            for name, cfg in raw.items():
-                if name.startswith("_"):
-                    continue
-                if name in result:
-                    result[name] = {**result[name], **cfg, "_source": "ads"}
-                else:
-                    result[name] = {**cfg, "_source": "ads"}
-            logger.debug("从 .ads/mcp_servers.json 加载/覆盖，当前共 %d 个", len(result))
-        except Exception as e:
-            logger.warning("加载 .ads/mcp_servers.json 失败: %s", e)
+    # 0. 用户级（跨项目）
+    if include_user:
+        _merge(_load_user_mcp_config())
 
+    if repo_path:
+        repo = Path(repo_path)
+        # 1. 项目 .claude/settings.json
+        _merge(_read_mcp_servers_file(repo / ".claude" / "settings.json", "claude"))
+        # 2. 项目 .codebuddy/settings.json + mcp.json
+        _merge(_read_mcp_servers_file(repo / ".codebuddy" / "settings.json", "codebuddy"))
+        _merge(_read_mcp_servers_file(repo / ".codebuddy" / "mcp.json", "codebuddy"))
+        # 3. 项目 .ads/mcp_servers.json（顶层即 servers）
+        _merge(_read_mcp_servers_file(repo / _PROJECT_MCP_RELPATH, "ads", top_level=True))
+
+    if result:
+        logger.debug("加载项目/用户 MCP 配置共 %d 个（repo=%s）", len(result), repo_path)
     return result
 
 

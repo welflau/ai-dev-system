@@ -263,6 +263,135 @@ print("PIE 启动完成")
     })
 
 
+async def _ue_import_asset_impl(
+    asset_id: str,
+    project_id: str,
+    ue_dest_path: str = "/Game/Textures/AI",
+    asset_name: str = "",
+    timeout: float = 60.0,
+) -> dict:
+    """ue_import_asset 核心逻辑，供 MCP tool 和 ue_editor.py 共用"""
+    import pathlib
+    from database import db
+    from config import settings
+
+    # ── 1. 查资产，获取本地绝对路径 ──────────────────────────────
+    row = await db.fetch_one("SELECT * FROM art_assets WHERE id = ?", (asset_id,))
+    if not row:
+        return {"success": False, "message": f"资产 {asset_id} 不存在于 art_assets 表"}
+
+    rel_path = row.get("file_path", "")
+    if rel_path and settings.ART_ASSETS_LOCAL_PATH:
+        abs_path = str(pathlib.Path(settings.ART_ASSETS_LOCAL_PATH) / rel_path)
+    elif rel_path:
+        abs_path = rel_path
+    else:
+        # 降级：从 image_requests 取 result_path（绝对路径）
+        img_req = await db.fetch_one(
+            "SELECT result_path, result_url FROM image_requests WHERE id = ?", (asset_id,)
+        )
+        if img_req and img_req.get("result_path"):
+            abs_path = img_req["result_path"]
+        else:
+            return {"success": False, "message": "资产无本地文件路径，无法导入 UE（请配置 ART_ASSETS_LOCAL_PATH）"}
+
+    abs_path = abs_path.replace("\\", "/")
+    if not pathlib.Path(abs_path).exists():
+        return {"success": False, "message": f"本地文件不存在：{abs_path}"}
+
+    # ── 2. 确定资产名 ─────────────────────────────────────────────
+    if not asset_name:
+        short_id = asset_id.replace("IMG-", "").replace("-", "")[:8]
+        asset_name = f"T_{short_id}"
+
+    # ── 3. 验证 UE 路径格式 ───────────────────────────────────────
+    if not ue_dest_path.startswith("/Game/"):
+        return {"success": False, "message": "ue_dest_path 须以 /Game/ 开头，如 /Game/Textures/AI"}
+
+    ue_full_path = f"{ue_dest_path.rstrip('/')}/{asset_name}"
+
+    # ── 4. 构造并执行 UE Python 导入代码 ──────────────────────────
+    import_code = f"""
+import unreal
+
+task = unreal.AssetImportTask()
+task.filename = r"{abs_path}"
+task.destination_path = "{ue_dest_path}"
+task.destination_name = "{asset_name}"
+task.automated = True
+task.replace_existing = True
+task.save = True
+
+unreal.AssetToolsHelpers.get_asset_tools().import_asset_tasks([task])
+
+imported = unreal.EditorAssetLibrary.does_asset_exist("{ue_full_path}")
+print(f"IMPORT_OK={{imported}}")
+print(f"UE_PATH={ue_full_path}")
+"""
+
+    result = await _ue_run(import_code, project_id=project_id, timeout=timeout)
+
+    if not result.get("success"):
+        err = result.get("error", "未知错误")
+        if "no_node" in str(err):
+            return {
+                "success": False,
+                "message": "UE Editor 未启动或 Remote Execution Server 未开启，请先在 Editor 中启用 Project Settings → Plugins → Python → Enable Remote Execution Server",
+            }
+        return {"success": False, "message": f"导入失败：{err[:300]}"}
+
+    stdout = str(result.get("stdout") or "") + str(result.get("result") or "")
+    if "IMPORT_OK=True" not in stdout:
+        return {
+            "success": False,
+            "message": f"导入命令执行但未确认成功，请检查 Content Browser。输出：{stdout[:200]}",
+        }
+
+    # ── 5. 回写 art_assets.ue_path ────────────────────────────────
+    from utils import now_iso
+    await db.execute(
+        "UPDATE art_assets SET ue_path=?, last_used_at=? WHERE id=?",
+        (ue_full_path, now_iso(), asset_id),
+    )
+
+    return {
+        "success": True,
+        "ue_path": ue_full_path,
+        "local_path": abs_path,
+        "message": f"已导入 {asset_name} → {ue_full_path}",
+    }
+
+
+@mcp.tool()
+async def ue_import_asset(
+    asset_id: str,
+    project_id: str,
+    ue_dest_path: str = "/Game/Textures/AI",
+    asset_name: str = "",
+    timeout: float = 60.0,
+) -> str:
+    """
+    将 art_assets 库中的图片导入 UE 项目的 Content 目录，生成 Texture2D uasset。
+
+    asset_id: art_assets 表中的资产 ID（如 IMG-xxxxxxxx）
+    project_id: 目标 UE 项目 ID（用于定位 UE Editor 实例）
+    ue_dest_path: UE 内部目标路径，如 /Game/Textures/UI（默认 /Game/Textures/AI）
+    asset_name: 导入后的资产名，留空则自动生成 T_{asset_id短}
+    timeout: 超时秒数（默认 60）
+
+    返回 JSON：{"success": bool, "ue_path": str, "message": str}
+    Editor 未启动时返回 success=false + 明确提示，不会挂起。
+    """
+    result = await _ue_import_asset_impl(
+        asset_id=asset_id,
+        project_id=project_id,
+        ue_dest_path=ue_dest_path,
+        asset_name=asset_name,
+        timeout=timeout,
+    )
+    return json.dumps(result, ensure_ascii=False)
+
+
 # ── 入口 ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     mcp.run()
