@@ -12964,12 +12964,19 @@ async function loadAllTicketConversations() {
                     } else {
                         // Agent 对话消息（LLM conversation）
                         const agentBadge = msg.agent_type ? `<div class="chat-agent-badge">${escapeHtml(msg.agent_type)} / ${escapeHtml(msg.action || '')}</div>` : '';
-                        const metaInfo = msg.model ? `<span style="font-size:10px;color:var(--text-muted)">${escapeHtml(msg.model)} · ${msg.duration_ms || 0}ms · ${(msg.input_tokens || 0)}→${(msg.output_tokens || 0)} tokens</span>` : '';
-                        // thinking 步骤展示（assistant 回复前插入思考面板）
+                        // thinking 步骤展示（assistant 回复前插入思考面板，与 AI 助手效果一致）
                         if (msg.role === 'assistant') {
                             const steps = msg.thinking_steps || msg.thinking || null;
                             const text = msg.thinking_text || null;
-                            const thinkEl = _buildTicketThinkingEl(steps, text);
+                            const meta = {
+                                model:        msg.model,
+                                duration_ms:  msg.duration_ms,
+                                input_tokens:  msg.input_tokens,
+                                output_tokens: msg.output_tokens,
+                                agent_type:   msg.agent_type,
+                                action:       msg.action,
+                            };
+                            const thinkEl = _buildTicketThinkingEl(steps, text, meta);
                             if (thinkEl) msgArea.appendChild(thinkEl);
                         }
                         const msgEl = document.createElement('div');
@@ -12980,11 +12987,11 @@ async function loadAllTicketConversations() {
                         msgEl.innerHTML = `
                             ${msg.role === 'user'
                                 ? '<div class="chat-msg-avatar">📝</div>'
-                                : _buildAssistantAvatar()}
+                                : _buildTicketAssistantAvatar(msg.model, msg.agent_type)}
                             <div class="chat-msg-content">
                                 ${agentBadge}
                                 <div class="chat-msg-bubble">${formatChatContent(msg.content)}</div>
-                                <div class="chat-msg-time">${formatTime(msg.created_at)} ${metaInfo}${replyBtn}</div>
+                                <div class="chat-msg-time">${formatTime(msg.created_at)}${replyBtn}</div>
                             </div>`;
                         msgArea.appendChild(msgEl);
                     }
@@ -13220,6 +13227,31 @@ function _appendCommentToTicketFeed(data) {
 }
 
 /**
+ * 工单对话 assistant 头像：显示该次 LLM 调用的实际模型（不依赖全局配置）
+ */
+function _buildTicketAssistantAvatar(model, agentType) {
+    const rawModel = model || '';
+    // 取短名：claude-sonnet-4-6 → sonnet-4-6，deepseek-v4-... → v4-...
+    const modelLabel = rawModel
+        .replace(/^claude-/, '').replace(/^gemini-/, '').replace(/^gpt-/, '')
+        .replace(/^deepseek-/, '');
+    const shortModel = modelLabel.length > 12 ? modelLabel.slice(0, 11) + '…' : modelLabel;
+    // 根据模型名选图标
+    let iconHtml;
+    if (rawModel.includes('claude')) {
+        iconHtml = _CLI_ICONS['claude'] || '<span style="font-size:14px;">🤖</span>';
+    } else if (rawModel.includes('deepseek') || rawModel.includes('codebuddy')) {
+        iconHtml = _CLI_ICONS['codebuddy'] || '<span style="font-size:14px;">🤖</span>';
+    } else {
+        iconHtml = '<span style="font-size:14px;">🤖</span>';
+    }
+    return `<div class="chat-avatar-wrap">
+        <div class="chat-avatar-icon">${iconHtml}</div>
+        ${shortModel ? `<div class="chat-avatar-model">${escapeHtml(shortModel)}</div>` : ''}
+    </div>`;
+}
+
+/**
  * 构建工单对话面板中的评论气泡 DOM 元素
  */
 function _buildTicketCommentEl(comment) {
@@ -13265,10 +13297,11 @@ function _buildTicketCommentEl(comment) {
 /**
  * 构建工单对话面板中的思考过程折叠块（历史 thinking steps）
  */
-function _buildTicketThinkingEl(thinkingSteps, thinkingText) {
+function _buildTicketThinkingEl(thinkingSteps, thinkingText, meta = null) {
     const hasSteps = thinkingSteps && thinkingSteps.length > 0;
-    const hasText = thinkingText && thinkingText.trim().length > 0;
-    if (!hasSteps && !hasText) return null;
+    const hasText  = thinkingText && thinkingText.trim().length > 0;
+    const hasMeta  = meta && (meta.model || meta.duration_ms);
+    if (!hasSteps && !hasText && !hasMeta) return null;
 
     const el = document.createElement('div');
     el.className = 'chat-thinking-panel';
@@ -13295,9 +13328,21 @@ function _buildTicketThinkingEl(thinkingSteps, thinkingText) {
         textHtml = `<div class="ctp-thinking-text">${escapeHtml(thinkingText)}</div>`;
     }
 
+    // 始终显示 meta 信息（模型、耗时、tokens）
+    let metaHtml = '';
+    if (hasMeta) {
+        const modelShort = (meta.model || '').replace(/^claude-/, '').replace(/^gemini-/, '');
+        const dur = meta.duration_ms ? `${(meta.duration_ms / 1000).toFixed(1)}s` : '';
+        const tokens = (meta.input_tokens || meta.output_tokens)
+            ? `${meta.input_tokens || 0}→${meta.output_tokens || 0} tokens` : '';
+        const parts = [modelShort, dur, tokens].filter(Boolean);
+        metaHtml = `<div class="ctp-meta">${parts.map(p => escapeHtml(p)).join(' · ')}</div>`;
+    }
+
     const title = hasSteps
         ? `思考了 ${thinkingSteps.length} 步`
-        : '推理过程';
+        : hasText ? '推理过程'
+        : `${escapeHtml(meta?.agent_type || 'Agent')} LLM 调用`;
 
     el.innerHTML = `
         <div class="ctp-header" onclick="this.closest('.chat-thinking-panel').classList.toggle('ctp-expanded')">
@@ -13305,7 +13350,7 @@ function _buildTicketThinkingEl(thinkingSteps, thinkingText) {
             <span class="ctp-title">${title}</span>
             <span class="ctp-toggle">∨</span>
         </div>
-        <div class="ctp-body">${textHtml}${stepsHtml}</div>`;
+        <div class="ctp-body">${metaHtml}${textHtml}${stepsHtml}</div>`;
     return el;
 }
 
