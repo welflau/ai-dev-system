@@ -9044,8 +9044,17 @@ function connectSSE(projectId) {
         // MCP run_command 实时进度事件
         eventSource.addEventListener('cli_task_start', (e) => {
             const d = JSON.parse(e.data);
-            _cliTaskRegister(d.task_id, d.title, 'run_command', 'running');
+            _cliTaskRegister(d.task_id, d.title, d.tool || 'run_command', 'running');
             _openTasksPanel();
+            // 同步到聊天思考面板（AI 回复进行中时）
+            if (chatSending) {
+                _chatThinkingAppend({
+                    step: 'start',
+                    tool: _extractCliToolName(d.tool || d.title || 'run_command'),
+                    args_hint: d.title || '',
+                    task_id: d.task_id,
+                });
+            }
         });
 
         eventSource.addEventListener('cli_task_line', (e) => {
@@ -9064,6 +9073,10 @@ function connectSSE(projectId) {
             const d = JSON.parse(e.data);
             const t = _CLI_TASKS_MEM[d.task_id];
             _cliTaskUpdate(d.task_id, d.status, t?.output || '', (d.duration_s || 0) * 1000);
+            // 同步更新聊天思考面板的对应步骤
+            if (chatSending) {
+                _updateCliThinkingStep(d.task_id, d.status, d.duration_s);
+            }
         });
 
         eventSource.onerror = () => {
@@ -13920,6 +13933,34 @@ const _TOOL_LABELS = {
  *
  * 返回 { begin, append, finish } 三个方法，对应面板生命周期。
  */
+/** 从 CLI task title 提取工具名（"ToolSearch: xxx" → "ToolSearch"，"mcp__ads__foo" → "foo"） */
+function _extractCliToolName(titleOrTool) {
+    if (!titleOrTool) return 'run_command';
+    // "ToolSearch: ..." → ToolSearch
+    const colonIdx = titleOrTool.indexOf(':');
+    if (colonIdx > 0 && colonIdx < 30) return titleOrTool.slice(0, colonIdx).trim();
+    // "mcp__ads_data__confirm_direct_ticket" → confirm_direct_ticket
+    const mcp = titleOrTool.match(/mcp__[\w]+__(.+)/);
+    if (mcp) return mcp[1];
+    // DeferExecuteTool → DeferExecuteTool
+    return titleOrTool.split(' ')[0] || 'tool';
+}
+
+/** 更新聊天思考面板里指定 task_id 的步骤为完成态 */
+function _updateCliThinkingStep(taskId, status, durationS) {
+    const panel = document.querySelector('.chat-thinking-panel');
+    if (!panel) return;
+    const stepEl = panel.querySelector(`.ctp-step[data-task-id="${taskId}"]`);
+    if (!stepEl) return;
+    stepEl.classList.remove('ctp-step-running');
+    stepEl.classList.add(status === 'failed' ? 'ctp-step-error' : 'ctp-step-done');
+    const statusEl = stepEl.querySelector('.ctp-step-status');
+    if (statusEl) {
+        const dur = durationS ? ` (${Math.round(durationS * 1000)}ms)` : '';
+        statusEl.textContent = status === 'failed' ? `✗${dur}` : `✓${dur}`;
+    }
+}
+
 function createThinkingContext(msgContainer) {
     let panel = null;
     let steps = [];
@@ -19406,8 +19447,16 @@ function connectGlobalSSE() {
         });
         _globalEventSource.addEventListener('cli_task_start', (e) => {
             const d = JSON.parse(e.data);
-            _cliTaskRegister(d.task_id, d.title, 'run_command', 'running');
+            _cliTaskRegister(d.task_id, d.title, d.tool || 'run_command', 'running');
             _openTasksPanel();
+            if (chatSending) {
+                _chatThinkingAppend({
+                    step: 'start',
+                    tool: _extractCliToolName(d.tool || d.title || 'run_command'),
+                    args_hint: d.title || '',
+                    task_id: d.task_id,
+                });
+            }
         });
         _globalEventSource.addEventListener('cli_task_line', (e) => {
             const d = JSON.parse(e.data);
@@ -19424,6 +19473,7 @@ function connectGlobalSSE() {
             const d = JSON.parse(e.data);
             const t = _CLI_TASKS_MEM[d.task_id];
             _cliTaskUpdate(d.task_id, d.status, t?.output || '', (d.duration_s || 0) * 1000);
+            if (chatSending) _updateCliThinkingStep(d.task_id, d.status, d.duration_s);
         });
         _globalEventSource.onerror = () => {
             _globalEventSource?.close();
