@@ -8586,7 +8586,12 @@ function connectSSE(projectId) {
                 const data = JSON.parse(e.data);
                 const action = data.action;
                 if (!action) return;
-                appendMcpActionCard(action);
+                if (chatSending) {
+                    // 流式回复进行中：缓存卡片，流结束后追加到 AI 文字后面
+                    _pendingMcpCards.push(action);
+                } else {
+                    appendMcpActionCard(action);
+                }
             } catch (err) {
                 console.warn('[SSE] chat_mcp_action parse failed:', err);
             }
@@ -10912,6 +10917,7 @@ let chatHistory = [];               // 全局聊天历史 [{role, content}]
 let chatCurrentTicketId = null;     // Job 模式选中的工单 ID
 let chatCurrentTicketTitle = '';    // Job 模式选中的工单标题
 let chatSending = false;
+let _pendingMcpCards = [];  // 流式回复进行中收到的 MCP 卡片，流结束后追加
 let _cardSeq = 0;
 // session 前缀：每次页面加载唯一，防止 localStorage 恢复的旧卡片 ID 与新卡片冲突
 const _SESSION_PREFIX = Date.now().toString(36);
@@ -14290,6 +14296,11 @@ async function sendChatMessage() {
         input.focus();
         // 关闭全局聊天思考日志 SSE
         if (_thinkingESrc) { _thinkingESrc.close(); _thinkingESrc = null; }
+        // 流结束：flush 缓存的 MCP 确认卡片（追加到 AI 文字后面，保证可见）
+        if (_pendingMcpCards.length > 0) {
+            _pendingMcpCards.splice(0).forEach(appendMcpActionCard);
+            scrollChatToBottom();
+        }
     }
 }
 
