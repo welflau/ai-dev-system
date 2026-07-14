@@ -131,6 +131,11 @@ class Database:
             ("llm_conversations", "tools_json", "TEXT"),
             # AI 生图导入 UE 后的内部路径，如 /Game/Textures/AI/T_IMG_abc
             ("art_assets", "ue_path", "TEXT NOT NULL DEFAULT ''"),
+            # 会话-工单双向链接：记录需求/工单由哪条 chat_messages 创建
+            ("requirements", "source_message_id", "TEXT"),
+            ("requirements", "source_session_id",  "TEXT"),
+            ("tickets",      "source_message_id", "TEXT"),
+            ("tickets",      "source_session_id",  "TEXT"),
         ]
         async with self._write_lock:
             for table, column, col_def in migrations:

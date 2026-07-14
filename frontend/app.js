@@ -4441,6 +4441,9 @@ async function openTicketDrawer(ticketId) {
         // 操作按钮
         html += renderTicketActions(data);
 
+        // 🔗 创建来源（会话溯源区块）
+        html += renderSourceSection(data);
+
         // 🩺 诊断面板（blocked 工单显著位置）
         html += renderDiagnosisPanel(data);
 
@@ -5018,6 +5021,60 @@ function renderTicketActions(ticket) {
     }
     if (!buttons) return '';
     return `<div class="drawer-section"><h4>操作</h4><div style="display:flex; gap:8px; flex-wrap:wrap;">${buttons}</div></div>`;
+}
+
+// ==================== 会话溯源 ====================
+
+/** 渲染工单来源区块（若有 source_message 则显示） */
+function renderSourceSection(ticket) {
+    const src = ticket.source_message;
+    if (!src) return '';
+    const timeStr = src.created_at ? formatTime(src.created_at) : '';
+    const snippet = src.snippet ? escHtml(src.snippet) : '';
+    const msgId   = escHtml(src.message_id || '');
+    const sessId  = escHtml(src.session_id || '');
+    return `
+    <div class="drawer-section source-section">
+        <h4>🗨 创建来源</h4>
+        <div class="source-message-card">
+            <div class="source-meta">
+                <span class="source-time">来自会话 · ${timeStr}</span>
+                <button class="btn-sm source-locate-btn"
+                        onclick="locateSourceMessage('${sessId}','${msgId}')"
+                        title="跳转到原始对话位置">↗ 定位到对话</button>
+            </div>
+            ${snippet ? `<div class="source-snippet">「${snippet}${snippet.length >= 120 ? '…' : ''}」</div>` : ''}
+        </div>
+    </div>`;
+}
+
+/** 导航到来源消息（切换 session + 滚动高亮） */
+async function locateSourceMessage(sessionId, messageId) {
+    if (!sessionId && !messageId) return;
+    // 确保聊天面板已打开
+    if (typeof chatPanelOpen !== 'undefined' && !chatPanelOpen
+        && typeof toggleChatPanel === 'function') {
+        toggleChatPanel();
+        await new Promise(r => setTimeout(r, 300));
+    }
+    // 若有 sessionId 且和当前不同，切换 session
+    if (sessionId && sessionId !== _currentChatSessionId
+        && typeof switchChatSession === 'function') {
+        try { await switchChatSession(sessionId); }
+        catch (_) {}
+        await new Promise(r => setTimeout(r, 400));
+    }
+    // 定位消息元素并高亮
+    const el = messageId
+        ? document.querySelector(`[data-msg-id="${CSS.escape(messageId)}"]`)
+        : null;
+    if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        el.classList.add('source-msg-highlight');
+        setTimeout(() => el.classList.remove('source-msg-highlight'), 2200);
+    } else {
+        showToast('对话消息未在当前视图中，已切换到对应会话', 'info');
+    }
 }
 
 // ==================== 诊断面板 ====================
@@ -6186,6 +6243,9 @@ async function loadRequirements() {
                     <td class="col-actions" onclick="event.stopPropagation()">
                         ${standaloneBtn}
                         <button class="btn-icon req-action-btn" onclick="showRequirementDetail('${r.id}')" title="详情">📋</button>
+                        ${!isStandalone && r.source_message_id
+                            ? `<button class="btn-icon req-action-btn" title="查看创建会话" onclick="locateSourceMessage('${escHtml(r.source_session_id||'')}','${escHtml(r.source_message_id||'')}')">🗨</button>`
+                            : ''}
                         <button class="btn-icon req-action-btn req-delete-btn" onclick="deleteReq('${r.id}', '${escHtml(r.title).replace(/'/g, "\\'")}')" title="删除">🗑️</button>
                     </td>
                 </tr>
@@ -14542,6 +14602,8 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
         : document.getElementById('chatMessages'));
     const msgEl = document.createElement('div');
     msgEl.className = `chat-msg ${role}`;
+    // 会话溯源：给带 _message_id 的气泡打上 data-msg-id，供 locateSourceMessage 定位
+    if (action?._message_id) msgEl.dataset.msgId = action._message_id;
 
     const avatar = role === 'user' ? '👤' : '🤖';
     const timeStr = timestamp ? formatTime(timestamp) : formatTime(new Date().toISOString());
@@ -15194,12 +15256,15 @@ async function doConfirmRequirement(cardId) {
     const description = card.dataset.description || '';
     const priority = card.dataset.priority || 'medium';
     const images = card.dataset.images ? JSON.parse(card.dataset.images) : [];
+    const msgId = card.dataset.messageId || '';
     const btns = card.querySelector('.confirm-req-btns');
     if (btns) btns.innerHTML = '<span style="color:var(--text-muted);font-size:12px">⏳ 创建中...</span>';
     try {
         const result = await api(`/projects/${currentProjectId}/chat/confirm-create-requirement`, {
             method: 'POST',
-            body: { title, description, priority, images },
+            body: { title, description, priority, images,
+                    source_message_id: msgId || null,
+                    source_session_id: _currentChatSessionId || null },
         });
         card.style.borderLeftColor = 'var(--success, #34d058)';
         card.querySelector('.action-title').textContent = '✅ 需求已创建';
@@ -15234,7 +15299,9 @@ async function doConfirmDirectTicket(cardId) {
     try {
         const result = await api(`/projects/${currentProjectId}/tickets/create-direct`, {
             method: 'POST',
-            body: { title, description, type: ticketType, start_from: startFrom, auto_start: true },
+            body: { title, description, type: ticketType, start_from: startFrom, auto_start: true,
+                    source_message_id: card.dataset.messageId || null,
+                    source_session_id: _currentChatSessionId || null },
         });
         card.style.borderLeftColor = 'var(--success, #34d058)';
         card.querySelector('.action-title').textContent = '✅ 工单已创建';

@@ -10232,3 +10232,48 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
 .standalone-req-row .req-table-title {
     color: #a78bfa;
 }
+
+/* ==================== 会话溯源 — 来源区块 ==================== */
+.source-section h4 { margin-bottom: 8px; }
+.source-message-card {
+    background: rgba(99,102,241,0.07);
+    border: 1px solid rgba(99,102,241,0.2);
+    border-radius: 8px;
+    padding: 10px 12px;
+}
+.source-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+}
+.source-time { font-size: 12px; color: var(--text-muted); }
+.source-locate-btn {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    border: 1px solid rgba(99,102,241,0.35);
+    background: rgba(99,102,241,0.1);
+    color: #a78bfa;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+.source-locate-btn:hover { background: rgba(99,102,241,0.2); }
+.source-snippet {
+    font-size: 12px;
+    color: var(--text-secondary);
+    font-style: italic;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+/* 来源消息高亮动画 */
+.source-msg-highlight {
+    animation: source-pulse 0.5s ease 3;
+    border-radius: 8px;
+}
+@keyframes source-pulse {
+    0%,100% { box-shadow: 0 0 0 0 rgba(99,102,241,0.4); }
+    50%      { box-shadow: 0 0 0 8px rgba(99,102,241,0.4); }
+}

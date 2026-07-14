@@ -91,6 +91,12 @@ class CreateRequirementAction(ActionBase):
             "updated_at": now,
             "completed_at": None,
         }
+        # 会话溯源字段
+        if context.get("source_message_id"):
+            req_data["source_message_id"] = context["source_message_id"]
+        if context.get("source_session_id"):
+            req_data["source_session_id"] = context["source_session_id"]
+
         await db.insert("requirements", req_data)
 
         log_id = generate_id("LOG")

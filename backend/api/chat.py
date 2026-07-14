@@ -785,8 +785,10 @@ class ConfirmRequirementRequest(BaseModel):
     title: str
     description: str = ""
     priority: str = "medium"
-    images: Optional[List[str]] = None  # 已保存的图片 URL 列表，如 ["/chat-images/..."]
-    paused: bool = False  # True 时创建为 paused 状态，不立即进入 Orchestrator 队列
+    images: Optional[List[str]] = None
+    paused: bool = False
+    source_message_id: Optional[str] = None   # 创建该需求的 chat_messages.id
+    source_session_id: Optional[str] = None   # 创建该需求的 chat_sessions.id
 
 
 class ConfirmBugRequest(BaseModel):
@@ -912,6 +914,8 @@ async def confirm_create_requirement(project_id: str, req: ConfirmRequirementReq
         "description": description,
         "priority": req.priority,
         "paused": req.paused,
+        "source_message_id": req.source_message_id,
+        "source_session_id": req.source_session_id,
     })
     result = action_result.data
     if result.get("type") == "error":
@@ -925,6 +929,19 @@ async def confirm_create_requirement(project_id: str, req: ConfirmRequirementReq
            AND action_data LIKE ?""",
         (_json.dumps(result, ensure_ascii=False), project_id, f'%{req.title[:30]}%'),
     )
+
+    # 用 source_message_id 精确更新 action_result（记录 requirement_id 供反向导航）
+    req_id = result.get("requirement_id") or result.get("id")
+    if req.source_message_id and req_id:
+        try:
+            await db.execute(
+                "UPDATE chat_messages SET action_state='executed', action_result=? WHERE id=?",
+                (_json.dumps({"requirement_id": req_id, "title": req.title,
+                              "at": now_iso()}, ensure_ascii=False),
+                 req.source_message_id),
+            )
+        except Exception as _e:
+            logger.debug("更新 action_result 失败（非致命）: %s", _e)
 
     return result
 

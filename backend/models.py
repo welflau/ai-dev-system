@@ -295,6 +295,8 @@ class DirectTicketCreate(BaseModel):
     estimated_hours: float = Field(default=4.0)
     start_from: str = Field(default="pending")    # pending/architecture_done/development_in_progress
     auto_start: bool = Field(default=True)        # 创建后立即加入调度队列
+    source_message_id: Optional[str] = Field(default=None)
+    source_session_id: Optional[str] = Field(default=None)
 
 
 def validate_requirement_transition(from_status: str, to_status: str) -> bool:

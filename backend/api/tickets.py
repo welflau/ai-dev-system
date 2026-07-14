@@ -134,9 +134,26 @@ async def get_ticket(project_id: str, ticket_id: str):
         if req:
             branch_name = req.get("branch_name")
 
+    # 获取来源消息摘要（用于工单抽屉"创建来源"区块）
+    source_message = None
+    if ticket.get("source_message_id"):
+        src = await db.fetch_one(
+            "SELECT id, session_id, content, created_at FROM chat_messages WHERE id = ?",
+            (ticket["source_message_id"],),
+        )
+        if src:
+            snippet = (src.get("content") or "")[:120].replace("\n", " ")
+            source_message = {
+                "message_id": src["id"],
+                "session_id": src.get("session_id") or ticket.get("source_session_id"),
+                "created_at": src.get("created_at"),
+                "snippet": snippet,
+            }
+
     return {
         **ticket,
         "branch_name": branch_name,
+        "source_message": source_message,
         "subtasks": subtasks,
         "logs": logs,
         "artifacts": artifacts,
@@ -359,7 +376,7 @@ async def create_direct_ticket(project_id: str, req: DirectTicketCreate):
 
     ticket_id = generate_id("TK")
     now = now_iso()
-    await db.insert("tickets", {
+    ticket_data = {
         "id": ticket_id,
         "requirement_id": standalone_req_id,
         "project_id": project_id,
@@ -372,7 +389,25 @@ async def create_direct_ticket(project_id: str, req: DirectTicketCreate):
         "estimated_hours": req.estimated_hours,
         "created_at": now,
         "updated_at": now,
-    })
+    }
+    if req.source_message_id:
+        ticket_data["source_message_id"] = req.source_message_id
+    if req.source_session_id:
+        ticket_data["source_session_id"] = req.source_session_id
+    await db.insert("tickets", ticket_data)
+
+    # 若有 source_message_id，回填 action_result 供反向导航
+    if req.source_message_id:
+        try:
+            import json as _json
+            await db.execute(
+                "UPDATE chat_messages SET action_state='executed', action_result=? WHERE id=?",
+                (_json.dumps({"ticket_id": ticket_id, "title": req.title,
+                              "at": now}, ensure_ascii=False),
+                 req.source_message_id),
+            )
+        except Exception as _e:
+            logger.debug("更新工单 action_result 失败: %s", _e)
 
     logger.info("创建直接工单: %s '%s' status=%s", ticket_id, req.title[:40], start_status)
 
