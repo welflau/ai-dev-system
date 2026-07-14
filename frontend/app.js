@@ -8597,10 +8597,8 @@ function connectSSE(projectId) {
                 setTimeout(loadChatHistory, 600);
             }
         });
-                console.warn('[SSE] chat_mcp_action parse failed:', err);
-            }
-        });
 
+        eventSource.addEventListener('ticket_created', (e) => {
         // v0.19.x 工单进度 SSE：后端 heartbeat_cb 关键行触发 → 更新 drawer 进度区
         eventSource.addEventListener('ticket_action_progress', (e) => {
             try {
