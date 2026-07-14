@@ -8599,6 +8599,12 @@ function connectSSE(projectId) {
         });
 
         eventSource.addEventListener('ticket_created', (e) => {
+            try {
+                const data = JSON.parse(e.data);
+                if (data.requirement_id) refreshBoard();
+            } catch {}
+        });
+
         // v0.19.x 工单进度 SSE：后端 heartbeat_cb 关键行触发 → 更新 drawer 进度区
         eventSource.addEventListener('ticket_action_progress', (e) => {
             try {
