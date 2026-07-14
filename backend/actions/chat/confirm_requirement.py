@@ -158,3 +158,43 @@ class ConfirmRequirementsBatchAction(ActionBase):
                 "message": f"识别到 {len(items)} 条需求，请勾选要创建的项",
             },
         )
+
+
+_VALID_START_FROM = ("pending", "architecture_done", "development_in_progress")
+_VALID_TICKET_TYPES = ("feature", "bugfix", "refactor", "test", "doc")
+
+
+class ConfirmDirectTicketAction(ActionBase):
+    """识别到原子任务时，产出直接工单草稿让用户确认（不走需求拆单）。"""
+
+    @property
+    def name(self) -> str:
+        return "confirm_direct_ticket"
+
+    @property
+    def description(self) -> str:
+        return "识别到原子任务（修复/添加/调整，预计≤4h）时，生成直接工单草稿让用户确认。不直接创建。"
+
+    async def run(self, context: Dict[str, Any]) -> ActionResult:
+        title = (context.get("title") or "").strip()
+        description = (context.get("description") or "").strip()
+        ticket_type = context.get("type") or context.get("ticket_type") or "feature"
+        if ticket_type not in _VALID_TICKET_TYPES:
+            ticket_type = "feature"
+        start_from = context.get("start_from") or "pending"
+        if start_from not in _VALID_START_FROM:
+            start_from = "pending"
+
+        if not title:
+            return ActionResult(success=False, error="工单标题不能为空")
+
+        return ActionResult(
+            success=True,
+            data={
+                "type": "confirm_direct_ticket",
+                "title": title,
+                "description": description,
+                "ticket_type": ticket_type,
+                "start_from": start_from,
+            },
+        )

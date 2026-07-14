@@ -5166,6 +5166,8 @@ function renderActionStateSummary(action) {
             + (pid ? ` &nbsp;<span class="action-link" style="font-size:12px;" onclick="showProjectDetail('${escapeHtml(pid)}')">进入项目 →</span>` : '');
     } else if (action.type === 'confirm_requirement' && isExec) {
         summary = `需求 <strong>${escapeHtml(action.title || '?')}</strong> 已创建`;
+    } else if (action.type === 'confirm_direct_ticket' && isExec) {
+        summary = `工单 <strong>${escapeHtml(action.title || '?')}</strong> 已创建`;
     } else if (action.type === 'confirm_bug' && isExec) {
         summary = `Bug <strong>${escapeHtml(action.title || '?')}</strong> 已上报`;
     } else if (action.type === 'generate_image' && isExec) {
@@ -14259,6 +14261,9 @@ function _buildAnyActionCardHtml(action) {
     if (t === 'confirm_requirement' || t === 'confirm_bug') {
         return _buildConfirmCardHtml(action);
     }
+    if (t === 'confirm_direct_ticket') {
+        return _buildConfirmDirectTicketCardHtml(action);
+    }
     if (t === 'confirm_requirements_batch') {
         return _buildBatchRequirementsCardHtml(action);
     }
@@ -14455,6 +14460,52 @@ function _buildBatchRequirementsCardHtml(action) {
         </div>`;
 }
 
+/** 构建直接工单确认卡片 */
+function _buildConfirmDirectTicketCardHtml(action) {
+    const safeId = _nextCardId('ticket_confirm');
+    const typeLabel = {'feature':'功能','bugfix':'修复','refactor':'重构','test':'测试','doc':'文档'}[action.ticket_type] || action.ticket_type || '功能';
+    const startLabel = {
+        'pending':                  '完整流程（规划→架构→开发）',
+        'architecture_done':        '跳过规划架构，直接开发',
+        'development_in_progress':  '立即开始开发',
+    }[action.start_from] || action.start_from || '完整流程';
+
+    const msgId = action._message_id ? ` data-message-id="${escapeHtml(action._message_id)}"` : '';
+    const isExecuted = action._state && action._state !== 'pending';
+
+    if (isExecuted) {
+        const label = action._state === 'executed' ? `✅ 工单已创建` : `✗ 已取消`;
+        return `<div class="chat-action-card" style="border-left-color:${action._state==='executed'?'var(--success)':'var(--text-muted);opacity:.6'}">
+            <div class="action-title">${label}</div>
+            ${action.title ? `<div class="action-detail"><strong>${escapeHtml(action.title)}</strong></div>` : ''}
+        </div>`;
+    }
+
+    return `
+    <div class="chat-action-card" id="${safeId}"
+         data-title="${escapeHtml(action.title||'')}"
+         data-description="${escapeHtml(action.description||'')}"
+         data-ticket-type="${escapeHtml(action.ticket_type||'feature')}"
+         data-start-from="${escapeHtml(action.start_from||'pending')}"
+         ${msgId}>
+        <div class="action-title">🎫 新工单草稿</div>
+        <div class="action-detail">
+            <div style="font-size:14px;font-weight:600;margin-bottom:6px;">${escapeHtml(action.title||'')}</div>
+            ${action.description ? `<div style="font-size:13px;color:var(--text-secondary);margin-bottom:8px;white-space:pre-wrap;">${escapeHtml(action.description)}</div>` : ''}
+            <div style="display:flex;gap:8px;flex-wrap:wrap;font-size:12px;color:var(--text-muted);">
+                <span>类型: <strong>${typeLabel}</strong></span>
+                <span>·</span>
+                <span>执行起点: <strong>${startLabel}</strong></span>
+            </div>
+        </div>
+        <div style="margin-top:8px;font-size:12px;color:var(--text-muted);">确认后系统会直接创建工单并加入执行队列。</div>
+        <div class="confirm-req-btns" style="margin-top:10px;display:flex;gap:8px;">
+            <button class="btn btn-sm btn-primary" onclick="doConfirmDirectTicket('${safeId}')">🎫 确认创建工单</button>
+            <button class="btn btn-sm" onclick="doCancelDirectTicket('${safeId}')">✗ 取消</button>
+        </div>
+    </div>`;
+}
+
 /** 构建单张 confirm_requirement 卡片 HTML（供单张和批量场景复用） */
 function _buildConfirmCardHtml(action) {
     const priorityLabel = {'critical':'🔴 紧急','high':'🟠 高','medium':'🟡 中','low':'🟢 低'}[action.priority] || action.priority;
@@ -14645,9 +14696,11 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
             </div>
         `;
     } else if (action && action._state && action._state !== 'pending'
-               && ['confirm_requirement', 'confirm_project', 'confirm_bug'].includes(action.type)) {
+               && ['confirm_requirement', 'confirm_project', 'confirm_bug', 'confirm_direct_ticket'].includes(action.type)) {
         // v0.19.1：刷新回来的已执行 / 已取消卡片直接走摘要渲染，避免重复可点按钮
         actionHtml = renderActionStateSummary(action);
+    } else if (action && action.type === 'confirm_direct_ticket') {
+        actionHtml = _buildConfirmDirectTicketCardHtml(action);
     } else if (action && action.type === 'confirm_requirement') {
         actionHtml = _buildConfirmCardHtml(action);
     } else if (action && action.type === 'confirm_project') {
@@ -15166,12 +15219,48 @@ async function doConfirmRequirement(cardId) {
     }
 }
 
-/** 批量需求卡片：确认创建勾选项 */
-async function doConfirmRequirementsBatch(cardId) {
+/** 直接工单卡片：确认创建 */
+async function doConfirmDirectTicket(cardId) {
     const card = document.getElementById(cardId);
     if (!card || !currentProjectId) return;
     if (card.dataset.confirming === '1') return;
     card.dataset.confirming = '1';
+    const title       = card.dataset.title || '';
+    const description = card.dataset.description || '';
+    const ticketType  = card.dataset.ticketType || 'feature';
+    const startFrom   = card.dataset.startFrom || 'pending';
+    const btns = card.querySelector('.confirm-req-btns');
+    if (btns) btns.innerHTML = '<span style="color:var(--text-muted);font-size:12px">⏳ 创建中...</span>';
+    try {
+        const result = await api(`/projects/${currentProjectId}/tickets/create-direct`, {
+            method: 'POST',
+            body: { title, description, type: ticketType, start_from: startFrom, auto_start: true },
+        });
+        card.style.borderLeftColor = 'var(--success, #34d058)';
+        card.querySelector('.action-title').textContent = '✅ 工单已创建';
+        const tid = result.ticket_id || '';
+        if (btns) btns.innerHTML = tid
+            ? `<span class="action-link" onclick="openTicketDrawer('${escapeHtml(tid)}')">查看工单 →</span>`
+            : `<span class="action-link" onclick="switchTab('board')">查看看板 →</span>`;
+        showToast(`工单「${title}」已创建`, 'success');
+        const msgId = card.dataset.messageId || '';
+        if (msgId) patchActionState(msgId, 'executed', { title, ticket_id: tid, at: new Date().toISOString() });
+        setTimeout(() => { if (typeof refreshBoard === 'function') refreshBoard(); }, 500);
+    } catch (e) {
+        card.dataset.confirming = '0';
+        card.style.borderLeftColor = 'var(--danger, #ea4a5a)';
+        card.querySelector('.action-title').textContent = '⚠️ 创建失败';
+        if (btns) btns.innerHTML = `<span style="color:var(--danger);font-size:12px">${escapeHtml(e.message)}</span>`;
+    }
+}
+
+function doCancelDirectTicket(cardId) {
+    const card = document.getElementById(cardId);
+    if (card) card.outerHTML = `<div class="chat-action-card" style="border-left-color:var(--text-muted);opacity:0.6;"><div class="action-title">✗ 已取消</div></div>`;
+}
+
+/** 批量需求卡片：确认创建勾选项 */
+async function doConfirmRequirementsBatch(cardId) {
 
     const reqs = JSON.parse(card.dataset.requirements || '[]');
     const checked = [...card.querySelectorAll('input[type=checkbox]:checked')].map(cb => parseInt(cb.dataset.idx));

@@ -466,6 +466,81 @@ async def confirm_requirement(
 
 
 @mcp.tool()
+async def confirm_direct_ticket(
+    title: str,
+    description: str,
+    type: str = "feature",
+    start_from: str = "pending",
+    project_id: str = "",
+) -> str:
+    """
+    识别到原子任务时调用（不需要需求拆单，直接作为工单执行）。
+    在 ADS 前端弹出工单草稿确认卡片，用户点「确认创建」后才真正创建工单。
+
+    ★ 与 confirm_requirement 的区别：
+      - confirm_direct_ticket：原子任务，规模小（≤4小时），一次完成，直接执行
+      - confirm_requirement：大功能，需要 AI 拆分成多个子工单后执行
+
+    触发时机（任意满足一条）：
+      - 用户说「修复 X」「加一个 X」「调整 X」「改一下 X」
+      - 描述非常具体，明确知道改哪个文件/功能
+      - 预计工作量 ≤ 4 小时，单人单次完成
+
+    不触发（改用 confirm_requirement）：
+      - 用户说「实现一个 XX 系统/模块」「做一套完整的 XX」
+      - 需要多个阶段规划和多个子任务
+
+    start_from 参数：
+      - "pending"：走完整 SOP（规划→架构→开发）
+      - "architecture_done"：跳过规划+架构，直接进入开发
+      - "development_in_progress"：跳过所有前置，立即开始开发（最快）
+    """
+    import httpx as _httpx
+    valid_types = ("feature", "bugfix", "refactor", "test", "doc")
+    if type not in valid_types:
+        type = "feature"
+    valid_start = ("pending", "architecture_done", "development_in_progress")
+    if start_from not in valid_start:
+        start_from = "pending"
+
+    pid = project_id or ADS_PROJECT_ID
+    if not pid:
+        rows = await _db_fetch(
+            "SELECT id FROM projects WHERE status = 'active' AND id != '__global__' ORDER BY updated_at DESC LIMIT 1"
+        )
+        pid = rows[0]["id"] if rows else ""
+    if not pid:
+        return json.dumps({"status": "error", "message": "未找到激活项目，请提供 project_id"}, ensure_ascii=False)
+
+    payload = {
+        "action": "confirm_direct_ticket",
+        "data": {
+            "title": title.strip(),
+            "description": description.strip(),
+            "type": type,
+            "start_from": start_from,
+        },
+    }
+
+    try:
+        async with _httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                f"{ADS_BASE_URL}/api/projects/{pid}/chat/mcp-action",
+                json=payload,
+            )
+        if resp.status_code == 200:
+            body = resp.json()
+            if body.get("status") == "ok":
+                return json.dumps({"status": "ok", "message": f"工单草稿已推送到前端，等待用户确认：{title}"}, ensure_ascii=False)
+            else:
+                return json.dumps({"status": "error", "message": f"推送异常: {body}"}, ensure_ascii=False)
+        else:
+            return json.dumps({"status": "error", "message": f"推送失败: HTTP {resp.status_code}"}, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)
+
+
+@mcp.tool()
 async def confirm_bug(
     title: str,
     description: str,

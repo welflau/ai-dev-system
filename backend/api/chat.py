@@ -2111,7 +2111,7 @@ async def _parse_and_execute_action(project_id: str, project: dict, response: st
 
     # ACTION 类型 → Action 实例 的映射（P1 改造后：所有能力走 Action 体系）
     # 对于 GIT_* 一族，原来共享 _execute_git_action 的一个分发器，现在每种子操作一个 Action。
-    from actions.chat.confirm_requirement import ConfirmRequirementAction
+    from actions.chat.confirm_requirement import ConfirmRequirementAction, ConfirmDirectTicketAction
     from actions.chat.confirm_bug import ConfirmBugAction
     from actions.chat.create_requirement import CreateRequirementAction
     from actions.chat.pause_requirement import PauseRequirementAction
@@ -2127,6 +2127,7 @@ async def _parse_and_execute_action(project_id: str, project: dict, response: st
 
     _ACTION_MAP = {
         "CONFIRM_REQUIREMENT": ConfirmRequirementAction,
+        "CONFIRM_DIRECT_TICKET": ConfirmDirectTicketAction,
         "CONFIRM_BUG": ConfirmBugAction,
         "GENERATE_IMAGE": GenerateImageAction,
         "CREATE_REQUIREMENT": CreateRequirementAction,
@@ -3034,6 +3035,24 @@ async def mcp_action_callback(project_id: str, req: _McpActionRequest):
             "priority": priority,
             "requirement_id": data.get("requirement_id") or "",
         }
+    elif action_name == "confirm_direct_ticket":
+        title = (data.get("title") or "").strip()
+        description = (data.get("description") or "").strip()
+        ticket_type = data.get("type") or data.get("ticket_type") or "feature"
+        if ticket_type not in ("feature", "bugfix", "refactor", "test", "doc"):
+            ticket_type = "feature"
+        start_from = data.get("start_from") or "pending"
+        if start_from not in ("pending", "architecture_done", "development_in_progress"):
+            start_from = "pending"
+        if not title:
+            raise HTTPException(400, "工单标题不能为空")
+        action_result = {
+            "type": "confirm_direct_ticket",
+            "title": title,
+            "description": description,
+            "ticket_type": ticket_type,
+            "start_from": start_from,
+        }
     else:
         logger.warning("mcp_action_callback: 未知 action=%s", action_name)
         return {"status": "no_action", "reason": f"unknown action: {action_name}"}
@@ -3042,19 +3061,21 @@ async def mcp_action_callback(project_id: str, req: _McpActionRequest):
         "action": action_result,
     })
 
-    # 持久化到 DB（写入当前项目最新 session），确保 loadChatHistory() 重建时也能渲染卡片
+    # 持久化到 DB
     try:
         sess_row = await db.fetch_one(
             "SELECT id FROM chat_sessions WHERE project_id = ? ORDER BY last_active_at DESC LIMIT 1",
             (project_id,),
         )
         session_id = sess_row["id"] if sess_row else "default"
+        atype = action_result.get("type", "")
+        if atype == "confirm_direct_ticket":
+            msg_text = f"工单草稿「{action_result.get('title', '')}」已生成，请在下方确认："
+        else:
+            msg_text = f"需求草稿「{action_result.get('title', '')}」已生成，请在下方确认："
         await _save_chat_message(
-            project_id,
-            "assistant",
-            f"需求草稿「{action_result.get('title', '')}」已生成，请在下方确认：",
-            action=action_result,
-            session_id=session_id,
+            project_id, "assistant", msg_text,
+            action=action_result, session_id=session_id,
         )
     except Exception as _e:
         logger.warning("mcp_action_callback 保存消息失败（不影响 SSE）: %s", _e)
