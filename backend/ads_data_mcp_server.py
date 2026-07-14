@@ -426,12 +426,24 @@ async def confirm_requirement(
     project_id 留空则自动查询当前唯一激活项目。
     """
     import httpx as _httpx
+
+    # 硬性拦截：用户消息含「工单」时必须用 confirm_direct_ticket
+    _ticket_kw = ("工单", "ticket", "直接做", "直接执行")
+    if any(kw in title for kw in _ticket_kw):
+        return json.dumps({
+            "status": "error",
+            "message": (
+                f"检测到关键词「{'、'.join(kw for kw in _ticket_kw if kw in title)}」，"
+                "用户意图是创建直接工单，请改用 confirm_direct_ticket 工具。"
+                "confirm_requirement 仅用于需要拆单的大功能需求。"
+            )
+        }, ensure_ascii=False)
+
     valid_priorities = ("critical", "high", "medium", "low")
     if priority not in valid_priorities:
         priority = "medium"
     pid = project_id or ADS_PROJECT_ID
     if not pid:
-        # 兜底：从 DB 取唯一激活项目
         rows = await _db_fetch(
             "SELECT id FROM projects WHERE status = 'active' AND id != '__global__' ORDER BY updated_at DESC LIMIT 1"
         )
