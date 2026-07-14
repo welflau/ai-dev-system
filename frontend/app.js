@@ -8580,18 +8580,23 @@ function connectSSE(projectId) {
             } catch {}
         });
 
-        // MCP tool 回调：confirm_requirement / confirm_bug 等卡片
+        // MCP tool 回调：confirm_requirement / confirm_bug / confirm_direct_ticket 等卡片
         eventSource.addEventListener('chat_mcp_action', (e) => {
             try {
                 const data = JSON.parse(e.data);
                 const action = data.action;
                 if (!action) return;
-                // 先尝试立即追加（快速响应），同时重载历史确保持久化的卡片也显示
+                // 先尝试立即追加（快速响应）
                 appendMcpActionCard(action);
-                if (typeof loadChatHistory === 'function') {
-                    setTimeout(loadChatHistory, 300);
-                }
             } catch (err) {
+                console.warn('[SSE] chat_mcp_action parse failed:', err);
+            }
+            // 无论 appendMcpActionCard 是否成功，都延迟重载聊天历史
+            // 确保 mcp_action_callback 持久化的卡片能从 DB 恢复显示
+            if (typeof loadChatHistory === 'function' && currentProjectId) {
+                setTimeout(loadChatHistory, 600);
+            }
+        });
                 console.warn('[SSE] chat_mcp_action parse failed:', err);
             }
         });
