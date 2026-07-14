@@ -8586,15 +8586,9 @@ function connectSSE(projectId) {
                 const data = JSON.parse(e.data);
                 const action = data.action;
                 if (!action) return;
-                // 先尝试立即追加（快速响应）
                 appendMcpActionCard(action);
             } catch (err) {
                 console.warn('[SSE] chat_mcp_action parse failed:', err);
-            }
-            // 无论 appendMcpActionCard 是否成功，都延迟重载聊天历史
-            // 确保 mcp_action_callback 持久化的卡片能从 DB 恢复显示
-            if (typeof loadChatHistory === 'function' && currentProjectId) {
-                setTimeout(loadChatHistory, 600);
             }
         });
 
