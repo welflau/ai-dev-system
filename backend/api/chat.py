@@ -2986,6 +2986,8 @@ def _build_user_content(text: str, images: Optional[List[str]] = None):
 # ads_data_mcp_server 里的 confirm_requirement / confirm_bug 工具调用此接口
 # 将 action 数据通过 SSE 推送到前端，弹出确认卡片
 
+_VALID_PRIORITIES = ("critical", "high", "medium", "low")
+
 class _McpActionRequest(BaseModel):
     action: str          # confirm_requirement | confirm_bug
     data: dict           # action 参数
@@ -2999,21 +3001,66 @@ async def mcp_action_callback(project_id: str, req: _McpActionRequest):
     if not project:
         raise HTTPException(404, "项目不存在")
 
-    # 复用现有的 chat action 执行逻辑
-    action_result = await _parse_and_execute_action(
-        project_id,
-        dict(project),
-        f"[ACTION:{req.action.upper()}]\n{json.dumps(req.data, ensure_ascii=False)}\n[/ACTION]",
-    )
+    action_name = (req.action or "").lower().strip()
+    data = req.data or {}
 
-    if action_result:
-        # 推 SSE 给前端（和普通 chat 回复的 action 事件格式一致）
-        await event_manager.publish_to_project(project_id, "chat_mcp_action", {
-            "action": action_result,
-        })
-        return {"status": "ok", "action_type": action_result.get("type")}
+    # 直接构建 action_result，不走 _parse_and_execute_action 避免解析链路异常
+    if action_name == "confirm_requirement":
+        title = (data.get("title") or "").strip()
+        description = (data.get("description") or "").strip()
+        priority = data.get("priority") or "medium"
+        if priority not in _VALID_PRIORITIES:
+            priority = "medium"
+        if not title:
+            raise HTTPException(400, "需求标题不能为空")
+        action_result = {
+            "type": "confirm_requirement",
+            "title": title,
+            "description": description,
+            "priority": priority,
+        }
+    elif action_name == "confirm_bug":
+        title = (data.get("title") or "").strip()
+        description = (data.get("description") or "").strip()
+        priority = data.get("priority") or "high"
+        if priority not in _VALID_PRIORITIES:
+            priority = "high"
+        if not title:
+            raise HTTPException(400, "Bug 标题不能为空")
+        action_result = {
+            "type": "confirm_bug",
+            "title": title,
+            "description": description,
+            "priority": priority,
+            "requirement_id": data.get("requirement_id") or "",
+        }
+    else:
+        logger.warning("mcp_action_callback: 未知 action=%s", action_name)
+        return {"status": "no_action", "reason": f"unknown action: {action_name}"}
 
-    return {"status": "no_action"}
+    await event_manager.publish_to_project(project_id, "chat_mcp_action", {
+        "action": action_result,
+    })
+
+    # 持久化到 DB（写入当前项目最新 session），确保 loadChatHistory() 重建时也能渲染卡片
+    try:
+        sess_row = await db.fetch_one(
+            "SELECT id FROM chat_sessions WHERE project_id = ? ORDER BY last_active_at DESC LIMIT 1",
+            (project_id,),
+        )
+        session_id = sess_row["id"] if sess_row else "default"
+        await _save_chat_message(
+            project_id,
+            "assistant",
+            f"需求草稿「{action_result.get('title', '')}」已生成，请在下方确认：",
+            action=action_result,
+            session_id=session_id,
+        )
+    except Exception as _e:
+        logger.warning("mcp_action_callback 保存消息失败（不影响 SSE）: %s", _e)
+
+    logger.info("mcp_action_callback: 推送 %s 卡片到项目 %s", action_name, project_id)
+    return {"status": "ok", "action_type": action_result["type"]}
 
 
 # ── 内部 API：MCP server 推 CLI 任务事件 ──────────────────────────────────────

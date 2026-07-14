@@ -8032,9 +8032,22 @@ function renderLogItem(log) {
         detail        = parsed.message || '';
         inputSummary  = parsed.input_summary  || '';
         outputSummary = parsed.output_summary || '';
-        errorMsg      = parsed.error_msg      || '';
+        // 后端有两种字段名：error_msg（tool_audit_log）和 error（ticket_logs blocked/ToolError）
+        errorMsg      = parsed.error_msg || parsed.error || '';
         durationMs    = parsed.duration_ms    ?? null;
         cliCmd        = parsed.cli_cmd        || '';   // CLI 完整指令
+
+        // 错误详情补充：blocked/ToolError 日志把原始错误放在 parsed.error，没有 message 时把 error 提升为 detail
+        if (!detail && errorMsg) detail = errorMsg;
+
+        // ── REACT 工具调用（方案B）
+        if (log.action === 'react_tool') {
+            return _renderReactToolItem(log, parsed);
+        }
+        // ── Agent 步骤打点（方案C）
+        if (log.action === 'skill_step_start' || log.action === 'skill_step_done' || log.action === 'skill_step_error') {
+            return _renderSkillStepItem(log, parsed);
+        }
     } catch {
         detail = log.detail || '';
     }
@@ -8042,6 +8055,37 @@ function renderLogItem(log) {
     // chat: 前缀的条目来自 AI 助手工具调用，加图标区分
     if ((log.action || '').startsWith('chat:')) {
         log = { ...log, _isChatTool: true };
+    }
+
+    // thought_done 有产出文件时，追加文件标签行
+    let fileChipsHtml = '';
+    if (log.action === 'thought_done') {
+        try {
+            const d = JSON.parse(log.detail || '{}');
+            let fileNames = d.files || [];
+            let filePaths = d.file_paths || [];
+
+            // 兼容老日志：从 message 里解析 "产出: a.cpp, b.h 等 N 个文件"
+            if (!fileNames.length && d.message) {
+                const m = d.message.match(/产出:\s*([^|]+)/);
+                if (m) {
+                    fileNames = m[1].replace(/\s*等\s*\d+\s*个文件.*/, '').split(',').map(s => s.trim()).filter(Boolean);
+                    filePaths = fileNames; // 老数据没有完整路径，点击只显示文件名
+                }
+            }
+
+            if (fileNames.length) {
+                const ticketId = log.ticket_id || '';
+                fileChipsHtml = `<div class="thought-files">${fileNames.map((f, i) => {
+                    const fullPath = filePaths[i] || f;
+                    const hasPath = fullPath !== f || f.includes('/');
+                    const onClick = hasPath
+                        ? `event.stopPropagation();showFileDiff('${escHtml(ticketId)}','${escHtml(fullPath)}','${escHtml(f)}')`
+                        : `event.stopPropagation();showToast('老日志未记录完整路径，请查看产出文件区', 'info')`;
+                    return `<span class="thought-file-chip" title="${escHtml(fullPath)}" onclick="${onClick}">📄 ${escHtml(f)}</span>`;
+                }).join('')}${d.file_count > fileNames.length ? `<span class="thought-file-chip more">+${d.file_count - fileNames.length} 个</span>` : ''}</div>`;
+            }
+        } catch {}
     }
 
     const PREVIEW_LIMIT = 160;
@@ -8061,15 +8105,17 @@ function renderLogItem(log) {
         messageHtml = `<div class="log-message">${detailHtml}</div>`;
     }
 
-    // 构建展开详情块（输入参数 + 输出摘要 + CLI指令）
+    // 构建展开详情块（输入参数 + 输出摘要 + CLI指令 + 错误）
+    // error/warn 级别或有错误内容时强制允许展开
     const expandId = 'logx-' + Math.random().toString(36).slice(2);
-    const hasExpand = (log._isChatTool && (inputSummary || outputSummary || errorMsg)) || cliCmd;
+    const isError = log.level === 'error' || log.level === 'warn';
+    const hasExpand = (log._isChatTool && (inputSummary || outputSummary || errorMsg)) || cliCmd || (isError && errorMsg);
     const expandHtml = hasExpand ? `
-        <div id="${expandId}" class="log-item-expand" style="display:none;">
+        <div id="${expandId}" class="log-item-expand" style="display:${isError && errorMsg ? '' : 'none'};">
             ${cliCmd        ? `<div class="log-expand-row"><span class="log-expand-label">CLI</span><code class="log-expand-val" style="font-family:monospace;font-size:11px;word-break:break-all;">${escHtml(cliCmd)}</code></div>` : ''}
             ${inputSummary  ? `<div class="log-expand-row"><span class="log-expand-label">输入</span><span class="log-expand-val">${escHtml(inputSummary)}</span></div>`  : ''}
             ${outputSummary ? `<div class="log-expand-row"><span class="log-expand-label">结果</span><span class="log-expand-val">${escHtml(outputSummary)}</span></div>` : ''}
-            ${errorMsg      ? `<div class="log-expand-row"><span class="log-expand-label log-expand-err">错误</span><span class="log-expand-val log-expand-err">${escHtml(errorMsg)}</span></div>` : ''}
+            ${errorMsg      ? `<div class="log-expand-row"><span class="log-expand-label log-expand-err">错误</span><span class="log-expand-val log-expand-err" style="white-space:pre-wrap;">${escHtml(errorMsg)}</span></div>` : ''}
         </div>` : '';
 
     // 内联评论（绑定到本条 log 的评论）
@@ -8102,14 +8148,122 @@ function renderLogItem(log) {
                     onclick="event.stopPropagation();toggleLogCommentBox('${commentBoxId}')">💬</button>
             </div>
             ${messageHtml}
+            ${fileChipsHtml}
             ${expandHtml}
+            ${_renderDiagnosisLink(log)}
             ${inlineHtml}
             ${commentBox}
         </div>`;
 }
 
+/**
+ * blocked / ToolError:agent:* 日志条目底部渲染 AI 诊断入口。
+ * - 若抽屉已经有诊断结果：显示"查看诊断 ↑"链接（滚到诊断面板）
+ * - 若还没诊断 / 正在诊断中：显示"🩺 触发 AI 诊断"按钮
+ */
+function _renderDiagnosisLink(log) {
+    const action = log.action || '';
+    const isBlocked    = action === 'blocked';
+    const isAgentError = action.startsWith('ToolError:agent:');
+    if (!isBlocked && !isAgentError) return '';
+    const tid = log.ticket_id || '';
+    if (!tid) return '';
+
+    return `<div class="log-diagnosis-bar">
+        <button class="log-diag-btn" onclick="event.stopPropagation();_triggerOrShowDiagnosis('${escHtml(tid)}')">
+            🩺 AI 诊断
+        </button>
+    </div>`;
+}
+
+/** 触发诊断或滚动到已有诊断面板 */
+async function _triggerOrShowDiagnosis(ticketId) {
+    // 先尝试滚到抽屉里已有的诊断面板
+    const diagPanel = document.querySelector('.diagnosis-panel');
+    if (diagPanel) {
+        diagPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        diagPanel.classList.add('diagnosis-highlight');
+        setTimeout(() => diagPanel.classList.remove('diagnosis-highlight'), 1500);
+        return;
+    }
+    // 没有诊断面板 → 触发诊断
+    if (!currentProjectId) return;
+    try {
+        showToast('正在触发 AI 诊断…', 'info');
+        await api(`/projects/${currentProjectId}/tickets/${ticketId}/diagnose`, { method: 'POST' });
+        showToast('诊断已触发，完成后自动显示', 'success');
+    } catch (e) {
+        showToast('诊断触发失败: ' + e.message, 'error');
+    }
+}
+
+/**
+ * 生成评论按钮 + 折叠输入框（供所有日志条目渲染函数复用）
+ */
+function _logCommentWidget(log) {
+    const commentBoxId = 'logcmt-' + (log.id || Math.random().toString(36).slice(2));
+    const tid = escHtml(_currentTimelineTicketId || log.ticket_id || '');
+    const lid = escHtml(log.id || '');
+    return {
+        btn: `<button class="log-comment-btn" title="评论此记录" onclick="event.stopPropagation();toggleLogCommentBox('${commentBoxId}')">💬</button>`,
+        box: `<div id="${commentBoxId}" class="log-inline-comment-box" style="display:none;">
+            <textarea class="log-inline-comment-input" placeholder="回复这条记录…" rows="2"></textarea>
+            <div style="display:flex;gap:6px;justify-content:flex-end;margin-top:4px;">
+                <button class="btn-sm" onclick="document.getElementById('${commentBoxId}').style.display='none'">取消</button>
+                <button class="comment-send-btn btn-sm" onclick="submitLogComment('${tid}','${lid}','${commentBoxId}')">发送</button>
+            </div>
+        </div>`,
+    };
+}
+
+/** 渲染 REACT 工具调用条目（方案B） */
+function _renderReactToolItem(log, detail) {
+    const toolName = detail.tool_name || '';
+    const argsHint = detail.args_hint || '';
+    const dur = detail.duration_ms != null ? `${Math.round(detail.duration_ms)}ms` : '';
+    const argsHtml = argsHint ? `<span class="react-tool-args">${escHtml(argsHint)}</span>` : '';
+    const durHtml  = dur ? `<span class="react-tool-dur">${dur}</span>` : '';
+    const cw = _logCommentWidget(log);
+    return `
+        <div class="log-item info log-react-tool">
+            <span class="react-tool-icon">🔧</span>
+            <span class="react-tool-name">${escHtml(toolName)}</span>
+            ${argsHtml}
+            ${durHtml}
+            <span class="log-time">${formatTime(log.created_at)}</span>
+            ${cw.btn}
+            ${cw.box}
+        </div>`;
+}
+
+/** 渲染 Agent 步骤打点条目（方案C） */
+function _renderSkillStepItem(log, detail) {
+    const phase    = detail.phase || (log.action.includes('start') ? 'start' : 'done');
+    const stepName = detail.step_name || detail.message || '';
+    const idx      = detail.step_index || 0;
+    const total    = detail.step_total || 0;
+    const dur      = detail.duration_ms ? `${Math.round(detail.duration_ms)}ms` : '';
+
+    const idxStr  = (idx && total) ? `[${idx}/${total}]` : '';
+    const icon    = phase === 'start' ? '⏱' : phase === 'error' ? '❌' : '✅';
+    const cls     = phase === 'start' ? 'step-start' : phase === 'error' ? 'step-error' : 'step-done';
+    const durHtml = (phase === 'done' && dur) ? `<span class="skill-step-dur">${dur}</span>` : '';
+    const cw = _logCommentWidget(log);
+
+    return `
+        <div class="log-item ${phase === 'error' ? 'error' : 'info'} log-skill-step ${cls}">
+            <span class="skill-step-icon">${icon}</span>
+            ${idxStr ? `<span class="skill-step-idx">${idxStr}</span>` : ''}
+            <span class="skill-step-name">${escHtml(stepName)}</span>
+            ${durHtml}
+            <span class="skill-step-agent">${escHtml(log.agent_type || 'Agent')}</span>
+            <span class="log-time">${formatTime(log.created_at)}</span>
+            ${cw.btn}
+            ${cw.box}
+        </div>`;
+}
+
 function toggleLogMessage(logId) {
-    const el = document.getElementById(logId);
     if (!el) return;
     const preview = el.querySelector('.log-message-preview');
     const link = el.querySelector('.log-expand-link');
@@ -8345,8 +8499,11 @@ function connectSSE(projectId) {
                 const data = JSON.parse(e.data);
                 const action = data.action;
                 if (!action) return;
-                // 追加一条 assistant 消息气泡，内含确认卡片
+                // 先尝试立即追加（快速响应），同时重载历史确保持久化的卡片也显示
                 appendMcpActionCard(action);
+                if (typeof loadChatHistory === 'function') {
+                    setTimeout(loadChatHistory, 300);
+                }
             } catch (err) {
                 console.warn('[SSE] chat_mcp_action parse failed:', err);
             }
@@ -17494,7 +17651,7 @@ function renderBugList(bugs) {
             ? `<button class="btn btn-sm btn-ticket-link" onclick="event.stopPropagation();openTicketDrawer('${b.ticket_id}')" title="查看关联工单">🎫 查看工单</button>`
             : '';
         return `
-        <div class="bug-card" data-bug-id="${b.id}">
+        <div class="bug-card" data-bug-id="${b.id}" style="cursor:pointer;" onclick="openBugDetail('${b.id}',${b.ticket_id ? `'${b.ticket_id}'` : 'null'})">
             <div class="bug-card-header">
                 <span class="bug-status-badge" style="background:${statusColor}20;color:${statusColor};border:1px solid ${statusColor}40;">${statusLabel}</span>
                 <span class="bug-priority">${priorityLabel}</span>
@@ -17516,9 +17673,115 @@ function renderBugList(bugs) {
     }).join('');
 }
 
+/** 点击文件标签：从 ticket 关联的 feature 分支读取文件 diff，弹出查看弹窗 */
+async function showFileDiff(ticketId, filePath, fileName) {
+    if (!currentProjectId) return;
+    document.getElementById('fileDiffModal')?.remove();
+
+    // 先拿 ticket 的 feature 分支名
+    let branch = null;
+    try {
+        const t = await api(`/projects/${currentProjectId}/tickets/${ticketId}`);
+        branch = t.branch_name || null;
+    } catch {}
+
+    let content = '', diff = '', error = '';
+    try {
+        const url = `/projects/${currentProjectId}/git/file-diff?path=${encodeURIComponent(filePath)}${branch ? `&branch=${encodeURIComponent(branch)}` : ''}`;
+        const data = await api(url);
+        content = data.content || '';
+        diff    = data.diff    || '';
+    } catch (e) {
+        // fallback: try plain file content
+        try {
+            const data2 = await api(`/projects/${currentProjectId}/git/file?path=${encodeURIComponent(filePath)}${branch ? `&branch=${encodeURIComponent(branch)}` : ''}`);
+            content = data2.content || '';
+        } catch (e2) {
+            error = e2.message;
+        }
+    }
+
+    const ext = fileName.split('.').pop().toLowerCase();
+    const lang = {'cpp':'cpp','h':'cpp','hpp':'cpp','py':'python','js':'javascript','ts':'typescript','cs':'csharp','md':'markdown','yaml':'yaml','yml':'yaml','json':'json','html':'html'}[ext] || '';
+
+    const body = diff
+        ? `<pre class="file-diff-pre"><code class="diff-code">${_colorDiff(escHtml(diff.slice(0, 20000)))}</code></pre>`
+        : content
+        ? `<pre class="file-diff-pre"><code>${escHtml(content.slice(0, 20000))}</code></pre>`
+        : `<div style="color:var(--text-muted);padding:16px;">${error || '文件内容为空'}</div>`;
+
+    document.body.insertAdjacentHTML('beforeend', `
+        <div class="modal-overlay" id="fileDiffModal" onclick="if(event.target===this)document.getElementById('fileDiffModal').remove()" style="z-index:2100;">
+            <div class="modal" style="max-width:860px;width:95%;max-height:85vh;display:flex;flex-direction:column;">
+                <div class="modal-header" style="flex-shrink:0;">
+                    <h3 style="font-family:monospace;font-size:13px;">📄 ${escHtml(filePath)}</h3>
+                    <div style="display:flex;gap:8px;align-items:center;">
+                        ${diff ? '<span style="font-size:11px;color:var(--text-muted);">对比 main 分支 diff</span>' : ''}
+                        <button class="btn-icon" onclick="document.getElementById('fileDiffModal').remove()">✕</button>
+                    </div>
+                </div>
+                <div style="flex:1;overflow:auto;background:var(--surface-code,#1e1e2e);border-radius:0 0 8px 8px;">
+                    ${body}
+                </div>
+            </div>
+        </div>`);
+}
+
+/** diff 着色：+ 行绿，- 行红，@@ 行蓝 */
+function _colorDiff(html) {
+    return html.split('\n').map(line => {
+        if (line.startsWith('+') && !line.startsWith('+++'))
+            return `<span style="color:#a8ff78;background:rgba(40,167,69,0.15);display:block;">${line}</span>`;
+        if (line.startsWith('-') && !line.startsWith('---'))
+            return `<span style="color:#ff7b7b;background:rgba(220,53,69,0.12);display:block;">${line}</span>`;
+        if (line.startsWith('@@'))
+            return `<span style="color:#79c0ff;display:block;">${line}</span>`;
+        return `<span style="display:block;">${line}</span>`;
+    }).join('');
+}
+
+/** 点击 BUG 卡片打开详情：有关联工单则打开工单抽屉，否则弹出 BUG 详情模态框 */
+async function openBugDetail(bugId, ticketId) {
+    if (ticketId) {
+        openTicketDrawer(ticketId);
+        return;
+    }
+    try {
+        const data = await api(`/projects/${currentProjectId}/bugs/${bugId}`);
+        const b = data.bug || data;
+        const statusLabel = BUG_STATUS_LABELS[b.status] || b.status;
+        const priorityLabel = BUG_PRIORITY_LABELS[b.priority] || b.priority;
+        document.getElementById('bugDetailModal')?.remove();
+        document.body.insertAdjacentHTML('beforeend', `
+            <div class="modal-overlay" id="bugDetailModal" onclick="if(event.target===this)document.getElementById('bugDetailModal').remove()" style="z-index:2000;">
+                <div class="modal" style="max-width:540px;width:90%;">
+                    <div class="modal-header">
+                        <h3>🐛 BUG 详情</h3>
+                        <button class="btn-icon" onclick="document.getElementById('bugDetailModal').remove()">✕</button>
+                    </div>
+                    <div class="modal-body" style="max-height:60vh;overflow-y:auto;">
+                        <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;">
+                            <span class="tag">${statusLabel}</span>
+                            <span class="tag">${priorityLabel}</span>
+                            <span style="font-size:12px;color:var(--text-muted);">#${b.id.slice(-6)}</span>
+                        </div>
+                        <div style="font-size:15px;font-weight:600;margin-bottom:10px;">${escapeHtml(b.title)}</div>
+                        <div style="font-size:13px;color:var(--text-secondary);white-space:pre-wrap;">${escapeHtml(b.description || '无描述')}</div>
+                        ${b.created_at ? `<div style="margin-top:12px;font-size:12px;color:var(--text-muted);">上报于 ${b.created_at.slice(0,10)}</div>` : ''}
+                    </div>
+                    <div class="modal-footer" style="display:flex;gap:8px;justify-content:flex-end;">
+                        ${b.status === 'open' ? `<button class="btn btn-primary" onclick="document.getElementById('bugDetailModal').remove();startBugFix('${b.id}')">🔧 开始修复</button>` : ''}
+                        <button class="btn" onclick="document.getElementById('bugDetailModal').remove()">关闭</button>
+                    </div>
+                </div>
+            </div>`);
+    } catch (e) {
+        showToast('加载 BUG 详情失败: ' + e.message, 'error');
+    }
+}
+
 /** 显示上报 BUG 模态框 */
 async function showCreateBugModal() {
-    if (!currentProjectId) return;
     try {
         const data = await api(`/projects/${currentProjectId}/requirements`);
         const sel = document.getElementById('bugRequirementId');
@@ -19642,7 +19905,7 @@ function appendMcpActionCard(action) {
     const container = document.getElementById('chatMessages');
     if (!container) return;
 
-    const actionHtml = renderActionCard(action);
+    const actionHtml = _buildAnyActionCardHtml(action);
     if (!actionHtml) return;
 
     const bubble = document.createElement('div');

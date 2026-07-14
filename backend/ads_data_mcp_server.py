@@ -454,7 +454,11 @@ async def confirm_requirement(
                 json=payload,
             )
         if resp.status_code == 200:
-            return json.dumps({"status": "ok", "message": f"需求草稿已推送到前端，等待用户确认：{title}"}, ensure_ascii=False)
+            body = resp.json()
+            if body.get("status") == "ok":
+                return json.dumps({"status": "ok", "message": f"需求草稿已推送到前端，等待用户确认：{title}"}, ensure_ascii=False)
+            else:
+                return json.dumps({"status": "error", "message": f"推送异常: {body}"}, ensure_ascii=False)
         else:
             return json.dumps({"status": "error", "message": f"推送失败: HTTP {resp.status_code}"}, ensure_ascii=False)
     except Exception as e:

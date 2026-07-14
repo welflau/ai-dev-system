@@ -191,6 +191,7 @@ async def delete_requirement(project_id: str, req_id: str):
         await db.delete("llm_conversations", "ticket_id = ?", (tid,))
         await db.delete("artifacts", "ticket_id = ?", (tid,))
         await db.delete("ticket_logs", "ticket_id = ?", (tid,))
+        await db.delete("ticket_comments", "ticket_id = ?", (tid,))
 
     # 删除需求级关联（不关联工单的）
     await db.delete("ticket_logs", "requirement_id = ?", (req_id,))

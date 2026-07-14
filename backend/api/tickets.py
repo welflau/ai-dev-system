@@ -702,7 +702,8 @@ async def get_ticket_logs(ticket_id: str):
 # ==================== 统一时间轴 + 评论 ====================
 
 # 次级日志的 action 前缀（默认折叠）
-_SECONDARY_ACTIONS = {"chat:", "llm_call", "tool_call", "shell_exec"}
+_SECONDARY_ACTIONS = {"chat:", "llm_call", "tool_call", "shell_exec",
+                      "react_tool", "skill_step_start"}
 
 
 def _classify_tier(item: dict) -> str:
@@ -710,10 +711,21 @@ def _classify_tier(item: dict) -> str:
     if item.get("_type") == "comment":
         return "primary"
     action = item.get("action", "") or ""
+    level  = item.get("level", "info") or "info"
+
+    # 错误/警告级别 → primary
+    if level in ("error", "warn", "warning"):
+        return "primary"
     # 状态变更 → primary
     if item.get("from_status") or item.get("to_status"):
         return "primary"
-    # LLM/工具调用 → secondary
+    # 步骤完成 → primary
+    if action == "skill_step_done":
+        return "primary"
+    # thought_done 标记 Agent 阶段完成 → 一律 primary
+    if action == "thought_done":
+        return "primary"
+    # LLM/工具调用 / 步骤开始 → secondary
     for prefix in _SECONDARY_ACTIONS:
         if action.startswith(prefix) or action == prefix:
             return "secondary"

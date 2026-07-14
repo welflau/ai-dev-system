@@ -11,6 +11,7 @@ rework / fix_issues 会先调用 ReflectionAction 做结构化反思，反思结
 """
 import json
 import logging
+import time
 from typing import Any, Dict
 from agents.base import BaseAgent, ReactMode
 from actions.write_code import WriteCodeAction
@@ -70,23 +71,31 @@ class DevAgent(BaseAgent):
     async def _do_develop(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """开发：根据是否有已有代码选择策略"""
         existing_code = context.get("existing_code", {})
+        step_total = 2
 
-        # 有已有代码 → 用 PlanCodeChange（精准增量）
-        # 空项目 → 用 WriteCode（全新生成）
+        # 步骤 1：代码生成
+        t0 = time.monotonic()
+        await self.emit_step("代码生成", context, phase="start", step_index=1, step_total=step_total)
         if existing_code:
             logger.info("📋 检测到已有代码，使用 PlanCodeChange 精准增量")
             code_result = await self.run_action("plan_code_change", context)
         else:
             logger.info("📝 空项目，使用 WriteCode 全新生成")
             code_result = await self.run_action("write_code", context)
+        await self.emit_step("代码生成", context, phase="done", step_index=1, step_total=step_total,
+                             duration_ms=int((time.monotonic() - t0) * 1000))
 
         # 注入 files 到 context，供 SelfTest 使用
         files = code_result.get("files", {})
         context["_files"] = files
         context["dev_result"] = code_result.get("dev_result", {"files": files})
 
-        # 自测
+        # 步骤 2：自测
+        t1 = time.monotonic()
+        await self.emit_step("自测验证", context, phase="start", step_index=2, step_total=step_total)
         test_result = await self.run_action("self_test", context)
+        await self.emit_step("自测验证", context, phase="done", step_index=2, step_total=step_total,
+                             duration_ms=int((time.monotonic() - t1) * 1000))
 
         # 合并结果
         result = {**code_result}
@@ -214,19 +223,30 @@ class DevAgent(BaseAgent):
 
     async def _do_retry_with_reflection(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """通用重试流程：拉历次反思 → 反思当次失败 → 注入 context → 重开发"""
-        # 1. 拉重试上下文（retry_count + 历次反思 + 上次代码）
+        step_total = 3
+
+        # 步骤 1：拉取重试上下文
+        t0 = time.monotonic()
+        await self.emit_step("拉取重试上下文", context, phase="start", step_index=1, step_total=step_total)
         await self._enrich_retry_context(context)
+        await self.emit_step("拉取重试上下文", context, phase="done", step_index=1, step_total=step_total,
+                             duration_ms=int((time.monotonic() - t0) * 1000))
 
         # 2. SOP config 允许关掉反思做 A/B
         sop_cfg = context.get("sop_config") or {}
         enable_reflection = sop_cfg.get("enable_reflection", True)
 
+        reflection = None
         if enable_reflection and self.has_action("reflect"):
+            # 步骤 2：反思根因
+            t1 = time.monotonic()
+            await self.emit_step("反思失败根因", context, phase="start", step_index=2, step_total=step_total)
             refl_result = await self.run_action("reflect", context)
             reflection = refl_result.get("reflection") or {}
-            # 把 retry_count 附到 reflection dict，方便下游（orchestrator 日志/前端）取用
             reflection["retry_count"] = context.get("retry_count", 1)
             context["reflection"] = reflection
+            await self.emit_step("反思失败根因", context, phase="done", step_index=2, step_total=step_total,
+                                 duration_ms=int((time.monotonic() - t1) * 1000))
             logger.info(
                 "🔍 Reflection 已注入（retry=%d, confidence=%.2f）",
                 reflection["retry_count"],
@@ -234,7 +254,6 @@ class DevAgent(BaseAgent):
             )
         else:
             # 降级到旧逻辑：把失败信号拼到 ticket_description
-            reflection = None
             ft = context.get("failure_type")
             if ft == "acceptance_rejected":
                 rr = context.get("rejection_reason", "")
@@ -260,8 +279,12 @@ class DevAgent(BaseAgent):
                         f"[测试问题] {json.dumps(ti, ensure_ascii=False)}"
                     )
 
-        # 3. 执行开发
+        # 步骤 3：重新开发
+        await self.emit_step("重新开发", context, phase="start", step_index=3, step_total=step_total)
+        t2 = time.monotonic()
         result = await self._do_develop(context)
+        await self.emit_step("重新开发", context, phase="done", step_index=3, step_total=step_total,
+                             duration_ms=int((time.monotonic() - t2) * 1000))
 
         # 4. 带出反思，供 orchestrator 写入 ticket_logs
         if reflection:

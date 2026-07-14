@@ -303,6 +303,14 @@ class BaseAgent(ABC):
         async for event in engine.run(messages, system, tools, context):
             if isinstance(event, ToolDoneEvent):
                 logger.info("🔧 %s REACT: %s 完成 (%dms)", self.agent_type, event.tool, event.duration_ms)
+                await self._emit_react_tool(
+                    project_id=context.get("project_id"),
+                    requirement_id=context.get("requirement_id"),
+                    ticket_id=context.get("ticket_id"),
+                    tool_name=event.tool,
+                    args_hint=event.args_hint,
+                    duration_ms=event.duration_ms,
+                )
             elif isinstance(event, MessageDoneEvent):
                 result = {
                     "status": "success",
@@ -317,6 +325,115 @@ class BaseAgent(ABC):
                 result = {"status": "error", "message": event.message}
 
         return result or {"status": "success"}
+
+    async def _emit_react_tool(
+        self,
+        project_id: Optional[str],
+        requirement_id: Optional[str],
+        ticket_id: Optional[str],
+        tool_name: str,
+        args_hint: str,
+        duration_ms: float,
+    ) -> None:
+        """REACT 模式每次工具调用完成后写 react_tool 日志到 ticket_logs，供时间轴展示。"""
+        if not ticket_id:
+            return
+        try:
+            from database import db
+            from utils import generate_id, now_iso
+            from events import event_manager
+            import json as _json
+
+            log_id = generate_id("LOG")
+            created_at = now_iso()
+            hint = (args_hint or "")[:80]
+            dur = round(duration_ms or 0, 1)
+            message = f"🔧 {tool_name}" + (f" → {hint[:60]}" if hint else "") + f" ({int(dur)}ms)"
+
+            detail_json = _json.dumps({
+                "message": message,
+                "tool_name": tool_name,
+                "args_hint": hint,
+                "duration_ms": dur,
+            }, ensure_ascii=False)
+
+            await db.execute(
+                "INSERT INTO ticket_logs "
+                "(id, ticket_id, requirement_id, project_id, agent_type, action, detail, level, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (log_id, ticket_id, requirement_id, project_id or "__global__",
+                 self.agent_type, "react_tool", detail_json, "info", created_at),
+            )
+            if project_id:
+                await event_manager.publish_to_project(project_id, "log_added", {
+                    "id": log_id, "ticket_id": ticket_id,
+                    "agent_type": self.agent_type, "action": "react_tool",
+                    "detail": detail_json, "level": "info", "created_at": created_at,
+                })
+        except Exception as e:
+            logger.debug("_emit_react_tool 失败: %s", e)
+
+    async def emit_step(
+        self,
+        step_name: str,
+        context: Dict[str, Any],
+        phase: str = "start",     # "start" | "done" | "error"
+        step_index: int = 0,
+        step_total: int = 0,
+        duration_ms: int = 0,
+    ) -> None:
+        """Agent action 代码中的手动步骤打点，写 skill_step_start / skill_step_done 到 ticket_logs。"""
+        ticket_id = context.get("ticket_id")
+        project_id = context.get("project_id")
+        if not ticket_id:
+            return
+        try:
+            from database import db
+            from utils import generate_id, now_iso
+            from events import event_manager
+            import json as _json
+
+            action = f"skill_step_{phase}" if phase in ("start", "done", "error") else "skill_step_done"
+            log_id = generate_id("LOG")
+            created_at = now_iso()
+
+            idx_str = f"[{step_index}/{step_total}] " if step_total else ""
+            if phase == "start":
+                message = f"{idx_str}{step_name} · 开始"
+                level = "info"
+            elif phase == "done":
+                dur_str = f" ({int(duration_ms)}ms)" if duration_ms else ""
+                message = f"{idx_str}{step_name} · 完成{dur_str}"
+                level = "info"
+            else:
+                message = f"{idx_str}{step_name} · 失败"
+                level = "error"
+
+            detail_json = _json.dumps({
+                "message": message,
+                "step_name": step_name,
+                "step_index": step_index,
+                "step_total": step_total,
+                "phase": phase,
+                "duration_ms": duration_ms,
+            }, ensure_ascii=False)
+
+            await db.execute(
+                "INSERT INTO ticket_logs "
+                "(id, ticket_id, requirement_id, project_id, agent_type, action, detail, level, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (log_id, ticket_id, context.get("requirement_id"),
+                 project_id or "__global__", self.agent_type, action,
+                 detail_json, level, created_at),
+            )
+            if project_id:
+                await event_manager.publish_to_project(project_id, "log_added", {
+                    "id": log_id, "ticket_id": ticket_id,
+                    "agent_type": self.agent_type, "action": action,
+                    "detail": detail_json, "level": level, "created_at": created_at,
+                })
+        except Exception as e:
+            logger.debug("emit_step 失败: %s", e)
 
     async def _think(self, context: Dict, action_names: list, current_result: Dict) -> str:
         """LLM 决定下一步执行哪个 Action"""

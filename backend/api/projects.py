@@ -865,6 +865,38 @@ async def get_git_file(project_id: str, path: str, branch: str = None):
     return {"path": path, "content": content}
 
 
+@router.get("/{project_id}/git/file-diff")
+async def get_git_file_diff(project_id: str, path: str, branch: str = None):
+    """返回指定文件在 feature 分支与 main/master 的 diff，用于时间轴文件点击查看。"""
+    import subprocess as _sp
+    project = await db.fetch_one("SELECT * FROM projects WHERE id = ?", (project_id,))
+    if not project:
+        raise HTTPException(404, "项目不存在")
+    _ensure_git_path(project)
+
+    repo_dir = git_manager._repo_path(project_id)
+    content = await git_manager.get_file_content(project_id, path, branch=branch)
+    if content is None:
+        raise HTTPException(404, "文件不存在")
+
+    diff_text = ""
+    try:
+        # 对比 main/master 分支，若不存在则显示整个文件作为新增
+        base = branch or "HEAD"
+        for base_branch in ("main", "master"):
+            r = _sp.run(
+                ["git", "diff", f"{base_branch}...{base}", "--", path],
+                cwd=str(repo_dir), capture_output=True, text=True, timeout=15,
+            )
+            if r.returncode == 0 and r.stdout.strip():
+                diff_text = r.stdout[:30000]
+                break
+    except Exception:
+        pass
+
+    return {"path": path, "content": content, "diff": diff_text}
+
+
 @router.get("/{project_id}/screenshots/{filename}")
 async def get_project_screenshot(project_id: str, filename: str):
     """v0.19.x：读取 UE 运行截图（存在项目截图目录，不在 git repo 内）"""

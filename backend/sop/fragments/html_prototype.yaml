@@ -20,6 +20,8 @@ required_traits:
   none_of:
     - platform:web             # web/HTML5 游戏本身已是 HTML，不需要"HTML 原型"阶段
     - platform:wechat
+    - engine:ue5               # UE 项目直接进引擎开发，HTML 原型无意义
+    - engine:ue4
 
 stage:
   agent: DevAgent
