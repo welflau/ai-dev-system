@@ -18001,7 +18001,7 @@ async function showFileDiff(ticketId, filePath, fileName) {
     if (!currentProjectId) return;
     document.getElementById('fileDiffModal')?.remove();
 
-    // 先拿 ticket 的 feature 分支名
+    // 先从 ticket 拿 feature 分支名，再从 requirement 拿备选
     let branch = null;
     try {
         const t = await api(`/projects/${currentProjectId}/tickets/${ticketId}`);
@@ -18009,19 +18009,14 @@ async function showFileDiff(ticketId, filePath, fileName) {
     } catch {}
 
     let content = '', diff = '', error = '';
+    // 后端会自动搜索所有分支 + 磁盘，不需要在前端重试
     try {
         const url = `/projects/${currentProjectId}/git/file-diff?path=${encodeURIComponent(filePath)}${branch ? `&branch=${encodeURIComponent(branch)}` : ''}`;
         const data = await api(url);
         content = data.content || '';
         diff    = data.diff    || '';
     } catch (e) {
-        // fallback: try plain file content
-        try {
-            const data2 = await api(`/projects/${currentProjectId}/git/file?path=${encodeURIComponent(filePath)}${branch ? `&branch=${encodeURIComponent(branch)}` : ''}`);
-            content = data2.content || '';
-        } catch (e2) {
-            error = e2.message;
-        }
+        error = e.message || '文件不存在';
     }
 
     const ext = fileName.split('.').pop().toLowerCase();

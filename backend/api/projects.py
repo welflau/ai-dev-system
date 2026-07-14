@@ -869,19 +869,48 @@ async def get_git_file(project_id: str, path: str, branch: str = None):
 async def get_git_file_diff(project_id: str, path: str, branch: str = None):
     """返回指定文件在 feature 分支与 main/master 的 diff，用于时间轴文件点击查看。"""
     import subprocess as _sp
+    from pathlib import Path as _Path
     project = await db.fetch_one("SELECT * FROM projects WHERE id = ?", (project_id,))
     if not project:
         raise HTTPException(404, "项目不存在")
     _ensure_git_path(project)
 
     repo_dir = git_manager._repo_path(project_id)
+
+    # 优先按指定 branch 读，否则搜索所有本地分支
     content = await git_manager.get_file_content(project_id, path, branch=branch)
+
+    if content is None and not branch:
+        # 没有指定 branch 时，遍历本地所有分支寻找文件
+        try:
+            r = _sp.run(["git", "branch", "--list", "--format=%(refname:short)"],
+                        cwd=str(repo_dir), capture_output=True, text=True, timeout=10)
+            for br in r.stdout.splitlines():
+                br = br.strip()
+                if not br:
+                    continue
+                c = await git_manager.get_file_content(project_id, path, branch=br)
+                if c is not None:
+                    content = c
+                    branch = br
+                    break
+        except Exception:
+            pass
+
     if content is None:
-        raise HTTPException(404, "文件不存在")
+        # 最后 fallback：直接读磁盘（未提交的文件）
+        disk_path = repo_dir / path
+        if disk_path.exists():
+            try:
+                content = disk_path.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+
+    if content is None:
+        raise HTTPException(404, "文件不存在（已检查 git 所有分支和磁盘）")
 
     diff_text = ""
     try:
-        # 对比 main/master 分支，若不存在则显示整个文件作为新增
         base = branch or "HEAD"
         for base_branch in ("main", "master"):
             r = _sp.run(
