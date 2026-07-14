@@ -2979,6 +2979,7 @@ class TicketOrchestrator:
         )
 
         project_id = ticket.get("project_id", "")
+        req_short = (ticket["requirement_id"] or "standalone")[-6:]
         context = {
             "ticket_id": ticket["id"],
             "ticket_title": ticket["title"],
@@ -2989,9 +2990,9 @@ class TicketOrchestrator:
             "requirement_description": requirement["description"] if requirement else "",
             "requirement_title": requirement["title"] if requirement else "",
             # 文件路径前缀：docs/Reqs/{需求短码}/{工单短码}/ — 需求文档统一归档到 Reqs/
-            "docs_prefix": f"docs/Reqs/{ticket['requirement_id'][-6:]}/{ticket['id'][-6:]}/",
+            "docs_prefix": f"docs/Reqs/{req_short}/{ticket['id'][-6:]}/",
             "src_prefix": f"src/{ticket.get('module', 'other')}/",
-            "tests_prefix": f"tests/{ticket['requirement_id'][-6:]}/",
+            "tests_prefix": f"tests/{req_short}/",
             # v0.19.x 工单面板进度区：让 UE 流式 actions 写心跳
             "_ticket_progress_cb": self._make_ticket_progress_callback(project_id, ticket["id"]),
         }

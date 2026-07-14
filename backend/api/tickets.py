@@ -2,17 +2,21 @@
 AI 自动开发系统 - 工单 API
 """
 import json
+import logging
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 from database import db
 from models import (
     TicketStatus,
     TicketUpdate,
     TicketRejectRequest,
+    DirectTicketCreate,
     validate_ticket_transition,
     STATUS_LABELS,
     BOARD_COLUMNS,
 )
 from utils import generate_id, now_iso
+
+logger = logging.getLogger("api.tickets")
 from events import event_manager
 
 router = APIRouter(tags=["tickets"])
@@ -299,6 +303,113 @@ async def cancel_ticket(project_id: str, ticket_id: str):
     )
 
     return {"message": "工单已取消"}
+
+
+# ==================== 直接创建独立工单 ====================
+
+_VALID_START_STATUSES = {
+    "pending",
+    "architecture_done",
+    "development_in_progress",
+}
+
+_STANDALONE_REQ_TITLE = "独立工单"
+
+
+async def _get_or_create_standalone_req(project_id: str) -> str:
+    """查询或创建项目的独立工单桶需求，返回其 ID（幂等）。"""
+    row = await db.fetch_one(
+        "SELECT id FROM requirements WHERE project_id = ? AND status = 'standalone' LIMIT 1",
+        (project_id,),
+    )
+    if row:
+        return row["id"]
+
+    req_id = generate_id("REQ")
+    now = now_iso()
+    await db.insert("requirements", {
+        "id": req_id,
+        "project_id": project_id,
+        "title": _STANDALONE_REQ_TITLE,
+        "description": "项目独立工单集合，由用户直接创建，不经过需求拆单流程。",
+        "status": "standalone",
+        "priority": "medium",
+        "created_at": now,
+        "updated_at": now,
+    })
+    logger.info("创建独立工单桶需求: %s (project=%s)", req_id, project_id)
+    return req_id
+
+
+@router.post("/api/projects/{project_id}/tickets/create-direct")
+async def create_direct_ticket(project_id: str, req: DirectTicketCreate):
+    """直接创建独立工单（不经过需求拆单，挂在独立工单桶需求下）。"""
+    project = await db.fetch_one("SELECT id FROM projects WHERE id = ?", (project_id,))
+    if not project:
+        raise HTTPException(404, "项目不存在")
+
+    start_status = req.start_from if req.start_from in _VALID_START_STATUSES else "pending"
+
+    # 校验 type
+    valid_types = {"feature", "bugfix", "refactor", "test", "doc"}
+    ticket_type = req.type if req.type in valid_types else "feature"
+
+    # 查询或创建独立工单桶
+    standalone_req_id = await _get_or_create_standalone_req(project_id)
+
+    ticket_id = generate_id("TK")
+    now = now_iso()
+    await db.insert("tickets", {
+        "id": ticket_id,
+        "requirement_id": standalone_req_id,
+        "project_id": project_id,
+        "title": req.title.strip(),
+        "description": req.description.strip(),
+        "type": ticket_type,
+        "module": req.module or "other",
+        "priority": req.priority,
+        "status": start_status,
+        "estimated_hours": req.estimated_hours,
+        "created_at": now,
+        "updated_at": now,
+    })
+
+    logger.info("创建直接工单: %s '%s' status=%s", ticket_id, req.title[:40], start_status)
+
+    # 写入创建日志
+    from events import event_manager
+    log_id = generate_id("LOG")
+    await db.execute(
+        "INSERT INTO ticket_logs (id, ticket_id, requirement_id, project_id, agent_type, action, detail, level, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (log_id, ticket_id, standalone_req_id, project_id, "Operator", "create",
+         json.dumps({"message": f"直接创建工单：{req.title[:60]}"}, ensure_ascii=False),
+         "info", now),
+    )
+
+    # 若设置了 auto_start，触发 orchestrator 调度
+    if req.auto_start and start_status != "pending":
+        try:
+            from orchestrator import orchestrator
+            import asyncio
+            asyncio.create_task(orchestrator.process_ticket(project_id, ticket_id))
+        except Exception as e:
+            logger.warning("触发 orchestrator 失败（不影响工单创建）: %s", e)
+
+    # SSE 通知看板刷新
+    await event_manager.publish_to_project(project_id, "ticket_created", {
+        "ticket_id": ticket_id,
+        "requirement_id": standalone_req_id,
+        "title": req.title,
+        "status": start_status,
+    })
+
+    return {
+        "ticket_id": ticket_id,
+        "requirement_id": standalone_req_id,
+        "status": start_status,
+        "message": f"工单「{req.title}」已创建",
+    }
 
 
 # ==================== 工单操作 ====================

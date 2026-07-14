@@ -31,6 +31,7 @@ class RequirementStatus(str, Enum):
     PAUSED = "paused"                # 已暂停（用户手动暂停）
     COMPLETED = "completed"          # 已完成（所有工单完成）
     CANCELLED = "cancelled"          # 已取消
+    STANDALONE = "standalone"        # 独立工单桶（不走拆单流程）
 
 
 class TicketStatus(str, Enum):
@@ -280,6 +281,20 @@ def validate_ticket_transition(from_status: str, to_status: str) -> bool:
         return False
     allowed = TICKET_TRANSITIONS.get(from_s, [])
     return to_s in allowed
+
+
+# ==================== 直接创建工单 ====================
+
+class DirectTicketCreate(BaseModel):
+    """直接创建单工单（独立工单桶模式，无需拆单）"""
+    title: str = Field(..., min_length=1, max_length=200)
+    description: str = Field(default="")
+    type: str = Field(default="feature")          # feature/bugfix/refactor/test/doc
+    module: str = Field(default="other")
+    priority: int = Field(default=3, ge=1, le=5)
+    estimated_hours: float = Field(default=4.0)
+    start_from: str = Field(default="pending")    # pending/architecture_done/development_in_progress
+    auto_start: bool = Field(default=True)        # 创建后立即加入调度队列
 
 
 def validate_requirement_transition(from_status: str, to_status: str) -> bool:

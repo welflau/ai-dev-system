@@ -10221,3 +10221,14 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
     0%,100% { box-shadow: 0 0 0 0 rgba(99,102,241,0.3); }
     50%      { box-shadow: 0 0 0 6px rgba(99,102,241,0.3); }
 }
+
+/* ==================== 独立工单桶 + 直接创建弹窗 ==================== */
+.standalone-req-row {
+    background: rgba(99,102,241,0.04);
+}
+.standalone-req-row:hover {
+    background: rgba(99,102,241,0.09);
+}
+.standalone-req-row .req-table-title {
+    color: #a78bfa;
+}

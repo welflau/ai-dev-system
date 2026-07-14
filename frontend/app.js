@@ -6140,7 +6140,13 @@ async function loadRequirements() {
             </thead>
             <tbody>`;
 
-        reqs.forEach(r => {
+        // standalone 需求置顶
+        const sortedReqs = [...reqs].sort((a, b) =>
+            (a.status === 'standalone' ? -1 : 1) - (b.status === 'standalone' ? -1 : 1)
+        );
+
+        sortedReqs.forEach(r => {
+            const isStandalone = r.status === 'standalone';
             const priorityMap = {
                 critical: { label: '紧急', cls: 'critical' },
                 high: { label: 'High', cls: 'high' },
@@ -6149,23 +6155,34 @@ async function loadRequirements() {
             };
             const pInfo = priorityMap[r.priority] || { label: r.priority, cls: 'medium' };
             const ticketCount = r.ticket_count || 0;
+            const titleIcon = isStandalone ? '🗂 ' : '';
+            const rowCls = isStandalone ? 'req-table-row standalone-req-row' : 'req-table-row';
+            const standaloneBtn = isStandalone
+                ? `<button class="btn-icon req-action-btn" style="color:var(--primary);" onclick="event.stopPropagation();showCreateDirectTicketModal()" title="直接创建工单">✚</button>`
+                : '';
 
             html += `
-                <tr class="req-table-row" data-req-id="${r.id}">
+                <tr class="${rowCls}" data-req-id="${r.id}">
                     <td class="col-expand" onclick="event.stopPropagation(); toggleReqTickets('${r.id}', this);">
                         ${ticketCount > 0 ? `<span class="req-expand-arrow" id="arrow-${r.id}">▶</span>` : '<span style="width:14px;display:inline-block;"></span>'}
                     </td>
-                    <td class="col-title" onclick="openPipeline('${r.id}')">
-                        <span class="req-table-title">${escHtml(r.title)}</span>
-                        ${r.branch_name ? `<span class="req-branch-tag" title="${escHtml(r.branch_name)}">🌿 ${escHtml(r.branch_name)}</span>` : ''}
-                        ${r.description ? `<span class="req-table-desc">${escHtml(r.description)}</span>` : ''}
+                    <td class="col-title" onclick="${isStandalone ? `showCreateDirectTicketModal()` : `openPipeline('${r.id}')`}">
+                        <span class="req-table-title">${titleIcon}${escHtml(r.title)}</span>
+                        ${isStandalone ? `<span class="req-table-desc" style="color:var(--primary);opacity:0.7;">点击直接创建工单 · ${ticketCount} 个工单</span>` : ''}
+                        ${!isStandalone && r.branch_name ? `<span class="req-branch-tag" title="${escHtml(r.branch_name)}">🌿 ${escHtml(r.branch_name)}</span>` : ''}
+                        ${!isStandalone && r.description ? `<span class="req-table-desc">${escHtml(r.description)}</span>` : ''}
                     </td>
-                    <td class="col-status"><span class="req-status-tag ${r.status}">${getStatusLabel(r.status)}</span></td>
+                    <td class="col-status">
+                        ${isStandalone
+                            ? `<span class="req-status-tag" style="background:rgba(99,102,241,0.15);color:#a78bfa;border:1px solid rgba(99,102,241,0.3);">独立工单桶</span>`
+                            : `<span class="req-status-tag ${r.status}">${getStatusLabel(r.status)}</span>`}
+                    </td>
                     <td class="col-priority"><span class="req-priority-tag ${pInfo.cls}">${escHtml(pInfo.label)}</span></td>
                     <td class="col-tickets">${ticketCount}</td>
                     <td class="col-module">${escHtml(r.module || '-')}</td>
                     <td class="col-time">${formatDateTime(r.created_at)}</td>
                     <td class="col-actions" onclick="event.stopPropagation()">
+                        ${standaloneBtn}
                         <button class="btn-icon req-action-btn" onclick="showRequirementDetail('${r.id}')" title="详情">📋</button>
                         <button class="btn-icon req-action-btn req-delete-btn" onclick="deleteReq('${r.id}', '${escHtml(r.title).replace(/'/g, "\\'")}')" title="删除">🗑️</button>
                     </td>
@@ -8360,6 +8377,14 @@ function connectSSE(projectId) {
             const data = JSON.parse(e.data);
             showToast(`工单被打回: ${data.reason || ''}`, 'warning');
             refreshBoard();
+        });
+
+        // 直接创建工单后刷新看板和需求列表
+        eventSource.addEventListener('ticket_created', (e) => {
+            try {
+                const data = JSON.parse(e.data);
+                if (data.requirement_id) refreshBoard();
+            } catch {}
         });
 
         eventSource.addEventListener('ticket_blocked', (e) => {
@@ -17610,6 +17635,134 @@ async function cancelCIBuild(buildId) {
         }
     } catch (e) {
         showToast(`取消失败: ${e.message}`, 'error');
+    }
+}
+
+// ==================== 直接创建独立工单 ====================
+
+/** 显示直接创建工单弹窗 */
+function showCreateDirectTicketModal() {
+    if (!currentProjectId) { showToast('请先进入一个项目', 'warning'); return; }
+    document.getElementById('directTicketModal')?.remove();
+    document.body.insertAdjacentHTML('beforeend', `
+        <div class="modal-overlay" id="directTicketModal" onclick="if(event.target===this)closeDirectTicketModal()" style="z-index:2000;">
+            <div class="modal" style="max-width:540px;width:95%;">
+                <div class="modal-header">
+                    <h3>✚ 直接创建工单</h3>
+                    <button class="btn-icon" onclick="closeDirectTicketModal()">✕</button>
+                </div>
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label class="form-label">标题 <span style="color:var(--danger)">*</span></label>
+                        <input id="dtTitle" class="form-input" placeholder="简短描述要做什么" autofocus>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">描述</label>
+                        <textarea id="dtDesc" class="form-input" rows="3" placeholder="详细说明（可选）"></textarea>
+                    </div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
+                        <div class="form-group">
+                            <label class="form-label">类型</label>
+                            <select id="dtType" class="form-input">
+                                <option value="feature">功能</option>
+                                <option value="bugfix">修复</option>
+                                <option value="refactor">重构</option>
+                                <option value="test">测试</option>
+                                <option value="doc">文档</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">模块</label>
+                            <select id="dtModule" class="form-input">
+                                <option value="other">其他</option>
+                                <option value="frontend">前端</option>
+                                <option value="backend">后端</option>
+                                <option value="database">数据库</option>
+                                <option value="api">API</option>
+                                <option value="testing">测试</option>
+                                <option value="deploy">部署</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">优先级</label>
+                            <select id="dtPriority" class="form-input">
+                                <option value="1">P1 紧急</option>
+                                <option value="2">P2 高</option>
+                                <option value="3" selected>P3 中</option>
+                                <option value="4">P4 低</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">执行起点</label>
+                        <div style="display:flex;flex-direction:column;gap:6px;margin-top:4px;">
+                            <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;">
+                                <input type="radio" name="dtStartFrom" value="pending" checked style="margin-top:3px;">
+                                <span><strong>完整流程</strong> <span style="color:var(--text-muted);font-size:12px;">规划 → 架构 → 开发 → 测试</span></span>
+                            </label>
+                            <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;">
+                                <input type="radio" name="dtStartFrom" value="architecture_done" style="margin-top:3px;">
+                                <span><strong>跳过规划架构</strong> <span style="color:var(--text-muted);font-size:12px;">直接进入开发阶段</span></span>
+                            </label>
+                            <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;">
+                                <input type="radio" name="dtStartFrom" value="development_in_progress" style="margin-top:3px;">
+                                <span><strong>立即开始开发</strong> <span style="color:var(--text-muted);font-size:12px;">跳过所有前置步骤</span></span>
+                            </label>
+                        </div>
+                    </div>
+                    <div class="form-group" style="margin-bottom:0;">
+                        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                            <input type="checkbox" id="dtAutoStart" checked>
+                            <span>创建后立即加入执行队列</span>
+                        </label>
+                    </div>
+                </div>
+                <div class="modal-footer" style="display:flex;gap:8px;justify-content:flex-end;">
+                    <button class="btn" onclick="closeDirectTicketModal()">取消</button>
+                    <button class="btn btn-primary" id="dtSubmitBtn" onclick="submitDirectTicket()">创建工单</button>
+                </div>
+            </div>
+        </div>`);
+    document.getElementById('dtTitle')?.focus();
+}
+
+function closeDirectTicketModal() {
+    document.getElementById('directTicketModal')?.remove();
+}
+
+/** 提交直接创建工单 */
+async function submitDirectTicket() {
+    const title = (document.getElementById('dtTitle')?.value || '').trim();
+    if (!title) { showToast('请填写工单标题', 'warning'); return; }
+
+    const startFrom = document.querySelector('input[name="dtStartFrom"]:checked')?.value || 'pending';
+    const body = {
+        title,
+        description: document.getElementById('dtDesc')?.value?.trim() || '',
+        type:         document.getElementById('dtType')?.value || 'feature',
+        module:       document.getElementById('dtModule')?.value || 'other',
+        priority:     parseInt(document.getElementById('dtPriority')?.value || '3'),
+        start_from:   startFrom,
+        auto_start:   document.getElementById('dtAutoStart')?.checked ?? true,
+        estimated_hours: 4.0,
+    };
+
+    const btn = document.getElementById('dtSubmitBtn');
+    if (btn) { btn.disabled = true; btn.textContent = '创建中…'; }
+
+    try {
+        const data = await api(`/projects/${currentProjectId}/tickets/create-direct`, {
+            method: 'POST', body,
+        });
+        closeDirectTicketModal();
+        showToast(`工单「${title}」已创建`, 'success');
+        refreshBoard();
+        loadRequirements();
+        // 自动打开工单抽屉
+        if (data.ticket_id) setTimeout(() => openTicketDrawer(data.ticket_id), 300);
+    } catch (e) {
+        showToast('创建失败: ' + e.message, 'error');
+        if (btn) { btn.disabled = false; btn.textContent = '创建工单'; }
     }
 }
 
