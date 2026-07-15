@@ -13510,15 +13510,126 @@ function _jumpToCliTask(taskId) {
 
 function _renderCliTaskOutput(taskId, outputEl) {
     const t = _CLI_TASKS_MEM[taskId];
-    if (!t) { outputEl.textContent = '任务不存在'; return; }
-    const statusLine = t.status === 'running' ? '🔄 运行中…'
-        : t.status === 'error' ? `❌ 失败 (${t.duration_ms}ms)` : `✓ 完成 (${t.duration_ms}ms)`;
-    const cmdLine = t.cmd ? `$ ${t.cmd}\n` : '';
-    const sep = cmdLine ? '─'.repeat(40) + '\n' : '';
-    // 兼容 output（字符串）和 output_lines（数组）两种来源
+    if (!t) { outputEl.innerHTML = '<span style="color:var(--text-muted)">任务不存在</span>'; return; }
+
     const outputText = t.output || (Array.isArray(t.output_lines) ? t.output_lines.join('\n') : '');
-    outputEl.textContent = `${statusLine}\n${cmdLine}${sep}${outputText || '（暂无输出）'}`;
-    outputEl.scrollTop = outputEl.scrollHeight;
+    const allLines   = outputText ? outputText.split('\n') : [];
+
+    const statusHtml = t.status === 'running'
+        ? `<span class="cto-status running">🔄 运行中…</span>`
+        : t.status === 'error' || t.status === 'failed'
+            ? `<span class="cto-status error">❌ 失败 (${t.duration_ms || 0}ms)</span>`
+            : `<span class="cto-status done">✓ 完成 (${t.duration_ms || 0}ms)</span>`;
+
+    const cmdHtml = t.cmd
+        ? `<div class="cto-cmd">$ ${_escHtmlSafe(t.cmd)}</div>`
+        : '';
+
+    // 复制按钮
+    const copyBtn = `<button class="cto-copy-btn" onclick="_cliOutputCopyAll('${taskId}')" title="复制全部输出">⎘</button>`;
+
+    // 截断：默认只显示最后 N 行
+    const MAX_LINES = 25;
+    let linesHtml = '';
+    let truncHtml  = '';
+    const hiddenCount = Math.max(0, allLines.length - MAX_LINES);
+
+    if (hiddenCount > 0) {
+        truncHtml = `<div class="cto-trunc" id="cto-trunc-${taskId}">
+            <span>⋯ 隐藏了前 ${hiddenCount} 行</span>
+            <button onclick="_cliOutputShowAll('${taskId}')">显示全部</button>
+        </div>`;
+        linesHtml = _formatCliLines(allLines.slice(-MAX_LINES), taskId);
+    } else {
+        linesHtml = _formatCliLines(allLines, taskId);
+    }
+
+    outputEl.innerHTML = `
+        <div class="cto-header">${statusHtml}${cmdHtml}${copyBtn}</div>
+        <div class="cto-body" id="cto-body-${taskId}">
+            ${truncHtml}
+            ${linesHtml}
+        </div>`;
+
+    // 流式情况下自动滚底
+    if (t.status === 'running') outputEl.scrollTop = outputEl.scrollHeight;
+}
+
+/** 格式化一批行：JSON 折叠 + URL 高亮 + 错误着色 */
+function _formatCliLines(lines, taskId) {
+    const parts = [];
+    let jsonBuf = [];
+    let jsonDepth = 0;
+
+    const flushJson = () => {
+        if (!jsonBuf.length) return;
+        const raw = jsonBuf.join('\n');
+        jsonBuf = []; jsonDepth = 0;
+        try {
+            const parsed = JSON.parse(raw);
+            const preview = JSON.stringify(parsed).slice(0, 80);
+            const uid = 'j' + Math.random().toString(36).slice(2, 8);
+            parts.push(`<details class="cto-json" id="${uid}">
+                <summary class="cto-json-sum">{ } <span class="cto-json-preview">${_escHtmlSafe(preview)}…</span></summary>
+                <pre class="cto-json-body">${_escHtmlSafe(JSON.stringify(parsed, null, 2))}</pre>
+            </details>`);
+        } catch {
+            // 不是合法 JSON，当普通行处理
+            parts.push(...jsonBuf.map(l => _colorLine(l)));
+        }
+    };
+
+    for (const line of lines) {
+        const trimmed = line.trim();
+        // JSON 检测：以 { 或 [ 开头
+        if (jsonDepth === 0 && (trimmed.startsWith('{') || trimmed.startsWith('['))) {
+            jsonBuf = [line];
+            jsonDepth = (trimmed.match(/[{[]/g) || []).length - (trimmed.match(/[}\]]/g) || []).length;
+            if (jsonDepth <= 0) { flushJson(); }
+        } else if (jsonDepth > 0) {
+            jsonBuf.push(line);
+            jsonDepth += (trimmed.match(/[{[]/g) || []).length - (trimmed.match(/[}\]]/g) || []).length;
+            if (jsonDepth <= 0) { flushJson(); }
+        } else {
+            parts.push(_colorLine(line));
+        }
+    }
+    if (jsonBuf.length) flushJson();
+    return parts.join('');
+}
+
+const _URL_RE = /https?:\/\/[^\s"'<>)]+/g;
+
+function _colorLine(line) {
+    const lower = line.toLowerCase();
+    let cls = '';
+    if (/\b(error|exception|fatal|failed|traceback)\b/.test(lower)) cls = 'cto-line-error';
+    else if (/\b(warning|warn)\b/.test(lower)) cls = 'cto-line-warn';
+    else if (/\b(success|completed|done|passed|ok)\b/.test(lower)) cls = 'cto-line-ok';
+
+    const escaped = _escHtmlSafe(line).replace(_URL_RE, m =>
+        `<a href="${m}" target="_blank" class="cto-url">${m}</a>`
+    );
+    return `<div class="cto-line ${cls}">${escaped || ' '}</div>`;
+}
+
+function _escHtmlSafe(str) {
+    return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function _cliOutputCopyAll(taskId) {
+    const t = _CLI_TASKS_MEM[taskId];
+    if (!t) return;
+    const text = t.output || (Array.isArray(t.output_lines) ? t.output_lines.join('\n') : '');
+    navigator.clipboard?.writeText(text).then(() => showToast('已复制', 'success'));
+}
+
+function _cliOutputShowAll(taskId) {
+    const t = _CLI_TASKS_MEM[taskId];
+    if (!t) return;
+    const allLines = (t.output || '').split('\n');
+    const bodyEl = document.getElementById(`cto-body-${taskId}`);
+    if (bodyEl) bodyEl.innerHTML = _formatCliLines(allLines, taskId);
 }
 
 function _injectCliTaskToPanel(taskId) {
