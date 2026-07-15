@@ -10491,3 +10491,14 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
     white-space: nowrap;
     margin-top: 1px;
 }
+
+/* ==================== 后台任务面板 — 拖拽手柄 + 搜索框 ==================== */
+#tasksPanelResizer:hover,
+#tasksPanelResizer:active {
+    background: var(--primary, #7c6af7) !important;
+    width: 4px;
+}
+#tasksSearchInput:focus {
+    border-color: var(--primary, #7c6af7);
+    box-shadow: 0 0 0 2px rgba(99,102,241,.15);
+}

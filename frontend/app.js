@@ -13411,6 +13411,7 @@ async function _openTasksPanel() {
 
     panel.style.display = 'flex';
     body.classList.add('has-tasks-panel');
+    _restoreTasksPanelWidth();
     _refreshTasksPanel();
 }
 
@@ -13877,6 +13878,61 @@ function _clearOldCliTasks() {
     }
     if (removed) { showToast(`已清除 ${removed} 条历史任务`, 'success'); _refreshTasksPanel(); }
     else { showToast('没有可清除的历史任务', 'info'); }
+}
+
+/** 后台任务列表搜索过滤 */
+function _tasksSearch(query) {
+    const q = query.trim().toLowerCase();
+    document.querySelectorAll('.tasks-panel-item').forEach(el => {
+        const text = (el.textContent || '').toLowerCase();
+        el.style.display = (!q || text.includes(q)) ? '' : 'none';
+    });
+    // 隐藏内部全部条目后，同时折叠/展开分组
+    document.querySelectorAll('.tasks-grp-header').forEach(header => {
+        const bodyId = header.dataset.grpId;
+        const body = document.getElementById(bodyId);
+        if (!body) return;
+        if (q) {
+            body.style.display = '';  // 搜索时全展开
+            const anyVisible = [...body.querySelectorAll('.tasks-panel-item')].some(el => el.style.display !== 'none');
+            header.style.display = anyVisible ? '' : 'none';
+        } else {
+            header.style.display = '';
+        }
+    });
+}
+
+/** 左右分栏拖拽调宽 */
+function _tasksPanelResizeStart(e) {
+    e.preventDefault();
+    const listEl    = document.getElementById('tasksPanelList');
+    const resizerEl = document.getElementById('tasksPanelResizer');
+    if (!listEl) return;
+
+    const startX   = e.clientX;
+    const startW   = listEl.offsetWidth;
+    resizerEl.style.background = 'var(--primary, #7c6af7)';
+
+    const onMove = (ev) => {
+        const newW = Math.max(120, Math.min(360, startW + ev.clientX - startX));
+        listEl.style.width = newW + 'px';
+    };
+    const onUp = () => {
+        resizerEl.style.background = '';
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        // 持久化宽度
+        try { localStorage.setItem('tasksPanelListW', listEl.offsetWidth); } catch {}
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+}
+
+/** 恢复上次面板宽度 */
+function _restoreTasksPanelWidth() {
+    const w = parseInt(localStorage.getItem('tasksPanelListW') || '200', 10);
+    const listEl = document.getElementById('tasksPanelList');
+    if (listEl && w >= 120 && w <= 360) listEl.style.width = w + 'px';
 }
 
 function _toggleTaskGroup(headerEl) {

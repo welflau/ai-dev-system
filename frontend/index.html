@@ -1630,9 +1630,20 @@
                     <button class="tasks-tab"         data-filter="success" onclick="_setTasksFilter('success')">完成</button>
                     <button class="tasks-tab"         data-filter="error"   onclick="_setTasksFilter('error')">失败</button>
                 </div>
+                <!-- 搜索框 -->
+                <div style="padding:4px 8px;border-bottom:1px solid var(--border);flex-shrink:0;">
+                    <input id="tasksSearchInput" type="text" placeholder="🔍 搜索任务…"
+                        oninput="_tasksSearch(this.value)"
+                        style="width:100%;box-sizing:border-box;background:rgba(255,255,255,.05);border:1px solid var(--border);
+                               border-radius:4px;padding:3px 7px;font-size:11px;color:var(--text);outline:none;">
+                </div>
                 <div style="display:flex;flex:1;overflow:hidden;min-height:0;">
-                    <div id="tasksPanelList" style="width:160px;flex-shrink:0;border-right:1px solid var(--border);
-                         overflow-y:auto;font-size:11px;"></div>
+                    <div id="tasksPanelList" style="width:200px;flex-shrink:0;overflow-y:auto;font-size:11px;"></div>
+                    <!-- 拖拽调宽手柄 -->
+                    <div id="tasksPanelResizer" style="width:4px;flex-shrink:0;cursor:col-resize;background:transparent;
+                         border-right:1px solid var(--border);transition:background .15s;"
+                         onmousedown="_tasksPanelResizeStart(event)"
+                         title="拖拽调整宽度"></div>
                     <div id="tasksPanelOutput" style="flex:1;overflow:auto;padding:0;font-family:monospace;
                          font-size:11px;line-height:1.5;color:var(--text);">
                         <div style="color:var(--text-muted);padding-top:30px;text-align:center;font-family:inherit;font-size:11px;">← 选择任务</div>
