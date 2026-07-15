@@ -13673,7 +13673,18 @@ async function _refreshTasksPanel() {
         const ticketTasks = resp?.data?.tasks || [];
 
         // 合并内存 CLI 任务（按时间正序，#1 = 最早执行）
-        const cliTasks = Object.values(_CLI_TASKS_MEM).sort((a,b) => (a.created_at||a.ts||'').localeCompare(b.created_at||b.ts||''));
+        let cliTasks = Object.values(_CLI_TASKS_MEM).sort((a,b) => (a.created_at||a.ts||'').localeCompare(b.created_at||b.ts||''));
+
+        // 应用状态过滤
+        const activeFilter = document.querySelector('.tasks-tab.active')?.dataset?.filter || 'all';
+        if (activeFilter !== 'all') {
+            const filterFn = activeFilter === 'running'
+                ? t => t.status === 'running'
+                : activeFilter === 'success'
+                    ? t => t.status === 'success'
+                    : t => t.status === 'error' || t.status === 'failed';
+            cliTasks = cliTasks.filter(filterFn);
+        }
 
         const statusIcon = s => ({
             running: '🔄', in_progress: '🔄', executing: '🔄', pending: '⏳', queued: '⏳',
@@ -13720,6 +13731,18 @@ async function _refreshTasksPanel() {
         // 按组内最后一条任务时间倒序（最新会话在顶部）
         sessionGroups.sort((a, b) => (b._lastMs || 0) - (a._lastMs || 0));
 
+        // 计算日期标签（今天 / 昨天 / N天前）
+        const _dayLabel = (ms) => {
+            if (!ms) return '';
+            const now = new Date(); const d = new Date(ms);
+            const diffDays = Math.floor((now.setHours(0,0,0,0) - d.setHours(0,0,0,0)) / 86400000);
+            if (diffDays === 0) return '今天';
+            if (diffDays === 1) return '昨天';
+            return `${diffDays} 天前`;
+        };
+        // 在 groups 间插入日期分隔符
+        let lastDayLabel = null;
+
         // 读取折叠状态（key → collapsed bool），默认只展开最新一组
         const _grpCollapsed = {};
         sessionGroups.forEach((grp, i) => {
@@ -13733,43 +13756,72 @@ async function _refreshTasksPanel() {
             const headerTs = grp._lastMs
                 ? (() => { try { return new Date(grp._lastMs).toLocaleTimeString('zh-CN',{hour12:false}); } catch { return ''; } })()
                 : '';
+
+            // 日期分隔符
+            const dayLabel = _dayLabel(grp._lastMs);
+            let daySepHtml = '';
+            if (dayLabel !== lastDayLabel) {
+                lastDayLabel = dayLabel;
+                daySepHtml = dayLabel
+                    ? `<div class="tasks-day-sep">${dayLabel}</div>`
+                    : '';
+            }
+
             const headerLabel = escapeHtml(grp.label) + (headerTs ? ` <span style="opacity:.4;font-weight:400;">${escapeHtml(headerTs)}</span>` : '');
             const arrow = collapsed ? '▶' : '▼';
+
+            // 统计当前组状态
+            const runCount  = grp.items.filter(({t}) => t.status === 'running').length;
+            const errCount  = grp.items.filter(({t}) => t.status === 'error' || t.status === 'failed').length;
+            const badgeHtml = runCount ? `<span class="tasks-grp-badge running">${runCount}</span>`
+                            : errCount ? `<span class="tasks-grp-badge error">${errCount}</span>` : '';
+
             const header = `<div class="tasks-grp-header" data-grp-key="${escapeHtml(grp.key)}" data-grp-id="${grpId}"
-                onclick="_toggleTaskGroup(this)"
-                style="font-size:10px;color:var(--text-muted);padding:6px 14px 5px;font-weight:600;opacity:.8;
-                       letter-spacing:.03em;border-top:1px solid var(--border-light,rgba(255,255,255,.06));
-                       cursor:pointer;display:flex;align-items:center;gap:5px;user-select:none;">
-                <span style="font-size:8px;opacity:.6;">${arrow}</span>
-                <span>${headerLabel}</span>
-                <span style="margin-left:auto;opacity:.4;font-weight:400;">${grp.items.length} 步</span>
+                onclick="_toggleTaskGroup(this)">
+                <span class="tasks-grp-arrow">${arrow}</span>
+                <span class="tasks-grp-label">${headerLabel}</span>
+                ${badgeHtml}
+                <span class="tasks-grp-count">${grp.items.length} 步</span>
             </div>`;
+
             const items = grp.items.map(({ t, idx }) => {
-                const isCli = t.type === 'cli_task';
+                const isCli    = t.type === 'cli_task';
                 const isActive = t.id === _cliActiveTaskId;
-                const durText = isCli && t.duration_ms ? ` · ${t.duration_ms}ms` : (t.elapsed ? ` · ${t.elapsed}` : '');
-                const subText = isCli ? `CLI${durText}` : `${t.agent ? escapeHtml(t.agent) : ''}${durText}${t.action ? ' · ' + escapeHtml(t.action.slice(0,20)) : ''}`;
-                const tsRaw = t.created_at
+                const durText  = isCli && t.duration_ms ? `${t.duration_ms}ms` : (t.elapsed || '');
+                const tsRaw    = t.created_at
                     ? (() => { try { return new Date(t.created_at).toLocaleTimeString('zh-CN', {hour12:false}); } catch { return t.created_at.slice(11,19); } })()
                     : (t.ts || '');
-                const tsText = tsRaw ? `<span style="opacity:.5;margin-left:4px;">${escapeHtml(tsRaw)}</span>` : '';
+
+                // 状态图标
+                const sIcon = {running:'🔄',in_progress:'🔄',executing:'🔄',success:'✅',error:'❌',failed:'❌',pending:'⏳'}[t.status] || '•';
+
+                // 工具名（从 title 提取更简洁的显示名）
+                const rawTitle = t.title || '';
+                const displayTitle = rawTitle.length > 40 ? rawTitle.slice(0, 38) + '…' : rawTitle;
+
+                // cmd 行（只取最后一段，避免过长路径）
                 const cmd = t.cmd || '';
-                const cmdText = isCli && cmd ? `<div style="color:var(--text-muted);font-size:10px;padding-left:24px;font-family:monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;opacity:.7;" title="${escapeHtml(cmd)}">$ ${escapeHtml(cmd.slice(0,60))}</div>` : '';
+                const cmdShort = cmd.length > 50 ? '…' + cmd.slice(-48) : cmd;
+                const cmdHtml  = isCli && cmd
+                    ? `<div class="tpi-cmd" title="${escapeHtml(cmd)}">$ ${escapeHtml(cmdShort)}</div>`
+                    : '';
+
                 return `
-                <div class="tasks-panel-item" data-task-id="${escapeHtml(t.id)}" data-task-type="${escapeHtml(t.type)}"
-                     onclick="_selectTaskItem(${JSON.stringify(t).replace(/"/g,'&quot;')})"
-                     style="padding:8px 14px;cursor:pointer;border-bottom:1px solid var(--border-light,rgba(255,255,255,.06));transition:background .15s;
-                            ${isActive ? 'background:var(--bg-elevated);border-left:2px solid var(--primary);' : ''}">
-                    <div style="display:flex;align-items:center;gap:6px;margin-bottom:2px;">
-                        <span style="font-size:10px;color:var(--text-muted);opacity:.6;min-width:18px;text-align:right;flex-shrink:0;">#${idx}</span>
-                        <span>${statusIcon(t.status)}</span>
-                        <span style="font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(t.title)}</span>
+                <div class="tasks-panel-item${isActive ? ' active' : ''}" data-task-id="${escapeHtml(t.id)}" data-task-type="${escapeHtml(t.type)}"
+                     onclick="_selectTaskItem(${JSON.stringify(t).replace(/"/g,'&quot;')})">
+                    <div class="tpi-main">
+                        <span class="tpi-seq">#${idx}</span>
+                        <span class="tpi-icon">${sIcon}</span>
+                        <span class="tpi-title">${escapeHtml(displayTitle)}</span>
                     </div>
-                    <div style="color:var(--text-muted);font-size:10px;padding-left:24px;">${subText}${tsText}</div>
-                    ${cmdText}
+                    <div class="tpi-meta">
+                        ${durText ? `<span class="tpi-dur">${escapeHtml(durText)}</span>` : ''}
+                        ${tsRaw ? `<span class="tpi-time">${escapeHtml(tsRaw)}</span>` : ''}
+                    </div>
+                    ${cmdHtml}
                 </div>`;
             }).join('');
-            return header + `<div id="${grpId}" style="${collapsed ? 'display:none;' : ''}">${items}</div>`;
+            return daySepHtml + header + `<div id="${grpId}" style="${collapsed ? 'display:none;' : ''}">${items}</div>`;
         }).join('');
 
         listEl.querySelectorAll('.tasks-panel-item').forEach(el => {
@@ -13802,6 +13854,29 @@ function _openLocalImageFile(filePath) {
         navigator.clipboard?.writeText(filePath);
         showToast('URL 已复制', 'success');
     }
+}
+
+/** 切换状态过滤 tab */
+function _setTasksFilter(filter) {
+    document.querySelectorAll('.tasks-tab').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.filter === filter);
+    });
+    _refreshTasksPanel();
+}
+
+/** 清除已完成超过 5 分钟的任务 */
+function _clearOldCliTasks() {
+    const cutoff = Date.now() - 5 * 60 * 1000;
+    let removed = 0;
+    for (const id in _CLI_TASKS_MEM) {
+        const t = _CLI_TASKS_MEM[id];
+        if (t.status !== 'running' && t.status !== 'in_progress') {
+            const ts = t.created_at ? new Date(t.created_at).getTime() : 0;
+            if (!ts || ts < cutoff) { delete _CLI_TASKS_MEM[id]; removed++; }
+        }
+    }
+    if (removed) { showToast(`已清除 ${removed} 条历史任务`, 'success'); _refreshTasksPanel(); }
+    else { showToast('没有可清除的历史任务', 'info'); }
 }
 
 function _toggleTaskGroup(headerEl) {
