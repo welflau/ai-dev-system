@@ -1099,6 +1099,11 @@ class LLMClient:
                 stderr_task = _asyncio.create_task(_stderr_reader())
                 deadline = _asyncio.get_event_loop().time() + self.cli_timeout
 
+                # 工单 token 流式推送：累积缓冲，每 ~60 字符推一次 SSE 事件
+                _tok_buf: list = []
+                _tok_buf_len: int = 0
+                _TOK_THRESHOLD = 60  # chars
+
                 try:
                     while True:
                         remaining = deadline - _asyncio.get_event_loop().time()
@@ -1121,6 +1126,19 @@ class LLMClient:
                         kind, chunk = item
                         if kind == "text":
                             yield {"type": "text_delta", "delta": chunk}
+                            # 工单上下文：批量推 token 到项目 SSE 频道
+                            if _llm_ctx.ticket_id and _llm_ctx.project_id:
+                                _tok_buf.append(chunk)
+                                _tok_buf_len += len(chunk)
+                                if _tok_buf_len >= _TOK_THRESHOLD:
+                                    _bat = ''.join(_tok_buf); _tok_buf = []; _tok_buf_len = 0
+                                    from events import event_manager as _em
+                                    await _em.publish_to_project(
+                                        _llm_ctx.project_id, "ticket_llm_token",
+                                        {"ticket_id": _llm_ctx.ticket_id,
+                                         "agent": _llm_ctx.agent_type or "Agent",
+                                         "delta": _bat},
+                                    )
                         elif kind == "thinking":
                             yield {"type": "thinking_delta", "delta": chunk}
                         elif kind == "resume_failed":
@@ -1143,6 +1161,18 @@ class LLMClient:
                         reader_task.cancel()
                     if not stderr_task.done():
                         stderr_task.cancel()
+                    # flush 剩余 token buffer
+                    if _tok_buf and _llm_ctx.ticket_id and _llm_ctx.project_id:
+                        try:
+                            from events import event_manager as _em
+                            await _em.publish_to_project(
+                                _llm_ctx.project_id, "ticket_llm_token",
+                                {"ticket_id": _llm_ctx.ticket_id,
+                                 "agent": _llm_ctx.agent_type or "Agent",
+                                 "delta": ''.join(_tok_buf), "done": True},
+                            )
+                        except Exception:
+                            pass
             else:
                 # 非流式 CLI：等待全部输出，一次性 yield
                 try:

@@ -167,7 +167,7 @@ function generateLocalPath(projectName) {
 document.addEventListener('DOMContentLoaded', () => {
     // 注入全局动画样式
     const _styleEl = document.createElement('style');
-    _styleEl.textContent = `@keyframes spin{to{transform:rotate(360deg)}}`;
+    _styleEl.textContent = `@keyframes spin{to{transform:rotate(360deg)}}@keyframes blink{0%,100%{opacity:0.2}50%{opacity:1}}`;
     document.head.appendChild(_styleEl);
     // 统一配置 marked（GFM + 换行）
     if (window.marked) {
@@ -8895,10 +8895,119 @@ function connectSSE(projectId) {
         eventSource.addEventListener('log_added', (e) => {
             const data = JSON.parse(e.data);
             console.log('[SSE] log_added:', data);
+            // thought_done/thought_start 到来时移除同 ticket 的流式卡片
+            if (data.ticket_id && (data.action === 'thought_done' || data.action === 'thought_start')) {
+                document.getElementById(`ticket-stream-${data.ticket_id}`)?.remove();
+                // 若工单聊天面板正在展示该工单，移除流式面板并重载对话
+                if (data.action === 'thought_done' && chatMode === 'job' && chatCurrentTicketId === data.ticket_id) {
+                    document.getElementById('ticket-chat-stream')?.remove();
+                    document.getElementById(`feed-stream-${data.ticket_id}`)?.remove();
+                    setTimeout(() => loadTicketConversations(data.ticket_id), 400);
+                }
+            }
             appendLogEntry(data);
             // 实时追加到工单对话 Feed
             if (chatMode === 'job' && data.ticket_id) {
                 appendToTicketFeed(data);
+            }
+        });
+
+        // SSE: 工单 Agent 实时 token 流
+        eventSource.addEventListener('ticket_llm_token', (e) => {
+            const data = JSON.parse(e.data);
+            if (!data.ticket_id || !data.delta) return;
+            const cardId = `ticket-stream-${data.ticket_id}`;
+            let card = document.getElementById(cardId);
+            if (!card) {
+                card = document.createElement('div');
+                card.id = cardId;
+                card.className = 'log-entry';
+                card.style.cssText = 'border-left:2px solid rgba(163,113,247,0.5);padding-left:8px;';
+                card.innerHTML = `
+                    <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
+                        <span class="log-agent" style="color:rgba(163,113,247,0.9);">${escapeHtml(data.agent||'Agent')}</span>
+                        <span style="font-size:10px;color:var(--text-muted);">思考中…<span class="stream-dots">
+                            <span style="animation:blink 1s infinite 0s">.</span>
+                            <span style="animation:blink 1s infinite .3s">.</span>
+                            <span style="animation:blink 1s infinite .6s">.</span>
+                        </span></span>
+                    </div>
+                    <div class="stream-text" style="font-size:11px;color:var(--text-muted);white-space:pre-wrap;max-height:100px;overflow:hidden;line-height:1.5;word-break:break-all;"></div>`;
+                // 插到日志面板顶部（最新可见）
+                const logPanel = document.getElementById('logPanelEntries');
+                if (logPanel) logPanel.prepend(card);
+            }
+            const textEl = card.querySelector('.stream-text');
+            if (textEl) {
+                textEl.textContent += data.delta;
+                // 保持最后 200 字可见
+                if (textEl.textContent.length > 300) {
+                    textEl.textContent = '…' + textEl.textContent.slice(-280);
+                }
+            }
+            // 若当前查看的是该工单的 feed，也同步更新
+            if (chatMode === 'job' && data.ticket_id) {
+                const section = document.getElementById(`ticket-section-${data.ticket_id}`);
+                const msgArea = section?.querySelector('.ticket-section-messages');
+                if (msgArea) {
+                    let feedCard = msgArea.querySelector(`#feed-stream-${data.ticket_id}`);
+                    if (!feedCard) {
+                        feedCard = document.createElement('div');
+                        feedCard.id = `feed-stream-${data.ticket_id}`;
+                        feedCard.className = 'ticket-feed-log-entry';
+                        feedCard.style.cssText = 'border-left:2px solid rgba(163,113,247,0.4);padding-left:6px;font-size:11px;color:var(--text-muted);';
+                        feedCard.innerHTML = `<span class="log-agent" style="color:rgba(163,113,247,0.8);">${escapeHtml(data.agent||'Agent')}</span> <span>思考中…</span><div class="feed-stream-text" style="white-space:pre-wrap;max-height:80px;overflow:hidden;word-break:break-all;"></div>`;
+                        msgArea.appendChild(feedCard);
+                    }
+                    const ft = feedCard.querySelector('.feed-stream-text');
+                    if (ft) {
+                        ft.textContent += data.delta;
+                        if (ft.textContent.length > 300) ft.textContent = '…' + ft.textContent.slice(-280);
+                    }
+                    msgArea.scrollTop = msgArea.scrollHeight;
+                }
+            }
+            // 工单聊天面板（#chatMessages, chatMode==='job'）实时流式思考
+            if (chatMode === 'job' && chatCurrentTicketId === data.ticket_id) {
+                const chatContainer = document.getElementById('chatMessages');
+                if (chatContainer) {
+                    let streamPanel = document.getElementById('ticket-chat-stream');
+                    if (!streamPanel) {
+                        streamPanel = document.createElement('div');
+                        streamPanel.id = 'ticket-chat-stream';
+                        streamPanel.className = 'crp-rounds-panel';
+                        streamPanel.style.marginLeft = '0';
+                        streamPanel.innerHTML = `
+                            <div class="crp-rounds-header">
+                                <span class="crp-rounds-icon">✦</span>
+                                <span class="crp-rounds-title">${escapeHtml(data.agent||'Agent')} 思考中…</span>
+                                <span class="crp-rounds-toggle" onclick="this.closest('.crp-rounds-panel').classList.toggle('crp-collapsed')">∨</span>
+                            </div>
+                            <div class="crp-rounds-body">
+                                <div class="crp-round-group crp-round-running crp-round-expanded">
+                                    <div class="crp-round-header">
+                                        <span class="crp-round-dot"></span>
+                                        <span class="crp-round-reasoning crp-round-reasoning-placeholder"></span>
+                                    </div>
+                                    <div class="crp-round-body">
+                                        <div class="crp-round-thinking stream-think-text" style="padding:6px 14px;font-size:11px;color:var(--text-muted);white-space:pre-wrap;word-break:break-word;max-height:300px;overflow-y:auto;"></div>
+                                    </div>
+                                </div>
+                            </div>`;
+                        chatContainer.appendChild(streamPanel);
+                        scrollChatToBottom();
+                    }
+                    const thinkEl = streamPanel.querySelector('.stream-think-text');
+                    if (thinkEl) {
+                        thinkEl.textContent += data.delta;
+                        const reasonEl = streamPanel.querySelector('.crp-round-reasoning');
+                        if (reasonEl) {
+                            reasonEl.textContent = thinkEl.textContent.replace(/\n+/g, ' ').slice(-80);
+                            reasonEl.classList.remove('crp-round-reasoning-placeholder');
+                        }
+                        scrollChatToBottom();
+                    }
+                }
             }
         });
 
@@ -12938,6 +13047,9 @@ async function loadChatHistory() {
 async function loadTicketConversations(ticketId) {
     if (!currentProjectId || !ticketId) return;
 
+    // 先移除旧的工单 header，防止重复插入
+    document.querySelectorAll('.chat-job-header').forEach(el => el.remove());
+
     const container = document.getElementById('chatMessages');
     container.innerHTML = '<div class="chat-typing"><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div></div>';
 
@@ -12948,7 +13060,7 @@ async function loadTicketConversations(ticketId) {
 
         container.innerHTML = '';
 
-        // 添加工单信息头
+        // 添加工单信息头（插到 #chatPanelBody 之前，即 chat header 和 body 中间）
         if (ticket.title) {
             chatCurrentTicketTitle = ticket.title;
             const header = document.createElement('div');
@@ -12958,7 +13070,12 @@ async function loadTicketConversations(ticketId) {
                 <div class="job-title">${escapeHtml(ticket.title)}</div>
                 <span class="job-close-btn" onclick="clearJobSelection()" title="取消选择">✕</span>
             `;
-            container.parentElement.insertBefore(header, container);
+            const chatPanelBody = document.getElementById('chatPanelBody');
+            if (chatPanelBody) {
+                chatPanelBody.parentElement.insertBefore(header, chatPanelBody);
+            } else {
+                container.parentElement.insertBefore(header, container);
+            }
         }
 
         if (messages.length === 0) {
@@ -16518,13 +16635,19 @@ function selectTicketForChat(ticketId, ticketTitle) {
         toggleChatPanel();
     }
 
-    if (chatMode === 'job') {
-        // 已在工单模式，直接滚动定位
-        scrollToTicketSection(ticketId);
-    } else {
-        // 切换到工单模式（会自动加载全部并定位）
-        setChatMode('job');
-    }
+    // 切换到 job 模式（更新 tab 样式、隐藏输入框）
+    chatMode = 'job';
+    document.getElementById('chatModeGlobal')?.classList.toggle('active', false);
+    document.getElementById('chatModeJob')?.classList.toggle('active', true);
+    document.getElementById('chatModeGroup')?.classList.toggle('active', false);
+    document.getElementById('chatPanelTitle').textContent = '工单对话';
+    document.getElementById('chatPanelIcon').textContent = '🔧';
+    document.getElementById('chatPanelInput').style.display = 'none';
+    document.getElementById('chatMessages').style.display = '';
+    document.getElementById('groupChatMessages').style.display = 'none';
+
+    // 直接加载该工单对话（标题固定在顶部）
+    loadTicketConversations(ticketId);
 }
 
 /**
@@ -16533,7 +16656,7 @@ function selectTicketForChat(ticketId, ticketTitle) {
 function clearJobSelection() {
     chatCurrentTicketId = null;
     chatCurrentTicketTitle = '';
-    // 移除高亮，Feed 保持显示
+    document.querySelectorAll('.chat-job-header').forEach(el => el.remove());
     document.querySelectorAll('.ticket-section-highlight').forEach(el => el.classList.remove('ticket-section-highlight'));
 }
 
