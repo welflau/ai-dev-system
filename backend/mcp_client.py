@@ -317,6 +317,7 @@ class MCPClient:
         self._servers: Dict[str, _ServerConnection] = {}
         self._servers_config: Dict[str, Dict[str, Any]] = {}
         self._started = False
+        self._warming_up: set = set()  # 正在后台启动的 server 名称集合
         self._load_config()
 
     def _load_config(self):
@@ -383,7 +384,8 @@ class MCPClient:
         """合并全局层 + 项目层后，返回该项目可用的工具列表。
 
         Phase 6：读取 {repo}/.ads/mcp_servers.json，与全局配置合并，
-        启动项目层新增的 server（若尚未运行），再按 traits 过滤返回工具。
+        **非阻塞**：项目层新增 server 在后台启动，不阻塞当前请求；
+        下次调用时若已完成启动则纳入工具列表。
         """
         project_cfg = _load_project_mcp_config(repo_path)
         if not project_cfg:
@@ -392,26 +394,21 @@ class MCPClient:
 
         merged = _merge_mcp_configs(self._servers_config, project_cfg)
 
-        # 启动项目层新增 / 被覆盖为 enabled:true 的 server
+        # 项目层新增 server — 先同步加入 _warming_up，再 fire-and-forget 启动
+        # 同步 add 确保 _stream_mcp_status_events 能立即感知到待连接的 server
         for name, cfg in merged.items():
             if not cfg.get("enabled"):
                 continue
-            if name not in self._servers:
-                conn = _ServerConnection(name, cfg)
-                ok = await conn.start()
-                self._servers[name] = conn
-                if ok:
-                    logger.info("MCP 项目层 server 已启动: %s", name)
-                else:
-                    logger.warning("MCP 项目层 server 启动失败: %s — %s", name, conn.error)
+            if name not in self._servers and name not in self._warming_up:
+                self._warming_up.add(name)  # 同步，create_task 之前
+                asyncio.create_task(self._start_project_server_bg(name, cfg))
 
-        # 按合并后配置过滤并收集工具
+        # 按合并后配置过滤并收集当前已 running 的工具
         schemas = []
         for name, conn in self._servers.items():
             if conn.status != "running":
                 continue
             cfg = merged.get(name, self._servers_config.get(name, {}))
-            # 项目层显式 disabled → 跳过
             if not cfg.get("enabled", True):
                 continue
             trait_filter = cfg.get("enabled_for_traits")
@@ -420,6 +417,39 @@ class MCPClient:
                     continue
             schemas.extend(conn.tools)
         return schemas
+
+    async def _start_project_server_bg(self, name: str, cfg: Dict[str, Any]) -> None:
+        """后台启动项目层 MCP server（fire-and-forget），结果写入 _servers。"""
+        self._warming_up.add(name)
+        try:
+            conn = _ServerConnection(name, cfg)
+            ok = await conn.start()
+            self._servers[name] = conn
+            if ok:
+                logger.info("MCP 项目层 server 已启动: %s", name)
+            else:
+                logger.warning("MCP 项目层 server 启动失败: %s — %s", name, conn.error)
+        except Exception as e:
+            logger.warning("MCP 项目层 server 启动异常: %s — %s", name, e)
+        finally:
+            self._warming_up.discard(name)
+
+    async def warmup_project_servers(self, repo_path: str) -> None:
+        """项目打开时预热：后台启动该项目所有项目层 MCP server。
+
+        同步将待启动 server 加入 _warming_up，保证调用方可立即感知连接状态。
+        """
+        project_cfg = _load_project_mcp_config(repo_path)
+        if not project_cfg:
+            return
+        merged = _merge_mcp_configs(self._servers_config, project_cfg)
+        for name, cfg in merged.items():
+            if not cfg.get("enabled"):
+                continue
+            if name not in self._servers and name not in self._warming_up:
+                logger.info("MCP 项目预热: 后台启动 %s", name)
+                self._warming_up.add(name)  # 同步 add，调用方可立即读到
+                asyncio.create_task(self._start_project_server_bg(name, cfg))
 
     async def call_tool(self, tool_name: str, tool_input: Dict[str, Any]) -> str:
         """分发到对应 server；返回 JSON 字符串或纯文本"""

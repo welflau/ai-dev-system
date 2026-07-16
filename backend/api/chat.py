@@ -134,6 +134,7 @@ class ChatRequest(BaseModel):
     images: Optional[List[str]] = Field(default=None, description="图片列表，base64 data URL，如 data:image/png;base64,...")
     chat_session_id: Optional[str] = Field(default=None, description="v0.20 会话 ID")
     msg_group_key: Optional[str] = Field(default=None, description="消息级任务分组 key，每次发送唯一，用于后台任务面板按对话分组")
+    agent: Optional[str] = Field(default=None, description="@mention Agent 名称，如 DevAgent / TestAgent，注入 persona 并走流式路径")
 
 
 class ChatResponse(BaseModel):
@@ -147,6 +148,7 @@ class GroupChatRequest(BaseModel):
     agent: Optional[str] = Field(default=None, description="目标 Agent: DevAgent / TestAgent / OrchestratorAgent / ChatAssistant")
     history: Optional[List[ChatMessage]] = Field(default=None, description="历史消息（可选）")
     images: Optional[List[str]] = Field(default=None, description="图片 base64 列表")
+    chat_session_id: Optional[str] = Field(default=None, description="会话 ID，用于消息持久化")
 
 
 class GroupChatResponse(BaseModel):
@@ -266,14 +268,30 @@ async def group_chat(project_id: str, req: GroupChatRequest):
     set_llm_context(project_id=project_id, agent_type=agent_name, action="group_chat")
     try:
         reply = await llm_client.chat(messages, temperature=0.75, max_tokens=1000)
-        return GroupChatResponse(
-            agent=agent_name,
-            reply=reply.strip(),
-            emoji=agent_cfg["emoji"],
-            color=agent_cfg["color"],
-        )
+        reply = reply.strip()
     finally:
         clear_llm_context()
+
+    # 持久化到 chat_messages，刷新后可还原 Agent 气泡
+    if req.chat_session_id:
+        try:
+            await _save_chat_message(project_id, "user", req.message,
+                                     images=req.images, session_id=req.chat_session_id)
+            await _save_chat_message(project_id, "assistant", reply,
+                                     action={"type": "group_agent_reply",
+                                             "agent": agent_name,
+                                             "emoji": agent_cfg["emoji"],
+                                             "color": agent_cfg["color"]},
+                                     session_id=req.chat_session_id)
+        except Exception as e:
+            logger.debug("group_chat save_message failed: %s", e)
+
+    return GroupChatResponse(
+        agent=agent_name,
+        reply=reply,
+        emoji=agent_cfg["emoji"],
+        color=agent_cfg["color"],
+    )
 
 
 @router.post("/group/all", response_model=GroupChatAllResponse)
@@ -611,6 +629,26 @@ async def _chat_stream_generator(
         yield _sse("message_done", {"full_text": "", "final_action": _path_action_p, "rounds": 0})
         return
 
+    # @mention Agent 路由：提前推送 agent_info 事件供前端样式化气泡
+    _agent_override = req.agent if (req.agent and req.agent in _AGENT_CONFIG) else None
+    if _agent_override:
+        _ac = _AGENT_CONFIG[_agent_override]
+        yield _sse("agent_info", {"agent": _agent_override, "emoji": _ac["emoji"], "color": _ac["color"]})
+
+    # MCP 预热：先同步将待连接 server 加入 _warming_up，再推状态事件
+    # 不能依赖 showProjectDetail 的预热（后端重启等情况下未触发）
+    try:
+        from mcp_client import mcp_client as _mc
+        _repo = project.get("git_repo_path", "") if project else ""
+        if _repo:
+            await _mc.warmup_project_servers(_repo)
+    except Exception:
+        pass
+
+    # MCP 连接状态：若有 server 正在启动则推进度事件，等待最多 5s
+    async for _mcp_ev in _stream_mcp_status_events():
+        yield _mcp_ev
+
     # 保存用户消息（异步 fire-and-forget，不阻塞 LLM 响应）
     import asyncio as _asyncio
     _asyncio.create_task(_save_chat_message(project_id, "user", req.message,
@@ -624,6 +662,7 @@ async def _chat_stream_generator(
             project=project,
             project_context=project_context,
             session_id=_sid,
+            agent_override=_agent_override,
         ):
             etype = ev.get("type", "")
 
@@ -731,6 +770,13 @@ async def _chat_stream_generator(
                     ev.get("thinking_steps") or thinking_steps or None
                 )
                 final_action = final_action or ev.get("action")
+                # @mention：用 group_agent_reply action 标记，刷新后可还原 Agent 气泡
+                if _agent_override and not final_action:
+                    _ac = _AGENT_CONFIG[_agent_override]
+                    final_action = {"type": "group_agent_reply",
+                                    "agent": _agent_override,
+                                    "emoji": _ac["emoji"],
+                                    "color": _ac["color"]}
                 if not full_text:
                     full_text = "操作已完成。"
                 try:
@@ -779,6 +825,43 @@ def _sse(event: str, data: dict) -> bytes:
 class SaveToRepoRequest(BaseModel):
     filename: str = Field(..., description="文件路径，如 docs/note.md")
     content: str = Field(..., description="文件内容")
+
+
+async def _stream_mcp_status_events():
+    """检查 MCP server 连接状态，若有 server 正在启动则推进度事件并等待（最多 5s）。
+
+    无 warming_up server 时立即返回（零开销）。
+    """
+    try:
+        from mcp_client import mcp_client
+        import asyncio as _aio
+
+        def _snapshot():
+            return {
+                "connecting": sorted(mcp_client._warming_up),
+                "ready": sorted(n for n, c in mcp_client._servers.items() if c.status == "running"),
+                "failed": sorted(n for n, c in mcp_client._servers.items()
+                                 if c.status not in ("running", "starting") and n not in mcp_client._warming_up),
+            }
+
+        snap = _snapshot()
+        if not snap["connecting"] and not snap["ready"] and not snap["failed"]:
+            return  # 没有任何 MCP server，直接跳过
+
+        # 至少有一个 server（不管状态），推一次初始状态
+        yield _sse("mcp_status", snap)
+
+        # 有 server 正在启动时，轮询等待（最多 5s）
+        _deadline = _aio.get_event_loop().time() + 5.0
+        while snap["connecting"] and _aio.get_event_loop().time() < _deadline:
+            await _aio.sleep(0.4)
+            new_snap = _snapshot()
+            if new_snap != snap:
+                snap = new_snap
+                yield _sse("mcp_status", snap)
+
+    except Exception:
+        pass  # MCP 不可用时静默跳过
 
 
 class ConfirmRequirementRequest(BaseModel):
@@ -2256,6 +2339,7 @@ class GlobalChatRequest(BaseModel):
     session_id: Optional[str] = Field(default=None, description="思考日志 SSE session ID（可选）")
     chat_session_id: Optional[str] = Field(default=None, description="v0.20 多会话 session ID")
     msg_group_key: Optional[str] = Field(default=None, description="消息级任务分组 key，每次发送唯一")
+    agent: Optional[str] = Field(default=None, description="@mention Agent 名称，注入 persona 并走流式路径")
 
 
 class GlobalChatResponse(BaseModel):
@@ -2325,6 +2409,62 @@ async def global_get_cli_task(task_id: str):
     except Exception:
         pass
     raise HTTPException(status_code=404, detail="任务不存在")
+
+
+@global_chat_router.post("/group", response_model=GroupChatResponse)
+async def global_group_chat(req: GroupChatRequest):
+    """全局聊天（无项目）@mention 路由 — 将消息分发到指定 Agent persona 回复"""
+    from llm_client import llm_client, set_llm_context, clear_llm_context
+
+    agent_name = req.agent
+    if not agent_name or agent_name not in _AGENT_CONFIG:
+        agent_name = _DEFAULT_AGENT
+        msg_lower = req.message.lower()
+        for kw, target in _KEYWORD_ROUTES.items():
+            if kw.lower() in msg_lower:
+                agent_name = target
+                break
+
+    agent_cfg = _AGENT_CONFIG[agent_name]
+    system_prompt = f"""{agent_cfg['persona']}
+
+## 全局模式（无当前项目）
+用户尚未打开具体项目，处于项目列表页。回复应通用、专业，不依赖具体项目上下文。
+回复不超过 300 字。"""
+
+    messages = [{"role": "system", "content": system_prompt}]
+    if req.history:
+        for msg in req.history[-10:]:
+            messages.append({"role": msg.role, "content": msg.content})
+    messages.append({"role": "user", "content": _build_user_content(req.message, req.images)})
+
+    set_llm_context(project_id=None, agent_type=agent_name, action="global_group_chat")
+    try:
+        reply = await llm_client.chat(messages, temperature=0.75, max_tokens=1000)
+        reply = reply.strip()
+    finally:
+        clear_llm_context()
+
+    # 持久化到 chat_messages
+    if req.chat_session_id:
+        try:
+            await _save_chat_message("__global__", "user", req.message,
+                                     images=req.images, session_id=req.chat_session_id)
+            await _save_chat_message("__global__", "assistant", reply,
+                                     action={"type": "group_agent_reply",
+                                             "agent": agent_name,
+                                             "emoji": agent_cfg["emoji"],
+                                             "color": agent_cfg["color"]},
+                                     session_id=req.chat_session_id)
+        except Exception as e:
+            logger.debug("global_group_chat save_message failed: %s", e)
+
+    return GroupChatResponse(
+        agent=agent_name,
+        reply=reply,
+        emoji=agent_cfg["emoji"],
+        color=agent_cfg["color"],
+    )
 
 
 @global_chat_router.post("/stream")
@@ -2400,6 +2540,16 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
         yield _sse("message_done", {"full_text": "", "final_action": _open_action, "rounds": 0})
         return
 
+    # @mention Agent 路由：提前推送 agent_info 事件
+    _agent_override_g = req.agent if (req.agent and req.agent in _AGENT_CONFIG) else None
+    if _agent_override_g:
+        _ac_g = _AGENT_CONFIG[_agent_override_g]
+        yield _sse("agent_info", {"agent": _agent_override_g, "emoji": _ac_g["emoji"], "color": _ac_g["color"]})
+
+    # MCP 连接状态进度事件
+    async for _mcp_ev in _stream_mcp_status_events():
+        yield _mcp_ev
+
     # 保存用户消息（异步 fire-and-forget，不阻塞 LLM 响应）
     _asyncio.create_task(_save_chat_message("__global__", "user", req.message,
                              images=req.images, session_id=_sid))
@@ -2411,6 +2561,7 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
             history=history_list,
             projects_brief=projects,
             session_id=_sid,
+            agent_override=_agent_override_g,
         ):
             etype = ev.get("type", "")
 
@@ -2500,6 +2651,12 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
                     ev.get("thinking_steps") or thinking_steps or None
                 )
                 final_action = final_action or ev.get("action")
+                if _agent_override_g and not final_action:
+                    _ac_g2 = _AGENT_CONFIG[_agent_override_g]
+                    final_action = {"type": "group_agent_reply",
+                                    "agent": _agent_override_g,
+                                    "emoji": _ac_g2["emoji"],
+                                    "color": _ac_g2["color"]}
                 if not full_text:
                     full_text = "操作已完成。"
                 try:

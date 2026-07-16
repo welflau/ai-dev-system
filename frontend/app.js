@@ -838,6 +838,8 @@ function showProjectDetail(projectId) {
     const repoPreview = document.getElementById('repoFilePreview');
     if (repoPreview) repoPreview.innerHTML = '<div class="file-preview-empty"><div class="emoji">📄</div><p>选择文件查看内容</p></div>';
     _activeTreeItem = null;
+    // 预热项目 MCP server（fire-and-forget），让 server 在首次对话前完成初始化
+    fetch(`${API}/projects/${projectId}/mcp/warmup`, { method: 'POST' }).catch(() => {});
 }
 
 /**
@@ -12181,7 +12183,21 @@ async function switchChatSession(sessionId) {
                 actionObj._state = msg.action_state || 'pending';
                 actionObj._result = msg.action_result || null;
             }
+            if (actionObj && actionObj.type === 'group_agent_reply') {
+                const _ag2 = actionObj.agent || '', _em2 = actionObj.emoji || '🤖', _co2 = actionObj.color || '#888';
+                appendChatBubble(msg.role, msg.content, msg.created_at, null, msg.images || [], [], msg.thinking || [], container);
+                const _me2 = container.lastElementChild;
+                if (_me2) {
+                    const _av2 = _me2.querySelector('.chat-avatar-wrap, .chat-msg-avatar');
+                    if (_av2) { _av2.className='chat-msg-avatar group-agent-avatar'; _av2.style.cssText=`background:${_co2}20;border:1.5px solid ${_co2}40;color:${_co2};font-size:16px;width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:2px;`; _av2.textContent=_em2; }
+                    const _ct2 = _me2.querySelector('.chat-msg-content');
+                    if (_ct2 && !_ct2.querySelector('.group-agent-name')) { const _nd2=document.createElement('div'); _nd2.className='group-agent-name'; _nd2.style.cssText=`color:${_co2};font-size:11px;font-weight:600;margin-bottom:3px;margin-left:2px;`; _nd2.textContent=_ag2; _ct2.insertBefore(_nd2,_ct2.firstChild); }
+                    const _bb2 = _me2.querySelector('.chat-msg-bubble'); if (_bb2) _bb2.style.borderLeft=`3px solid ${_co2}40`;
+                    _me2.classList.add('group-agent-msg');
+                }
+            } else {
             appendChatBubble(msg.role, msg.content, msg.created_at, actionObj, msg.images || [], [], msg.thinking || [], container);
+            }
         }
         scrollChatToBottom();
     } catch (e) {
@@ -12358,8 +12374,7 @@ async function _sendChatStreaming(url, body) {
                     if (bubbleWrapper.style.display === 'none') {
                         document.getElementById('chatTyping')?.remove();
                         bubbleWrapper.style.display = '';
-                    }
-                    fullText += data.delta;
+                    }                    fullText += data.delta;
                     // 每 200 字或 300ms 做一次 Markdown 渲染
                     if (fullText.length - _lastRenderLen >= 200) {
                         if (_renderTimer) { clearTimeout(_renderTimer); _renderTimer = null; }
@@ -12368,6 +12383,49 @@ async function _sendChatStreaming(url, body) {
                         scrollChatToBottom();
                     } else {
                         _scheduleRender();
+                    }
+
+                } else if (eventName === 'agent_info') {
+                    // @mention：流式气泡改为 Agent 样式（emoji 头像 + 主题色 + 名称行）
+                    const c = data.color || '#888';
+                    const avatarEl = bubbleWrapper.querySelector('.chat-avatar-wrap, .chat-msg-avatar');
+                    if (avatarEl) {
+                        avatarEl.className = 'chat-msg-avatar group-agent-avatar';
+                        avatarEl.style.cssText = `background:${c}20;border:1.5px solid ${c}40;color:${c};font-size:16px;width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:2px;`;
+                        avatarEl.textContent = data.emoji || '';
+                    }
+                    const contentEl = bubbleWrapper.querySelector('.chat-msg-content');
+                    if (contentEl && !contentEl.querySelector('.group-agent-name')) {
+                        const nameDiv = document.createElement('div');
+                        nameDiv.className = 'group-agent-name';
+                        nameDiv.style.cssText = `color:${c};font-size:11px;font-weight:600;margin-bottom:3px;margin-left:2px;`;
+                        nameDiv.textContent = data.agent || '';
+                        contentEl.insertBefore(nameDiv, contentEl.firstChild);
+                    }
+                    if (bubbleEl) bubbleEl.style.borderLeft = `3px solid ${c}40`;
+                    bubbleWrapper.classList.add('group-agent-msg');
+
+                } else if (eventName === 'mcp_status') {
+                    // MCP 连接进度条
+                    let mcpBar = document.getElementById('mcpStatusBar');
+                    if (!mcpBar) {
+                        mcpBar = document.createElement('div');
+                        mcpBar.id = 'mcpStatusBar';
+                        mcpBar.style.cssText = 'margin:0 0 6px 36px;font-size:11px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:4px 10px;border-left:2px solid rgba(163,113,247,0.4);border-radius:0 4px 4px 0;';
+                        container.insertBefore(mcpBar, bubbleWrapper);
+                    }
+                    const conn = (data.connecting || []);
+                    const ready = (data.ready || []);
+                    const failed = (data.failed || []);
+                    let tags = '';
+                    conn.forEach(n  => { tags += `<span style="color:var(--text-muted);opacity:.7">⏳ ${escapeHtml(n)}</span>`; });
+                    ready.forEach(n => { tags += `<span style="color:#3fb950">✓ ${escapeHtml(n)}</span>`; });
+                    failed.forEach(n=> { tags += `<span style="color:var(--text-muted);opacity:.5;text-decoration:line-through">${escapeHtml(n)}</span>`; });
+                    const label = conn.length > 0 ? '🔌 MCP 连接中…' : '🔌 MCP';
+                    mcpBar.innerHTML = `<span style="color:rgba(163,113,247,0.8);font-weight:600;">${label}</span>${tags}`;
+                    // 全部完成（无 connecting）时淡出
+                    if (conn.length === 0) {
+                        setTimeout(() => { if (mcpBar) mcpBar.style.opacity = '0.4'; }, 1500);
                     }
 
                 } else if (eventName === 'context_memory') {
@@ -12633,6 +12691,8 @@ async function _sendChatStreaming(url, body) {
                     return { reply: data.message, action: null, actions: [], _streamed: true };
 
                 } else if (eventName === 'message_done') {
+                    // 清理 MCP 状态条
+                    document.getElementById('mcpStatusBar')?.remove();
                     // 检查 stop_reason：max_tokens 说明回复被截断
                     if (data.stop_reason === 'max_tokens') {
                         _stopReasonWarning = 'max_tokens';
@@ -12694,14 +12754,19 @@ async function _sendChatStreaming(url, body) {
 
     // J-3b: 收尾分组面板
     if (_roundsPanel) {
-        // 最后一轮：空轮次（无推理+无工具）直接移除 DOM，不显示
+        // 最后一轮：空轮次（无推理+无工具）
         if (_curRoundEl) {
             const hasReasoning = (_curRoundBuf || '').trim().length > 0
                 || _curRoundEl.querySelector('.crp-round-reasoning:not(.crp-round-reasoning-placeholder)');
             const hasSteps = (_curRoundBody?.children.length || 0) > 0;
             if (!hasReasoning && !hasSteps) {
-                _curRoundEl.remove();  // 空轮次：静默移除
+                _curRoundEl.remove();  // 空轮次：移除轮次卡片，但保留面板（靠时间指示器）
                 _roundCount = Math.max(0, _roundCount - 1);
+                // 空轮次时在 body 加一行简短提示
+                const _bodyEl = _roundsPanel.querySelector('.crp-rounds-body');
+                if (_bodyEl && _bodyEl.children.length === 0) {
+                    _bodyEl.innerHTML = `<div style="padding:4px 12px;font-size:11px;color:var(--text-muted);font-style:italic;">直接生成回复，无工具调用</div>`;
+                }
             } else {
                 _curRoundEl.classList.remove('crp-round-running');
                 _curRoundEl.classList.add('crp-round-done');
@@ -12716,8 +12781,9 @@ async function _sendChatStreaming(url, body) {
             _roundsHeader.textContent = `思考了 ${roundPart}${stepPart}${elapsed ? ' · ' + elapsed : ''}`;
         }
         // _roundsPanel 有内容（或有耗时）时才折叠显示，否则移除
+        // _panelStartTime > 0 表示有真实轮次发生（纯文本回复也保留时间指示器）
         const _bodyChildren = _roundsPanel.querySelector('.crp-rounds-body')?.children.length || 0;
-        if (_bodyChildren === 0 && _roundCount === 0) {
+        if (_bodyChildren === 0 && _roundCount === 0 && _panelStartTime === 0) {
             _roundsPanel.remove();
         } else {
             _roundsPanel.classList.add('crp-collapsed');
@@ -12817,6 +12883,36 @@ async function loadChatHistory() {
                 actionObj._state = msg.action_state || 'pending';
                 actionObj._result = msg.action_result || null;
             }
+            // group_agent_reply：还原带颜色 Agent 气泡（含思考面板）
+            if (actionObj && actionObj.type === 'group_agent_reply') {
+                const _ag = actionObj.agent || '';
+                const _em = actionObj.emoji || '🤖';
+                const _co = actionObj.color || '#888';
+                // 用 appendChatBubble 渲染（自动处理 thinking 面板）
+                appendChatBubble(msg.role, msg.content, msg.created_at, null,
+                    msg.images || [], [], msg.thinking || [], container);
+                // 对最后一个子元素（文本气泡）应用 Agent 样式
+                const _msgEl = container.lastElementChild;
+                if (_msgEl) {
+                    const _av = _msgEl.querySelector('.chat-avatar-wrap, .chat-msg-avatar');
+                    if (_av) {
+                        _av.className = 'chat-msg-avatar group-agent-avatar';
+                        _av.style.cssText = `background:${_co}20;border:1.5px solid ${_co}40;color:${_co};font-size:16px;width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:2px;`;
+                        _av.textContent = _em;
+                    }
+                    const _ct = _msgEl.querySelector('.chat-msg-content');
+                    if (_ct && !_ct.querySelector('.group-agent-name')) {
+                        const _nd = document.createElement('div');
+                        _nd.className = 'group-agent-name';
+                        _nd.style.cssText = `color:${_co};font-size:11px;font-weight:600;margin-bottom:3px;margin-left:2px;`;
+                        _nd.textContent = _ag;
+                        _ct.insertBefore(_nd, _ct.firstChild);
+                    }
+                    const _bb = _msgEl.querySelector('.chat-msg-bubble');
+                    if (_bb) _bb.style.borderLeft = `3px solid ${_co}40`;
+                    _msgEl.classList.add('group-agent-msg');
+                }
+            } else {
             appendChatBubble(
                 msg.role,
                 msg.content,
@@ -12827,6 +12923,7 @@ async function loadChatHistory() {
                 msg.thinking || [],
                 container
             );
+            }
         }
         scrollChatToBottom();
     } catch (e) {
@@ -14469,28 +14566,59 @@ async function sendChatMessage() {
                 }
             }
         } else if (currentProjectId) {
-            // 项目内聊天 — 流式 API，服务端从 DB 读 history（Session Resume）
-            const _sid = await _ensureChatSession();
-            resp = await _sendChatStreaming(
-                `/projects/${currentProjectId}/chat/stream`,
-                { message: fullMessage,
-                  images: images.length > 0 ? images : undefined,
-                  chat_session_id: _sid,
-                  msg_group_key: _cliCurrentSession?.key || undefined }
-            );
+            // 检测 @mention — 路由到流式路径（注入 Agent persona）
+            const atMentionM = fullMessage.match(/@(DevAgent|TestAgent|OrchestratorAgent|ChatAssistant)\b/i);
+            if (atMentionM) {
+                const resolvedAgent = _AGENT_MENTION_MAP[atMentionM[1].toLowerCase()] || atMentionM[1];
+                const _sid = await _ensureChatSession();
+                _morphTypingToAgent(resolvedAgent);
+                resp = await _sendChatStreaming(
+                    `/projects/${currentProjectId}/chat/stream`,
+                    { message: fullMessage,
+                      agent: resolvedAgent,
+                      images: images.length > 0 ? images : undefined,
+                      chat_session_id: _sid,
+                      msg_group_key: _cliCurrentSession?.key || undefined }
+                );
+            } else {
+                // 项目内聊天 — 流式 API，服务端从 DB 读 history（Session Resume）
+                const _sid = await _ensureChatSession();
+                resp = await _sendChatStreaming(
+                    `/projects/${currentProjectId}/chat/stream`,
+                    { message: fullMessage,
+                      images: images.length > 0 ? images : undefined,
+                      chat_session_id: _sid,
+                      msg_group_key: _cliCurrentSession?.key || undefined }
+                );
+            }
         } else {
-            // 全局聊天（无项目）— 传 history 兜底（无 session_id 时服务端用前端传的）
-            const _sid = await _ensureChatSession();
-            resp = await _sendChatStreaming(
-                `/chat/stream`,
-                { message: fullMessage, history: historyToSend,
-                  images: images.length > 0 ? images : undefined,
-                  chat_session_id: _sid,
-                  msg_group_key: _cliCurrentSession?.key || undefined }
-            );
+            // 全局聊天（无项目）— @mention 路由到 /chat/group，否则走流式
+            const atMentionG = fullMessage.match(/@(DevAgent|TestAgent|OrchestratorAgent|ChatAssistant)\b/i);
+            if (atMentionG) {
+                const resolvedAgent = _AGENT_MENTION_MAP[atMentionG[1].toLowerCase()] || atMentionG[1];
+                const _sid = await _ensureChatSession();
+                _morphTypingToAgent(resolvedAgent);
+                resp = await _sendChatStreaming(
+                    `/chat/stream`,
+                    { message: fullMessage,
+                      agent: resolvedAgent,
+                      images: images.length > 0 ? images : undefined,
+                      chat_session_id: _sid,
+                      msg_group_key: _cliCurrentSession?.key || undefined }
+                );
+            } else {
+                const _sid = await _ensureChatSession();
+                resp = await _sendChatStreaming(
+                    `/chat/stream`,
+                    { message: fullMessage, history: historyToSend,
+                      images: images.length > 0 ? images : undefined,
+                      chat_session_id: _sid,
+                      msg_group_key: _cliCurrentSession?.key || undefined }
+                );
+            }
         }
 
-        if (chatMode !== 'group') {
+        if (chatMode !== 'group' && !resp?._handled) {
         // 思考完成，折叠面板（流式路径已在流中折叠，非流式才在此处折叠）
         if (!resp || !resp._streamed) _chatThinkingFinish();
         // 移除加载动画（流式路径已提前移除，此处为非流式兜底）
@@ -15499,11 +15627,12 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
 /**
  * 追加群聊 Agent 专属气泡
  */
-function appendGroupAgentBubble(agentName, emoji, color, content) {
-    const container = document.getElementById('groupChatMessages') || document.getElementById('chatMessages');
+function appendGroupAgentBubble(agentName, emoji, color, content, timestamp = null) {
+    const groupContainer = document.getElementById('groupChatMessages');
+    const container = (chatMode === 'group' && groupContainer) ? groupContainer : document.getElementById('chatMessages');
     const msgEl = document.createElement('div');
     msgEl.className = 'chat-msg assistant group-agent-msg';
-    const timeStr = formatTime(new Date().toISOString());
+    const timeStr = formatTime(timestamp || new Date().toISOString());
     msgEl.innerHTML = `
         <div class="chat-msg-avatar group-agent-avatar" style="background:${escapeHtml(color)}20;border:1.5px solid ${escapeHtml(color)}40;color:${escapeHtml(color)};font-size:16px;">${escapeHtml(emoji)}</div>
         <div class="chat-msg-content">
@@ -16448,6 +16577,42 @@ const _AGENT_TEST_LIST = [
 let _slashCommands = [];        // 从后端加载的命令列表缓存
 let _slashCommandsProjectId = ''; // 缓存对应的项目 ID（切换项目时失效）
 
+// @mention Agent 路由配置（与后端 _AGENT_CONFIG 对齐）
+const _AGENT_MENTIONS = [
+    { name: 'DevAgent',          emoji: '👨‍💻', desc: '代码开发 / 架构设计', color: '#58a6ff' },
+    { name: 'TestAgent',         emoji: '🧪',  desc: '测试 / Bug 分析',    color: '#3fb950' },
+    { name: 'OrchestratorAgent', emoji: '🎯',  desc: '需求拆分 / 任务规划', color: '#d2a8ff' },
+    { name: 'ChatAssistant',     emoji: '🤖',  desc: '通用 AI 助手',       color: '#e6a817' },
+];
+const _AGENT_MENTION_MAP = {};
+_AGENT_MENTIONS.forEach(a => { _AGENT_MENTION_MAP[a.name.toLowerCase()] = a.name; });
+
+/** 将 #chatTyping 气泡替换成 Agent 样式（emoji 头像 + 主题色），并隐藏思考面板 */
+function _morphTypingToAgent(agentName) {
+    const info = _AGENT_MENTIONS.find(a => a.name === agentName);
+    if (!info) return;
+    const el = document.getElementById('chatTyping');
+    if (!el) return;
+    const c = info.color;
+    el.innerHTML = `
+        <div class="chat-msg-avatar group-agent-avatar"
+             style="background:${c}20;border:1.5px solid ${c}40;color:${c};font-size:16px;width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;">
+            ${info.emoji}
+        </div>
+        <div class="chat-msg-content">
+            <div style="color:${c};font-size:11px;font-weight:600;margin-bottom:3px;margin-left:2px;">${escapeHtml(info.name)}</div>
+            <div class="chat-msg-bubble" style="display:inline-block;width:fit-content;border-left:3px solid ${c}40;">
+                <div class="chat-typing">
+                    <div class="chat-typing-dot"></div>
+                    <div class="chat-typing-dot"></div>
+                    <div class="chat-typing-dot"></div>
+                </div>
+            </div>
+        </div>`;
+    // 折叠残留的思考面板（@mention 是 REST，无思考事件）
+    _chatThinkingFinish();
+}
+
 async function _loadSlashCommands() {
     const pid = currentProjectId || '';
     // 项目切换时清缓存，重新加载（合并项目级 .claude/commands/ + .ads/commands/）
@@ -16548,8 +16713,18 @@ async function _handleSlashCommand(input) {
 
 // 输入时显示斜杠命令补全
 async function _onChatInputChange(val) {
-    // A-4: @file 輸入提示
+    // @AgentName 补全（优先于 @file 检测）
     if (val.includes('@') && !val.startsWith('/')) {
+        const agentTail = val.match(/@([A-Za-z]*)$/);
+        if (agentTail) {
+            const query = agentTail[1].toLowerCase();
+            const matched = _AGENT_MENTIONS.filter(a => a.name.toLowerCase().startsWith(query));
+            if (matched.length > 0) {
+                _showAgentMentionSuggestions(matched);
+                return;
+            }
+        }
+        // @file 提示
         const atMatch = val.match(/@([A-Za-z]:[/\\][^\s]*|[./~][^\s]*|\/[^\s]*)$/);
         if (atMatch) {
             _showAtFileTip(atMatch[0]);
@@ -16593,6 +16768,34 @@ function _showSlashSuggestions(cmds) {
             <span class="slash-cmd-desc">${escapeHtml(c.description)}</span>
         </div>`).join('');
     box.style.display = 'block';
+}
+
+function _showAgentMentionSuggestions(agents) {
+    let box = document.getElementById('slashSuggestBox');
+    if (!box) {
+        box = document.createElement('div');
+        box.id = 'slashSuggestBox';
+        box.className = 'slash-suggest-box';
+        const wrap = document.querySelector('.chat-input-wrap');
+        wrap?.insertAdjacentElement('afterbegin', box);
+    }
+    box.innerHTML = agents.map((a, i) => `
+        <div class="slash-suggest-item${i === 0 ? ' slash-suggest-active' : ''}"
+             onclick="_selectAgentMention('${a.name}')">
+            <span class="slash-cmd-name">${a.emoji} @${a.name}</span>
+            <span class="slash-cmd-desc">${escapeHtml(a.desc)}</span>
+        </div>`).join('');
+    box.style.display = 'block';
+}
+
+function _selectAgentMention(name) {
+    const input = document.getElementById('chatInput');
+    if (input) {
+        input.value = input.value.replace(/@[A-Za-z]*$/, `@${name} `);
+        input.focus();
+        autoResizeChatInput();
+    }
+    _hideSlashSuggestions();
 }
 
 // ultrathink：設置最大 thinking budget，顯示視覺提示

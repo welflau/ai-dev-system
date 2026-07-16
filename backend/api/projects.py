@@ -2693,6 +2693,24 @@ async def get_project_mcp_all(project_id: str):
     }
 
 
+@router.post("/{project_id}/mcp/warmup")
+async def warmup_project_mcp(project_id: str):
+    """项目打开时预热 MCP server：后台 fire-and-forget，立即返回。
+
+    前端在 showProjectDetail 时调用，让 MCP server 在用户开始对话前完成初始化。
+    """
+    try:
+        proj = await db.fetch_one("SELECT git_repo_path FROM projects WHERE id = ?", (project_id,))
+        repo_path = (proj or {}).get("git_repo_path", "") if proj else ""
+        if repo_path:
+            from mcp_client import mcp_client
+            import asyncio
+            asyncio.create_task(mcp_client.warmup_project_servers(repo_path))
+    except Exception as e:
+        logger.debug("MCP warmup error (ignored): %s", e)
+    return {"ok": True}
+
+
 @router.get("/{project_id}/rules/all")
 async def get_project_rules_all(project_id: str):
     """合并三来源 Rule：内置(backend/skills/rules/) / 用户(.claude/rules/) / Pack(rules/)。"""

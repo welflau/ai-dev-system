@@ -645,6 +645,7 @@ class ChatAssistantAgent(BaseAgent):
         project: Dict[str, Any],
         project_context: Dict[str, Any],
         session_id: Optional[str] = None,
+        agent_override: Optional[str] = None,
     ):
         """
         流式对话：逐步 yield SSE 事件 dict，由上层端点包装为 text/event-stream。
@@ -669,6 +670,18 @@ class ChatAssistantAgent(BaseAgent):
         system_prompt = await self._build_system_prompt(
             project, {**project_context, "history_len": history_len}
         )
+        # @mention Agent：在 system_prompt 前注入 Agent persona，限制不触发写操作工具
+        if agent_override:
+            from api.chat import _AGENT_CONFIG as _AC
+            _persona = _AC.get(agent_override, {}).get("persona", "")
+            if _persona:
+                system_prompt = (
+                    f"{_persona}\n\n"
+                    "[重要] 你处于 @mention 对话模式，专注回答问题和提供建议。"
+                    "不要主动创建需求、工单、项目等写操作，除非用户明确要求。\n\n"
+                    "---\n\n"
+                    f"{system_prompt}"
+                )
         messages = await self._assemble_messages(history, user_message, images, session_id=session_id)
 
         # 发送本次注入的记忆元数据给前端（用于思考面板显示）
@@ -925,6 +938,7 @@ class ChatAssistantAgent(BaseAgent):
         history: Optional[List[Dict[str, str]]],
         projects_brief: List[Dict[str, Any]],
         session_id: Optional[str] = None,
+        agent_override: Optional[str] = None,
     ):
         """全局聊天流式版：逐步 yield SSE 事件，与 chat_stream 同格式。内部使用 QueryEngine（Phase 2）。"""
         from llm_client import llm_client, set_llm_context, clear_llm_context
@@ -942,6 +956,18 @@ class ChatAssistantAgent(BaseAgent):
 
         preset_suggestions = self._match_preset_suggestions(user_message)
         system_prompt = self._build_global_system_prompt(projects_brief, preset_suggestions)
+        # @mention Agent：注入 persona
+        if agent_override:
+            from api.chat import _AGENT_CONFIG as _AC
+            _persona = _AC.get(agent_override, {}).get("persona", "")
+            if _persona:
+                system_prompt = (
+                    f"{_persona}\n\n"
+                    "[重要] 你处于 @mention 对话模式，专注回答问题和提供建议。"
+                    "不要主动创建需求、工单、项目等写操作，除非用户明确要求。\n\n"
+                    "---\n\n"
+                    f"{system_prompt}"
+                )
         messages = await self._assemble_messages(history, user_message, images, session_id=session_id)
         tools = self._exposed_tool_schemas(scope="global")
         inner_executor = _ChatToolExecutor(self, project_id=None, session_id=session_id)
