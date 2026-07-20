@@ -8599,6 +8599,22 @@ function connectSSE(projectId) {
             }
         });
 
+        // mcp_action_callback 保存 DB 后补推 msg_id，写入最新 action 卡片
+        eventSource.addEventListener('chat_mcp_action_id', (e) => {
+            try {
+                const data = JSON.parse(e.data);
+                if (!data.msg_id) return;
+                // 找页面上最新的 confirm_direct_ticket / confirm_requirement 卡片写入 messageId
+                const selector = `[data-title]:not([data-message-id])`;
+                const cards = document.querySelectorAll(`#chatMessages ${selector}`);
+                if (cards.length > 0) {
+                    cards[cards.length - 1].dataset.messageId = data.msg_id;
+                }
+            } catch (err) {
+                console.warn('[SSE] chat_mcp_action_id parse failed:', err);
+            }
+        });
+
         eventSource.addEventListener('ticket_created', (e) => {
             try {
                 const data = JSON.parse(e.data);
@@ -15740,8 +15756,7 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
             : _buildAssistantAvatar()}
         <div class="chat-msg-content">
             ${imagesHtml}
-            <div class="chat-msg-bubble">${formatChatContent(content)}</div>
-            ${actionHtml}
+            ${(content || actionHtml) ? `<div class="chat-msg-bubble">${formatChatContent(content)}${actionHtml}</div>` : ''}
             ${toolbarHtml}
             <div class="chat-msg-time">${timeStr}</div>
         </div>

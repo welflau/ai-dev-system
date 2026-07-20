@@ -3270,6 +3270,7 @@ async def mcp_action_callback(project_id: str, req: _McpActionRequest):
     })
 
     # 持久化到 DB
+    _mcp_msg_id = None
     try:
         sess_row = await db.fetch_one(
             "SELECT id FROM chat_sessions WHERE project_id = ? ORDER BY last_active_at DESC LIMIT 1",
@@ -3281,10 +3282,16 @@ async def mcp_action_callback(project_id: str, req: _McpActionRequest):
             msg_text = f"工单草稿「{action_result.get('title', '')}」已生成，请在下方确认："
         else:
             msg_text = f"需求草稿「{action_result.get('title', '')}」已生成，请在下方确认："
-        await _save_chat_message(
+        _mcp_msg_id = await _save_chat_message(
             project_id, "assistant", msg_text,
             action=action_result, session_id=session_id,
         )
+        # 把 msg_id 补推给前端，让确认卡片能持久化 action_state
+        if _mcp_msg_id:
+            await event_manager.publish_to_project(project_id, "chat_mcp_action_id", {
+                "msg_id": _mcp_msg_id,
+                "action_type": action_result.get("type", ""),
+            })
     except Exception as _e:
         logger.warning("mcp_action_callback 保存消息失败（不影响 SSE）: %s", _e)
 
