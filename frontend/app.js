@@ -10613,23 +10613,19 @@ function renderCodeWithLineNumbers(container, content, ext, path) {
     }
 
     const lines = content.split('\n');
-    const highlightedLines = highlighted ? highlighted.split('\n') : null;
+    // hljs 输出行数与 lines 可能不一致（trailing newline 等原因），以 lines 为准
+    const hlLines = highlighted ? highlighted.split('\n') : null;
 
-    // 生成行号 + 代码
-    // 注意：code-gutter 是 flex-column，code-content 是 <pre>
-    // <pre> 会保留 \n，不能用 join('\n')，否则 block span 之间每行都多一空行
-    // 用 join('') 配合 display:block 的 .code-line 自然换行
-    const gutterHtml = lines.map((_, i) =>
-        `<span class="line-num">${i + 1}</span>`
-    ).join('');
-
-    const codeHtml = highlightedLines
-        ? highlightedLines.map(l => `<span class="code-line">${l}</span>`).join('')
-        : lines.map(l => `<span class="code-line">${escapeHtml(l)}</span>`).join('');
+    // 行号内联到每行内容前，彻底避免 gutter/code 两列高度不同步的错位问题
+    const codeHtml = lines.map((rawLine, i) => {
+        const lineContent = (hlLines && hlLines[i] !== undefined)
+            ? hlLines[i]
+            : escapeHtml(rawLine);
+        return `<span class="code-line"><span class="line-num">${i + 1}</span>${lineContent}</span>`;
+    }).join('');
 
     container.innerHTML = `
         <div class="code-block" data-raw="${escapeHtml(content)}">
-            <div class="code-gutter">${gutterHtml}</div>
             <pre class="code-content hljs"><code>${codeHtml}</code></pre>
         </div>
     `;

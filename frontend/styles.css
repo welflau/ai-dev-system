@@ -3874,42 +3874,38 @@ pre.hljs, .hljs pre { background: transparent !important; }
 }
 
 .code-block {
-    display: flex;
+    display: block;
     min-height: 100%;
-    overflow: hidden;    /* 防止整体溢出影响布局 */
+    overflow: hidden;
 }
 
 .code-gutter {
-    display: flex;
-    flex-direction: column;
-    padding: 14px 0;
-    min-width: 48px;
-    background: rgba(0,0,0,0.2);
-    border-right: 1px solid rgba(255,255,255,0.05);
-    text-align: right;
-    user-select: none;
-    flex-shrink: 0;
+    display: none;   /* 已改为行号内联，gutter 不再使用 */
 }
 
 .line-num {
-    display: block;
-    padding: 0 12px 0 8px;
+    display: inline-block;
+    width: 3em;
+    padding-right: 1em;
+    text-align: right;
     font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;
     font-size: 12px;
     line-height: 1.6;
     color: rgba(255,255,255,0.2);
     white-space: pre;
+    user-select: none;
+    flex-shrink: 0;
 }
 
 .code-content {
     flex: 1;
     margin: 0 !important;
-    padding: 14px 20px !important;
+    padding: 14px 0 !important;
     background: transparent !important;
     font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace !important;
     font-size: 13px !important;
     line-height: 1.6 !important;
-    overflow-x: auto !important;   /* 超长行水平滚动，不折行 */
+    overflow-x: auto !important;
     overflow-y: visible !important;
     border-radius: 0 !important;
 }
@@ -3917,12 +3913,13 @@ pre.hljs, .hljs pre { background: transparent !important; }
 .code-content code {
     display: block;
     background: transparent !important;
+    padding: 14px 20px 14px 0 !important;
 }
 
 .code-line {
     display: block;
     line-height: 1.6;
-    white-space: pre;       /* 禁止折行，超长行靠 overflow-x: auto 水平滚动 */
+    white-space: pre;
 }
 
 /* empty / error / loading states */
