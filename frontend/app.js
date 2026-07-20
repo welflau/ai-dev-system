@@ -15590,6 +15590,11 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
         actionHtml = renderActionStateSummary(action);
     } else if (action && action.type === 'generate_image') {
         actionHtml = renderGenerateImageCard(action);
+    } else if (action && action.type) {
+        // 未在此处显式处理的 action type（如 error_alert、group_agent_reply 等）
+        // 走通用路由器，避免丢失内容
+        const _fallbackHtml = _buildAnyActionCardHtml(action);
+        if (_fallbackHtml && _fallbackHtml !== '__rendered__') actionHtml = _fallbackHtml;
     }
 
     // 图片展示（用户发送的图片）
