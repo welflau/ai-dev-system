@@ -1723,6 +1723,20 @@ async def get_ticket_conversations(project_id: str, ticket_id: str):
         (ticket_id,),
     )
 
+    # 从 ticket_logs 拉取 react_tool 日志，用于填充 thinking_steps（按时间区间关联）
+    react_logs = await db.fetch_all(
+        """SELECT agent_type, action, detail, created_at
+           FROM ticket_logs
+           WHERE ticket_id = ? AND action = 'react_tool'
+           ORDER BY created_at ASC""",
+        (ticket_id,),
+    )
+    # 建索引：按 created_at 前缀（到分钟）分组，便于与 llm_conversations 关联
+    _react_by_minute: dict = {}
+    for rl in react_logs:
+        _key = (rl["created_at"] or "")[:16]  # YYYY-MM-DDTHH:MM
+        _react_by_minute.setdefault(_key, []).append(rl)
+
     # 转换为聊天消息格式
     chat_messages = []
     for conv in conversations:
@@ -1745,13 +1759,26 @@ async def get_ticket_conversations(project_id: str, ticket_id: str):
                     if isinstance(blk, dict) and blk.get("type") == "thinking":
                         thinking_text = (blk.get("thinking") or blk.get("text") or "")[:5000]
 
-        # 工具步骤：优先 tools_json，回退 messages 解析（旧数据）
+        # 工具步骤：优先 tools_json，回退 ticket_logs.react_tool（CLI 路径未填充 tools_json 时）
         thinking_steps = []
         if conv.get("tools_json"):
             try:
                 thinking_steps = json.loads(conv["tools_json"]) or []
             except (json.JSONDecodeError, TypeError):
                 pass
+        if not thinking_steps:
+            _conv_min = (conv["created_at"] or "")[:16]
+            for rl in _react_by_minute.get(_conv_min, []):
+                try:
+                    d = json.loads(rl["detail"]) if rl["detail"] else {}
+                except Exception:
+                    d = {}
+                thinking_steps.append({
+                    "tool": d.get("tool") or d.get("tool_name") or rl["action"],
+                    "summary": d.get("output_summary") or d.get("summary") or d.get("message") or "",
+                    "args_hint": d.get("input_summary") or d.get("args_hint") or "",
+                    "duration_ms": d.get("duration_ms") or 0,
+                })
 
         chat_messages.append({
             "id": conv["id"],

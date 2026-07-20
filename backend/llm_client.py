@@ -1295,7 +1295,8 @@ class LLMClient:
             "action": _llm_ctx.action,
             "messages": json.dumps(messages, ensure_ascii=False),
             "response": response,
-            "model": self.model,
+            # CLI 模式存实际执行模型（cli_model），而非主模型名（model）
+            "model": self.cli_model if self.api_format == "cli" and self.cli_model else self.model,
             "input_tokens": usage.get("input_tokens") if usage else None,
             "output_tokens": usage.get("output_tokens") if usage else None,
             "duration_ms": duration_ms,
