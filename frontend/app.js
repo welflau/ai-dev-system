@@ -10433,7 +10433,7 @@ async function viewRepoFile(path, itemEl) {
         const repoBranch = document.getElementById('repoBranchSelect')?.value || '';
         const branchParam = repoBranch ? `&branch=${encodeURIComponent(repoBranch)}` : '';
         const data = await api(`/projects/${currentProjectId}/git/file?path=${encodeURIComponent(path)}${branchParam}`);
-        const content = data.content || '';
+        const content = (data.content || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
         const size = data.size ? formatFileSize(data.size) : '';
         const lines = content.split('\n');
         const lineCount = lines.length;
@@ -10556,6 +10556,8 @@ function _looksLikeBinary(s) {
 }
 
 function renderCodeWithLineNumbers(container, content, ext, path) {
+    // 统一换行符：CRLF/CR → LF，防止行号与高亮内容错位
+    content = (content || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
     // v0.19.1 二进制文件占位
     if (_looksLikeBinary(content)) {
         const fname = path ? path.split('/').pop() : '(未知文件)';
