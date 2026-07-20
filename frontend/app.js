@@ -12404,6 +12404,7 @@ async function _sendChatStreaming(url, body) {
     const bubbleEl = bubbleWrapper.querySelector('._stream-bubble');
 
     let fullText = '';
+    let _savedMsgId = null;  // message_done 时收到的 DB msg_id，卡片创建后写入
     let finalAction = null;
     let finalActions = [];
     // J-3b: 分组思考面板状态
@@ -12806,13 +12807,8 @@ async function _sendChatStreaming(url, body) {
                     if (data.stop_reason === 'max_tokens') {
                         _stopReasonWarning = 'max_tokens';
                     }
-                    // msg_id：把 DB 生成的消息 ID 写入流式气泡里的所有 action 卡片
-                    // 这样 patchActionState 才能在用户确认时持久化状态
-                    if (data.msg_id) {
-                        bubbleWrapper.querySelectorAll('[data-title]').forEach(card => {
-                            if (!card.dataset.messageId) card.dataset.messageId = data.msg_id;
-                        });
-                    }
+                    // msg_id：记录下来，等卡片创建后再写入 data-message-id
+                    if (data.msg_id) _savedMsgId = data.msg_id;
                     break;
                 }
                 eventName = '';
@@ -12929,7 +12925,11 @@ async function _sendChatStreaming(url, body) {
             const cardEl = document.createElement('div');
             cardEl.innerHTML = cardHtml;
             const child = cardEl.firstElementChild;
-            if (child) contentEl.insertBefore(child, timeEl);
+            if (child) {
+                // 卡片创建后写入 msg_id，patchActionState 才能持久化状态
+                if (_savedMsgId && !child.dataset.messageId) child.dataset.messageId = _savedMsgId;
+                contentEl.insertBefore(child, timeEl);
+            }
         }
         // '__rendered__'：已由 _buildAnyActionCardHtml 直接渲染到 DOM，无需再处理
     }
