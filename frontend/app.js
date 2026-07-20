@@ -10616,13 +10616,16 @@ function renderCodeWithLineNumbers(container, content, ext, path) {
     const highlightedLines = highlighted ? highlighted.split('\n') : null;
 
     // 生成行号 + 代码
+    // 注意：code-gutter 是 flex-column，code-content 是 <pre>
+    // <pre> 会保留 \n，不能用 join('\n')，否则 block span 之间每行都多一空行
+    // 用 join('') 配合 display:block 的 .code-line 自然换行
     const gutterHtml = lines.map((_, i) =>
         `<span class="line-num">${i + 1}</span>`
-    ).join('\n');
+    ).join('');
 
     const codeHtml = highlightedLines
-        ? highlightedLines.map(l => `<span class="code-line">${l}</span>`).join('\n')
-        : lines.map(l => `<span class="code-line">${escapeHtml(l)}</span>`).join('\n');
+        ? highlightedLines.map(l => `<span class="code-line">${l}</span>`).join('')
+        : lines.map(l => `<span class="code-line">${escapeHtml(l)}</span>`).join('');
 
     container.innerHTML = `
         <div class="code-block" data-raw="${escapeHtml(content)}">
