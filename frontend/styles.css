@@ -3876,6 +3876,7 @@ pre.hljs, .hljs pre { background: transparent !important; }
 .code-block {
     display: flex;
     min-height: 100%;
+    overflow: hidden;    /* 防止整体溢出影响布局 */
 }
 
 .code-gutter {
@@ -3908,7 +3909,8 @@ pre.hljs, .hljs pre { background: transparent !important; }
     font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace !important;
     font-size: 13px !important;
     line-height: 1.6 !important;
-    overflow: visible !important;
+    overflow-x: auto !important;   /* 超长行水平滚动，不折行 */
+    overflow-y: visible !important;
     border-radius: 0 !important;
 }
 
@@ -3920,6 +3922,7 @@ pre.hljs, .hljs pre { background: transparent !important; }
 .code-line {
     display: block;
     line-height: 1.6;
+    white-space: pre;       /* 禁止折行，超长行靠 overflow-x: auto 水平滚动 */
 }
 
 /* empty / error / loading states */
