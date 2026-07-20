@@ -304,6 +304,26 @@ async def chat_alert_hook(ctx: ToolHookContext) -> None:
             "agent_type": agent_type,
             "created_at": now_iso(),
         })
+        # 持久化到 chat_messages，刷新后可还原
+        try:
+            from api.chat import _save_chat_message
+            from database import db as _db
+            # 找该项目最近的 session（alert 写入当前活跃会话）
+            row = await _db.fetch_one(
+                "SELECT id FROM chat_sessions WHERE project_id=? AND last_status NOT IN ('poisoned') "
+                "ORDER BY updated_at DESC LIMIT 1",
+                (project_id,),
+            )
+            if row:
+                await _save_chat_message(
+                    project_id, "assistant", "",  # content 为空，由 action card 展示
+                    action={"type": "error_alert", "title": title, "body": body,
+                            "tool": tool, "ticket_id": ticket_id or "",
+                            "agent": agent_type},
+                    session_id=row["id"],
+                )
+        except Exception as _pe:
+            logger.debug("chat_alert_hook 持久化失败: %s", _pe)
     except Exception as e:
         logger.debug("chat_alert_hook 推送失败: %s", e)
 

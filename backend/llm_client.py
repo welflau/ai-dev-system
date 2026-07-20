@@ -953,6 +953,7 @@ class LLMClient:
                 stderr=_asyncio.subprocess.PIPE,
                 env=env,
                 cwd=cwd,
+                limit=4 * 1024 * 1024,  # 4MB，防止大工具结果触发 LimitOverrunError
             )
 
             if stdin_data and proc.stdin:
@@ -973,102 +974,75 @@ class LLMClient:
                 async def _reader():
                     nonlocal full_text
                     _raw_lines_seen = 0
-                    async for raw_line in proc.stdout:
-                        line = raw_line.decode("utf-8", errors="replace").strip()
-                        if not line:
-                            continue
-                        _raw_lines_seen += 1
-                        # 记录所有行（截断防止日志爆炸），帮助诊断格式差异
-                        logger.debug("🖥️  CLI stdout[%d]: %s", _raw_lines_seen, line[:400])
-                        if _raw_lines_seen <= 3 or _raw_lines_seen % 50 == 0:
-                            logger.info("🖥️  CLI stdout[%d]: %s", _raw_lines_seen, line[:400])
-                        try:
-                            obj = _json.loads(line)
-                        except _json.JSONDecodeError:
-                            logger.debug("🖥️  CLI non-JSON line: %s", line[:200])
-                            continue
-                        t = obj.get("type", "")
-                        if t == "stream_event":
-                            ev = obj.get("event", {})
-                            et = ev.get("type", "")
-                            delta = ev.get("delta", {})
-                            dt = delta.get("type", "")
-                            if et == "content_block_delta":
-                                if dt == "text_delta":
-                                    chunk = delta.get("text", "")
-                                    if chunk:
-                                        full_text += chunk
-                                        await queue.put(("text", chunk))
-                                elif dt == "thinking_delta":
-                                    chunk = delta.get("thinking", "")
-                                    if chunk:
-                                        await queue.put(("thinking", chunk))
-                            # hy3 等模型的 message_delta 可能没有 type 字段
-                            # 但 event 里直接有 delta.stop_reason 表示结束
-                        elif t == "assistant":
-                            # 完整 assistant 消息：提取文本和 tool_use blocks
-                            msg = obj.get("message", {})
-                            for blk in msg.get("content", []):
-                                if blk.get("type") == "text":
-                                    chunk = blk.get("text", "")
-                                    if chunk and chunk not in full_text:
-                                        full_text += chunk
-                                        await queue.put(("text", chunk))
-                                elif blk.get("type") == "tool_use":
-                                    await queue.put(("tool_start", {
-                                        "tool_use_id": blk.get("id", ""),
-                                        "name": blk.get("name", ""),
-                                        "input": blk.get("input", {}),
-                                    }))
-                        elif t == "user":
-                            # tool_result blocks（工具执行完毕）
-                            msg = obj.get("message", {})
-                            for blk in msg.get("content", []):
-                                if blk.get("type") == "tool_result":
-                                    content = blk.get("content", [])
-                                    result_text = ""
-                                    if isinstance(content, list):
-                                        for c in content:
-                                            if isinstance(c, dict) and c.get("type") == "text":
-                                                result_text += c.get("text", "")
-                                    elif isinstance(content, str):
-                                        result_text = content
-                                    await queue.put(("tool_result", {
-                                        "tool_use_id": blk.get("tool_use_id", ""),
-                                        "result": result_text[:50000],
-                                    }))
-                        elif t == "system" and obj.get("subtype") == "init":
-                            # Session Resume: CLI 输出的会话 ID，用于下次 --resume
-                            sid = obj.get("session_id", "")
-                            if sid:
-                                await queue.put(("session_id", sid))
-                        elif t == "error":
-                            # codebuddy/claude CLI 直接返回 {"type":"error","error":"..."} 的错误
-                            err_text = obj.get("error", "") or obj.get("message", "") or "未知错误"
-                            _resume_fail_kws = (
-                                "No conversation found",
-                                "conversation not found",
-                                "session not found",
-                                "invalid session",
-                            )
-                            if resume_session_id and any(kw.lower() in err_text.lower() for kw in _resume_fail_kws):
-                                logger.warning("🖥️  CLI Resume 失败（session 已过期），清除并重试: %s", err_text[:200])
-                                await queue.put(("resume_failed", resume_session_id))
-                            elif not full_text:
-                                full_text = f"[CLI错误] {err_text[:300]}"
-                                await queue.put(("text", full_text))
-                        elif t == "result":
-                            if obj.get("is_error"):
-                                err_text = obj.get("result", "") or ""
-                                if not err_text:
-                                    errors = obj.get("errors", [])
-                                    err_text = errors[0] if errors else "未知错误"
-                                # Session resume 失败：通知上层清除旧 session_id 并重试
+                    try:
+                        async for raw_line in proc.stdout:
+                            line = raw_line.decode("utf-8", errors="replace").strip()
+                            if not line:
+                                continue
+                            _raw_lines_seen += 1
+                            logger.debug("🖥️  CLI stdout[%d]: %s", _raw_lines_seen, line[:400])
+                            if _raw_lines_seen <= 3 or _raw_lines_seen % 50 == 0:
+                                logger.info("🖥️  CLI stdout[%d]: %s", _raw_lines_seen, line[:400])
+                            try:
+                                obj = _json.loads(line)
+                            except _json.JSONDecodeError:
+                                logger.debug("🖥️  CLI non-JSON line: %s", line[:200])
+                                continue
+                            t = obj.get("type", "")
+                            if t == "stream_event":
+                                ev = obj.get("event", {})
+                                et = ev.get("type", "")
+                                delta = ev.get("delta", {})
+                                dt = delta.get("type", "")
+                                if et == "content_block_delta":
+                                    if dt == "text_delta":
+                                        chunk = delta.get("text", "")
+                                        if chunk:
+                                            full_text += chunk
+                                            await queue.put(("text", chunk))
+                                    elif dt == "thinking_delta":
+                                        chunk = delta.get("thinking", "")
+                                        if chunk:
+                                            await queue.put(("thinking", chunk))
+                            elif t == "assistant":
+                                msg = obj.get("message", {})
+                                for blk in msg.get("content", []):
+                                    if blk.get("type") == "text":
+                                        chunk = blk.get("text", "")
+                                        if chunk and chunk not in full_text:
+                                            full_text += chunk
+                                            await queue.put(("text", chunk))
+                                    elif blk.get("type") == "tool_use":
+                                        await queue.put(("tool_start", {
+                                            "tool_use_id": blk.get("id", ""),
+                                            "name": blk.get("name", ""),
+                                            "input": blk.get("input", {}),
+                                        }))
+                            elif t == "user":
+                                msg = obj.get("message", {})
+                                for blk in msg.get("content", []):
+                                    if blk.get("type") == "tool_result":
+                                        content = blk.get("content", [])
+                                        result_text = ""
+                                        if isinstance(content, list):
+                                            for c in content:
+                                                if isinstance(c, dict) and c.get("type") == "text":
+                                                    result_text += c.get("text", "")
+                                        elif isinstance(content, str):
+                                            result_text = content
+                                        await queue.put(("tool_result", {
+                                            "tool_use_id": blk.get("tool_use_id", ""),
+                                            "result": result_text[:50000],
+                                        }))
+                            elif t == "system" and obj.get("subtype") == "init":
+                                sid = obj.get("session_id", "")
+                                if sid:
+                                    await queue.put(("session_id", sid))
+                            elif t == "error":
+                                err_text = obj.get("error", "") or obj.get("message", "") or "未知错误"
                                 _resume_fail_kws = (
-                                    "No conversation found",
-                                    "conversation not found",
-                                    "session not found",
-                                    "invalid session",
+                                    "No conversation found", "conversation not found",
+                                    "session not found", "invalid session",
                                 )
                                 if resume_session_id and any(kw.lower() in err_text.lower() for kw in _resume_fail_kws):
                                     logger.warning("🖥️  CLI Resume 失败（session 已过期），清除并重试: %s", err_text[:200])
@@ -1076,12 +1050,30 @@ class LLMClient:
                                 elif not full_text:
                                     full_text = f"[CLI错误] {err_text[:300]}"
                                     await queue.put(("text", full_text))
-                            else:
-                                # 成功的 result 块：hy3 等模型可能只在这里给出最终文本
-                                result_text = obj.get("result", "") or ""
-                                if result_text and not full_text:
-                                    full_text = result_text
-                                    await queue.put(("text", result_text))
+                            elif t == "result":
+                                if obj.get("is_error"):
+                                    err_text = obj.get("result", "") or ""
+                                    if not err_text:
+                                        errors = obj.get("errors", [])
+                                        err_text = errors[0] if errors else "未知错误"
+                                    _resume_fail_kws = (
+                                        "No conversation found", "conversation not found",
+                                        "session not found", "invalid session",
+                                    )
+                                    if resume_session_id and any(kw.lower() in err_text.lower() for kw in _resume_fail_kws):
+                                        logger.warning("🖥️  CLI Resume 失败（session 已过期），清除并重试: %s", err_text[:200])
+                                        await queue.put(("resume_failed", resume_session_id))
+                                    elif not full_text:
+                                        full_text = f"[CLI错误] {err_text[:300]}"
+                                        await queue.put(("text", full_text))
+                                else:
+                                    result_text = obj.get("result", "") or ""
+                                    if result_text and not full_text:
+                                        full_text = result_text
+                                        await queue.put(("text", result_text))
+                    except _asyncio.LimitOverrunError as _loe:
+                        # 单行 JSON 超过 StreamReader 缓冲区（limit=4MB 仍触发则跳过）
+                        logger.warning("🖥️  CLI stdout 单行过长（LimitOverrunError），跳过: %s", _loe)
                     await queue.put(None)  # 结束哨兵
 
                 async def _stderr_reader():

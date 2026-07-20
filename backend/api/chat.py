@@ -779,8 +779,9 @@ async def _chat_stream_generator(
                                     "color": _ac["color"]}
                 if not full_text:
                     full_text = "操作已完成。"
+                _saved_msg_id = None
                 try:
-                    await _save_chat_message(project_id, "assistant", full_text,
+                    _saved_msg_id = await _save_chat_message(project_id, "assistant", full_text,
                                              action=final_action, session_id=_sid,
                                              thinking=save_thinking)
                     # Session Resume：标记 session 为 completed
@@ -790,7 +791,9 @@ async def _chat_stream_generator(
                     )
                 except Exception as _se:
                     logger.warning("流式消息保存失败: %s", _se)
-                yield _sse("message_done", {"rounds": ev.get("rounds", 1), "stop_reason": ev.get("stop_reason", "end_turn")})
+                yield _sse("message_done", {"rounds": ev.get("rounds", 1),
+                                            "stop_reason": ev.get("stop_reason", "end_turn"),
+                                            "msg_id": _saved_msg_id})
                 return  # generator 结束，不再执行后续保存
 
     except Exception as e:
@@ -1135,7 +1138,7 @@ async def _load_session_history(
         """SELECT role, content FROM chat_messages
            WHERE session_id = ? AND project_id = ?
              AND role IN ('user', 'assistant')
-           ORDER BY created_at ASC
+           ORDER BY created_at ASC, id ASC
            LIMIT ?""",
         (session_id, project_id, limit),
     )
@@ -1279,7 +1282,7 @@ async def get_session_messages(project_id: str, session_id: str, limit: int = 20
     rows = await db.fetch_all(
         """SELECT * FROM chat_messages
            WHERE project_id = ? AND session_id = ?
-           ORDER BY created_at ASC LIMIT ?""",
+           ORDER BY created_at ASC, id ASC LIMIT ?""",
         (project_id, session_id, limit),
     )
     messages = []
@@ -1308,7 +1311,7 @@ async def get_chat_history(project_id: str, limit: int = 50):
     rows = await db.fetch_all(
         """SELECT * FROM chat_messages
            WHERE project_id = ?
-           ORDER BY created_at DESC
+           ORDER BY created_at DESC, id DESC
            LIMIT ?""",
         (project_id, limit),
     )
@@ -2327,6 +2330,7 @@ async def _save_chat_message(
         "UPDATE chat_sessions SET updated_at = ?, message_count = message_count + 1 WHERE id = ?",
         (now_iso(), eff_session),
     )
+    return msg_id
 
 
 # ==================== 全局聊天 API（无需 project_id）====================
@@ -2659,8 +2663,9 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
                                     "color": _ac_g2["color"]}
                 if not full_text:
                     full_text = "操作已完成。"
+                _saved_msg_id_g = None
                 try:
-                    await _save_chat_message("__global__", "assistant", full_text,
+                    _saved_msg_id_g = await _save_chat_message("__global__", "assistant", full_text,
                                              action=final_action, session_id=_sid,
                                              thinking=save_thinking_g)
                     await db.execute(
@@ -2669,7 +2674,9 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
                     )
                 except Exception as _se:
                     logger.warning("全局流式消息保存失败: %s", _se)
-                yield _sse("message_done", {"rounds": ev.get("rounds", 1), "stop_reason": ev.get("stop_reason", "end_turn")})
+                yield _sse("message_done", {"rounds": ev.get("rounds", 1),
+                                            "stop_reason": ev.get("stop_reason", "end_turn"),
+                                            "msg_id": _saved_msg_id_g})
                 return
 
     except Exception as e:

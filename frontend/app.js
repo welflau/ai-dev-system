@@ -12806,6 +12806,13 @@ async function _sendChatStreaming(url, body) {
                     if (data.stop_reason === 'max_tokens') {
                         _stopReasonWarning = 'max_tokens';
                     }
+                    // msg_id：把 DB 生成的消息 ID 写入流式气泡里的所有 action 卡片
+                    // 这样 patchActionState 才能在用户确认时持久化状态
+                    if (data.msg_id) {
+                        bubbleWrapper.querySelectorAll('[data-title]').forEach(card => {
+                            if (!card.dataset.messageId) card.dataset.messageId = data.msg_id;
+                        });
+                    }
                     break;
                 }
                 eventName = '';
@@ -14915,9 +14922,16 @@ function _buildAnyActionCardHtml(action) {
         return _buildBatchRequirementsCardHtml(action);
     }
     if (t === 'confirm_project') {
-        // 直接渲染到 DOM（因为需要 setTimeout 副作用，不能只返回 HTML）
         _renderConfirmProjectCard(action);
-        return '__rendered__';  // 特殊标记，告知调用方已直接渲染，不需再 innerHTML
+        return '__rendered__';
+    }
+    if (t === 'error_alert') {
+        // 系统错误卡片（git commit 失败等），与 _onAgentAlert 样式一致
+        const bodyHtml = escapeHtml(action.body || action.title || '').replace(/\n/g, '<br>');
+        return `<div style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.3);border-radius:6px;padding:10px 12px;white-space:normal;">
+            <div style="font-weight:600;color:var(--error,#ef4444);margin-bottom:4px;">${escapeHtml(action.title || '⚠️ 错误')}</div>
+            <div style="font-size:12px;color:var(--text-secondary);">${bodyHtml}</div>
+        </div>`;
     }
     return '';
 }
