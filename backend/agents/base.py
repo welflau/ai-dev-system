@@ -135,6 +135,14 @@ class BaseAgent(ABC):
         memory_text = await self.get_memory_prompt(project_id, limit=3)
 
         parts = [p for p in [skills_text, project_rules_text, memory_text] if p]
+
+        # Superpowers 纪律注入（三层融合：纪律层）
+        # DevAgent._inject_superpowers() 检测 Pack 并设置 context['superpowers_context']
+        # 在此处追加到 skills prompt，使所有 ActionNode 都获得 TDD/调试/验证铁律
+        sp_ctx = context.get("superpowers_context", "") if context else ""
+        if sp_ctx:
+            parts.append(sp_ctx)
+
         return "\n\n".join(parts) if parts else skills_text
 
     async def run_action(self, action_name: str, context: Dict[str, Any]) -> Dict[str, Any]:
