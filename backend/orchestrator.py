@@ -3627,6 +3627,153 @@ class TicketOrchestrator:
         except Exception as e:
             logger.debug("_write_phase_comment 失败（忽略）: %s", e)
 
+    # ──────────────────────────────────────────────────────────────
+    # 三层融合：阶段重置 + 里程碑通知
+    # ──────────────────────────────────────────────────────────────
+
+    PHASE_ORDER = [
+        "propose", "architecture", "development",
+        "testing", "verify", "review", "deploy",
+    ]
+    MAX_RESET_COUNT = 3  # 超过此次数自动 blocked
+
+    async def reset_phases(
+        self,
+        ticket_id: str,
+        project_id: str,
+        from_phase: str,
+        reason: str,
+    ) -> bool:
+        """
+        将指定阶段及后续所有阶段重置为 pending。
+        保留历史日志（可追溯），返回是否成功。
+        reset_count >= MAX_RESET_COUNT 时自动 blocked 并通知人工介入。
+        """
+        try:
+            idx = self.PHASE_ORDER.index(from_phase)
+        except ValueError:
+            logger.warning("reset_phases: 未知 phase '%s'", from_phase)
+            return False
+
+        phases_to_reset = self.PHASE_ORDER[idx:]
+        ts = now_iso()
+
+        # 检查重置次数（取 from_phase 的 reset_count）
+        row = await db.fetch_one(
+            "SELECT reset_count FROM ticket_phase_status WHERE ticket_id=? AND phase=?",
+            (ticket_id, from_phase),
+        )
+        current_count = (row or {}).get("reset_count", 0)
+        new_count = current_count + 1
+
+        if new_count > self.MAX_RESET_COUNT:
+            # 超过阈值 → blocked，等待人工
+            await db.execute(
+                "UPDATE tickets SET status='blocked', updated_at=? WHERE id=?",
+                (ts, ticket_id),
+            )
+            await self.post_milestone_comment(
+                ticket_id, project_id,
+                f"⚠️ 阶段 `{from_phase}` 已重置 {new_count} 次，超过上限（{self.MAX_RESET_COUNT}次），"
+                f"工单已暂停，请人工介入确认方向。\n原因：{reason}",
+                level="error",
+            )
+            logger.warning("reset_phases: ticket %s 超过重置上限，自动 blocked", ticket_id)
+            return False
+
+        # 更新/插入阶段状态
+        for phase in phases_to_reset:
+            existing = await db.fetch_one(
+                "SELECT reset_count FROM ticket_phase_status WHERE ticket_id=? AND phase=?",
+                (ticket_id, phase),
+            )
+            if existing:
+                await db.execute(
+                    """UPDATE ticket_phase_status
+                       SET status='pending', reset_count=reset_count+1,
+                           last_reset_reason=?, last_reset_at=?, completed_at=NULL
+                       WHERE ticket_id=? AND phase=?""",
+                    (reason, ts, ticket_id, phase),
+                )
+            else:
+                await db.insert("ticket_phase_status", {
+                    "ticket_id": ticket_id, "phase": phase,
+                    "status": "pending", "reset_count": 1,
+                    "last_reset_reason": reason, "last_reset_at": ts,
+                })
+
+        # 写时间轴日志
+        await self._add_layer_log(
+            ticket_id, project_id,
+            action="phase_reset", layer="harness",
+            detail={
+                "from_phase": from_phase,
+                "phases": phases_to_reset,
+                "reason": reason,
+                "reset_count": new_count,
+            },
+        )
+        logger.info("reset_phases: ticket %s from=%s reason=%s", ticket_id, from_phase, reason)
+        return True
+
+    async def post_milestone_comment(
+        self,
+        ticket_id: str,
+        project_id: str,
+        message: str,
+        level: str = "info",
+    ):
+        """发送里程碑系统通知到工单评论区（SSE 实时推送 + DB 持久化）"""
+        try:
+            comment_id = "CMT-" + generate_id()
+            await db.insert("ticket_comments", {
+                "id": comment_id,
+                "ticket_id": ticket_id,
+                "project_id": project_id,
+                "author": "System",
+                "author_type": "system",
+                "content": message,
+                "phase": "milestone",
+                "created_at": now_iso(),
+            })
+            await event_manager.publish_to_project(project_id, "comment_added", {
+                "ticket_id": ticket_id,
+                "comment_id": comment_id,
+                "author_type": "system",
+                "author": "System",
+                "content": message,
+                "level": level,
+            })
+        except Exception as e:
+            logger.debug("post_milestone_comment 失败（忽略）: %s", e)
+
+    async def _add_layer_log(
+        self,
+        ticket_id: str,
+        project_id: str,
+        action: str,
+        layer: str,
+        detail: dict,
+        level: str = "info",
+    ):
+        """写带 layer 标注的 ticket_log（三层时间轴显示用）"""
+        try:
+            import json as _json
+            log_id = generate_id("LOG")
+            await db.insert("ticket_logs", {
+                "id": log_id,
+                "ticket_id": ticket_id,
+                "project_id": project_id,
+                "agent_type": layer,
+                "action": action,
+                "detail": _json.dumps(detail, ensure_ascii=False),
+                "level": level,
+                "layer": layer,
+                "created_at": now_iso(),
+            })
+        except Exception as e:
+            logger.debug("_add_layer_log 失败（忽略）: %s", e)
+
 
     async def reply_to_comment(
         self,

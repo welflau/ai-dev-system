@@ -136,6 +136,12 @@ class Database:
             ("requirements", "source_session_id",  "TEXT"),
             ("tickets",      "source_message_id", "TEXT"),
             ("tickets",      "source_session_id",  "TEXT"),
+            # 三层融合：规范层 + 变更追踪
+            ("ticket_logs",  "layer", "TEXT DEFAULT 'harness'"),  # spec/discipline/harness
+            ("tickets",      "openspec_stage",  "TEXT"),          # proposed/applied/verified/archived
+            ("tickets",      "spec_version",    "INTEGER DEFAULT 1"),
+            ("tickets",      "change_count",    "INTEGER DEFAULT 0"),
+            ("tickets",      "source_ticket_id","TEXT"),           # breaking change 来源工单
         ]
         async with self._write_lock:
             for table, column, col_def in migrations:
@@ -933,6 +939,35 @@ CREATE TABLE IF NOT EXISTS permission_requests (
 CREATE INDEX IF NOT EXISTS idx_perm_req_status    ON permission_requests(status);
 CREATE INDEX IF NOT EXISTS idx_perm_req_project   ON permission_requests(project_id);
 CREATE INDEX IF NOT EXISTS idx_perm_req_created   ON permission_requests(created_at);
+
+-- ============================================================
+-- 三层融合：工单阶段状态表
+-- ============================================================
+CREATE TABLE IF NOT EXISTS ticket_phase_status (
+    ticket_id         TEXT NOT NULL REFERENCES tickets(id),
+    phase             TEXT NOT NULL,   -- propose/architecture/development/testing/verify/review/deploy
+    status            TEXT NOT NULL DEFAULT 'pending',  -- pending/running/done/failed/skipped
+    reset_count       INTEGER NOT NULL DEFAULT 0,
+    last_reset_reason TEXT,
+    last_reset_at     TEXT,
+    completed_at      TEXT,
+    PRIMARY KEY (ticket_id, phase)
+);
+CREATE INDEX IF NOT EXISTS idx_ticket_phase_ticket ON ticket_phase_status(ticket_id);
+
+-- ============================================================
+-- 三层融合：Specs 版本历史表
+-- ============================================================
+CREATE TABLE IF NOT EXISTS ticket_spec_versions (
+    id             TEXT PRIMARY KEY,
+    ticket_id      TEXT NOT NULL REFERENCES tickets(id),
+    version        INTEGER NOT NULL DEFAULT 1,
+    content        TEXT,              -- specs.md 快照
+    change_summary TEXT,
+    triggered_by   TEXT,             -- comment_id
+    created_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_spec_versions_ticket ON ticket_spec_versions(ticket_id);
 """
 
 

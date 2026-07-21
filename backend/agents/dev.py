@@ -73,6 +73,11 @@ class DevAgent(BaseAgent):
         existing_code = context.get("existing_code", {})
         step_total = 2
 
+        # Superpowers 纪律注入（可选增强，项目装了 Pack 才激活）
+        project_id = context.get("project_id", "")
+        repo_path = context.get("repo_path", "")
+        await self._inject_superpowers(context, project_id, repo_path)
+
         # 步骤 1：代码生成
         t0 = time.monotonic()
         await self.emit_step("代码生成", context, phase="start", step_index=1, step_total=step_total)
@@ -356,3 +361,67 @@ class DevAgent(BaseAgent):
         except Exception as e:
             logger.warning("查询 similar_failures 失败: %s", e)
             context["similar_failures"] = []
+
+    # ──────────────────────────────────────────────────────────────
+    # Superpowers 纪律注入
+    # ──────────────────────────────────────────────────────────────
+
+    # 开发阶段注入的核心 Skill 列表（按重要性排序，控制 token 量）
+    _SUPERPOWERS_DEV_SKILLS = [
+        "using-superpowers",           # 铁律总纲（最重要）
+        "test-driven-development",     # TDD 铁律
+        "systematic-debugging",        # 根因分析
+        "verification-before-completion",  # 完成前必须验证
+    ]
+
+    async def _inject_superpowers(
+        self,
+        context: Dict[str, Any],
+        project_id: str,
+        repo_path: str,
+    ) -> None:
+        """
+        检测项目是否安装了 Superpowers Pack，有则把核心 Skill 注入 context['superpowers_context']。
+        Actions（如 WriteCodeAction）读取该字段追加到 instruction 中。
+        无 Pack 时静默跳过，不影响原有执行路径。
+        """
+        if not repo_path:
+            return
+        try:
+            from capability_check import has_superpowers, load_superpowers_skills
+            if not await has_superpowers(project_id, repo_path):
+                return
+
+            sp_content = load_superpowers_skills(repo_path, self._SUPERPOWERS_DEV_SKILLS)
+            if not sp_content:
+                return
+
+            context["superpowers_context"] = sp_content
+            logger.info("⚡ Superpowers 纪律已注入 DevAgent（%d chars）", len(sp_content))
+
+            # 写时间轴日志（layer=discipline）
+            ticket_id = context.get("ticket_id", "")
+            if ticket_id:
+                try:
+                    import json as _json
+                    from database import db
+                    from utils import generate_id, now_iso
+                    await db.insert("ticket_logs", {
+                        "id": generate_id("LOG"),
+                        "ticket_id": ticket_id,
+                        "project_id": project_id,
+                        "agent_type": "discipline",
+                        "action": "superpowers_skill",
+                        "detail": _json.dumps({
+                            "skills": self._SUPERPOWERS_DEV_SKILLS,
+                            "pack": "superpowers",
+                            "chars": len(sp_content),
+                        }, ensure_ascii=False),
+                        "level": "info",
+                        "layer": "discipline",
+                        "created_at": now_iso(),
+                    })
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.debug("_inject_superpowers 失败（忽略）: %s", e)
