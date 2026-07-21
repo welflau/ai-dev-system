@@ -1,0 +1,27 @@
+{
+  "name": "superpowers",
+  "display_name": "Superpowers 开发纪律套件",
+  "description": "Superpowers v6.1.1 — 编码 Agent 行为铁律：TDD/系统调试/Brainstorm门禁/Git Worktree隔离/验证前完成/并行派发/代码评审，让 AI Agent 遵循可靠、可重复的工程纪律",
+  "version": "6.1.1",
+  "tags": ["tdd", "discipline", "quality", "debugging", "code-review", "git", "superpowers", "bdd", "engineering"],
+  "auto_traits": ["vcs:git"],
+  "contains": ["skills"],
+  "targets": ["claude", "codebuddy"],
+  "homepage": "https://github.com/fission-ai/superpowers",
+  "skills": [
+    "using-superpowers",
+    "brainstorming",
+    "writing-plans",
+    "test-driven-development",
+    "systematic-debugging",
+    "verification-before-completion",
+    "using-git-worktrees",
+    "subagent-driven-development",
+    "executing-plans",
+    "dispatching-parallel-agents",
+    "requesting-code-review",
+    "receiving-code-review",
+    "finishing-a-development-branch",
+    "writing-skills"
+  ]
+}
