@@ -158,6 +158,10 @@ class TestAgent(BaseAgent):
         logger.info("🧪 测试完成: %s | 通过率 %d%% (%d/%d) | %s",
                      title, pass_rate, total_passed, total_checks, status)
 
+        # OpenSpec Verify（规范层，可选增强，只在测试全绿时触发）
+        if all_passed:
+            await self._run_openspec_verify(context)
+
         return {
             "status": status,
             "test_result": results,
@@ -723,6 +727,93 @@ def test_no_syntax_errors():
 
         md += f"\n---\n*由 AI 自动开发系统 TestAgent 生成*\n"
         return md
+
+    async def _run_openspec_verify(self, context: Dict[str, Any]) -> None:
+        """
+        触发 opsx:verify，对账 specs.md 的 GIVEN/WHEN/THEN。
+        只在测试全绿后调用，项目未安装 OpenSpec 或无 specs 时静默跳过。
+        Verify 失败 → 工单 blocked + 人工介入通知。
+        """
+        try:
+            project_id = context.get("project_id", "")
+            ticket_id = context.get("ticket_id", "")
+            if not project_id or not ticket_id:
+                return
+
+            from capability_check import has_openspec, get_openspec_cli, _get_repo_path, ticket_has_specs
+            repo_path = context.get("repo_path") or await _get_repo_path(project_id)
+            if not repo_path or not await has_openspec(project_id, repo_path):
+                return
+            if not ticket_has_specs(repo_path, ticket_id):
+                logger.info("📐 OpenSpec 已安装但无 specs，跳过 Verify（ticket=%s）", ticket_id[:12])
+                return
+
+            cli = get_openspec_cli()
+            if not cli:
+                return
+
+            logger.info("📐 [规范层] OpenSpec Verify（ticket=%s）", ticket_id[:12])
+
+            import asyncio
+            proc = await asyncio.create_subprocess_shell(
+                f"{cli} verify",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                cwd=repo_path,
+                stdin=asyncio.subprocess.PIPE,
+            )
+            if proc.stdin:
+                proc.stdin.write(b"\n\n\n")
+                await proc.stdin.drain()
+                proc.stdin.close()
+
+            try:
+                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=120)
+                output = stdout.decode("utf-8", errors="replace")[:800] if stdout else ""
+                rc = proc.returncode
+            except asyncio.TimeoutError:
+                proc.kill()
+                output = "(超时)"
+                rc = -1
+
+            from orchestrator import Orchestrator
+            from database import db
+            from utils import now_iso
+            orch = Orchestrator()
+
+            if rc == 0:
+                await db.execute(
+                    "UPDATE tickets SET openspec_stage='verified', updated_at=? WHERE id=?",
+                    (now_iso(), ticket_id),
+                )
+                await orch.post_milestone_comment(
+                    ticket_id, project_id,
+                    "📐 [规范层] **OpenSpec Verify 通过** — 所有 specs 验收场景已满足 ✅",
+                )
+                await orch._add_layer_log(
+                    ticket_id, project_id, action="openspec_verify",
+                    layer="spec", detail={"rc": 0, "output": output[:300]},
+                )
+                logger.info("📐 OpenSpec Verify 通过（ticket=%s）", ticket_id[:12])
+            else:
+                # Verify 不通过 → blocked + 人工介入
+                await db.execute(
+                    "UPDATE tickets SET status='blocked', updated_at=? WHERE id=?",
+                    (now_iso(), ticket_id),
+                )
+                await orch.post_milestone_comment(
+                    ticket_id, project_id,
+                    f"📐 **OpenSpec Verify 未通过** — 部分验收场景未满足，工单已暂停。\n"
+                    f"```\n{output[:400]}\n```\n请修复后重新运行测试。",
+                    level="error",
+                )
+                await orch._add_layer_log(
+                    ticket_id, project_id, action="openspec_verify_failed",
+                    layer="spec", detail={"rc": rc, "output": output[:400]},
+                )
+                logger.warning("📐 OpenSpec Verify 失败，工单 blocked（ticket=%s）", ticket_id[:12])
+        except Exception as e:
+            logger.debug("_run_openspec_verify 失败（忽略）: %s", e)
 
 
 async def _async_sleep(seconds):
