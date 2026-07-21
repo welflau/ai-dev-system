@@ -1436,6 +1436,59 @@ body.chat-open .drawer.docked {
     margin-bottom: 24px;
 }
 
+/* OpenSpec 内容面板 */
+.openspec-tabs {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 6px;
+}
+.openspec-tab {
+    padding: 3px 10px;
+    font-size: 11px;
+    font-weight: 500;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all .15s;
+}
+.openspec-tab:hover { background: var(--bg-elevated); color: var(--text); }
+.openspec-tab.active {
+    background: rgba(168,85,247,0.12);
+    border-color: rgba(168,85,247,0.4);
+    color: #a855f7;
+}
+.openspec-content {
+    max-height: 360px;
+    overflow-y: auto;
+    font-size: 12px;
+    line-height: 1.65;
+    color: var(--text-secondary);
+}
+.openspec-md h1,.openspec-md h2,.openspec-md h3 {
+    font-size: 13px; font-weight: 600; color: var(--text);
+    margin: 10px 0 4px;
+}
+.openspec-md p { margin: 4px 0; }
+.openspec-md ul,.openspec-md ol { padding-left: 18px; margin: 4px 0; }
+.openspec-md code {
+    background: var(--bg-elevated);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 11px;
+}
+.openspec-md pre {
+    background: var(--bg-elevated);
+    padding: 8px 10px;
+    border-radius: 5px;
+    overflow-x: auto;
+    font-size: 11px;
+}
+
 /* 工单三层能力提示横幅 */
 .cap-banner {
     display: flex;

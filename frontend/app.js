@@ -4386,6 +4386,72 @@ function _buildCapabilityBanner(hasSP, hasOS) {
     </div>`;
 }
 
+/** 异步加载工单 OpenSpec 内容，有 specs 时显示面板 */
+async function _loadTicketOpenSpec(ticketId) {
+    if (!currentProjectId) return;
+    try {
+        const data = await api(`/projects/${currentProjectId}/openspec/ticket/${ticketId}/specs`);
+        if (!data.initialized || !data.files || Object.keys(data.files).length === 0) return;
+
+        const panel = document.getElementById('openspecPanel');
+        const tabsEl = document.getElementById('openspecTabs');
+        const contentEl = document.getElementById('openspecContent');
+        const badgeEl = document.getElementById('openspecStageBadge');
+        if (!panel || !tabsEl || !contentEl) return;
+
+        // 阶段徽章
+        const STAGE_BADGE = {
+            proposed:  { text: '📐 Proposed',   color: '#a855f7' },
+            applied:   { text: '📐 Applied',     color: '#a855f7' },
+            verified:  { text: '📐 Verified ✓', color: '#34d058' },
+            archived:  { text: '📐 Archived',   color: '#8b949e' },
+        };
+        if (badgeEl && data.openspec_stage) {
+            const b = STAGE_BADGE[data.openspec_stage] || { text: `📐 ${data.openspec_stage}`, color: '#a855f7' };
+            badgeEl.innerHTML = `<span style="font-size:11px;font-weight:700;padding:2px 8px;border:1.5px solid ${b.color}60;border-radius:4px;color:${b.color};transform:rotate(-1deg);display:inline-block;">${escHtml(b.text)}</span>`;
+        }
+
+        // Tab 顺序：优先显示核心文件
+        const TAB_ORDER = ['proposal','specs','design','tasks','changelog'];
+        const TAB_LABELS = { proposal:'📋 Proposal', specs:'✅ Specs', design:'🏗 Design', tasks:'📝 Tasks', changelog:'📜 变更记录' };
+        const files = data.files;
+        const keys = TAB_ORDER.filter(k => files[k]).concat(
+            Object.keys(files).filter(k => !TAB_ORDER.includes(k))
+        );
+        if (keys.length === 0) return;
+
+        let activeKey = keys[0];
+
+        function renderTabs() {
+            tabsEl.innerHTML = keys.map(k => `
+                <button class="openspec-tab ${k === activeKey ? 'active' : ''}"
+                        onclick="_switchOpenSpecTab('${escHtml(k)}')" data-key="${escHtml(k)}">
+                    ${escHtml(TAB_LABELS[k] || k)}
+                </button>`).join('');
+        }
+
+        function renderContent(key) {
+            const f = files[key];
+            if (!f) return;
+            const md = window.marked ? marked.parse(f.content || '') : escapeHtml(f.content || '');
+            contentEl.innerHTML = `<div class="openspec-md">${md}</div>`;
+        }
+
+        window._openspecFiles = files;
+        window._switchOpenSpecTab = (key) => {
+            activeKey = key;
+            renderTabs();
+            renderContent(key);
+        };
+
+        renderTabs();
+        renderContent(activeKey);
+        panel.style.display = '';
+    } catch (e) {
+        // OpenSpec 未安装或无 specs，静默跳过
+    }
+}
+
 async function openTicketDrawer(ticketId) {
     if (!currentProjectId) return;
 
@@ -4715,6 +4781,19 @@ async function openTicketDrawer(ticketId) {
             </div>`;
         }
 
+        // OpenSpec 内容面板（有 specs 时展示，异步加载）
+        html += `
+        <div class="drawer-section" id="openspecPanel" style="display:none;">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+                <h4 style="margin:0;">📐 OpenSpec 规范</h4>
+                <span id="openspecStageBadge"></span>
+            </div>
+            <div class="openspec-tabs" id="openspecTabs"></div>
+            <div class="openspec-content" id="openspecContent">
+                <div style="color:var(--text-muted);font-size:12px;padding:8px;">加载中…</div>
+            </div>
+        </div>`;
+
         // 统一时间轴（logs + comments 合并，异步加载）
         html += `
         <div class="drawer-section" id="timelineSection">
@@ -4732,6 +4811,10 @@ async function openTicketDrawer(ticketId) {
         </div>`;
 
         drawerBody.innerHTML = html;
+
+        // OpenSpec 内容异步加载
+        _loadTicketOpenSpec(data.id);
+
         // 描述区图片点击放大
         drawerBody.querySelectorAll('.ticket-description img').forEach(img => {
             img.onclick = () => window.open(img.src, '_blank');

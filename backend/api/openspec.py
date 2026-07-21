@@ -114,6 +114,55 @@ async def run_openspec_command(project_id: str, req: RunCommandRequest):
     )
 
 
+@router.get("/ticket/{ticket_id}/specs")
+async def get_ticket_openspec(project_id: str, ticket_id: str):
+    """读取工单的 OpenSpec 内容：proposal/specs/design/tasks + verify 结果。
+
+    返回 openspec/changes/{ticket_id}/ 目录下所有 .md 文件内容，
+    以及 openspec_stage（来自 tickets 表）供前端判断验证状态。
+    """
+    repo_path = await _get_project_repo_path(project_id)
+    if not repo_path:
+        raise HTTPException(404, "项目无本地路径")
+
+    spec_dir = Path(repo_path) / "openspec" / "changes" / ticket_id
+    if not spec_dir.exists():
+        return {
+            "initialized": False,
+            "ticket_id": ticket_id,
+            "files": {},
+            "openspec_stage": None,
+        }
+
+    # 读取 .md 文件
+    files: dict = {}
+    for md_file in sorted(spec_dir.rglob("*.md")):
+        try:
+            rel = md_file.relative_to(spec_dir).as_posix()
+            content = md_file.read_text(encoding="utf-8", errors="replace")
+            # 按文件名简化 key（proposal/specs/design/tasks/changelog）
+            key = md_file.stem.lower()
+            if "/" in rel:
+                key = rel.replace("/", "_").replace(".md", "")
+            files[key] = {"path": rel, "content": content}
+        except Exception:
+            pass
+
+    # 也读 openspec_stage
+    ticket_row = await db.fetch_one(
+        "SELECT openspec_stage FROM tickets WHERE id = ? AND project_id = ?",
+        (ticket_id, project_id),
+    )
+    openspec_stage = (ticket_row or {}).get("openspec_stage")
+
+    return {
+        "initialized": True,
+        "ticket_id": ticket_id,
+        "files": files,
+        "openspec_stage": openspec_stage,
+    }
+
+
 async def _stream_command(cmd_args: list, cwd: str | None, stdin_input: bytes = None):
     """运行子进程，逐行 yield SSE 事件。
 
