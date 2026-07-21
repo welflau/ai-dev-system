@@ -1250,6 +1250,14 @@
 
                             <!-- 面板：OpenSpec -->
                             <div class="inner-tab-panel" id="inner-panel-openspec">
+                                <!-- 三层仪表盘 -->
+                                <div class="settings-card" id="openspecDashboardCard" style="margin-bottom:12px;">
+                                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                                        <h3 class="settings-card-title" style="margin:0;">📊 三层覆盖率</h3>
+                                        <button class="btn btn-sm btn-ghost" onclick="loadOpenSpecDashboard()">🔄</button>
+                                    </div>
+                                    <div id="openspecDashboardContent" style="font-size:12px;color:var(--text-muted);">加载中…</div>
+                                </div>
                                 <!-- 已安装的 Skills / Commands -->
                                 <div class="settings-card" id="openspecInstalledCard" style="display:none;">
                                     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">

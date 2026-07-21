@@ -220,3 +220,118 @@ async def _stream_command(cmd_args: list, cwd: str | None, stdin_input: bytes = 
     except Exception as e:
         logger.exception("openspec run error: %s", e)
         yield _sse("error", {"message": str(e)})
+
+
+@router.get("/ticket/{ticket_id}/spec-versions")
+async def get_ticket_spec_versions(project_id: str, ticket_id: str):
+    """返回工单的 specs 版本历史（ticket_spec_versions 表 + 文件系统备份）。"""
+    repo_path = await _get_project_repo_path(project_id)
+
+    # 从 DB 读版本记录
+    rows = await db.fetch_all(
+        """SELECT id, version, change_summary, triggered_by, created_at
+           FROM ticket_spec_versions WHERE ticket_id = ?
+           ORDER BY version ASC""",
+        (ticket_id,),
+    )
+
+    # 从文件系统读备份文件内容
+    file_versions: dict = {}
+    if repo_path:
+        changes_dir = Path(repo_path) / "openspec" / "changes" / ticket_id
+        if changes_dir.exists():
+            for vf in sorted(changes_dir.glob("specs.v*.md")):
+                try:
+                    num = int(vf.stem.replace("specs.v", ""))
+                    file_versions[num] = vf.read_text(encoding="utf-8", errors="replace")
+                except (ValueError, Exception):
+                    pass
+
+    versions = []
+    for row in rows:
+        ver = row["version"]
+        versions.append({
+            "version": ver,
+            "change_summary": row["change_summary"] or "",
+            "created_at": row["created_at"],
+            "content": row.get("content") or file_versions.get(ver, ""),
+        })
+
+    # 补充文件系统里有但 DB 无记录的版本（兼容旧数据）
+    db_vers = {r["version"] for r in rows}
+    for ver, content in file_versions.items():
+        if ver not in db_vers:
+            versions.append({
+                "version": ver,
+                "change_summary": f"v{ver}（文件备份）",
+                "created_at": "",
+                "content": content,
+            })
+    versions.sort(key=lambda x: x["version"])
+
+    return {"ticket_id": ticket_id, "versions": versions}
+
+
+@router.get("/project-stats")
+async def get_project_openspec_stats(project_id: str):
+    """返回项目三层覆盖率统计，供仪表盘展示。"""
+    # 工单总数
+    total_row = await db.fetch_one(
+        "SELECT COUNT(*) as cnt FROM tickets WHERE project_id=? AND status NOT IN ('cancelled')",
+        (project_id,),
+    )
+    total = (total_row or {}).get("cnt", 0)
+    if total == 0:
+        return {"total": 0, "openspec": {}, "superpowers": {}, "harness": {}}
+
+    # OpenSpec 各阶段覆盖数
+    os_rows = await db.fetch_all(
+        """SELECT openspec_stage, COUNT(*) as cnt FROM tickets
+           WHERE project_id=? AND openspec_stage IS NOT NULL AND status NOT IN ('cancelled')
+           GROUP BY openspec_stage""",
+        (project_id,),
+    )
+    os_counts = {r["openspec_stage"]: r["cnt"] for r in os_rows}
+
+    # Superpowers 激活过的工单数（ticket_logs 有 superpowers_skill action）
+    sp_row = await db.fetch_one(
+        """SELECT COUNT(DISTINCT ticket_id) as cnt FROM ticket_logs
+           WHERE project_id=? AND action='superpowers_skill'""",
+        (project_id,),
+    )
+    sp_count = (sp_row or {}).get("cnt", 0)
+
+    # 已完成工单数
+    done_row = await db.fetch_one(
+        "SELECT COUNT(*) as cnt FROM tickets WHERE project_id=? AND status='done'",
+        (project_id,),
+    )
+    done_count = (done_row or {}).get("cnt", 0)
+
+    # 有变更记录的工单数
+    changed_row = await db.fetch_one(
+        "SELECT COUNT(*) as cnt FROM tickets WHERE project_id=? AND change_count > 0",
+        (project_id,),
+    )
+    changed_count = (changed_row or {}).get("cnt", 0)
+
+    def pct(n): return round(n / total * 100) if total else 0
+
+    return {
+        "total": total,
+        "openspec": {
+            "proposed": os_counts.get("proposed", 0),
+            "verified": os_counts.get("verified", 0),
+            "archived": os_counts.get("archived", 0),
+            "coverage_pct": pct(sum(os_counts.values())),
+        },
+        "superpowers": {
+            "activated": sp_count,
+            "coverage_pct": pct(sp_count),
+        },
+        "harness": {
+            "done": done_count,
+            "changed": changed_count,
+            "done_pct": pct(done_count),
+        },
+    }

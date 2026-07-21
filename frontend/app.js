@@ -1060,7 +1060,7 @@ function switchAgentConfigTab(inner) {
     if (inner === 'commands') loadProjectCommands();
     if (inner === 'rules') loadProjectRules();
     if (inner === 'hooks') loadProjectHooks();
-    if (inner === 'openspec') loadOpenSpecStatus();
+    if (inner === 'openspec') { loadOpenSpecStatus(); loadOpenSpecDashboard(); }
     // traits 已移到「系统设置」modal（showSystemSettingsModal('traits')）
 }
 
@@ -2186,6 +2186,48 @@ async function deleteCustomSkill(skillId, name) {
 }
 
 // ── OpenSpec ───────────────────────────────────────────────────────────────────
+
+async function loadOpenSpecDashboard() {
+    const el = document.getElementById('openspecDashboardContent');
+    if (!el || !currentProjectId) return;
+    try {
+        const d = await api(`/projects/${currentProjectId}/openspec/project-stats`);
+        if (!d.total) { el.innerHTML = '<span style="opacity:.5;">暂无工单数据</span>'; return; }
+        const { total, openspec: os, superpowers: sp, harness: h } = d;
+        const bar = (pct, color) =>
+            `<div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden;">
+                <div style="height:100%;width:${pct}%;background:${color};border-radius:3px;transition:width .4s;"></div>
+            </div>`;
+        el.innerHTML = `
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
+            <div style="padding:8px 10px;background:rgba(168,85,247,.08);border:1px solid rgba(168,85,247,.2);border-radius:6px;">
+                <div style="font-weight:600;color:#a855f7;margin-bottom:5px;">📐 规范层</div>
+                ${bar(os.coverage_pct, '#a855f7')}
+                <div style="margin-top:5px;opacity:.8;">
+                    覆盖 <b>${os.coverage_pct}%</b>（${os.proposed + os.verified + os.archived}/${total}）<br>
+                    <span style="font-size:10px;">验证 ${os.verified} · 归档 ${os.archived}</span>
+                </div>
+            </div>
+            <div style="padding:8px 10px;background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.2);border-radius:6px;">
+                <div style="font-weight:600;color:#f59e0b;margin-bottom:5px;">⚡ 纪律层</div>
+                ${bar(sp.coverage_pct, '#f59e0b')}
+                <div style="margin-top:5px;opacity:.8;">
+                    激活 <b>${sp.coverage_pct}%</b>（${sp.activated}/${total}）<br>
+                    <span style="font-size:10px;">TDD · 调试 · 验证铁律</span>
+                </div>
+            </div>
+            <div style="padding:8px 10px;background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.2);border-radius:6px;">
+                <div style="font-weight:600;color:#3b82f6;margin-bottom:5px;">🔧 编排层</div>
+                ${bar(h.done_pct, '#3b82f6')}
+                <div style="margin-top:5px;opacity:.8;">
+                    完成 <b>${h.done_pct}%</b>（${h.done}/${total}）<br>
+                    <span style="font-size:10px;">变更过 ${h.changed} 个工单</span>
+                </div>
+            </div>
+        </div>
+        <div style="margin-top:6px;font-size:10px;opacity:.45;text-align:right;">共 ${total} 个活跃工单</div>`;
+    } catch { el.innerHTML = '<span style="opacity:.4;">加载失败</span>'; }
+}
 
 async function loadOpenSpecStatus() {
     if (!currentProjectId) return;
@@ -4460,10 +4502,60 @@ async function _loadTicketOpenSpec(ticketId) {
 
         renderTabs();
         renderContent(activeKey);
+
+        // 异步加载版本历史
+        _loadSpecVersionHistory(ticketId, tabsEl, contentEl, files, keys, TAB_LABELS,
+            () => { activeKey = keys[0]; renderTabs(); renderContent(keys[0]); });
+
         panel.style.display = '';
     } catch (e) {
         // OpenSpec 未安装或无 specs，静默跳过
     }
+}
+
+/** 异步加载并追加 Specs 版本历史 Tab */
+async function _loadSpecVersionHistory(ticketId, tabsEl, contentEl, files, keys, labels, resetFn) {
+    if (!currentProjectId) return;
+    try {
+        const data = await api(`/projects/${currentProjectId}/openspec/ticket/${ticketId}/spec-versions`);
+        const versions = data.versions || [];
+        if (versions.length <= 1) return;  // 只有一个版本无需显示
+
+        // 把版本历史加为 Tab
+        keys.push('__history__');
+        labels['__history__'] = `📜 历史 (${versions.length})`;
+        files['__history__'] = { path: '', content: '' };
+
+        // 重新渲染 tabs
+        tabsEl.innerHTML = keys.map((k, i) => `
+            <button class="openspec-tab${k === keys[0] ? ' active' : ''}"
+                    onclick="_switchOpenSpecTab('${escHtml(k)}')" data-key="${escHtml(k)}">
+                ${escHtml(labels[k] || k)}
+            </button>`).join('');
+
+        // 历史 Tab 的渲染函数
+        const origSwitch = window._switchOpenSpecTab;
+        window._switchOpenSpecTab = (key) => {
+            if (key === '__history__') {
+                // 高亮 tab
+                tabsEl.querySelectorAll('.openspec-tab').forEach(b =>
+                    b.classList.toggle('active', b.dataset.key === key));
+                // 渲染版本列表
+                const verHtml = versions.map(v => `
+                    <div style="margin-bottom:10px;padding:8px 10px;background:var(--bg-elevated);border-radius:5px;">
+                        <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;">
+                            <span style="font-weight:700;color:var(--primary);">v${v.version}</span>
+                            <span style="font-size:11px;color:var(--text-muted);">${v.created_at ? formatTime(v.created_at) : ''}</span>
+                            <span style="font-size:11px;color:var(--text-secondary);">${escapeHtml(v.change_summary || '')}</span>
+                        </div>
+                        ${v.content ? `<div class="openspec-md" style="font-size:11px;max-height:120px;overflow:hidden;">${window.marked ? marked.parse(v.content.slice(0, 800)) : escapeHtml(v.content.slice(0, 200))}</div>` : ''}
+                    </div>`).join('');
+                contentEl.innerHTML = `<div style="font-size:12px;">${verHtml}</div>`;
+            } else {
+                origSwitch(key);
+            }
+        };
+    } catch { /* 无版本历史，静默跳过 */ }
 }
 
 /**
