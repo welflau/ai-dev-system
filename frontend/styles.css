@@ -1436,6 +1436,25 @@ body.chat-open .drawer.docked {
     margin-bottom: 24px;
 }
 
+/* 三层时间轴标注 */
+.log-item.layer-spec       { border-left: 2px solid rgba(168,85,247,0.35) !important; }
+.log-item.layer-discipline { border-left: 2px solid rgba(245,158,11,0.35) !important; }
+.log-item.layer-harness    { border-left: 2px solid rgba(59,130,246,0.35) !important; }
+.layer-badge { margin-right: 2px; }
+
+/* 工单卡片 OpenSpec 印章小标签 */
+.openspec-stamp-mini {
+    display: inline-block;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 1px 5px;
+    border: 1px solid;
+    border-radius: 3px;
+    transform: rotate(-1.5deg);
+    letter-spacing: 0.03em;
+    vertical-align: middle;
+}
+
 /* OpenSpec 内容面板 */
 .openspec-tabs {
     display: flex;

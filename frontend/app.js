@@ -4330,6 +4330,7 @@ function renderTicketCard(t) {
                 <span class="tag tag-type${t.type === 'bug' ? ' tag-bug' : ''}">${escHtml(t.type || 'feature')}</span>
                 <span class="tag tag-priority-${t.priority}">${pLabel}</span>
                 ${t.assigned_agent ? `<span class="tag tag-agent">${escHtml(t.assigned_agent)}</span>` : ''}
+                ${t.openspec_stage ? _buildOpenSpecStampMini(t.openspec_stage) : ''}
             </div>
             <div class="ticket-footer">
                 <select class="status-select" onchange="updateTicketStatus('${t.id}', this.value, this)" onclick="event.stopPropagation()">
@@ -4362,6 +4363,19 @@ async function updateTicketStatus(ticketId, newStatus, selectEl) {
 // ==================== 工单详情抽屉 ====================
 
 /** 构建三层能力提示横幅：告知用户当前缺哪层、走哪条路径 */
+/** 工单卡片上的 OpenSpec 印章小标签 */
+function _buildOpenSpecStampMini(stage) {
+    const MAP = {
+        proposed: { text: '📐', title: 'OpenSpec Proposed',  color: '#a855f7' },
+        applied:  { text: '📐', title: 'OpenSpec Applied',   color: '#a855f7' },
+        verified: { text: '📐✓',title: 'OpenSpec Verified',  color: '#34d058' },
+        archived: { text: '📐', title: 'OpenSpec Archived',  color: '#8b949e' },
+    };
+    const s = MAP[stage];
+    if (!s) return '';
+    return `<span class="openspec-stamp-mini" style="color:${s.color};border-color:${s.color}60;" title="${s.title}">${s.text}</span>`;
+}
+
 function _buildCapabilityBanner(hasSP, hasOS) {
     const missing = [];
     if (!hasOS) missing.push({ label: 'OpenSpec', icon: '📐', tab: 'openspec', desc: '规范层' });
@@ -8223,7 +8237,61 @@ function _openTicketByShortId(shortId) {
         }).catch(() => showToast(`找不到工单 ${shortId}`, 'warning'));
 }
 
+/** 三层专属 log action 的紧凑渲染 */
+function _renderLayerLogItem(log, meta) {
+    const LAYER_COLORS = { spec: '#a855f7', discipline: '#f59e0b', harness: '#3b82f6' };
+    const color = LAYER_COLORS[meta.layer] || '#888';
+    let detail = '';
+    try {
+        const d = JSON.parse(log.detail || '{}');
+        if (log.action === 'phase_reset') {
+            detail = `从 <b>${d.from_phase || '?'}</b> 重置 · ${d.reason || ''}`;
+        } else if (log.action === 'change_detected') {
+            detail = `${d.type || '?'} · ${d.reason || ''} · <i>${(d.comment_preview || '').slice(0, 40)}</i>`;
+        } else if (log.action === 'superpowers_skill') {
+            detail = (d.skills || []).join(' · ');
+        } else if (log.action.startsWith('openspec_')) {
+            detail = d.output ? d.output.slice(0, 80) : '';
+        } else {
+            detail = d.message || '';
+        }
+    } catch { detail = log.detail || ''; }
+
+    return `
+        <div class="log-item info layer-${meta.layer}" style="border-left-color:${color}40;padding:5px 10px 5px 14px;">
+            <div class="log-header" style="gap:5px;">
+                <span style="color:${color};font-size:12px;">${meta.icon}</span>
+                <span class="log-agent" style="color:${color};">${escHtml(meta.label)}</span>
+                <span class="log-time">${formatTime(log.created_at)}</span>
+            </div>
+            ${detail ? `<div style="font-size:11px;color:var(--text-muted);margin-top:2px;">${detail}</div>` : ''}
+        </div>`;
+}
+
 function renderLogItem(log) {
+    // ── 三层标注配置 ────────────────────────────────────────────────────────
+    const LAYER_STYLE = {
+        spec:       { icon: '📐', label: '规范层', color: '#a855f7', cls: 'layer-spec' },
+        discipline: { icon: '⚡', label: '纪律层', color: '#f59e0b', cls: 'layer-discipline' },
+        harness:    { icon: '🔧', label: '编排层', color: '#3b82f6', cls: 'layer-harness' },
+    };
+    const layerStyle = LAYER_STYLE[log.layer] || null;
+
+    // 三层专属 action 快捷渲染
+    const LAYER_ACTIONS = {
+        openspec_propose:        { icon: '📐', label: 'OpenSpec Propose 完成', layer: 'spec' },
+        openspec_propose_failed: { icon: '📐', label: 'OpenSpec Propose 失败', layer: 'spec' },
+        openspec_verify:         { icon: '📐', label: 'OpenSpec Verify 通过 ✅', layer: 'spec' },
+        openspec_verify_failed:  { icon: '📐', label: 'OpenSpec Verify 失败 ❌', layer: 'spec' },
+        superpowers_skill:       { icon: '⚡', label: 'Superpowers 约束已激活', layer: 'discipline' },
+        phase_reset:             { icon: '🔄', label: '阶段重置', layer: 'harness' },
+        change_detected:         { icon: '🔍', label: '变更检测', layer: 'harness' },
+        milestone_architecture:  { icon: '🔧', label: '架构里程碑', layer: 'harness' },
+    };
+    if (LAYER_ACTIONS[log.action]) {
+        return _renderLayerLogItem(log, LAYER_ACTIONS[log.action]);
+    }
+
     let detail = '';
     let inputSummary = '';
     let outputSummary = '';
@@ -8337,8 +8405,9 @@ function renderLogItem(log) {
         </div>`;
 
     return `
-        <div class="log-item ${log.level || 'info'}${log._isChatTool ? ' log-chat-tool' : ''}"${hasExpand ? ` onclick="toggleBlock('${expandId}')" style="cursor:pointer;" title="点击展开详情"` : ''}>
+        <div class="log-item ${log.level || 'info'}${log._isChatTool ? ' log-chat-tool' : ''}${layerStyle ? ' ' + layerStyle.cls : ''}"${layerStyle ? ` style="border-left-color:${layerStyle.color}40;"` : ''}${hasExpand ? ` onclick="toggleBlock('${expandId}')" style="cursor:pointer;${layerStyle ? `border-left-color:${layerStyle.color}40;` : ''}" title="点击展开详情"` : ''}>
             <div class="log-header">
+                ${layerStyle ? `<span class="layer-badge" style="color:${layerStyle.color};font-size:11px;opacity:.8;" title="${layerStyle.label}">${layerStyle.icon}</span>` : ''}
                 <span class="log-agent">${log._isChatTool ? '💬 ' : ''}${escHtml(log.agent_type || 'System')}</span>
                 <span class="log-action">${escHtml((log.action || '').replace(/^chat:/, '🔧 '))}</span>
                 ${cliCmd ? `<span class="log-action" style="color:var(--text-muted);font-size:11px;">▶ CLI</span>` : ''}
