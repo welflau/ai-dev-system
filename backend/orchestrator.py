@@ -3936,18 +3936,10 @@ class TicketOrchestrator:
                 await self._tweak_flow(ticket_id, project_id, comment, impact, comment_id)
                 return True
             elif impact.type == "partial":
-                # Partial Flow（P2，暂回落到 tweak 处理）
-                await self._tweak_flow(ticket_id, project_id, comment, impact, comment_id)
+                await self._partial_flow(ticket_id, project_id, comment, impact, comment_id, ticket)
                 return True
             elif impact.type == "breaking":
-                # Breaking Flow（P3，暂通知人工）
-                await self.post_milestone_comment(
-                    ticket_id, project_id,
-                    f"⚠️ 检测到**根本性需求变更**，建议关闭当前工单并创建新工单。\n"
-                    f"原因：{impact.reason}\n"
-                    f"评论：「{comment[:100]}」",
-                    level="error",
-                )
+                await self._breaking_flow(ticket_id, project_id, comment, impact, comment_id, ticket)
                 return True
 
         except Exception as e:
@@ -4000,6 +3992,216 @@ class TicketOrchestrator:
             reply_to_comment_id=comment_id,
         )
         logger.info("tweak_flow: ticket=%s reason=%s reset_ok=%s", ticket_id[:12], impact.reason[:40], reset_ok)
+
+    async def _partial_flow(
+        self,
+        ticket_id: str,
+        project_id: str,
+        comment: str,
+        impact,
+        comment_id: Optional[str],
+        ticket: dict,
+    ) -> None:
+        """
+        Partial Flow：局部需求变化，更新 OpenSpec specs 后重新执行受影响阶段。
+
+        步骤：
+        1. SpecVersionManager 备份当前 specs.md
+        2. LLM 生成 spec delta（只改变化部分）
+        3. 写入新 specs.md + DB 版本记录
+        4. 判断是否影响架构，决定从哪个阶段重置
+        5. 回复用户确认
+        """
+        try:
+            from capability_check import ticket_has_specs, _get_repo_path
+            from spec_version_manager import SpecVersionManager, generate_spec_delta
+
+            repo_path = ticket.get("repo_path") or await _get_repo_path(project_id)
+            if not repo_path:
+                # 无 repo_path → 降级到 tweak
+                await self._tweak_flow(ticket_id, project_id, comment, impact, comment_id)
+                return
+
+            # 1. 读取当前 specs
+            spec_mgr = SpecVersionManager(ticket_id, repo_path)
+            current_specs = spec_mgr.read_current_specs()
+
+            if not current_specs:
+                # 无 specs → 降级到 tweak（没有规范文件无法做 partial）
+                await self._tweak_flow(ticket_id, project_id, comment, impact, comment_id)
+                return
+
+            # 2. 备份当前 specs
+            ver = spec_mgr.snapshot()
+
+            # 3. LLM 生成新 specs（追加/修改场景）
+            new_specs = await generate_spec_delta(
+                current_specs=current_specs,
+                change_request=comment,
+                affected_specs=impact.affected_specs,
+            )
+
+            # 4. 写入 specs.md + DB
+            spec_mgr.apply_delta(new_specs)
+            await spec_mgr.save_version_to_db(
+                content=new_specs,
+                change_summary=impact.reason,
+                comment_id=comment_id,
+            )
+
+            # 5. 更新 change_count
+            await db.execute(
+                "UPDATE tickets SET change_count=COALESCE(change_count,0)+1, "
+                "openspec_stage='proposed', updated_at=? WHERE id=?",
+                (now_iso(), ticket_id),
+            )
+
+            # 6. 判断是否影响架构（含"架构"关键词时从 architecture 重置）
+            arch_keywords = ("架构", "数据库", "接口", "API", "数据结构", "architecture", "database", "schema")
+            needs_arch = any(kw in comment.lower() for kw in arch_keywords)
+            from_phase = "architecture" if needs_arch else "development"
+
+            reason = f"partial({ver}→{spec_mgr.current_version}): {impact.reason}"
+            reset_ok = await self.reset_phases(ticket_id, project_id, from_phase, reason)
+
+            # 7. 写时间轴日志
+            await self._add_layer_log(
+                ticket_id, project_id, action="spec_updated", layer="spec",
+                detail={
+                    "old_version": ver,
+                    "new_version": spec_mgr.current_version,
+                    "summary": impact.reason,
+                    "from_phase": from_phase,
+                },
+            )
+
+            # 8. 回复用户
+            phase_desc = "架构 → 开发 → 测试 → 验证" if needs_arch else "开发 → 测试 → 验证"
+            msg = (
+                f"📐 已收到局部需求变更：{impact.reason}\n"
+                f"规范已更新至 **v{spec_mgr.current_version}**（原 v{ver}），"
+                f"重置阶段：{phase_desc}。"
+            ) if reset_ok else (
+                f"📐 检测到局部变更（{impact.reason}），规范已更新，但阶段重置次数超限，请人工确认。"
+            )
+
+            await self._write_phase_comment(
+                project_id, ticket_id, "System", msg,
+                reply_to_comment_id=comment_id,
+            )
+            logger.info("partial_flow: ticket=%s ver=%s->%s from=%s", ticket_id[:12], ver, spec_mgr.current_version, from_phase)
+
+        except Exception as e:
+            logger.warning("_partial_flow 失败，降级到 tweak: %s", e)
+            await self._tweak_flow(ticket_id, project_id, comment, impact, comment_id)
+
+    async def _breaking_flow(
+        self,
+        ticket_id: str,
+        project_id: str,
+        comment: str,
+        impact,
+        comment_id: Optional[str],
+        ticket: dict,
+    ) -> None:
+        """
+        Breaking Flow：需求根本变更，关闭当前工单，创建衍生新工单。
+
+        步骤：
+        1. 当前工单 → cancelled
+        2. 从评论提取新需求标题和描述
+        3. 创建新工单（source_ticket_id 关联原工单）
+        4. 两边都留记录
+        """
+        try:
+            from utils import generate_id
+
+            # 1. 关闭当前工单
+            await db.execute(
+                "UPDATE tickets SET status='cancelled', updated_at=? WHERE id=?",
+                (now_iso(), ticket_id),
+            )
+
+            # 2. 提取新需求标题（LLM 从评论中抽取，失败用评论前30字）
+            new_title = await self._extract_title_from_comment(comment, ticket.get("title", ""))
+            new_desc = comment[:500]
+
+            # 3. 创建新工单
+            new_ticket_id = generate_id("TK")
+            requirement_id = ticket.get("requirement_id", "")
+            project_id_t = ticket.get("project_id", project_id)
+
+            await db.insert("tickets", {
+                "id": new_ticket_id,
+                "requirement_id": requirement_id,
+                "project_id": project_id_t,
+                "title": new_title,
+                "description": new_desc,
+                "type": ticket.get("type", "feature"),
+                "module": ticket.get("module", "other"),
+                "priority": ticket.get("priority", 3),
+                "sort_order": 0,
+                "status": "pending",
+                "assigned_agent": ticket.get("assigned_agent", ""),
+                "source_ticket_id": ticket_id,
+                "estimated_hours": ticket.get("estimated_hours"),
+                "created_at": now_iso(),
+                "updated_at": now_iso(),
+            })
+
+            # 4. 更新 change_count
+            await db.execute(
+                "UPDATE tickets SET change_count=COALESCE(change_count,0)+1, updated_at=? WHERE id=?",
+                (now_iso(), ticket_id),
+            )
+
+            # 5. 原工单留记录
+            await self._write_phase_comment(
+                project_id, ticket_id, "System",
+                f"⚠️ 需求根本性变更，当前工单已关闭。\n"
+                f"原因：{impact.reason}\n"
+                f"新工单：#{new_ticket_id[-6:]}「{new_title}」已创建，将走完整流程。",
+                reply_to_comment_id=comment_id,
+            )
+
+            # 6. 新工单留来源记录
+            await self._write_phase_comment(
+                project_id, new_ticket_id, "System",
+                f"📋 此工单由 #{ticket_id[-6:]}「{ticket.get('title', '')}」变更派生。\n"
+                f"变更原因：{impact.reason}",
+            )
+
+            await self._add_layer_log(
+                ticket_id, project_id, action="breaking_change", layer="harness",
+                detail={"new_ticket_id": new_ticket_id, "reason": impact.reason},
+            )
+
+            logger.info("breaking_flow: old=%s new=%s reason=%s", ticket_id[:12], new_ticket_id[:12], impact.reason[:40])
+
+        except Exception as e:
+            logger.warning("_breaking_flow 失败: %s", e)
+            # 降级：通知人工
+            await self.post_milestone_comment(
+                ticket_id, project_id,
+                f"⚠️ 检测到根本性变更（{impact.reason}），自动处理失败，请人工介入。",
+                level="error",
+            )
+
+    async def _extract_title_from_comment(self, comment: str, original_title: str) -> str:
+        """从评论中提取新需求标题，失败返回截断评论。"""
+        try:
+            from llm_client import llm_client
+            prompt = (
+                f"从以下需求变更评论中提取一个简洁的需求标题（10-20字，中文）：\n{comment[:300]}\n"
+                f"原工单标题参考：{original_title}\n只返回标题，不要解释："
+            )
+            title = await llm_client.chat(
+                [{"role": "user", "content": prompt}],
+                temperature=0.2, max_tokens=60,
+            )
+            return title.strip()[:50] or comment[:30]
+        except Exception:
+            return comment[:30]
 
 
     # ── TODO G：uproject 自愈 ───────────────────────────────────────────────
