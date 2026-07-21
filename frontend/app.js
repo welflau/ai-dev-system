@@ -4708,6 +4708,7 @@ async function openTicketDrawer(ticketId) {
                 <span class="progress-silence"></span>
             </div>
             <div class="progress-latest-log">—</div>
+            <div class="progress-action-hint" style="display:none;"></div>
             <div class="progress-foot">
                 <a class="action-link" onclick="scrollToLogPanel()">查看操作日志 →</a>
             </div>
@@ -6162,7 +6163,8 @@ async function _refreshTicketActionProgress() {
         _renderProgressHealth(el, data.health);
         _renderProgressElapsed(el, data.elapsed_ms, data.silence_ms);
         const logEl = el.querySelector('.progress-latest-log');
-        if (logEl) logEl.textContent = data.latest_log || '（暂无输出）';
+        if (logEl) logEl.textContent = data.latest_log || '（处理中…）';
+        _updateProgressActionHint(el, data.current_action, data.health);
     } catch (e) {
         console.warn('[progress] refresh failed:', e);
     }
@@ -6188,6 +6190,7 @@ function _tickTicketActionProgress() {
     // 活性状态随时间推进也要更新（60s/300s 阈值）
     const health = _deriveHealthClient(elapsedMs, silenceMs, st.lastLogAt);
     _renderProgressHealth(el, health);
+    _updateProgressActionHint(el, st.currentAction, health);
 
     // 每分钟强制重拉一次（兜底 SSE 丢包）
     if (elapsedMs != null && Math.floor(elapsedMs / 60000) !== Math.floor((elapsedMs - 5000) / 60000)) {
@@ -6213,6 +6216,35 @@ function _renderProgressHealth(el, health) {
     const info = _PROGRESS_HEALTH_MAP[health] || _PROGRESS_HEALTH_MAP.starting;
     badge.textContent = `${info.icon} ${info.label}`;
     badge.style.color = info.color;
+
+    // 呼吸动画：silent/starting 状态说明进程存活但无输出，加动画增加感知
+    badge.classList.toggle('progress-badge-pulse', health === 'silent' || health === 'starting');
+}
+
+// 动作感知提示：长时间无输出的动作给出上下文说明
+const _ACTION_HINTS = {
+    run_engine_compile: '🔨 UBT 全量编译中，C++ 编译通常需要 3-10 分钟，无输出属正常现象，请耐心等待。',
+    run_engine_compile_check: '🔨 UBT 增量编译检查中，通常 1-3 分钟，无输出属正常现象。',
+    run_uat: '📦 RunUAT 打包中，根据项目大小需要 5-20 分钟。',
+    playtest: '🎮 Play-In-Editor 测试运行中，等待测试结果…',
+};
+
+function _updateProgressActionHint(el, actionName, health) {
+    const hintEl = el.querySelector('.progress-action-hint');
+    if (!hintEl) return;
+    // 只在 silent/starting（无输出）状态显示提示
+    if (health !== 'silent' && health !== 'starting') {
+        hintEl.style.display = 'none';
+        return;
+    }
+    // 按 action 名匹配
+    const key = Object.keys(_ACTION_HINTS).find(k => (actionName || '').includes(k));
+    if (key) {
+        hintEl.textContent = _ACTION_HINTS[key];
+        hintEl.style.display = '';
+    } else {
+        hintEl.style.display = 'none';
+    }
 }
 
 function _renderProgressElapsed(el, elapsedMs, silenceMs) {
@@ -13600,13 +13632,18 @@ async function loadAllTicketConversations() {
                         const replyBtn = msg.role === 'assistant'
                             ? `<button class="tfc-reply-trigger" title="评论此回复" onclick="_openFeedReplyBox(this, '${escapeHtml(t.id)}')">💬</button>`
                             : '';
+                        // 长内容气泡折叠（内容超过 600 字符时）
+                        const content = msg.content || '';
+                        const isLong = content.length > 600;
+                        const bubbleId = `tbbl-${Math.random().toString(36).slice(2,8)}`;
                         msgEl.innerHTML = `
                             ${msg.role === 'user'
                                 ? '<div class="chat-msg-avatar">📝</div>'
                                 : _buildTicketAssistantAvatar(msg.model, msg.agent_type)}
                             <div class="chat-msg-content">
                                 ${agentBadge}
-                                <div class="chat-msg-bubble">${formatChatContent(msg.content)}</div>
+                                <div class="chat-msg-bubble${isLong ? ' tfc-bubble-collapsed' : ''}" id="${bubbleId}">${formatChatContent(content)}</div>
+                                ${isLong ? `<button class="tfc-expand-btn" onclick="_toggleTicketBubble('${bubbleId}', this)">展开 ▾</button>` : ''}
                                 <div class="chat-msg-time">${formatTime(msg.created_at)}${replyBtn}</div>
                             </div>`;
                         msgArea.appendChild(msgEl);
@@ -13752,6 +13789,13 @@ function appendToTicketFeed(logData) {
 /**
  * 打开/关闭 feed 里 agent 消息/评论的行内评论输入框
  */
+function _toggleTicketBubble(bubbleId, btn) {
+    const bubble = document.getElementById(bubbleId);
+    if (!bubble) return;
+    const collapsed = bubble.classList.toggle('tfc-bubble-collapsed');
+    btn.textContent = collapsed ? '展开 ▾' : '收起 ▴';
+}
+
 function _openFeedReplyBox(btn, ticketId) {
     // 锚点：.chat-msg（LLM 对话）、.tfc-reply（子回复）、.ticket-feed-comment（顶层评论）
     const anchor = btn.closest('.chat-msg') || btn.closest('.tfc-reply') || btn.closest('.ticket-feed-comment');
