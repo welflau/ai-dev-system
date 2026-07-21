@@ -4466,6 +4466,83 @@ async function _loadTicketOpenSpec(ticketId) {
     }
 }
 
+/**
+ * 构建三层状态总览栏
+ * hasSP: Superpowers Pack 已安装
+ * hasOS: OpenSpec 已初始化
+ * ticketData: 工单详情（status / openspec_stage 等）
+ */
+function _buildThreeLayerBar(hasSP, hasOS, ticketData) {
+    // 只要有任何一层有内容才显示
+    if (!hasSP && !hasOS) return '';
+
+    const stage = ticketData.openspec_stage || null;
+    const ticketStatus = ticketData.status || '';
+
+    // ── 规范层（OpenSpec）──────────────────────────────────────────
+    let specHtml = '';
+    if (hasOS) {
+        const OS_PHASES = [
+            { key: 'proposed', label: 'Propose' },
+            { key: 'applied',  label: 'Apply'   },
+            { key: 'verified', label: 'Verify'  },
+            { key: 'archived', label: 'Archive' },
+        ];
+        const stageIdx = OS_PHASES.findIndex(p => p.key === stage);
+        const nodes = OS_PHASES.map((p, i) => {
+            const done = stageIdx >= i;
+            const active = stageIdx === i;
+            const cls = done ? 'tlb-done' : 'tlb-pending';
+            return `<span class="tlb-node ${cls}${active ? ' tlb-active' : ''}">${escHtml(p.label)}</span>`;
+        }).join('<span class="tlb-arrow">──</span>');
+        specHtml = `<div class="tlb-row tlb-spec">
+            <span class="tlb-layer-icon" title="规范层">📐</span>
+            <div class="tlb-nodes">${nodes}</div>
+        </div>`;
+    }
+
+    // ── 纪律层（Superpowers）──────────────────────────────────────
+    let discHtml = '';
+    if (hasSP) {
+        // Superpowers 只有两态：装了 Pack（待激活）或已激活（dev 阶段有记录）
+        const devPhases = ['development', 'testing', 'in_review', 'done'];
+        const activated = devPhases.includes(ticketStatus) || ticketStatus === 'done';
+        discHtml = `<div class="tlb-row tlb-discipline">
+            <span class="tlb-layer-icon" title="纪律层">⚡</span>
+            <div class="tlb-nodes">
+                <span class="tlb-node ${activated ? 'tlb-done' : 'tlb-pending'}">TDD</span>
+                <span class="tlb-arrow">·</span>
+                <span class="tlb-node ${activated ? 'tlb-done' : 'tlb-pending'}">调试规范</span>
+                <span class="tlb-arrow">·</span>
+                <span class="tlb-node ${activated ? 'tlb-done' : 'tlb-pending'}">验证铁律</span>
+            </div>
+        </div>`;
+    }
+
+    // ── 编排层（Harness/ADS）─────────────────────────────────────
+    const HARNESS_PHASES = [
+        { keys: ['pending', 'todo'],                         label: '需求'  },
+        { keys: ['architecture', 'architecture_done'],       label: '架构'  },
+        { keys: ['development', 'development_in_progress'],  label: '开发'  },
+        { keys: ['testing'],                                  label: '测试'  },
+        { keys: ['in_review'],                                label: '审查'  },
+        { keys: ['done'],                                     label: '完成'  },
+    ];
+    const hIdx = HARNESS_PHASES.findIndex(p => p.keys.includes(ticketStatus));
+    const hNodes = HARNESS_PHASES.map((p, i) => {
+        const done = hIdx > i || ticketStatus === 'done';
+        const active = hIdx === i;
+        const cls = done ? 'tlb-done' : 'tlb-pending';
+        return `<span class="tlb-node ${cls}${active ? ' tlb-active' : ''}">${escHtml(p.label)}</span>`;
+    }).join('<span class="tlb-arrow">→</span>');
+    const harnessHtml = `<div class="tlb-row tlb-harness">
+        <span class="tlb-layer-icon" title="编排层">🔧</span>
+        <div class="tlb-nodes">${hNodes}</div>
+    </div>`;
+
+    return `<div class="three-layer-bar">${specHtml}${discHtml}${harnessHtml}</div>`;
+}
+
 async function openTicketDrawer(ticketId) {
     if (!currentProjectId) return;
 
@@ -4494,10 +4571,12 @@ async function openTicketDrawer(ticketId) {
             _hasOS = !!(_osStatus.initialized);
         } catch { _hasOS = false; }
         const _capBanner = _buildCapabilityBanner(_hasSP, _hasOS);
+        const _layerBar  = _buildThreeLayerBar(_hasSP, _hasOS, data);
 
         // 基本信息
         let html = `
         ${_capBanner}
+        ${_layerBar}
         <div class="drawer-section">
             <h4>基本信息</h4>
             <div class="detail-grid">
@@ -4517,6 +4596,9 @@ async function openTicketDrawer(ticketId) {
                 <span class="detail-value">${formatDateTime(data.created_at)}</span>
                 ${data.started_at ? `<span class="detail-label">开始时间</span><span class="detail-value">${formatDateTime(data.started_at)}</span>` : ''}
                 ${data.completed_at ? `<span class="detail-label">完成时间</span><span class="detail-value">${formatDateTime(data.completed_at)}</span>` : ''}
+                ${data.source_ticket_id ? `<span class="detail-label">衍生自</span><span class="detail-value"><a class="action-link" onclick="openTicketDrawer('${escHtml(data.source_ticket_id)}')" title="查看原工单" style="cursor:pointer;">#${escHtml(data.source_ticket_id.slice(-6))} →</a></span>` : ''}
+                ${data.change_count > 0 ? `<span class="detail-label">变更次数</span><span class="detail-value"><span style="color:var(--warning);font-size:11px;">🔄 ${data.change_count} 次</span></span>` : ''}
+                ${data.openspec_stage ? `<span class="detail-label">OpenSpec</span><span class="detail-value">${_buildOpenSpecStampMini(data.openspec_stage)}</span>` : ''}
             </div>
         </div>
 

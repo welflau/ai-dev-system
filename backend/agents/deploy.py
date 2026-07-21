@@ -103,6 +103,9 @@ class DeployAgent(BaseAgent):
 
         files = self._generate_deploy_files(ticket_title, docs_prefix, preview_url)
 
+        # OpenSpec Archive（规范层，可选，merge 后归档到 openspec/archive/）
+        await self._run_openspec_archive(context)
+
         return {
             "status": "success",
             "deploy_result": {
@@ -111,6 +114,56 @@ class DeployAgent(BaseAgent):
             },
             "files": files,
         }
+
+    async def _run_openspec_archive(self, context: Dict[str, Any]) -> None:
+        """触发 opsx:archive，将规范合并到主库。项目未安装 OpenSpec 时静默跳过。"""
+        try:
+            project_id = context.get("project_id", "")
+            ticket_id = context.get("ticket_id", "")
+            if not project_id or not ticket_id:
+                return
+            from capability_check import has_openspec, get_openspec_cli, _get_repo_path, ticket_has_specs
+            repo_path = context.get("repo_path") or await _get_repo_path(project_id)
+            if not repo_path or not await has_openspec(project_id, repo_path):
+                return
+            if not ticket_has_specs(repo_path, ticket_id):
+                return
+            cli = get_openspec_cli()
+            if not cli:
+                return
+
+            import asyncio
+            proc = await asyncio.create_subprocess_shell(
+                f"{cli} archive",
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+                cwd=repo_path, stdin=asyncio.subprocess.PIPE,
+            )
+            if proc.stdin:
+                proc.stdin.write(b"\n\n\n")
+                await proc.stdin.drain()
+                proc.stdin.close()
+            try:
+                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
+                rc = proc.returncode
+            except asyncio.TimeoutError:
+                proc.kill(); rc = -1
+
+            from database import db
+            from utils import now_iso
+            from orchestrator import Orchestrator
+            orch = Orchestrator()
+            if rc == 0:
+                await db.execute(
+                    "UPDATE tickets SET openspec_stage='archived', updated_at=? WHERE id=?",
+                    (now_iso(), ticket_id),
+                )
+                await orch.post_milestone_comment(
+                    ticket_id, project_id,
+                    "📐 [规范层] **OpenSpec Archive 完成** — 规范已归档到主库 `openspec/archive/` 🗃",
+                )
+            logger.debug("OpenSpec archive rc=%d ticket=%s", rc, ticket_id[:12])
+        except Exception as e:
+            logger.debug("_run_openspec_archive 失败（忽略）: %s", e)
 
     @classmethod
     async def deploy_env(cls, project_id: str, env_type: str, branch: str = None) -> Optional[str]:

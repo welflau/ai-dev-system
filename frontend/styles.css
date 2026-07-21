@@ -1436,6 +1436,44 @@ body.chat-open .drawer.docked {
     margin-bottom: 24px;
 }
 
+/* 三层状态总览栏 */
+.three-layer-bar {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    margin-bottom: 14px;
+    padding: 8px 12px;
+    background: rgba(0,0,0,0.15);
+    border-radius: 6px;
+    border: 1px solid var(--border);
+}
+.tlb-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+}
+.tlb-layer-icon { width: 18px; flex-shrink: 0; font-size: 13px; }
+.tlb-nodes { display: flex; align-items: center; gap: 3px; flex-wrap: wrap; }
+.tlb-node {
+    padding: 1px 7px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: 500;
+    border: 1px solid transparent;
+}
+.tlb-node.tlb-done    { opacity: .9; }
+.tlb-node.tlb-pending { opacity: .3; }
+.tlb-node.tlb-active  { opacity: 1; font-weight: 700; }
+.tlb-spec .tlb-node.tlb-done    { background: rgba(168,85,247,.15); border-color: rgba(168,85,247,.35); color: #a855f7; }
+.tlb-spec .tlb-node.tlb-pending { color: var(--text-muted); }
+.tlb-discipline .tlb-node.tlb-done    { background: rgba(245,158,11,.12); border-color: rgba(245,158,11,.3); color: #f59e0b; }
+.tlb-discipline .tlb-node.tlb-pending { color: var(--text-muted); }
+.tlb-harness .tlb-node.tlb-done    { background: rgba(59,130,246,.12); border-color: rgba(59,130,246,.3); color: #3b82f6; }
+.tlb-harness .tlb-node.tlb-pending { color: var(--text-muted); }
+.tlb-harness .tlb-node.tlb-active  { background: rgba(59,130,246,.22); border-color: rgba(59,130,246,.5); color: #3b82f6; }
+.tlb-arrow { color: var(--text-muted); opacity: .4; font-size: 10px; }
+
 /* 三层时间轴标注 */
 .log-item.layer-spec       { border-left: 2px solid rgba(168,85,247,0.35) !important; }
 .log-item.layer-discipline { border-left: 2px solid rgba(245,158,11,0.35) !important; }
