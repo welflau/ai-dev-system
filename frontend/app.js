@@ -4402,13 +4402,17 @@ async function openTicketDrawer(ticketId) {
 
         drawerTitle.textContent = data.title;
 
-        // 能力提示横幅：检测 OpenSpec / Superpowers 安装状态
+        // 能力提示横幅：检测 OpenSpec / Superpowers 安装状态（项目级，非工单级）
         const _installedPacks = (() => {
             try { return JSON.parse(currentProject?.installed_packs || '[]'); } catch { return []; }
         })();
         const _hasSP = _installedPacks.includes('superpowers');
-        const _hasOS = !!data.openspec_stage;  // 有 openspec_stage 则说明 OpenSpec 已运行过
-        // 也可检测项目层面的 OpenSpec 初始化状态（openspec/ 目录），这里用简化判断
+        // OpenSpec：调项目级 /openspec/status 端点，检测 openspec/ 目录是否存在
+        let _hasOS = false;
+        try {
+            const _osStatus = await api(`/projects/${currentProjectId}/openspec/status`);
+            _hasOS = !!(_osStatus.initialized);
+        } catch { _hasOS = false; }
         const _capBanner = _buildCapabilityBanner(_hasSP, _hasOS);
 
         // 基本信息
