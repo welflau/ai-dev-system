@@ -3782,11 +3782,23 @@ class TicketOrchestrator:
         comment_content: str,
         comment_id: str = None,
     ):
-        """用户发评论后，由当前负责 Agent（或 ChatAssistant）立刻异步回复"""
+        """用户发评论后，由当前负责 Agent（或 ChatAssistant）立刻异步回复。
+
+        三层融合扩展：先过变更分析中间件，检测评论是否含需求变更；
+        有变更 → 路由到对应 Flow（tweak/partial/breaking）；
+        无变更 → 原有 LLM 回复路径。
+        """
         try:
             ticket = await db.fetch_one("SELECT * FROM tickets WHERE id = ?", (ticket_id,))
             if not ticket:
                 return
+
+            # ── 变更分析中间件（三层融合：变更触发机制）──────────────────
+            handled = await self._handle_change_impact(
+                ticket_id, project_id, comment_content, comment_id, ticket,
+            )
+            if handled:
+                return  # 已由变更 Flow 处理，不走普通回复
 
             # 读取完整评论历史（正序）
             history = await db.fetch_all(
@@ -3858,6 +3870,136 @@ class TicketOrchestrator:
 
         except Exception as e:
             logger.warning("reply_to_comment 失败（忽略）: %s", e)
+
+    # ──────────────────────────────────────────────────────────────
+    # 三层融合：变更分析中间件 + Tweak Flow
+    # ──────────────────────────────────────────────────────────────
+
+    async def _handle_change_impact(
+        self,
+        ticket_id: str,
+        project_id: str,
+        comment: str,
+        comment_id: Optional[str],
+        ticket: dict,
+    ) -> bool:
+        """
+        变更分析中间件：检测评论是否含需求变更，路由到对应 Flow。
+        返回 True 表示已处理（不再走普通回复），False 表示无变更正常回复。
+        """
+        try:
+            from change_impact import change_analyzer, ACTIVE_PHASES
+
+            ticket_status = ticket.get("status", "")
+            if ticket_status not in ACTIVE_PHASES:
+                return False
+
+            # 读取 OpenSpec specs（有则辅助分析）
+            specs_content = None
+            try:
+                from capability_check import get_ticket_specs_path
+                repo_row = await db.fetch_one(
+                    "SELECT git_repo_path FROM projects WHERE id = ?", (project_id,)
+                )
+                repo_path = (repo_row or {}).get("git_repo_path", "")
+                if repo_path:
+                    sp = get_ticket_specs_path(repo_path, ticket_id)
+                    if sp.exists():
+                        specs_content = sp.read_text(encoding="utf-8", errors="replace")[:2000]
+            except Exception:
+                pass
+
+            impact = await change_analyzer.analyze(
+                comment=comment,
+                ticket_title=ticket.get("title", ""),
+                ticket_status=ticket_status,
+                specs_content=specs_content,
+            )
+
+            if not impact.is_change:
+                return False  # 无变更，走正常回复
+
+            # 记录变更日志
+            await self._add_layer_log(
+                ticket_id, project_id,
+                action="change_detected", layer="harness",
+                detail={
+                    "type": impact.type,
+                    "reason": impact.reason,
+                    "comment_id": comment_id or "",
+                    "comment_preview": comment[:100],
+                },
+            )
+
+            # 路由到对应 Flow
+            if impact.type == "tweak":
+                await self._tweak_flow(ticket_id, project_id, comment, impact, comment_id)
+                return True
+            elif impact.type == "partial":
+                # Partial Flow（P2，暂回落到 tweak 处理）
+                await self._tweak_flow(ticket_id, project_id, comment, impact, comment_id)
+                return True
+            elif impact.type == "breaking":
+                # Breaking Flow（P3，暂通知人工）
+                await self.post_milestone_comment(
+                    ticket_id, project_id,
+                    f"⚠️ 检测到**根本性需求变更**，建议关闭当前工单并创建新工单。\n"
+                    f"原因：{impact.reason}\n"
+                    f"评论：「{comment[:100]}」",
+                    level="error",
+                )
+                return True
+
+        except Exception as e:
+            logger.debug("_handle_change_impact 失败（忽略）: %s", e)
+
+        return False
+
+    async def _tweak_flow(
+        self,
+        ticket_id: str,
+        project_id: str,
+        comment: str,
+        impact,
+        comment_id: Optional[str] = None,
+    ) -> None:
+        """
+        Tweak Flow：细节调整，specs 不变，重置开发阶段重新执行。
+        适用于 tweak 和 P2 前的 partial（specs 更新逻辑 P2 再补）。
+        """
+        # 1. 记录变更日志（change_count + 1）
+        await db.execute(
+            "UPDATE tickets SET change_count = COALESCE(change_count, 0) + 1, updated_at = ? "
+            "WHERE id = ?",
+            (now_iso(), ticket_id),
+        )
+
+        # 2. 判断从哪个阶段重置
+        #    tweak → 从 development 重置
+        #    partial（简化）→ 从 development 重置（P2 再支持从 architecture 重置）
+        from_phase = "development"
+        reason = f"{impact.type}: {impact.reason} （来自评论 {comment[:60]}）"
+
+        reset_ok = await self.reset_phases(ticket_id, project_id, from_phase, reason)
+
+        if reset_ok:
+            # 3. 回复用户确认
+            msg = (
+                f"✅ 已收到需求调整：{impact.reason}\n"
+                f"已重置**开发阶段**，将根据最新要求重新实现。\n"
+                f"（变更类型：{impact.type}）"
+            )
+        else:
+            msg = (
+                f"⚠️ 检测到需求调整（{impact.reason}），但阶段重置次数已超限，"
+                f"请人工确认是否继续。"
+            )
+
+        await self._write_phase_comment(
+            project_id, ticket_id, "System", msg,
+            reply_to_comment_id=comment_id,
+        )
+        logger.info("tweak_flow: ticket=%s reason=%s reset_ok=%s", ticket_id[:12], impact.reason[:40], reset_ok)
 
 
     # ── TODO G：uproject 自愈 ───────────────────────────────────────────────
