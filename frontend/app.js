@@ -4361,6 +4361,31 @@ async function updateTicketStatus(ticketId, newStatus, selectEl) {
 
 // ==================== 工单详情抽屉 ====================
 
+/** 构建三层能力提示横幅：告知用户当前缺哪层、走哪条路径 */
+function _buildCapabilityBanner(hasSP, hasOS) {
+    const missing = [];
+    if (!hasOS) missing.push({ label: 'OpenSpec', icon: '📐', tab: 'openspec', desc: '规范层' });
+    if (!hasSP) missing.push({ label: 'Superpowers', icon: '⚡', tab: 'configpack', desc: '纪律层' });
+    if (missing.length === 0) return '';  // 全装了，不显示
+
+    const path = missing.length === 2 ? '标准 ADS 流水线'
+        : !hasOS ? 'ADS + 纪律约束（Superpowers）'
+        : 'ADS + 规范层（OpenSpec）';
+
+    const chips = missing.map(m =>
+        `<span class="cap-missing-chip" onclick="switchTab('${m.tab}')" title="点击前往安装">
+            ${m.icon} 未安装 ${m.label}
+            <span class="cap-chip-arrow">→</span>
+        </span>`
+    ).join('');
+
+    return `<div class="cap-banner">
+        <span class="cap-banner-icon">ℹ</span>
+        <span class="cap-banner-text">${chips}</span>
+        <span class="cap-banner-path">当前路径：${escHtml(path)}</span>
+    </div>`;
+}
+
 async function openTicketDrawer(ticketId) {
     if (!currentProjectId) return;
 
@@ -4377,8 +4402,18 @@ async function openTicketDrawer(ticketId) {
 
         drawerTitle.textContent = data.title;
 
+        // 能力提示横幅：检测 OpenSpec / Superpowers 安装状态
+        const _installedPacks = (() => {
+            try { return JSON.parse(currentProject?.installed_packs || '[]'); } catch { return []; }
+        })();
+        const _hasSP = _installedPacks.includes('superpowers');
+        const _hasOS = !!data.openspec_stage;  // 有 openspec_stage 则说明 OpenSpec 已运行过
+        // 也可检测项目层面的 OpenSpec 初始化状态（openspec/ 目录），这里用简化判断
+        const _capBanner = _buildCapabilityBanner(_hasSP, _hasOS);
+
         // 基本信息
         let html = `
+        ${_capBanner}
         <div class="drawer-section">
             <h4>基本信息</h4>
             <div class="detail-grid">

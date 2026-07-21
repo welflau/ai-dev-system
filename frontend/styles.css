@@ -1435,6 +1435,44 @@ body.chat-open .drawer.docked {
 .drawer-section {
     margin-bottom: 24px;
 }
+
+/* 工单三层能力提示横幅 */
+.cap-banner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 14px;
+    padding: 7px 12px;
+    background: rgba(59,130,246,0.06);
+    border: 1px solid rgba(59,130,246,0.2);
+    border-radius: 6px;
+    font-size: 11px;
+    color: var(--text-muted);
+}
+.cap-banner-icon { color: rgba(59,130,246,0.8); font-size: 13px; }
+.cap-banner-text { display: flex; gap: 6px; flex-wrap: wrap; flex: 1; }
+.cap-missing-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 2px 8px;
+    background: rgba(239,68,68,0.08);
+    border: 1px solid rgba(239,68,68,0.25);
+    border-radius: 4px;
+    color: rgba(239,68,68,0.85);
+    cursor: pointer;
+    font-size: 11px;
+    transition: background .15s;
+}
+.cap-missing-chip:hover { background: rgba(239,68,68,0.16); }
+.cap-chip-arrow { opacity: .5; font-size: 10px; }
+.cap-banner-path {
+    margin-left: auto;
+    font-size: 10px;
+    opacity: .6;
+    white-space: nowrap;
+}
 .drawer-section h4 {
     font-size: 13px;
     color: var(--text-muted);

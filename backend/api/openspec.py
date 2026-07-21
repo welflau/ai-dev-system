@@ -101,15 +101,24 @@ async def run_openspec_command(project_id: str, req: RunCommandRequest):
     if req.command.startswith("init") and not repo_path:
         raise HTTPException(400, "项目无本地路径，无法执行初始化")
 
+    # init 命令有交互式 harness 选择器，自动注入 Enter 键序列确认默认选择
+    # 默认已选 Claude Code + CodeBuddy，多个 \n 覆盖所有可能的交互提示
+    stdin_input = None
+    if req.command.startswith("init"):
+        stdin_input = b"\n\n\n\n\n"  # 多次 Enter，确认所有交互提示
+
     return StreamingResponse(
-        _stream_command(cmd_args, cwd),
+        _stream_command(cmd_args, cwd, stdin_input=stdin_input),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 
-async def _stream_command(cmd_args: list, cwd: str | None):
-    """运行子进程，逐行 yield SSE 事件。"""
+async def _stream_command(cmd_args: list, cwd: str | None, stdin_input: bytes = None):
+    """运行子进程，逐行 yield SSE 事件。
+
+    stdin_input: 可选的 stdin 字节流，用于自动回答交互提示（如 openspec init 的 harness 选择）。
+    """
 
     def _sse(event: str, data: dict) -> bytes:
         return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode()
@@ -119,11 +128,14 @@ async def _stream_command(cmd_args: list, cwd: str | None):
     try:
         # Windows 需要 shell=True 才能找到 npm/openspec（PATH 扩展）
         use_shell = sys.platform == "win32"
+        stdin_mode = asyncio.subprocess.PIPE if stdin_input else asyncio.subprocess.DEVNULL
+
         if use_shell:
             import subprocess
             cmd_str = " ".join(cmd_args)
             proc = await asyncio.create_subprocess_shell(
                 cmd_str,
+                stdin=stdin_mode,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 cwd=cwd,
@@ -131,10 +143,20 @@ async def _stream_command(cmd_args: list, cwd: str | None):
         else:
             proc = await asyncio.create_subprocess_exec(
                 *cmd_args,
+                stdin=stdin_mode,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 cwd=cwd,
             )
+
+        # 有 stdin_input 时写入并关闭（模拟 Enter 确认交互提示）
+        if stdin_input and proc.stdin:
+            try:
+                proc.stdin.write(stdin_input)
+                await proc.stdin.drain()
+                proc.stdin.close()
+            except Exception:
+                pass
 
         async for raw_line in proc.stdout:
             line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
