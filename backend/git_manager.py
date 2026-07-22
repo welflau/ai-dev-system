@@ -359,7 +359,8 @@ Thumbs.db
         """切换到指定分支"""
         repo_dir = str(self._repo_path(project_id))
         # 先清理可能冲突的未跟踪文件（如 .pyc 缓存）
-        await self._run_git(repo_dir, "clean", "-fd", "--exclude=.env")
+        # 保留 openspec/（OpenSpec 规范目录，应跨分支持久存在）和 .env
+        await self._run_git(repo_dir, "clean", "-fd", "--exclude=.env", "--exclude=openspec")
         await self._run_git(repo_dir, "checkout", ".")
         rc, _, err = await self._run_git(repo_dir, "checkout", branch_name)
         if rc != 0:
