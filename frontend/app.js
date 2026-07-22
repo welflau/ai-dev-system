@@ -4616,17 +4616,26 @@ function _buildThreeLayerBar(hasSP, hasOS, ticketData) {
     const HARNESS_PHASES = [
         { keys: ['pending', 'todo'],                         label: '需求'  },
         { keys: ['architecture', 'architecture_done'],       label: '架构'  },
-        { keys: ['development', 'development_in_progress'],  label: '开发'  },
+        { keys: ['development', 'development_in_progress', 'blocked', 'cancelled'],  label: '开发'  },
         { keys: ['testing'],                                  label: '测试'  },
         { keys: ['in_review'],                                label: '审查'  },
         { keys: ['done'],                                     label: '完成'  },
     ];
     const hIdx = HARNESS_PHASES.findIndex(p => p.keys.includes(ticketStatus));
+    const isBlocked = ticketStatus === 'blocked';
+    const isCancelled = ticketStatus === 'cancelled';
     const hNodes = HARNESS_PHASES.map((p, i) => {
         const done = hIdx > i || ticketStatus === 'done';
         const active = hIdx === i;
+        // blocked/cancelled 时当前节点用特殊颜色
+        const blockedStyle = (active && isBlocked)
+            ? ' style="border-color:rgba(239,68,68,.5);color:#ef4444;"'
+            : (active && isCancelled)
+                ? ' style="border-color:rgba(139,148,158,.4);color:#8b949e;"'
+                : '';
         const cls = done ? 'tlb-done' : 'tlb-pending';
-        return `<span class="tlb-node ${cls}${active ? ' tlb-active' : ''}">${escHtml(p.label)}</span>`;
+        const label = (active && isBlocked) ? `${escHtml(p.label)} ⚠` : escHtml(p.label);
+        return `<span class="tlb-node ${cls}${active ? ' tlb-active' : ''}"${blockedStyle}>${label}</span>`;
     }).join('<span class="tlb-arrow">→</span>');
     const harnessHtml = `<div class="tlb-row tlb-harness">
         <span class="tlb-layer-icon" title="编排层">🔧</span>
