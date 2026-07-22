@@ -15357,9 +15357,19 @@ function _buildAnyActionCardHtml(action) {
     if (t === 'error_alert') {
         // 系统错误卡片（git commit 失败等），与 _onAgentAlert 样式一致
         const bodyHtml = escapeHtml(action.body || action.title || '').replace(/\n/g, '<br>');
+        const ticketId = action.ticket_id || '';
+        const ticketLink = (ticketId && currentProjectId)
+            ? `<div style="margin-top:8px;padding-top:7px;border-top:1px solid rgba(239,68,68,0.2);">
+                   <a class="action-link" style="color:rgba(239,68,68,0.8);font-size:11px;"
+                      onclick="openTicketDrawer('${escapeHtml(ticketId)}')" title="打开工单">
+                       🔍 查看工单 #${escapeHtml(ticketId.slice(-6))} →
+                   </a>
+               </div>`
+            : '';
         return `<div style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.3);border-radius:6px;padding:10px 12px;white-space:normal;">
             <div style="font-weight:600;color:var(--error,#ef4444);margin-bottom:4px;">${escapeHtml(action.title || '⚠️ 错误')}</div>
             <div style="font-size:12px;color:var(--text-secondary);">${bodyHtml}</div>
+            ${ticketLink}
         </div>`;
     }
     return '';
@@ -20797,6 +20807,15 @@ function _onAgentAlert(data) {
 
     const body   = (data.body  || '').replace(/\n/g, '<br>');
     const time   = formatTime(data.created_at || new Date().toISOString());
+    const ticketId = data.ticket_id || '';
+    const ticketLink = (ticketId && currentProjectId)
+        ? `<div style="margin-top:8px;padding-top:6px;border-top:1px solid rgba(239,68,68,0.2);">
+               <a class="action-link" style="color:rgba(239,68,68,0.8);font-size:12px;"
+                  onclick="openTicketDrawer('${escHtml(ticketId)}')" title="打开工单">
+                   🔍 查看工单 #${escHtml(ticketId.slice(-6))} →
+               </a>
+           </div>`
+        : '';
     const bubble = document.createElement('div');
     bubble.className = 'chat-msg assistant';
     bubble.innerHTML = `
@@ -20805,6 +20824,7 @@ function _onAgentAlert(data) {
             <div class="chat-msg-bubble" style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.3);">
                 <div style="font-weight:600;color:var(--error,#ef4444);margin-bottom:4px;">${escHtml(data.title || '⚠️ Agent 错误')}</div>
                 <div style="font-size:13px;color:var(--text-secondary);">${body}</div>
+                ${ticketLink}
             </div>
             <div class="chat-msg-time">${time}</div>
         </div>`;
