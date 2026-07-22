@@ -82,12 +82,23 @@ class ArchitectAgent(BaseAgent):
             project_id = context.get("project_id", "")
             ticket_id = context.get("ticket_id", "")
             if not project_id or not ticket_id:
+                logger.debug("_run_openspec_propose 跳过：缺 project_id 或 ticket_id")
                 return
 
             from capability_check import has_openspec, get_openspec_cli, _get_repo_path
             repo_path = context.get("repo_path") or await _get_repo_path(project_id)
-            if not repo_path or not await has_openspec(project_id, repo_path):
-                return  # 未安装，静默跳过
+            if not repo_path:
+                logger.info("_run_openspec_propose 跳过：项目无 repo_path（未设置本地路径）")
+                return
+
+            openspec_ok = await has_openspec(project_id, repo_path)
+            logger.info(
+                "OpenSpec 检测：repo=%s cli=%s initialized=%s",
+                repo_path, get_openspec_cli(), openspec_ok,
+            )
+            if not openspec_ok:
+                logger.info("_run_openspec_propose 跳过：OpenSpec 未安装或未初始化（请先执行 openspec init）")
+                return
 
             cli = get_openspec_cli()
             if not cli:

@@ -2980,20 +2980,30 @@ class TicketOrchestrator:
 
         project_id = ticket.get("project_id", "")
         req_short = (ticket["requirement_id"] or "standalone")[-6:]
+
+        # 获取项目 repo_path，注入 context 供 Agent 直接使用（无需再查 DB）
+        _repo_path = ""
+        try:
+            from git_manager import git_manager as _gm
+            _rp = _gm._repo_path(project_id)
+            if _rp:
+                _repo_path = str(_rp)
+        except Exception:
+            pass
+
         context = {
             "ticket_id": ticket["id"],
             "ticket_title": ticket["title"],
             "ticket_description": ticket.get("description", ""),
-            "ticket_type": ticket.get("type", "feature"),  # 'bug' or 'feature'
+            "ticket_type": ticket.get("type", "feature"),
             "module": ticket.get("module", "other"),
             "project_id": project_id,
+            "repo_path": _repo_path,          # ← 注入 repo_path
             "requirement_description": requirement["description"] if requirement else "",
             "requirement_title": requirement["title"] if requirement else "",
-            # 文件路径前缀：docs/Reqs/{需求短码}/{工单短码}/ — 需求文档统一归档到 Reqs/
             "docs_prefix": f"docs/Reqs/{req_short}/{ticket['id'][-6:]}/",
             "src_prefix": f"src/{ticket.get('module', 'other')}/",
             "tests_prefix": f"tests/{req_short}/",
-            # v0.19.x 工单面板进度区：让 UE 流式 actions 写心跳
             "_ticket_progress_cb": self._make_ticket_progress_callback(project_id, ticket["id"]),
         }
 

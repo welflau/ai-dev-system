@@ -30,22 +30,33 @@ async def has_superpowers(project_id: str, repo_path: Optional[str] = None) -> b
 
 
 async def has_openspec(project_id: str, repo_path: Optional[str] = None) -> bool:
-    """项目是否安装并初始化了 OpenSpec（opsx/openspec CLI 可用 + openspec/ 目录存在）"""
+    """项目是否可以使用 OpenSpec（CLI 可用 + openspec/ 目录已初始化）。
+
+    Propose/Verify/Archive 命令需要 openspec init 已经跑过。
+    """
     if not repo_path:
         repo_path = await _get_repo_path(project_id)
     if not repo_path:
         return False
     try:
-        cli_available = bool(shutil.which("opsx") or shutil.which("openspec-cn") or shutil.which("openspec"))
         spec_dir = Path(repo_path) / "openspec"
-        return cli_available and spec_dir.exists()
+        return bool(get_openspec_cli()) and spec_dir.exists()
     except Exception:
         return False
 
 
+async def openspec_cli_available() -> bool:
+    """OpenSpec CLI 是否已安装（不要求 init，用于判断能否触发 Propose 等命令）"""
+    return bool(get_openspec_cli())
+
+
 def get_openspec_cli() -> Optional[str]:
-    """返回可用的 OpenSpec CLI 命令名，None 表示未安装"""
-    for cmd in ("opsx", "openspec-cn", "openspec"):
+    """返回可用的 OpenSpec CLI 命令名，None 表示未安装。
+
+    只查找真正的 openspec 工具（openspec-cn / openspec），
+    排除 opsx（是 harness slash command 前缀，不是独立 CLI）。
+    """
+    for cmd in ("openspec-cn", "openspec"):
         if shutil.which(cmd):
             return cmd
     return None
