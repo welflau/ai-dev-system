@@ -3456,6 +3456,13 @@ class TicketOrchestrator:
         except Exception as e:
             logger.debug("_write_memory 失败（忽略）: %s", e)
 
+    # 本地工具动作（不走 LLM，直接执行 shell/CLI）
+    LOCAL_TOOL_ACTIONS = frozenset({
+        "run_engine_compile", "run_engine_compile_check",
+        "run_uat", "run_ci_deploy", "playtest",
+        "write_html_prototype",  # 轻量本地生成，不走 ReAct LLM
+    })
+
     async def _log_agent_thought(
         self,
         project_id: str,
@@ -3468,8 +3475,16 @@ class TicketOrchestrator:
         result: Optional[Dict] = None,
         elapsed_ms: int = 0,
     ):
-        """把 Agent 执行的开始/完成写入 ticket_logs，让操作日志可见思考过程。"""
+        """把 Agent 执行的开始/完成写入 ticket_logs，让操作日志可见思考过程。
+
+        LLM 推理类动作 → thought_start / thought_done
+        本地工具类动作 → tool_start  / tool_done
+        """
         try:
+            # 区分 LLM 推理 vs 本地工具
+            is_local = action in self.LOCAL_TOOL_ACTIONS
+            log_prefix = "tool" if is_local else "thought"
+
             detail_data: Optional[Dict] = None
             if phase == "start":
                 msg = f"[{agent_name}] 开始 {action}"
@@ -3502,8 +3517,8 @@ class TicketOrchestrator:
                 if files:
                     full_paths = list(files.keys())[:8]
                     detail_data = {
-                        "files": file_names[:8],       # 文件名（显示用）
-                        "file_paths": full_paths,      # 完整路径（点击查看用）
+                        "files": file_names[:8],
+                        "file_paths": full_paths,
                         "file_count": len(files),
                         "elapsed_ms": elapsed_ms,
                         "status": status,
@@ -3511,7 +3526,7 @@ class TicketOrchestrator:
 
             await self._log(
                 project_id, requirement_id, ticket_id,
-                agent_name, f"thought_{phase}",
+                agent_name, f"{log_prefix}_{phase}",
                 None, None,
                 msg, "info",
                 detail_data=detail_data,

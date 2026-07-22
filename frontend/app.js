@@ -8493,6 +8493,8 @@ function renderLogItem(log) {
         phase_reset:             { icon: '🔄', label: '阶段重置', layer: 'harness' },
         change_detected:         { icon: '🔍', label: '变更检测', layer: 'harness' },
         milestone_architecture:  { icon: '🔧', label: '架构里程碑', layer: 'harness' },
+        tool_start:              { icon: '🔧', label: '本地工具执行', layer: 'harness' },
+        tool_done:               { icon: '🔧', label: '本地工具完成', layer: 'harness' },
     };
     if (LAYER_ACTIONS[log.action]) {
         return _renderLayerLogItem(log, LAYER_ACTIONS[log.action]);
@@ -8534,9 +8536,9 @@ function renderLogItem(log) {
         log = { ...log, _isChatTool: true };
     }
 
-    // thought_done 有产出文件时，追加文件标签行
+    // thought_done / tool_done 有产出文件时，追加文件标签行
     let fileChipsHtml = '';
-    if (log.action === 'thought_done') {
+    if (log.action === 'thought_done' || log.action === 'tool_done') {
         try {
             const d = JSON.parse(log.detail || '{}');
             let fileNames = d.files || [];
@@ -9309,10 +9311,11 @@ function connectSSE(projectId) {
             const data = JSON.parse(e.data);
             console.log('[SSE] log_added:', data);
             // thought_done/thought_start 到来时移除同 ticket 的流式卡片
-            if (data.ticket_id && (data.action === 'thought_done' || data.action === 'thought_start')) {
+            if (data.ticket_id && (data.action === 'thought_done' || data.action === 'thought_start'
+                                || data.action === 'tool_done' || data.action === 'tool_start')) {
                 document.getElementById(`ticket-stream-${data.ticket_id}`)?.remove();
                 // 若工单聊天面板正在展示该工单，移除流式面板并重载对话
-                if (data.action === 'thought_done' && chatMode === 'job' && chatCurrentTicketId === data.ticket_id) {
+                if ((data.action === 'thought_done' || data.action === 'tool_done') && chatMode === 'job' && chatCurrentTicketId === data.ticket_id) {
                     document.getElementById('ticket-chat-stream')?.remove();
                     document.getElementById(`feed-stream-${data.ticket_id}`)?.remove();
                     setTimeout(() => loadTicketConversations(data.ticket_id), 400);
