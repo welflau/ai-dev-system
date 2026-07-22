@@ -4597,8 +4597,9 @@ function _buildThreeLayerBar(hasSP, hasOS, ticketData) {
     let discHtml = '';
     if (hasSP) {
         // Superpowers 只有两态：装了 Pack（待激活）或已激活（dev 阶段有记录）
-        const devPhases = ['development', 'testing', 'in_review', 'done'];
-        const activated = devPhases.includes(ticketStatus) || ticketStatus === 'done';
+        // 曾经历开发阶段即视为已激活（包括 blocked/testing/in_review/done）
+        const PAST_DEV = ['development','development_in_progress','testing','in_review','done','blocked','cancelled'];
+        const activated = PAST_DEV.includes(ticketStatus);
         discHtml = `<div class="tlb-row tlb-discipline">
             <span class="tlb-layer-icon" title="纪律层">⚡</span>
             <div class="tlb-nodes">
@@ -4632,7 +4633,12 @@ function _buildThreeLayerBar(hasSP, hasOS, ticketData) {
         <div class="tlb-nodes">${hNodes}</div>
     </div>`;
 
-    return `<div class="three-layer-bar">${specHtml}${discHtml}${harnessHtml}</div>`;
+    const legendHtml = `<div class="tlb-legend">
+        <span class="tlb-legend-item"><span class="tlb-dot tlb-dot-done"></span>已完成</span>
+        <span class="tlb-legend-item"><span class="tlb-dot tlb-dot-active"></span>进行中</span>
+        <span class="tlb-legend-item"><span class="tlb-dot tlb-dot-pending"></span>待进行</span>
+    </div>`;
+    return `<div class="three-layer-bar">${specHtml}${discHtml}${harnessHtml}${legendHtml}</div>`;
 }
 
 async function openTicketDrawer(ticketId) {
