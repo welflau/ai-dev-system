@@ -13958,6 +13958,7 @@ function _buildTicketEventEl(msg) {
         assign:               { icon: '📋', label: '接单开始处理', compact: true },
         complete:             { icon: '✅', label: '阶段完成', compact: true },
         thought_start:        { icon: '✦', label: 'LLM 推理开始', compact: true },
+        react_tool:           { icon: '🔧', label: '工具调用', compact: false },  // 工具调用含输出，不 compact
         thought_done:         { icon: '✦', label: 'LLM 推理完成', compact: false },
         tool_start:           { icon: '🔧', label: '本地工具执行', compact: true },
         tool_done:            { icon: '🔧', label: '本地工具完成', compact: false },

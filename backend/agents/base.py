@@ -318,6 +318,8 @@ class BaseAgent(ABC):
                     tool_name=event.tool,
                     args_hint=event.args_hint,
                     duration_ms=event.duration_ms,
+                    output_summary=(event.result or "")[:500] if event.result else "",
+                    summary=event.summary or "",
                 )
             elif isinstance(event, MessageDoneEvent):
                 result = {
@@ -342,6 +344,8 @@ class BaseAgent(ABC):
         tool_name: str,
         args_hint: str,
         duration_ms: float,
+        output_summary: str = "",   # 工具输出摘要（前 500 字节）
+        summary: str = "",          # 工具完成摘要
     ) -> None:
         """REACT 模式每次工具调用完成后写 react_tool 日志到 ticket_logs，供时间轴展示。"""
         if not ticket_id:
@@ -363,6 +367,8 @@ class BaseAgent(ABC):
                 "tool_name": tool_name,
                 "args_hint": hint,
                 "duration_ms": dur,
+                "output_summary": (output_summary or "")[:500],
+                "summary": (summary or "")[:200],
             }, ensure_ascii=False)
 
             await db.execute(
