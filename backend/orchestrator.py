@@ -3514,6 +3514,7 @@ class TicketOrchestrator:
                 msg = " | ".join(parts)
 
                 # 结构化文件列表，供前端渲染文件标签
+                detail_data = {}
                 if files:
                     full_paths = list(files.keys())[:8]
                     detail_data = {
@@ -3523,6 +3524,25 @@ class TicketOrchestrator:
                         "elapsed_ms": elapsed_ms,
                         "status": status,
                     }
+
+                # 本地工具类：把关键输出也存入 detail，供展开查看 + AI 上下文
+                if is_local and isinstance(result, dict):
+                    # UBT 编译：errors / raw_tail
+                    errors = result.get("errors") or []
+                    raw_tail = (result.get("raw_tail") or "")[:4000]
+                    command = result.get("command", "")
+                    if errors or raw_tail:
+                        detail_data["output_summary"] = raw_tail[-2000:] if raw_tail else ""
+                        detail_data["errors_summary"] = json.dumps(
+                            [{"msg": e.get("message", ""), "file": e.get("file", ""), "line": e.get("line", "")}
+                             for e in errors[:10]],
+                            ensure_ascii=False,
+                        )
+                        detail_data["command"] = command[:300]
+                    # Playtest：直接用 message（已含 pass/fail 信息）
+                    playtest_msg = result.get("message") or result.get("msg", "")
+                    if playtest_msg and not detail_data.get("output_summary"):
+                        detail_data["output_summary"] = str(playtest_msg)[:2000]
 
             await self._log(
                 project_id, requirement_id, ticket_id,

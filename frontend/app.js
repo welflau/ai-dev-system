@@ -8463,6 +8463,9 @@ function _renderLayerLogItem(log, meta) {
     const LAYER_COLORS = { spec: '#a855f7', discipline: '#f59e0b', harness: '#3b82f6' };
     const color = LAYER_COLORS[meta.layer] || '#888';
     let detail = '';
+    let outputSummary = '';
+    let errorsSummary = '';
+    let cmdLine = '';
     try {
         const d = JSON.parse(log.detail || '{}');
         if (log.action === 'phase_reset') {
@@ -8476,16 +8479,40 @@ function _renderLayerLogItem(log, meta) {
         } else {
             detail = d.message || '';
         }
+        outputSummary = d.output_summary || '';
+        errorsSummary = d.errors_summary || '';
+        cmdLine = d.command || '';
     } catch { detail = log.detail || ''; }
 
+    // 有详细输出时加展开区
+    const expandId = `layer-expand-${log.id || Math.random().toString(36).slice(2)}`;
+    const hasExpand = !!(outputSummary || errorsSummary);
+    let errorsHtml = '';
+    if (errorsSummary) {
+        try {
+            const errs = JSON.parse(errorsSummary);
+            errorsHtml = errs.map(e =>
+                `<div style="margin:2px 0;">${_linkifyErrors(`${e.file}${e.line ? ':' + e.line : ''}: ${e.msg}`)}</div>`
+            ).join('');
+        } catch { errorsHtml = escHtml(errorsSummary.slice(0, 300)); }
+    }
+    const expandHtml = hasExpand ? `
+        <div id="${expandId}" class="log-item-expand" style="display:none;max-height:300px;overflow-y:auto;">
+            ${cmdLine ? `<div class="log-expand-row"><span class="log-expand-label">命令</span><code style="font-size:10px;word-break:break-all;">${escHtml(cmdLine)}</code></div>` : ''}
+            ${errorsHtml ? `<div class="log-expand-row"><span class="log-expand-label log-expand-err">错误</span><div style="font-size:11px;">${errorsHtml}</div></div>` : ''}
+            ${outputSummary ? `<div class="log-expand-row"><span class="log-expand-label">输出</span><pre style="font-size:10px;max-height:200px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;">${_linkifyErrors(outputSummary)}</pre></div>` : ''}
+        </div>` : '';
+
     return `
-        <div class="log-item info layer-${meta.layer}" style="border-left-color:${color}40;padding:5px 10px 5px 14px;">
+        <div class="log-item info layer-${meta.layer}" style="border-left-color:${color}40;padding:5px 10px 5px 14px;"${hasExpand ? ` onclick="toggleBlock('${expandId}')" style="cursor:pointer;border-left-color:${color}40;padding:5px 10px 5px 14px;"` : ''}>
             <div class="log-header" style="gap:5px;">
                 <span style="color:${color};font-size:12px;">${meta.icon}</span>
                 <span class="log-agent" style="color:${color};">${escHtml(meta.label)}</span>
+                ${hasExpand ? `<span class="log-expand-link" style="font-size:10px;color:${color};opacity:.6;">展开 ▼</span>` : ''}
                 <span class="log-time">${formatTime(log.created_at)}</span>
             </div>
             ${detail ? `<div style="font-size:11px;color:var(--text-muted);margin-top:2px;">${detail}</div>` : ''}
+            ${expandHtml}
         </div>`;
 }
 
@@ -13781,18 +13808,30 @@ function appendToTicketFeed(logData) {
     let msgArea = section.querySelector('.ticket-section-messages');
     if (!msgArea) return;
 
-    const actionLabel = {assign:'接单', complete:'完成', accept:'验收通过', reject:'验收不通过', error:'异常', start:'开始'}[logData.action] || logData.action;
+    const actionLabel = {assign:'接单', complete:'完成', accept:'验收通过', reject:'验收不通过', error:'异常', start:'开始', tool_done:'🔧 工具完成', thought_done:'完成'}[logData.action] || logData.action;
     let detail = '';
+    let outputSummary = '';
+    let errorsRaw = '';
     if (logData.detail) {
         try {
             const d = typeof logData.detail === 'string' ? JSON.parse(logData.detail) : logData.detail;
             detail = d.message || '';
+            outputSummary = d.output_summary || '';
+            errorsRaw = d.errors_summary || '';
         } catch { detail = ''; }
     }
 
+    const hasDrill = !!(outputSummary || errorsRaw);
+    const drillId = hasDrill ? `feed-drill-${Math.random().toString(36).slice(2)}` : '';
+    const drillHtml = hasDrill ? `
+        <div id="${drillId}" style="display:none;margin-top:4px;padding:6px 8px;background:var(--bg);border-radius:4px;font-size:10px;color:var(--text-muted);">
+            ${errorsRaw ? (() => { try { return JSON.parse(errorsRaw).slice(0,5).map(e => `<div style="color:#ef4444;">${escapeHtml(e.file||'')}${e.line?':'+e.line:''} ${escapeHtml(e.msg||'')}</div>`).join(''); } catch { return ''; } })() : ''}
+            ${outputSummary ? `<pre style="margin:4px 0 0;white-space:pre-wrap;max-height:160px;overflow-y:auto;">${escapeHtml(outputSummary.slice(-800))}</pre>` : ''}
+        </div>` : '';
+
     const logEl = document.createElement('div');
     logEl.className = 'ticket-feed-log-entry';
-    logEl.innerHTML = `<span class="log-agent">${escapeHtml(logData.agent_type || 'System')}</span> <span class="log-action">${escapeHtml(actionLabel)}</span> ${detail ? '<span class="log-msg">'+escapeHtml(detail.substring(0,80))+'</span>' : ''} <span class="log-time">${formatTime(logData.created_at)}</span>`;
+    logEl.innerHTML = `<span class="log-agent">${escapeHtml(logData.agent_type || 'System')}</span> <span class="log-action">${escapeHtml(actionLabel)}</span> ${detail ? '<span class="log-msg">'+escapeHtml(detail.substring(0,80))+'</span>' : ''} ${hasDrill ? `<a style="font-size:10px;color:var(--primary);cursor:pointer;margin-left:4px;" onclick="event.stopPropagation();const el=document.getElementById('${drillId}');if(el)el.style.display=el.style.display==='none'?'':'none'">详情 ▾</a>` : ''} <span class="log-time">${formatTime(logData.created_at)}</span>${drillHtml}`;
     msgArea.appendChild(logEl);
 
     // 更新 section header 的状态
