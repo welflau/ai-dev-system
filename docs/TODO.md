@@ -1,6 +1,59 @@
 # AI Dev System — 待办清单
 
-> 最后更新: 2026-05-22
+> 最后更新: 2026-07-22
+
+---
+
+## 🎯 待办（未完成）
+
+### 工单后台任务专用窗口
+
+**背景**：工单执行过程中有大量 CLI 任务（UBT 编译、Playtest、Deploy 等），输出只能在全局后台任务面板看到，无法按工单过滤查看完整命令行输出。
+
+**需求**：
+- 工单详情页加"后台任务"区（或 Tab），只显示该工单相关的 CLI 任务
+- 每个任务可展开查看完整命令行输出（复用 `cli_task_log` 表，filter by ticket_id / session_key）
+- 和工单会话面板打通，AI 对话时可引用这些输出作为上下文
+
+**参考实现**：
+- 后端：`cli_task_log` 表已有 `session_key` 字段，可按工单 session 过滤
+- 前端：在工单抽屉"进展时间轴"下方加"后台任务"折叠区，复用现有 `_renderCliTaskOutput()`
+
+---
+
+### OpenSpec 灰色状态说明（低优先）
+
+工单会话三层总览栏中，规范层 Propose/Apply/Verify/Archive 全灰时，当前只有 `○ 待进行` 图例，用户需要更明确的提示。
+
+**需求**：全灰时在规范层行末加一个小提示「未触发 OpenSpec 流程」，或加 tooltip 说明原因（未安装/未触发 Propose）。
+
+---
+
+## ✅ 已完成（2026-07 三层融合系列）
+
+### ✅ 三层融合（OpenSpec × Superpowers × Harness）2026-07-21~22
+
+完整实现三层架构、可观测性、变更触发机制：
+- Superpowers Pack 套件（14 SKILL.md）+ DevAgent 铁律注入
+- OpenSpec Propose/Verify/Archive 自动集成
+- 工单能力提示横幅 + 三层状态总览栏 + OpenSpec 内容面板
+- 时间轴三层颜色标注 + 工单卡片印章
+- ChangeImpactAnalyzer + Tweak/Partial/Breaking 三种变更流
+- 项目三层仪表盘 + Specs 版本历史 UI
+- 详见 `dev-notes/2026-07-21_*.md`
+
+### ✅ 工单会话窗口完整执行流 2026-07-22
+
+`get_ticket_conversations` 合并 `ticket_logs` 编排事件，工单会话窗口显示完整执行日志流（Agent 接单 / LLM 推理 / 工具调用 / 阶段完成），按时间排序。
+
+### ✅ UI 体验修复系列 2026-07-22
+
+进度面板静默感知（呼吸动画 + 动作说明）/ 气泡折叠 / 报错文件路径可点击 / LLM 推理 vs 本地工具日志区分 / 错误卡片工单链接 / 三层总览栏修复
+
+---
+
+*详细变更见 `dev-notes/` 目录*
+
 
 ---
 
