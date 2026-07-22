@@ -108,28 +108,10 @@ async def run_openspec_command(project_id: str, req: RunCommandRequest):
         stdin_input = b"\n\n\n\n\n"  # 多次 Enter，确认所有交互提示
 
     return StreamingResponse(
-        _stream_command(cmd_args, cwd, stdin_input=stdin_input,
-                        post_success_hook=_commit_openspec_dir if req.command.startswith("init") and repo_path else None,
-                        hook_cwd=repo_path),
+        _stream_command(cmd_args, cwd, stdin_input=stdin_input),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
-
-
-async def _commit_openspec_dir(cwd: str) -> None:
-    """openspec init 成功后把 openspec/ 目录加入 git 追踪并提交，防止 git clean 删除。"""
-    try:
-        import asyncio as _aio
-        proc = await _aio.create_subprocess_shell(
-            "git add openspec/ && git diff --cached --quiet || git commit -m \"chore: init openspec config\"",
-            cwd=cwd,
-            stdout=_aio.subprocess.PIPE,
-            stderr=_aio.subprocess.STDOUT,
-        )
-        await proc.communicate()
-        logger.info("openspec/ 已纳入 git 追踪并提交（cwd=%s）", cwd)
-    except Exception as e:
-        logger.debug("openspec git commit 失败（非致命）: %s", e)
 
 
 @router.get("/ticket/{ticket_id}/specs")
@@ -181,12 +163,10 @@ async def get_ticket_openspec(project_id: str, ticket_id: str):
     }
 
 
-async def _stream_command(cmd_args: list, cwd: str | None, stdin_input: bytes = None,
-                          post_success_hook=None, hook_cwd: str | None = None):
+async def _stream_command(cmd_args: list, cwd: str | None, stdin_input: bytes = None):
     """运行子进程，逐行 yield SSE 事件。
 
     stdin_input: 可选的 stdin 字节流，用于自动回答交互提示（如 openspec init 的 harness 选择）。
-    post_success_hook: 命令成功（rc=0）后异步执行的钩子协程函数。
     """
 
     def _sse(event: str, data: dict) -> bytes:
@@ -234,10 +214,6 @@ async def _stream_command(cmd_args: list, cwd: str | None, stdin_input: bytes = 
 
         rc = await proc.wait()
         yield _sse("done", {"exit_code": rc, "success": rc == 0})
-        # init 成功后自动把 openspec/ 纳入 git 追踪
-        if rc == 0 and post_success_hook and hook_cwd:
-            import asyncio as _aio
-            _aio.create_task(post_success_hook(hook_cwd))
 
     except FileNotFoundError as e:
         yield _sse("error", {"message": f"命令未找到: {e}"})
