@@ -13555,6 +13555,12 @@ async function loadTicketConversations(ticketId) {
         }
 
         for (const msg of messages) {
+            // ── 编排事件（非 LLM，来自 ticket_logs）────────────────────
+            if (msg.is_event) {
+                const evEl = _buildTicketEventEl(msg);
+                if (evEl) container.appendChild(evEl);
+                continue;
+            }
             if (msg.is_agent) {
                 // Agent 消息带标签
                 const agentBadge = msg.agent_type ? `<div class="chat-agent-badge">${msg.agent_type} / ${msg.action || ''}</div>` : '';
@@ -13946,6 +13952,84 @@ function _appendCommentToTicketFeed(data) {
 /**
  * 工单对话 assistant 头像：显示该次 LLM 调用的实际模型（不依赖全局配置）
  */
+/** 构建编排事件气泡（ticket_logs 来源，非 LLM 对话） */
+function _buildTicketEventEl(msg) {
+    const ACTION_LABELS = {
+        assign:               { icon: '📋', label: '接单开始处理', compact: true },
+        complete:             { icon: '✅', label: '阶段完成', compact: true },
+        thought_start:        { icon: '✦', label: 'LLM 推理开始', compact: true },
+        thought_done:         { icon: '✦', label: 'LLM 推理完成', compact: false },
+        tool_start:           { icon: '🔧', label: '本地工具执行', compact: true },
+        tool_done:            { icon: '🔧', label: '本地工具完成', compact: false },
+        react_tool:           { icon: '🔧', label: '工具调用', compact: false },
+        skill_step_done:      { icon: '✅', label: '步骤完成', compact: false },
+        planning_done:        { icon: '📋', label: '规划完成', compact: false },
+        architecture_done:    { icon: '🏗', label: '架构完成', compact: false },
+        openspec_propose:     { icon: '📐', label: 'OpenSpec Propose 完成', compact: false },
+        openspec_verify:      { icon: '📐', label: 'OpenSpec Verify 通过', compact: false },
+        phase_reset:          { icon: '🔄', label: '阶段重置', compact: true },
+        change_detected:      { icon: '🔍', label: '变更检测', compact: true },
+        milestone_architecture:{ icon: '🔧', label: '架构里程碑', compact: true },
+    };
+
+    const meta = ACTION_LABELS[msg.event_type] || { icon: '•', label: msg.event_type, compact: true };
+    const agentColor = { PlannerAgent:'#a855f7', ArchitectAgent:'#3b82f6', DevAgent:'#10b981',
+                         TestAgent:'#f59e0b', ReviewAgent:'#ec4899', DeployAgent:'#ef4444' }[msg.agent_type] || '#8b949e';
+
+    // compact 条目：单行事件卡（assign、start 等无内容的）
+    if (meta.compact && !msg.summary && !msg.output_summary) {
+        const el = document.createElement('div');
+        el.className = 'tkt-event-compact';
+        el.style.cssText = `display:flex;align-items:center;gap:6px;padding:3px 8px;margin:2px 0;font-size:11px;color:var(--text-muted);`;
+        const statusArrow = (msg.from_status && msg.to_status)
+            ? ` <span style="opacity:.5;">${escapeHtml(msg.from_status)} → ${escapeHtml(msg.to_status)}</span>` : '';
+        el.innerHTML = `
+            <span style="color:${agentColor};font-weight:600;min-width:80px;">${escapeHtml(msg.agent_type)}</span>
+            <span style="opacity:.6;">${meta.icon} ${meta.label}</span>
+            ${statusArrow}
+            <span style="margin-left:auto;opacity:.4;">${formatTime(msg.created_at)}</span>`;
+        return el;
+    }
+
+    // 详情条目：带内容的气泡卡
+    const expandId = `tke-${Math.random().toString(36).slice(2)}`;
+    const hasExpand = !!(msg.output_summary || msg.errors_summary);
+    let errHtml = '';
+    if (msg.errors_summary) {
+        try {
+            const errs = JSON.parse(msg.errors_summary);
+            errHtml = errs.slice(0,5).map(e =>
+                `<div style="color:#ef4444;font-size:10px;">${_linkifyErrors(`${e.file||''}${e.line?':'+e.line:''} ${e.msg||''}`)}</div>`
+            ).join('');
+        } catch {}
+    }
+    const expandHtml = hasExpand ? `
+        <div id="${expandId}" style="display:none;margin-top:6px;padding:6px 8px;background:var(--bg);border-radius:4px;">
+            ${errHtml}
+            ${msg.output_summary ? `<pre style="font-size:10px;margin:4px 0 0;white-space:pre-wrap;max-height:200px;overflow-y:auto;">${_linkifyErrors(msg.output_summary.slice(-1000))}</pre>` : ''}
+        </div>` : '';
+
+    const filesHtml = (msg.files || []).length > 0
+        ? `<div style="margin-top:4px;">${(msg.files).map(f =>
+            `<span class="artifact-badge" onclick="openRepoFileFromChat('${escapeHtml(f)}')" style="cursor:pointer;">📄 ${escapeHtml(f)}</span>`
+          ).join(' ')}</div>` : '';
+
+    const el = document.createElement('div');
+    el.className = 'tkt-event-card';
+    el.style.cssText = `margin:4px 0;padding:8px 10px;background:var(--bg-elevated);border-radius:6px;border-left:3px solid ${agentColor}40;`;
+    el.innerHTML = `
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:${msg.summary ? '4px' : '0'};">
+            <span style="color:${agentColor};font-weight:600;font-size:11px;">${escapeHtml(msg.agent_type)}</span>
+            <span class="log-action" style="font-size:10px;">${meta.icon} ${meta.label}</span>
+            ${hasExpand ? `<a style="font-size:10px;color:var(--primary);cursor:pointer;margin-left:auto;" onclick="const e=document.getElementById('${expandId}');if(e)e.style.display=e.style.display==='none'?'':'none'">详情 ▾</a>` : ''}
+            <span style="font-size:10px;opacity:.4;${hasExpand?'':'margin-left:auto;'}">${formatTime(msg.created_at)}</span>
+        </div>
+        ${msg.summary ? `<div style="font-size:12px;color:var(--text-secondary);">${escapeHtml(msg.summary)}</div>` : ''}
+        ${filesHtml}
+        ${expandHtml}`;
+    return el;
+}
+
 function _buildTicketAssistantAvatar(model, agentType) {
     const rawModel = model || '';
     // 取短名：claude-sonnet-4-6 → sonnet-4-6，deepseek-v4-... → v4-...

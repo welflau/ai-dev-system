@@ -1807,6 +1807,63 @@ async def get_ticket_conversations(project_id: str, ticket_id: str):
             "thinking_text": thinking_text if thinking_text else None,
         })
 
+    # ── 合并 ticket_logs 关键事件（assign / complete / thought_done / tool_done / react_tool 等）
+    # 这些事件代表"谁做了什么"，与 LLM 回复内容一起形成完整对话流
+    LOG_ACTIONS_SHOW = {
+        "assign", "complete",
+        "thought_start", "thought_done",
+        "tool_start", "tool_done",
+        "react_tool", "skill_step_done",
+        "planning_done", "architecture_done",
+        "openspec_propose", "openspec_verify",
+        "phase_reset", "change_detected",
+        "milestone_architecture",
+    }
+    try:
+        log_rows = await db.fetch_all(
+            """SELECT id, agent_type, action, from_status, to_status, detail,
+                      level, created_at
+               FROM ticket_logs
+               WHERE ticket_id = ? AND action IN ({})
+               ORDER BY created_at ASC""".format(
+                ",".join("?" * len(LOG_ACTIONS_SHOW))
+            ),
+            (ticket_id, *LOG_ACTIONS_SHOW),
+        )
+        for lr in log_rows:
+            detail_obj: dict = {}
+            try:
+                detail_obj = json.loads(lr["detail"] or "{}")
+            except Exception:
+                pass
+
+            # 从 detail 提取摘要文字
+            summary = detail_obj.get("message") or ""
+            files = detail_obj.get("files") or []
+            output_summary = detail_obj.get("output_summary") or ""
+            errors_summary = detail_obj.get("errors_summary") or ""
+
+            chat_messages.append({
+                "id": lr["id"],
+                "role": "event",            # 特殊角色：编排事件
+                "event_type": lr["action"],
+                "agent_type": lr["agent_type"] or "System",
+                "from_status": lr["from_status"] or "",
+                "to_status": lr["to_status"] or "",
+                "summary": summary,
+                "files": files,
+                "output_summary": output_summary,
+                "errors_summary": errors_summary,
+                "level": lr["level"] or "info",
+                "created_at": lr["created_at"],
+                "is_event": True,
+            })
+    except Exception as _le:
+        logger.debug("合并 ticket_logs 失败（不影响主流）: %s", _le)
+
+    # 按时间排序，合并 LLM 对话和编排事件
+    chat_messages.sort(key=lambda m: m.get("created_at") or "")
+
     return {
         "ticket": {
             "id": ticket["id"],
