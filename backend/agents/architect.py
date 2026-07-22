@@ -68,7 +68,7 @@ class ArchitectAgent(BaseAgent):
             await orch._add_layer_log(ticket_id, project_id, action="milestone_architecture",
                                       layer="harness", detail={"arch_file": arch_file})
         except Exception as e:
-            logger.debug("架构里程碑通知失败（忽略）: %s", e)
+            logger.warning("架构里程碑通知失败: %s", e, exc_info=True)
 
         # OpenSpec Propose（规范层，可选增强）
         await self._run_openspec_propose(context)
@@ -162,5 +162,5 @@ class ArchitectAgent(BaseAgent):
                     layer="spec", detail={"rc": rc, "output": output[:200]},
                 )
         except Exception as e:
-            logger.debug("_run_openspec_propose 失败（忽略）: %s", e)
+            logger.warning("_run_openspec_propose 异常: %s", e, exc_info=True)
 
