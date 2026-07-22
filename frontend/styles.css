@@ -7633,6 +7633,15 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
     margin-top: 8px;
     text-align: right;
 }
+/* 报错文本中可点击的文件路径链接 */
+.err-file-link {
+    color: var(--primary-light, #79c0ff);
+    text-decoration: underline dotted;
+    cursor: pointer;
+    font-family: inherit;
+}
+.err-file-link:hover { color: var(--primary, #58a6ff); text-decoration: underline; }
+
 /* 进度面板：动作感知提示（静默状态给出上下文说明） */
 .ticket-action-progress .progress-action-hint {
     margin-top: 6px;

@@ -6163,7 +6163,7 @@ async function _refreshTicketActionProgress() {
         _renderProgressHealth(el, data.health);
         _renderProgressElapsed(el, data.elapsed_ms, data.silence_ms);
         const logEl = el.querySelector('.progress-latest-log');
-        if (logEl) logEl.textContent = data.latest_log || '（处理中…）';
+        if (logEl) logEl.innerHTML = _linkifyErrors(data.latest_log || '处理中…');
         _updateProgressActionHint(el, data.current_action, data.health);
     } catch (e) {
         console.warn('[progress] refresh failed:', e);
@@ -8592,7 +8592,7 @@ function renderLogItem(log) {
             ${cliCmd        ? `<div class="log-expand-row"><span class="log-expand-label">CLI</span><code class="log-expand-val" style="font-family:monospace;font-size:11px;word-break:break-all;">${escHtml(cliCmd)}</code></div>` : ''}
             ${inputSummary  ? `<div class="log-expand-row"><span class="log-expand-label">输入</span><span class="log-expand-val">${escHtml(inputSummary)}</span></div>`  : ''}
             ${outputSummary ? `<div class="log-expand-row"><span class="log-expand-label">结果</span><span class="log-expand-val">${escHtml(outputSummary)}</span></div>` : ''}
-            ${errorMsg      ? `<div class="log-expand-row"><span class="log-expand-label log-expand-err">错误</span><span class="log-expand-val log-expand-err" style="white-space:pre-wrap;">${escHtml(errorMsg)}</span></div>` : ''}
+            ${errorMsg      ? `<div class="log-expand-row"><span class="log-expand-label log-expand-err">错误</span><span class="log-expand-val log-expand-err" style="white-space:pre-wrap;">${_linkifyErrors(errorMsg)}</span></div>` : ''}
         </div>` : '';
 
     // 内联评论（绑定到本条 log 的评论）
@@ -9032,7 +9032,7 @@ function connectSSE(projectId) {
                 if (data.latest_log_at) st.lastLogAt = data.latest_log_at;
                 // 刷新最新 log
                 const logEl = el.querySelector('.progress-latest-log');
-                if (logEl && data.latest_log) logEl.textContent = data.latest_log;
+                if (logEl && data.latest_log) logEl.innerHTML = _linkifyErrors(data.latest_log);
                 // health 重算
                 const now = Date.now();
                 const elapsedMs = st.startedAt ? (now - new Date(st.startedAt).getTime()) : null;
@@ -17004,6 +17004,41 @@ function openRepoFileFromChat(filePath) {
     if (!currentProjectId) { showToast('请先选择项目', 'warning'); return; }
     switchTab('repo');
     setTimeout(() => viewRepoFile(filePath, null), 450);
+}
+
+/**
+ * 将报错文本中的"文件路径:行号"模式转为可点击链接。
+ * 支持：MSVC / GCC / Clang / Python / Node.js 等常见格式。
+ */
+function _linkifyErrors(text) {
+    if (!text || !currentProjectId) return escHtml(text);
+
+    // 先转义 HTML
+    let escaped = escHtml(text);
+
+    // 匹配模式（替换顺序：长模式优先）
+    // 1. MSVC: path\to\file.cpp(123): 或 path/to/file.cpp(123):
+    escaped = escaped.replace(
+        /([\w/\\.\-]+\.(?:cpp|h|cs|py|ts|js|go|rs|java|swift|kt|lua|ue|uasset|ini|cfg))\((\d+)\)/gi,
+        (_, fp, ln) => `<a class="err-file-link" onclick="openRepoFileFromChat('${fp.replace(/\\/g, '/')}')" title="打开 ${fp} 第 ${ln} 行">${fp}(${ln})</a>`
+    );
+
+    // 2. GCC/Python/Node: path/to/file.ext:行号  或  path/to/file.ext:行号:列号
+    escaped = escaped.replace(
+        /([\w/\\.\-]+\.(?:cpp|h|cs|py|ts|js|go|rs|java|swift|kt|lua|ini|cfg)):(\d+)(?::\d+)?/gi,
+        (match, fp, ln) => {
+            if (match.includes('onclick=')) return match;  // 已处理过
+            return `<a class="err-file-link" onclick="openRepoFileFromChat('${fp.replace(/\\/g, '/')}')" title="打开 ${fp} 第 ${ln} 行">${match}</a>`;
+        }
+    );
+
+    // 3. Python: File "path/to/file.py", line 123
+    escaped = escaped.replace(
+        /File &quot;([\w/\\.\-]+\.py)&quot;, line (\d+)/gi,
+        (_, fp, ln) => `File <a class="err-file-link" onclick="openRepoFileFromChat('${fp.replace(/\\/g, '/')}')" title="打开 ${fp} 第 ${ln} 行">&quot;${fp}&quot;</a>, line ${ln}`
+    );
+
+    return escaped;
 }
 
 /** 从 git read_file 的消息文本中尝试提取文件路径 */
