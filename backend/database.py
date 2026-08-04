@@ -111,6 +111,10 @@ class Database:
             ("chat_messages", "session_id", "TEXT DEFAULT 'default'"),  # 关联 chat_sessions.id
             # v0.20 思考步骤持久化：AI 调工具时的思考日志，刷新后可恢复
             ("chat_messages", "thinking_json", "TEXT"),  # JSON array: [{tool, args_hint, summary, step}, ...]
+            # 每条 assistant 消息快照当时 LLM 配置，历史头像不随全局配置漂移
+            ("chat_messages", "api_format", "TEXT"),   # anthropic / openai / cli
+            ("chat_messages", "cli_type", "TEXT"),     # claude / codebuddy / cursor / ...
+            ("chat_messages", "llm_model", "TEXT"),    # 当时实际使用的模型名
             # 手动挡模式：auto=自动挡（工单流转+自动commit），manual=手动挡（纯对话+不自动commit）
             ("projects", "mode", "TEXT NOT NULL DEFAULT 'auto'"),
             # 多路径配置：JSON [{path, vcs, auto_detected, writable, label}]

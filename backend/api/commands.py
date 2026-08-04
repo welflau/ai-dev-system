@@ -19,6 +19,8 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter
 from pydantic import BaseModel
 
+from .chat import _save_chat_message  # 斜杠命令落库：复用 chat.py 的持久化工具
+
 logger = logging.getLogger("api.commands")
 
 router = APIRouter(tags=["commands"])
@@ -105,6 +107,41 @@ _BUILTIN_COMMANDS: Dict[str, Dict[str, Any]] = {
         "description": "生成并布置 UE 关卡",
         "args_hint": "<描述>",
         "requires_project": True,
+    },
+    "help": {
+        "description": "显示所有可用命令",
+        "args_hint": "",
+        "requires_project": False,
+    },
+    "model": {
+        "description": "查看或切换当前模型",
+        "args_hint": "[模型名]",
+        "requires_project": False,
+    },
+    "clear": {
+        "description": "清空当前对话历史",
+        "args_hint": "",
+        "requires_project": False,
+    },
+    "status": {
+        "description": "查看 LLM 连接状态和系统信息",
+        "args_hint": "",
+        "requires_project": False,
+    },
+    "tasks": {
+        "description": "查看正在执行的工单/任务（同时打开分屏任务面板）",
+        "args_hint": "",
+        "requires_project": False,
+    },
+    "todos": {
+        "description": "/tasks 的别名",
+        "args_hint": "",
+        "requires_project": False,
+    },
+    "agents": {
+        "description": "查看所有 Agent 及其状态",
+        "args_hint": "",
+        "requires_project": False,
     },
 }
 
@@ -352,9 +389,9 @@ async def _dispatch_command(
         # ── 与 Claude Code 名称统一的命令 ──
         "doctor":    _cmd_doctor,
         "cost":      _cmd_cost,
-        "review":    lambda a, p, c: _cmd_aicr_check(a, p, c),
-        "mcp":       lambda a, p, c: _cmd_mcp_config(a, p, c),
-        "init":      lambda a, p, c: _cmd_ads_init(a, p, c),
+        "review":    _cmd_aicr_check,
+        "mcp":       _cmd_mcp_config,
+        "init":      _cmd_ads_init,
         "diff":      _cmd_diff,
         "config":    _cmd_config,
         "commit":    _cmd_commit,
@@ -391,10 +428,29 @@ async def _dispatch_command(
         return CommandResult(success=False, output=f"未知命令：/{name}。输入 /help 查看可用命令。")
 
     try:
-        return await handler(args=args, project_id=project_id, context=context)
+        result = await handler(args=args, project_id=project_id, context=context)
     except Exception as e:
         logger.error("命令 /%s 执行失败: %s", name, e, exc_info=True)
-        return CommandResult(success=False, output=f"命令执行失败: {e}")
+        result = CommandResult(success=False, output=f"命令执行失败: {e}")
+
+    # 持久化「用户命令 + 命令输出」到 chat_messages（项目内 + 全局都存）
+    # 失败仅 warning，不阻断命令返回
+    try:
+        eff_pid = project_id or "__global__"   # 与 chat.py 全局聊天约定一致
+        eff_sid = (context or {}).get("session_id") or "default"
+        await _save_chat_message(
+            eff_pid, "user", f"/{name} {args}".strip(),
+            session_id=eff_sid,
+        )
+        await _save_chat_message(
+            eff_pid, "assistant", result.output or "",
+            action={"type": "slash_command", "command": name, "success": result.success},
+            session_id=eff_sid,
+        )
+    except Exception as _se:
+        logger.warning("斜杠命令持久化失败: %s", _se)
+
+    return result
 
 
 async def _match_project_skill(name: str, project_id: str) -> Optional[str]:
@@ -800,20 +856,71 @@ async def _cmd_ads_init(args: str, project_id: Optional[str], context: dict) -> 
 
 
 async def _cmd_ue_run(args: str, project_id: Optional[str], context: dict) -> CommandResult:
-    """在 UE Editor 执行 Python 代码（B-0 Python 桥接）"""
+    """在 UE Editor 执行 Python 代码（B-0 Python 桥接）
+
+    支持两种输入：
+    1. Python 代码（直接执行）— 含 import/print/unreal 等关键字
+    2. 自然语言描述（让 LLM 生成代码再执行）— 不含 Python 关键字
+    """
     if not project_id:
         return CommandResult(success=False, output="❌ /ue-run 需要在项目内使用")
-    code = args.strip()
-    if not code:
-        return CommandResult(success=False, output="用法：/ue-run <python code>\n例：/ue-run import unreal; print(unreal.SystemLibrary.get_engine_version())")
+    text = args.strip()
+    if not text:
+        return CommandResult(success=False, output="用法：/ue-run <python code 或自然语言描述>\n例：/ue-run import unreal; print(unreal.SystemLibrary.get_engine_version())\n例：/ue-run 列出关卡所有 Actor")
+
+    # 启发式判断：是否像 Python 代码（含 import/print/unreal/def/class/for/if 中任一关键字）
+    looks_like_python = any(kw in text for kw in (
+        "import ", "print(", "print ", "unreal", "def ", "class ", "for ", "if ",
+        "while ", "with ", "return ", "=", "+", "-", "*", "/",
+    ))
+
+    code = text
+    if not looks_like_python:
+        # 自然语言描述 → 调 LLM 生成 Python 代码
+        try:
+            from llm_client import llm_client as _llm
+            gen_prompt = (
+                "你是 UE5 Python 代码生成助手。根据用户的自然语言描述，"
+                "生成一段简短、可直接执行的 import unreal Python 代码（不写解释、不带 markdown）。\n"
+                f"用户描述：{text}\n\n"
+                "只返回 Python 代码本身，不要其他任何内容。"
+            )
+            generated = await _llm.generate(gen_prompt, max_tokens=1000, temperature=0.2)
+            generated = generated.strip()
+            if generated.startswith("```python"):
+                generated = generated[len("```python"):].lstrip()
+            if generated.startswith("```"):
+                generated = generated[3:].lstrip()
+            if generated.endswith("```"):
+                generated = generated[:-3].rstrip()
+            if not generated or "import" not in generated:
+                return CommandResult(
+                    success=False,
+                    output=(
+                        f"❌ 无法从描述生成 Python 代码\n\n"
+                        f"原始输入：{text}\n"
+                        f"LLM 返回：\n```\n{generated[:300]}\n```\n\n"
+                        f"请直接提供 Python 代码，例如：\n"
+                        f"/ue-run import unreal; print(unreal.EditorLevelLibrary.get_all_level_actors().__len__())"
+                    ),
+                )
+            code = generated
+        except Exception as _ge:
+            return CommandResult(
+                success=False,
+                output=f"❌ 代码生成失败: {_ge}\n\n请直接提供 Python 代码。",
+            )
+
+    # 执行 Python 代码
     from engines.ue_python_bridge import run_python
     result = await run_python(code, project_id=project_id)
     if result["success"]:
         out = result.get("stdout") or result.get("result") or "✅ 执行成功（无输出）"
-        return CommandResult(success=True, output=f"✅ 执行成功\n```\n{out}\n```", data=result)
+        header = "✅ 执行成功" if looks_like_python else f"✅ 执行成功（由描述「{text}」生成）"
+        return CommandResult(success=True, output=f"{header}\n```python\n{code}\n```\n```\n{out}\n```", data=result)
     else:
         err = result.get("error") or "执行失败"
-        return CommandResult(success=False, output=f"❌ {err}", data=result)
+        return CommandResult(success=False, output=f"❌ {err}\n\n代码：\n```python\n{code}\n```", data=result)
 
 
 async def _cmd_ue_bp_gen(args: str, project_id: Optional[str], context: dict) -> CommandResult:
@@ -1714,7 +1821,7 @@ async def _cmd_help(args: str, project_id: Optional[str], context: dict) -> Comm
 
 async def _cmd_model(args: str, project_id: Optional[str], context: dict) -> CommandResult:
     """查看或切换当前模型"""
-    from llm_client import llm_client, CLI_MODEL_OPTIONS
+    from llm_client import llm_client, get_cli_model_options
     from config import settings
 
     arg = args.strip()
@@ -1722,7 +1829,7 @@ async def _cmd_model(args: str, project_id: Optional[str], context: dict) -> Com
     if not arg:
         # 查看当前模型
         if llm_client.api_format == "cli":
-            available = CLI_MODEL_OPTIONS.get(llm_client.cli_type, [])
+            available = get_cli_model_options().get(llm_client.cli_type, [])
             lines = [
                 f"**当前模型：** `{llm_client.cli_model}`",
                 f"**接入方式：** CLI · {llm_client.cli_type}",
@@ -1919,7 +2026,7 @@ async def _cmd_tasks(args: str, project_id: Optional[str], context: dict) -> Com
 
         # CI 构建任务
         ci_builds = await db.fetch_all(
-            """SELECT build_id, project_id, build_type, status, created_at, raw_output_tail
+            """SELECT id, project_id, build_type, status, created_at, raw_output_tail
                FROM ci_builds
                WHERE status IN ('running','pending')
                ORDER BY created_at DESC
@@ -1956,7 +2063,7 @@ async def _cmd_tasks(args: str, project_id: Optional[str], context: dict) -> Com
             })
         for b in ci_builds:
             task_items.append({
-                "id": b["build_id"], "type": "ci_build",
+                "id": b["id"], "type": "ci_build",
                 "title": f"CI: {b.get('build_type','build')}",
                 "status": b.get("status", ""),
                 "project_id": b.get("project_id", ""),

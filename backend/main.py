@@ -21,16 +21,27 @@ LOG_FORMAT = "%(asctime)s [%(name)s] %(levelname)s  %(message)s"
 LOG_DATE_FORMAT = "%H:%M:%S"
 
 # Windows 控制台默认 GBK 编码，无法输出 emoji —— 强制 UTF-8
-_console_handler = logging.StreamHandler(sys.stdout)
-_console_handler.setFormatter(logging.Formatter(LOG_FORMAT, datefmt=LOG_DATE_FORMAT))
-if sys.platform == "win32":
+# 打包为 windowed exe 时 sys.stdout 可能为 None，需兜底
+_console_stream = sys.stdout
+if sys.platform == "win32" and _console_stream is not None and hasattr(_console_stream, "buffer"):
     import io
-    _console_handler.stream = io.TextIOWrapper(
-        sys.stdout.buffer, encoding="utf-8", errors="replace", line_buffering=True,
-    )
+    try:
+        _console_stream = io.TextIOWrapper(
+            _console_stream.buffer, encoding="utf-8", errors="replace", line_buffering=True,
+        )
+    except Exception:
+        _console_stream = sys.stdout
+if _console_stream is None:
+    _console_stream = open(os.devnull, "w", encoding="utf-8")
+_console_handler = logging.StreamHandler(_console_stream)
+_console_handler.setFormatter(logging.Formatter(LOG_FORMAT, datefmt=LOG_DATE_FORMAT))
 
-# 同时输出到日志文件（便于排查）
-_LOG_DIR = Path(__file__).parent
+# 同时输出到日志文件（便于排查；打包后写到 cwd/runtime，避免写 _MEIPASS）
+_LOG_DIR = Path(os.getcwd()) if getattr(sys, "frozen", False) else Path(__file__).parent
+try:
+    _LOG_DIR.mkdir(parents=True, exist_ok=True)
+except Exception:
+    _LOG_DIR = Path(os.getcwd())
 _file_handler = logging.FileHandler(
     _LOG_DIR / "server.log", encoding="utf-8", mode="a",
 )
@@ -495,7 +506,7 @@ async def get_preview_url(project_id: str):
 @app.get("/api/llm/status")
 async def llm_status():
     """LLM 状态"""
-    from llm_client import llm_client, CLI_MODEL_OPTIONS, _CLI_ADAPTERS
+    from llm_client import llm_client, get_cli_model_options, _CLI_ADAPTERS
     is_cli = llm_client.api_format == "cli"
     return {
         "configured":  llm_client.is_configured,
@@ -510,8 +521,23 @@ async def llm_status():
         "cli_model":   llm_client.cli_model   if is_cli else None,
         "cli_timeout": llm_client.cli_timeout if is_cli else None,
         # 前端联动用：各 CLI 工具的模型列表 + 默认命令名（始终返回，方便弹窗初始化）
-        "cli_model_options": CLI_MODEL_OPTIONS,
+        "cli_model_options": get_cli_model_options(),
         "cli_default_cmds":  {k: v["default_cmd"] for k, v in _CLI_ADAPTERS.items()},
+    }
+
+
+@app.post("/api/llm/cli-models/refresh")
+async def llm_cli_models_refresh(body: dict = None):
+    """从本地 CLI 实时查询模型列表（刷新下拉）"""
+    from llm_client import llm_client, fetch_cli_models
+    body = body or {}
+    cli_type = body.get("cli_type") or llm_client.cli_type or "claude"
+    cli_cmd = body.get("cli_cmd") or llm_client.cli_cmd or ""
+    result = await fetch_cli_models(cli_type, cli_cmd)
+    return {
+        "cli_type": cli_type,
+        "cli_cmd": cli_cmd,
+        **result,
     }
 
 

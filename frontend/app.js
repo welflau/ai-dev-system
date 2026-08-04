@@ -334,6 +334,7 @@ const _CLI_ICONS = {
     'codebuddy': `<svg viewBox="0 0 24 24" width="16" height="16"><circle cx="12" cy="12" r="12" fill="#1677ff"/><text x="12" y="16" text-anchor="middle" font-size="10" fill="white" font-family="sans-serif">CB</text></svg>`,
     'gemini-internal': `<svg viewBox="0 0 24 24" width="16" height="16"><circle cx="12" cy="12" r="12" fill="#4285f4"/><text x="12" y="16" text-anchor="middle" font-size="14" fill="white" font-family="sans-serif">✦</text></svg>`,
     'tclaude': `<svg viewBox="0 0 24 24" width="16" height="16"><circle cx="12" cy="12" r="12" fill="#7B2FBE"/><text x="12" y="16" text-anchor="middle" font-size="10" fill="white" font-family="sans-serif">TC</text></svg>`,
+    'cursor': `<svg viewBox="0 0 24 24" width="16" height="16"><circle cx="12" cy="12" r="12" fill="#000"/><path d="M7.5 6.5l9 4.2-3.8 1.5-1.5 3.8L7.5 6.5z" fill="#fff"/></svg>`,
     'custom': `<svg viewBox="0 0 24 24" width="16" height="16"><circle cx="12" cy="12" r="12" fill="#64748b"/><text x="12" y="16" text-anchor="middle" font-size="11" fill="white" font-family="sans-serif">?</text></svg>`,
 };
 
@@ -341,8 +342,18 @@ const _CLI_ICONS = {
  * 构建 assistant 聊天头像 HTML。
  * CLI 模式：显示对应工具图标 + 模型名；API 模式：显示 🤖 + 模型名。
  */
-function _buildAssistantAvatar() {
-    const cfg = window._llmConfig || {};
+/**
+ * 构建 assistant 头像。
+ * @param {object|null} meta 消息自带快照 {api_format, cli_type, llm_model}；缺省回退全局配置
+ */
+function _buildAssistantAvatar(meta = null) {
+    const global = window._llmConfig || {};
+    const cfg = {
+        api_format: (meta && meta.api_format) || global.api_format,
+        cli_type: (meta && meta.cli_type) || global.cli_type,
+        cli_model: (meta && (meta.llm_model || meta.cli_model)) || global.cli_model,
+        model: (meta && (meta.llm_model || meta.model)) || global.model,
+    };
     const isCli = cfg.api_format === 'cli';
     const rawModel = isCli ? (cfg.cli_model || cfg.model || '') : (cfg.model || '');
     // 取最后一段短名：claude-sonnet-4-6 → sonnet-4-6，gemini-3.1-pro → 3.1-pro
@@ -354,6 +365,17 @@ function _buildAssistantAvatar() {
         <div class="chat-avatar-icon">${iconHtml}</div>
         ${shortModel ? `<div class="chat-avatar-model">${escapeHtml(shortModel)}</div>` : ''}
     </div>`;
+}
+
+/** 从历史消息行提取 LLM 快照（无字段时返回 null，走全局回退） */
+function _msgLlmMeta(msg) {
+    if (!msg) return null;
+    if (!msg.api_format && !msg.cli_type && !msg.llm_model) return null;
+    return {
+        api_format: msg.api_format || null,
+        cli_type: msg.cli_type || null,
+        llm_model: msg.llm_model || null,
+    };
 }
 
 async function checkLLMStatus() {
@@ -441,12 +463,70 @@ function _fillCliModelSelect(cliType, currentModel) {
     selectEl.style.display = 'block';
     customEl.style.display = 'none';
     selectEl.innerHTML = models.map(m =>
-        `<option value="${m}"${m === currentModel ? ' selected' : ''}>${m}</option>`
+        `<option value="${escapeHtml(m)}"${m === currentModel ? ' selected' : ''}>${escapeHtml(m)}</option>`
     ).join('');
     // 若 currentModel 不在列表里则默认选第一个
     if (currentModel && !models.includes(currentModel)) {
         selectEl.insertAdjacentHTML('afterbegin',
-            `<option value="${currentModel}" selected>${currentModel}（当前）</option>`);
+            `<option value="${escapeHtml(currentModel)}" selected>${escapeHtml(currentModel)}（当前）</option>`);
+    }
+}
+
+/** 从本地 CLI 重新查询模型列表并刷新下拉 */
+async function refreshCliModels() {
+    const cliType = document.getElementById('llmCliType')?.value || 'claude';
+    const cliCmd = document.getElementById('llmCliCmd')?.value.trim() || '';
+    const btn = document.getElementById('llmCliModelRefreshBtn');
+    const hint = document.getElementById('llmCliModelRefreshHint');
+    const current = _getCliModelValue();
+
+    if (cliType === 'custom') {
+        if (hint) {
+            hint.style.display = 'block';
+            hint.style.color = 'var(--text-muted)';
+            hint.textContent = '自定义 CLI 请手动填写模型名';
+        }
+        return;
+    }
+
+    const prevLabel = btn ? btn.textContent : '';
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = '查询中…';
+    }
+    if (hint) {
+        hint.style.display = 'block';
+        hint.style.color = 'var(--text-muted)';
+        hint.textContent = cliType === 'codebuddy'
+            ? '正在查询（CodeBuddy --help 可能较慢）…'
+            : '正在从 CLI 查询模型列表…';
+    }
+
+    try {
+        const data = await api('/llm/cli-models/refresh', {
+            method: 'POST',
+            body: { cli_type: cliType, cli_cmd: cliCmd },
+        });
+        const models = data.models || [];
+        if (models.length) {
+            _cliModelOptions[cliType] = models;
+            _fillCliModelSelect(cliType, current);
+        }
+        if (hint) {
+            hint.style.color = data.ok ? 'var(--success, #22c55e)' : 'var(--warning, #f59e0b)';
+            hint.textContent = data.message || (data.ok ? `已刷新 ${models.length} 个模型` : '刷新失败');
+        }
+    } catch (e) {
+        if (hint) {
+            hint.style.display = 'block';
+            hint.style.color = 'var(--danger, #ef4444)';
+            hint.textContent = `刷新失败: ${e.message || e}`;
+        }
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = prevLabel || '↻ 刷新';
+        }
     }
 }
 
@@ -2897,7 +2977,7 @@ function _renderWorkingPaths(p) {
     } catch { extraPaths = []; }
 
     if (!mainPath && extraPaths.length === 0) {
-        el.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">暂无工作路径</div>';
+        el.innerHTML = '<div class="wp-empty-state">暂无工作路径</div>';
         return;
     }
 
@@ -2905,28 +2985,271 @@ function _renderWorkingPaths(p) {
 
     if (mainPath) {
         rows.push(`
-            <div class="working-path-row primary">
-                <span class="wp-badge">主路径</span>
+            <div class="working-path-row">
+                <span class="wp-badge primary">主路径</span>
                 <span class="wp-path" title="${escapeHtml(mainPath)}">${escapeHtml(mainPath)}</span>
-                <button class="wp-copy btn btn-xs" onclick="copyToClipboard('${escapeHtml(mainPath)}')" title="复制">📋</button>
+                <span class="wp-meta">通过上方"本地仓库路径"修改</span>
+                <div class="wp-actions">
+                    <button class="btn btn-xs" onclick="copyToClipboard('${escapeHtml(mainPath)}')" title="复制">📋</button>
+                </div>
             </div>`);
     }
 
-    for (const ep of extraPaths) {
+    for (let i = 0; i < extraPaths.length; i++) {
+        const ep = extraPaths[i];
         const path  = ep.path || ep;
         const label = ep.label || '';
         const vcs   = ep.vcs || '';
         const rw    = ep.writable === false ? '只读' : '';
-        const meta  = [label, vcs, rw].filter(Boolean).join(' · ');
+        const meta  = [label, vcs, rw].filter(Boolean).join(' · ') || '附加';
+        const idx   = i;
+
         rows.push(`
-            <div class="working-path-row extra">
-                <span class="wp-badge extra">${escapeHtml(meta || '附加')}</span>
-                <span class="wp-path" title="${escapeHtml(path)}">${escapeHtml(path)}</span>
-                <button class="wp-copy btn btn-xs" onclick="copyToClipboard('${escapeHtml(path)}')" title="复制">📋</button>
+            <div class="working-path-row" id="wp-row-${idx}">
+                <span class="wp-badge extra">${escapeHtml(meta)}</span>
+                <span class="wp-path" id="wp-text-${idx}" title="${escapeHtml(path)}">${escapeHtml(path)}</span>
+                <div class="wp-actions" id="wp-actions-${idx}">
+                    <button class="btn btn-xs" onclick="startEditExtraPath(${idx})" title="编辑">✏️</button>
+                    <button class="btn btn-xs btn-danger" onclick="deleteExtraPath(${idx})" title="删除">🗑</button>
+                    <button class="btn btn-xs" onclick="copyToClipboard('${escapeHtml(path)}')" title="复制">📋</button>
+                </div>
+                <div class="wp-actions" id="wp-edit-actions-${idx}" style="display:none;">
+                    <button class="btn btn-xs btn-primary" onclick="saveExtraPathEdit(${idx})" title="保存">✅</button>
+                    <button class="btn btn-xs" onclick="cancelExtraPathEdit(${idx})" title="取消">❌</button>
+                </div>
             </div>`);
     }
 
+    // 添加路径按钮区域
+    rows.push(`<div id="wp-add-area" class="wp-add-area" style="display:none;">
+        <input type="text" id="wp-add-input" placeholder="输入绝对路径，例: D:/Projects/MyPlugin" />
+        <input type="text" id="wp-add-label" placeholder="标签（可选）" style="flex:0.4;min-width:80px;" />
+        <button class="btn btn-sm btn-primary" onclick="addExtraPath()">✅ 添加</button>
+        <button class="btn btn-sm" onclick="cancelAddExtraPath()">取消</button>
+    </div>`);
+
+    rows.push(`<div id="wp-add-btn-row" style="margin-top:6px;">
+        <button class="btn btn-xs" onclick="showAddExtraPath()">+ 添加路径</button>
+    </div>`);
+
     el.innerHTML = rows.join('');
+
+    // 持久化保存按钮（仅在 extra_paths 有变更时需要）
+    _updateSaveAllButton(p);
+}
+
+/** 更新"保存全部"按钮状态 */
+function _updateSaveAllButton(p) {
+    const el = document.getElementById('wp-save-all-area');
+    // 检查是否有待保存的变更
+    const hasEdits = document.getElementById('wp-save-all-area')?.dataset.pending === 'true';
+    if (hasEdits) return; // 按钮已存在
+
+    // 首次渲染时不显示，只有编辑后显示
+}
+
+/** 开始编辑额外路径 */
+function startEditExtraPath(idx) {
+    const row = document.getElementById(`wp-row-${idx}`);
+    const textEl = document.getElementById(`wp-text-${idx}`);
+    const actionsEl = document.getElementById(`wp-actions-${idx}`);
+    const editActionsEl = document.getElementById(`wp-edit-actions-${idx}`);
+    if (!row || !textEl || !actionsEl || !editActionsEl) return;
+
+    const currentPath = textEl.textContent.trim();
+    textEl.outerHTML = `<input type="text" class="wp-edit-input" id="wp-edit-input-${idx}" value="${escapeHtml(currentPath)}" />`;
+    actionsEl.style.display = 'none';
+    editActionsEl.style.display = 'flex';
+}
+
+/** 取消编辑额外路径 */
+function cancelExtraPathEdit(idx) {
+    const row = document.getElementById(`wp-row-${idx}`);
+    const inputEl = document.getElementById(`wp-edit-input-${idx}`);
+    const actionsEl = document.getElementById(`wp-actions-${idx}`);
+    const editActionsEl = document.getElementById(`wp-edit-actions-${idx}`);
+    if (!row || !inputEl || !actionsEl || !editActionsEl) return;
+
+    inputEl.outerHTML = `<span class="wp-path" id="wp-text-${idx}" title="${escapeHtml(inputEl.defaultValue)}">${escapeHtml(inputEl.defaultValue)}</span>`;
+    actionsEl.style.display = 'flex';
+    editActionsEl.style.display = 'none';
+}
+
+/** 保存编辑后的额外路径 */
+function saveExtraPathEdit(idx) {
+    const inputEl = document.getElementById(`wp-edit-input-${idx}`);
+    const actionsEl = document.getElementById(`wp-actions-${idx}`);
+    const editActionsEl = document.getElementById(`wp-edit-actions-${idx}`);
+    if (!inputEl || !actionsEl || !editActionsEl) return;
+
+    const newVal = inputEl.value.trim();
+    if (!newVal) { showToast('路径不能为空', 'error'); return; }
+
+    const pathText = escapeHtml(newVal);
+    inputEl.outerHTML = `<span class="wp-path" id="wp-text-${idx}" title="${pathText}">${pathText}</span>`;
+    actionsEl.style.display = 'flex';
+    editActionsEl.style.display = 'none';
+
+    _markWorkingPathsDirty();
+}
+
+/** 删除额外路径 */
+function deleteExtraPath(idx) {
+    if (!confirm('确认删除此工作路径？')) return;
+    const row = document.getElementById(`wp-row-${idx}`);
+    if (row) row.remove();
+    _markWorkingPathsDirty();
+}
+
+/** 显示添加路径输入框 */
+function showAddExtraPath() {
+    document.getElementById('wp-add-area').style.display = 'flex';
+    document.getElementById('wp-add-btn-row').style.display = 'none';
+    document.getElementById('wp-add-input').focus();
+}
+
+/** 取消添加路径 */
+function cancelAddExtraPath() {
+    document.getElementById('wp-add-area').style.display = 'none';
+    document.getElementById('wp-add-btn-row').style.display = '';
+    document.getElementById('wp-add-input').value = '';
+    document.getElementById('wp-add-label').value = '';
+}
+
+/** 添加额外路径到列表 */
+function addExtraPath() {
+    const inputEl = document.getElementById('wp-add-input');
+    const labelEl = document.getElementById('wp-add-label');
+    const path = (inputEl?.value || '').trim();
+    if (!path) { showToast('路径不能为空', 'error'); return; }
+
+    const label = (labelEl?.value || '').trim();
+    const meta = label || '附加';
+
+    const listEl = document.getElementById('workingPathsList');
+    if (!listEl) return;
+
+    // 区分大小写去重
+    const existingPaths = new Set();
+    listEl.querySelectorAll('.wp-path').forEach(el => {
+        const t = (el.title || el.textContent || '').trim().replace(/\\/g, '/');
+        if (t) existingPaths.add(t);
+    });
+    const normalizedNew = path.replace(/\\/g, '/');
+    const exists = Array.from(existingPaths).some(p => {
+        return p.replace(/\\/g, '/') === normalizedNew;
+    });
+    if (exists) { showToast('路径已存在', 'warning'); return; }
+
+    // 用全局计数器生成稳定 idx，兼容 startEditExtraPath/deleteExtraPath 的 ID 查找模式
+    if (typeof _wpNewCounter === 'undefined') { window._wpNewCounter = 0; }
+    const idx = `new-${window._wpNewCounter++}`;
+
+    const newRow = document.createElement('div');
+    newRow.className = 'working-path-row';
+    newRow.id = `wp-row-${idx}`;
+    newRow.innerHTML = `
+        <span class="wp-badge extra">${escapeHtml(meta)}</span>
+        <span class="wp-path" id="wp-text-${idx}" title="${escapeHtml(path)}">${escapeHtml(path)}</span>
+        <div class="wp-actions" id="wp-actions-${idx}">
+            <button class="btn btn-xs" onclick="startEditExtraPath('${idx}')" title="编辑">✏️</button>
+            <button class="btn btn-xs btn-danger" onclick="deleteExtraPath('${idx}')" title="删除">🗑</button>
+            <button class="btn btn-xs" onclick="copyToClipboard('${escapeHtml(path)}')" title="复制">📋</button>
+        </div>
+        <div class="wp-actions" id="wp-edit-actions-${idx}" style="display:none;">
+            <button class="btn btn-xs btn-primary" onclick="saveExtraPathEdit('${idx}')" title="保存">✅</button>
+            <button class="btn btn-xs" onclick="cancelExtraPathEdit('${idx}')" title="取消">❌</button>
+        </div>`;
+
+    // 插入到添加区域之前
+    const addArea = document.getElementById('wp-add-area');
+    if (addArea && addArea.parentNode === listEl) {
+        listEl.insertBefore(newRow, addArea);
+    } else {
+        const addBtnRow = document.getElementById('wp-add-btn-row');
+        if (addBtnRow && addBtnRow.parentNode === listEl) {
+            listEl.insertBefore(newRow, addBtnRow);
+        }
+    }
+
+    cancelAddExtraPath();
+    _markWorkingPathsDirty();
+}
+
+/** 标记工作路径有未保存的变更，显示"保存全部"按钮 */
+function _markWorkingPathsDirty() {
+    let area = document.getElementById('wp-save-all-area');
+    if (area) {
+        area.style.display = 'flex';
+        return;
+    }
+    const el = document.getElementById('workingPathsList');
+    if (!el) return;
+    area = document.createElement('div');
+    area.id = 'wp-save-all-area';
+    area.className = 'wp-add-area';
+    area.style.cssText = 'justify-content:flex-end;';
+    area.innerHTML = `
+        <span style="font-size:11px;color:var(--warning,#f59e0b);">⚠ 路径有变更，请保存</span>
+        <button class="btn btn-sm btn-primary" onclick="saveAllExtraPaths()">💾 保存全部</button>`;
+    el.appendChild(area);
+}
+
+/** 保存所有 extra_paths 变更到后端 */
+async function saveAllExtraPaths() {
+    // 收集当前所有额外路径（除了主路径行）
+    const listEl = document.getElementById('workingPathsList');
+    if (!listEl) return;
+
+    const newPaths = [];
+    // 优先使用 data 属性标记过的新行以及 DOM 顺序
+    const rows = listEl.querySelectorAll('.working-path-row');
+    for (const row of rows) {
+        const pathEl = row.querySelector('.wp-path');
+        if (!pathEl) continue;
+
+        const badgeEl = row.querySelector('.wp-badge');
+        const badgeText = (badgeEl?.textContent || '').trim();
+
+        // 额外路径行：不是主路径行
+        if (badgeText === '主路径') continue;
+
+        const path = (pathEl.title || pathEl.textContent || '').trim();
+        if (!path) continue;
+
+        // 尝试从 badge 还原 label
+        const meta = (badgeEl?.textContent || '').trim();
+        const entry = { path };
+        if (meta && meta !== '附加') {
+            entry.label = meta;
+        }
+        newPaths.push(entry);
+    }
+
+    if (!currentProjectId) return;
+
+    try {
+        const data = await api(`/projects/${currentProjectId}/extra-paths`, {
+            method: 'PATCH',
+            body: { extra_paths: newPaths }
+        });
+
+        // 更新 currentProject 缓存
+        if (currentProject) {
+            currentProject.extra_paths = JSON.stringify(data.extra_paths || newPaths);
+        }
+
+        // 移除保存按钮
+        const area = document.getElementById('wp-save-all-area');
+        if (area) area.remove();
+
+        // 重渲染以规整索引
+        if (currentProject) _renderWorkingPaths(currentProject);
+
+        showToast('工作路径已保存', 'success');
+    } catch (e) {
+        showToast(`保存失败: ${e.message}`, 'error');
+    }
 }
 
 /** 加载 Remote 列表（GET /git/remotes） */
@@ -3654,6 +3977,7 @@ async function saveRepoPath() {
         currentProject = data;
         document.getElementById('settingsRepoPath').value = data.git_repo_path || newPath;
         cancelEditRepoPath();
+        _renderWorkingPaths(data);
         if (data.warning) {
             showToast(`路径已保存（⚠️ ${data.warning}）`, 'warning');
         } else {
@@ -4447,13 +4771,34 @@ async function _loadTicketOpenSpec(ticketId) {
     if (!currentProjectId) return;
     try {
         const data = await api(`/projects/${currentProjectId}/openspec/ticket/${ticketId}/specs`);
-        if (!data.initialized || !data.files || Object.keys(data.files).length === 0) return;
-
         const panel = document.getElementById('openspecPanel');
         const tabsEl = document.getElementById('openspecTabs');
         const contentEl = document.getElementById('openspecContent');
         const badgeEl = document.getElementById('openspecStageBadge');
         if (!panel || !tabsEl || !contentEl) return;
+
+        const hasFiles = data.files && Object.keys(data.files).length > 0;
+        // 四件套核心文件（readme 只是 change 目录占位，不算生成完成）
+        const CORE_ARTIFACTS = ['proposal', 'specs', 'design', 'tasks'];
+        const hasCore = data.files && CORE_ARTIFACTS.some(k => data.files[k]);
+
+        // 四件套还没生成完（propose 已启动、change 目录建了含 readme，但四件套 .md 在排队）：
+        // 显示"生成中"占位 + 刷新按钮，而不是静默隐藏或只显示 readme——否则用户以为 OpenSpec 没跑。
+        if (!hasCore) {
+            if (data.openspec_stage || hasFiles) {
+                if (badgeEl) badgeEl.innerHTML =
+                    `<span style="font-size:11px;font-weight:700;padding:2px 8px;border:1.5px solid #a855f760;border-radius:4px;color:#a855f7;">📐 ${escHtml(data.openspec_stage || 'proposed')}</span>`;
+                tabsEl.innerHTML = '';
+                contentEl.innerHTML =
+                    `<div style="color:var(--text-muted);font-size:12px;padding:10px;line-height:1.7;">
+                        ⏳ 四件套（proposal / specs / design / tasks）正在生成中…<br>
+                        <span style="opacity:.7;">需调用 LLM 依次生成，可能稍候。生成完成后点刷新查看。</span><br>
+                        <button class="btn-sm" style="margin-top:8px;" onclick="_loadTicketOpenSpec('${escHtml(ticketId)}')">🔄 刷新</button>
+                     </div>`;
+                panel.style.display = '';
+            }
+            return;   // 无 stage 且无任何文件 → 项目没用 OpenSpec，静默隐藏
+        }
 
         // 阶段徽章
         const STAGE_BADGE = {
@@ -4564,6 +4909,25 @@ async function _loadSpecVersionHistory(ticketId, tabsEl, contentEl, files, keys,
  * hasOS: OpenSpec 已初始化
  * ticketData: 工单详情（status / openspec_stage 等）
  */
+/**
+ * 三层状态栏单个节点。done/active 且给了 jump 时可点击跳时间轴。
+ * @param {string} label   节点文字
+ * @param {string} cls      tlb-done | tlb-pending
+ * @param {boolean} active  是否当前阶段
+ * @param {string} jumpActions  逗号分隔 action（空=不可点）
+ * @param {string} jumpStatuses 逗号分隔 to_status
+ * @param {string} extraStyle   额外内联样式（如 blocked 染色）
+ */
+function _tlbNode(label, cls, active, jumpActions, jumpStatuses, extraStyle) {
+    const clickable = !!(jumpActions || jumpStatuses);
+    const clickCls = clickable ? ' tlb-clickable' : '';
+    const onclick = clickable
+        ? ` onclick="_jumpToTimelineByStage('${jumpActions || ''}','${jumpStatuses || ''}')" title="跳到时间轴对应记录"`
+        : '';
+    const styleAttr = extraStyle ? ` style="${extraStyle}"` : '';
+    return `<span class="tlb-node ${cls}${active ? ' tlb-active' : ''}${clickCls}"${styleAttr}${onclick}>${label}</span>`;
+}
+
 function _buildThreeLayerBar(hasSP, hasOS, ticketData) {
     // 只要有任何一层有内容才显示
     if (!hasSP && !hasOS) return '';
@@ -4575,17 +4939,17 @@ function _buildThreeLayerBar(hasSP, hasOS, ticketData) {
     let specHtml = '';
     if (hasOS) {
         const OS_PHASES = [
-            { key: 'proposed', label: 'Propose' },
-            { key: 'applied',  label: 'Apply'   },
-            { key: 'verified', label: 'Verify'  },
-            { key: 'archived', label: 'Archive' },
+            { key: 'proposed', label: 'Propose', jump: 'openspec_propose,openspec_propose_started,openspec_propose_partial,openspec_propose_failed,openspec_artifact' },
+            { key: 'applied',  label: 'Apply',   jump: 'openspec_apply' },
+            { key: 'verified', label: 'Verify',  jump: 'openspec_verify,openspec_verify_failed' },
+            { key: 'archived', label: 'Archive', jump: 'openspec_archive' },
         ];
         const stageIdx = OS_PHASES.findIndex(p => p.key === stage);
         const nodes = OS_PHASES.map((p, i) => {
             const done = stageIdx >= i;
             const active = stageIdx === i;
             const cls = done ? 'tlb-done' : 'tlb-pending';
-            return `<span class="tlb-node ${cls}${active ? ' tlb-active' : ''}">${escHtml(p.label)}</span>`;
+            return _tlbNode(escHtml(p.label), cls, active, done ? p.jump : '', '', '');
         }).join('<span class="tlb-arrow">──</span>');
         specHtml = `<div class="tlb-row tlb-spec">
             <span class="tlb-layer-icon" title="规范层">📐</span>
@@ -4600,26 +4964,34 @@ function _buildThreeLayerBar(hasSP, hasOS, ticketData) {
         // 曾经历开发阶段即视为已激活（包括 blocked/testing/in_review/done）
         const PAST_DEV = ['development','development_in_progress','testing','in_review','done','blocked','cancelled'];
         const activated = PAST_DEV.includes(ticketStatus);
+        const dCls = activated ? 'tlb-done' : 'tlb-pending';
+        const dJump = activated ? 'superpowers_skill' : '';
         discHtml = `<div class="tlb-row tlb-discipline">
             <span class="tlb-layer-icon" title="纪律层">⚡</span>
             <div class="tlb-nodes">
-                <span class="tlb-node ${activated ? 'tlb-done' : 'tlb-pending'}">TDD</span>
+                ${_tlbNode('TDD', dCls, false, dJump, '', '')}
                 <span class="tlb-arrow">·</span>
-                <span class="tlb-node ${activated ? 'tlb-done' : 'tlb-pending'}">调试规范</span>
+                ${_tlbNode('调试规范', dCls, false, dJump, '', '')}
                 <span class="tlb-arrow">·</span>
-                <span class="tlb-node ${activated ? 'tlb-done' : 'tlb-pending'}">验证铁律</span>
+                ${_tlbNode('验证铁律', dCls, false, dJump, '', '')}
             </div>
         </div>`;
     }
 
     // ── 编排层（Harness/ADS）─────────────────────────────────────
     const HARNESS_PHASES = [
-        { keys: ['pending', 'todo'],                         label: '需求'  },
-        { keys: ['architecture', 'architecture_done'],       label: '架构'  },
-        { keys: ['development', 'development_in_progress', 'blocked', 'cancelled'],  label: '开发'  },
-        { keys: ['testing'],                                  label: '测试'  },
-        { keys: ['in_review'],                                label: '审查'  },
-        { keys: ['done'],                                     label: '完成'  },
+        { keys: ['pending', 'todo'],                         label: '需求',
+          jumpActions: 'write_prd,decompose', jumpStatuses: 'pending,planning_done' },
+        { keys: ['architecture', 'architecture_done'],       label: '架构',
+          jumpActions: 'design_architecture', jumpStatuses: 'architecture_done,architecture_in_progress' },
+        { keys: ['development', 'development_in_progress', 'blocked', 'cancelled'],  label: '开发',
+          jumpActions: 'develop,rework,fix_issues', jumpStatuses: 'development_done,development_in_progress,engine_compile_failed,self_test_failed' },
+        { keys: ['testing'],                                  label: '测试',
+          jumpActions: 'run_tests', jumpStatuses: 'testing_done,testing_failed,testing_in_progress,play_test_failed' },
+        { keys: ['in_review'],                                label: '审查',
+          jumpActions: 'code_review,acceptance_review', jumpStatuses: 'in_review,acceptance_passed,acceptance_rejected' },
+        { keys: ['done'],                                     label: '完成',
+          jumpActions: '', jumpStatuses: 'done,deployed' },
     ];
     const hIdx = HARNESS_PHASES.findIndex(p => p.keys.includes(ticketStatus));
     const isBlocked = ticketStatus === 'blocked';
@@ -4628,14 +5000,17 @@ function _buildThreeLayerBar(hasSP, hasOS, ticketData) {
         const done = hIdx > i || ticketStatus === 'done';
         const active = hIdx === i;
         // blocked/cancelled 时当前节点用特殊颜色
-        const blockedStyle = (active && isBlocked)
-            ? ' style="border-color:rgba(239,68,68,.5);color:#ef4444;"'
+        const extraStyle = (active && isBlocked)
+            ? 'border-color:rgba(239,68,68,.5);color:#ef4444;'
             : (active && isCancelled)
-                ? ' style="border-color:rgba(139,148,158,.4);color:#8b949e;"'
+                ? 'border-color:rgba(139,148,158,.4);color:#8b949e;'
                 : '';
         const cls = done ? 'tlb-done' : 'tlb-pending';
         const label = (active && isBlocked) ? `${escHtml(p.label)} ⚠` : escHtml(p.label);
-        return `<span class="tlb-node ${cls}${active ? ' tlb-active' : ''}"${blockedStyle}>${label}</span>`;
+        // 点亮（done 或 active）才可点
+        const lit = done || active;
+        return _tlbNode(label, cls, active,
+            lit ? p.jumpActions : '', lit ? p.jumpStatuses : '', extraStyle);
     }).join('<span class="tlb-arrow">→</span>');
     const harnessHtml = `<div class="tlb-row tlb-harness">
         <span class="tlb-layer-icon" title="编排层">🔧</span>
@@ -4648,6 +5023,60 @@ function _buildThreeLayerBar(hasSP, hasOS, ticketData) {
         <span class="tlb-legend-item"><span class="tlb-dot tlb-dot-pending"></span>待进行</span>
     </div>`;
     return `<div class="three-layer-bar">${specHtml}${discHtml}${harnessHtml}${legendHtml}</div>`;
+}
+
+/**
+ * 从三层状态栏的节点跳到时间轴上对应的日志条目。
+ * @param {string} actionsCsv  逗号分隔的候选 action（匹配 data-action）
+ * @param {string} statusCsv   逗号分隔的候选 to_status（匹配 data-to-status）
+ *
+ * 命中策略：优先 action 匹配，其次 to_status 匹配；多条命中取最新（DOM 中最靠下）。
+ * 命中项若在折叠的「详细日志」区，先展开再滚动 + 高亮闪烁。
+ */
+function _jumpToTimelineByStage(actionsCsv, statusCsv) {
+    const container = document.getElementById('unifiedTimeline');
+    if (!container) return;
+    const actions  = (actionsCsv || '').split(',').map(s => s.trim()).filter(Boolean);
+    const statuses = (statusCsv  || '').split(',').map(s => s.trim()).filter(Boolean);
+
+    const items = [...container.querySelectorAll('.log-item')];
+    const matchIn = (predFn) => items.filter(predFn);
+
+    // 优先按 action，其次按 to_status
+    let hits = actions.length
+        ? matchIn(el => actions.includes(el.dataset.action || ''))
+        : [];
+    if (!hits.length && statuses.length) {
+        hits = matchIn(el => statuses.includes(el.dataset.toStatus || ''));
+    }
+    if (!hits.length) {
+        // 诊断：把 DOM 里实际存在的 action/status 打出来，方便定位映射缺口
+        const seenActions = [...new Set(items.map(el => el.dataset.action).filter(Boolean))];
+        const seenStatus  = [...new Set(items.map(el => el.dataset.toStatus).filter(Boolean))];
+        console.warn('[stage-jump] no hit',
+            { wantActions: actions, wantStatuses: statuses,
+              logItemCount: items.length, seenActions, seenStatus });
+        if (typeof showToast === 'function') showToast('该阶段暂无时间轴记录', 'info');
+        return;
+    }
+
+    const target = hits[hits.length - 1];   // 最新一条
+
+    // 若目标在折叠的详细日志区，先展开
+    const secondary = document.getElementById('secondaryLogsContent');
+    if (secondary && secondary.contains(target) && secondary.style.display === 'none') {
+        if (typeof toggleSecondaryLogs === 'function') toggleSecondaryLogs();
+    }
+
+    // 时间轴区域本身可能在抽屉里需要滚动进视野
+    const section = document.getElementById('timelineSection');
+    if (section) section.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+    setTimeout(() => {
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        target.classList.add('timeline-jump-highlight');
+        setTimeout(() => target.classList.remove('timeline-jump-highlight'), 1600);
+    }, secondary && secondary.contains(target) ? 120 : 0);
 }
 
 async function openTicketDrawer(ticketId) {
@@ -5552,7 +5981,9 @@ function renderActionStateSummary(action) {
     } else if (action.type === 'confirm_requirement' && isExec) {
         summary = `需求 <strong>${escapeHtml(action.title || '?')}</strong> 已创建`;
     } else if (action.type === 'confirm_direct_ticket' && isExec) {
-        summary = `工单 <strong>${escapeHtml(action.title || '?')}</strong> 已创建`;
+        const _tid = action._result?.ticket_id || action.ticket_id || '';
+        summary = `工单 <strong>${escapeHtml(action.title || '?')}</strong> 已创建`
+            + (_tid ? ` &nbsp;<span class="action-link" onclick="openTicketInChat('${escapeHtml(_tid)}')">查看工单 →</span>` : '');
     } else if (action.type === 'confirm_bug' && isExec) {
         summary = `Bug <strong>${escapeHtml(action.title || '?')}</strong> 已上报`;
     } else if (action.type === 'generate_image' && isExec) {
@@ -8504,7 +8935,7 @@ function _renderLayerLogItem(log, meta) {
         </div>` : '';
 
     return `
-        <div class="log-item info layer-${meta.layer}" style="border-left-color:${color}40;padding:5px 10px 5px 14px;"${hasExpand ? ` onclick="toggleBlock('${expandId}')" style="cursor:pointer;border-left-color:${color}40;padding:5px 10px 5px 14px;"` : ''}>
+        <div class="log-item info layer-${meta.layer}" data-action="${escHtml(log.action || '')}" data-to-status="${escHtml(log.to_status || '')}" style="border-left-color:${color}40;padding:5px 10px 5px 14px;"${hasExpand ? ` onclick="toggleBlock('${expandId}')" style="cursor:pointer;border-left-color:${color}40;padding:5px 10px 5px 14px;"` : ''}>
             <div class="log-header" style="gap:5px;">
                 <span style="color:${color};font-size:12px;">${meta.icon}</span>
                 <span class="log-agent" style="color:${color};">${escHtml(meta.label)}</span>
@@ -8527,8 +8958,11 @@ function renderLogItem(log) {
 
     // 三层专属 action 快捷渲染
     const LAYER_ACTIONS = {
+        openspec_propose_started: { icon: '📐', label: 'OpenSpec Propose 启动', layer: 'spec' },
         openspec_propose:        { icon: '📐', label: 'OpenSpec Propose 完成', layer: 'spec' },
+        openspec_propose_partial:{ icon: '📐', label: 'OpenSpec Propose 部分完成', layer: 'spec' },
         openspec_propose_failed: { icon: '📐', label: 'OpenSpec Propose 失败', layer: 'spec' },
+        openspec_artifact:       { icon: '📐', label: 'OpenSpec 单件已生成', layer: 'spec' },
         openspec_verify:         { icon: '📐', label: 'OpenSpec Verify 通过 ✅', layer: 'spec' },
         openspec_verify_failed:  { icon: '📐', label: 'OpenSpec Verify 失败 ❌', layer: 'spec' },
         superpowers_skill:       { icon: '⚡', label: 'Superpowers 约束已激活', layer: 'discipline' },
@@ -8548,6 +8982,12 @@ function renderLogItem(log) {
     let errorMsg = '';
     let durationMs = null;
     let cliCmd = '';
+    // 编译/流程详情（reject engine_compile 等日志的结构化字段）
+    let compileCmd = '';
+    let compileExit = null;
+    let compileErrors = [];
+    let compileWarnings = [];
+    let compileRawTail = '';
     try {
         const parsed = JSON.parse(log.detail || '{}');
         detail        = parsed.message || '';
@@ -8557,6 +8997,12 @@ function renderLogItem(log) {
         errorMsg      = parsed.error_msg || parsed.error || '';
         durationMs    = parsed.duration_ms    ?? null;
         cliCmd        = parsed.cli_cmd        || '';   // CLI 完整指令
+        // 编译详情字段（UBT reject 日志携带 command/exit_code/errors/warnings/raw_tail）
+        compileCmd      = parsed.command || '';
+        compileExit     = parsed.exit_code ?? null;
+        compileErrors   = Array.isArray(parsed.errors)   ? parsed.errors   : [];
+        compileWarnings = Array.isArray(parsed.warnings) ? parsed.warnings : [];
+        compileRawTail  = parsed.raw_tail || '';
 
         // 错误详情补充：blocked/ToolError 日志把原始错误放在 parsed.error，没有 message 时把 error 提升为 detail
         if (!detail && errorMsg) detail = errorMsg;
@@ -8578,13 +9024,19 @@ function renderLogItem(log) {
         log = { ...log, _isChatTool: true };
     }
 
-    // thought_done / tool_done 有产出文件时，追加文件标签行
+    // thought_done / tool_done / complete 有产出文件时，追加文件标签行
     let fileChipsHtml = '';
-    if (log.action === 'thought_done' || log.action === 'tool_done') {
+    if (log.action === 'thought_done' || log.action === 'tool_done' || log.action === 'complete') {
         try {
             const d = JSON.parse(log.detail || '{}');
             let fileNames = d.files || [];
             let filePaths = d.file_paths || [];
+
+            // complete 日志（develop/rework 完成）用 git_files：完整相对路径列表
+            if (!fileNames.length && Array.isArray(d.git_files) && d.git_files.length) {
+                filePaths = d.git_files;
+                fileNames = d.git_files.map(p => String(p).replace(/\\/g, '/').split('/').pop());
+            }
 
             // 兼容老日志：从 message 里解析 "产出: a.cpp, b.h 等 N 个文件"
             if (!fileNames.length && d.message) {
@@ -8597,6 +9049,7 @@ function renderLogItem(log) {
 
             if (fileNames.length) {
                 const ticketId = log.ticket_id || '';
+                const totalCount = d.file_count || d.files_count || fileNames.length;
                 fileChipsHtml = `<div class="thought-files">${fileNames.map((f, i) => {
                     const fullPath = filePaths[i] || f;
                     const hasPath = fullPath !== f || f.includes('/');
@@ -8604,7 +9057,7 @@ function renderLogItem(log) {
                         ? `event.stopPropagation();showFileDiff('${escHtml(ticketId)}','${escHtml(fullPath)}','${escHtml(f)}')`
                         : `event.stopPropagation();showToast('老日志未记录完整路径，请查看产出文件区', 'info')`;
                     return `<span class="thought-file-chip" title="${escHtml(fullPath)}" onclick="${onClick}">📄 ${escHtml(f)}</span>`;
-                }).join('')}${d.file_count > fileNames.length ? `<span class="thought-file-chip more">+${d.file_count - fileNames.length} 个</span>` : ''}</div>`;
+                }).join('')}${totalCount > fileNames.length ? `<span class="thought-file-chip more">+${totalCount - fileNames.length} 个</span>` : ''}</div>`;
             }
         } catch {}
     }
@@ -8630,13 +9083,40 @@ function renderLogItem(log) {
     // error/warn 级别或有错误内容时强制允许展开
     const expandId = 'logx-' + Math.random().toString(36).slice(2);
     const isError = log.level === 'error' || log.level === 'warn';
-    const hasExpand = (log._isChatTool && (inputSummary || outputSummary || errorMsg)) || cliCmd || (isError && errorMsg);
+
+    // 编译/流程详情块：UBT reject 等日志的 command/exit_code/errors/warnings/raw_tail
+    const hasCompileDetail = !!(compileCmd || compileExit !== null || compileErrors.length || compileWarnings.length || compileRawTail);
+    let compileHtml = '';
+    if (hasCompileDetail) {
+        const errRows = compileErrors.slice(0, 20).map(e => {
+            const fname = (e.file || '?').replace(/\\/g, '/').split('/').pop();
+            const line  = e.line != null ? ':' + e.line : '';
+            const code  = e.code ? `<span class="compile-err-code">${escHtml(e.code)}</span>` : '';
+            const cat   = e.category ? `<span class="compile-err-cat">${escHtml(e.category)}</span>` : '';
+            return `<div class="compile-err-row"><code class="compile-err-file">${escHtml(fname + line)}</code>${code}${cat}<span class="compile-err-msg">${escHtml((e.msg || '').slice(0, 200))}</span></div>`;
+        }).join('');
+        const moreErr = compileErrors.length > 20 ? `<div class="diag-more">…还有 ${compileErrors.length - 20} 个错误</div>` : '';
+        const warnRows = compileWarnings.slice(0, 5).map(w => {
+            const fname = (w.file || '?').replace(/\\/g, '/').split('/').pop();
+            const line  = w.line != null ? ':' + w.line : '';
+            return `<div class="compile-err-row compile-warn-row"><code class="compile-err-file">${escHtml(fname + line)}</code><span class="compile-err-msg">${escHtml((w.msg || '').slice(0, 160))}</span></div>`;
+        }).join('');
+        compileHtml = `
+            ${compileCmd    ? `<div class="log-expand-row"><span class="log-expand-label">命令</span><code class="log-expand-val" style="font-family:monospace;font-size:10px;word-break:break-all;">${escHtml(compileCmd)}</code></div>` : ''}
+            ${compileExit !== null ? `<div class="log-expand-row"><span class="log-expand-label">退出码</span><span class="log-expand-val ${compileExit === 0 ? '' : 'log-expand-err'}">${escHtml(String(compileExit))}${(compileExit !== 0 && !compileErrors.length && !compileRawTail) ? ' <span style="opacity:.7;">（无输出，疑似环境/进程问题）</span>' : ''}</span></div>` : ''}
+            ${errRows  ? `<div class="log-expand-row"><span class="log-expand-label log-expand-err">错误(${compileErrors.length})</span><div class="compile-err-list">${errRows}${moreErr}</div></div>` : ''}
+            ${warnRows ? `<div class="log-expand-row"><span class="log-expand-label">警告(${compileWarnings.length})</span><div class="compile-err-list">${warnRows}</div></div>` : ''}
+            ${compileRawTail ? `<div class="log-expand-row"><span class="log-expand-label">原始日志</span><pre class="compile-raw-log">${escHtml(compileRawTail)}</pre></div>` : ''}`;
+    }
+
+    const hasExpand = (log._isChatTool && (inputSummary || outputSummary || errorMsg)) || cliCmd || (isError && errorMsg) || hasCompileDetail;
     const expandHtml = hasExpand ? `
-        <div id="${expandId}" class="log-item-expand" style="display:${isError && errorMsg ? '' : 'none'};">
+        <div id="${expandId}" class="log-item-expand" style="display:${(isError && errorMsg) ? '' : 'none'};max-height:340px;overflow-y:auto;">
             ${cliCmd        ? `<div class="log-expand-row"><span class="log-expand-label">CLI</span><code class="log-expand-val" style="font-family:monospace;font-size:11px;word-break:break-all;">${escHtml(cliCmd)}</code></div>` : ''}
             ${inputSummary  ? `<div class="log-expand-row"><span class="log-expand-label">输入</span><span class="log-expand-val">${escHtml(inputSummary)}</span></div>`  : ''}
             ${outputSummary ? `<div class="log-expand-row"><span class="log-expand-label">结果</span><span class="log-expand-val">${escHtml(outputSummary)}</span></div>` : ''}
             ${errorMsg      ? `<div class="log-expand-row"><span class="log-expand-label log-expand-err">错误</span><span class="log-expand-val log-expand-err" style="white-space:pre-wrap;">${_linkifyErrors(errorMsg)}</span></div>` : ''}
+            ${compileHtml}
         </div>` : '';
 
     // 内联评论（绑定到本条 log 的评论）
@@ -8655,12 +9135,13 @@ function renderLogItem(log) {
         </div>`;
 
     return `
-        <div class="log-item ${log.level || 'info'}${log._isChatTool ? ' log-chat-tool' : ''}${layerStyle ? ' ' + layerStyle.cls : ''}"${layerStyle ? ` style="border-left-color:${layerStyle.color}40;"` : ''}${hasExpand ? ` onclick="toggleBlock('${expandId}')" style="cursor:pointer;${layerStyle ? `border-left-color:${layerStyle.color}40;` : ''}" title="点击展开详情"` : ''}>
+        <div class="log-item ${log.level || 'info'}${log._isChatTool ? ' log-chat-tool' : ''}${layerStyle ? ' ' + layerStyle.cls : ''}" data-action="${escHtml(log.action || '')}" data-to-status="${escHtml(log.to_status || '')}"${layerStyle ? ` style="border-left-color:${layerStyle.color}40;"` : ''}${hasExpand ? ` onclick="toggleBlock('${expandId}')" style="cursor:pointer;${layerStyle ? `border-left-color:${layerStyle.color}40;` : ''}" title="点击展开详情"` : ''}>
             <div class="log-header">
                 ${layerStyle ? `<span class="layer-badge" style="color:${layerStyle.color};font-size:11px;opacity:.8;" title="${layerStyle.label}">${layerStyle.icon}</span>` : ''}
                 <span class="log-agent">${log._isChatTool ? '💬 ' : ''}${escHtml(log.agent_type || 'System')}</span>
                 <span class="log-action">${escHtml((log.action || '').replace(/^chat:/, '🔧 '))}</span>
                 ${cliCmd ? `<span class="log-action" style="color:var(--text-muted);font-size:11px;">▶ CLI</span>` : ''}
+                ${hasCompileDetail ? `<span class="log-compile-toggle" title="点击展开编译详情">详情 ▾</span>` : ''}
                 ${log.from_status && log.to_status ? `
                     <span class="log-status-change">
                         ${getStatusLabel(log.from_status)} <span class="arrow">→</span> ${getStatusLabel(log.to_status)}
@@ -9367,6 +9848,12 @@ function connectSSE(projectId) {
             // 实时追加到工单对话 Feed
             if (chatMode === 'job' && data.ticket_id) {
                 appendToTicketFeed(data);
+            }
+            // OpenSpec 四件套逐件生成完成 → 若该工单抽屉正开着，刷新 OpenSpec 面板
+            if (data.ticket_id && data.ticket_id === _currentTimelineTicketId
+                && typeof data.action === 'string' && data.action.startsWith('openspec_')
+                && document.getElementById('ticketDrawer')?.classList.contains('active')) {
+                if (typeof _loadTicketOpenSpec === 'function') _loadTicketOpenSpec(data.ticket_id);
             }
         });
 
@@ -11936,7 +12423,7 @@ async function _loadSplitPaneHistory(msgId, sessionId) {
         messages.forEach(msg => appendChatBubble(
             msg.role, msg.content, msg.created_at,
             null, msg.images || [], [], msg.thinking || [],
-            container
+            container, _msgLlmMeta(msg)
         ));
         container.scrollTop = container.scrollHeight;
     } catch (e) {
@@ -12753,7 +13240,7 @@ async function switchChatSession(sessionId) {
             }
             if (actionObj && actionObj.type === 'group_agent_reply') {
                 const _ag2 = actionObj.agent || '', _em2 = actionObj.emoji || '🤖', _co2 = actionObj.color || '#888';
-                appendChatBubble(msg.role, msg.content, msg.created_at, null, msg.images || [], [], msg.thinking || [], container);
+                appendChatBubble(msg.role, msg.content, msg.created_at, null, msg.images || [], [], msg.thinking || [], container, _msgLlmMeta(msg));
                 const _me2 = container.lastElementChild;
                 if (_me2) {
                     const _av2 = _me2.querySelector('.chat-avatar-wrap, .chat-msg-avatar');
@@ -12764,7 +13251,7 @@ async function switchChatSession(sessionId) {
                     _me2.classList.add('group-agent-msg');
                 }
             } else {
-            appendChatBubble(msg.role, msg.content, msg.created_at, actionObj, msg.images || [], [], msg.thinking || [], container);
+            appendChatBubble(msg.role, msg.content, msg.created_at, actionObj, msg.images || [], [], msg.thinking || [], container, _msgLlmMeta(msg));
             }
         }
         scrollChatToBottom();
@@ -13318,10 +13805,11 @@ async function _sendChatStreaming(url, body) {
     }
 
     _streamAbortController = null;
-    // 流结束：取消节流，完整 Markdown 渲染
+    // 流结束：取消节流，完整 Markdown 渲染，确保气泡可见
     if (_renderTimer) { clearTimeout(_renderTimer); _renderTimer = null; }
     bubbleEl.innerHTML = formatChatContent(fullText || '操作已完成。');
     bubbleWrapper.classList.remove('_streaming');
+    bubbleWrapper.style.display = '';  // 无 text_delta 时气泡隐藏，流结束必须显示
 
     // J-3b: 收尾分组面板
     if (_roundsPanel) {
@@ -13465,7 +13953,7 @@ async function loadChatHistory() {
                 const _co = actionObj.color || '#888';
                 // 用 appendChatBubble 渲染（自动处理 thinking 面板）
                 appendChatBubble(msg.role, msg.content, msg.created_at, null,
-                    msg.images || [], [], msg.thinking || [], container);
+                    msg.images || [], [], msg.thinking || [], container, _msgLlmMeta(msg));
                 // 对最后一个子元素（文本气泡）应用 Agent 样式
                 const _msgEl = container.lastElementChild;
                 if (_msgEl) {
@@ -13496,7 +13984,8 @@ async function loadChatHistory() {
                 msg.images || [],
                 [],
                 msg.thinking || [],
-                container
+                container,
+                _msgLlmMeta(msg)
             );
             }
         }
@@ -13534,6 +14023,7 @@ async function loadTicketConversations(ticketId) {
             header.innerHTML = `
                 <div class="job-status-dot" style="background: ${getStatusColor(ticket.status)}"></div>
                 <div class="job-title">${escapeHtml(ticket.title)}</div>
+                <span class="job-tasks-btn" onclick="_openTicketTasksPanel('${escapeHtml(ticketId)}')" title="查看该工单的后台任务（编译/自测/playtest 等控制台输出）">📟 后台任务</span>
                 <span class="job-close-btn" onclick="clearJobSelection()" title="取消选择">✕</span>
             `;
             const chatPanelBody = document.getElementById('chatPanelBody');
@@ -13561,6 +14051,19 @@ async function loadTicketConversations(ticketId) {
                 if (evEl) container.appendChild(evEl);
                 continue;
             }
+            // ── 评论（人工 / Agent 回复）→ 独立聊天气泡 ───────────────
+            if (msg.is_comment || msg.type === 'comment') {
+                container.appendChild(_buildTicketCommentAsChatMsg({
+                    id: msg.id,
+                    ticket_id: ticketId,
+                    author: msg.author || (msg.author_type === 'human' ? '你' : 'Agent'),
+                    author_type: msg.author_type || (msg.role === 'user' ? 'human' : 'agent'),
+                    content: msg.content || '',
+                    phase: msg.phase || null,
+                    created_at: msg.created_at,
+                }));
+                continue;
+            }
             if (msg.is_agent) {
                 // Agent 消息带标签
                 const agentBadge = msg.agent_type ? `<div class="chat-agent-badge">${msg.agent_type} / ${msg.action || ''}</div>` : '';
@@ -13570,8 +14073,8 @@ async function loadTicketConversations(ticketId) {
                 msgEl.className = `chat-msg ${msg.role}`;
                 msgEl.innerHTML = `
                     ${msg.role === 'user'
-                        ? '<div class="chat-msg-avatar">📝</div>'
-                        : _buildAssistantAvatar()}
+                        ? '<div class="chat-msg-avatar">👤</div>'
+                        : _buildTicketAssistantAvatar(msg.model, msg.agent_type)}
                     <div class="chat-msg-content">
                         ${agentBadge}
                         <div class="chat-msg-bubble">${formatChatContent(msg.content)}</div>
@@ -13586,7 +14089,7 @@ async function loadTicketConversations(ticketId) {
                     catch { actionObj = null; }
                 }
                 appendChatBubble(msg.role, msg.content, msg.created_at, actionObj,
-                    msg.images || [], [], msg.thinking || []);
+                    msg.images || [], [], msg.thinking || [], null, _msgLlmMeta(msg));
             }
         }
         scrollChatToBottom();
@@ -13658,7 +14161,8 @@ async function loadAllTicketConversations() {
                         logEl.innerHTML = `<span class="log-agent">${escapeHtml(msg.agent_type)}</span> <span class="log-action">${escapeHtml(actionLabel)}</span> ${msg.message ? '<span class="log-msg">'+escapeHtml(msg.message.substring(0,80))+'</span>' : ''} <span class="log-time">${formatTime(msg.created_at)}</span>`;
                         msgArea.appendChild(logEl);
                     } else if (msg.type === 'comment') {
-                        // 评论气泡（人工评论 or Agent 回复）
+                        // 评论 → 独立聊天气泡（问/答拆开，不嵌套）
+                        if (!msg.ticket_id) msg.ticket_id = t.id;
                         msgArea.appendChild(_buildTicketCommentEl(msg));
                     } else {
                         // Agent 对话消息（LLM conversation）
@@ -13915,30 +14419,10 @@ function _appendCommentToTicketFeed(data) {
     const msgArea = section.querySelector('.ticket-section-messages');
     if (!msgArea) return;
 
-    // 如果是 agent 回复（有 reply_to_comment_id），则找到父评论气泡并追加到其回复区
-    if (data.reply_to_comment_id) {
-        const parentEl = msgArea.querySelector(`[data-comment-id="${CSS.escape(data.reply_to_comment_id)}"]`);
-        if (parentEl) {
-            let repliesDiv = parentEl.querySelector('.tfc-replies');
-            if (!repliesDiv) {
-                repliesDiv = document.createElement('div');
-                repliesDiv.className = 'tfc-replies';
-                parentEl.appendChild(repliesDiv);
-            }
-            const rIcon = data.author_type === 'human' ? '👤' : '🤖';
-            const replyEl = document.createElement('div');
-            replyEl.className = 'tfc-reply';
-            replyEl.innerHTML = `
-                <div class="tfc-reply-meta">${rIcon} <span class="tfc-author">${escapeHtml(data.author || '')}</span> <span class="tfc-time">${formatTime(data.created_at || new Date().toISOString())}</span></div>
-                <div class="tfc-content">${formatChatContent(data.content || '')}</div>`;
-            repliesDiv.appendChild(replyEl);
-            return;
-        }
-    }
-
-    // 顶层评论：直接追加气泡
+    // 问/答一律追加独立聊天气泡（不再嵌进父评论的 replies 区）
     const commentData = {
-        id: data.comment_id || ('sse-' + Date.now()),
+        id: data.comment_id || data.id || ('sse-' + Date.now()),
+        ticket_id: data.ticket_id || '',
         author: data.author || '',
         author_type: data.author_type || 'agent',
         content: data.content || '',
@@ -13947,6 +14431,7 @@ function _appendCommentToTicketFeed(data) {
         replies: [],
     };
     msgArea.appendChild(_buildTicketCommentEl(commentData));
+    msgArea.scrollTop = msgArea.scrollHeight;
 }
 
 /**
@@ -13967,6 +14452,9 @@ function _buildTicketEventEl(msg) {
         planning_done:        { icon: '📋', label: '规划完成', compact: false },
         architecture_done:    { icon: '🏗', label: '架构完成', compact: false },
         openspec_propose:     { icon: '📐', label: 'OpenSpec Propose 完成', compact: false },
+        openspec_propose_started: { icon: '📐', label: 'OpenSpec Propose 启动', compact: false },
+        openspec_propose_partial: { icon: '📐', label: 'OpenSpec Propose 部分完成', compact: false },
+        openspec_artifact:    { icon: '📐', label: 'OpenSpec 单件已生成', compact: true },
         openspec_verify:      { icon: '📐', label: 'OpenSpec Verify 通过', compact: false },
         phase_reset:          { icon: '🔄', label: '阶段重置', compact: true },
         change_detected:      { icon: '🔍', label: '变更检测', compact: true },
@@ -14011,9 +14499,10 @@ function _buildTicketEventEl(msg) {
         </div>` : '';
 
     const filesHtml = (msg.files || []).length > 0
-        ? `<div style="margin-top:4px;">${(msg.files).map(f =>
-            `<span class="artifact-badge" onclick="openRepoFileFromChat('${escapeHtml(f)}')" style="cursor:pointer;">📄 ${escapeHtml(f)}</span>`
-          ).join(' ')}</div>` : '';
+        ? `<div style="margin-top:4px;">${(msg.files).map(f => {
+            const base = String(f).replace(/\\/g, '/').split('/').pop();
+            return `<span class="artifact-badge" title="${escapeHtml(f)}" onclick="openRepoFileFromChat('${escapeHtml(f)}')" style="cursor:pointer;">📄 ${escapeHtml(base)}</span>`;
+          }).join(' ')}</div>` : '';
 
     const el = document.createElement('div');
     el.className = 'tkt-event-card';
@@ -14031,22 +14520,48 @@ function _buildTicketEventEl(msg) {
     return el;
 }
 
+/**
+ * 工单对话统一 assistant 头像（与全局 AI 助手同结构：图标 + 模型短名）。
+ * - 优先用消息自带 model
+ * - 无 model 时回退全局 LLM 配置（避免评论气泡掉成裸 🤖）
+ */
 function _buildTicketAssistantAvatar(model, agentType) {
-    const rawModel = model || '';
-    // 取短名：claude-sonnet-4-6 → sonnet-4-6，deepseek-v4-... → v4-...
+    const cfg = window._llmConfig || {};
+    const isCli = cfg.api_format === 'cli';
+    let rawModel = (model || '').trim();
+    if (!rawModel) {
+        rawModel = isCli ? (cfg.cli_model || cfg.model || '') : (cfg.model || '');
+    }
+    // 取短名：claude-sonnet-4-6 → sonnet-4-6，deepseek-v4-pro-ioa → v4-pro-ioa
     const modelLabel = rawModel
         .replace(/^claude-/, '').replace(/^gemini-/, '').replace(/^gpt-/, '')
         .replace(/^deepseek-/, '');
-    const shortModel = modelLabel.length > 12 ? modelLabel.slice(0, 11) + '…' : modelLabel;
-    // 根据模型名选图标
+    let shortModel = modelLabel.length > 12 ? modelLabel.slice(0, 11) + '…' : modelLabel;
+    // 仍无模型名时，用 Agent 名做角标，保持头像区高度一致
+    if (!shortModel && agentType) {
+        shortModel = String(agentType).replace(/Agent$/i, '') || agentType;
+        if (shortModel.length > 10) shortModel = shortModel.slice(0, 9) + '…';
+    }
+
     let iconHtml;
-    if (rawModel.includes('claude')) {
-        iconHtml = _CLI_ICONS['claude'] || '<span style="font-size:14px;">🤖</span>';
-    } else if (rawModel.includes('deepseek') || rawModel.includes('codebuddy')) {
-        iconHtml = _CLI_ICONS['codebuddy'] || '<span style="font-size:14px;">🤖</span>';
+    if (rawModel.includes('claude') || (isCli && (cfg.cli_type || '').includes('claude'))) {
+        const cliKey = (cfg.cli_type === 'tclaude' || cfg.cli_type === 'claude-internal')
+            ? cfg.cli_type : 'claude';
+        iconHtml = _CLI_ICONS[cliKey] || _CLI_ICONS['claude'];
+    } else if (
+        rawModel.includes('deepseek') || rawModel.includes('codebuddy')
+        || (isCli && (cfg.cli_type === 'codebuddy' || !cfg.cli_type))
+    ) {
+        iconHtml = _CLI_ICONS['codebuddy'];
+    } else if (isCli && cfg.cli_type && _CLI_ICONS[cfg.cli_type]) {
+        iconHtml = _CLI_ICONS[cfg.cli_type];
+    } else if (isCli) {
+        iconHtml = _CLI_ICONS['custom'];
     } else {
+        // API 模式：与 _buildAssistantAvatar 一致用 🤖
         iconHtml = '<span style="font-size:14px;">🤖</span>';
     }
+
     return `<div class="chat-avatar-wrap">
         <div class="chat-avatar-icon">${iconHtml}</div>
         ${shortModel ? `<div class="chat-avatar-model">${escapeHtml(shortModel)}</div>` : ''}
@@ -14056,44 +14571,51 @@ function _buildTicketAssistantAvatar(model, agentType) {
 /**
  * 构建工单对话面板中的评论气泡 DOM 元素
  */
-function _buildTicketCommentEl(comment) {
+/**
+ * 单条评论 → 独立聊天气泡（user 右/紫，assistant 左），不再嵌套平铺。
+ * 若带 replies，一并展开为后续气泡（DocumentFragment）。
+ */
+function _buildTicketCommentAsChatMsg(comment) {
     const isHuman = comment.author_type === 'human';
+    const role = isHuman ? 'user' : 'assistant';
     const el = document.createElement('div');
-    el.className = `ticket-feed-comment ${isHuman ? 'human' : 'agent'}`;
-    el.dataset.commentId = comment.id;
+    el.className = `chat-msg ${role}`;
+    el.dataset.commentId = comment.id || '';
 
-    const authorIcon = isHuman ? '👤' : '🤖';
-    const phaseTag = comment.phase ? `<span class="tfc-phase">${escapeHtml(comment.phase)}</span>` : '';
-
-    // 顶层评论的 hover 评论按钮（仅 agent 评论显示）
-    const topReplyBtn = !isHuman
-        ? `<button class="tfc-reply-trigger" title="回复此评论" onclick="_openFeedReplyBox(this, '${escapeHtml(comment.ticket_id || '')}')">💬</button>`
+    const content = comment.content || '';
+    const isLong = content.length > 600;
+    const bubbleId = `tbbl-${Math.random().toString(36).slice(2, 8)}`;
+    const agentBadge = (!isHuman && comment.author)
+        ? `<div class="chat-agent-badge">${escapeHtml(comment.author)}${comment.phase ? ' / ' + escapeHtml(comment.phase) : ''}</div>`
+        : '';
+    const replyBtn = !isHuman
+        ? `<button class="tfc-reply-trigger" title="回复" onclick="_openFeedReplyBox(this, '${escapeHtml(comment.ticket_id || '')}')">💬</button>`
         : '';
 
-    let repliesHtml = '';
-    if (comment.replies && comment.replies.length > 0) {
-        repliesHtml = `<div class="tfc-replies">${comment.replies.map(r => {
-            const rIcon = r.author_type === 'human' ? '👤' : '🤖';
-            const rReplyBtn = r.author_type !== 'human'
-                ? `<button class="tfc-reply-trigger" title="回复此评论" onclick="_openFeedReplyBox(this, '${escapeHtml(comment.ticket_id || '')}')">💬</button>`
-                : '';
-            return `<div class="tfc-reply">
-                <div class="tfc-reply-meta">${rIcon} <span class="tfc-author">${escapeHtml(r.author)}</span> <span class="tfc-time">${formatTime(r.created_at)}</span>${rReplyBtn}</div>
-                <div class="tfc-content">${formatChatContent(r.content)}</div>
-            </div>`;
-        }).join('')}</div>`;
-    }
-
     el.innerHTML = `
-        <div class="tfc-meta">
-            <span class="tfc-author">${authorIcon} ${escapeHtml(comment.author)}</span>
-            ${phaseTag}
-            <span class="tfc-time">${formatTime(comment.created_at)}</span>
-            ${topReplyBtn}
-        </div>
-        <div class="tfc-content">${formatChatContent(comment.content)}</div>
-        ${repliesHtml}`;
+        ${isHuman
+            ? '<div class="chat-msg-avatar">👤</div>'
+            : _buildTicketAssistantAvatar(null, comment.author || 'Agent')}
+        <div class="chat-msg-content">
+            ${agentBadge}
+            <div class="chat-msg-bubble${isLong ? ' tfc-bubble-collapsed' : ''}" id="${bubbleId}">${formatChatContent(content)}</div>
+            ${isLong ? `<button class="tfc-expand-btn" onclick="_toggleTicketBubble('${bubbleId}', this)">展开 ▾</button>` : ''}
+            <div class="chat-msg-time">${formatTime(comment.created_at)}${replyBtn}</div>
+        </div>`;
     return el;
+}
+
+function _buildTicketCommentEl(comment) {
+    // 问/答拆成独立气泡，避免「一条评论里嵌套回复」的平铺感
+    const frag = document.createDocumentFragment();
+    frag.appendChild(_buildTicketCommentAsChatMsg(comment));
+    if (comment.replies && comment.replies.length) {
+        for (const r of comment.replies) {
+            if (!r.ticket_id && comment.ticket_id) r.ticket_id = comment.ticket_id;
+            frag.appendChild(_buildTicketCommentAsChatMsg(r));
+        }
+    }
+    return frag;
 }
 
 /**
@@ -14196,6 +14718,8 @@ async function _openTasksPanel() {
     const body = document.getElementById('chatPanelBody');
     if (!panel || !body) return;
 
+    _tasksTicketFilter = '';   // 全局 /tasks：清工单过滤，显示所有任务
+
     if (!chatPanelOpen) toggleChatPanel();
 
     panel.style.display = 'flex';
@@ -14209,6 +14733,24 @@ function _closeTasksSplitPane() {
     const body = document.getElementById('chatPanelBody');
     if (panel) panel.style.display = 'none';
     if (body) body.classList.remove('has-tasks-panel');
+    _tasksTicketFilter = '';   // 清工单过滤态，避免串台到全局 /tasks
+}
+
+/** 工单过滤态：非空时后台任务面板只显示该工单的任务（编译/自测/playtest 等） */
+let _tasksTicketFilter = '';
+
+/** 从工单聊天头部打开后台任务面板，筛选出当前工单的后台任务 */
+async function _openTicketTasksPanel(ticketId) {
+    if (!ticketId) return;
+    _tasksTicketFilter = ticketId;
+    const panel = document.getElementById('tasksSidePanel');
+    const body = document.getElementById('chatPanelBody');
+    if (!panel || !body) return;
+    if (!chatPanelOpen) toggleChatPanel();
+    panel.style.display = 'flex';
+    body.classList.add('has-tasks-panel');
+    _restoreTasksPanelWidth();
+    await _refreshTasksPanel();
 }
 
 // 内存 CLI 任务表（与后端 _CLI_TASKS 镜像，用于列表渲染）
@@ -14433,12 +14975,197 @@ function _injectCliTaskToPanel(taskId) {
     }
 }
 
+/**
+ * 把工单日志合成为后台任务面板的任务项（cli_task 风格）。
+ *
+ * 识别 tool_start / tool_done（run_engine_compile、self_test、playtest 等本地工具执行），
+ * 配对成一个任务；再从同一时段的 reject 日志里补充结构化编译输出（command/exit_code/
+ * errors/warnings/raw_tail），拼成控制台文本供右侧输出区展示。
+ *
+ * @param {Array} logs  /tickets/{id}/logs 返回的日志（DESC，需正序处理）
+ * @returns {Array} 任务项数组（type:'cli_task'）
+ */
+function _buildTicketTasksFromLogs(logs) {
+    const asc = [...(logs || [])].reverse();   // DB 是 DESC → 转正序
+    const parse = (d) => {
+        if (!d) return {};
+        if (typeof d === 'object') return d;
+        try { return JSON.parse(d); } catch { return {}; }
+    };
+
+    // 收集 reject 日志（结构化编译详情），按时间用于就近匹配
+    const rejects = asc
+        .filter(l => l.action === 'reject')
+        .map(l => ({ t: new Date(l.created_at || 0).getTime(), d: parse(l.detail) }));
+
+    const tasks = [];
+    const pending = {};   // 未配对的 tool_start，按工具名索引
+
+    for (const log of asc) {
+        const act = log.action || '';
+        if (act !== 'tool_start' && act !== 'tool_done' && act !== 'complete') continue;
+        const d = parse(log.detail);
+
+        // complete（develop/rework 完成）：合成"开发产出"任务，列出产出文件
+        if (act === 'complete') {
+            const files = (Array.isArray(d.file_paths) && d.file_paths.length ? d.file_paths
+                        : Array.isArray(d.git_files) && d.git_files.length ? d.git_files
+                        : Array.isArray(d.files) ? d.files : []);
+            if (!files.length) continue;   // 无文件产出的 complete 不建任务
+            const lines = [`产出 ${files.length} 个文件：`];
+            files.forEach(f => lines.push(`  📄 ${f}`));
+            if (d.result_summary) lines.push(`\n备注：${d.result_summary}`);
+            if (d.git_commit) lines.push(`\ngit commit: ${d.git_commit}`);
+            tasks.push({
+                id: `titk-${log.id || Math.random().toString(36).slice(2)}`,
+                type: 'cli_task',
+                title: '开发产出',
+                tool: 'develop',
+                status: 'success',
+                output: lines.join('\n'),
+                cmd: '',
+                duration_ms: 0,
+                created_at: log.created_at,
+                ts: log.created_at ? log.created_at.slice(11, 19) : '',
+                session_key: 'ticket_tasks',
+                session_label: '工单后台任务',
+            });
+            continue;
+        }
+
+        // 工具名：detail 里没有独立字段，从 message 里抠 "开始 xxx" / "完成 xxx (…)"
+        const msg = d.message || '';
+        const toolMatch = msg.match(/(?:开始|完成)\s+([a-z_]+)/i);
+        const tool = toolMatch ? toolMatch[1] : (act === 'tool_start' ? 'tool' : (pending._last || 'tool'));
+
+        if (act === 'tool_start') {
+            pending[tool] = { start: log, startMs: new Date(log.created_at || 0).getTime() };
+            pending._last = tool;
+            continue;
+        }
+
+        // tool_done：配对
+        const started = pending[tool] || pending[pending._last] || {};
+        delete pending[tool];
+        const startLog = started.start;
+        const doneMs = new Date(log.created_at || 0).getTime();
+
+        // 状态：message 里带 status=xxx；error/compile_failed → error
+        const statusMatch = msg.match(/status=([a-z_]+)/i);
+        const rawStatus = statusMatch ? statusMatch[1] : '';
+        const isErr = /fail|error|compile_failed/i.test(rawStatus) || log.level === 'error';
+        const durMatch = msg.match(/\((\d+)\s*ms\)/);
+        const durationMs = durMatch ? parseInt(durMatch[1], 10) : (started.startMs ? doneMs - started.startMs : 0);
+
+        // 就近找一条 reject（编译详情），时间落在 [startMs, doneMs+2s] 内
+        const near = rejects.find(r => r.t >= (started.startMs || 0) - 1000 && r.t <= doneMs + 2000);
+
+        // 拼控制台输出
+        const outParts = [];
+        if (d.output_summary) outParts.push(d.output_summary);
+        if (near) {
+            const rd = near.d;
+            if (rd.command)    outParts.push(`$ ${rd.command}`);
+            if (rd.exit_code !== undefined) outParts.push(`exit_code = ${rd.exit_code}`);
+            const errs = Array.isArray(rd.errors) ? rd.errors : [];
+            if (errs.length) {
+                outParts.push(`\n── errors (${errs.length}) ──`);
+                errs.forEach(e => {
+                    const f = (e.file || '?').replace(/\\/g, '/').split('/').pop();
+                    outParts.push(`${f}${e.line != null ? ':' + e.line : ''}  ${e.code || ''}  ${e.msg || ''}`.trim());
+                });
+            }
+            const warns = Array.isArray(rd.warnings) ? rd.warnings : [];
+            if (warns.length) {
+                outParts.push(`\n── warnings (${warns.length}) ──`);
+                warns.forEach(w => {
+                    const f = (w.file || '?').replace(/\\/g, '/').split('/').pop();
+                    outParts.push(`${f}${w.line != null ? ':' + w.line : ''}  ${w.msg || ''}`.trim());
+                });
+            }
+            if (rd.raw_tail) outParts.push(`\n── raw log (tail) ──\n${rd.raw_tail}`);
+        }
+        const output = outParts.join('\n') || msg || '(无输出)';
+
+        tasks.push({
+            id: `titk-${log.id || Math.random().toString(36).slice(2)}`,
+            type: 'cli_task',
+            title: tool,
+            tool,
+            status: isErr ? 'error' : 'success',
+            output,
+            cmd: near?.d?.command || '',
+            duration_ms: durationMs,
+            created_at: (startLog || log).created_at,
+            ts: (startLog || log).created_at ? (startLog || log).created_at.slice(11, 19) : '',
+            session_key: 'ticket_tasks',
+            session_label: '工单后台任务',
+        });
+    }
+    return tasks;
+}
+
 async function _refreshTasksPanel() {
     const listEl = document.getElementById('tasksPanelList');
     if (!listEl) return;
     listEl.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);">加载中…</div>';
 
     try {
+        // ── 工单过滤模式：只显示当前工单的后台任务（从工单日志合成）──────────
+        if (_tasksTicketFilter) {
+            let ticketBuilt = [];
+            try {
+                const data = await api(`/tickets/${_tasksTicketFilter}/logs`);
+                ticketBuilt = _buildTicketTasksFromLogs(data.logs || []);
+            } catch (e) {
+                listEl.innerHTML = `<div style="padding:20px;color:var(--danger);">加载工单任务失败: ${escapeHtml(String(e))}</div>`;
+                return;
+            }
+            // 同步到内存表，供 _selectTaskItem / _renderCliTaskOutput 读取
+            ticketBuilt.forEach(t => { _CLI_TASKS_MEM[t.id] = t; });
+
+            // 应用状态过滤 tab
+            const af = document.querySelector('.tasks-tab.active')?.dataset?.filter || 'all';
+            let filtered = ticketBuilt;
+            if (af !== 'all') {
+                filtered = ticketBuilt.filter(af === 'running'
+                    ? t => t.status === 'running'
+                    : af === 'success' ? t => t.status === 'success'
+                    : t => t.status === 'error' || t.status === 'failed');
+            }
+
+            const shortId = _tasksTicketFilter.slice(-6);
+            if (!filtered.length) {
+                listEl.innerHTML = `<div class="tasks-day-sep">工单 #${escapeHtml(shortId)}</div>`
+                    + '<div style="padding:20px;text-align:center;color:var(--text-muted);">该工单暂无后台任务</div>';
+                return;
+            }
+            listEl.innerHTML = `<div class="tasks-day-sep">工单 #${escapeHtml(shortId)} · ${filtered.length} 个任务</div>`
+                + filtered.map((t, i) => {
+                    const isActive = t.id === _cliActiveTaskId;
+                    const sIcon = { running:'🔄', success:'✅', error:'❌', failed:'❌' }[t.status] || '•';
+                    const durText = t.duration_ms ? `${t.duration_ms}ms` : '';
+                    const cmd = t.cmd || '';
+                    const cmdShort = cmd.length > 50 ? '…' + cmd.slice(-48) : cmd;
+                    const cmdHtml = cmd ? `<div class="tpi-cmd" title="${escapeHtml(cmd)}">$ ${escapeHtml(cmdShort)}</div>` : '';
+                    return `
+                    <div class="tasks-panel-item${isActive ? ' active' : ''}" data-task-id="${escapeHtml(t.id)}" data-task-type="cli_task"
+                         onclick="_selectTaskItem(${JSON.stringify(t).replace(/"/g,'&quot;')})">
+                        <div class="tpi-main">
+                            <span class="tpi-seq">#${i + 1}</span>
+                            <span class="tpi-icon">${sIcon}</span>
+                            <span class="tpi-title">${escapeHtml(t.title || '')}</span>
+                        </div>
+                        <div class="tpi-meta">
+                            ${durText ? `<span class="tpi-dur">${escapeHtml(durText)}</span>` : ''}
+                            ${t.ts ? `<span class="tpi-time">${escapeHtml(t.ts)}</span>` : ''}
+                        </div>
+                        ${cmdHtml}
+                    </div>`;
+                }).join('');
+            return;
+        }
+
         // 从 API 拉 cli-tasks 历史（含 DB 持久化记录），不按 session_id 过滤
         // session_key 现在是消息级 msg_group_key，与 chat_session_id 不同
         const cliUrl = currentProjectId
@@ -15775,7 +16502,7 @@ function _buildConfirmCardHtml(action) {
         </div>`;
 }
 
-function appendChatBubble(role, content, timestamp = null, action = null, images = [], actions = [], thinking = [], _container = null) {
+function appendChatBubble(role, content, timestamp = null, action = null, images = [], actions = [], thinking = [], _container = null, llmMeta = null) {
     const container = _container || (chatMode === 'group'
         ? (document.getElementById('groupChatMessages') || document.getElementById('chatMessages'))
         : document.getElementById('chatMessages'));
@@ -15784,7 +16511,6 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
     // 会话溯源：给带 _message_id 的气泡打上 data-msg-id，供 locateSourceMessage 定位
     if (action?._message_id) msgEl.dataset.msgId = action._message_id;
 
-    const avatar = role === 'user' ? '👤' : '🤖';
     const timeStr = timestamp ? formatTime(timestamp) : formatTime(new Date().toISOString());
 
     let actionHtml = '';
@@ -16320,7 +17046,7 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
     msgEl.innerHTML = `
         ${role === 'user'
             ? '<div class="chat-msg-avatar">👤</div>'
-            : _buildAssistantAvatar()}
+            : _buildAssistantAvatar(llmMeta)}
         <div class="chat-msg-content">
             ${imagesHtml}
             ${(content || actionHtml) ? `<div class="chat-msg-bubble">${formatChatContent(content)}${actionHtml}</div>` : ''}
@@ -16491,7 +17217,7 @@ async function doConfirmDirectTicket(cardId) {
         card.querySelector('.action-title').textContent = '✅ 工单已创建';
         const tid = result.ticket_id || '';
         if (btns) btns.innerHTML = tid
-            ? `<span class="action-link" onclick="openTicketDrawer('${escapeHtml(tid)}')">查看工单 →</span>`
+            ? `<span class="action-link" onclick="openTicketInChat('${escapeHtml(tid)}')">查看工单 →</span>`
             : `<span class="action-link" onclick="switchTab('board')">查看看板 →</span>`;
         showToast(`工单「${title}」已创建`, 'success');
         const msgId = card.dataset.messageId || '';
@@ -17279,6 +18005,30 @@ function selectTicketForChat(ticketId, ticketTitle) {
 
     // 直接加载该工单对话（标题固定在顶部）
     loadTicketConversations(ticketId);
+}
+
+/**
+ * 从聊天卡片「查看工单 →」跳转：若处于全屏聊天则先退出全屏（缩回右侧），
+ * 再切到该工单的工单对话窗口并选中。
+ * 不走 toggleChatFullscreen 的退出分支（那会 reload 项目页 + loadChatHistory 回到 global），
+ * 这里手动缩回全屏样式后直接进 job 模式。
+ */
+function openTicketInChat(ticketId, ticketTitle) {
+    if (!ticketId) return;
+    // 退出全屏 / 分屏，缩回右侧停靠
+    if (_chatFullscreen) {
+        _chatFullscreen = false;
+        document.body.classList.remove('chat-fullscreen');
+        document.body.classList.remove('chat-split');
+        const btn = document.getElementById('chatFullscreenBtn');
+        if (btn) { btn.textContent = '⛶'; btn.title = '全屏'; }
+        const splitBtn = document.getElementById('chatSplitBtn');
+        if (splitBtn) splitBtn.style.display = 'none';
+        try { _destroyAllSplitPanes(); } catch {}
+        try { _updateFullscreenProjectLabel(); } catch {}
+    }
+    // 切到该工单对话（内部会确保面板打开 + job 模式 + 加载会话）
+    selectTicketForChat(ticketId, ticketTitle);
 }
 
 /**

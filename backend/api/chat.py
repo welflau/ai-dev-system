@@ -649,10 +649,15 @@ async def _chat_stream_generator(
     async for _mcp_ev in _stream_mcp_status_events():
         yield _mcp_ev
 
-    # 保存用户消息（异步 fire-and-forget，不阻塞 LLM 响应）
-    import asyncio as _asyncio
-    _asyncio.create_task(_save_chat_message(project_id, "user", req.message,
-                             images=req.images, session_id=_sid))
+    # 保存用户消息（同步写入，确保 session 记录先于流式响应创建）
+    try:
+        await _save_chat_message(project_id, "user", req.message,
+                                 images=req.images, session_id=_sid)
+    except Exception as _ue:
+        logger.warning("保存用户消息失败（继续流式）: %s", _ue)
+
+    # ← 标记是否已有 save（message_done 路径已保存则跳过 finally 兜底）
+    _msg_saved = False
 
     try:
         async for ev in agent.chat_stream(
@@ -761,6 +766,7 @@ async def _chat_stream_generator(
                 return
 
             elif etype == "message_done":
+                _msg_saved = True  # 先标标记，finally 不再兜底
                 # J-3b: 追加最后一轮，构建分组格式存 DB
                 if _cur_round is not None:
                     _thinking_rounds.append(_cur_round)
@@ -794,11 +800,19 @@ async def _chat_stream_generator(
                 yield _sse("message_done", {"rounds": ev.get("rounds", 1),
                                             "stop_reason": ev.get("stop_reason", "end_turn"),
                                             "msg_id": _saved_msg_id})
-                return  # generator 结束，不再执行后续保存
+                return  # generator 结束
 
     except Exception as e:
         logger.error("流式聊天异常: %s", e)
-        # Session Resume：异常时标记 session poisoned，避免下次恢复到坏状态
+        try:
+            # 异常时保存已有的部分回复（防止用户输入丢失）
+            save_thinking_fb = _thinking_rounds if _thinking_rounds else (thinking_steps or None)
+            await _save_chat_message(project_id, "assistant",
+                                     full_text or "（对话异常中断）",
+                                     action=final_action, session_id=_sid,
+                                     thinking=save_thinking_fb)
+        except Exception as _sex:
+            logger.warning("异常兜底保存失败: %s", _sex)
         try:
             await db.execute(
                 "UPDATE chat_sessions SET last_status='poisoned', last_active_at=? WHERE id=?",
@@ -809,15 +823,22 @@ async def _chat_stream_generator(
         yield _sse("error", {"message": str(e)})
         return
 
-    # 异常路径兜底保存（message_done 未收到时）
-    if not full_text:
-        full_text = "操作已完成。"
-    try:
-        await _save_chat_message(project_id, "assistant", full_text,
-                                 action=final_action, session_id=_sid,
-                                 thinking=thinking_steps or None)
-    except Exception as e:
-        logger.warning("流式消息保存失败(兜底): %s", e)
+    finally:
+        # finally 兜底：message_done 没来 + 无异常时（generator 自然结束但无 message_done）
+        if not _msg_saved:
+            if not full_text:
+                full_text = "操作已完成。"
+            save_thinking_fin = _thinking_rounds if _thinking_rounds else (thinking_steps or None)
+            try:
+                await _save_chat_message(project_id, "assistant", full_text,
+                                         action=final_action, session_id=_sid,
+                                         thinking=save_thinking_fin)
+                await db.execute(
+                    "UPDATE chat_sessions SET last_status='completed', last_active_at=? WHERE id=?",
+                    (now_iso(), _sid),
+                )
+            except Exception as _fe:
+                logger.warning("finally 兜底保存失败: %s", _fe)
 
 
 def _sse(event: str, data: dict) -> bytes:
@@ -1839,7 +1860,11 @@ async def get_ticket_conversations(project_id: str, ticket_id: str):
 
             # 从 detail 提取摘要文字
             summary = detail_obj.get("message") or ""
-            files = detail_obj.get("files") or []
+            # 文件列表：优先完整相对路径（点击可定位），兜底 git_files（老日志）
+            files = (detail_obj.get("file_paths")
+                     or detail_obj.get("git_files")
+                     or detail_obj.get("files")
+                     or [])
             output_summary = detail_obj.get("output_summary") or ""
             errors_summary = detail_obj.get("errors_summary") or ""
 
@@ -1861,7 +1886,34 @@ async def get_ticket_conversations(project_id: str, ticket_id: str):
     except Exception as _le:
         logger.debug("合并 ticket_logs 失败（不影响主流）: %s", _le)
 
-    # 按时间排序，合并 LLM 对话和编排事件
+    # ── 合并 ticket_comments（人工评论 + Agent 回复）为独立聊天气泡 ──
+    # 不再把 reply 嵌进父评论；前后端都按时间序平铺成 user/assistant
+    try:
+        comments = await db.fetch_all(
+            """SELECT id, author, author_type, content, phase,
+                      reply_to_comment_id, created_at
+               FROM ticket_comments
+               WHERE ticket_id = ?
+               ORDER BY created_at ASC""",
+            (ticket_id,),
+        )
+        for c in comments:
+            chat_messages.append({
+                "id": c["id"],
+                "type": "comment",
+                "role": "user" if c["author_type"] == "human" else "assistant",
+                "author": c["author"],
+                "author_type": c["author_type"],
+                "content": c["content"] or "",
+                "phase": c["phase"],
+                "created_at": c["created_at"],
+                "ticket_id": ticket_id,
+                "is_comment": True,
+            })
+    except Exception as _ce:
+        logger.debug("合并 ticket_comments 失败（不影响主流）: %s", _ce)
+
+    # 按时间排序，合并 LLM 对话、编排事件、评论
     chat_messages.sort(key=lambda m: m.get("created_at") or "")
 
     return {
@@ -2370,6 +2422,28 @@ async def _save_images(project_id: str, images: list) -> list:
     return image_urls
 
 
+def _snapshot_llm_meta(role: str) -> dict:
+    """assistant 消息快照当时 LLM 配置；user 消息不写。"""
+    if role != "assistant":
+        return {"api_format": None, "cli_type": None, "llm_model": None}
+    try:
+        from llm_client import llm_client
+        api_format = getattr(llm_client, "api_format", None) or None
+        if api_format == "cli":
+            cli_type = getattr(llm_client, "cli_type", None) or None
+            model = (
+                getattr(llm_client, "cli_model", None)
+                or getattr(llm_client, "model", None)
+                or None
+            )
+        else:
+            cli_type = None
+            model = getattr(llm_client, "model", None) or None
+        return {"api_format": api_format, "cli_type": cli_type, "llm_model": model}
+    except Exception:
+        return {"api_format": None, "cli_type": None, "llm_model": None}
+
+
 async def _save_chat_message(
     project_id: str,
     role: str,
@@ -2397,6 +2471,8 @@ async def _save_chat_message(
     if role == "user":
         await _update_session_title_if_needed(eff_session, content)
 
+    llm_meta = _snapshot_llm_meta(role)
+
     await db.insert("chat_messages", {
         "id": msg_id,
         "project_id": project_id,
@@ -2407,6 +2483,9 @@ async def _save_chat_message(
         "images_json": json.dumps(image_urls, ensure_ascii=False) if image_urls else None,
         "thinking_json": json.dumps(thinking, ensure_ascii=False) if thinking else None,
         "session_id": eff_session,
+        "api_format": llm_meta["api_format"],
+        "cli_type": llm_meta["cli_type"],
+        "llm_model": llm_meta["llm_model"],
         "created_at": now_iso(),
     })
     # 更新会话 updated_at + message_count
@@ -2610,20 +2689,18 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
     # ── 路径检测预处理：消息是本地路径时直接触发 scan-directory，不依赖 LLM tool_use ──
     _path_action = await _detect_and_handle_path(expanded_message_g, projects)
     if _path_action:
-        import asyncio as _asyncio
         # 直接输出 action 卡片，跳过 LLM 调用
-        _asyncio.create_task(_save_chat_message("__global__", "user", req.message,
-                                 images=req.images, session_id=_sid))
+        await _save_chat_message("__global__", "user", req.message,
+                                 images=req.images, session_id=_sid)
         yield _sse("action", _path_action)
         yield _sse("message_done", {"full_text": "", "final_action": _path_action, "rounds": 0})
         return
 
     # ── 打开已有项目检测：「打开/进入 xxx 项目」直接跳转，跳过 LLM ──
-    import asyncio as _asyncio
     _open_action = await _detect_open_project(expanded_message_g, projects)
     if _open_action:
-        _asyncio.create_task(_save_chat_message("__global__", "user", req.message,
-                                 images=req.images, session_id=_sid))
+        await _save_chat_message("__global__", "user", req.message,
+                                 images=req.images, session_id=_sid)
         yield _sse("action", _open_action)
         yield _sse("message_done", {"full_text": "", "final_action": _open_action, "rounds": 0})
         return
@@ -2638,9 +2715,12 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
     async for _mcp_ev in _stream_mcp_status_events():
         yield _mcp_ev
 
-    # 保存用户消息（异步 fire-and-forget，不阻塞 LLM 响应）
-    _asyncio.create_task(_save_chat_message("__global__", "user", req.message,
-                             images=req.images, session_id=_sid))
+    # 保存用户消息（同步写入）
+    try:
+        await _save_chat_message("__global__", "user", req.message,
+                                 images=req.images, session_id=_sid)
+    except Exception as _ue2:
+        logger.warning("全局保存用户消息失败: %s", _ue2)
 
     try:
         async for ev in agent.chat_global_stream(

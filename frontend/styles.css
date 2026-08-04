@@ -1306,6 +1306,71 @@ body.chat-open #projectListPage {
 }
 .log-expand-err { color: var(--error, #fc8181) !important; }
 
+/* 编译/流程详情折叠块（时间轴 reject 等日志） */
+.log-compile-toggle {
+    font-size: 11px;
+    color: var(--warning, #f0a020);
+    opacity: 0.85;
+    cursor: pointer;
+    user-select: none;
+}
+.log-compile-toggle:hover { opacity: 1; }
+.compile-err-list {
+    flex: 1;
+    min-width: 0;
+    max-height: 200px;
+    overflow-y: auto;
+}
+.compile-err-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 6px;
+    padding: 2px 0;
+    font-size: 11px;
+    line-height: 1.5;
+}
+.compile-err-file {
+    color: var(--text-secondary, #a0aec0);
+    font-family: monospace;
+    font-size: 10px;
+    word-break: break-all;
+}
+.compile-err-code {
+    color: var(--error, #fc8181);
+    font-weight: 600;
+    font-size: 10px;
+}
+.compile-err-cat {
+    color: var(--text-muted, #718096);
+    font-size: 10px;
+    padding: 0 4px;
+    border: 1px solid var(--border, #2d3748);
+    border-radius: 3px;
+}
+.compile-err-msg {
+    color: var(--text, #e2e8f0);
+    flex: 1;
+    min-width: 120px;
+}
+.compile-warn-row .compile-err-msg { color: var(--warning, #f0a020); }
+.compile-raw-log {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    max-height: 220px;
+    overflow: auto;
+    font-family: monospace;
+    font-size: 10px;
+    line-height: 1.45;
+    white-space: pre-wrap;
+    word-break: break-all;
+    color: var(--text-secondary, #a0aec0);
+    background: var(--bg, #0d1117);
+    padding: 6px 8px;
+    border-radius: 4px;
+}
+
 .log-header {
     display: flex;
     align-items: center;
@@ -1491,6 +1556,30 @@ body.chat-open .drawer.docked {
 .tlb-harness .tlb-node.tlb-pending { color: var(--text-muted); }
 .tlb-harness .tlb-node.tlb-active  { background: rgba(59,130,246,.22); border-color: rgba(59,130,246,.5); color: #3b82f6; }
 .tlb-arrow { color: var(--text-muted); opacity: .4; font-size: 10px; }
+
+/* 可点击节点：跳转到时间轴对应记录 */
+.tlb-node.tlb-clickable { cursor: pointer; transition: filter .12s, box-shadow .12s; }
+.tlb-node.tlb-clickable:hover {
+    filter: brightness(1.25);
+    box-shadow: 0 0 0 1px currentColor inset;
+}
+.tlb-node.tlb-clickable::after {
+    content: '↗';
+    font-size: 8px;
+    opacity: .5;
+    margin-left: 2px;
+    vertical-align: super;
+}
+
+/* 时间轴条目跳转高亮闪烁 */
+@keyframes timeline-jump-flash {
+    0%   { background: rgba(124,106,247,.35); }
+    100% { background: transparent; }
+}
+.log-item.timeline-jump-highlight {
+    animation: timeline-jump-flash 1.6s ease-out;
+    border-radius: 4px;
+}
 
 /* 三层时间轴标注 */
 .log-item.layer-spec       { border-left: 2px solid rgba(168,85,247,0.35) !important; }
@@ -4754,6 +4843,95 @@ pre.hljs, .hljs pre { background: transparent !important; }
     word-break: break-all;
 }
 
+/* ==================== 工作路径卡片 ==================== */
+.working-path-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    margin-bottom: 6px;
+}
+.working-path-row:last-of-type { margin-bottom: 0; }
+.working-path-row .wp-badge {
+    flex-shrink: 0;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+.working-path-row .wp-badge.primary {
+    background: rgba(99,102,241,0.15);
+    color: var(--primary-light);
+}
+.working-path-row .wp-badge.extra {
+    background: rgba(16,185,129,0.12);
+    color: var(--success,#10b981);
+}
+.working-path-row .wp-path {
+    flex: 1;
+    min-width: 0;
+    font-size: 12px;
+    font-family: var(--font-mono, "Cascadia Code", Consolas, monospace);
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    word-break: break-all;
+}
+.working-path-row .wp-meta {
+    flex-shrink: 0;
+    font-size: 11px;
+    color: var(--text-muted);
+}
+.working-path-row .wp-actions {
+    flex-shrink: 0;
+    display: flex;
+    gap: 4px;
+}
+.working-path-row .wp-edit-input {
+    flex: 1;
+    min-width: 0;
+    padding: 4px 8px;
+    font-size: 12px;
+    font-family: var(--font-mono, "Cascadia Code", Consolas, monospace);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    outline: none;
+}
+.working-path-row .wp-edit-input:focus {
+    border-color: var(--primary-light);
+}
+.wp-add-area {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+    align-items: center;
+}
+.wp-add-area input {
+    flex: 1;
+    padding: 5px 8px;
+    font-size: 12px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    outline: none;
+}
+.wp-add-area input:focus {
+    border-color: var(--primary-light);
+}
+.wp-empty-state {
+    color: var(--text-muted);
+    font-size: 12px;
+    padding: 8px 0;
+}
+
 /* Agent 列表 */
 .agent-list {
     display: flex;
@@ -6435,6 +6613,22 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
 }
 .chat-job-header .job-close-btn:hover {
     color: var(--text);
+}
+.chat-job-header .job-tasks-btn {
+    font-size: 11px;
+    cursor: pointer;
+    color: var(--text-muted);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 2px 8px;
+    flex-shrink: 0;
+    white-space: nowrap;
+    transition: color .15s, border-color .15s;
+}
+.chat-job-header .job-tasks-btn:hover {
+    color: var(--primary-light, #a371f7);
+    border-color: var(--primary, #7c6af7);
 }
 
 /* 工单对话统一 Feed */

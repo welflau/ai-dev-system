@@ -2,13 +2,26 @@
 AI 自动开发系统 - 配置管理
 """
 import os
+import sys
 from pathlib import Path
 from dotenv import load_dotenv
 
-# 加载 .env 文件
-load_dotenv()
+# PyInstaller 打包后：资源在 sys._MEIPASS，可写数据放 exe 旁
+_FROZEN = getattr(sys, "frozen", False)
+if _FROZEN:
+    _MEIPASS = Path(sys._MEIPASS)
+    _APP_DIR = Path(sys.executable).resolve().parent
+    load_dotenv(_APP_DIR / ".env")
+    load_dotenv(_MEIPASS / ".env", override=False)
+    # 可写运行时目录（db / chat_images 等），避免写进只读解压区
+    BASE_DIR = _APP_DIR / "runtime"
+    BASE_DIR.mkdir(exist_ok=True)
+    _FRONTEND_DEFAULT = str(_MEIPASS / "frontend")
+else:
+    load_dotenv()
+    BASE_DIR = Path(__file__).resolve().parent
+    _FRONTEND_DEFAULT = str(BASE_DIR.parent / "frontend")
 
-BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
@@ -32,9 +45,13 @@ class Settings:
     LLM_MAX_RETRIES: int = int(os.getenv("LLM_MAX_RETRIES", "3"))
     LLM_API_FORMAT: str = os.getenv("LLM_API_FORMAT", "anthropic")  # anthropic / openai / cli
 
+    # OpenSpec 四件套生成：每件 LLM 调用的独立超时（秒）。
+    # LLM 资源被占时会排队，无上限会静默拖死后台 propose；超时则跳过该件继续。
+    OPENSPEC_ARTIFACT_TIMEOUT: int = int(os.getenv("OPENSPEC_ARTIFACT_TIMEOUT", "90"))
+
     # LLM CLI 模式（LLM_API_FORMAT=cli 时生效）
-    LLM_CLI_TYPE:    str = os.getenv("LLM_CLI_TYPE",    "claude")   # claude / codebuddy / custom
-    LLM_CLI_CMD:     str = os.getenv("LLM_CLI_CMD",     "claude")   # 可执行文件名或完整路径
+    LLM_CLI_TYPE:    str = os.getenv("LLM_CLI_TYPE",    "claude")   # claude / codebuddy / cursor / custom
+    LLM_CLI_CMD:     str = os.getenv("LLM_CLI_CMD",     "claude")   # 可执行文件名或完整路径（cursor 默认 agent）
     LLM_CLI_MODEL:   str = os.getenv("LLM_CLI_MODEL",   "")         # 留空则复用 LLM_MODEL
     LLM_CLI_TIMEOUT: int = int(os.getenv("LLM_CLI_TIMEOUT", "1800")) # 子进程超时（秒），UBT/hy3等长任务需要更长时间
 
@@ -46,8 +63,8 @@ class Settings:
     # 显式关闭：CHAT_USE_AGENT=0 / false / no
     CHAT_USE_AGENT: bool = os.getenv("CHAT_USE_AGENT", "true").lower() in ("1", "true", "yes")
 
-    # Frontend
-    FRONTEND_DIR: str = str(BASE_DIR.parent / "frontend")
+    # Frontend（打包后指向 _MEIPASS/frontend）
+    FRONTEND_DIR: str = os.getenv("FRONTEND_DIR", _FRONTEND_DEFAULT)
 
     # 全局设计知识库（G_DesignKnowledge）
     GLOBAL_KNOWLEDGE_REPO_URL: str = os.getenv("GLOBAL_KNOWLEDGE_REPO_URL", "")

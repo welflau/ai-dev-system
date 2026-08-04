@@ -159,8 +159,8 @@ LLM_MODEL=claude-sonnet-4-5
 
 # CLI 模式（本地命令行工具，可选）
 # LLM_API_FORMAT=cli
-# LLM_CLI_TYPE=claude          # claude / claude-internal / gemini-internal / codebuddy / custom
-# LLM_CLI_CMD=claude
+# LLM_CLI_TYPE=claude          # claude / claude-internal / gemini-internal / codebuddy / cursor / custom
+# LLM_CLI_CMD=claude           # cursor 时填 agent 或 cursor-agent
 # LLM_CLI_MODEL=claude-sonnet-4-5
 ```
 

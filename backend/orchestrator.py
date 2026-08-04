@@ -126,6 +126,23 @@ class TicketOrchestrator:
 
     # ==================== v0.17 Phase C''：项目级 SOP 规则 ====================
 
+    # 非代码工单关键词：命中则跳过 UE 引擎编译（无可编译 C++）
+    _NONCODE_TICKET_KEYWORDS = (
+        "验证 openspec", "openspec 流程", "验证流程", "跑通流程", "流程验证",
+        "测试流程", "件套", "冒烟", "验证钩子", "钩子验证", "端到端",
+        "验证 propose", "propose 流程", "流程测试", "验收流程",
+    )
+
+    def _is_noncode_ticket(self, ticket: Dict) -> bool:
+        """启发式判断工单是否为"非代码验证/流程类"（无可编译产物）。
+
+        用于让 engine_compile fragment 对这类工单跳过——它们描述的是"验证某流程
+        跑通"而非"实现某功能"，硬跑 UBT 编译只会空转报错。
+        仅按标题+描述关键词匹配，宁可漏跳（真实代码工单照常编译）也不误跳。
+        """
+        text = f"{ticket.get('title', '')} {ticket.get('description', '')}".lower()
+        return any(kw in text for kw in self._NONCODE_TICKET_KEYWORDS)
+
     async def _get_rules_for_project(
         self,
         project_id: str,
@@ -1319,9 +1336,80 @@ class TicketOrchestrator:
                 # 终态或无规则，不处理
                 return
 
+            # ── P0：max_retries 止损 ──────────────────────────────────
+            # reject 回跳规则（如 engine_compile_failed → fix_issues）带 _rework_source_stage
+            # 和 config.max_retries。若该失败状态已连续触发超过上限，直接 blocked，
+            # 停止 develop↔compile_failed 无限循环烧 token（实测踩过 4 轮空转坑）。
+            rework_source = rule.get("_rework_source_stage")
+            max_retries = int((rule.get("config") or {}).get("max_retries") or 0)
+            if rework_source and max_retries > 0:
+                cnt_row = await db.fetch_one(
+                    """SELECT COUNT(*) AS c FROM ticket_logs
+                       WHERE ticket_id = ? AND action = 'reject' AND to_status = ?""",
+                    (ticket_id, current_status),
+                )
+                reject_cnt = (cnt_row or {}).get("c", 0) or 0
+                if reject_cnt >= max_retries:
+                    logger.warning(
+                        "🛑 工单 %s 在 %s 已 reject %d 次（≥max_retries=%d），blocked 止损",
+                        ticket_id[:12], current_status, reject_cnt, max_retries,
+                    )
+                    await db.update("tickets", {
+                        "status": TicketStatus.BLOCKED.value,
+                        "updated_at": now_iso(),
+                    }, "id = ?", (ticket_id,))
+                    await self._log(
+                        project_id, ticket["requirement_id"], ticket_id, "Orchestrator",
+                        "blocked", current_status, TicketStatus.BLOCKED.value,
+                        f"「{current_status}」已连续失败 {reject_cnt} 次（上限 {max_retries}），"
+                        f"停止自动重试，转人工介入。反复重试同一失败通常是环境/需求问题，"
+                        f"继续重试只会空转烧 token。",
+                        "warning",
+                        detail_data={"reject_count": reject_cnt, "max_retries": max_retries,
+                                     "source_stage": rework_source, "failed_status": current_status},
+                    )
+                    await event_manager.publish_to_project(
+                        project_id, "ticket_blocked",
+                        {"ticket_id": ticket_id, "from": current_status,
+                         "to": TicketStatus.BLOCKED.value, "reason": "max_retries_exceeded"},
+                    )
+                    return
+
             agent_name = rule["agent"]
             action = rule["action"]
             next_status = rule.get("next_status")
+
+            # ── P1：非代码工单跳过 UE 引擎编译 ──────────────────────────
+            # engine_compile fragment 对所有工单触发，但"验证 OpenSpec 流程 / 跑通某流程 /
+            # 测试 N 件套"这类非代码工单没有可编译的 C++，硬编译只会空转报错。
+            # 启发式：标题+描述命中非代码关键词 → 跳过编译，直接推进到 engine_compile_passed。
+            if action == "run_engine_compile" and self._is_noncode_ticket(ticket):
+                skip_to = "engine_compile_passed"
+                await db.update("tickets", {
+                    "status": skip_to,
+                    "assigned_agent": agent_name,
+                    "updated_at": now_iso(),
+                }, "id = ?", (ticket_id,))
+                await self._log(
+                    project_id, ticket["requirement_id"], ticket_id, "Orchestrator",
+                    "skip", current_status, skip_to,
+                    f"检测到非代码工单（验证/流程类，无可编译 C++），跳过 UE 引擎编译，"
+                    f"直接进入后续阶段。",
+                    "info",
+                    detail_data={"skipped_action": "run_engine_compile",
+                                 "reason": "noncode_ticket",
+                                 "title": ticket.get("title", "")[:80]},
+                )
+                await event_manager.publish_to_project(
+                    project_id, "ticket_status_changed",
+                    {"ticket_id": ticket_id, "from": current_status, "to": skip_to,
+                     "agent": "Orchestrator"},
+                )
+                logger.info("⏭ 工单 %s 非代码，跳过 engine_compile → %s",
+                            ticket_id[:12], skip_to)
+                # 触发下一步流转
+                asyncio.create_task(self.process_ticket(project_id, ticket_id))
+                return
 
             agent = self.agents.get(agent_name)
             if not agent:
@@ -1915,6 +2003,9 @@ class TicketOrchestrator:
                             "duration_ms": result.get("duration_ms"),
                             "command": result.get("command"),
                             "err_brief": err_brief,
+                            # 原始 UBT stdout 末尾（供前端"原始 raw log"折叠块展示）。
+                            # errors=[] 但 exit!=0 时尤其有用——此时唯一的诊断线索就在这里。
+                            "raw_tail": (result.get("raw_tail") or "")[-4000:],
                         },
                     )
                     # v0.19.x：编译失败自动创建 Bug 记录（走正式 Bug 流程）
@@ -1978,12 +2069,17 @@ class TicketOrchestrator:
                 "updated_at": now_iso(),
             }, "id = ?", (ticket_id,))
 
+            # develop/rework 产出文件列表（供时间轴/会话文件链接渲染）
+            _dev_files = list((result.get("files") or {}).keys())
+            _dev_file_names = [p.replace("\\", "/").split("/")[-1] for p in _dev_files]
             await self._log(
                 project_id, requirement_id, ticket_id, agent_name,
                 "complete", current_status, new_status,
                 f"开发完成 | 自测: {test_summary}",
                 detail_data={
                     "files_count": len(result.get("files", {})),
+                    "files": _dev_file_names[:50],       # 文件名（chip 显示）
+                    "file_paths": _dev_files[:50],        # 完整相对路径（点击定位）
                     "result_summary": str(result.get("dev_result", {}).get("notes", ""))[:500],
                     "self_test": self_test,
                     "git_commit": git_result.get("commit_hash") if git_result else None,
@@ -3896,12 +3992,23 @@ class TicketOrchestrator:
                 "不要用 markdown 标题，直接用自然语言。"
             )
 
-            from llm_client import llm_client
-            reply_text = await llm_client.generate(
-                prompt,
-                max_tokens=400,
-                temperature=0.5,
+            from llm_client import llm_client, set_llm_context, clear_llm_context
+            # 必须带上 ticket/project，chat() 才会走流式并推 ticket_llm_token
+            set_llm_context(
+                ticket_id=ticket_id,
+                requirement_id=ticket.get("requirement_id"),
+                project_id=project_id,
+                agent_type=agent_name,
+                action="reply_to_comment",
             )
+            try:
+                reply_text = await llm_client.generate(
+                    prompt,
+                    max_tokens=400,
+                    temperature=0.5,
+                )
+            finally:
+                clear_llm_context()
 
             if reply_text and reply_text.strip():
                 await self._write_phase_comment(

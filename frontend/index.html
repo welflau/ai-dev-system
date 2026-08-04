@@ -2018,6 +2018,7 @@
                                     <option value="tclaude">TClaude 内网版（tclaude）</option>
                                     <option value="gemini-internal">Gemini 内网版（gemini-internal）</option>
                                     <option value="codebuddy">CodeBuddy（codebuddy）</option>
+                                    <option value="cursor">Cursor Agent（agent）</option>
                                     <option value="custom">自定义（stdin 传入）</option>
                                 </select>
                             </div>
@@ -2027,10 +2028,17 @@
                                 <p style="font-size:11px; color:var(--text-muted); margin-top:4px;">已在 PATH 中可直接写名称，否则填完整路径</p>
                             </div>
                             <div class="form-group">
-                                <label>模型</label>
+                                <label style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+                                    <span>模型</span>
+                                    <button type="button" id="llmCliModelRefreshBtn" class="btn btn-sm"
+                                            onclick="refreshCliModels()"
+                                            title="从本地 CLI 重新查询可用模型"
+                                            style="font-size:11px;padding:2px 8px;white-space:nowrap;">↻ 刷新</button>
+                                </label>
                                 <select id="llmCliModelSelect" style="width:100%; padding:8px; background:var(--bg); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text);"></select>
                                 <input type="text" id="llmCliModelCustom" placeholder="填写模型名称"
                                        style="display:none; margin-top:6px; width:100%; padding:8px; background:var(--bg); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text); box-sizing:border-box;">
+                                <p id="llmCliModelRefreshHint" style="font-size:11px;color:var(--text-muted);margin-top:4px;display:none;"></p>
                             </div>
                             <div class="form-group">
                                 <label>CLI 超时（秒）</label>
@@ -2158,7 +2166,7 @@
     <!-- ==================== Toast 通知 ==================== -->
     <div class="toast-container" id="toastContainer"></div>
 
-    <script src="/static/app.js?v=20260625i"></script>
+    <script src="/static/app.js?v=20260804b"></script>
 </body>
 </html>
 
