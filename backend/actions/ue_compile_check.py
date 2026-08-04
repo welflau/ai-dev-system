@@ -447,18 +447,33 @@ class UECompileCheckAction(ActionBase):
         tail = text[-8192:] if len(text) > 8192 else ""
         # 状态语义（关键）：
         # - success        UBT exit=0 且无 errors
-        # - compile_failed UBT 真跑了但编译失败（有 errors 或 exit!=0 带输出）
+        # - compile_failed UBT 真跑了但编译失败（有 errors，或 exit!=0 且有输出可诊断）
         #   → orchestrator 会走 reject_goto: development 链路触发 fix_issues 修复
-        # - error（保留给 Action 早期返回）UBT 没启动 / uproject 找不到等环境问题
-        #   → orchestrator 走 BLOCKED 人工介入
+        # - error          环境级失败：UBT 没启动 / uproject 找不到 / exit!=0 但零输出
+        #   → orchestrator 走 BLOCKED 人工介入（不触发无意义的 fix_issues 循环）
+        #
+        # 零输出 exit!=0 单独判 error 的原因（实测踩坑）：
+        #   UBA 子进程 / mutex / 环境问题会让 UBT 以非 0 退出却一行 stdout 都没有，
+        #   errors 解析出来是空。若仍判 compile_failed，fix_issues 拿不到任何错误信息，
+        #   LLM 反思只能空转，工单在 develop↔compile_failed 间无限循环烧 token 后才 blocked。
+        #   直接判环境级 error，第一时间 blocked 人工介入，止血。
+        no_output = not text.strip()
         if exit_code == 0 and not errors:
             status = "success"
+        elif exit_code != 0 and not errors and no_output:
+            status = "error"
         else:
             status = "compile_failed"
 
         logger.info(
-            "🔧 UBT done: exit=%d errors=%d warnings=%d duration=%.1fs",
-            exit_code, len(errors), len(warnings), duration_ms / 1000.0,
+            "🔧 UBT done: exit=%d errors=%d warnings=%d duration=%.1fs status=%s",
+            exit_code, len(errors), len(warnings), duration_ms / 1000.0, status,
+        )
+
+        env_err_msg = (
+            f"UBT 异常退出（exit={exit_code}）但无任何 stdout 输出，"
+            f"疑似 UBA 子进程 / mutex / 引擎环境问题，非代码编译错误。"
+            f"命令: {cmd_str}"
         )
 
         data: Dict[str, Any] = {
@@ -480,16 +495,22 @@ class UECompileCheckAction(ActionBase):
             "target_platform": platform,
             "target_config": config_name,
         }
+        # 环境级 error 时把诊断信息透传给 orchestrator 的 BLOCKED 分支（读 message/error）
+        if status == "error":
+            data["message"] = env_err_msg
+            data["error"] = env_err_msg
 
-        msg = (
-            f"编译通过（耗时 {duration_ms // 1000}s）"
-            if status == "success"
-            else f"编译失败（{len(errors)} 个 error, {len(warnings)} 个 warning）"
-        )
+        if status == "success":
+            msg = f"编译通过（耗时 {duration_ms // 1000}s）"
+        elif status == "error":
+            msg = env_err_msg
+        else:
+            msg = f"编译失败（{len(errors)} 个 error, {len(warnings)} 个 warning）"
         return ActionResult(
             success=(status == "success"),
             data=data,
             message=msg,
+            error=(env_err_msg if status == "error" else None),
         )
 
 

@@ -132,9 +132,15 @@ class DeployAgent(BaseAgent):
             if not cli:
                 return
 
+            from capability_check import _short_ticket_id
+            change_id = _short_ticket_id(ticket_id)
+            if not change_id:
+                return
+
             import asyncio
+            # OpenSpec archive 需要 change_id（短工单 id）+ -y 跳过确认
             proc = await asyncio.create_subprocess_shell(
-                f"{cli} archive",
+                f"{cli} archive {change_id} -y",
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
                 cwd=repo_path, stdin=asyncio.subprocess.PIPE,
             )
@@ -150,8 +156,7 @@ class DeployAgent(BaseAgent):
 
             from database import db
             from utils import now_iso
-            from orchestrator import Orchestrator
-            orch = Orchestrator()
+            from orchestrator import orchestrator as orch
             if rc == 0:
                 await db.execute(
                     "UPDATE tickets SET openspec_stage='archived', updated_at=? WHERE id=?",

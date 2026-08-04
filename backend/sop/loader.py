@@ -395,6 +395,13 @@ def sop_to_transition_rules(config: Dict[str, Any]) -> Dict[str, Dict]:
         if reject_status and reject_goto and reject_status not in rules:
             goto_stage = stages_by_id.get(reject_goto)
             if goto_stage:
+                # config 以 goto 阶段为基（development 的 timeout 等），
+                # 但 max_retries 语义属于"失败源阶段"（如 engine_compile 声明 max_retries:3），
+                # 需从 source stage.config 提取并覆盖进来，供 orchestrator 止损判断读取。
+                reject_config = dict(goto_stage.get("config", {}))
+                src_max_retries = (stage.get("config") or {}).get("max_retries")
+                if src_max_retries is not None:
+                    reject_config["max_retries"] = src_max_retries
                 rules[reject_status] = {
                     "agent": goto_stage.get("agent", "DevAgent"),
                     # fix_issues 是 DevAgent 的反思修复 action；若 goto 的 agent 不是
@@ -402,7 +409,7 @@ def sop_to_transition_rules(config: Dict[str, Any]) -> Dict[str, Dict]:
                     "action": "fix_issues" if goto_stage.get("agent") == "DevAgent"
                               else goto_stage.get("action", "fix_issues"),
                     "next_status": _get_next_status(goto_stage),
-                    "config": goto_stage.get("config", {}),
+                    "config": reject_config,
                     "_rework_source_stage": stage.get("id"),
                     "_rework_goto_stage": reject_goto,
                 }

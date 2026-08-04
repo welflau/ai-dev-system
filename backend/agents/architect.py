@@ -53,8 +53,7 @@ class ArchitectAgent(BaseAgent):
             project_id = context.get("project_id", "")
             if not ticket_id or not project_id:
                 return
-            from orchestrator import Orchestrator
-            orch = Orchestrator()
+            from orchestrator import orchestrator as orch
             # 从产出文件里找架构文档路径
             artifacts = result.get("artifacts") or []
             arch_file = next(
@@ -75,8 +74,16 @@ class ArchitectAgent(BaseAgent):
 
     async def _run_openspec_propose(self, context: Dict[str, Any]) -> None:
         """
-        触发 opsx:propose，生成 proposal/specs/design/tasks 四件套。
-        项目未安装 OpenSpec 时静默跳过，不影响主流程。
+        OpenSpec 变更提案：生成 proposal/specs/design/tasks 四件套。
+
+        v0.21：改由通用 SkillRunner 驱动 —— 加载 `openspec-propose` 可执行 skill，
+        把 openspec-cn 的 new change / instructions / validate 声明成 LLM 工具 +
+        write_file，让 LLM 自主按 skill 步骤跑完。取代原先硬编码的
+        `_fill_openspec_4_artifacts`（new→instructions→generate→write→validate 写死）。
+
+        保留全部可见性：openspec_propose_started 日志 + milestone、每次工具调用的
+        react_tool 时间轴、write_file → openspec_artifact 日志、partial/完成收尾、
+        openspec_stage 更新。项目未安装 OpenSpec 时静默跳过。
         """
         try:
             project_id = context.get("project_id", "")
@@ -85,82 +92,123 @@ class ArchitectAgent(BaseAgent):
                 logger.debug("_run_openspec_propose 跳过：缺 project_id 或 ticket_id")
                 return
 
-            from capability_check import has_openspec, get_openspec_cli, _get_repo_path
+            from capability_check import get_openspec_cli, _get_repo_path, _short_ticket_id
             repo_path = context.get("repo_path") or await _get_repo_path(project_id)
             if not repo_path:
-                logger.info("_run_openspec_propose 跳过：项目无 repo_path（未设置本地路径）")
+                logger.info("_run_openspec_propose 跳过：项目无 repo_path")
                 return
 
-            openspec_ok = await has_openspec(project_id, repo_path)
-            logger.info(
-                "OpenSpec 检测：repo=%s cli=%s initialized=%s",
-                repo_path, get_openspec_cli(), openspec_ok,
-            )
-            if not openspec_ok:
-                logger.info("_run_openspec_propose 跳过：OpenSpec 未安装或未初始化（请先执行 openspec init）")
+            from skills.executable_loader import load_executable_skill
+            from skills.runner import SkillRunner
+            skill = load_executable_skill("openspec-propose", repo_path=repo_path)
+            if not skill:
+                logger.warning("_run_openspec_propose 跳过：openspec-propose skill 未找到")
+                return
+            runner = SkillRunner(skill)
+
+            # 可用性检查（skill.availability = [has_openspec]）
+            if not await runner.is_available({"project_id": project_id, "repo_path": repo_path}):
+                logger.info("_run_openspec_propose 跳过：OpenSpec 未安装或未初始化")
                 return
 
             cli = get_openspec_cli()
-            if not cli:
+            change_id = _short_ticket_id(ticket_id)
+            if not cli or not change_id:
                 return
 
-            ticket_title = context.get("ticket_title", "")
-            ticket_desc = (context.get("ticket_description") or "")[:150]
-            propose_arg = f"{ticket_title}: {ticket_desc}".strip(": ")
+            ticket_title = (context.get("ticket_title") or "")[:100]
+            ticket_desc = (context.get("ticket_description") or "")[:200]
+            goal = f"{ticket_title}: {ticket_desc}".strip(": ")
 
-            logger.info("📐 [规范层] OpenSpec Propose: %s", propose_arg[:60])
-
-            import asyncio
-            import sys
-            cmd = f'{cli} propose "{propose_arg}"' if sys.platform == "win32" else None
-            proc = await asyncio.create_subprocess_shell(
-                cmd or f'{cli} propose "{propose_arg}"',
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-                cwd=repo_path,
-                stdin=asyncio.subprocess.PIPE,
-            )
-            if proc.stdin:
-                proc.stdin.write(b"\n\n\n\n\n")
-                await proc.stdin.drain()
-                proc.stdin.close()
-
+            # 拿 project traits（供 skill system 里参考）
+            from database import db
+            from utils import now_iso
+            project_traits = []
             try:
-                stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=60)
-                output = stdout.decode("utf-8", errors="replace")[:500] if stdout else ""
-                rc = proc.returncode
-            except asyncio.TimeoutError:
-                proc.kill()
-                output = "(超时)"
-                rc = -1
+                row = await db.fetch_one("SELECT traits FROM projects WHERE id=?", (project_id,))
+                if row and row.get("traits"):
+                    import json as _json
+                    project_traits = _json.loads(row["traits"])
+            except Exception:
+                pass
 
-            from orchestrator import Orchestrator
-            orch = Orchestrator()
+            # 预填命令主干参数 + 上下文（LLM 只需填 instructions 的 artifact 槽）
+            run_ctx = {
+                **context,
+                "cli": cli, "change_id": change_id,
+                "goal": goal, "desc": ticket_title or change_id,
+                "repo_path": repo_path, "project_id": project_id, "ticket_id": ticket_id,
+                "ticket_title": ticket_title, "ticket_description": ticket_desc,
+                "project_traits": project_traits,
+            }
 
-            if rc == 0:
-                # 更新工单 openspec_stage
-                from database import db
-                from utils import now_iso
-                await db.execute(
-                    "UPDATE tickets SET openspec_stage='proposed', updated_at=? WHERE id=?",
-                    (now_iso(), ticket_id),
-                )
-                await orch.post_milestone_comment(
-                    ticket_id, project_id,
-                    f"📐 [规范层] **OpenSpec Propose 完成** — specs/design/tasks 已生成。\n"
-                    f"文件位置：`openspec/changes/{ticket_id}/`",
-                )
-                await orch._add_layer_log(
-                    ticket_id, project_id, action="openspec_propose",
-                    layer="spec", detail={"rc": rc, "output": output[:200]},
-                )
-                logger.info("📐 OpenSpec Propose 成功（ticket=%s）", ticket_id[:12])
-            else:
-                logger.warning("📐 OpenSpec Propose 失败 rc=%d: %s", rc, output[:200])
-                await orch._add_layer_log(
-                    ticket_id, project_id, action="openspec_propose_failed",
-                    layer="spec", detail={"rc": rc, "output": output[:200]},
-                )
+            logger.info("📐 [规范层] OpenSpec Propose (SkillRunner): change=%s", change_id)
+
+            from orchestrator import orchestrator as orch
+            # started 记录（不依赖 LLM，先落，保证可见）
+            await db.execute(
+                "UPDATE tickets SET openspec_stage='proposed', updated_at=? WHERE id=?",
+                (now_iso(), ticket_id),
+            )
+            await orch._add_layer_log(
+                ticket_id, project_id, action="openspec_propose_started", layer="spec",
+                detail={"change_id": change_id,
+                        "message": f"OpenSpec change 目录（{change_id}）Propose 已启动，正在生成 4 件套…"},
+            )
+            await orch.post_milestone_comment(
+                ticket_id, project_id,
+                f"📐 [规范层] **OpenSpec Propose 已启动** — 由 SkillRunner 驱动生成 "
+                f"proposal/specs/design/tasks 4 件套（change `{change_id}`，需调用 LLM，可能稍候）…",
+            )
+
+            # 每次工具调用 → react_tool 时间轴；write_file → 额外 openspec_artifact 日志
+            async def on_tool(ev):
+                try:
+                    await self._emit_react_tool(
+                        project_id, context.get("requirement_id"), ticket_id,
+                        ev.tool, ev.args_hint, ev.duration_ms,
+                        output_summary=(ev.result or "")[:500], summary=ev.summary or "",
+                    )
+                except Exception:
+                    pass
+                if ev.tool == "write_file":
+                    try:
+                        await orch._add_layer_log(
+                            ticket_id, project_id, action="openspec_artifact", layer="spec",
+                            detail={"change_id": change_id,
+                                    "message": f"OpenSpec 产出已写入：{ev.args_hint or ev.summary or ''}"},
+                        )
+                    except Exception:
+                        pass
+
+            result = await runner.execute(run_ctx, on_tool=on_tool)
+
+            # 收尾：按回收到的产出文件判 partial（漏 validate 也如实反映）
+            ok_count = len(result.outputs)
+            expected = skill.expected_output_count or 4
+            is_partial = (result.status != "success") or (ok_count < expected)
+            got = set(result.outputs.keys())
+            def _mark(fn): return "✅" if fn in got else "❌"
+            artifact_summary = (
+                f"📐 [规范层] **OpenSpec Propose {'部分完成' if is_partial else '完成'}** — "
+                f"{ok_count}/{expected} 件套已生成。\n"
+                f"文件位置：`openspec/changes/{change_id}/`\n"
+                f"- proposal: {_mark('proposal.md')}\n"
+                f"- specs:    {_mark('specs.md')}\n"
+                f"- design:   {_mark('design.md')}\n"
+                f"- tasks:    {_mark('tasks.md')}\n"
+                f"运行状态：{result.status}（{result.rounds} 轮）"
+            )
+            await orch.post_milestone_comment(ticket_id, project_id, artifact_summary)
+            await orch._add_layer_log(
+                ticket_id, project_id,
+                action="openspec_propose_partial" if is_partial else "openspec_propose",
+                layer="spec", level="warning" if is_partial else "info",
+                detail={"change_id": change_id, "outputs": list(got),
+                        "ok_count": ok_count, "status": result.status, "rounds": result.rounds},
+            )
+            logger.info("📐 OpenSpec Propose %s（ticket=%s, change=%s, %d/%d, status=%s）",
+                        "部分完成" if is_partial else "成功",
+                        ticket_id[:12], change_id, ok_count, expected, result.status)
         except Exception as e:
             logger.warning("_run_openspec_propose 异常: %s", e, exc_info=True)
-

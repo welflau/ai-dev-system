@@ -18,7 +18,10 @@ class SpecVersionManager:
     def __init__(self, ticket_id: str, repo_path: str):
         self.ticket_id = ticket_id
         self.repo_path = repo_path
-        self.specs_path = Path(repo_path) / "openspec" / "changes" / ticket_id / "specs.md"
+        # 用短 id 作为 OpenSpec change 目录名（与 capability_check._short_ticket_id 保持一致：带 c- 前缀）
+        from capability_check import _short_ticket_id
+        short_id = _short_ticket_id(ticket_id)
+        self.specs_path = Path(repo_path) / "openspec" / "changes" / short_id / "specs.md"
         self.changes_dir = self.specs_path.parent
 
     def read_current_specs(self) -> Optional[str]:

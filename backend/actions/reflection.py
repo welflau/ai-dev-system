@@ -163,6 +163,32 @@ class ReflectionAction(ActionBase):
         compile_warnings = context.get("compile_warnings") or []
         compile_cmd = context.get("compile_command") or ""
 
+        # P2：编译失败但拿不到任何结构化 error（UBT 零输出 / UBA / mutex / 环境问题）。
+        # 此时失败信号为空，硬喂给 LLM 只会"编空气"——它会抓着工单描述瞎猜（实测跑题到
+        # OpenSpec 流程）。直接返回低置信度最小反思，指向环境排查，不浪费 LLM 调用。
+        # 注：P0 已让 UBT 零输出判 error→blocked，正常不会走到这里；此为防御性兜底
+        # （例如 compile_failed 有 errors 但未透传、或 fix_issues 被手动触发的场景）。
+        if failure_type == "engine_compile_failed" and not compile_errors:
+            logger.warning("Reflection: engine_compile_failed 但无 compile_errors，返回环境问题最小反思")
+            reflection = {
+                "root_cause": "编译失败但未捕获到任何结构化错误信息，疑似环境级问题"
+                              "（UBT 零输出 / UBA 子进程 / mutex / 引擎路径），而非代码语法错误。",
+                "missed_requirements": [],
+                "previous_attempt_issue": "上一次编译没有产生可解析的 error 输出，无法定位代码问题。",
+                "strategy_change": "先排查引擎/构建环境（确认 UBT 可正常启动、无残留 mutex、"
+                                   "引擎版本与 .uproject 匹配），而非盲目改代码。建议人工介入检查。",
+                "specific_changes": [
+                    "检查 UnrealBuildTool 是否能独立运行（手动执行编译命令看 stdout）",
+                    "确认无残留 UBA/编译进程占用 mutex",
+                    "核对引擎版本与 EngineAssociation 一致",
+                ],
+                "confidence": 0.2,
+            }
+            return ActionResult(
+                success=True,
+                data={"reflection": reflection, "retry_count": retry_count},
+            )
+
         if failure_type == "acceptance_rejected":
             failure_signal = f"ProductAgent 验收不通过。理由：\n{rejection_reason}"
         elif failure_type == "testing_failed":

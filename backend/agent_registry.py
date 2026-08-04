@@ -81,6 +81,7 @@ def _register_builtin_agents():
     from agents.deploy import DeployAgent
     from agents.chat_assistant import ChatAssistantAgent
     from agents.ue_editor import UEEditorAgent           # B-3
+    from agents.skill_agent import SkillAgent            # 通用 skill 执行
 
     builtin = {
         "ProductAgent": ProductAgent,
@@ -94,6 +95,7 @@ def _register_builtin_agents():
         "DeployAgent": DeployAgent,
         "ChatAssistant": ChatAssistantAgent,
         "UEEditorAgent": UEEditorAgent,                  # B-3 UE 內容創作
+        "SkillAgent": SkillAgent,                        # 通用 skill 执行（SOP stage.config.skill_id）
     }
     for name, cls in builtin.items():
         if name not in _REGISTRY:

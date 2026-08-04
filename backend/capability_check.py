@@ -62,9 +62,24 @@ def get_openspec_cli() -> Optional[str]:
     return None
 
 
+def _short_ticket_id(ticket_id: str) -> str:
+    """工单 → OpenSpec change 名（短 id + 前缀，符合 OpenSpec 命名规范）
+
+    OpenSpec 限制：必须以字母开头，不能含下划线。
+    所以一律加 `c-` 前缀（change 的简写）。
+
+    例：TK-20260731-049479 → c-049479
+         TK-20260722-5b14d7 → c-5b14d7
+    """
+    if not ticket_id:
+        return ""
+    short = ticket_id.rsplit("-", 1)[-1]
+    return f"c-{short}"
+
+
 def get_ticket_specs_path(repo_path: str, ticket_id: str) -> Path:
-    """返回该工单的 OpenSpec specs 文件路径"""
-    return Path(repo_path) / "openspec" / "changes" / ticket_id / "specs.md"
+    """返回该工单的 OpenSpec specs 文件路径（用短 id 匹配 change 目录）"""
+    return Path(repo_path) / "openspec" / "changes" / _short_ticket_id(ticket_id) / "specs.md"
 
 
 def ticket_has_specs(repo_path: str, ticket_id: str) -> bool:

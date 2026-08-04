@@ -104,11 +104,15 @@ async def run_openspec_command(project_id: str, req: RunCommandRequest):
     # init 命令有交互式 harness 选择器，自动注入 Enter 键序列确认默认选择
     # 默认已选 Claude Code + CodeBuddy，多个 \n 覆盖所有可能的交互提示
     stdin_input = None
-    if req.command.startswith("init"):
+    is_init = req.command.startswith("init")
+    if is_init:
         stdin_input = b"\n\n\n\n\n"  # 多次 Enter，确认所有交互提示
 
     return StreamingResponse(
-        _stream_command(cmd_args, cwd, stdin_input=stdin_input),
+        _stream_command(
+            cmd_args, cwd, stdin_input=stdin_input,
+            commit_openspec_after=is_init,
+        ),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -125,7 +129,10 @@ async def get_ticket_openspec(project_id: str, ticket_id: str):
     if not repo_path:
         raise HTTPException(404, "项目无本地路径")
 
-    spec_dir = Path(repo_path) / "openspec" / "changes" / ticket_id
+    # 用工单短 id 匹配 change 目录（与写入侧 capability_check._short_ticket_id 一致：带 c- 前缀）
+    from capability_check import _short_ticket_id
+    change_id = _short_ticket_id(ticket_id)
+    spec_dir = Path(repo_path) / "openspec" / "changes" / change_id
     if not spec_dir.exists():
         return {
             "initialized": False,
@@ -163,10 +170,30 @@ async def get_ticket_openspec(project_id: str, ticket_id: str):
     }
 
 
-async def _stream_command(cmd_args: list, cwd: str | None, stdin_input: bytes = None):
+async def _commit_openspec_dir(cwd: str) -> None:
+    """openspec init 成功后把 openspec/ 纳入 git 追踪并提交，防止 git clean 误删。"""
+    try:
+        proc = await asyncio.create_subprocess_shell(
+            "git add openspec/ && git diff --cached --quiet || git commit -m \"chore: init openspec config\"",
+            cwd=cwd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        await proc.communicate()
+        logger.info("openspec/ 已纳入 git 追踪并提交（cwd=%s）", cwd)
+    except Exception as e:
+        logger.warning("openspec git commit 失败（非致命）: %s", e)
+
+
+async def _stream_command(
+    cmd_args: list,
+    cwd: str | None,
+    stdin_input: bytes = None,
+    commit_openspec_after: bool = False,
+):
     """运行子进程，逐行 yield SSE 事件。
 
-    stdin_input: 可选的 stdin 字节流，用于自动回答交互提示（如 openspec init 的 harness 选择）。
+    commit_openspec_after: init 命令成功后自动把 openspec/ 提交进 git，防止 git clean 删除。
     """
 
     def _sse(event: str, data: dict) -> bytes:
@@ -180,7 +207,6 @@ async def _stream_command(cmd_args: list, cwd: str | None, stdin_input: bytes = 
         stdin_mode = asyncio.subprocess.PIPE if stdin_input else asyncio.subprocess.DEVNULL
 
         if use_shell:
-            import subprocess
             cmd_str = " ".join(cmd_args)
             proc = await asyncio.create_subprocess_shell(
                 cmd_str,
@@ -215,6 +241,9 @@ async def _stream_command(cmd_args: list, cwd: str | None, stdin_input: bytes = 
         rc = await proc.wait()
         yield _sse("done", {"exit_code": rc, "success": rc == 0})
 
+        if rc == 0 and commit_openspec_after and cwd:
+            asyncio.create_task(_commit_openspec_dir(cwd))
+
     except FileNotFoundError as e:
         yield _sse("error", {"message": f"命令未找到: {e}"})
     except Exception as e:
@@ -238,7 +267,9 @@ async def get_ticket_spec_versions(project_id: str, ticket_id: str):
     # 从文件系统读备份文件内容
     file_versions: dict = {}
     if repo_path:
-        changes_dir = Path(repo_path) / "openspec" / "changes" / ticket_id
+        from capability_check import _short_ticket_id
+        change_id = _short_ticket_id(ticket_id)
+        changes_dir = Path(repo_path) / "openspec" / "changes" / change_id
         if changes_dir.exists():
             for vf in sorted(changes_dir.glob("specs.v*.md")):
                 try:

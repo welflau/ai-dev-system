@@ -431,6 +431,32 @@ async def create_direct_ticket(project_id: str, req: DirectTicketCreate):
         except Exception as e:
             logger.warning("触发 orchestrator 失败（不影响工单创建）: %s", e)
 
+    # ── 规范层钩子：直接创建工单也补 PRD + OpenSpec ─────────────
+    # 不论 start_from 是什么，都触发：
+    #   1. Planner 钩子（仅当 start_from == "pending" 才让 orchestrator 走完整 Planner）
+    #   2. OpenSpec Propose（项目已 init openspec/ 时补 spec 目录）
+    import asyncio
+    _hook_task = asyncio.create_task(
+        _post_create_layer_hooks(
+            project_id=project_id,
+            ticket_id=ticket_id,
+            title=req.title.strip(),
+            description=req.description.strip(),
+            start_from=start_status,
+        )
+    )
+    # fire-and-forget，但别静默：任务异常时打日志（否则 create_task 的异常会被吞）
+    def _hook_done(t: "asyncio.Task"):
+        try:
+            exc = t.exception()
+            if exc:
+                logger.warning("规范层钩子任务异常（ticket=%s）: %r", ticket_id, exc)
+        except asyncio.CancelledError:
+            logger.warning("规范层钩子任务被取消（ticket=%s）", ticket_id)
+        except Exception:
+            pass
+    _hook_task.add_done_callback(_hook_done)
+
     # SSE 通知看板刷新
     await event_manager.publish_to_project(project_id, "ticket_created", {
         "ticket_id": ticket_id,
@@ -1157,6 +1183,69 @@ async def ticket_events(ticket_id: str):
 
 
 # ==================== 内部方法 ====================
+
+
+async def _post_create_layer_hooks(
+    project_id: str,
+    ticket_id: str,
+    title: str,
+    description: str,
+    start_from: str,
+) -> None:
+    """直接创建工单后的"规范层"钩子（fire-and-forget 任务）
+
+    互斥策略（避免重复触发）：
+    - start_from == "pending"：
+        Planner 钩子把工单推到 planning_in_progress，orchestrator 走完整
+        Planner → Architect → OpenSpec Propose。**OpenSpec 钩子跳过**，
+        让 Architect 阶段统一触发，避免 new change 重复创建。
+    - start_from in ("architecture_done", "development_in_progress")：
+        Planner 钩子跳过（用户已选跳过规划）。**OpenSpec 钩子触发**，
+        单独补 spec 目录。
+
+    任一钩子失败都仅 warning，不影响工单本身。
+    """
+    try:
+        from capability_check import has_openspec, _get_repo_path
+        from orchestrator import orchestrator as orch
+        from database import db
+        from utils import now_iso
+
+        # ── 1. Planner 钩子（仅 start_from="pending" 才走）────────
+        if start_from == "pending":
+            try:
+                # 把工单推到 planning_in_progress，让 orchestrator 走完整 Planner 流程
+                await db.execute(
+                    "UPDATE tickets SET status='planning_in_progress', updated_at=? "
+                    "WHERE id=? AND status='pending'",
+                    (now_iso(), ticket_id),
+                )
+                await orch.process_ticket(project_id, ticket_id)
+                logger.info("🔧 [规范层] Planner 钩子触发（ticket=%s, start_from=pending → 走完整 SOP）", ticket_id[:12])
+            except Exception as _pe:
+                logger.warning("Planner 钩子失败（不影响工单）: %s", _pe, exc_info=True)
+            return  # 关键：pending 路径下不再单独触发 OpenSpec，让 Architect 阶段统一处理
+
+        # ── 2. OpenSpec 钩子（仅 start_from != "pending" 才补）────
+        try:
+            repo_path = await _get_repo_path(project_id)
+            if repo_path and await has_openspec(project_id, repo_path):
+                from agents.architect import ArchitectAgent
+                await ArchitectAgent()._run_openspec_propose({
+                    "project_id": project_id,
+                    "ticket_id": ticket_id,
+                    "ticket_title": title,
+                    "ticket_description": description,
+                    "repo_path": repo_path,
+                })
+                logger.info("📐 [规范层] OpenSpec Propose 钩子触发（ticket=%s, start_from=%s）",
+                            ticket_id[:12], start_from)
+            else:
+                logger.debug("OpenSpec 钩子跳过：项目未安装 OpenSpec（project=%s）", project_id[:12])
+        except Exception as _oe:
+            logger.warning("OpenSpec Propose 钩子失败（不影响工单）: %s", _oe, exc_info=True)
+    except Exception as _e:
+        logger.warning("_post_create_layer_hooks 顶层异常: %s", _e, exc_info=True)
 
 
 async def _log_ticket(
