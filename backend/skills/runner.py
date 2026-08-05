@@ -118,9 +118,19 @@ class SkillRunner:
         actions: Dict[str, Any] = {}
         for spec in self.skill.cli_tools:
             actions[spec.name] = GenericCLIAction(spec)
+        outs = self.skill.outputs or {}
+        write_mode = str(outs.get("write_mode") or "skill")
+        allowed_exts = outs.get("allowed_exts")
+        if allowed_exts is not None and not isinstance(allowed_exts, list):
+            allowed_exts = None
         for bt in self.skill.builtin_tools:
             if bt == "write_file":
-                actions["write_file"] = WriteFileAction()
+                actions["write_file"] = WriteFileAction(
+                    allowed_exts=allowed_exts, write_mode=write_mode,
+                )
+            elif bt == "read_file":
+                from actions.read_repo_file import ReadRepoFileAction
+                actions["read_file"] = ReadRepoFileAction()
             elif bt == "shell":
                 from actions.chat.shell_exec import ShellAction
                 actions["shell"] = ShellAction()

@@ -1297,6 +1297,42 @@ async def delete_session(project_id: str, session_id: str):
     return {"ok": True}
 
 
+async def _heal_pending_direct_ticket_card(project_id: str, msg: dict) -> None:
+    """历史草稿卡若工单已建但 action_state 仍 pending，按标题回填为 executed。"""
+    if msg.get("action_type") != "confirm_direct_ticket":
+        return
+    state = (msg.get("action_state") or "pending").strip() or "pending"
+    if state != "pending":
+        return
+    try:
+        ad = msg.get("action_data")
+        if isinstance(ad, str):
+            ad = json.loads(ad or "{}")
+        elif not isinstance(ad, dict):
+            ad = {}
+        title = (ad.get("title") or "").strip()
+        if not title:
+            return
+        ticket = await db.fetch_one(
+            """SELECT id, title, created_at FROM tickets
+               WHERE project_id = ? AND title = ? AND status != 'cancelled'
+               ORDER BY created_at DESC LIMIT 1""",
+            (project_id, title),
+        )
+        if not ticket:
+            return
+        ar = {"ticket_id": ticket["id"], "title": title, "at": ticket.get("created_at") or now_iso()}
+        await db.execute(
+            "UPDATE chat_messages SET action_state='executed', action_result=? WHERE id=?",
+            (json.dumps(ar, ensure_ascii=False), msg["id"]),
+        )
+        msg["action_state"] = "executed"
+        msg["action_result"] = ar
+        logger.info("heal confirm_direct_ticket: msg=%s → ticket=%s", msg["id"][:12], ticket["id"][:12])
+    except Exception as e:
+        logger.debug("heal confirm_direct_ticket 失败: %s", e)
+
+
 @router.get("/sessions/{session_id}/messages")
 async def get_session_messages(project_id: str, session_id: str, limit: int = 200):
     """获取指定会话的消息列表"""
@@ -1317,6 +1353,7 @@ async def get_session_messages(project_id: str, session_id: str, limit: int = 20
                 msg["action_result"] = json.loads(raw_ar)
             except Exception:
                 pass
+        await _heal_pending_direct_ticket_card(project_id, msg)
         messages.append(msg)
     return {"messages": messages, "session_id": session_id}
 
@@ -1836,7 +1873,8 @@ async def get_ticket_conversations(project_id: str, ticket_id: str):
         "tool_start", "tool_done",
         "react_tool", "skill_step_done",
         "planning_done", "architecture_done",
-        "openspec_propose", "openspec_verify",
+        "openspec_propose", "openspec_apply", "openspec_apply_started",
+        "openspec_apply_partial", "openspec_apply_failed", "openspec_verify",
         "phase_reset", "change_detected",
         "milestone_architecture",
     }
@@ -3402,11 +3440,7 @@ async def mcp_action_callback(project_id: str, req: _McpActionRequest):
         logger.warning("mcp_action_callback: 未知 action=%s", action_name)
         return {"status": "no_action", "reason": f"unknown action: {action_name}"}
 
-    await event_manager.publish_to_project(project_id, "chat_mcp_action", {
-        "action": action_result,
-    })
-
-    # 持久化到 DB
+    # 先落库拿到 msg_id，再 SSE 推送（卡片与 id 同事件，避免流式缓存导致绑不上）
     _mcp_msg_id = None
     try:
         sess_row = await db.fetch_one(
@@ -3423,17 +3457,33 @@ async def mcp_action_callback(project_id: str, req: _McpActionRequest):
             project_id, "assistant", msg_text,
             action=action_result, session_id=session_id,
         )
-        # 把 msg_id 补推给前端，让确认卡片能持久化 action_state
         if _mcp_msg_id:
-            await event_manager.publish_to_project(project_id, "chat_mcp_action_id", {
-                "msg_id": _mcp_msg_id,
-                "action_type": action_result.get("type", ""),
-            })
+            # 默认 pending，刷新时明确按状态渲染
+            await db.execute(
+                "UPDATE chat_messages SET action_state='pending' WHERE id=? AND (action_state IS NULL OR action_state='')",
+                (_mcp_msg_id,),
+            )
     except Exception as _e:
         logger.warning("mcp_action_callback 保存消息失败（不影响 SSE）: %s", _e)
 
-    logger.info("mcp_action_callback: 推送 %s 卡片到项目 %s", action_name, project_id)
-    return {"status": "ok", "action_type": action_result["type"]}
+    if _mcp_msg_id:
+        action_result["_message_id"] = _mcp_msg_id
+
+    await event_manager.publish_to_project(project_id, "chat_mcp_action", {
+        "action": action_result,
+        "msg_id": _mcp_msg_id,
+    })
+    # 兼容旧前端：仍推 chat_mcp_action_id
+    if _mcp_msg_id:
+        await event_manager.publish_to_project(project_id, "chat_mcp_action_id", {
+            "msg_id": _mcp_msg_id,
+            "action_type": action_result.get("type", ""),
+            "title": action_result.get("title") or "",
+        })
+
+    logger.info("mcp_action_callback: 推送 %s 卡片到项目 %s msg=%s",
+                action_name, project_id, (_mcp_msg_id or "")[:12])
+    return {"status": "ok", "action_type": action_result["type"], "msg_id": _mcp_msg_id}
 
 
 # ── 内部 API：MCP server 推 CLI 任务事件 ──────────────────────────────────────

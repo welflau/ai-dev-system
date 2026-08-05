@@ -396,18 +396,40 @@ async def create_direct_ticket(project_id: str, req: DirectTicketCreate):
         ticket_data["source_session_id"] = req.source_session_id
     await db.insert("tickets", ticket_data)
 
-    # 若有 source_message_id，回填 action_result 供反向导航
-    if req.source_message_id:
-        try:
-            import json as _json
+    # 回填聊天草稿卡片为已执行（有 source_message_id 精确更新；否则按标题匹配最近 pending 草稿）
+    try:
+        import json as _json
+        ar_json = _json.dumps(
+            {"ticket_id": ticket_id, "title": req.title, "at": now},
+            ensure_ascii=False,
+        )
+        msg_id = req.source_message_id
+        if not msg_id and req.title.strip():
+            # 流式期间 msg_id 可能未绑到卡片 → 按标题找回 pending 的 confirm_direct_ticket
+            title_norm = req.title.strip()
+            cands = await db.fetch_all(
+                """SELECT id, action_data FROM chat_messages
+                   WHERE project_id = ? AND action_type = 'confirm_direct_ticket'
+                     AND (action_state IS NULL OR action_state = '' OR action_state = 'pending')
+                   ORDER BY created_at DESC LIMIT 30""",
+                (project_id,),
+            )
+            for row in cands or []:
+                try:
+                    ad = json.loads(row.get("action_data") or "{}")
+                except Exception:
+                    continue
+                if (ad.get("title") or "").strip() == title_norm:
+                    msg_id = row["id"]
+                    logger.info("create-direct: 按标题回填草稿消息 %s", msg_id[:12])
+                    break
+        if msg_id:
             await db.execute(
                 "UPDATE chat_messages SET action_state='executed', action_result=? WHERE id=?",
-                (_json.dumps({"ticket_id": ticket_id, "title": req.title,
-                              "at": now}, ensure_ascii=False),
-                 req.source_message_id),
+                (ar_json, msg_id),
             )
-        except Exception as _e:
-            logger.debug("更新工单 action_result 失败: %s", _e)
+    except Exception as _e:
+        logger.debug("更新工单 action_result 失败: %s", _e)
 
     logger.info("创建直接工单: %s '%s' status=%s", ticket_id, req.title[:40], start_status)
 

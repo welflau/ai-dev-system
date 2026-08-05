@@ -79,9 +79,17 @@ async def new_change(change_id: str, description: str = "", goal: str = "") -> s
 
 @mcp.tool()
 async def instructions(change_id: str, artifact: str) -> str:
-    """获取某个产出物的写作要求（sections 模板 / 验收准则）。
-    artifact 取值：proposal / specs / design / tasks。写每一件前先调它。"""
-    return json.dumps(await _run(["instructions", "--change", change_id, artifact], 30),
+    """获取某个产出物的写作要求，或 Apply 实现指令。
+    artifact 取值：proposal / specs / design / tasks / apply。
+    Propose 写每一件前先调对应 artifact；实现阶段传 apply。"""
+    return json.dumps(await _run(["instructions", "--change", change_id, artifact, "--json"], 60),
+                      ensure_ascii=False)
+
+
+@mcp.tool()
+async def instructions_apply(change_id: str) -> str:
+    """获取 Apply 阶段实现指令（contextFiles、任务进度、动态 instruction）。开发前必调。"""
+    return json.dumps(await _run(["instructions", "apply", "--change", change_id, "--json"], 60),
                       ensure_ascii=False)
 
 

@@ -77,15 +77,42 @@ def _short_ticket_id(ticket_id: str) -> str:
     return f"c-{short}"
 
 
+def get_ticket_change_dir(repo_path: str, ticket_id: str) -> Path:
+    """返回该工单对应的 OpenSpec change 目录"""
+    return Path(repo_path) / "openspec" / "changes" / _short_ticket_id(ticket_id)
+
+
 def get_ticket_specs_path(repo_path: str, ticket_id: str) -> Path:
     """返回该工单的 OpenSpec specs 文件路径（用短 id 匹配 change 目录）"""
-    return Path(repo_path) / "openspec" / "changes" / _short_ticket_id(ticket_id) / "specs.md"
+    return get_ticket_change_dir(repo_path, ticket_id) / "specs.md"
+
+
+def get_ticket_tasks_path(repo_path: str, ticket_id: str) -> Path:
+    """返回该工单的 OpenSpec tasks.md 路径"""
+    return get_ticket_change_dir(repo_path, ticket_id) / "tasks.md"
 
 
 def ticket_has_specs(repo_path: str, ticket_id: str) -> bool:
     """该工单是否已有 OpenSpec specs 文件"""
     try:
         return get_ticket_specs_path(repo_path, ticket_id).exists()
+    except Exception:
+        return False
+
+
+def ticket_has_tasks(repo_path: str, ticket_id: str) -> bool:
+    """该工单是否已有 OpenSpec tasks.md（Apply 前置条件）"""
+    try:
+        return get_ticket_tasks_path(repo_path, ticket_id).is_file()
+    except Exception:
+        return False
+
+
+def ticket_has_change(repo_path: str, ticket_id: str) -> bool:
+    """该工单是否已有 OpenSpec change 目录"""
+    try:
+        d = get_ticket_change_dir(repo_path, ticket_id)
+        return d.is_dir()
     except Exception:
         return False
 

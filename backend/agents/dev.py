@@ -12,6 +12,7 @@ rework / fix_issues 会先调用 ReflectionAction 做结构化反思，反思结
 import json
 import logging
 import time
+from pathlib import Path
 from typing import Any, Dict
 from agents.base import BaseAgent, ReactMode
 from actions.write_code import WriteCodeAction
@@ -69,7 +70,7 @@ class DevAgent(BaseAgent):
         return result.to_dict()
 
     async def _do_develop(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """开发：根据是否有已有代码选择策略"""
+        """开发：有 OpenSpec change/tasks 时强制走 Apply；否则 WriteCode / PlanCodeChange。"""
         existing_code = context.get("existing_code", {})
         step_total = 2
 
@@ -78,10 +79,14 @@ class DevAgent(BaseAgent):
         repo_path = context.get("repo_path", "")
         await self._inject_superpowers(context, project_id, repo_path)
 
-        # 步骤 1：代码生成
+        # 步骤 1：代码生成（OpenSpec Apply 优先）
         t0 = time.monotonic()
         await self.emit_step("代码生成", context, phase="start", step_index=1, step_total=step_total)
-        if existing_code:
+        apply_result = await self._run_openspec_apply(context)
+        if apply_result is not None:
+            code_result = apply_result
+            logger.info("📐 开发走 OpenSpec Apply（files=%d）", len(code_result.get("files") or {}))
+        elif existing_code:
             logger.info("📋 检测到已有代码，使用 PlanCodeChange 精准增量")
             code_result = await self.run_action("plan_code_change", context)
         else:
@@ -89,6 +94,16 @@ class DevAgent(BaseAgent):
             code_result = await self.run_action("write_code", context)
         await self.emit_step("代码生成", context, phase="done", step_index=1, step_total=step_total,
                              duration_ms=int((time.monotonic() - t0) * 1000))
+
+        # Apply 硬失败：不继续自测，直接返回错误（避免绕过规范层瞎写）
+        if code_result.get("_openspec_apply_failed"):
+            return {
+                "status": "error",
+                "message": code_result.get("message") or "OpenSpec Apply 失败",
+                "files": code_result.get("files") or {},
+                "dev_result": code_result.get("dev_result") or {"files": {}, "notes": ""},
+                "openspec_apply": code_result.get("openspec_apply"),
+            }
 
         # 注入 files 到 context，供 SelfTest 使用
         files = code_result.get("files", {})
@@ -111,6 +126,193 @@ class DevAgent(BaseAgent):
         result["estimated_hours"] = result.get("estimated_hours", 4)
 
         return result
+
+    async def _run_openspec_apply(self, context: Dict[str, Any]):
+        """有 OpenSpec change+tasks 时用 SkillRunner 跑 Apply；否则返回 None（走旧开发路径）。
+
+        返回 dict（含 files / status）表示已接管开发；返回 None 表示未启用 Apply。
+        """
+        try:
+            project_id = context.get("project_id", "")
+            ticket_id = context.get("ticket_id", "")
+            if not project_id or not ticket_id:
+                return None
+
+            from capability_check import (
+                has_openspec, get_openspec_cli, _get_repo_path,
+                ticket_has_tasks, ticket_has_change, _short_ticket_id,
+            )
+            repo_path = context.get("repo_path") or await _get_repo_path(project_id)
+            if not repo_path or not await has_openspec(project_id, repo_path):
+                return None
+            # 本工单已有 OpenSpec change → 强制 Apply，禁止降级 WriteCode
+            if not ticket_has_change(repo_path, ticket_id):
+                logger.info("📐 OpenSpec Apply 跳过：本工单尚无 change（ticket=%s）", ticket_id[:12])
+                return None
+            if not ticket_has_tasks(repo_path, ticket_id):
+                logger.warning("📐 OpenSpec change 存在但缺 tasks.md，拒绝降级 WriteCode（ticket=%s）",
+                               ticket_id[:12])
+                return {
+                    "status": "error",
+                    "_openspec_apply_failed": True,
+                    "message": "OpenSpec Propose 尚未产出 tasks.md，无法 Apply。请先完成 Propose 四件套。",
+                    "files": {},
+                }
+
+            from skills.executable_loader import load_executable_skill
+            from skills.runner import SkillRunner
+            skill = load_executable_skill("openspec-apply", repo_path=repo_path)
+            if not skill:
+                logger.warning("📐 openspec-apply skill 未找到，拒绝降级到 WriteCode")
+                return {
+                    "status": "error",
+                    "_openspec_apply_failed": True,
+                    "message": "项目已有 OpenSpec change，但 openspec-apply skill 未找到",
+                    "files": {},
+                }
+            runner = SkillRunner(skill)
+            if not await runner.is_available({"project_id": project_id, "repo_path": repo_path}):
+                return None
+
+            cli = get_openspec_cli()
+            change_id = _short_ticket_id(ticket_id)
+            if not cli or not change_id:
+                return None
+
+            from database import db
+            from utils import now_iso
+            from orchestrator import orchestrator as orch
+
+            project_traits = []
+            try:
+                row = await db.fetch_one("SELECT traits FROM projects WHERE id=?", (project_id,))
+                if row and row.get("traits"):
+                    project_traits = json.loads(row["traits"])
+            except Exception:
+                pass
+
+            # 把反思/编译错误等注入 goal，便于 Apply 修回归
+            extra_bits = []
+            if context.get("reflection"):
+                extra_bits.append(f"反思: {json.dumps(context['reflection'], ensure_ascii=False)[:400]}")
+            if context.get("compile_errors"):
+                extra_bits.append(f"编译错误: {json.dumps(context['compile_errors'], ensure_ascii=False)[:400]}")
+            if context.get("test_issues"):
+                extra_bits.append(f"测试问题: {json.dumps(context['test_issues'], ensure_ascii=False)[:300]}")
+
+            run_ctx = {
+                **context,
+                "cli": cli, "change_id": change_id,
+                "repo_path": repo_path, "project_id": project_id, "ticket_id": ticket_id,
+                "project_traits": project_traits,
+                "_skill_written_files": {},
+            }
+            if extra_bits:
+                run_ctx["ticket_description"] = (
+                    f"{context.get('ticket_description') or ''}\n" + "\n".join(extra_bits)
+                )
+
+            logger.info("📐 [规范层] OpenSpec Apply 启动: change=%s", change_id)
+            await orch._add_layer_log(
+                ticket_id, project_id, action="openspec_apply_started", layer="spec",
+                detail={"change_id": change_id,
+                        "message": f"OpenSpec Apply 已启动，按 tasks.md 落地实现（change `{change_id}`）…"},
+            )
+            await orch.post_milestone_comment(
+                ticket_id, project_id,
+                f"📐 [规范层] **OpenSpec Apply 已启动** — 按 `openspec/changes/{change_id}/tasks.md` "
+                f"逐项实现（不再走通用 WriteCode）…",
+            )
+
+            async def on_tool(ev):
+                try:
+                    await self._emit_react_tool(
+                        project_id, context.get("requirement_id"), ticket_id,
+                        ev.tool, ev.args_hint, ev.duration_ms,
+                        output_summary=(ev.result or "")[:500], summary=ev.summary or "",
+                    )
+                except Exception:
+                    pass
+
+            result = await runner.execute(run_ctx, on_tool=on_tool)
+            files = dict(run_ctx.get("_skill_written_files") or {})
+            # 确保 tasks.md 最新内容进 commit（若磁盘有而 tracker 漏了）
+            try:
+                from capability_check import get_ticket_tasks_path
+                tp = get_ticket_tasks_path(repo_path, ticket_id)
+                if tp.is_file():
+                    rel = tp.relative_to(Path(repo_path)).as_posix()
+                    files.setdefault(rel, tp.read_text(encoding="utf-8", errors="replace"))
+            except Exception:
+                pass
+
+            # 无任何落盘且 runner 报错/超预算 → 硬失败；all_done 未改文件仍算成功
+            is_fail = (result.status in ("error", "budget_exceeded") and not files)
+            is_partial = (result.status not in ("success",)) and bool(files)
+
+            if is_fail:
+                await orch._add_layer_log(
+                    ticket_id, project_id, action="openspec_apply_failed", layer="spec",
+                    level="warning",
+                    detail={"change_id": change_id, "status": result.status,
+                            "message": (result.message or "")[:400], "rounds": result.rounds},
+                )
+                await orch.post_milestone_comment(
+                    ticket_id, project_id,
+                    f"📐 [规范层] **OpenSpec Apply 失败** — {result.status}: {(result.message or '')[:300]}",
+                    level="error",
+                )
+                return {
+                    "status": "error",
+                    "_openspec_apply_failed": True,
+                    "message": f"OpenSpec Apply 失败（{result.status}）: {result.message or ''}",
+                    "files": files,
+                    "openspec_apply": {"change_id": change_id, "status": result.status},
+                    "dev_result": {"files": files, "notes": result.message or ""},
+                }
+
+            await db.execute(
+                "UPDATE tickets SET openspec_stage='applied', updated_at=? WHERE id=?",
+                (now_iso(), ticket_id),
+            )
+            action = "openspec_apply_partial" if is_partial and result.status != "success" else "openspec_apply"
+            await orch._add_layer_log(
+                ticket_id, project_id, action=action, layer="spec",
+                level="warning" if action.endswith("partial") else "info",
+                detail={"change_id": change_id, "status": result.status, "rounds": result.rounds,
+                        "files": list(files.keys())[:40], "message": (result.message or "")[:400]},
+            )
+            await orch.post_milestone_comment(
+                ticket_id, project_id,
+                f"📐 [规范层] **OpenSpec Apply "
+                f"{'部分完成' if action.endswith('partial') else '完成'}** — "
+                f"change `{change_id}`，写入 {len(files)} 个文件（{result.rounds} 轮）。",
+            )
+            logger.info("📐 OpenSpec Apply %s（ticket=%s, files=%d, status=%s）",
+                        "部分完成" if action.endswith("partial") else "成功",
+                        ticket_id[:12], len(files), result.status)
+
+            notes = result.message or f"OpenSpec Apply {change_id}"
+            return {
+                "status": "success",
+                "files": files,
+                "dev_result": {"files": files, "notes": notes},
+                "openspec_apply": {
+                    "change_id": change_id,
+                    "status": result.status,
+                    "rounds": result.rounds,
+                    "files_count": len(files),
+                },
+                "estimated_hours": 4,
+            }
+        except Exception as e:
+            logger.warning("_run_openspec_apply 异常: %s", e, exc_info=True)
+            return {
+                "status": "error",
+                "_openspec_apply_failed": True,
+                "message": f"OpenSpec Apply 异常: {e}",
+                "files": {},
+            }
 
     async def _do_rework(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """返工（Reflexion）：先反思失败根因 → 再按反思策略重开发"""

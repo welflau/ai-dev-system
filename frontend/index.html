@@ -776,6 +776,20 @@
                                     </select>
                                 </div>
                                 <div class="form-group">
+                                    <label>运行模式</label>
+                                    <div style="display:flex;flex-direction:column;gap:8px;margin-top:4px;">
+                                        <label style="font-size:13px;cursor:pointer;display:flex;align-items:flex-start;gap:8px;line-height:1.4;">
+                                            <input type="radio" name="settingsProjectMode" value="manual" style="margin-top:3px;">
+                                            <span><strong>手动挡</strong> — 工单/对话可改文件，<em>不</em>自动 git commit / push，也不自动 p4 submit；由你本地提交</span>
+                                        </label>
+                                        <label style="font-size:13px;cursor:pointer;display:flex;align-items:flex-start;gap:8px;line-height:1.4;">
+                                            <input type="radio" name="settingsProjectMode" value="auto" style="margin-top:3px;">
+                                            <span><strong>自动挡</strong> — 工单流转后自动写入并 git commit（默认）</span>
+                                        </label>
+                                    </div>
+                                    <small class="form-hint">混合 Git/P4 或需人工审改时建议用手动挡</small>
+                                </div>
+                                <div class="form-group">
                                     <label>项目 ID</label>
                                     <input type="text" id="settingsProjectId" readonly disabled>
                                     <small class="form-hint">系统自动生成，不可修改</small>
@@ -2166,7 +2180,7 @@
     <!-- ==================== Toast 通知 ==================== -->
     <div class="toast-container" id="toastContainer"></div>
 
-    <script src="/static/app.js?v=20260804b"></script>
+    <script src="/static/app.js?v=20260805c"></script>
 </body>
 </html>
 

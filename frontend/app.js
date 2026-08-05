@@ -2946,6 +2946,10 @@ function loadSettingsGeneral() {
     document.getElementById('settingsProjectStatus').value = p.status || 'active';
     document.getElementById('settingsProjectId').value = p.id || '';
     document.getElementById('settingsCreatedAt').value = formatDateTime(p.created_at) || '';
+    const mode = (p.mode === 'manual') ? 'manual' : 'auto';
+    document.querySelectorAll('input[name="settingsProjectMode"]').forEach(el => {
+        el.checked = el.value === mode;
+    });
 }
 
 /** 加载仓库设置 */
@@ -3907,6 +3911,8 @@ async function saveProjectSettings() {
     const description = document.getElementById('settingsProjectDesc').value.trim();
     const tech_stack = document.getElementById('settingsTechStack').value.trim();
     const status = document.getElementById('settingsProjectStatus').value;
+    const modeEl = document.querySelector('input[name="settingsProjectMode"]:checked');
+    const mode = (modeEl && modeEl.value === 'manual') ? 'manual' : 'auto';
 
     if (!name) {
         showToast('项目名称不能为空', 'error');
@@ -3915,7 +3921,8 @@ async function saveProjectSettings() {
 
     try {
         await api(`/projects/${currentProjectId}`, { method: 'PUT', body: { name, description, tech_stack, status } });
-        showToast('项目设置已保存', 'success');
+        await api(`/projects/${currentProjectId}/mode`, { method: 'PATCH', body: { mode } });
+        showToast(`项目设置已保存（${mode === 'manual' ? '手动挡' : '自动挡'}）`, 'success');
         // 刷新当前项目数据
         const data = await api(`/projects/${currentProjectId}`);
         currentProject = data;
@@ -4940,7 +4947,7 @@ function _buildThreeLayerBar(hasSP, hasOS, ticketData) {
     if (hasOS) {
         const OS_PHASES = [
             { key: 'proposed', label: 'Propose', jump: 'openspec_propose,openspec_propose_started,openspec_propose_partial,openspec_propose_failed,openspec_artifact' },
-            { key: 'applied',  label: 'Apply',   jump: 'openspec_apply' },
+            { key: 'applied',  label: 'Apply',   jump: 'openspec_apply,openspec_apply_started,openspec_apply_partial,openspec_apply_failed' },
             { key: 'verified', label: 'Verify',  jump: 'openspec_verify,openspec_verify_failed' },
             { key: 'archived', label: 'Archive', jump: 'openspec_archive' },
         ];
@@ -5983,7 +5990,9 @@ function renderActionStateSummary(action) {
     } else if (action.type === 'confirm_direct_ticket' && isExec) {
         const _tid = action._result?.ticket_id || action.ticket_id || '';
         summary = `工单 <strong>${escapeHtml(action.title || '?')}</strong> 已创建`
-            + (_tid ? ` &nbsp;<span class="action-link" onclick="openTicketInChat('${escapeHtml(_tid)}')">查看工单 →</span>` : '');
+            + (_tid
+                ? ` <div class="confirm-req-btns" style="margin-top:8px;"><button class="btn btn-sm btn-primary" onclick="openTicketInChat('${escapeHtml(_tid)}')">👁 查看工单</button></div>`
+                : ` &nbsp;<span class="action-link" onclick="switchTab('board')">查看看板 →</span>`);
     } else if (action.type === 'confirm_bug' && isExec) {
         summary = `Bug <strong>${escapeHtml(action.title || '?')}</strong> 已上报`;
     } else if (action.type === 'generate_image' && isExec) {
@@ -8963,6 +8972,10 @@ function renderLogItem(log) {
         openspec_propose_partial:{ icon: '📐', label: 'OpenSpec Propose 部分完成', layer: 'spec' },
         openspec_propose_failed: { icon: '📐', label: 'OpenSpec Propose 失败', layer: 'spec' },
         openspec_artifact:       { icon: '📐', label: 'OpenSpec 单件已生成', layer: 'spec' },
+        openspec_apply_started:  { icon: '📐', label: 'OpenSpec Apply 启动', layer: 'spec' },
+        openspec_apply:          { icon: '📐', label: 'OpenSpec Apply 完成', layer: 'spec' },
+        openspec_apply_partial:  { icon: '📐', label: 'OpenSpec Apply 部分完成', layer: 'spec' },
+        openspec_apply_failed:   { icon: '📐', label: 'OpenSpec Apply 失败', layer: 'spec' },
         openspec_verify:         { icon: '📐', label: 'OpenSpec Verify 通过 ✅', layer: 'spec' },
         openspec_verify_failed:  { icon: '📐', label: 'OpenSpec Verify 失败 ❌', layer: 'spec' },
         superpowers_skill:       { icon: '⚡', label: 'Superpowers 约束已激活', layer: 'discipline' },
@@ -9510,6 +9523,9 @@ function connectSSE(projectId) {
                 const data = JSON.parse(e.data);
                 const action = data.action;
                 if (!action) return;
+                // 后端先落库再推送：msg_id / _message_id 一并带上
+                const mid = data.msg_id || action._message_id || '';
+                if (mid) action._message_id = mid;
                 if (chatSending) {
                     // 流式回复进行中：缓存卡片，流结束后追加到 AI 文字后面
                     _pendingMcpCards.push(action);
@@ -9521,16 +9537,32 @@ function connectSSE(projectId) {
             }
         });
 
-        // mcp_action_callback 保存 DB 后补推 msg_id，写入最新 action 卡片
+        // mcp_action_callback 保存 DB 后补推 msg_id（兼容旧路径 / 迟到绑定）
         eventSource.addEventListener('chat_mcp_action_id', (e) => {
             try {
                 const data = JSON.parse(e.data);
                 if (!data.msg_id) return;
-                // 找页面上最新的 confirm_direct_ticket / confirm_requirement 卡片写入 messageId
-                const selector = `[data-title]:not([data-message-id])`;
-                const cards = document.querySelectorAll(`#chatMessages ${selector}`);
-                if (cards.length > 0) {
-                    cards[cards.length - 1].dataset.messageId = data.msg_id;
+                // 1) 先绑到尚未落盘的 pending 缓存（流式中最常见）
+                const title = (data.title || '').trim();
+                let bound = false;
+                for (let i = _pendingMcpCards.length - 1; i >= 0; i--) {
+                    const a = _pendingMcpCards[i];
+                    if (a._message_id) continue;
+                    if (title && (a.title || '').trim() !== title) continue;
+                    if (data.action_type && a.type && a.type !== data.action_type) continue;
+                    a._message_id = data.msg_id;
+                    bound = true;
+                    break;
+                }
+                if (bound) return;
+                // 2) 再绑到 DOM 上缺 messageId 的确认卡
+                const cards = document.querySelectorAll('#chatMessages [data-title]');
+                for (let i = cards.length - 1; i >= 0; i--) {
+                    const card = cards[i];
+                    if (card.dataset.messageId) continue;
+                    if (title && (card.dataset.title || '').trim() !== title) continue;
+                    card.dataset.messageId = data.msg_id;
+                    break;
                 }
             } catch (err) {
                 console.warn('[SSE] chat_mcp_action_id parse failed:', err);
@@ -14455,6 +14487,10 @@ function _buildTicketEventEl(msg) {
         openspec_propose_started: { icon: '📐', label: 'OpenSpec Propose 启动', compact: false },
         openspec_propose_partial: { icon: '📐', label: 'OpenSpec Propose 部分完成', compact: false },
         openspec_artifact:    { icon: '📐', label: 'OpenSpec 单件已生成', compact: true },
+        openspec_apply_started: { icon: '📐', label: 'OpenSpec Apply 启动', compact: false },
+        openspec_apply:       { icon: '📐', label: 'OpenSpec Apply 完成', compact: false },
+        openspec_apply_partial: { icon: '📐', label: 'OpenSpec Apply 部分完成', compact: false },
+        openspec_apply_failed: { icon: '📐', label: 'OpenSpec Apply 失败', compact: false },
         openspec_verify:      { icon: '📐', label: 'OpenSpec Verify 通过', compact: false },
         phase_reset:          { icon: '🔄', label: '阶段重置', compact: true },
         change_detected:      { icon: '🔍', label: '变更检测', compact: true },
@@ -16440,9 +16476,20 @@ function _buildConfirmDirectTicketCardHtml(action) {
     const isExecuted = action._state && action._state !== 'pending';
 
     if (isExecuted) {
-        const label = action._state === 'executed' ? `✅ 工单已创建` : `✗ 已取消`;
-        return `<div class="chat-action-card" style="border-left-color:${action._state==='executed'?'var(--success)':'var(--text-muted);opacity:.6'}">
-            <div class="action-title">${label}</div>
+        const tid = action._result?.ticket_id || action.ticket_id || '';
+        if (action._state === 'executed') {
+            return `<div class="chat-action-card" style="border-left-color:var(--success)">
+                <div class="action-title">✅ 工单已创建</div>
+                <div class="action-detail">
+                    ${action.title ? `<strong>${escapeHtml(action.title)}</strong>` : ''}
+                    ${tid ? `<div class="confirm-req-btns" style="margin-top:10px;">
+                        <button class="btn btn-sm btn-primary" onclick="openTicketInChat('${escapeHtml(tid)}')">👁 查看工单</button>
+                    </div>` : `<div style="margin-top:8px;"><span class="action-link" onclick="switchTab('board')">查看看板 →</span></div>`}
+                </div>
+            </div>`;
+        }
+        return `<div class="chat-action-card" style="border-left-color:var(--text-muted);opacity:.6">
+            <div class="action-title">✗ 已取消</div>
             ${action.title ? `<div class="action-detail"><strong>${escapeHtml(action.title)}</strong></div>` : ''}
         </div>`;
     }
@@ -17217,10 +17264,11 @@ async function doConfirmDirectTicket(cardId) {
         card.querySelector('.action-title').textContent = '✅ 工单已创建';
         const tid = result.ticket_id || '';
         if (btns) btns.innerHTML = tid
-            ? `<span class="action-link" onclick="openTicketInChat('${escapeHtml(tid)}')">查看工单 →</span>`
+            ? `<button class="btn btn-sm btn-primary" onclick="openTicketInChat('${escapeHtml(tid)}')">👁 查看工单</button>`
             : `<span class="action-link" onclick="switchTab('board')">查看看板 →</span>`;
         showToast(`工单「${title}」已创建`, 'success');
         const msgId = card.dataset.messageId || '';
+        // 后端 create-direct 已按 source_message_id / 标题回填；前端再 patch 一次双保险
         if (msgId) patchActionState(msgId, 'executed', { title, ticket_id: tid, at: new Date().toISOString() });
         setTimeout(() => { if (typeof refreshBoard === 'function') refreshBoard(); }, 500);
     } catch (e) {
@@ -17233,7 +17281,10 @@ async function doConfirmDirectTicket(cardId) {
 
 function doCancelDirectTicket(cardId) {
     const card = document.getElementById(cardId);
-    if (card) card.outerHTML = `<div class="chat-action-card" style="border-left-color:var(--text-muted);opacity:0.6;"><div class="action-title">✗ 已取消</div></div>`;
+    if (!card) return;
+    const msgId = card.dataset.messageId || '';
+    if (msgId) patchActionState(msgId, 'cancelled', { at: new Date().toISOString() });
+    card.outerHTML = `<div class="chat-action-card" style="border-left-color:var(--text-muted);opacity:0.6;"><div class="action-title">✗ 已取消</div></div>`;
 }
 
 /** 批量需求卡片：确认创建勾选项 */
@@ -22289,6 +22340,11 @@ function appendMcpActionCard(action) {
             <div class="chat-msg-bubble">${actionHtml}</div>
         </div>
     `;
+    // 确保确认卡带上 messageId（流式 flush / 迟到绑定都能点确认后落库）
+    const card = bubble.querySelector('[data-title]');
+    if (card && action._message_id && !card.dataset.messageId) {
+        card.dataset.messageId = action._message_id;
+    }
     container.appendChild(bubble);
     scrollChatToBottom();
 }
