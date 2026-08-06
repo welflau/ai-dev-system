@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI 自动开发系统</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260625f">
+    <link rel="stylesheet" href="/static/styles.css?v=20260806n">
     <!-- highlight.js 语法高亮 -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
@@ -165,8 +165,16 @@
         <section id="projectPage" class="page">
             <div class="project-layout">
                 <!-- 侧栏 -->
-                <aside class="sidebar">
+                <aside class="sidebar" id="projectSidebar">
                     <div class="sidebar-header">
+                        <button type="button" class="sidebar-toggle-btn" id="sidebarToggleBtn"
+                                onclick="toggleProjectSidebar()" title="收起侧栏"
+                                aria-label="收起侧栏" aria-expanded="true">
+                            <!-- Cursor 风格：左侧栏布局图标 -->
+                            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                                <path d="M2 1.5A1.5 1.5 0 0 0 .5 3v10A1.5 1.5 0 0 0 2 14.5h12a1.5 1.5 0 0 0 1.5-1.5V3A1.5 1.5 0 0 0 14 1.5H2zM2 2.5h3v11H2a.5.5 0 0 1-.5-.5V3a.5.5 0 0 1 .5-.5zm4 0h8a.5.5 0 0 1 .5.5v10a.5.5 0 0 1-.5.5H6v-11z"/>
+                            </svg>
+                        </button>
                         <h3 id="sidebarProjectName"></h3>
                     </div>
                     <nav class="sidebar-nav">
@@ -265,8 +273,35 @@
                 <!-- Docking 容器（内容区 + 底部日志面板） -->
                 <div class="content-dock-wrapper">
 
+                <!-- 侧栏收起且标题栏未挂上按钮时的兜底展开（仅标题行高度，非左侧竖条） -->
+                <button type="button" class="sidebar-expand-fallback" id="sidebarExpandFallback"
+                        onclick="toggleProjectSidebar()" title="打开侧栏" aria-label="打开侧栏">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                        <path d="M2 1.5A1.5 1.5 0 0 0 .5 3v10A1.5 1.5 0 0 0 2 14.5h12a1.5 1.5 0 0 0 1.5-1.5V3A1.5 1.5 0 0 0 14 1.5H2zM2 2.5h3v11H2a.5.5 0 0 1-.5-.5V3a.5.5 0 0 1 .5-.5zm4 0h8a.5.5 0 0 1 .5.5v10a.5.5 0 0 1-.5.5H6v-11z"/>
+                    </svg>
+                </button>
+
                 <!-- 主内容区 -->
                 <div class="content-area">
+
+                    <!-- 侧栏收起时，展开按钮寄存在此，再挂到当前页标题栏 -->
+                    <div class="sidebar-toggle-park" id="sidebarTogglePark" aria-hidden="true">
+                        <button type="button" class="sidebar-toggle-btn sidebar-toggle-in-title" id="sidebarToggleInTitle"
+                                onclick="toggleProjectSidebar()" title="打开侧栏"
+                                aria-label="打开侧栏" aria-expanded="false">
+                            <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                                <path d="M2 1.5A1.5 1.5 0 0 0 .5 3v10A1.5 1.5 0 0 0 2 14.5h12a1.5 1.5 0 0 0 1.5-1.5V3A1.5 1.5 0 0 0 14 1.5H2zM2 2.5h3v11H2a.5.5 0 0 1-.5-.5V3a.5.5 0 0 1 .5-.5zm4 0h8a.5.5 0 0 1 .5.5v10a.5.5 0 0 1-.5.5H6v-11z"/>
+                            </svg>
+                        </button>
+                    </div>
+
+                    <!-- C 工作区文档 Tabs（md / 源码 / diff）；无打开文档时隐藏 -->
+                    <div class="main-ws-tabbar" id="mainWsTabBar" style="display:none;" role="tablist">
+                        <button type="button" class="main-ws-tab main-ws-tab-page" id="mainWsPageTab"
+                                onclick="adsShell.focusPage()" title="回到当前页面">看板</button>
+                        <div class="main-ws-tabs" id="mainWsTabs"></div>
+                    </div>
+                    <div class="main-ws-host" id="mainWsHost" style="display:none;"></div>
 
                     <!-- Tab: 工单看板 -->
                     <div id="tab-board" class="tab-content active">
@@ -1550,11 +1585,34 @@
 
                 </div> <!-- /.content-dock-wrapper -->
 
+                <!-- D 右侧工作台：工单 + AI（Grid 第三列，见壳层方案） -->
+                <aside class="right-workbench" id="rightWorkbench" aria-label="右侧工作台">
+                    <div class="rw-toolbar" id="rwToolbar">
+                        <div class="rw-tabs" role="tablist">
+                            <button type="button" class="rw-tab active" role="tab" id="rwTabTicket"
+                                    data-rw-tab="ticket" onclick="adsShell.setRightTab('ticket')">工单</button>
+                            <button type="button" class="rw-tab" role="tab" id="rwTabChat"
+                                    data-rw-tab="chat" onclick="adsShell.setRightTab('chat')">对话</button>
+                        </div>
+                        <div class="rw-toolbar-actions">
+                            <button type="button" class="btn-icon rw-tool-btn" id="rwSplitBtn"
+                                    onclick="adsShell.toggleRightSplit()" title="一键分屏：工单 | 对话">⊞</button>
+                            <button type="button" class="btn-icon rw-tool-btn" id="rwCloseBtn"
+                                    onclick="adsShell.closeRight()" title="关闭工作台">✕</button>
+                        </div>
+                    </div>
+                    <div class="rw-body" id="rwBody">
+                        <div class="rw-pane" id="rwTicketPane" data-pane="ticket"></div>
+                        <div class="rw-resizer" id="rwResizer" title="拖拽调整分屏比例"></div>
+                        <div class="rw-pane" id="rwChatPane" data-pane="chat"></div>
+                    </div>
+                </aside>
+
             </div>
         </section>
     </main>
 
-    <!-- ==================== 全局聊天面板（不依赖项目上下文） ==================== -->
+    <!-- ==================== 全局聊天面板（列表页 fixed；项目页挂入右侧工作台） ==================== -->
     <div class="chat-panel" id="chatPanel">
         <div class="chat-panel-resize" id="chatPanelResize"></div>
         <div class="chat-panel-header">
@@ -1572,7 +1630,7 @@
                 <button class="btn-icon chat-panel-btn" onclick="toggleChatHistory()" title="历史对话" id="chatHistoryBtn">🕐</button>
                 <button class="btn-icon chat-panel-btn" id="chatSplitBtn" onclick="addChatSplitPane()" title="新增分屏" style="display:none;">⊞</button>
                 <button class="btn-icon chat-panel-btn" id="chatFullscreenBtn" onclick="toggleChatFullscreen()" title="全屏">⛶</button>
-                <button class="btn-icon chat-panel-btn" onclick="toggleChatPanel()" title="收起面板">✕</button>
+                <button class="btn-icon chat-panel-btn" id="chatPanelCloseBtn" onclick="toggleChatPanel()" title="收起面板">✕</button>
             </div>
             <div id="chatHeaderProjectLabel" style="
                 position:absolute; left:50%; transform:translateX(-50%);
@@ -1726,7 +1784,7 @@
         </div>
     </aside>
 
-    <!-- ==================== 工单详情抽屉 ==================== -->
+    <!-- ==================== 工单详情（项目页挂入右侧工作台；非壳层时作抽屉兜底） ==================== -->
     <div class="drawer-overlay" id="drawerOverlay" onclick="closeDrawer()"></div>
     <aside class="drawer" id="ticketDrawer">
         <div class="drawer-resize-handle" id="drawerResizeHandle"></div>
@@ -1734,8 +1792,8 @@
             <div class="drawer-title" id="drawerTitle"></div>
             <div class="drawer-header-actions">
                 <button class="btn-icon" id="drawerDockBtn" onclick="toggleDrawerDock()"
-                        title="切换 浮动/固定（Dock）模式">📌</button>
-                <button class="btn-icon" onclick="closeDrawer()">&times;</button>
+                        title="切换 浮动/固定（Dock）模式" style="display:none;">📌</button>
+                <button class="btn-icon" id="drawerCloseBtn" onclick="closeDrawer()" title="关闭">&times;</button>
             </div>
         </div>
         <div class="drawer-body" id="drawerBody"></div>
@@ -2180,7 +2238,7 @@
     <!-- ==================== Toast 通知 ==================== -->
     <div class="toast-container" id="toastContainer"></div>
 
-    <script src="/static/app.js?v=20260805c"></script>
+    <script src="/static/app.js?v=20260806o"></script>
 </body>
 </html>
 

@@ -30,6 +30,9 @@
     /* 尺寸 */
     --sidebar-width: 220px;
     --topbar-height: 52px;
+    --metrics-bar-height: 26px;
+    /* 顶栏 + 指标条之下的可视区高度（避免 100vh 算漏导致整页滚动条） */
+    --app-stage-height: calc(100vh - var(--topbar-height) - var(--metrics-bar-height));
     --radius: 8px;
     --radius-sm: 6px;
 
@@ -81,13 +84,33 @@ body {
     letter-spacing: -0.5px;
 }
 
+.breadcrumb {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0;
+    min-width: 0;
+    font-size: 13px;
+}
 .breadcrumb a {
     color: var(--text-secondary);
     text-decoration: none;
-    font-size: 13px;
+    white-space: nowrap;
 }
 .breadcrumb a:hover { color: var(--text); }
-.breadcrumb span { color: var(--text-muted); margin: 0 6px; }
+.breadcrumb .bc-sep {
+    color: var(--text-muted);
+    margin: 0 6px;
+    user-select: none;
+}
+.breadcrumb .bc-current {
+    color: var(--text);
+    font-weight: 600;
+    white-space: nowrap;
+    max-width: 280px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
 
 .llm-status {
     display: flex;
@@ -114,7 +137,7 @@ body {
     top: var(--topbar-height);
     left: 0;
     right: 0;
-    height: 26px;
+    height: var(--metrics-bar-height);
     background: var(--bg);
     border-bottom: 1px solid var(--border);
     display: flex;
@@ -222,8 +245,8 @@ body {
 /* ==================== 主布局 ==================== */
 
 .main-container {
-    margin-top: calc(var(--topbar-height) + 26px);
-    min-height: calc(100vh - var(--topbar-height) - 26px);
+    margin-top: calc(var(--topbar-height) + var(--metrics-bar-height));
+    min-height: var(--app-stage-height);
     transition: padding-right 0.3s ease;
 }
 
@@ -231,12 +254,23 @@ body {
 .page.active { display: block; }
 #projectPage.page { padding: 0; } /* grid 布局不需要外层 padding */
 
+/* 项目详情页：锁死舞台高度，禁止撑出整页滚动条 */
+#projectPage.page.active {
+    height: var(--app-stage-height);
+    overflow: hidden;
+}
+body.shell-project .main-container {
+    height: var(--app-stage-height);
+    min-height: var(--app-stage-height);
+    overflow: hidden;
+}
+
 /* 项目列表页：固定高度 + flex 列布局，让日志面板吸附到底部 */
 #projectListPage.page.active {
     display: flex;
     flex-direction: column;
     padding: 0;
-    height: calc(100vh - var(--topbar-height) - 26px);
+    height: var(--app-stage-height);
     overflow: hidden;
 }
 #projectListPage .page-header {
@@ -255,12 +289,13 @@ body {
 .page-header {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    gap: 8px;
     margin-bottom: 24px;
 }
 .page-header h1, .page-header h2 {
     font-size: 22px;
     font-weight: 600;
+    margin-right: auto; /* 标题吃剩余空间，右侧操作贴右 */
 }
 
 .page-header-actions {
@@ -314,37 +349,41 @@ body {
 }
 
 /* ==================== 项目详情布局 ==================== */
-
-.project-layout {
-    display: flex;
-    flex-direction: column;
-    height: calc(100vh - var(--topbar-height));
-}
+/* S 侧栏 | C 主舞台(+E) | D 右侧工作台 */
 
 .project-layout > .sidebar {
-    /* 侧栏不参与纵向 flex，通过嵌套横向 flex 布局 */
+    /* grid 子项：侧栏 */
 }
 
-/* 横向布局容器（侧栏 + 内容区 + 聊天面板） */
 .project-layout {
     display: grid;
-    grid-template-columns: var(--sidebar-width) 1fr;
+    grid-template-columns: var(--sidebar-width) 1fr var(--right-workbench-width, 0px);
     grid-template-rows: 1fr;
-    height: calc(100vh - var(--topbar-height));
+    height: var(--app-stage-height);
+    max-height: var(--app-stage-height);
+    overflow: hidden;
+    transition: grid-template-columns 0.2s ease;
+}
+.project-layout.sidebar-collapsed {
+    /* 收起后不留左侧窄轨，主区吃满；展开按钮进内容区标题栏 */
+    grid-template-columns: 0px 1fr var(--right-workbench-width, 0px);
+}
+.project-layout.right-open {
+    --right-workbench-width: var(--ads-right-width, 520px);
 }
 
-/* 聊天面板展开时的布局调整 */
-.project-layout.chat-open {
-    grid-template-columns: var(--sidebar-width) 1fr;
-}
-body.chat-open .project-layout {
-    margin-right: var(--chat-panel-width, 600px);
-}
+/* 列表页仍用 fixed 聊天腾位；项目页壳层用 Grid 第三列，禁止 margin 双预留 */
 body.chat-open #projectListPage {
     margin-right: var(--chat-panel-width, 600px);
 }
+body.chat-open.shell-project .project-layout {
+    margin-right: 0;
+}
+body.chat-open.shell-project #projectListPage {
+    margin-right: 0;
+}
 
-/* 内容+日志 Docking 容器 */
+/* 内容+日志 Docking 容器（C + E） */
 .content-dock-wrapper {
     grid-column: 2;
     grid-row: 1;
@@ -352,6 +391,238 @@ body.chat-open #projectListPage {
     flex-direction: column;
     min-height: 0;
     overflow: hidden;
+    position: relative;
+}
+/* 侧栏收起兜底：贴在内容区左上角标题行位置，不是整列窄轨 */
+.sidebar-expand-fallback {
+    display: none;
+    position: absolute;
+    top: 14px;
+    left: 12px;
+    z-index: 25;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 6px;
+    background: var(--bg-elevated);
+    color: var(--text);
+    cursor: pointer;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+}
+.sidebar-expand-fallback:hover {
+    background: rgba(79, 70, 229, 0.18);
+    color: var(--primary-light);
+}
+.project-layout.sidebar-collapsed .sidebar-expand-fallback {
+    display: inline-flex;
+}
+/* 标题栏已成功挂上展开钮时，隐藏兜底，避免双按钮 */
+.project-layout.sidebar-collapsed .board-header .sidebar-toggle-in-title ~ *,
+.project-layout.sidebar-collapsed .page-header .sidebar-toggle-in-title {
+    /* marker only */
+}
+.project-layout.sidebar-collapsed:has(.board-header .sidebar-toggle-in-title) .sidebar-expand-fallback,
+.project-layout.sidebar-collapsed:has(.page-header .sidebar-toggle-in-title) .sidebar-expand-fallback,
+.project-layout.sidebar-collapsed:has(.settings-page-header .sidebar-toggle-in-title) .sidebar-expand-fallback,
+.project-layout.sidebar-collapsed:has(.main-ws-tabbar .sidebar-toggle-in-title) .sidebar-expand-fallback {
+    display: none;
+}
+
+/* ==================== D 右侧工作台 ==================== */
+.right-workbench {
+    grid-column: 3;
+    grid-row: 1;
+    display: none;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    background: var(--bg-card);
+    border-left: 1px solid var(--border);
+    overflow: hidden;
+    z-index: 40;
+    position: relative;
+}
+.project-layout.right-open .right-workbench {
+    display: flex;
+}
+/* 左缘拖宽热区 */
+.right-workbench::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 4px;
+    cursor: ew-resize;
+    z-index: 6;
+}
+
+.rw-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    height: 40px;
+    padding: 0 8px 0 4px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    background: var(--bg-elevated);
+}
+.rw-tabs {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    min-width: 0;
+}
+.rw-tab {
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-weight: 500;
+    padding: 6px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+.rw-tab:hover {
+    background: var(--bg-hover);
+    color: var(--text);
+}
+.rw-tab.active {
+    background: rgba(79, 70, 229, 0.15);
+    color: var(--primary-light);
+}
+.project-layout.right-split .rw-tabs {
+    /* 分屏时 Tab 仅作状态指示，点击仍可切焦点半边 */
+    opacity: 0.95;
+}
+.rw-toolbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex-shrink: 0;
+}
+.rw-tool-btn {
+    width: 28px;
+    height: 28px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    color: var(--text-secondary);
+}
+.rw-tool-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text);
+}
+.rw-tool-btn.active {
+    color: var(--primary-light);
+    background: rgba(79, 70, 229, 0.15);
+}
+
+.rw-body {
+    flex: 1;
+    display: flex;
+    flex-direction: row;
+    min-height: 0;
+    min-width: 0;
+    overflow: hidden;
+}
+.rw-pane {
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+    display: none;
+    flex-direction: column;
+    position: relative;
+}
+/* Tab 模式：只显示当前 pane */
+.project-layout.right-open:not(.right-split) .rw-pane.active-pane {
+    display: flex;
+    flex: 1;
+}
+/* 分屏模式：两半都显示 */
+.project-layout.right-split .rw-pane {
+    display: flex;
+}
+.project-layout.right-split #rwTicketPane {
+    flex: var(--rw-split-left, 1) 1 0;
+}
+.project-layout.right-split #rwChatPane {
+    flex: var(--rw-split-right, 1) 1 0;
+}
+.rw-resizer {
+    display: none;
+    width: 5px;
+    flex-shrink: 0;
+    cursor: col-resize;
+    background: transparent;
+    position: relative;
+    z-index: 2;
+}
+.project-layout.right-split .rw-resizer {
+    display: block;
+}
+.rw-resizer::after {
+    content: '';
+    position: absolute;
+    left: 2px;
+    top: 20%;
+    bottom: 20%;
+    width: 1px;
+    background: var(--border);
+    transition: background 0.15s, box-shadow 0.15s;
+}
+.rw-resizer:hover::after,
+.rw-resizer.dragging::after {
+    background: var(--primary);
+    box-shadow: 0 0 6px rgba(79, 70, 229, 0.35);
+}
+
+/* 挂入工作台后：取消 fixed / 抽屉滑入，改为填满 pane */
+.shell-project .right-workbench .chat-panel,
+.shell-project .right-workbench .drawer {
+    position: relative !important;
+    top: auto !important;
+    right: auto !important;
+    left: auto !important;
+    bottom: auto !important;
+    width: 100% !important;
+    max-width: none !important;
+    min-width: 0 !important;
+    height: 100% !important;
+    max-height: none !important;
+    transform: none !important;
+    box-shadow: none !important;
+    border-left: none !important;
+    z-index: auto !important;
+    display: flex !important;
+}
+.shell-project .right-workbench .chat-panel-resize,
+.shell-project .right-workbench .drawer-resize-handle {
+    display: none !important;
+}
+.shell-project .right-workbench .drawer-overlay {
+    display: none !important;
+}
+/* 壳层内隐藏面板自身关闭/Dock（由工作台工具栏统一关） */
+.shell-project .right-workbench #chatPanelCloseBtn,
+.shell-project .right-workbench #drawerDockBtn,
+.shell-project .right-workbench #drawerCloseBtn {
+    display: none !important;
+}
+/* 分屏时隐藏内层重复标题可保留；工具栏已有 Tab */
+.shell-project.shell-right-split .rw-toolbar .rw-tab.active {
+    box-shadow: inset 0 -2px 0 var(--primary);
+}
+
+/* 壳层下废弃 Dock 占位 */
+body.shell-project.has-docked-drawer .main-container {
+    padding-right: 0 !important;
 }
 
 .sidebar {
@@ -363,18 +634,73 @@ body.chat-open #projectListPage {
     flex-direction: column;
     padding: 0;
     grid-row: 1;
+    transition: width 0.2s ease, min-width 0.2s ease;
+    overflow: hidden;
 }
 
 .sidebar-header {
-    padding: 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 12px 12px 10px;
     border-bottom: 1px solid var(--border);
+    min-height: 48px;
+    flex-shrink: 0;
 }
 .sidebar-header h3 {
+    flex: 1;
+    min-width: 0;
     font-size: 15px;
     font-weight: 600;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+/* Cursor 风格侧栏收起/展开按钮 */
+.sidebar-toggle-btn {
+    flex-shrink: 0;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+.sidebar-toggle-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text);
+}
+.sidebar-toggle-btn:focus-visible {
+    outline: 1px solid var(--primary);
+    outline-offset: 1px;
+}
+.sidebar-toggle-btn svg {
+    display: block;
+}
+/* 侧栏收起：整栏隐藏（不留左侧一条），展开钮挂到内容区标题栏 */
+.project-layout.sidebar-collapsed .sidebar {
+    display: none;
+}
+.sidebar-toggle-park {
+    display: none;
+}
+.sidebar-toggle-in-title {
+    display: none;
+    flex-shrink: 0;
+}
+.project-layout.sidebar-collapsed .sidebar-toggle-in-title {
+    display: inline-flex;
+}
+/* 文档 Tab 栏与标题栏同高时也可挂展开钮 */
+.main-ws-tabbar .sidebar-toggle-in-title {
+    margin-right: 4px;
 }
 
 .sidebar-nav {
@@ -414,6 +740,170 @@ body.chat-open #projectListPage {
     padding: 20px;
     padding-bottom: 28px;
     min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+/* 文档 Tab 激活时隐藏页面内容（保留 DOM，便于切回） */
+.content-area > .tab-content.ws-hidden {
+    display: none !important;
+}
+.content-area > .tab-content.active:not(.ws-hidden) {
+    flex: 1;
+    min-height: 0;
+}
+.content-area.ws-doc-active {
+    padding-top: 0;
+    overflow: hidden;
+}
+
+/* ==================== C 主舞台工作区 Tabs ==================== */
+.main-ws-tabbar {
+    display: none;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+    height: 36px;
+    margin: 0 -20px 0;
+    padding: 0 8px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-elevated);
+    overflow-x: auto;
+}
+.content-area.ws-doc-active .main-ws-tabbar {
+    margin-right: -20px;
+}
+.main-ws-tabs {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    min-width: 0;
+}
+.main-ws-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    max-width: 180px;
+    height: 28px;
+    padding: 0 8px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 12px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.main-ws-tab:hover {
+    background: var(--bg-hover);
+    color: var(--text);
+}
+.main-ws-tab.active {
+    background: rgba(79, 70, 229, 0.15);
+    color: var(--primary-light);
+}
+.main-ws-tab-page {
+    font-weight: 600;
+    flex-shrink: 0;
+}
+.main-ws-tab-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.main-ws-tab-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    border-radius: 4px;
+    font-size: 14px;
+    line-height: 1;
+    opacity: 0.55;
+}
+.main-ws-tab-close:hover {
+    opacity: 1;
+    background: rgba(255, 255, 255, 0.08);
+}
+.main-ws-host {
+    display: none;
+    flex: 1;
+    flex-direction: column;
+    min-height: 0;
+    margin: 0 -20px -28px;
+    background: var(--bg);
+}
+.main-ws-pane-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    height: 36px;
+    padding: 0 12px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+.main-ws-pane-path {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    color: var(--text-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.main-ws-pane-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+}
+.main-ws-badge {
+    font-size: 11px;
+    color: var(--text-muted);
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: var(--bg-elevated);
+}
+.main-ws-pane-body {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    background: var(--surface-code, #1e1e2e);
+}
+.main-ws-loading, .main-ws-error {
+    padding: 24px;
+    color: var(--text-muted);
+    font-size: 13px;
+}
+.main-ws-error { color: var(--danger, #f87171); }
+.main-ws-code {
+    margin: 0;
+    padding: 12px 16px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text);
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+.main-ws-md {
+    padding: 20px 28px;
+    max-width: 900px;
+    color: var(--text);
+    background: var(--bg);
+    min-height: 100%;
+}
+.main-ws-img {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: var(--bg);
+    min-height: 100%;
+}
+.main-ws-img img {
+    max-width: 100%;
+    max-height: calc(100vh - 220px);
+    border-radius: 6px;
 }
 
 /* 仓库文件页激活时让 content-area 切换为 flex 列，使 workspace 能撑满高度 */
@@ -451,10 +941,13 @@ body.chat-open #projectListPage {
 .board-header {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    gap: 8px;
     margin-bottom: 16px;
 }
-.board-header h2 { font-size: 18px; }
+.board-header h2 {
+    font-size: 18px;
+    margin-right: auto;
+}
 
 .board-filters {
     display: flex;
@@ -3319,6 +3812,9 @@ input[readonly]:focus {
 @media (max-width: 768px) {
     .sidebar { width: 180px; min-width: 180px; }
     .project-layout { grid-template-columns: 180px 1fr; }
+    .project-layout.sidebar-collapsed {
+        grid-template-columns: 0px 1fr var(--right-workbench-width, 0px);
+    }
     .board-column { min-width: 180px; }
     .drawer { width: 100%; transform: translateX(100%); }
     .job-drawer { width: 100%; right: -100%; }
@@ -4623,13 +5119,14 @@ pre.hljs, .hljs pre { background: transparent !important; }
 .settings-page-header {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    gap: 8px;
     margin-bottom: 20px;
 }
 
 .settings-page-header h2 {
     font-size: 18px;
     margin: 0;
+    margin-right: auto;
 }
 
 .settings-card {
@@ -5764,6 +6261,7 @@ pre.hljs, .hljs pre { background: transparent !important; }
 
 :root {
     --chat-panel-width: 600px;
+    --sidebar-collapsed-width: 44px;
 }
 
 .chat-toggle-btn {
@@ -5791,9 +6289,9 @@ pre.hljs, .hljs pre { background: transparent !important; }
 .chat-panel {
     position: fixed;
     right: 0;
-    top: var(--topbar-height);
+    top: calc(var(--topbar-height) + var(--metrics-bar-height));
     width: var(--chat-panel-width, 600px);
-    height: calc(100vh - var(--topbar-height));
+    height: var(--app-stage-height);
     display: none;
     flex-direction: column;
     background: var(--bg-card);
@@ -5850,15 +6348,25 @@ body.chat-fullscreen .drawer-overlay {
 }
 
 body.chat-fullscreen .chat-panel {
-    left: 0;
-    right: 0;
+    /* 必须 fixed：壳层里曾设 relative，全屏时 chat 已挪到 body */
+    position: fixed !important;
+    left: 0 !important;
+    right: 0 !important;
     width: 100% !important;
     max-width: 100% !important;
-    top: 26px;           /* 仅 metrics-bar 高度，topbar 已隐藏 */
-    height: calc(100vh - 26px);
-    display: flex;
-    box-shadow: none;
-    border-left: none;
+    min-width: 0 !important;
+    top: var(--metrics-bar-height) !important;           /* 仅 metrics-bar 高度，topbar 已隐藏 */
+    height: calc(100vh - var(--metrics-bar-height)) !important;
+    max-height: none !important;
+    display: flex !important;
+    transform: none !important;
+    box-shadow: none !important;
+    border-left: none !important;
+    z-index: 150 !important;
+}
+/* 全屏时显示关闭钮（壳层工作台内默认隐藏） */
+body.chat-fullscreen #chatPanelCloseBtn {
+    display: inline-flex !important;
 }
 
 /* 全屏时 metrics-bar 顶置，z-index 高于 chat-panel */
@@ -7845,14 +8353,20 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
     margin-top: 8px;
     text-align: right;
 }
-/* 报错文本中可点击的文件路径链接 */
-.err-file-link {
+/* 报错文本 / 聊天内容中可点击的文件路径链接 */
+.err-file-link,
+.chat-file-link {
     color: var(--primary-light, #79c0ff);
     text-decoration: underline dotted;
     cursor: pointer;
     font-family: inherit;
 }
-.err-file-link:hover { color: var(--primary, #58a6ff); text-decoration: underline; }
+.err-file-link:hover,
+.chat-file-link:hover { color: var(--primary, #58a6ff); text-decoration: underline; }
+.chat-file-link .chat-inline-code {
+    color: inherit;
+    text-decoration: inherit;
+}
 
 /* 进度面板：动作感知提示（静默状态给出上下文说明） */
 .ticket-action-progress .progress-action-hint {

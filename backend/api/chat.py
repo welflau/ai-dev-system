@@ -617,6 +617,9 @@ async def _chat_stream_generator(
     _thinking_rounds: list = []   # [{round, reasoning, steps:[]}]
     _cur_round: dict | None = None
     _thinking_buf: str = ""  # 当前思考段缓冲，tool_done 时 flush 到 events
+    # 本轮工具触及的文件路径（落库时写成完整相对路径，避免对话只剩裸文件名）
+    _touched_files: list[str] = []
+    _repo_root = (project.get("local_repo_path") or project.get("git_repo_path") or "") if project else ""
     # 消息级分组 key：每次发消息唯一，用于后台任务面板按对话分组
     _msg_group_key = req.msg_group_key or _sid
     # A-4: @file 引用展開（在 LLM 調用前注入文件內容）
@@ -711,12 +714,15 @@ async def _chat_stream_generator(
                 # CLI 工具任务：注册到内存，告知前端 task_id 以便 /tasks 面板追踪
                 _task_id = ev.get("tool_use_id") or ""
                 _is_cli_tool = bool(_task_id)
+                _tin = ev.get("input", {}) or {}
                 if _is_cli_tool:
                     _cli_task_add(_task_id, label, ev["tool"], project_id=project_id,
                                   session_key=_msg_group_key,
                                   session_label=req.message[:30])
+                for _p in _paths_from_tool_payload(ev["tool"], _tin):
+                    _touched_files.append(_p)
                 yield _sse("tool_start", {
-                    "tool": ev["tool"], "label": label, "input": ev.get("input", {}),
+                    "tool": ev["tool"], "label": label, "input": _tin,
                     **({"task_id": _task_id} if _is_cli_tool else {}),
                 })
 
@@ -726,6 +732,9 @@ async def _chat_stream_generator(
                 duration_ms = ev.get("duration_ms", 0)
                 result_raw = ev.get("result", "")
                 _task_id2 = ev.get("tool_use_id") or ""
+                # 补全：tool_start 已采过 input；这里再从 args_hint 兜底一次
+                for _p in _paths_from_tool_payload(ev["tool"], None, args_hint):
+                    _touched_files.append(_p)
                 step = {"tool": ev["tool"], "args_hint": args_hint,
                         "summary": summary, "duration_ms": duration_ms,
                         "result": result_raw}
@@ -785,6 +794,11 @@ async def _chat_stream_generator(
                                     "color": _ac["color"]}
                 if not full_text:
                     full_text = "操作已完成。"
+                # 把本轮工具真实路径追加进回复（模型常只写裸文件名，导致点击打不开）
+                _files_block = _build_touched_files_block(_touched_files, _repo_root)
+                if _files_block and "涉及文件（完整路径）" not in full_text:
+                    full_text += _files_block
+                    yield _sse("text_delta", {"delta": _files_block})
                 _saved_msg_id = None
                 try:
                     _saved_msg_id = await _save_chat_message(project_id, "assistant", full_text,
@@ -839,6 +853,85 @@ async def _chat_stream_generator(
                 )
             except Exception as _fe:
                 logger.warning("finally 兜底保存失败: %s", _fe)
+
+
+# 读写类工具：落库时需要保留完整相对路径
+_FILE_TOUCH_TOOLS = {
+    "Write", "Edit", "Read", "write_file", "edit_file", "create_file",
+    "read_file", "read_files", "read_local_file", "git_read_file",
+}
+
+
+def _tool_short_name(tool: str) -> str:
+    return tool.split("__")[-1] if "__" in (tool or "") else (tool or "")
+
+
+def _paths_from_tool_payload(tool: str, tool_input: dict | None, args_hint: str = "") -> list[str]:
+    """从工具入参 / args_hint 提取路径（尽量保留目录，不只文件名）。"""
+    out: list[str] = []
+    short = _tool_short_name(tool)
+    inp = tool_input if isinstance(tool_input, dict) else {}
+
+    for k in ("path", "file_path", "filePath", "file", "filename"):
+        v = inp.get(k)
+        if isinstance(v, str) and v.strip():
+            out.append(v.strip())
+    paths = inp.get("paths")
+    if isinstance(paths, list):
+        out.extend(str(p).strip() for p in paths if p)
+
+    # args_hint 形如 "(path: Config/DefaultEngine.ini)" 或裸路径
+    if not out and args_hint:
+        import re as _re
+        m = _re.search(r"\((?:path|file_path|filePath|file|filename|paths):\s*([^)]+)\)", args_hint)
+        if m:
+            raw = m.group(1).strip()
+            out.extend(p.strip() for p in raw.split(",") if p.strip())
+        elif short in _FILE_TOUCH_TOOLS or any(c in args_hint for c in ("/", "\\")):
+            out.append(args_hint.strip())
+
+    # 非文件工具且无路径 → 忽略
+    if short not in _FILE_TOUCH_TOOLS and tool not in _FILE_TOUCH_TOOLS:
+        # 仍接受明确带路径的入参（MCP 写文件等）
+        if not out:
+            return []
+    return out
+
+
+def _to_repo_rel_path(path: str, repo_root: str = "") -> str:
+    """绝对路径 → 仓库相对路径；去掉前导 / 与 ./"""
+    p = (path or "").replace("\\", "/").strip().strip("`\"'")
+    if not p:
+        return ""
+    root = (repo_root or "").replace("\\", "/").rstrip("/")
+    if root and p.lower().startswith(root.lower() + "/"):
+        p = p[len(root) + 1:]
+    elif root and p.lower() == root.lower():
+        return ""
+    # /Config/foo.ini → Config/foo.ini（避免被当成绝对路径）
+    while p.startswith("./"):
+        p = p[2:]
+    p = p.lstrip("/")
+    return p
+
+
+def _build_touched_files_block(paths: list[str], repo_root: str = "") -> str:
+    """生成追加到助手回复的「涉及文件」段落（完整相对路径，便于点击打开）。"""
+    seen = set()
+    normed = []
+    for raw in paths:
+        rel = _to_repo_rel_path(raw, repo_root)
+        if not rel or rel in seen:
+            continue
+        # 过滤明显非文件的噪声
+        if len(rel) > 260:
+            continue
+        seen.add(rel)
+        normed.append(rel)
+    if not normed:
+        return ""
+    lines = "\n".join(f"- `{p}`" for p in normed)
+    return f"\n\n---\n📁 **涉及文件（完整路径）**\n{lines}\n"
 
 
 def _sse(event: str, data: dict) -> bytes:

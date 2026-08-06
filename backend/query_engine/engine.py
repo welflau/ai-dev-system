@@ -51,15 +51,52 @@ _ARGS_HINT_KEY: Dict[str, str] = {
     "shell": "command", "web_search": "query",
     "save_memory": "title", "read_files": "paths",
     "browse_marketplace": "dir_name", "install_project_skill": "dir_name",
+    # CLI / 内置写读工具（必须带上完整路径，避免对话里只剩裸文件名）
+    "Write": "path", "Edit": "path", "Read": "path",
+    "write_file": "path", "edit_file": "path", "create_file": "path",
+    "read_file": "path",
 }
+
+_FILE_PATH_KEYS = ("path", "file_path", "filePath", "file", "filename")
 
 
 def _extract_args_hint(tool_name: str, tool_input: dict) -> str:
+    if not isinstance(tool_input, dict):
+        return ""
     key = _ARGS_HINT_KEY.get(tool_name)
     if not key:
+        short = tool_name.split("__")[-1] if "__" in tool_name else tool_name
+        key = _ARGS_HINT_KEY.get(short)
+    val = tool_input.get(key, "") if key else ""
+    if isinstance(val, list):
+        val = ", ".join(str(v) for v in val[:5])
+    if not val:
+        for k in _FILE_PATH_KEYS:
+            if tool_input.get(k):
+                key = key or k
+                val = tool_input[k]
+                break
+        if not val and isinstance(tool_input.get("paths"), list) and tool_input["paths"]:
+            key = "paths"
+            val = ", ".join(str(v) for v in tool_input["paths"][:5])
+    if not val:
         return ""
-    val = str(tool_input.get(key, ""))[:60]
-    return f"({key}: {val})" if val else ""
+    return f"({key}: {str(val)[:150]})" if key else str(val)[:150]
+
+
+def _paths_from_tool_input(tool_input: dict) -> list:
+    """从工具入参提取文件路径列表（用于对话落库）。"""
+    if not isinstance(tool_input, dict):
+        return []
+    out = []
+    for k in _FILE_PATH_KEYS:
+        v = tool_input.get(k)
+        if isinstance(v, str) and v.strip():
+            out.append(v.strip())
+    paths = tool_input.get("paths")
+    if isinstance(paths, list):
+        out.extend(str(p).strip() for p in paths if p)
+    return out
 
 
 def _format_result_summary(tool_name: str, result_text: str) -> str:
@@ -265,6 +302,7 @@ class QueryEngine:
                 full_cli_text = ""
                 _cli_tool_times: dict = {}   # tool_use_id → start_time
                 _cli_tool_names: dict = {}   # tool_use_id → tool_name
+                _cli_tool_inputs: dict = {}  # tool_use_id → input（用于补全 args_hint / 完整路径）
                 _cli_tool_started: set = set()  # 已 yield ToolStartEvent 的 tool_use_id，防重复
 
                 # 把 system prompt 拼入 messages，_messages_to_prompt 会包裹为 <ads_context> 注入 stdin
@@ -297,21 +335,32 @@ class QueryEngine:
                             _cli_tool_started.add(tid)
                             _cli_tool_times[tid] = __import__("time").time()
                             _cli_tool_names[tid] = ev["name"]
+                            _cli_tool_inputs[tid] = ev.get("input", {}) or {}
                             yield ToolStartEvent(
                                 tool=ev["name"],
-                                input=ev.get("input", {}),
+                                input=_cli_tool_inputs[tid],
                                 tool_use_id=tid,
                             )
                     elif etype == "cli_tool_result":
                         tid = ev["tool_use_id"]
                         elapsed = (__import__("time").time() - _cli_tool_times.pop(tid, __import__("time").time())) * 1000
                         tool_name = _cli_tool_names.pop(tid, tid)
+                        tool_input = _cli_tool_inputs.pop(tid, {}) or {}
+                        args_hint = _extract_args_hint(tool_name, tool_input)
+                        result_text = ev.get("result", "") or ""
+                        summary = _format_result_summary(tool_name, result_text) if result_text else ""
+                        thinking_steps.append({
+                            "tool": tool_name,
+                            "args_hint": args_hint,
+                            "summary": summary,
+                            "duration_ms": round(elapsed),
+                        })
                         yield ToolDoneEvent(
                             tool=tool_name,
-                            summary="",
-                            args_hint="",
+                            summary=summary,
+                            args_hint=args_hint,
                             duration_ms=elapsed,
-                            result=ev.get("result", ""),
+                            result=result_text,
                             tool_use_id=tid,
                         )
                     elif etype == "stop":

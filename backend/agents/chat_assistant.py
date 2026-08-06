@@ -409,10 +409,21 @@ class _ChatToolExecutor:
                 "set_session_flag": "flag",
                 "dispatch_subtask": "title",
                 "dispatch_parallel_subtasks": "subtasks",
+                "Write": "path", "Edit": "path", "Read": "path",
+                "write_file": "path", "edit_file": "path", "create_file": "path",
+                "read_file": "path",
             }
             key = _KEY.get(tool_name)
-            arg_val = str(tool_input.get(key, ""))[:60] if key else ""
-            args_hint = f"({key}: {arg_val})" if arg_val else ""
+            if not key and isinstance(tool_input, dict):
+                for _k in ("path", "file_path", "filePath", "file", "filename", "paths"):
+                    if tool_input.get(_k):
+                        key = _k
+                        break
+            raw_val = tool_input.get(key, "") if key and isinstance(tool_input, dict) else ""
+            if isinstance(raw_val, list):
+                raw_val = ", ".join(str(v) for v in raw_val[:5])
+            arg_val = str(raw_val)[:150] if raw_val else ""
+            args_hint = f"({key}: {arg_val})" if key and arg_val else (arg_val or "")
             payload = {"step": step, "tool": tool_name, "args_hint": args_hint, "summary": summary[:120]}
 
             # 持久化收集：始终执行（done 阶段），不依赖 project_id/session_id
@@ -847,15 +858,7 @@ class ChatAssistantAgent(BaseAgent):
                             }
                     return
                 elif isinstance(event, MessageDoneEvent):
-                    yield {
-                        "type": "message_done",
-                        "rounds": event.rounds,
-                        "thinking_steps": event.thinking_steps or [],
-                        "action": event.final_action,
-                        "actions": event.all_confirm_results if len(event.all_confirm_results) > 1 else None,
-                        "stop_reason": event.stop_reason,
-                    }
-                    # 手动挡：会话结束后推送文件改动汇报
+                    # 手动挡：先推文件改动汇报（必须在 message_done 之前，否则上层会提前结束流）
                     _pid = project_id if 'project_id' in dir() else None
                     _proj = project if 'project' in dir() else None
                     changes = _session_file_changes.pop(_pid, []) if _pid else []
@@ -865,6 +868,14 @@ class ChatAssistantAgent(BaseAgent):
                             "type": "text_delta",
                             "delta": f"\n\n---\n📝 **本次共修改 {len(changes)} 个文件：**\n{change_text}\n\n请自行决定提交时机（git commit / p4 submit）。",
                         }
+                    yield {
+                        "type": "message_done",
+                        "rounds": event.rounds,
+                        "thinking_steps": event.thinking_steps or [],
+                        "action": event.final_action,
+                        "actions": event.all_confirm_results if len(event.all_confirm_results) > 1 else None,
+                        "stop_reason": event.stop_reason,
+                    }
                 elif isinstance(event, BudgetExceededEvent):
                     yield {"type": "budget_exceeded", "reason": event.reason}
                 elif isinstance(event, ErrorEvent):
@@ -2000,6 +2011,11 @@ def _build_manual_mode_section(project: dict, history_len: int = 0) -> str:
         lines.append("- **P4 路径**：系统自动在写前执行 `p4 edit`，无需手动 checkout")
         lines.append("- **只读路径**：需用户确认才能修改（如引擎源码）")
         lines.append("- 写完后告知用户「已修改 N 个文件，请自行决定提交」")
+        lines.append(
+            "- **引用文件时必须写仓库相对完整路径**（如 `Config/DefaultEngine.ini`、"
+            "`Source/Foo/Bar.cpp`），禁止只写裸文件名（如 `DefaultEngine.ini`），"
+            "否则用户无法从对话一键打开文件"
+        )
 
     # 「是否创建需求」智能提示（对话 >= 2 轮后才生效）
     if history_len >= 2:

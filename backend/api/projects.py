@@ -852,17 +852,28 @@ async def get_git_commit_detail(project_id: str, sha: str):
 
 @router.get("/{project_id}/git/file")
 async def get_git_file(project_id: str, path: str, branch: str = None):
-    """读取仓库中的文件内容（branch 参数指定从哪个分支读，不影响工作目录）"""
+    """读取仓库中的文件内容（branch 参数指定从哪个分支读，不影响工作目录）
+
+    路径支持裸文件名解析：如 DefaultEngine.ini → Config/DefaultEngine.ini
+    """
     project = await db.fetch_one("SELECT * FROM projects WHERE id = ?", (project_id,))
     if not project:
         raise HTTPException(404, "项目不存在")
 
     _ensure_git_path(project)
-    content = await git_manager.get_file_content(project_id, path, branch=branch)
+    resolved = await git_manager.resolve_file_path(project_id, path, branch=branch)
+    if not resolved:
+        raise HTTPException(404, "文件不存在")
+    content = await git_manager.get_file_content(project_id, resolved, branch=branch)
     if content is None:
         raise HTTPException(404, "文件不存在")
 
-    return {"path": path, "content": content}
+    req_path = (path or "").replace("\\", "/").strip().lstrip("/")
+    return {
+        "path": resolved,
+        "content": content,
+        "resolved_from": req_path if req_path != resolved else None,
+    }
 
 
 @router.get("/{project_id}/git/file-diff")
@@ -876,9 +887,13 @@ async def get_git_file_diff(project_id: str, path: str, branch: str = None):
     _ensure_git_path(project)
 
     repo_dir = git_manager._repo_path(project_id)
+    resolved = await git_manager.resolve_file_path(project_id, path, branch=branch)
+    if not resolved:
+        # 没解析到时仍用原 path 走旧逻辑（多分支搜索）
+        resolved = git_manager._normalize_rel_path(path)
 
     # 优先按指定 branch 读，否则搜索所有本地分支
-    content = await git_manager.get_file_content(project_id, path, branch=branch)
+    content = await git_manager.get_file_content(project_id, resolved, branch=branch)
 
     if content is None and not branch:
         # 没有指定 branch 时，遍历本地所有分支寻找文件
@@ -889,7 +904,7 @@ async def get_git_file_diff(project_id: str, path: str, branch: str = None):
                 br = br.strip()
                 if not br:
                     continue
-                c = await git_manager.get_file_content(project_id, path, branch=br)
+                c = await git_manager.get_file_content(project_id, resolved, branch=br)
                 if c is not None:
                     content = c
                     branch = br
@@ -899,8 +914,8 @@ async def get_git_file_diff(project_id: str, path: str, branch: str = None):
 
     if content is None:
         # 最后 fallback：直接读磁盘（未提交的文件）
-        disk_path = repo_dir / path
-        if disk_path.exists():
+        if git_manager._disk_file_exists(repo_dir, resolved):
+            disk_path = repo_dir.joinpath(*resolved.split("/"))
             try:
                 content = disk_path.read_text(encoding="utf-8", errors="replace")
             except Exception:
@@ -914,7 +929,7 @@ async def get_git_file_diff(project_id: str, path: str, branch: str = None):
         base = branch or "HEAD"
         for base_branch in ("main", "master"):
             r = _sp.run(
-                ["git", "diff", f"{base_branch}...{base}", "--", path],
+                ["git", "diff", f"{base_branch}...{base}", "--", resolved],
                 cwd=str(repo_dir), capture_output=True, text=True, timeout=15,
             )
             if r.returncode == 0 and r.stdout.strip():
@@ -923,7 +938,7 @@ async def get_git_file_diff(project_id: str, path: str, branch: str = None):
     except Exception:
         pass
 
-    return {"path": path, "content": content, "diff": diff_text}
+    return {"path": resolved, "content": content, "diff": diff_text}
 
 
 @router.get("/{project_id}/screenshots/{filename}")
@@ -963,9 +978,12 @@ async def get_git_file_raw(project_id: str, path: str):
     if not project:
         raise HTTPException(404, "项目不存在")
     _ensure_git_path(project)
-    from pathlib import Path as P
-    file_path = git_manager._repo_path(project_id) / path
-    if not file_path.exists():
+    resolved = await git_manager.resolve_file_path(project_id, path)
+    if not resolved:
+        raise HTTPException(404, "文件不存在")
+    repo_dir = git_manager._repo_path(project_id)
+    file_path = repo_dir.joinpath(*resolved.split("/"))
+    if not file_path.is_file():
         raise HTTPException(404, "文件不存在")
     return FR(str(file_path))
 

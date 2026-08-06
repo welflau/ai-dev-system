@@ -857,12 +857,131 @@ Thumbs.db
             "children": _scan_dir(repo_dir),
         }
 
+    def _normalize_rel_path(self, file_path: str) -> str:
+        """规范化仓库相对路径：统一分隔符、去掉前导 /、去掉 ./"""
+        path = (file_path or "").replace("\\", "/").strip()
+        path = path.lstrip("/")
+        while path.startswith("./"):
+            path = path[2:]
+        return path
+
+    def _disk_file_exists(self, repo_dir: Path, rel_path: str) -> bool:
+        """安全检查磁盘文件是否在仓库内且存在（避免 Path / '/abs' 逃逸）"""
+        if not rel_path or ".." in rel_path.split("/"):
+            return False
+        target = repo_dir.joinpath(*rel_path.split("/"))
+        try:
+            target.resolve().relative_to(repo_dir.resolve())
+        except ValueError:
+            return False
+        return target.is_file()
+
+    async def resolve_file_path(self, project_id: str, file_path: str,
+                                branch: str = None) -> Optional[str]:
+        """将聊天/日志中的路径解析为仓库内真实相对路径。
+
+        支持：裸文件名（DefaultEngine.ini → Config/DefaultEngine.ini）、
+        前导斜杠、大小写近似、git ls-files / 磁盘搜索。
+        """
+        repo_dir = self._repo_path(project_id)
+        path = self._normalize_rel_path(file_path)
+        if not path:
+            return None
+
+        async def _exists(rel: str) -> bool:
+            if self._disk_file_exists(repo_dir, rel):
+                return True
+            ref = f"{branch}:{rel}" if branch else f"HEAD:{rel}"
+            rc, _, _ = await self._run_git(str(repo_dir), "cat-file", "-e", ref)
+            return rc == 0
+
+        if await _exists(path):
+            return path
+
+        name = Path(path).name
+        # 裸文件名 / 仅一层：尝试常见工程前缀（UE Config 等）
+        if "/" not in path or not await _exists(path):
+            prefixes = (
+                "Config/", "Source/", "Content/", "Plugins/",
+                "backend/", "frontend/", "src/", "app/", "lib/",
+            )
+            # 扩展名启发
+            lower = name.lower()
+            if lower.endswith(".ini"):
+                prefixes = ("Config/",) + prefixes
+            elif lower.endswith((".cpp", ".h", ".hpp", ".c", ".cs")):
+                prefixes = ("Source/",) + tuple(p for p in prefixes if p != "Source/")
+
+            candidates = []
+            if "/" not in path:
+                candidates.extend(f"{p}{name}" for p in prefixes)
+                candidates.append(name)
+            else:
+                # 已有目录但找不到：再试 basename + 前缀
+                candidates.extend(f"{p}{name}" for p in prefixes)
+
+            seen = set()
+            for cand in candidates:
+                if cand in seen:
+                    continue
+                seen.add(cand)
+                if await _exists(cand):
+                    return cand
+
+        # git ls-files 按 basename 搜
+        rc, out, _ = await self._run_git(str(repo_dir), "ls-files", f"**/{name}", name)
+        matches = []
+        if rc == 0 and out:
+            for line in out.splitlines():
+                m = line.strip().replace("\\", "/")
+                if m and Path(m).name.lower() == name.lower():
+                    matches.append(m)
+
+        # 磁盘 rglob 兜底（未跟踪文件）
+        if not matches:
+            try:
+                for f in repo_dir.rglob(name):
+                    if not f.is_file():
+                        continue
+                    parts = f.parts
+                    if ".git" in parts or "Intermediate" in parts or "Binaries" in parts:
+                        continue
+                    try:
+                        rel = str(f.relative_to(repo_dir)).replace("\\", "/")
+                    except ValueError:
+                        continue
+                    if Path(rel).name.lower() == name.lower():
+                        matches.append(rel)
+            except Exception:
+                pass
+
+        if not matches:
+            return None
+
+        def _rank(m: str) -> tuple:
+            ml = m.lower()
+            nl = name.lower()
+            # 精确大小写优先；Config/*.ini、Source/* 优先；路径越短越好
+            return (
+                0 if Path(m).name == name else 1,
+                0 if ml.startswith("config/") and nl.endswith(".ini") else 1,
+                0 if ml.startswith("source/") else 1,
+                m.count("/"),
+                len(m),
+            )
+
+        matches.sort(key=_rank)
+        return matches[0]
+
     async def get_file_content(self, project_id: str, file_path: str,
                                branch: str = None) -> Optional[str]:
         """读取仓库中的文件内容。
         branch 不为空时用 git show branch:path，不依赖工作目录当前分支。
         """
         repo_dir = self._repo_path(project_id)
+        file_path = self._normalize_rel_path(file_path)
+        if not file_path:
+            return None
 
         # 优先用 git show 读取指定分支（不受工作目录当前分支影响）
         if branch:
@@ -881,13 +1000,9 @@ Thumbs.db
                 return out
 
         # 最终降级：直接读工作目录文件（兼容未提交的文件）
-        target = repo_dir / file_path
-        if not target.exists() or not target.is_file():
+        if not self._disk_file_exists(repo_dir, file_path):
             return None
-        try:
-            target.resolve().relative_to(repo_dir.resolve())
-        except ValueError:
-            return None
+        target = repo_dir.joinpath(*file_path.split("/"))
         try:
             return target.read_text(encoding="utf-8")
         except Exception:

@@ -177,9 +177,825 @@ document.addEventListener('DOMContentLoaded', () => {
     loadProjects();
     initLogPanel();
     initProjectNameListener();
-    // 默认全屏打开 AI 助手
-    toggleChatFullscreen();
+    adsShell.init();
+    // 默认全屏打开 AI 对话（进项目后会退出全屏并挂入右侧工作台）
+    if (!_chatFullscreen) toggleChatFullscreen();
 });
+
+// ==================== ADS Shell（界面壳层）====================
+// 方案：docs/20260806_01_ADS界面壳层与面板统一方案.md
+// S 侧栏 | C 主舞台 | D 右栏（工单/对话 Tab+一键分屏）| E 底栏日志
+
+const adsShell = (() => {
+    const KEYS = {
+        sidebarCollapsed: 'ads.shell.sidebarCollapsed',
+        rightOpen: 'ads.shell.rightOpen',
+        rightMode: 'ads.shell.rightMode',
+        rightTab: 'ads.shell.rightTab',
+        rightWidth: 'ads.shell.rightWidth',
+        splitRatio: 'ads.shell.rightSplitRatio',
+        bottomCollapsed: 'ads.shell.bottomCollapsed',
+        // 兼容旧键
+        legacySidebar: 'project_sidebar_collapsed',
+    };
+
+    const state = {
+        mounted: false,
+        rightOpen: false,
+        rightMode: 'tab', // 'tab' | 'split'
+        rightTab: 'chat', // 'ticket' | 'chat'
+        rightWidth: 520,
+        splitRatio: 0.5,
+        activeTicketId: null,
+        // C 主舞台工作区
+        currentPage: 'board',
+        mainTabs: [],          // { id, type:'file'|'diff', title, path, ticketId? }
+        mainActiveId: null,    // null = 显示页面；否则显示文档 Tab
+    };
+
+    const _PAGE_LABELS = {
+        board: '看板', 'ticket-list': '列表', 'ticket-graph': '关系图',
+        requirements: '需求', flow: '流程', roadmap: 'Roadmap', bugs: 'BUG',
+        repo: '仓库', stats: '统计', cicd: '交付', agents: 'Agent',
+        logs: '日志', automation: '自动化',
+        'settings-general': '基本信息', 'settings-repo': '仓库配置',
+        'settings-sop': 'SOP', 'settings-agents': 'Agent/扩展',
+        'settings-knowledge': '知识库', 'settings-assets': '资产库',
+        'settings-danger': '高级设置',
+    };
+
+    function _lsGet(key, fallback = null) {
+        try {
+            const v = localStorage.getItem(key);
+            return v === null ? fallback : v;
+        } catch {
+            return fallback;
+        }
+    }
+    function _lsSet(key, val) {
+        try { localStorage.setItem(key, String(val)); } catch {}
+    }
+
+    function _layout() {
+        return document.querySelector('#projectPage .project-layout');
+    }
+
+    function init() {
+        // 恢复偏好
+        const legacy = _lsGet(KEYS.legacySidebar);
+        const collapsed = (_lsGet(KEYS.sidebarCollapsed, legacy) === '1');
+        setSidebarCollapsed(collapsed);
+
+        state.rightWidth = Math.min(900, Math.max(360, parseInt(_lsGet(KEYS.rightWidth, '520'), 10) || 520));
+        state.splitRatio = Math.min(0.8, Math.max(0.2, parseFloat(_lsGet(KEYS.splitRatio, '0.5')) || 0.5));
+        state.rightMode = _lsGet(KEYS.rightMode, 'tab') === 'split' ? 'split' : 'tab';
+        state.rightTab = _lsGet(KEYS.rightTab, 'chat') === 'ticket' ? 'ticket' : 'chat';
+
+        _initRightResizer();
+        _initSplitResizer();
+
+        // 底栏默认收起（方案建议）
+        if (_lsGet(KEYS.bottomCollapsed, '1') === '1') {
+            const panel = document.getElementById('logPanel');
+            if (panel && !panel.classList.contains('collapsed')) {
+                try { toggleLogPanel(); } catch {}
+            }
+        }
+    }
+
+    function enterProject() {
+        document.body.classList.add('shell-project');
+        // 退出全屏：不要走 toggleChatFullscreen 的 exit 分支（会 showProjectList/Detail 搅乱壳层）
+        if (typeof _chatFullscreen !== 'undefined' && _chatFullscreen) {
+            _chatFullscreen = false;
+            document.body.classList.remove('chat-fullscreen', 'chat-split');
+            const fsBtn = document.getElementById('chatFullscreenBtn');
+            if (fsBtn) { fsBtn.textContent = '⛶'; fsBtn.title = '全屏'; }
+            const splitBtn = document.getElementById('chatSplitBtn');
+            if (splitBtn) splitBtn.style.display = 'none';
+            try { _destroyAllSplitPanes(); } catch {}
+            try { _updateFullscreenProjectLabel(); } catch {}
+        }
+        _mountPanels();
+        // 进入项目默认不打开右栏（点工单/AI 再开）；若用户上次离开时开着可恢复
+        const preferOpen = _lsGet(KEYS.rightOpen, '0') === '1';
+        if (preferOpen) {
+            openRight({ tab: state.rightTab, split: state.rightMode === 'split' });
+        } else {
+            closeRight({ persist: false });
+        }
+        _applySidebarToLayout();
+        // 等页面 header 渲染后再挂展开钮（标题栏 / 工作区 Tab 栏）
+        requestAnimationFrame(() => {
+            if (_layout()?.classList.contains('sidebar-collapsed')) {
+                _syncSidebarToggleInTitle(true);
+            }
+        });
+    }
+
+    function leaveProject() {
+        closeRight({ persist: true });
+        closeAllMainTabs();
+        _unmountPanels();
+        document.body.classList.remove('shell-project', 'shell-right-split');
+        const layout = _layout();
+        if (layout) {
+            layout.classList.remove('right-open', 'right-split');
+            layout.style.removeProperty('--ads-right-width');
+        }
+        // 清掉历史 Dock 占位
+        _clearDockedDrawerReserve();
+    }
+
+    function _mountPanels() {
+        const ticketPane = document.getElementById('rwTicketPane');
+        const chatPane = document.getElementById('rwChatPane');
+        const drawer = document.getElementById('ticketDrawer');
+        const chat = document.getElementById('chatPanel');
+        const overlay = document.getElementById('drawerOverlay');
+        if (ticketPane && drawer && drawer.parentElement !== ticketPane) {
+            ticketPane.appendChild(drawer);
+            drawer.classList.add('active', 'docked');
+            drawer.classList.remove('shell-floating');
+        }
+        // 全屏中不要把 chat 装回 layout（会被藏掉）
+        if (typeof _chatFullscreen !== 'undefined' && _chatFullscreen) {
+            if (chat && chat.parentElement !== document.body) {
+                document.body.appendChild(chat);
+            }
+        } else if (chatPane && chat && chat.parentElement !== chatPane) {
+            chatPane.appendChild(chat);
+        }
+        if (overlay) overlay.classList.remove('active');
+        state.mounted = true;
+    }
+
+    /** 全屏结束后把 chat 挂回右侧工作台 */
+    function remountChatToWorkbench() {
+        if (typeof _chatFullscreen !== 'undefined' && _chatFullscreen) return;
+        if (!document.body.classList.contains('shell-project')) return;
+        const chatPane = document.getElementById('rwChatPane');
+        const chat = document.getElementById('chatPanel');
+        if (chatPane && chat && chat.parentElement !== chatPane) {
+            chatPane.appendChild(chat);
+        }
+    }
+
+    function _unmountPanels() {
+        const drawer = document.getElementById('ticketDrawer');
+        const chat = document.getElementById('chatPanel');
+        const overlay = document.getElementById('drawerOverlay');
+        // 抽屉放回 body（在 overlay 后）
+        if (drawer && overlay && drawer.parentElement !== document.body) {
+            overlay.insertAdjacentElement('afterend', drawer);
+            drawer.classList.remove('active', 'docked');
+        } else if (drawer && drawer.parentElement !== document.body) {
+            document.body.appendChild(drawer);
+            drawer.classList.remove('active', 'docked');
+        }
+        if (chat && chat.parentElement !== document.body) {
+            document.body.appendChild(chat);
+        }
+        state.mounted = false;
+    }
+
+    function setSidebarCollapsed(collapsed) {
+        const layout = _layout();
+        const btn = document.getElementById('sidebarToggleBtn');
+        const btnTitle = document.getElementById('sidebarToggleInTitle');
+        if (layout) layout.classList.toggle('sidebar-collapsed', !!collapsed);
+        const title = collapsed ? '打开侧栏' : '收起侧栏';
+        for (const b of [btn, btnTitle]) {
+            if (!b) continue;
+            b.title = title;
+            b.setAttribute('aria-label', title);
+            b.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+        }
+        _lsSet(KEYS.sidebarCollapsed, collapsed ? '1' : '0');
+        _lsSet(KEYS.legacySidebar, collapsed ? '1' : '0');
+        _syncSidebarToggleInTitle(!!collapsed);
+    }
+
+    /** 收起时把展开钮挂到当前页标题栏；展开时收回 park，不留左侧窄条 */
+    function _syncSidebarToggleInTitle(collapsed) {
+        const btn = document.getElementById('sidebarToggleInTitle');
+        const park = document.getElementById('sidebarTogglePark');
+        if (!btn || !park) return;
+        if (!collapsed) {
+            park.appendChild(btn);
+            return;
+        }
+        const docHost = document.getElementById('mainWsHost');
+        const tabBar = document.getElementById('mainWsTabBar');
+        const docActive = docHost && docHost.style.display !== 'none' && tabBar;
+        if (docActive) {
+            tabBar.insertBefore(btn, tabBar.firstChild);
+            return;
+        }
+        const active = document.querySelector('.content-area > .tab-content.active:not(.ws-hidden)');
+        const header = active?.querySelector('.board-header, .page-header, .settings-page-header');
+        if (header) {
+            const heading = header.querySelector('h1, h2');
+            if (heading) header.insertBefore(btn, heading);
+            else header.insertBefore(btn, header.firstChild);
+        } else {
+            park.appendChild(btn);
+        }
+    }
+
+    function toggleSidebar() {
+        const layout = _layout();
+        if (!layout) return;
+        setSidebarCollapsed(!layout.classList.contains('sidebar-collapsed'));
+    }
+
+    function _applySidebarToLayout() {
+        const collapsed = _lsGet(KEYS.sidebarCollapsed, _lsGet(KEYS.legacySidebar, '0')) === '1';
+        setSidebarCollapsed(collapsed);
+    }
+
+    function openRight(opts = {}) {
+        if (!document.body.classList.contains('shell-project')) {
+            // 非项目壳层：退化到旧行为
+            if (opts.tab === 'chat' && !chatPanelOpen) toggleChatPanel();
+            return;
+        }
+        _mountPanels();
+        if (opts.ticketId) state.activeTicketId = opts.ticketId;
+        if (opts.tab === 'ticket' || opts.tab === 'chat') state.rightTab = opts.tab;
+        if (opts.split === true) state.rightMode = 'split';
+        if (opts.split === false) state.rightMode = 'tab';
+
+        state.rightOpen = true;
+        const layout = _layout();
+        if (layout) {
+            layout.classList.add('right-open');
+            layout.style.setProperty('--ads-right-width', state.rightWidth + 'px');
+        }
+        _renderRightMode();
+        _syncChatOpenFlag(true);
+        _lsSet(KEYS.rightOpen, '1');
+        _lsSet(KEYS.rightTab, state.rightTab);
+        _lsSet(KEYS.rightMode, state.rightMode);
+
+        // 打开对话时确保模式栏可见并按需加载历史
+        if (state.rightTab === 'chat' || state.rightMode === 'split') {
+            const modeBar = document.getElementById('chatModeBar');
+            const modeBtn = document.getElementById('chatModeBtn');
+            if (modeBar) modeBar.style.display = '';
+            if (modeBtn) modeBtn.style.display = '';
+            if (typeof chatMode !== 'undefined' && chatMode === 'global' && typeof loadChatHistory === 'function') {
+                loadChatHistory();
+            }
+        }
+    }
+
+    function closeRight(opts = {}) {
+        const persist = opts.persist !== false;
+        state.rightOpen = false;
+        state.rightMode = 'tab';
+        const layout = _layout();
+        if (layout) {
+            layout.classList.remove('right-open', 'right-split');
+        }
+        document.body.classList.remove('shell-right-split');
+        _syncChatOpenFlag(false);
+        _clearDockedDrawerReserve();
+        // 抽屉在壳层内保持挂载，但不显示（工作台已关）
+        const drawer = document.getElementById('ticketDrawer');
+        if (drawer && !state.mounted) drawer.classList.remove('active');
+        const overlay = document.getElementById('drawerOverlay');
+        if (overlay) overlay.classList.remove('active');
+        if (persist) {
+            _lsSet(KEYS.rightOpen, '0');
+            _lsSet(KEYS.rightMode, 'tab');
+        }
+        const splitBtn = document.getElementById('rwSplitBtn');
+        if (splitBtn) {
+            splitBtn.classList.remove('active');
+            splitBtn.title = '一键分屏：工单 | 对话';
+        }
+    }
+
+    function setRightTab(tab) {
+        if (tab !== 'ticket' && tab !== 'chat') return;
+        state.rightTab = tab;
+        if (!state.rightOpen) {
+            openRight({ tab });
+            return;
+        }
+        if (state.rightMode === 'split') {
+            // 分屏下切换 Tab = 聚焦对应半边（高亮）
+            _highlightSplitFocus(tab);
+        } else {
+            _renderRightMode();
+        }
+        _lsSet(KEYS.rightTab, tab);
+        if (tab === 'chat') {
+            _syncChatOpenFlag(true);
+            if (typeof chatMode !== 'undefined' && chatMode === 'global' && typeof loadChatHistory === 'function') {
+                loadChatHistory();
+            }
+        }
+    }
+
+    function toggleRightSplit() {
+        if (!state.rightOpen) {
+            openRight({ tab: state.rightTab || 'ticket', split: true });
+            return;
+        }
+        state.rightMode = state.rightMode === 'split' ? 'tab' : 'split';
+        _renderRightMode();
+        _lsSet(KEYS.rightMode, state.rightMode);
+    }
+
+    function setRightMode(mode) {
+        state.rightMode = mode === 'split' ? 'split' : 'tab';
+        if (state.rightOpen) _renderRightMode();
+        _lsSet(KEYS.rightMode, state.rightMode);
+    }
+
+    function _renderRightMode() {
+        const layout = _layout();
+        if (!layout) return;
+        const split = state.rightMode === 'split';
+        layout.classList.toggle('right-split', split);
+        document.body.classList.toggle('shell-right-split', split);
+
+        const ticketPane = document.getElementById('rwTicketPane');
+        const chatPane = document.getElementById('rwChatPane');
+        const tabTicket = document.getElementById('rwTabTicket');
+        const tabChat = document.getElementById('rwTabChat');
+        const splitBtn = document.getElementById('rwSplitBtn');
+
+        if (split) {
+            const left = state.splitRatio;
+            const right = Math.max(0.05, 1 - left);
+            layout.style.setProperty('--rw-split-left', String(left));
+            layout.style.setProperty('--rw-split-right', String(right));
+            ticketPane?.classList.add('active-pane');
+            chatPane?.classList.add('active-pane');
+            tabTicket?.classList.add('active');
+            tabChat?.classList.add('active');
+            if (splitBtn) {
+                splitBtn.classList.add('active');
+                splitBtn.title = '合并为单页签';
+            }
+            _syncChatOpenFlag(true);
+        } else {
+            layout.style.removeProperty('--rw-split-left');
+            layout.style.removeProperty('--rw-split-right');
+            const isTicket = state.rightTab === 'ticket';
+            ticketPane?.classList.toggle('active-pane', isTicket);
+            chatPane?.classList.toggle('active-pane', !isTicket);
+            tabTicket?.classList.toggle('active', isTicket);
+            tabChat?.classList.toggle('active', !isTicket);
+            if (splitBtn) {
+                splitBtn.classList.remove('active');
+                splitBtn.title = '一键分屏：工单 | 对话';
+            }
+            // 仅对话页签可见时点亮顶栏 AI 按钮
+            _syncChatOpenFlag(!isTicket);
+        }
+    }
+
+    function _highlightSplitFocus(tab) {
+        const tabTicket = document.getElementById('rwTabTicket');
+        const tabChat = document.getElementById('rwTabChat');
+        tabTicket?.classList.toggle('active', tab === 'ticket');
+        tabChat?.classList.toggle('active', tab === 'chat');
+        state.rightTab = tab;
+    }
+
+    function _syncChatOpenFlag(open) {
+        chatPanelOpen = !!open;
+        const toggleBtn = document.getElementById('chatToggleBtn');
+        if (open) {
+            document.body.classList.add('chat-open');
+            toggleBtn?.classList.add('active');
+        } else {
+            // 壳层项目页：右栏关则去掉 chat-open（不再靠 margin 腾位）
+            if (document.body.classList.contains('shell-project')) {
+                document.body.classList.remove('chat-open');
+            } else if (!open) {
+                document.body.classList.remove('chat-open');
+            }
+            toggleBtn?.classList.remove('active');
+        }
+    }
+
+    function _initRightResizer() {
+        // 工作台左缘拖拽改宽：复用 chat resize 手柄逻辑的简化版
+        document.addEventListener('mousedown', (e) => {
+            if (!document.body.classList.contains('shell-project') || !state.rightOpen) return;
+            const layout = _layout();
+            if (!layout) return;
+            // 仅当点在工作台左边缘 6px
+            const wb = document.getElementById('rightWorkbench');
+            if (!wb) return;
+            const rect = wb.getBoundingClientRect();
+            if (e.clientX < rect.left - 2 || e.clientX > rect.left + 6) return;
+            if (!wb.contains(e.target) && Math.abs(e.clientX - rect.left) > 6) return;
+            // 若点在分屏条上则交给分屏
+            if (e.target.closest('#rwResizer')) return;
+
+            e.preventDefault();
+            const startX = e.clientX;
+            const startW = state.rightWidth;
+            const onMove = (ev) => {
+                const delta = startX - ev.clientX;
+                state.rightWidth = Math.min(900, Math.max(360, startW + delta));
+                layout.style.setProperty('--ads-right-width', state.rightWidth + 'px');
+            };
+            const onUp = () => {
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+                document.body.style.cursor = '';
+                document.body.style.userSelect = '';
+                _lsSet(KEYS.rightWidth, state.rightWidth);
+            };
+            document.body.style.cursor = 'ew-resize';
+            document.body.style.userSelect = 'none';
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+        });
+    }
+
+    function _initSplitResizer() {
+        const handle = document.getElementById('rwResizer');
+        if (!handle || handle.dataset.bound) return;
+        handle.dataset.bound = '1';
+        handle.addEventListener('mousedown', (e) => {
+            if (state.rightMode !== 'split') return;
+            e.preventDefault();
+            handle.classList.add('dragging');
+            const body = document.getElementById('rwBody');
+            const onMove = (ev) => {
+                if (!body) return;
+                const rect = body.getBoundingClientRect();
+                if (rect.width < 40) return;
+                let ratio = (ev.clientX - rect.left) / rect.width;
+                ratio = Math.min(0.8, Math.max(0.2, ratio));
+                state.splitRatio = ratio;
+                const layout = _layout();
+                layout?.style.setProperty('--rw-split-left', String(ratio));
+                layout?.style.setProperty('--rw-split-right', String(1 - ratio));
+            };
+            const onUp = () => {
+                handle.classList.remove('dragging');
+                document.removeEventListener('mousemove', onMove);
+                document.removeEventListener('mouseup', onUp);
+                _lsSet(KEYS.splitRatio, state.splitRatio);
+            };
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+        });
+    }
+
+    function isProjectShell() {
+        return document.body.classList.contains('shell-project');
+    }
+
+    // ── C 主舞台：页面 + 文档 Tabs ──────────────────────────
+
+    function notifyPage(pageId) {
+        state.currentPage = pageId || 'board';
+        // 侧栏切页 = 回到页面视图（文档 Tab 保留可点回）
+        state.mainActiveId = null;
+        _renderMainWorkspace();
+        // 切页后把展开钮挂到新页标题栏
+        if (_layout()?.classList.contains('sidebar-collapsed')) {
+            _syncSidebarToggleInTitle(true);
+        }
+    }
+
+    function focusPage() {
+        state.mainActiveId = null;
+        _renderMainWorkspace();
+        // 确保对应 page 内容可见
+        const tabEl = document.getElementById(`tab-${state.currentPage}`);
+        if (tabEl && !tabEl.classList.contains('active')) {
+            if (typeof switchTab === 'function') switchTab(state.currentPage);
+        }
+    }
+
+    function openMain(tab, opts = {}) {
+        if (!tab || !tab.type) return null;
+        if (!currentProjectId) {
+            showToast('请先选择项目', 'warning');
+            return null;
+        }
+        const activate = opts.activate !== false;
+        let id;
+        if (tab.type === 'file') {
+            const path = (tab.path || '').replace(/\\/g, '/');
+            if (!path) return null;
+            id = 'file:' + path;
+            let existing = state.mainTabs.find(t => t.id === id);
+            if (!existing) {
+                existing = {
+                    id,
+                    type: 'file',
+                    path,
+                    title: path.split('/').pop() || path,
+                    preview: tab.preview !== false,
+                };
+                state.mainTabs.push(existing);
+            }
+        } else if (tab.type === 'diff') {
+            const path = (tab.path || '').replace(/\\/g, '/');
+            const ticketId = tab.ticketId || '';
+            id = 'diff:' + (ticketId || '') + ':' + path;
+            let existing = state.mainTabs.find(t => t.id === id);
+            if (!existing) {
+                existing = {
+                    id,
+                    type: 'diff',
+                    path,
+                    ticketId,
+                    title: (path.split('/').pop() || 'diff') + ' ↔',
+                };
+                state.mainTabs.push(existing);
+            }
+        } else if (tab.type === 'page') {
+            if (typeof switchTab === 'function') switchTab(tab.pageId);
+            return tab.pageId;
+        } else {
+            return null;
+        }
+        if (activate) state.mainActiveId = id;
+        _renderMainWorkspace();
+        if (activate) _loadMainTabContent(id);
+        return id;
+    }
+
+    function activateMainTab(id) {
+        if (!state.mainTabs.some(t => t.id === id)) return;
+        state.mainActiveId = id;
+        _renderMainWorkspace();
+        _loadMainTabContent(id);
+    }
+
+    function closeMainTab(id) {
+        const idx = state.mainTabs.findIndex(t => t.id === id);
+        if (idx < 0) return;
+        state.mainTabs.splice(idx, 1);
+        if (state.mainActiveId === id) {
+            const next = state.mainTabs[idx] || state.mainTabs[idx - 1] || null;
+            state.mainActiveId = next ? next.id : null;
+        }
+        _renderMainWorkspace();
+        if (state.mainActiveId) _loadMainTabContent(state.mainActiveId);
+    }
+
+    function closeAllMainTabs() {
+        state.mainTabs = [];
+        state.mainActiveId = null;
+        _renderMainWorkspace();
+    }
+
+    function _renderMainWorkspace() {
+        const bar = document.getElementById('mainWsTabBar');
+        const tabsEl = document.getElementById('mainWsTabs');
+        const host = document.getElementById('mainWsHost');
+        const pageTab = document.getElementById('mainWsPageTab');
+        if (!bar || !tabsEl || !host) return;
+
+        const hasDocs = state.mainTabs.length > 0;
+        bar.style.display = hasDocs ? 'flex' : 'none';
+
+        if (pageTab) {
+            pageTab.textContent = _PAGE_LABELS[state.currentPage] || state.currentPage;
+            pageTab.classList.toggle('active', !state.mainActiveId);
+        }
+
+        tabsEl.innerHTML = state.mainTabs.map(t => {
+            const active = t.id === state.mainActiveId ? ' active' : '';
+            const icon = t.type === 'diff' ? '≠' : '📄';
+            const safeId = t.id.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+            return `<button type="button" class="main-ws-tab${active}" role="tab"
+                        onclick="adsShell.activateMainTab('${safeId}')" title="${_escAttr(t.path || t.title)}">
+                        <span class="main-ws-tab-icon">${icon}</span>
+                        <span class="main-ws-tab-label">${_escHtml(t.title)}</span>
+                        <span class="main-ws-tab-close" onclick="event.stopPropagation();adsShell.closeMainTab('${safeId}')" title="关闭">×</span>
+                    </button>`;
+        }).join('');
+
+        const showDoc = !!state.mainActiveId;
+        host.style.display = showDoc ? 'flex' : 'none';
+        document.querySelectorAll('.content-area > .tab-content').forEach(el => {
+            if (showDoc) {
+                el.classList.add('ws-hidden');
+            } else {
+                el.classList.remove('ws-hidden');
+            }
+        });
+        document.getElementById('content-area')?.classList.toggle('ws-doc-active', showDoc);
+        document.querySelector('.content-area')?.classList.toggle('ws-doc-active', showDoc);
+        if (_layout()?.classList.contains('sidebar-collapsed')) {
+            _syncSidebarToggleInTitle(true);
+        }
+    }
+
+    function _escHtml(s) {
+        return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+    function _escAttr(s) {
+        return _escHtml(s).replace(/'/g, '&#39;');
+    }
+
+    async function _loadMainTabContent(id) {
+        const tab = state.mainTabs.find(t => t.id === id);
+        const host = document.getElementById('mainWsHost');
+        if (!tab || !host || state.mainActiveId !== id) return;
+
+        host.innerHTML = `
+            <div class="main-ws-pane-header">
+                <div class="main-ws-pane-path" title="${_escAttr(tab.path)}">${_escHtml(tab.path || tab.title)}</div>
+                <div class="main-ws-pane-actions" id="mainWsPaneActions"></div>
+            </div>
+            <div class="main-ws-pane-body" id="mainWsPaneBody">
+                <div class="main-ws-loading">加载中…</div>
+            </div>`;
+
+        const body = document.getElementById('mainWsPaneBody');
+        const actions = document.getElementById('mainWsPaneActions');
+        try {
+            if (tab.type === 'file') {
+                await _fillFilePane(tab, body, actions);
+            } else if (tab.type === 'diff') {
+                await _fillDiffPane(tab, body, actions);
+            }
+        } catch (e) {
+            if (body) body.innerHTML = `<div class="main-ws-error">加载失败：${_escHtml(e.message || e)}</div>`;
+        }
+    }
+
+    async function _fillFilePane(tab, body, actions) {
+        let path = tab.path;
+        let tabRef = tab;
+        const imgExts = ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'ico', 'bmp'];
+        let ext = (path.split('.').pop() || '').toLowerCase();
+        if (imgExts.includes(ext)) {
+            const rawUrl = `/api/projects/${currentProjectId}/git/file-raw?path=${encodeURIComponent(path)}`;
+            body.innerHTML = `<div class="main-ws-img"><img src="${rawUrl}" alt="${_escAttr(tabRef.title)}"></div>`;
+            return;
+        }
+        const data = await api(`/projects/${currentProjectId}/git/file?path=${encodeURIComponent(path)}`);
+        // 后端可能把裸文件名解析成真实路径（如 DefaultEngine.ini → Config/DefaultEngine.ini）
+        if (data.path && data.path !== path) {
+            path = String(data.path).replace(/\\/g, '/');
+            const newId = 'file:' + path;
+            const existing = state.mainTabs.find(t => t.id === newId && t !== tabRef);
+            if (existing) {
+                state.mainTabs = state.mainTabs.filter(t => t !== tabRef);
+                tabRef = existing;
+            } else {
+                tabRef.id = newId;
+            }
+            tabRef.path = path;
+            tabRef.title = path.split('/').pop() || path;
+            state.mainActiveId = tabRef.id;
+            _renderMainWorkspace();
+            const pathEl = document.querySelector('.main-ws-pane-path');
+            if (pathEl) {
+                pathEl.textContent = path;
+                pathEl.title = path;
+            }
+        }
+        const content = (data.content || '').replace(/\r\n/g, '\n');
+        tabRef._content = content;
+        ext = (path.split('.').pop() || '').toLowerCase();
+
+        if (ext === 'md' || ext === 'markdown') {
+            if (actions) {
+                actions.innerHTML = `
+                    <button type="button" class="btn-icon main-ws-action" id="mainWsMdToggle" title="切换源码/预览">源码</button>
+                    <button type="button" class="btn-icon main-ws-action" onclick="navigator.clipboard.writeText(adsShell.getMainTabContent('${tabRef.id.replace(/'/g, "\\'")}'))" title="复制">⎘</button>`;
+            }
+            _renderMdOrSource(body, content, path, true);
+            const btn = document.getElementById('mainWsMdToggle');
+            if (btn) {
+                let preview = true;
+                btn.onclick = () => {
+                    preview = !preview;
+                    btn.textContent = preview ? '源码' : '预览';
+                    _renderMdOrSource(body, content, path, preview);
+                };
+            }
+            return;
+        }
+
+        if (actions) {
+            actions.innerHTML = `<button type="button" class="btn-icon main-ws-action" onclick="navigator.clipboard.writeText(adsShell.getMainTabContent('${tabRef.id.replace(/'/g, "\\'")}'))" title="复制">⎘</button>`;
+        }
+        body.innerHTML = `<pre class="main-ws-code"><code>${_escHtml(content.slice(0, 200000))}</code></pre>`;
+    }
+
+    function _renderMdOrSource(body, content, path, preview) {
+        if (preview && window.marked) {
+            body.innerHTML = `<div class="main-ws-md markdown-body">${marked.parse(content)}</div>`;
+            // 相对图片：简单处理 /api raw
+            body.querySelectorAll('img').forEach(img => {
+                const src = img.getAttribute('src') || '';
+                if (src && !src.startsWith('http') && !src.startsWith('/') && !src.startsWith('data:')) {
+                    const dir = path.includes('/') ? path.slice(0, path.lastIndexOf('/') + 1) : '';
+                    img.src = `/api/projects/${currentProjectId}/git/file-raw?path=${encodeURIComponent(dir + src)}`;
+                }
+            });
+        } else {
+            body.innerHTML = `<pre class="main-ws-code"><code>${_escHtml(content.slice(0, 200000))}</code></pre>`;
+        }
+    }
+
+    async function _fillDiffPane(tab, body, actions) {
+        let branch = null;
+        if (tab.ticketId) {
+            try {
+                const t = await api(`/projects/${currentProjectId}/tickets/${tab.ticketId}`);
+                branch = t.branch_name || null;
+            } catch {}
+        }
+        const url = `/projects/${currentProjectId}/git/file-diff?path=${encodeURIComponent(tab.path)}${branch ? `&branch=${encodeURIComponent(branch)}` : ''}`;
+        const data = await api(url);
+        const diff = data.diff || '';
+        const content = data.content || '';
+        tab._content = diff || content;
+
+        if (actions) {
+            actions.innerHTML = diff
+                ? `<span class="main-ws-badge">vs main</span>`
+                : `<span class="main-ws-badge">文件</span>`;
+            actions.innerHTML += ` <button type="button" class="btn-icon main-ws-action" onclick="adsShell.openMain({type:'file',path:'${tab.path.replace(/'/g, "\\'")}'})" title="打开文件">📄</button>`;
+        }
+
+        if (diff) {
+            const colored = (typeof _colorDiff === 'function')
+                ? _colorDiff(_escHtml(diff.slice(0, 20000)))
+                : _escHtml(diff.slice(0, 20000));
+            body.innerHTML = `<pre class="main-ws-code main-ws-diff"><code class="diff-code">${colored}</code></pre>`;
+        } else if (content) {
+            body.innerHTML = `<pre class="main-ws-code"><code>${_escHtml(content.slice(0, 20000))}</code></pre>`;
+        } else {
+            body.innerHTML = `<div class="main-ws-error">无 diff / 文件内容为空</div>`;
+        }
+    }
+
+    function getMainTabContent(id) {
+        const tab = state.mainTabs.find(t => t.id === id);
+        return tab?._content || '';
+    }
+
+    return {
+        init,
+        enterProject,
+        leaveProject,
+        getState: () => ({
+            ...state,
+            sidebarCollapsed: !!_layout()?.classList.contains('sidebar-collapsed'),
+            mainTabs: state.mainTabs.map(t => ({ id: t.id, type: t.type, title: t.title, path: t.path })),
+        }),
+        setSidebarCollapsed,
+        toggleSidebar,
+        openRight,
+        closeRight,
+        setRightTab,
+        toggleRightSplit,
+        setRightMode,
+        isProjectShell,
+        notifyPage,
+        focusPage,
+        openMain,
+        activateMainTab,
+        closeMainTab,
+        closeAllMainTabs,
+        getMainTabContent,
+        remountChatToWorkbench,
+        syncSidebarToggleInTitle: () => {
+            if (_layout()?.classList.contains('sidebar-collapsed')) {
+                _syncSidebarToggleInTitle(true);
+            }
+        },
+    };
+})();
+
+/** 切换项目侧栏（Cursor 风格）— 委托 shell */
+function toggleProjectSidebar() {
+    if (typeof adsShell !== 'undefined' && adsShell.toggleSidebar) {
+        adsShell.toggleSidebar();
+        return;
+    }
+    // 兜底：无 shell 时直接改 class
+    const layout = document.querySelector('#projectPage .project-layout');
+    if (!layout) {
+        showToast('请先进入项目', 'info');
+        return;
+    }
+    layout.classList.toggle('sidebar-collapsed');
+}
+function initProjectSidebarState() {
+    /* 已并入 adsShell.init */
+}
 
 /**
  * 初始化项目名称输入监听
@@ -891,6 +1707,7 @@ function showPage(pageId) {
 function showProjectList() {
     currentProjectId = null;
     currentProject = null;
+    if (typeof adsShell !== 'undefined') adsShell.leaveProject();
     closeDrawer();   // 切走时把工单详情抽屉收起来，否则列表页会继续顶着
     disconnectSSE();
     showPage('projectListPage');
@@ -907,6 +1724,18 @@ function showProjectDetail(projectId) {
     _slashCommands = []; _slashCommandsProjectId = ''; // 切换项目时重新加载命令列表
     stopGlobalLogPolling(); // 切換到項目頁面，停止全局輪詢
     showPage('projectPage');
+    // 先写面包屑占位，避免 enterProject 异常时路径一直停在「项目列表」
+    updateBreadcrumb([
+        { text: '项目列表', onClick: 'showProjectList()' },
+        { text: '加载中…' },
+    ]);
+    try {
+        if (typeof adsShell !== 'undefined') {
+            adsShell.enterProject();
+        }
+    } catch (e) {
+        console.error('adsShell.enterProject failed:', e);
+    }
     loadProjectDetail();
     connectSSE(projectId);
     // 清空日志面板并加载该项目历史日志
@@ -987,6 +1816,11 @@ function _updateChatPanelForContext() {
 }
 
 function switchTab(tab) {
+    // 壳层：记录当前页面并回到页面视图（文档 Tab 仍保留）
+    if (typeof adsShell !== 'undefined' && adsShell.isProjectShell()) {
+        adsShell.notifyPage(tab);
+    }
+
     // 侧栏导航高亮（主导航项）
     document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
     const activeNav = document.querySelector(`.nav-item[data-tab="${tab}"]`);
@@ -4059,11 +4893,14 @@ async function deleteProject() {
 
 function updateBreadcrumb(items) {
     const bc = document.getElementById('breadcrumb');
+    if (!bc || !items?.length) return;
     bc.innerHTML = items.map((item, i) => {
+        const text = escHtml(String(item.text ?? ''));
         if (i < items.length - 1) {
-            return `<a href="#" onclick="${item.onClick}; return false;">${item.text}</a><span>›</span>`;
+            const onClick = item.onClick || 'showProjectList()';
+            return `<a href="#" onclick="${onClick}; return false;">${text}</a><span class="bc-sep">›</span>`;
         }
-        return `<a href="#" class="current">${item.text}</a>`;
+        return `<span class="bc-current">${text}</span>`;
     }).join('');
 }
 
@@ -4576,22 +5413,30 @@ async function loadProjectDetail() {
     if (!currentProjectId) return;
     try {
         const data = await api(`/projects/${currentProjectId}`);
-        currentProject = data;
-        document.getElementById('sidebarProjectName').textContent = data.name;
+        // 兼容 {…project字段} 与 { project: {…} }
+        currentProject = data?.project || data;
+        const name = currentProject?.name || data?.name || currentProjectId.slice(0, 12);
+        const nameEl = document.getElementById('sidebarProjectName');
+        if (nameEl) nameEl.textContent = name;
         updateBreadcrumb([
             { text: '项目列表', onClick: 'showProjectList()' },
-            { text: data.name, onClick: '' },
+            { text: name },
         ]);
         // 项目数据加载完成后更新聊天面板标题（此时 currentProject 已有值）
         const titleEl = document.getElementById('chatPanelTitle');
         if (titleEl && currentProjectId) {
-            titleEl.textContent = `AI 助手 · ${data.name}`;
+            titleEl.textContent = `AI 助手 · ${name}`;
         }
         _updateFullscreenProjectLabel();
         // 加载默认 tab
         switchTab('board');
         loadRequirementFilter();
     } catch (e) {
+        console.error('loadProjectDetail failed:', e);
+        updateBreadcrumb([
+            { text: '项目列表', onClick: 'showProjectList()' },
+            { text: '加载失败' },
+        ]);
         showToast(`加载项目失败: ${e.message}`, 'error');
     }
 }
@@ -4968,9 +5813,10 @@ function _buildThreeLayerBar(hasSP, hasOS, ticketData) {
     let discHtml = '';
     if (hasSP) {
         // Superpowers 只有两态：装了 Pack（待激活）或已激活（dev 阶段有记录）
-        // 曾经历开发阶段即视为已激活（包括 blocked/testing/in_review/done）
-        const PAST_DEV = ['development','development_in_progress','testing','in_review','done','blocked','cancelled'];
-        const activated = PAST_DEV.includes(ticketStatus);
+        // 用展示态：曾进入开发/审查/完成/阻塞 即视为已激活
+        const disp = (typeof toDisplayStatus === 'function') ? toDisplayStatus(ticketStatus) : ticketStatus;
+        const activated = ['in_progress', 'in_review', 'done', 'blocked'].includes(disp)
+            || /development|testing|review|deploy|engine_compile|self_test|play_test|acceptance/.test(ticketStatus || '');
         const dCls = activated ? 'tlb-done' : 'tlb-pending';
         const dJump = activated ? 'superpowers_skill' : '';
         discHtml = `<div class="tlb-row tlb-discipline">
@@ -4986,27 +5832,47 @@ function _buildThreeLayerBar(hasSP, hasOS, ticketData) {
     }
 
     // ── 编排层（Harness/ADS）─────────────────────────────────────
+    // keys 必须覆盖细粒度 status；看板「已完成」= testing_done/deployed，以前只写了 done → 全灰
     const HARNESS_PHASES = [
-        { keys: ['pending', 'todo'],                         label: '需求',
+        { keys: ['pending', 'todo', 'planning_done', 'planning_in_progress'], label: '需求',
           jumpActions: 'write_prd,decompose', jumpStatuses: 'pending,planning_done' },
-        { keys: ['architecture', 'architecture_done'],       label: '架构',
+        { keys: ['architecture', 'architecture_done', 'architecture_in_progress'], label: '架构',
           jumpActions: 'design_architecture', jumpStatuses: 'architecture_done,architecture_in_progress' },
-        { keys: ['development', 'development_in_progress', 'blocked', 'cancelled'],  label: '开发',
-          jumpActions: 'develop,rework,fix_issues', jumpStatuses: 'development_done,development_in_progress,engine_compile_failed,self_test_failed' },
-        { keys: ['testing'],                                  label: '测试',
-          jumpActions: 'run_tests', jumpStatuses: 'testing_done,testing_failed,testing_in_progress,play_test_failed' },
-        { keys: ['in_review'],                                label: '审查',
-          jumpActions: 'code_review,acceptance_review', jumpStatuses: 'in_review,acceptance_passed,acceptance_rejected' },
-        { keys: ['done'],                                     label: '完成',
-          jumpActions: '', jumpStatuses: 'done,deployed' },
+        { keys: ['development', 'development_in_progress', 'development_done',
+                 'engine_compile_pending', 'engine_compile_failed', 'engine_compile_passed',
+                 'self_test_failed', 'blocked', 'cancelled'], label: '开发',
+          jumpActions: 'develop,rework,fix_issues',
+          jumpStatuses: 'development_done,development_in_progress,engine_compile_failed,self_test_failed' },
+        { keys: ['testing', 'testing_in_progress', 'testing_failed', 'play_test_failed',
+                 'play_test_passed'], label: '测试',
+          jumpActions: 'run_tests',
+          jumpStatuses: 'testing_done,testing_failed,testing_in_progress,play_test_failed' },
+        { keys: ['in_review', 'acceptance_passed', 'acceptance_rejected', 'review_passed'], label: '审查',
+          jumpActions: 'code_review,acceptance_review',
+          jumpStatuses: 'in_review,acceptance_passed,acceptance_rejected,review_passed' },
+        { keys: ['done', 'testing_done', 'deployed', 'deploying', 'completed'], label: '完成',
+          jumpActions: '', jumpStatuses: 'done,testing_done,deployed' },
     ];
-    const hIdx = HARNESS_PHASES.findIndex(p => p.keys.includes(ticketStatus));
+    let hIdx = HARNESS_PHASES.findIndex(p => p.keys.includes(ticketStatus));
+    // 兜底：映射到展示态后再找（避免新 status 未进 keys 时整条灰掉）
+    if (hIdx < 0 && typeof toDisplayStatus === 'function') {
+        const disp = toDisplayStatus(ticketStatus);
+        const DISP_TO_H = { pending: 0, todo: 0, in_progress: 2, in_review: 4, done: 5, blocked: 2, cancelled: 2 };
+        if (disp in DISP_TO_H) hIdx = DISP_TO_H[disp];
+    }
     const isBlocked = ticketStatus === 'blocked';
     const isCancelled = ticketStatus === 'cancelled';
+    const isTerminalDone = ['testing_done', 'deployed', 'done', 'completed'].includes(ticketStatus);
     const hNodes = HARNESS_PHASES.map((p, i) => {
-        const done = hIdx > i || ticketStatus === 'done';
-        const active = hIdx === i;
-        // blocked/cancelled 时当前节点用特殊颜色
+        let done = false, active = false;
+        if (isTerminalDone) {
+            // 看板「已完成」：整条编排层点亮，落在「完成」
+            done = true;
+            active = (i === HARNESS_PHASES.length - 1);
+        } else if (hIdx >= 0) {
+            done = i < hIdx;
+            active = i === hIdx;
+        }
         const extraStyle = (active && isBlocked)
             ? 'border-color:rgba(239,68,68,.5);color:#ef4444;'
             : (active && isCancelled)
@@ -5014,7 +5880,6 @@ function _buildThreeLayerBar(hasSP, hasOS, ticketData) {
                 : '';
         const cls = done ? 'tlb-done' : 'tlb-pending';
         const label = (active && isBlocked) ? `${escHtml(p.label)} ⚠` : escHtml(p.label);
-        // 点亮（done 或 active）才可点
         const lit = done || active;
         return _tlbNode(label, cls, active,
             lit ? p.jumpActions : '', lit ? p.jumpStatuses : '', extraStyle);
@@ -5089,8 +5954,10 @@ function _jumpToTimelineByStage(actionsCsv, statusCsv) {
 async function openTicketDrawer(ticketId) {
     if (!currentProjectId) return;
 
-    // 应用用户的 Dock 偏好（从 localStorage）
-    _applyDrawerDockPreference();
+    // 壳层下不再使用 Dock 占位；非壳层保留旧 Dock 偏好
+    if (!(typeof adsShell !== 'undefined' && adsShell.isProjectShell())) {
+        _applyDrawerDockPreference();
+    }
 
     // 联动聊天面板 — 设置当前工单上下文
     chatCurrentTicketId = ticketId;
@@ -5470,14 +6337,23 @@ async function openTicketDrawer(ticketId) {
                 }
             });
         }
-        // 打开抽屉
-        document.getElementById('drawerOverlay').classList.add('active');
-        document.getElementById('ticketDrawer').classList.add('active');
+        // 打开：壳层走右侧工作台；否则走旧抽屉
+        if (typeof adsShell !== 'undefined' && adsShell.isProjectShell()) {
+            document.getElementById('ticketDrawer')?.classList.add('active');
+            document.getElementById('drawerOverlay')?.classList.remove('active');
+            adsShell.openRight({ tab: 'ticket', ticketId, split: false });
+        } else {
+            document.getElementById('drawerOverlay')?.classList.add('active');
+            document.getElementById('ticketDrawer')?.classList.add('active');
+            _applyDockedDrawerReserve();
+        }
         // v0.19.x 启动进度区（首次拉数据 + 5s ticker 刷已用时）
         _startTicketActionProgress(ticketId);
         // 异步加载统一时间轴
         _loadUnifiedTimeline(ticketId);
     } catch (e) {
+        // 打开失败时清掉可能已加上的 Dock 占位，避免主区留白
+        _clearDockedDrawerReserve();
         showToast(`加载工单失败: ${e.message}`, 'error');
     }
 }
@@ -5816,7 +6692,10 @@ function renderSourceSection(ticket) {
 async function locateSourceMessage(sessionId, messageId) {
     if (!sessionId && !messageId) return;
     // 确保聊天面板已打开
-    if (typeof chatPanelOpen !== 'undefined' && !chatPanelOpen
+    if (typeof adsShell !== 'undefined' && adsShell.isProjectShell()) {
+        adsShell.openRight({ tab: 'chat' });
+        await new Promise(r => setTimeout(r, 300));
+    } else if (typeof chatPanelOpen !== 'undefined' && !chatPanelOpen
         && typeof toggleChatPanel === 'function') {
         toggleChatPanel();
         await new Promise(r => setTimeout(r, 300));
@@ -6549,13 +7428,41 @@ function toggleCollapsible(blockId) {
 }
 
 function closeDrawer() {
-    document.getElementById('drawerOverlay').classList.remove('active');
-    document.getElementById('ticketDrawer').classList.remove('active');
-    // Dock 模式下关闭也要去掉 body 的占位 class 和 CSS 变量，让主内容区回弹
-    document.body.classList.remove('has-docked-drawer');
-    document.body.style.removeProperty('--docked-drawer-width');
+    if (typeof adsShell !== 'undefined' && adsShell.isProjectShell()) {
+        // 壳层：关工作台（主区 Grid 回弹，无 padding/margin 残留）
+        adsShell.closeRight();
+        _stopTicketActionProgress();
+        return;
+    }
+    document.getElementById('drawerOverlay')?.classList.remove('active');
+    document.getElementById('ticketDrawer')?.classList.remove('active');
+    // Dock 占位必须清干净（含拖拽写入的内联 padding），否则主内容区会留出空白
+    _clearDockedDrawerReserve();
     // v0.19.x：停掉进度区 ticker
     _stopTicketActionProgress();
+}
+
+/** 清除 Dock 抽屉给主内容区预留的右边距（class / CSS 变量 / 内联 style） */
+function _clearDockedDrawerReserve() {
+    document.body.classList.remove('has-docked-drawer');
+    document.body.style.removeProperty('--docked-drawer-width');
+    const main = document.querySelector('.main-container');
+    if (main) main.style.paddingRight = '';
+}
+
+/** 仅在抽屉打开且为 Dock 时预留主区宽度 */
+function _applyDockedDrawerReserve() {
+    const drawer = document.getElementById('ticketDrawer');
+    if (!drawer?.classList.contains('docked') || !drawer.classList.contains('active')) {
+        _clearDockedDrawerReserve();
+        return;
+    }
+    document.body.classList.add('has-docked-drawer');
+    const w = drawer.offsetWidth || 500;
+    document.body.style.setProperty('--docked-drawer-width', w + 'px');
+    // 只用 CSS 变量驱动 padding，避免内联 style 在关闭后残留
+    const main = document.querySelector('.main-container');
+    if (main) main.style.paddingRight = '';
 }
 
 // ==================== v0.19.x 工单「📍 当前进度」区 ====================
@@ -6748,17 +7655,12 @@ function _syncDockBtnState(isDocked) {
     if (isDocked) {
         btn.innerHTML = '📍';  // Dock 态 = 实心定位
         btn.title = 'Dock 模式开启（与主内容并排）。点击切回浮动';
-        document.body.classList.add('has-docked-drawer');
-        // 同步当前抽屉宽度到 CSS 变量，让 padding-right 正确
-        const drawer = document.getElementById('ticketDrawer');
-        if (drawer) {
-            document.body.style.setProperty('--docked-drawer-width', drawer.offsetWidth + 'px');
-        }
     } else {
         btn.innerHTML = '📌';  // 浮动态 = 图钉
         btn.title = '浮动模式（遮盖主内容）。点击切 Dock 模式';
-        document.body.classList.remove('has-docked-drawer');
     }
+    // 占位只跟「抽屉打开且 Dock」绑定；关抽屉/切浮动时立即回弹主区
+    _applyDockedDrawerReserve();
 }
 
 /** 切换抽屉的 浮动/固定(Dock) 模式。状态保存到 localStorage */
@@ -6793,11 +7695,9 @@ function _initDrawerResize() {
             const delta = startX - e.clientX;
             const newWidth = Math.min(900, Math.max(320, startWidth + delta));
             drawer.style.width = newWidth + 'px';
-            // docked 模式同步更新主容器留白
-            if (drawer.classList.contains('docked')) {
+            // docked 且打开时只更新 CSS 变量（由 body.has-docked-drawer 驱动 padding）
+            if (drawer.classList.contains('docked') && drawer.classList.contains('active')) {
                 document.body.style.setProperty('--docked-drawer-width', newWidth + 'px');
-                const main = document.querySelector('.main-container');
-                if (main) main.style.paddingRight = newWidth + 'px';
             }
         };
 
@@ -6828,8 +7728,14 @@ function _initDrawerResize() {
     } catch {}
 }
 
-// 页面加载后初始化拖拽
-document.addEventListener('DOMContentLoaded', _initDrawerResize);
+// 页面加载后初始化拖拽；顺带清掉历史残留的内联 padding（关抽屉后主区留白 bug）
+document.addEventListener('DOMContentLoaded', () => {
+    _initDrawerResize();
+    const drawer = document.getElementById('ticketDrawer');
+    if (!drawer?.classList.contains('active')) {
+        _clearDockedDrawerReserve();
+    }
+});
 
 /** 打开抽屉时根据用户偏好自动应用 Dock 状态 */
 function _applyDrawerDockPreference() {
@@ -8300,7 +9206,7 @@ async function showRequirementDetail(reqId) {
             <div class="drawer-section">
                 <h4>关联工单 (${tickets.length})</h4>
                 ${tickets.map(t => `
-                    <div style="background:var(--bg-elevated); padding:10px; border-radius:var(--radius-sm); margin-bottom:6px; cursor:pointer; display:flex; justify-content:space-between; align-items:center;" onclick="closeDrawer(); setTimeout(() => openTicketDrawer('${t.id}'), 300);">
+                    <div style="background:var(--bg-elevated); padding:10px; border-radius:var(--radius-sm); margin-bottom:6px; cursor:pointer; display:flex; justify-content:space-between; align-items:center;" onclick="openTicketDrawer('${t.id}')">
                         <span style="font-size:13px;">${escHtml(t.title)}</span>
                         <span class="tag tag-module" style="font-size:11px;">${getStatusLabel(t.status)}</span>
                     </div>
@@ -8978,6 +9884,7 @@ function renderLogItem(log) {
         openspec_apply_failed:   { icon: '📐', label: 'OpenSpec Apply 失败', layer: 'spec' },
         openspec_verify:         { icon: '📐', label: 'OpenSpec Verify 通过 ✅', layer: 'spec' },
         openspec_verify_failed:  { icon: '📐', label: 'OpenSpec Verify 失败 ❌', layer: 'spec' },
+        openspec_archive:        { icon: '📐', label: 'OpenSpec Archive 完成', layer: 'spec' },
         superpowers_skill:       { icon: '⚡', label: 'Superpowers 约束已激活', layer: 'discipline' },
         phase_reset:             { icon: '🔄', label: '阶段重置', layer: 'harness' },
         change_detected:         { icon: '🔍', label: '变更检测', layer: 'harness' },
@@ -12322,21 +13229,37 @@ function toggleChatFullscreen() {
     _chatFullscreen = !_chatFullscreen;
     const btn = document.getElementById('chatFullscreenBtn');
     const splitBtn = document.getElementById('chatSplitBtn');
+    const chat = document.getElementById('chatPanel');
 
     if (_chatFullscreen) {
-        if (!chatPanelOpen) toggleChatPanel();
+        // 壳层下 chat 挂在 .project-layout 内；全屏 CSS 会 display:none 整个 layout，
+        // 必须先把 chat 挪到 body，否则「点了全屏却什么都看不见」。
+        if (chat && chat.parentElement !== document.body) {
+            document.body.appendChild(chat);
+        }
+        chatPanelOpen = true;
+        document.body.classList.add('chat-open');
+        document.getElementById('chatToggleBtn')?.classList.add('active');
+        // 显示面板自身关闭钮（壳层里被藏掉了）
+        const closeBtn = document.getElementById('chatPanelCloseBtn');
+        if (closeBtn) closeBtn.style.display = '';
+
         document.body.classList.add('chat-fullscreen');
-        btn.textContent = '⊡';
-        btn.title = '退出全屏';
+        if (btn) { btn.textContent = '⊡'; btn.title = '退出全屏'; }
         if (splitBtn) splitBtn.style.display = '';
-        // 全屏时关闭工单抽屉，避免遮挡聊天面板
-        closeDrawer();
+        // 全屏时收起右侧工作台/抽屉，避免残留占位
+        try {
+            if (typeof adsShell !== 'undefined' && adsShell.isProjectShell()) {
+                adsShell.closeRight({ persist: false });
+            } else {
+                closeDrawer();
+            }
+        } catch { closeDrawer(); }
         _updateFullscreenProjectLabel();
     } else {
         document.body.classList.remove('chat-fullscreen');
         document.body.classList.remove('chat-split');
-        btn.textContent = '⛶';
-        btn.title = '全屏';
+        if (btn) { btn.textContent = '⛶'; btn.title = '全屏'; }
         if (splitBtn) splitBtn.style.display = 'none';
         _destroyAllSplitPanes();
         _updateFullscreenProjectLabel();
@@ -12347,8 +13270,15 @@ function toggleChatFullscreen() {
                 showProjectDetail(currentProjectId);
             } else {
                 showProjectList();
+                if (chat && chat.parentElement !== document.body) {
+                    document.body.appendChild(chat);
+                }
+                if (!chatPanelOpen) toggleChatPanel();
             }
             setTimeout(() => loadChatHistory(), 100);
+        } else if (typeof adsShell !== 'undefined' && adsShell.isProjectShell()) {
+            // 流式中：只把 chat 挂回工作台，不重载页面
+            try { adsShell.remountChatToWorkbench(); } catch {}
         }
     }
 }
@@ -12857,8 +13787,22 @@ function _destroyAllSplitPanes() {
 }
 
 function toggleChatPanel() {
+    // 项目壳层：AI 在右侧工作台，不再用 fixed + margin-right
+    if (typeof adsShell !== 'undefined' && adsShell.isProjectShell()) {
+        const st = adsShell.getState();
+        const chatVisible = st.rightOpen && (st.rightMode === 'split' || st.rightTab === 'chat');
+        if (chatVisible && st.rightMode !== 'split') {
+            adsShell.closeRight();
+        } else if (chatVisible && st.rightMode === 'split') {
+            // 分屏时顶栏按钮：切到对话焦点；再次可关整栏——这里改为关整栏更符合「收起」
+            adsShell.closeRight();
+        } else {
+            adsShell.openRight({ tab: 'chat' });
+        }
+        return;
+    }
+
     chatPanelOpen = !chatPanelOpen;
-    const panel = document.getElementById('chatPanel');
     const toggleBtn = document.getElementById('chatToggleBtn');
 
     if (chatPanelOpen) {
@@ -17788,10 +18732,67 @@ function _renderMarkdownText(text) {
     return html;
 }
 
-/** 行内格式：加粗 / 斜体 / 行内代码 / 图片 */
+/** 聊天内容可点击打开的文件扩展名 */
+const _CHAT_FILE_EXT =
+    'cpp|cxx|cc|h|hpp|hxx|c|cs|py|pyi|ts|tsx|js|jsx|mjs|cjs|go|rs|java|kt|kts|swift|lua|' +
+    'ini|cfg|conf|json|ya?ml|md|markdown|txt|xml|html?|css|scss|less|vue|svelte|toml|' +
+    'cmake|gd|tscn|tres|shader|hlsl|glsl|usf|ush|bat|cmd|ps1|sh|bash|zsh|sql|proto|' +
+    'uproject|uplugin|uasset|umap|Build\\.cs|Target\\.cs|csproj|sln|plist|' +
+    'gitignore|editorconfig|env|rc';
+
+function _stripPathNoise(s) {
+    return String(s || '').trim()
+        .replace(/^['"`]+|['"`]+$/g, '')
+        .replace(/[.,;:!?）】\]]+$/g, '')
+        .replace(/:\d+(?::\d+)?$/, '')
+        .replace(/\(\d+\)$/, '');
+}
+
+function _isClickableFilePath(s) {
+    const t = _stripPathNoise(s);
+    if (!t || t.length < 3 || t.length > 300) return false;
+    if (/^(https?:|mailto:|data:|#|\/api\/)/i.test(t)) return false;
+    if (t.includes('://')) return false;
+    if (!(new RegExp(`\\.(?:${_CHAT_FILE_EXT})$`, 'i')).test(t)) return false;
+    if (/[\\\/]/.test(t)) return true;
+    return /^[\w.\-]+\.\w+$/.test(t) && /[a-zA-Z]/.test(t);
+}
+
+/** 生成可点击文件锚点（innerHtml 已转义/安全） */
+function _chatFileAnchor(rawPath, innerHtml) {
+    const pathOnly = _stripPathNoise(rawPath).replace(/\\/g, '/');
+    if (!pathOnly) return innerHtml;
+    const safe = pathOnly.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    return `<a class="chat-file-link" href="#" onclick="event.preventDefault();event.stopPropagation();openRepoFileFromChat('${safe}')" title="打开文件 ${escapeHtml(pathOnly)}">${innerHtml}</a>`;
+}
+
+/** 在纯文本（无 HTML 标签）中把路径变成链接 */
+function _linkifyBareFilePaths(text) {
+    if (!text) return text;
+    const re = new RegExp(
+        `(?<![\\w@])(` +
+        `(?:[A-Za-z]:[\\\\/]|\\.{0,2}[\\\\/])?` +
+        `(?:[\\w.\\-]+[\\\\/])+` +
+        `[\\w.\\-]+\\.(?:${_CHAT_FILE_EXT})` +
+        `(?:\\(\\d+\\)|:\\d+(?::\\d+)?)?` +
+        `)(?![\\w./])`,
+        'gi'
+    );
+    return text.replace(re, (match) => {
+        if (!_isClickableFilePath(match)) return match;
+        return _chatFileAnchor(match, match);
+    });
+}
+
+/** 行内格式：加粗 / 斜体 / 行内代码 / 图片 / 可点击文件路径 */
 function _inlineFormat(text) {
-    return text
-        .replace(/`([^`\n]+)`/g, '<code class="chat-inline-code">$1</code>')
+    let html = text
+        .replace(/`([^`\n]+)`/g, (_, code) => {
+            if (_isClickableFilePath(code)) {
+                return _chatFileAnchor(code, `<code class="chat-inline-code">${code}</code>`);
+            }
+            return `<code class="chat-inline-code">${code}</code>`;
+        })
         .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
         .replace(/\*(.+?)\*/g, '<em>$1</em>')
         .replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_, alt, src) => {
@@ -17800,6 +18801,16 @@ function _inlineFormat(text) {
             const safeAlt = escapeHtml(alt);
             return `<img src="${encodedSrc}" alt="${safeAlt}" class="chat-md-img" style="max-width:100%;border-radius:6px;margin:4px 0;cursor:pointer;" onclick="window.open(this.src,'_blank')" onerror="this.style.display='none'">`;
         });
+
+    // 保护已生成的 HTML 标签，再对裸路径做链接化
+    const tags = [];
+    html = html.replace(/<[^>]+>/g, (m) => {
+        tags.push(m);
+        return `\x01T${tags.length - 1}\x02`;
+    });
+    html = _linkifyBareFilePaths(html);
+    html = html.replace(/\x01T(\d+)\x02/g, (_, i) => tags[+i] || '');
+    return html;
 }
 
 /** 生成可折叠的代码文件卡片 */
@@ -17928,11 +18939,78 @@ function copyCodeCard(cardId) {
         .catch(() => showToast('复制失败', 'warning'));
 }
 
-/** 从聊天跳转到仓库文件页 */
+/** 把聊天里的路径规范成仓库相对路径 */
+function _normalizeChatFilePath(filePath) {
+    let path = String(filePath || '').trim().replace(/\\/g, '/');
+    path = path.replace(/^['"`]+|['"`]+$/g, '');
+    path = path.replace(/[.,;:!?）】\]]+$/g, '');
+    path = path.replace(/:\d+(?::\d+)?$/, '').replace(/\(\d+\)$/, '');
+    if (!path) return '';
+
+    const root = String(currentProject?.local_repo_path || '')
+        .replace(/\\/g, '/').replace(/\/+$/, '');
+    if (root && path.toLowerCase().startsWith(root.toLowerCase() + '/')) {
+        path = path.slice(root.length + 1);
+    } else if (/^[A-Za-z]:\//.test(path)) {
+        // 绝对路径但根未知：尝试裁到常见工程子目录
+        const markers = ['/Source/', '/Content/', '/Plugins/', '/Config/', '/backend/', '/frontend/', '/src/', '/app/'];
+        for (const m of markers) {
+            const idx = path.indexOf(m);
+            if (idx >= 0) { path = path.slice(idx + 1); break; }
+        }
+    }
+    // 去掉前导 /（/Config/xxx 会被 Path 当成绝对路径导致找不到）
+    return path.replace(/^\.\//, '').replace(/^\/+/, '');
+}
+
+/**
+ * 软退出全屏：不走 toggleChatFullscreen 退出分支（避免 reload 项目页 / 打断对话）。
+ * 用于从全屏聊天点击工单/文件链接时缩回右侧工作台。
+ */
+function _exitChatFullscreenSoft() {
+    if (!_chatFullscreen) return false;
+    _chatFullscreen = false;
+    document.body.classList.remove('chat-fullscreen', 'chat-split');
+    const btn = document.getElementById('chatFullscreenBtn');
+    if (btn) { btn.textContent = '⛶'; btn.title = '全屏'; }
+    const splitBtn = document.getElementById('chatSplitBtn');
+    if (splitBtn) splitBtn.style.display = 'none';
+    try { _destroyAllSplitPanes(); } catch {}
+    try { _updateFullscreenProjectLabel(); } catch {}
+    try {
+        if (typeof adsShell !== 'undefined' && adsShell.isProjectShell()) {
+            adsShell.remountChatToWorkbench();
+        }
+    } catch {}
+    return true;
+}
+
+/** 从聊天/日志跳转打开文件：退出全屏 → 主舞台工作区 Tab，否则回退仓库页 */
 function openRepoFileFromChat(filePath) {
     if (!currentProjectId) { showToast('请先选择项目', 'warning'); return; }
-    switchTab('repo');
-    setTimeout(() => viewRepoFile(filePath, null), 450);
+    const path = _normalizeChatFilePath(filePath);
+    if (!path) return;
+
+    _exitChatFullscreenSoft();
+
+    const openFile = () => {
+        if (typeof adsShell !== 'undefined' && adsShell.isProjectShell()) {
+            try { adsShell.openRight({ tab: 'chat' }); } catch {}
+            try { adsShell.remountChatToWorkbench(); } catch {}
+            adsShell.openMain({ type: 'file', path });
+            return;
+        }
+        switchTab('repo');
+        setTimeout(() => viewRepoFile(path, null), 450);
+    };
+
+    // 全屏可能发生在尚未进入项目壳层时：先进入项目再打开
+    if (typeof adsShell !== 'undefined' && !adsShell.isProjectShell()) {
+        try { showProjectDetail(currentProjectId); } catch {}
+        setTimeout(openFile, 280);
+        return;
+    }
+    openFile();
 }
 
 /**
@@ -18038,8 +19116,10 @@ function selectTicketForChat(ticketId, ticketTitle) {
     chatCurrentTicketId = ticketId;
     chatCurrentTicketTitle = ticketTitle || '';
 
-    // 如果面板未打开，先打开
-    if (!chatPanelOpen) {
+    // 打开右侧对话（壳层）或旧聊天面板
+    if (typeof adsShell !== 'undefined' && adsShell.isProjectShell()) {
+        adsShell.openRight({ tab: 'chat', ticketId });
+    } else if (!chatPanelOpen) {
         toggleChatPanel();
     }
 
@@ -18066,18 +19146,8 @@ function selectTicketForChat(ticketId, ticketTitle) {
  */
 function openTicketInChat(ticketId, ticketTitle) {
     if (!ticketId) return;
-    // 退出全屏 / 分屏，缩回右侧停靠
-    if (_chatFullscreen) {
-        _chatFullscreen = false;
-        document.body.classList.remove('chat-fullscreen');
-        document.body.classList.remove('chat-split');
-        const btn = document.getElementById('chatFullscreenBtn');
-        if (btn) { btn.textContent = '⛶'; btn.title = '全屏'; }
-        const splitBtn = document.getElementById('chatSplitBtn');
-        if (splitBtn) splitBtn.style.display = 'none';
-        try { _destroyAllSplitPanes(); } catch {}
-        try { _updateFullscreenProjectLabel(); } catch {}
-    }
+    // 退出全屏 / 分屏，缩回右侧停靠（不 reload）
+    _exitChatFullscreenSoft();
     // 切到该工单对话（内部会确保面板打开 + job 模式 + 加载会话）
     selectTicketForChat(ticketId, ticketTitle);
 }
@@ -20082,12 +21152,17 @@ function renderBugList(bugs) {
     }).join('');
 }
 
-/** 点击文件标签：从 ticket 关联的 feature 分支读取文件 diff，弹出查看弹窗 */
+/** 点击文件标签：壳层在主舞台开 diff Tab；否则保留弹窗 */
 async function showFileDiff(ticketId, filePath, fileName) {
     if (!currentProjectId) return;
+    const path = (filePath || '').replace(/\\/g, '/');
+    if (typeof adsShell !== 'undefined' && adsShell.isProjectShell()) {
+        adsShell.openMain({ type: 'diff', path, ticketId, title: fileName });
+        return;
+    }
+
     document.getElementById('fileDiffModal')?.remove();
 
-    // 先从 ticket 拿 feature 分支名，再从 requirement 拿备选
     let branch = null;
     try {
         const t = await api(`/projects/${currentProjectId}/tickets/${ticketId}`);
@@ -20095,18 +21170,14 @@ async function showFileDiff(ticketId, filePath, fileName) {
     } catch {}
 
     let content = '', diff = '', error = '';
-    // 后端会自动搜索所有分支 + 磁盘，不需要在前端重试
     try {
-        const url = `/projects/${currentProjectId}/git/file-diff?path=${encodeURIComponent(filePath)}${branch ? `&branch=${encodeURIComponent(branch)}` : ''}`;
+        const url = `/projects/${currentProjectId}/git/file-diff?path=${encodeURIComponent(path)}${branch ? `&branch=${encodeURIComponent(branch)}` : ''}`;
         const data = await api(url);
         content = data.content || '';
         diff    = data.diff    || '';
     } catch (e) {
         error = e.message || '文件不存在';
     }
-
-    const ext = fileName.split('.').pop().toLowerCase();
-    const lang = {'cpp':'cpp','h':'cpp','hpp':'cpp','py':'python','js':'javascript','ts':'typescript','cs':'csharp','md':'markdown','yaml':'yaml','yml':'yaml','json':'json','html':'html'}[ext] || '';
 
     const body = diff
         ? `<pre class="file-diff-pre"><code class="diff-code">${_colorDiff(escHtml(diff.slice(0, 20000)))}</code></pre>`
@@ -20118,7 +21189,7 @@ async function showFileDiff(ticketId, filePath, fileName) {
         <div class="modal-overlay" id="fileDiffModal" onclick="if(event.target===this)document.getElementById('fileDiffModal').remove()" style="z-index:2100;">
             <div class="modal" style="max-width:860px;width:95%;max-height:85vh;display:flex;flex-direction:column;">
                 <div class="modal-header" style="flex-shrink:0;">
-                    <h3 style="font-family:monospace;font-size:13px;">📄 ${escHtml(filePath)}</h3>
+                    <h3 style="font-family:monospace;font-size:13px;">📄 ${escHtml(path)}</h3>
                     <div style="display:flex;gap:8px;align-items:center;">
                         ${diff ? '<span style="font-size:11px;color:var(--text-muted);">对比 main 分支 diff</span>' : ''}
                         <button class="btn-icon" onclick="document.getElementById('fileDiffModal').remove()">✕</button>

@@ -1921,6 +1921,9 @@ class LLMClient:
                 "git_read_file": "path", "git_log": "branch",
                 "search_knowledge": "query", "ue_call": "function",
                 "list_directory": "path", "save_memory": "title",
+                "Write": "path", "Edit": "path", "Read": "path",
+                "write_file": "path", "edit_file": "path", "create_file": "path",
+                "read_file": "path",
             }
             tools_steps = []
             tool_id_to_idx: dict = {}
