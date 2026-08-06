@@ -266,9 +266,17 @@ const adsShell = (() => {
     function enterProject() {
         document.body.classList.add('shell-project');
         // 退出全屏：不要走 toggleChatFullscreen 的 exit 分支（会 showProjectList/Detail 搅乱壳层）
-        if (typeof _chatFullscreen !== 'undefined' && _chatFullscreen) {
+        if (typeof _chatFullscreen !== 'undefined' && (_chatFullscreen || document.body.classList.contains('chat-fullscreen'))) {
             _chatFullscreen = false;
             document.body.classList.remove('chat-fullscreen', 'chat-split');
+            try {
+                document.querySelector('.top-bar')?.style.removeProperty('display');
+                const mb = document.getElementById('metricsBar');
+                if (mb) {
+                    mb.style.removeProperty('top');
+                    mb.style.removeProperty('z-index');
+                }
+            } catch {}
             const fsBtn = document.getElementById('chatFullscreenBtn');
             if (fsBtn) { fsBtn.textContent = '⛶'; fsBtn.title = '全屏'; }
             const splitBtn = document.getElementById('chatSplitBtn');
@@ -284,8 +292,9 @@ const adsShell = (() => {
         } else {
             closeRight({ persist: false });
         }
+        _renderMainWorkspace();
         _applySidebarToLayout();
-        // 等页面 header 渲染后再挂展开钮（标题栏 / 工作区 Tab 栏）
+        // 等标题栏渲染后再挂展开钮
         requestAnimationFrame(() => {
             if (_layout()?.classList.contains('sidebar-collapsed')) {
                 _syncSidebarToggleInTitle(true);
@@ -298,6 +307,9 @@ const adsShell = (() => {
         closeAllMainTabs();
         _unmountPanels();
         document.body.classList.remove('shell-project', 'shell-right-split');
+        const bar = document.getElementById('mainWsTabBar');
+        if (bar) bar.style.display = 'none';
+        document.querySelector('.content-area')?.classList.remove('ws-tabbar-active', 'ws-doc-active');
         const layout = _layout();
         if (layout) {
             layout.classList.remove('right-open', 'right-split');
@@ -376,7 +388,7 @@ const adsShell = (() => {
         _syncSidebarToggleInTitle(!!collapsed);
     }
 
-    /** 收起时把展开钮挂到当前页标题栏；展开时收回 park，不留左侧窄条 */
+    /** 收起时把展开钮挂到主舞台标题栏（常驻）；展开时收回 park */
     function _syncSidebarToggleInTitle(collapsed) {
         const btn = document.getElementById('sidebarToggleInTitle');
         const park = document.getElementById('sidebarTogglePark');
@@ -385,10 +397,10 @@ const adsShell = (() => {
             park.appendChild(btn);
             return;
         }
-        const docHost = document.getElementById('mainWsHost');
         const tabBar = document.getElementById('mainWsTabBar');
-        const docActive = docHost && docHost.style.display !== 'none' && tabBar;
-        if (docActive) {
+        // 壳层标题栏常驻（无文件也显示），展开钮始终挂顶栏
+        if (tabBar && document.body.classList.contains('shell-project')) {
+            if (tabBar.style.display === 'none') tabBar.style.display = 'flex';
             tabBar.insertBefore(btn, tabBar.firstChild);
             return;
         }
@@ -761,8 +773,9 @@ const adsShell = (() => {
         const pageTab = document.getElementById('mainWsPageTab');
         if (!bar || !tabsEl || !host) return;
 
-        const hasDocs = state.mainTabs.length > 0;
-        bar.style.display = hasDocs ? 'flex' : 'none';
+        // 主舞台标题栏常驻（无打开文件时也保留，与图1一致）
+        const inShell = document.body.classList.contains('shell-project');
+        bar.style.display = inShell ? 'flex' : 'none';
 
         if (pageTab) {
             pageTab.textContent = _PAGE_LABELS[state.currentPage] || state.currentPage;
@@ -791,7 +804,9 @@ const adsShell = (() => {
             }
         });
         document.getElementById('content-area')?.classList.toggle('ws-doc-active', showDoc);
-        document.querySelector('.content-area')?.classList.toggle('ws-doc-active', showDoc);
+        document.querySelector('.content-area')?.classList.toggle('ws-doc-active', !!showDoc);
+        document.getElementById('content-area')?.classList.toggle('ws-tabbar-active', inShell);
+        document.querySelector('.content-area')?.classList.toggle('ws-tabbar-active', inShell);
         if (_layout()?.classList.contains('sidebar-collapsed')) {
             _syncSidebarToggleInTitle(true);
         }
@@ -18968,9 +18983,18 @@ function _normalizeChatFilePath(filePath) {
  * 用于从全屏聊天点击工单/文件链接时缩回右侧工作台。
  */
 function _exitChatFullscreenSoft() {
-    if (!_chatFullscreen) return false;
+    if (!_chatFullscreen && !document.body.classList.contains('chat-fullscreen')) return false;
     _chatFullscreen = false;
     document.body.classList.remove('chat-fullscreen', 'chat-split');
+    // 清掉可能残留的 inline，避免顶栏/指标条错位导致顶端留空
+    try {
+        document.querySelector('.top-bar')?.style.removeProperty('display');
+        const mb = document.getElementById('metricsBar');
+        if (mb) {
+            mb.style.removeProperty('top');
+            mb.style.removeProperty('z-index');
+        }
+    } catch {}
     const btn = document.getElementById('chatFullscreenBtn');
     if (btn) { btn.textContent = '⛶'; btn.title = '全屏'; }
     const splitBtn = document.getElementById('chatSplitBtn');

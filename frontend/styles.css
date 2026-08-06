@@ -31,8 +31,11 @@
     --sidebar-width: 220px;
     --topbar-height: 52px;
     --metrics-bar-height: 26px;
-    /* 顶栏 + 指标条之下的可视区高度（避免 100vh 算漏导致整页滚动条） */
-    --app-stage-height: calc(100vh - var(--topbar-height) - var(--metrics-bar-height));
+    /* 顶栏 + 指标条总占位（全屏时仅指标条，见 body.chat-fullscreen） */
+    --chrome-top: calc(var(--topbar-height) + var(--metrics-bar-height));
+    --app-stage-height: calc(100vh - var(--chrome-top));
+    /* 壳层三栏顶行统一高度：侧栏标题 | 工作区 Tabs | 右栏 Tabs */
+    --shell-titlebar-height: 40px;
     --radius: 8px;
     --radius-sm: 6px;
 
@@ -245,7 +248,7 @@ body {
 /* ==================== 主布局 ==================== */
 
 .main-container {
-    margin-top: calc(var(--topbar-height) + var(--metrics-bar-height));
+    margin-top: var(--chrome-top);
     min-height: var(--app-stage-height);
     transition: padding-right 0.3s ease;
 }
@@ -465,11 +468,14 @@ body.chat-open.shell-project #projectListPage {
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    height: 40px;
+    height: var(--shell-titlebar-height);
+    min-height: var(--shell-titlebar-height);
+    max-height: var(--shell-titlebar-height);
     padding: 0 8px 0 4px;
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
     background: var(--bg-elevated);
+    box-sizing: border-box;
 }
 .rw-tabs {
     display: flex;
@@ -642,10 +648,13 @@ body.shell-project.has-docked-drawer .main-container {
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 12px 12px 12px 10px;
+    height: var(--shell-titlebar-height);
+    min-height: var(--shell-titlebar-height);
+    max-height: var(--shell-titlebar-height);
+    padding: 0 12px 0 10px;
     border-bottom: 1px solid var(--border);
-    min-height: 48px;
     flex-shrink: 0;
+    box-sizing: border-box;
 }
 .sidebar-header h3 {
     flex: 1;
@@ -744,6 +753,68 @@ body.shell-project.has-docked-drawer .main-container {
     flex-direction: column;
 }
 
+/* 壳层：去掉顶 padding，让工作区 Tab 与侧栏/右栏顶行齐平 */
+body.shell-project .content-area {
+    padding-top: 0;
+}
+/* 有文档 Tab 时页面内容已隐藏；无文档时页面标题行顶对齐，不再额外垫高 */
+body.shell-project .content-area > .tab-content.active:not(.ws-hidden) {
+    padding-top: 0;
+}
+
+/* 壳层看板页内标题：顶栏已由 main-ws-tabbar 承担，此处仅作内容标题+筛选 */
+body.shell-project .board-header {
+    height: auto;
+    min-height: 32px;
+    max-height: none;
+    margin: 10px 0 12px;
+    padding: 0;
+    border-bottom: none;
+    background: transparent;
+    box-sizing: border-box;
+    gap: 10px;
+    overflow: visible;
+}
+body.shell-project .board-header h2 {
+    font-size: 15px;
+    font-weight: 600;
+    margin: 0;
+    margin-right: auto;
+    flex-shrink: 0;
+    white-space: nowrap;
+    line-height: 1.2;
+}
+body.shell-project .board-filters {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 1;
+    min-width: 0;
+}
+body.shell-project .board-filters select {
+    height: 26px;
+    max-width: 120px;
+    padding: 0 8px;
+    font-size: 12px;
+    line-height: 24px;
+    border-radius: 5px;
+    flex-shrink: 1;
+    min-width: 0;
+}
+body.shell-project .board-filters .btn,
+body.shell-project .board-filters .btn-sm {
+    height: 26px;
+    padding: 0 10px;
+    font-size: 12px;
+    line-height: 24px;
+    white-space: nowrap;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    box-sizing: border-box;
+}
+
 /* 文档 Tab 激活时隐藏页面内容（保留 DOM，便于切回） */
 .content-area > .tab-content.ws-hidden {
     display: none !important;
@@ -752,25 +823,33 @@ body.shell-project.has-docked-drawer .main-container {
     flex: 1;
     min-height: 0;
 }
+/* 有工作区文档时隐藏页面并锁滚动；标题栏常驻时同样顶对齐 */
 .content-area.ws-doc-active {
     padding-top: 0;
     overflow: hidden;
 }
+.content-area.ws-tabbar-active {
+    padding-top: 0;
+}
 
-/* ==================== C 主舞台工作区 Tabs ==================== */
+/* ==================== C 主舞台工作区 Tabs（标题栏常驻） ==================== */
 .main-ws-tabbar {
     display: none;
     align-items: center;
     gap: 4px;
     flex-shrink: 0;
-    height: 36px;
+    height: var(--shell-titlebar-height);
+    min-height: var(--shell-titlebar-height);
+    max-height: var(--shell-titlebar-height);
     margin: 0 -20px 0;
     padding: 0 8px;
     border-bottom: 1px solid var(--border);
     background: var(--bg-elevated);
     overflow-x: auto;
+    box-sizing: border-box;
 }
-.content-area.ws-doc-active .main-ws-tabbar {
+body.shell-project .main-ws-tabbar,
+.content-area.ws-tabbar-active .main-ws-tabbar {
     margin-right: -20px;
 }
 .main-ws-tabs {
@@ -838,10 +917,13 @@ body.shell-project.has-docked-drawer .main-container {
     align-items: center;
     justify-content: space-between;
     gap: 8px;
-    height: 36px;
+    height: var(--shell-titlebar-height);
+    min-height: var(--shell-titlebar-height);
+    max-height: var(--shell-titlebar-height);
     padding: 0 12px;
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
+    box-sizing: border-box;
 }
 .main-ws-pane-path {
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -6289,7 +6371,7 @@ pre.hljs, .hljs pre { background: transparent !important; }
 .chat-panel {
     position: fixed;
     right: 0;
-    top: calc(var(--topbar-height) + var(--metrics-bar-height));
+    top: var(--chrome-top);
     width: var(--chat-panel-width, 600px);
     height: var(--app-stage-height);
     display: none;
@@ -6335,6 +6417,11 @@ body.chat-open .chat-panel {
 }
 
 /* ── 全屏模式 ────────────────────────────────────── */
+/* 全屏时顶栏隐藏，指标条顶置；chrome 占位只留指标条高度，避免退出后「顶端留空」 */
+body.chat-fullscreen {
+    --chrome-top: var(--metrics-bar-height);
+    --app-stage-height: calc(100vh - var(--metrics-bar-height));
+}
 /* 隐藏其他区域，只留 chat-panel */
 body.chat-fullscreen .top-bar,
 body.chat-fullscreen #projectPage > .project-layout,
@@ -6355,8 +6442,8 @@ body.chat-fullscreen .chat-panel {
     width: 100% !important;
     max-width: 100% !important;
     min-width: 0 !important;
-    top: var(--metrics-bar-height) !important;           /* 仅 metrics-bar 高度，topbar 已隐藏 */
-    height: calc(100vh - var(--metrics-bar-height)) !important;
+    top: var(--chrome-top) !important;
+    height: var(--app-stage-height) !important;
     max-height: none !important;
     display: flex !important;
     transform: none !important;
@@ -6371,8 +6458,21 @@ body.chat-fullscreen #chatPanelCloseBtn {
 
 /* 全屏时 metrics-bar 顶置，z-index 高于 chat-panel */
 body.chat-fullscreen .metrics-bar {
-    top: 0;
+    top: 0 !important;
     z-index: 200;
+}
+
+/* 非全屏：强制顶栏可见、指标条回到顶栏下方（防止全屏残留导致顶端留空） */
+body:not(.chat-fullscreen) .top-bar {
+    display: flex !important;
+    top: 0 !important;
+    height: var(--topbar-height) !important;
+    z-index: 100 !important;
+    visibility: visible !important;
+}
+body:not(.chat-fullscreen) .metrics-bar {
+    top: var(--topbar-height) !important;
+    z-index: 99 !important;
 }
 
 body.chat-fullscreen .chat-panel-resize {
@@ -6554,11 +6654,20 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 10px 14px;
+    height: var(--shell-titlebar-height);
+    min-height: var(--shell-titlebar-height);
+    max-height: var(--shell-titlebar-height);
+    padding: 0 14px;
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
     background: var(--bg-card);
     position: relative;
+    box-sizing: border-box;
+}
+
+/* 壳层内：对话标题行与中间路径栏齐平（都在 Tabs 下一行） */
+.shell-project .right-workbench .chat-panel-header {
+    background: var(--bg-elevated);
 }
 
 .chat-panel-title {
