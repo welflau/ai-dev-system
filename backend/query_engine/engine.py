@@ -206,6 +206,74 @@ def _format_result_summary(tool_name: str, result_text: str) -> str:
     return result_text[:80].replace("\n", " ")
 
 
+def _synthesize_confirm_action(
+    tool_name: str, tool_input: dict, result_text: str = "",
+) -> Optional[dict]:
+    """从 confirm_* 工具名+入参合成前端确认卡 action（CLI/MCP 路径兜底）。"""
+    import json as _json
+    short = tool_name.rsplit("__", 1)[-1] if "__" in (tool_name or "") else (tool_name or "")
+    if short not in (
+        "confirm_requirement", "confirm_bug",
+        "confirm_direct_ticket", "confirm_requirements_batch",
+    ):
+        return None
+    try:
+        parsed = _json.loads(result_text) if isinstance(result_text, str) and result_text.strip().startswith("{") else {}
+    except Exception:
+        parsed = {}
+    if isinstance(parsed, dict) and (parsed.get("status") == "error" or parsed.get("error")):
+        return None
+    inp = tool_input if isinstance(tool_input, dict) else {}
+    if short == "confirm_requirement":
+        title = (inp.get("title") or "").strip()
+        if not title:
+            return None
+        pri = inp.get("priority") or "medium"
+        if pri not in ("critical", "high", "medium", "low"):
+            pri = "medium"
+        return {
+            "type": "confirm_requirement",
+            "title": title,
+            "description": (inp.get("description") or "").strip(),
+            "priority": pri,
+        }
+    if short == "confirm_bug":
+        title = (inp.get("title") or "").strip()
+        if not title:
+            return None
+        pri = inp.get("priority") or "high"
+        if pri not in ("critical", "high", "medium", "low"):
+            pri = "high"
+        return {
+            "type": "confirm_bug",
+            "title": title,
+            "description": (inp.get("description") or "").strip(),
+            "priority": pri,
+            "requirement_id": inp.get("requirement_id") or "",
+        }
+    if short == "confirm_direct_ticket":
+        title = (inp.get("title") or "").strip()
+        if not title:
+            return None
+        return {
+            "type": "confirm_direct_ticket",
+            "title": title,
+            "description": (inp.get("description") or "").strip(),
+            "ticket_type": inp.get("type") or inp.get("ticket_type") or "feature",
+            "start_from": inp.get("start_from") or "pending",
+        }
+    if short == "confirm_requirements_batch":
+        reqs = inp.get("requirements") or []
+        if not isinstance(reqs, list) or len(reqs) < 1:
+            return None
+        return {
+            "type": "confirm_requirements_batch",
+            "requirements": reqs,
+            "summary": (inp.get("summary") or "").strip(),
+        }
+    return None
+
+
 class QueryEngine:
     """
     统一的 LLM 工具调用循环引擎。
@@ -336,6 +404,14 @@ class QueryEngine:
                             _cli_tool_times[tid] = __import__("time").time()
                             _cli_tool_names[tid] = ev["name"]
                             _cli_tool_inputs[tid] = ev.get("input", {}) or {}
+                            # CLI Write/Edit：尽力拍快照（tool_start 时写入可能已发生）
+                            try:
+                                from checkpoint.service import checkpoint_service
+                                await checkpoint_service.maybe_capture_for_tool(
+                                    ev["name"], _cli_tool_inputs[tid], context,
+                                )
+                            except Exception:
+                                pass
                             yield ToolStartEvent(
                                 tool=ev["name"],
                                 input=_cli_tool_inputs[tid],
@@ -363,6 +439,16 @@ class QueryEngine:
                             result=result_text,
                             tool_use_id=tid,
                         )
+                        # CLI 直调 MCP confirm_*：项目 SSE 可能无人订阅，流式 ActionEvent 作主路径
+                        _synth = _synthesize_confirm_action(tool_name, tool_input, result_text)
+                        if _synth:
+                            final_action = _synth
+                            all_confirm_results.append(_synth)
+                            logger.info(
+                                "CLI confirm 合成 ActionEvent: %s %s",
+                                _synth.get("type"), (_synth.get("title") or "")[:40],
+                            )
+                            yield ActionEvent(action_data=_synth)
                     elif etype == "stop":
                         break
 
@@ -400,15 +486,17 @@ class QueryEngine:
                     ).strip()
 
                 if _cli_action:
+                    final_action = _cli_action
                     yield ActionEvent(action_data=_cli_action)
 
                 # action だけ出力で本文が空の場合、空吹き出しを防ぐ
-                _display_text = _clean_text or ('' if _cli_action else full_cli_text)
+                _display_text = _clean_text or ('' if (final_action or _cli_action) else full_cli_text)
 
                 yield MessageDoneEvent(
                     full_text=_display_text,
-                    thinking_steps=[],
-                    final_action=_cli_action,
+                    thinking_steps=thinking_steps,
+                    final_action=final_action or _cli_action,
+                    all_confirm_results=list(all_confirm_results),
                     rounds=1,
                     total_tokens=0,
                 )
@@ -558,6 +646,14 @@ class QueryEngine:
 
                 start_ts = time.monotonic()
                 try:
+                    # API 路径：execute 前可靠拍 Checkpoint
+                    try:
+                        from checkpoint.service import checkpoint_service
+                        await checkpoint_service.maybe_capture_for_tool(
+                            tool_name, tool_input, context,
+                        )
+                    except Exception:
+                        pass
                     result_text, action_data = await self.executor.execute(
                         tool_name, tool_input, context
                     )

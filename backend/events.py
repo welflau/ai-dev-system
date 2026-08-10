@@ -37,12 +37,18 @@ class EventManager:
             "data": data,
             "timestamp": datetime.now().isoformat(),
         }
-        if channel in self._subscribers:
-            for queue in self._subscribers[channel]:
-                try:
-                    queue.put_nowait(message)
-                except asyncio.QueueFull:
-                    pass  # 队列满了就跳过
+        subs = self._subscribers.get(channel) or set()
+        if not subs:
+            # 无人订阅时确认卡会"推了但前端看不到"——打日志便于排查
+            import logging
+            logging.getLogger("events").warning(
+                "SSE publish 无订阅者 channel=%s event=%s", channel, event_type,
+            )
+        for queue in list(subs):
+            try:
+                queue.put_nowait(message)
+            except asyncio.QueueFull:
+                pass  # 队列满了就跳过
 
     async def publish_to_project(self, project_id: str, event_type: str, data: Any):
         """发布项目级事件"""

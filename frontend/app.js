@@ -21,6 +21,88 @@ let _thinkingESrc = null;
 // v0.20 多会话管理
 let _currentChatSessionId = null;   // 当前会话 ID，null 表示未初始化
 
+// 刷新后恢复：上次项目 / 会话 / 是否全屏
+const _CHAT_WS_KEYS = {
+    projectId: 'ads.chat.lastProjectId',
+    sessionId: 'ads.chat.lastSessionId',
+    fullscreen: 'ads.chat.fullscreen',
+};
+let _chatWsPersistReady = true;
+
+function _readChatWorkspacePrefs() {
+    try {
+        return {
+            projectId: localStorage.getItem(_CHAT_WS_KEYS.projectId) || null,
+            sessionId: localStorage.getItem(_CHAT_WS_KEYS.sessionId) || null,
+            fullscreen: localStorage.getItem(_CHAT_WS_KEYS.fullscreen) !== '0',
+        };
+    } catch {
+        return { projectId: null, sessionId: null, fullscreen: true };
+    }
+}
+
+function _persistChatWorkspace() {
+    if (!_chatWsPersistReady) return;
+    try {
+        if (currentProjectId) localStorage.setItem(_CHAT_WS_KEYS.projectId, currentProjectId);
+        else localStorage.removeItem(_CHAT_WS_KEYS.projectId);
+        if (_currentChatSessionId) localStorage.setItem(_CHAT_WS_KEYS.sessionId, _currentChatSessionId);
+        else localStorage.removeItem(_CHAT_WS_KEYS.sessionId);
+        localStorage.setItem(_CHAT_WS_KEYS.fullscreen, (typeof _chatFullscreen !== 'undefined' && _chatFullscreen) ? '1' : '0');
+    } catch {}
+}
+
+/** 刷新后恢复上次聊天页（项目 / 全局 + 会话 + 全屏） */
+async function _restoreChatWorkspace() {
+    const prefs = _readChatWorkspacePrefs();
+    _chatWsPersistReady = false;
+    try {
+        let projectId = prefs.projectId;
+        if (projectId) {
+            try {
+                const data = await api(`/projects/${projectId}`);
+                currentProject = data.project || data;
+            } catch (e) {
+                console.warn('[chat] restore project missing, fallback global', projectId, e);
+                projectId = null;
+            }
+        }
+
+        if (projectId) {
+            showProjectDetail(projectId);
+            if (prefs.sessionId) {
+                try {
+                    await switchChatSession(prefs.sessionId);
+                } catch (e) {
+                    console.warn('[chat] restore session failed, use latest', e);
+                    await loadChatHistory();
+                }
+            }
+            if (prefs.fullscreen) {
+                if (!_chatFullscreen) toggleChatFullscreen();
+            } else {
+                try { adsShell.openRight({ tab: 'chat' }); } catch {}
+            }
+        } else {
+            if (prefs.fullscreen && !_chatFullscreen) toggleChatFullscreen();
+            chatPanelOpen = true;
+            currentProjectId = null;
+            currentProject = null;
+            _updateChatPanelForContext();
+            if (prefs.sessionId) {
+                try {
+                    await switchChatSession(prefs.sessionId);
+                } catch {
+                    await loadChatHistory();
+                }
+            }
+        }
+    } finally {
+        _chatWsPersistReady = true;
+        _persistChatWorkspace();
+    }
+}
+
 // ==================== 工具函数 ====================
 
 /**
@@ -178,8 +260,13 @@ document.addEventListener('DOMContentLoaded', () => {
     initLogPanel();
     initProjectNameListener();
     adsShell.init();
-    // 默认全屏打开 AI 对话（进项目后会退出全屏并挂入右侧工作台）
-    if (!_chatFullscreen) toggleChatFullscreen();
+    // 刷新后恢复上次聊天页（项目/全局、会话、全屏）；无记录时默认全屏全局助手
+    _restoreChatWorkspace().catch(e => {
+        console.warn('[chat] restore workspace failed', e);
+        if (!_chatFullscreen) toggleChatFullscreen();
+        chatPanelOpen = true;
+        try { loadChatHistory(); } catch {}
+    });
 });
 
 // ==================== ADS Shell（界面壳层）====================
@@ -450,13 +537,17 @@ const adsShell = (() => {
         _lsSet(KEYS.rightTab, state.rightTab);
         _lsSet(KEYS.rightMode, state.rightMode);
 
-        // 打开对话时确保模式栏可见并按需加载历史
+        // 打开对话时确保模式栏可见；仅在消息区为空时才加载历史（避免全屏切换冲掉确认卡）
         if (state.rightTab === 'chat' || state.rightMode === 'split') {
             const modeBar = document.getElementById('chatModeBar');
             const modeBtn = document.getElementById('chatModeBtn');
             if (modeBar) modeBar.style.display = '';
             if (modeBtn) modeBtn.style.display = '';
-            if (typeof chatMode !== 'undefined' && chatMode === 'global' && typeof loadChatHistory === 'function') {
+            if (typeof chatMode !== 'undefined' && chatMode === 'global'
+                && typeof loadChatHistory === 'function'
+                && typeof _chatMessagesHasContent === 'function' && !_chatMessagesHasContent()
+                && !(typeof chatSending !== 'undefined' && chatSending)
+                && !(typeof _streamAbortController !== 'undefined' && _streamAbortController)) {
                 loadChatHistory();
             }
         }
@@ -505,7 +596,11 @@ const adsShell = (() => {
         _lsSet(KEYS.rightTab, tab);
         if (tab === 'chat') {
             _syncChatOpenFlag(true);
-            if (typeof chatMode !== 'undefined' && chatMode === 'global' && typeof loadChatHistory === 'function') {
+            if (typeof chatMode !== 'undefined' && chatMode === 'global'
+                && typeof loadChatHistory === 'function'
+                && typeof _chatMessagesHasContent === 'function' && !_chatMessagesHasContent()
+                && !(typeof chatSending !== 'undefined' && chatSending)
+                && !(typeof _streamAbortController !== 'undefined' && _streamAbortController)) {
                 loadChatHistory();
             }
         }
@@ -1732,6 +1827,7 @@ function showProjectList() {
     _updateChatPanelForContext();
     // 启动全局日志轮询
     startGlobalLogPolling();
+    _persistChatWorkspace();
 }
 
 function showProjectDetail(projectId) {
@@ -1764,18 +1860,56 @@ function showProjectDetail(projectId) {
     _activeTreeItem = null;
     // 预热项目 MCP server（fire-and-forget），让 server 在首次对话前完成初始化
     fetch(`${API}/projects/${projectId}/mcp/warmup`, { method: 'POST' }).catch(() => {});
+    _persistChatWorkspace();
 }
+
+/** 消息区是否已有真实内容（气泡/确认卡）；有则禁止无脑 reload */
+function _chatMessagesHasContent() {
+    const el = document.getElementById('chatMessages');
+    if (!el) return false;
+    return !!(el.querySelector('.chat-msg, .chat-confirm-card, .chat-action-card'));
+}
+
+/** 上次聊天 context 对应的 projectId（用于同项目内跳过清空） */
+let _lastChatContextProjectId = undefined;
 
 /**
  * 根据当前是否在项目内，更新聊天面板的模式栏和欢迎消息
+ * @param {{force?: boolean}} [opts] force=true 时即使同项目也强制重载
  */
-function _updateChatPanelForContext() {
+function _updateChatPanelForContext(opts = {}) {
     const modeBar = document.getElementById('chatModeBar');
     const modeBtn = document.getElementById('chatModeBtn');
     const msgContainer = document.getElementById('chatMessages');
+    const sameContext = !opts.force && (_lastChatContextProjectId === currentProjectId);
+
+    if (currentProjectId) {
+        if (modeBar) modeBar.style.display = '';
+        if (modeBtn) modeBtn.style.display = '';
+        const titleEl = document.getElementById('chatPanelTitle');
+        if (titleEl) {
+            const name = currentProject?.name || '';
+            titleEl.textContent = name ? `AI 助手 · ${name}` : 'AI 助手';
+        }
+        _updateFullscreenProjectLabel();
+    } else {
+        if (modeBar) modeBar.style.display = 'none';
+        if (modeBtn) modeBtn.style.display = 'none';
+        if (chatMode !== 'global') setChatMode('global');
+        const titleEl = document.getElementById('chatPanelTitle');
+        if (titleEl) titleEl.textContent = 'AI 助手';
+        _updateFullscreenProjectLabel();
+    }
+
+    // 同项目（含退出全屏再进详情）只刷新标题；若消息区仍是空欢迎页则补载历史
+    if (sameContext) {
+        if (chatPanelOpen && !chatSending && !_streamAbortController && !_chatMessagesHasContent()) {
+            loadChatHistory();
+        }
+        return;
+    }
 
     // 切换 context 时：若有进行中的请求，只清理 UI 状态，不中断后台请求
-    // 注意：仅在项目真正切换时才清理（switchTab 同项目内切换不应走到这里）
     if (chatSending) {
         chatSending = false;
         document.getElementById('chatSendBtn') && (document.getElementById('chatSendBtn').disabled = false);
@@ -1797,34 +1931,17 @@ function _updateChatPanelForContext() {
         clone?.querySelector('#chatTyping')?.remove();
         _globalChatHistory = [...chatHistory];
         _globalChatDom = clone ? clone.innerHTML : '';
-
-        if (modeBar) modeBar.style.display = '';
-        if (modeBtn) modeBtn.style.display = '';
-
-        // 标题显示项目名
-        const titleEl = document.getElementById('chatPanelTitle');
-        if (titleEl) {
-            const name = currentProject?.name || '';
-            titleEl.textContent = name ? `AI 助手 · ${name}` : 'AI 助手';
-        }
-        _updateFullscreenProjectLabel();
-    } else {
-        // 返回列表：切回全局模式，标题恢复
-        if (modeBar) modeBar.style.display = 'none';
-        if (modeBtn) modeBtn.style.display = 'none';
-        if (chatMode !== 'global') setChatMode('global');
-
-        const titleEl = document.getElementById('chatPanelTitle');
-        if (titleEl) titleEl.textContent = 'AI 助手';
-        _updateFullscreenProjectLabel();
     }
+
+    _lastChatContextProjectId = currentProjectId;
 
     // 重置当前聊天历史（流式输出进行中时跳过，避免切 Tab 打断对话）
     if (!chatSending && !_streamAbortController) {
         chatHistory = [];
     }
 
-    if (chatPanelOpen) {
+    // 流式中不要 showChatWelcome / loadChatHistory（会清空 #chatMessages）
+    if (chatPanelOpen && !chatSending && !_streamAbortController) {
         showChatWelcome();
         loadChatHistory();
     }
@@ -7406,11 +7523,69 @@ async function startTicket(ticketId) {
 }
 
 async function cancelTicket(ticketId) {
-    if (!confirm('确定取消此工单？')) return;
+    if (!currentProjectId) return;
+    let plan = { has_changes: false, files: [], file_count: 0, strategy: 'none' };
     try {
-        await api(`/projects/${currentProjectId}/tickets/${ticketId}`, { method: 'DELETE' });
-        showToast('工单已取消', 'info');
-        closeDrawer();
+        plan = await api(`/projects/${currentProjectId}/tickets/${ticketId}/revert-preview`);
+    } catch (e) {
+        console.warn('revert-preview failed', e);
+    }
+
+    let doRevert = false;
+    const strategy = plan.strategy || (plan.has_changes ? 'git' : 'none');
+    const strategyLabel = strategy === 'checkpoint' ? 'Checkpoint 快照还原'
+        : strategy === 'git' ? 'Git 路径回滚' : '';
+
+    if (plan && plan.has_changes) {
+        const files = plan.files || [];
+        const show = files.slice(0, 12).map(f => `  · ${f}`).join('\n');
+        const more = files.length > 12 ? `\n  …另有 ${files.length - 12} 个文件` : '';
+        const osLine = plan.openspec_path ? `\n  · ${plan.openspec_path}/（OpenSpec）` : '';
+        const msg =
+            `取消工单并回滚本单改动？\n\n` +
+            `策略：${strategyLabel}\n` +
+            `将恢复/删除 ${plan.file_count || files.length} 个文件` +
+            (plan.openspec_path ? ' + OpenSpec change' : '') +
+            `：\n${show}${more}${osLine}\n\n` +
+            `确定 = 取消并回滚\n取消 = 再选是否仅取消状态`;
+        if (confirm(msg)) {
+            doRevert = true;
+        } else if (!confirm('仅取消工单、保留仓库里的代码改动？')) {
+            return;
+        }
+    } else {
+        if (!confirm('确定取消此工单？（未检测到可回滚的文件记录）')) return;
+    }
+
+    try {
+        const q = doRevert ? '?revert=true' : '';
+        const res = await api(`/projects/${currentProjectId}/tickets/${ticketId}${q}`, { method: 'DELETE' });
+        if (doRevert && res?.revert) {
+            const rv = res.revert;
+            const strat = rv.strategy === 'checkpoint' ? 'Checkpoint'
+                : rv.strategy === 'git' ? 'Git' : (rv.strategy || '');
+            const n = rv.file_count ?? ((rv.restored || []).length + (rv.deleted || []).length + (rv.files || []).length);
+            const errN = (rv.errors || []).length;
+            const skN = (rv.skipped || []).length;
+            let msg = res?.message || `已取消并回滚（${strat || '未知策略'}）`;
+            if (strat) msg = `已取消 · ${strat} 还原 ${n} 项`;
+            if (skN || errN) msg += `（跳过 ${skN}，错误 ${errN}）`;
+            showToast(msg, errN ? 'warning' : 'info');
+        } else {
+            showToast(res?.message || (doRevert ? '已取消并回滚' : '工单已取消'), 'info');
+        }
+        // 取消后不关右侧工作台：切到 AI 会话（分屏则聚焦对话半边）
+        try { _stopTicketActionProgress(); } catch {}
+        if (typeof adsShell !== 'undefined' && adsShell.isProjectShell?.()) {
+            if (typeof adsShell.setRightTab === 'function') {
+                adsShell.setRightTab('chat');
+            } else {
+                adsShell.openRight({ tab: 'chat' });
+            }
+        } else {
+            // 旧抽屉：关抽屉即可（无独立 AI 半屏）
+            closeDrawer();
+        }
         refreshBoard();
     } catch (e) {
         showToast(`取消失败: ${e.message}`, 'error');
@@ -9827,6 +10002,9 @@ function _renderLayerLogItem(log, meta) {
     let outputSummary = '';
     let errorsSummary = '';
     let cmdLine = '';
+    let checkpointId = '';
+    let restorable = false;
+    let cpTrigger = '';
     try {
         const d = JSON.parse(log.detail || '{}');
         if (log.action === 'phase_reset') {
@@ -9836,9 +10014,16 @@ function _renderLayerLogItem(log, meta) {
         } else if (log.action === 'superpowers_skill') {
             detail = (d.skills || []).join(' · ');
         } else if (log.action.startsWith('openspec_')) {
-            detail = d.output ? d.output.slice(0, 80) : '';
+            detail = d.output ? d.output.slice(0, 80) : (d.message || '');
+        } else if (log.action === 'checkpoint' || log.action === 'checkpoint_restore') {
+            detail = d.message || '';
+            checkpointId = d.checkpoint_id || '';
+            restorable = !!d.restorable && !!checkpointId;
+            cpTrigger = d.trigger || '';
         } else {
             detail = d.message || '';
+            checkpointId = d.checkpoint_id || '';
+            restorable = !!d.restorable && !!checkpointId;
         }
         outputSummary = d.output_summary || '';
         errorsSummary = d.errors_summary || '';
@@ -9864,17 +10049,58 @@ function _renderLayerLogItem(log, meta) {
             ${outputSummary ? `<div class="log-expand-row"><span class="log-expand-label">输出</span><pre style="font-size:10px;max-height:200px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;">${_linkifyErrors(outputSummary)}</pre></div>` : ''}
         </div>` : '';
 
+    const tid = escHtml(log.ticket_id || _currentTimelineTicketId || '');
+    const restoreBtn = restorable && tid && checkpointId
+        ? `<button type="button" class="btn-text-sm" style="margin-left:auto;color:${color};font-size:11px;"
+                onclick="event.stopPropagation();restoreTicketCheckpoint('${tid}','${escHtml(checkpointId)}')"
+                title="还原到此 Checkpoint 之后的文件改动将被撤销">↩️ 还原到此</button>`
+        : '';
+
     return `
         <div class="log-item info layer-${meta.layer}" data-action="${escHtml(log.action || '')}" data-to-status="${escHtml(log.to_status || '')}" style="border-left-color:${color}40;padding:5px 10px 5px 14px;"${hasExpand ? ` onclick="toggleBlock('${expandId}')" style="cursor:pointer;border-left-color:${color}40;padding:5px 10px 5px 14px;"` : ''}>
             <div class="log-header" style="gap:5px;">
                 <span style="color:${color};font-size:12px;">${meta.icon}</span>
-                <span class="log-agent" style="color:${color};">${escHtml(meta.label)}</span>
+                <span class="log-agent" style="color:${color};">${escHtml(meta.label)}${cpTrigger ? ` · ${escHtml(cpTrigger)}` : ''}</span>
                 ${hasExpand ? `<span class="log-expand-link" style="font-size:10px;color:${color};opacity:.6;">展开 ▼</span>` : ''}
+                ${restoreBtn}
                 <span class="log-time">${formatTime(log.created_at)}</span>
             </div>
             ${detail ? `<div style="font-size:11px;color:var(--text-muted);margin-top:2px;">${detail}</div>` : ''}
             ${expandHtml}
         </div>`;
+}
+
+async function restoreTicketCheckpoint(ticketId, checkpointId) {
+    if (!currentProjectId || !ticketId || !checkpointId) return;
+    if (!confirm('还原到此 Checkpoint？\n其后由 Agent 写入的文件将恢复为该时刻内容（新建文件会删除）。\n\n策略：Checkpoint 快照还原（不依赖 Git 历史）')) return;
+    try {
+        const res = await api(
+            `/projects/${currentProjectId}/tickets/${ticketId}/checkpoints/${checkpointId}/restore`,
+            { method: 'POST', body: { confirm: true } },
+        );
+        const restoredN = (res?.restored || []).length;
+        const deletedN = (res?.deleted || []).length;
+        const n = restoredN + deletedN;
+        const skippedN = (res?.skipped || []).length;
+        const errN = (res?.errors || []).length;
+        if (res?.ok === false && n === 0) {
+            showToast(`还原失败：${res.error || '未知错误'}`, 'error');
+        } else if (errN || skippedN) {
+            const bits = [`已还原 ${n} 项`];
+            if (skippedN) bits.push(`跳过 ${skippedN}`);
+            if (errN) bits.push(`错误 ${errN}`);
+            if (res.commit_hash) bits.push(String(res.commit_hash).slice(0, 8));
+            showToast(bits.join(' · '), 'warning');
+            if (errN && Array.isArray(res.errors)) {
+                console.warn('checkpoint restore errors', res.errors);
+            }
+        } else {
+            showToast(`已还原 ${n} 项` + (res.commit_hash ? ` · ${String(res.commit_hash).slice(0, 8)}` : ''), 'success');
+        }
+        if (typeof _loadUnifiedTimeline === 'function') _loadUnifiedTimeline(ticketId);
+    } catch (e) {
+        showToast(`还原失败: ${e.message}`, 'error');
+    }
 }
 
 function renderLogItem(log) {
@@ -9900,6 +10126,9 @@ function renderLogItem(log) {
         openspec_verify:         { icon: '📐', label: 'OpenSpec Verify 通过 ✅', layer: 'spec' },
         openspec_verify_failed:  { icon: '📐', label: 'OpenSpec Verify 失败 ❌', layer: 'spec' },
         openspec_archive:        { icon: '📐', label: 'OpenSpec Archive 完成', layer: 'spec' },
+        checkpoint:              { icon: '💾', label: 'Checkpoint 快照', layer: 'harness' },
+        checkpoint_restore:      { icon: '↩️', label: 'Checkpoint 还原', layer: 'harness' },
+        revert:                  { icon: '↩️', label: 'Git 回滚', layer: 'harness' },
         superpowers_skill:       { icon: '⚡', label: 'Superpowers 约束已激活', layer: 'discipline' },
         phase_reset:             { icon: '🔄', label: '阶段重置', layer: 'harness' },
         change_detected:         { icon: '🔍', label: '变更检测', layer: 'harness' },
@@ -13212,6 +13441,7 @@ async function _switchProjectInFullscreen(projectId) {
         if (chatMode === 'global') {
             loadChatHistory();
         }
+        _persistChatWorkspace();
     } catch (e) {
         showToast(`切换项目失败: ${e.message}`, 'error');
     }
@@ -13227,6 +13457,7 @@ function _switchToGlobalChat() {
     _globalChatDom = '';
     _globalChatHistory = [];
     _updateChatPanelForContext();
+    _persistChatWorkspace();
 }
 
 function _updateFullscreenProjectLabel() {
@@ -13271,6 +13502,7 @@ function toggleChatFullscreen() {
             }
         } catch { closeDrawer(); }
         _updateFullscreenProjectLabel();
+        _persistChatWorkspace();
     } else {
         document.body.classList.remove('chat-fullscreen');
         document.body.classList.remove('chat-split');
@@ -13278,8 +13510,25 @@ function toggleChatFullscreen() {
         if (splitBtn) splitBtn.style.display = 'none';
         _destroyAllSplitPanes();
         _updateFullscreenProjectLabel();
-        // 退出全屏：若当前有项目（全屏期间可能切换过），进入该项目页
-        // 流式输出进行中时跳过页面重载，避免打断对话
+        try {
+            document.querySelector('.top-bar')?.style.removeProperty('display');
+            const mb = document.getElementById('metricsBar');
+            if (mb) {
+                mb.style.removeProperty('top');
+                mb.style.removeProperty('z-index');
+            }
+        } catch {}
+
+        // 同项目壳层内退出全屏：只挂回右侧工作台，绝不 showProjectDetail/loadChatHistory
+        // （后者会清空会话并刷掉「新建技能系统」等消息与确认卡）
+        if (typeof adsShell !== 'undefined' && adsShell.isProjectShell() && currentProjectId) {
+            try { adsShell.remountChatToWorkbench(); } catch {}
+            try { adsShell.openRight({ tab: 'chat' }); } catch {}
+            _persistChatWorkspace();
+            return;
+        }
+
+        // 无壳层 / 无项目：回退到列表或进入项目页
         if (!chatSending && !_streamAbortController) {
             if (currentProjectId) {
                 showProjectDetail(currentProjectId);
@@ -13290,11 +13539,14 @@ function toggleChatFullscreen() {
                 }
                 if (!chatPanelOpen) toggleChatPanel();
             }
-            setTimeout(() => loadChatHistory(), 100);
+            // 仅消息区为空时补载，避免冲掉已有 DOM
+            setTimeout(() => {
+                if (!_chatMessagesHasContent()) loadChatHistory();
+            }, 100);
         } else if (typeof adsShell !== 'undefined' && adsShell.isProjectShell()) {
-            // 流式中：只把 chat 挂回工作台，不重载页面
             try { adsShell.remountChatToWorkbench(); } catch {}
         }
+        _persistChatWorkspace();
     }
 }
 
@@ -13456,7 +13708,10 @@ async function _splitPaneSend(paneId) {
         const resp = await _sendChatStreamingToContainer(
             streamUrl,
             { message: text, history: [], chat_session_id: pane.sessionId,
-              project_id: currentProjectId || undefined },
+              project_id: currentProjectId || undefined,
+              ticket_id: (typeof chatCurrentTicketId !== 'undefined' && chatCurrentTicketId)
+                  || (typeof _currentTimelineTicketId !== 'undefined' && _currentTimelineTicketId)
+                  || undefined },
             container,
             pane.thinking,
             typingEl,
@@ -13837,8 +14092,8 @@ function toggleChatPanel() {
             if (chatMode !== 'global') setChatMode('global');
         }
 
-        // 加载聊天历史
-        if (chatMode === 'global') {
+        // 加载聊天历史（已有内容则保留，避免全屏/开关面板冲掉确认卡）
+        if (chatMode === 'global' && !_chatMessagesHasContent()) {
             loadChatHistory();
         }
     } else {
@@ -14008,6 +14263,7 @@ async function newChatSession() {
         const container = document.getElementById('chatMessages');
         if (container) container.innerHTML = '';
         showChatWelcome();
+        _persistChatWorkspace();
         // 关闭历史面板
         const panel = document.getElementById('chatHistoryPanel');
         if (panel) panel.style.display = 'none';
@@ -14205,10 +14461,16 @@ async function loadChatSessions() {
 
 /** 切换到指定会话 */
 async function switchChatSession(sessionId) {
+    // 流式中禁止切换会话重绘，否则会吃掉进行中的用户气泡
+    if (chatSending || _streamAbortController) {
+        console.warn('[chat] skip switchChatSession while streaming');
+        return;
+    }
     const container = document.getElementById('chatMessages');
     if (!container) return;
     _currentChatSessionId = sessionId;
     _cliClearMem();  // 切会话时清空内存任务，后台任务面板跟着切
+    _persistChatWorkspace();
     // 关闭历史面板，让消息区可见
     const panel = document.getElementById('chatHistoryPanel');
     if (panel) panel.style.display = 'none';
@@ -14298,6 +14560,7 @@ async function _ensureChatSession() {
     } catch (e) {
         _currentChatSessionId = 'default';
     }
+    _persistChatWorkspace();
     return _currentChatSessionId;
 }
 
@@ -14796,11 +15059,21 @@ async function _sendChatStreaming(url, body) {
     }
 
     _streamAbortController = null;
-    // 流结束：取消节流，完整 Markdown 渲染，确保气泡可见
+    // 流结束：取消节流，完整 Markdown 渲染
     if (_renderTimer) { clearTimeout(_renderTimer); _renderTimer = null; }
-    bubbleEl.innerHTML = formatChatContent(fullText || '操作已完成。');
-    bubbleWrapper.classList.remove('_streaming');
-    bubbleWrapper.style.display = '';  // 无 text_delta 时气泡隐藏，流结束必须显示
+
+    const _willFlushMcp = (typeof _pendingMcpCards !== 'undefined' && _pendingMcpCards.length > 0);
+    const _actionCardHtml = finalAction ? _buildAnyActionCardHtml(finalAction) : '';
+    const _hasActionCard = !!(!_actionCardHtml ? false : _actionCardHtml === '__rendered__' || _actionCardHtml);
+    // 无正文 + 仅有确认卡：去掉「操作已完成。」空助手气泡（卡由下方插入或 MCP flush 展示）
+    const _dropEmptyStreamBubble = !fullText.trim() && (_willFlushMcp || _hasActionCard) && !_roundsPanel;
+    if (_dropEmptyStreamBubble) {
+        bubbleWrapper.remove();
+    } else {
+        bubbleEl.innerHTML = formatChatContent(fullText || (_hasActionCard || _willFlushMcp ? '' : '操作已完成。'));
+        bubbleWrapper.classList.remove('_streaming');
+        bubbleWrapper.style.display = '';
+    }
 
     // J-3b: 收尾分组面板
     if (_roundsPanel) {
@@ -14848,28 +15121,33 @@ async function _sendChatStreaming(url, body) {
     }
     _chatThinkingFinish();
 
-    // 追加工具栏和时间戳
-    const contentEl = bubbleWrapper.querySelector('.chat-msg-content');
-    const timeEl = contentEl.querySelector('.chat-msg-time');
-    timeEl.textContent = formatTime(new Date().toISOString());
-
-    // 追加 action 卡片（若有）
+    // 追加 action 卡片（若有）；流式气泡已被移除时走独立 assistant 气泡
     if (finalAction) {
-        // 确保气泡可见（无 text_delta 时气泡是隐藏的）
-        bubbleWrapper.style.display = '';
-        const cardHtml = _buildAnyActionCardHtml(finalAction);
-        if (cardHtml && cardHtml !== '__rendered__') {
-            // 普通卡片：插入 HTML
-            const cardEl = document.createElement('div');
-            cardEl.innerHTML = cardHtml;
-            const child = cardEl.firstElementChild;
-            if (child) {
-                // 卡片创建后写入 msg_id，patchActionState 才能持久化状态
-                if (_savedMsgId && !child.dataset.messageId) child.dataset.messageId = _savedMsgId;
-                contentEl.insertBefore(child, timeEl);
+        if (bubbleWrapper.isConnected) {
+            const contentEl = bubbleWrapper.querySelector('.chat-msg-content');
+            const timeEl = contentEl?.querySelector('.chat-msg-time');
+            if (timeEl) timeEl.textContent = formatTime(new Date().toISOString());
+            bubbleWrapper.style.display = '';
+            if (_actionCardHtml && _actionCardHtml !== '__rendered__' && contentEl && timeEl) {
+                const cardEl = document.createElement('div');
+                cardEl.innerHTML = _actionCardHtml;
+                const child = cardEl.firstElementChild;
+                if (child) {
+                    if (_savedMsgId && !child.dataset.messageId) child.dataset.messageId = _savedMsgId;
+                    contentEl.insertBefore(child, timeEl);
+                }
+            }
+        } else if (_actionCardHtml && _actionCardHtml !== '__rendered__') {
+            // 与 MCP flush 路径一致；若已有 pending MCP 卡则留给 finally flush，避免重复
+            if (!_willFlushMcp) {
+                if (finalAction && _savedMsgId) finalAction._message_id = _savedMsgId;
+                appendMcpActionCard(finalAction);
             }
         }
-        // '__rendered__'：已由 _buildAnyActionCardHtml 直接渲染到 DOM，无需再处理
+        // '__rendered__'：已由 _buildAnyActionCardHtml / _renderConfirmProjectCard 直接渲染
+    } else if (bubbleWrapper.isConnected) {
+        const timeEl = bubbleWrapper.querySelector('.chat-msg-time');
+        if (timeEl) timeEl.textContent = formatTime(new Date().toISOString());
     }
 
     scrollChatToBottom();
@@ -14878,14 +15156,22 @@ async function _sendChatStreaming(url, body) {
 }
 
 async function loadChatHistory() {
+    // 流式发送进行中禁止重载：会 container.innerHTML='' 冲掉刚插入的用户气泡，
+    // 而 SSE/MCP 确认卡仍会往新 DOM 追加 → 表现为「只见 AI 卡、用户气泡被吃」。
+    if (chatSending || _streamAbortController) {
+        console.warn('[chat] skip loadChatHistory while streaming');
+        return;
+    }
     if (!currentProjectId) {
-        // 始终从 DB 加载最新 session，确保思考面板等动态内容正确渲染
+        // 优先已记住的 session；否则取最近一条
         try {
-            const data = await api('/chat/sessions?limit=1');
-            const latest = (data.sessions || [])[0];
-            if (latest) {
-                _currentChatSessionId = latest.id;
-                await switchChatSession(latest.id);
+            let sessionToLoad = _currentChatSessionId;
+            if (!sessionToLoad) {
+                const data = await api('/chat/sessions?limit=1');
+                sessionToLoad = (data.sessions || [])[0]?.id || null;
+            }
+            if (sessionToLoad) {
+                await switchChatSession(sessionToLoad);
             } else {
                 showChatWelcome();
             }
@@ -16864,6 +17150,9 @@ async function sendChatMessage() {
 
     if (!fullMessage.trim() && images.length === 0) return;
 
+    _chatSendStartedAt = Date.now();
+    _chatLastUserText = fullMessage || message;
+
     chatSending = true;
     _refreshHistoryRunningState();  // 历史面板若已打开，更新 Running 状态
     const sendBtn = document.getElementById('chatSendBtn');
@@ -16992,7 +17281,10 @@ async function sendChatMessage() {
                       agent: resolvedAgent,
                       images: images.length > 0 ? images : undefined,
                       chat_session_id: _sid,
-                      msg_group_key: _cliCurrentSession?.key || undefined }
+                      msg_group_key: _cliCurrentSession?.key || undefined,
+                      ticket_id: (typeof chatCurrentTicketId !== 'undefined' && chatCurrentTicketId)
+                          || (typeof _currentTimelineTicketId !== 'undefined' && _currentTimelineTicketId)
+                          || undefined }
                 );
             } else {
                 // 项目内聊天 — 流式 API，服务端从 DB 读 history（Session Resume）
@@ -17002,7 +17294,10 @@ async function sendChatMessage() {
                     { message: fullMessage,
                       images: images.length > 0 ? images : undefined,
                       chat_session_id: _sid,
-                      msg_group_key: _cliCurrentSession?.key || undefined }
+                      msg_group_key: _cliCurrentSession?.key || undefined,
+                      ticket_id: (typeof chatCurrentTicketId !== 'undefined' && chatCurrentTicketId)
+                          || (typeof _currentTimelineTicketId !== 'undefined' && _currentTimelineTicketId)
+                          || undefined }
                 );
             }
         } else {
@@ -17167,12 +17462,120 @@ async function sendChatMessage() {
         // 关闭全局聊天思考日志 SSE
         if (_thinkingESrc) { _thinkingESrc.close(); _thinkingESrc = null; }
         // 流结束：flush 缓存的 MCP 确认卡片（追加到 AI 文字后面，保证可见）
+        // 与流式 ActionEvent 去重：同 title 已有确认卡则跳过
         if (_pendingMcpCards.length > 0) {
-            _pendingMcpCards.splice(0).forEach(appendMcpActionCard);
+            const existingTitles = new Set(
+                [...document.querySelectorAll('#chatMessages .chat-confirm-card[data-title]')]
+                    .map(el => (el.dataset.title || '').trim())
+                    .filter(Boolean)
+            );
+            _pendingMcpCards.splice(0).forEach(a => {
+                const t = (a.title || '').trim();
+                if (t && existingTitles.has(t)) return;
+                appendMcpActionCard(a);
+                if (t) existingTitles.add(t);
+            });
             scrollChatToBottom();
+        }
+        // CLI 模式：mcp-action 已落库但 SSE 可能丢 → 仅补回「本轮」最近 1 张 pending 卡
+        // （禁止扫全会话，否则会把历史地图/移动等旧草稿一次性刷出来）
+        try {
+            await _recoverPendingConfirmCards({
+                sinceTs: (typeof _chatSendStartedAt === 'number' ? _chatSendStartedAt : Date.now()) - 8000,
+                maxRecover: 1,
+                userHint: (typeof _chatLastUserText === 'string' ? _chatLastUserText : ''),
+            });
+        } catch (e) {
+            console.warn('[chat] recover confirm cards failed', e);
         }
     }
 }
+
+/** 本轮发送起点（供确认卡恢复窗口使用） */
+let _chatSendStartedAt = 0;
+let _chatLastUserText = '';
+
+/**
+ * 从当前会话 DB 补回未展示的 pending 确认卡（SSE 丢失时的兜底）。
+ * 严格限制：只看 sinceTs 之后、最多 maxRecover 张；优先 title 命中本轮用户话术。
+ */
+async function _recoverPendingConfirmCards(opts = {}) {
+    if (!currentProjectId || !_currentChatSessionId) return;
+    if (chatSending || _streamAbortController) return;
+
+    const sinceTs = typeof opts.sinceTs === 'number' ? opts.sinceTs : (Date.now() - 2 * 60 * 1000);
+    const maxRecover = Math.max(1, Math.min(2, opts.maxRecover ?? 1));
+    const userHint = (opts.userHint || '').trim();
+
+    // 本轮若流式/MCP 已插入过确认卡，不再扫库
+    const existingEls = [...document.querySelectorAll('#chatMessages .chat-confirm-card[data-title]')];
+    const existing = new Set(existingEls.map(el => (el.dataset.title || '').trim()).filter(Boolean));
+    // 刚插入过卡（距发送窗口内）则跳过
+    if (existingEls.length > 0 && existing.size > 0) {
+        // 若已有卡，仍允许补「本轮 hint 命中且尚未展示」的一张；否则直接返回避免刷旧卡
+        if (!userHint) return;
+    }
+
+    const data = await api(
+        `/projects/${currentProjectId}/chat/sessions/${_currentChatSessionId}/messages?limit=200`
+    );
+    const msgs = data.messages || data || [];
+    if (!Array.isArray(msgs) || !msgs.length) return;
+
+    const candidates = [];
+    for (let i = msgs.length - 1; i >= 0; i--) {
+        const msg = msgs[i];
+        if (msg.role !== 'assistant') continue;
+        if (msg.action_state && msg.action_state !== 'pending') continue;
+        const created = msg.created_at ? Date.parse(msg.created_at) : NaN;
+        if (!isNaN(created) && created < sinceTs) continue;
+
+        let action = null;
+        if (msg.action_data) {
+            try {
+                action = typeof msg.action_data === 'string'
+                    ? JSON.parse(msg.action_data) : msg.action_data;
+            } catch { action = null; }
+        }
+        if (!action?.type || !String(action.type).startsWith('confirm_')) continue;
+        const t = (action.title || '').trim();
+        if (t && existing.has(t)) continue;
+
+        let score = 0;
+        if (userHint && t && userHint.includes(t.slice(0, Math.min(8, t.length)))) score += 10;
+        if (userHint && t) {
+            // 简单重叠：用户话里的关键词出现在 title
+            const hits = userHint.split(/[\s，。、]+/).filter(w => w.length >= 2 && t.includes(w));
+            score += hits.length * 3;
+        }
+        if (action.type === 'confirm_requirement') score += 1; // 略优先需求卡
+        candidates.push({ msg, action, score, created: isNaN(created) ? 0 : created });
+    }
+
+    if (!candidates.length) return;
+    candidates.sort((a, b) => (b.score - a.score) || (b.created - a.created));
+
+    // 有用户话术时：只补「明显相关」的卡；无关历史草稿（地图/移动）一律不补
+    if (userHint && candidates[0].score < 3) return;
+
+    let added = 0;
+    for (const cand of candidates) {
+        if (added >= maxRecover) break;
+        if (userHint && cand.score < 3) continue;
+        const { msg, action } = cand;
+        const t = (action.title || '').trim();
+        action._message_id = msg.id;
+        action._state = msg.action_state || 'pending';
+        appendMcpActionCard(action);
+        if (t) existing.add(t);
+        added++;
+    }
+    if (added) {
+        console.log('[chat] recovered pending confirm cards:', added);
+        scrollChatToBottom();
+    }
+}
+
 
 /**
  * 追加聊天气泡
@@ -19006,6 +19409,7 @@ function _exitChatFullscreenSoft() {
             adsShell.remountChatToWorkbench();
         }
     } catch {}
+    _persistChatWorkspace();
     return true;
 }
 
@@ -23422,6 +23826,14 @@ async function submitAddAutomation() {
 function appendMcpActionCard(action) {
     const container = document.getElementById('chatMessages');
     if (!container) return;
+
+    // 同 title 已有确认卡则跳过（SSE + 流式 ActionEvent 双通道）
+    const title = (action.title || '').trim();
+    if (title) {
+        const dup = [...container.querySelectorAll('.chat-confirm-card[data-title]')]
+            .some(el => (el.dataset.title || '').trim() === title);
+        if (dup) return;
+    }
 
     const actionHtml = _buildAnyActionCardHtml(action);
     if (!actionHtml) return;
