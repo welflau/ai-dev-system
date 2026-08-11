@@ -914,18 +914,150 @@ const adsShell = (() => {
         return _escHtml(s).replace(/'/g, '&#39;');
     }
 
+    // 主舞台文件查看器偏好（Cursor 风格）
+    const VIEW_KEYS = {
+        lineNumbers: 'ads.ws.lineNumbers',
+        wordWrap: 'ads.ws.wordWrap',
+        treeOpen: 'ads.ws.treeOpen',
+    };
+    const viewPrefs = {
+        lineNumbers: _lsGet(VIEW_KEYS.lineNumbers, '1') !== '0',
+        wordWrap: _lsGet(VIEW_KEYS.wordWrap, '0') === '1',
+        treeOpen: _lsGet(VIEW_KEYS.treeOpen, '0') === '1',
+    };
+
+    function _setViewPref(key, val) {
+        viewPrefs[key] = !!val;
+        _lsSet(VIEW_KEYS[key], viewPrefs[key] ? '1' : '0');
+    }
+
+    function _pathCrumbsHtml(path) {
+        const parts = String(path || '').replace(/\\/g, '/').split('/').filter(Boolean);
+        if (!parts.length) return _escHtml(path || '');
+        return parts.map((p, i) => {
+            const sub = parts.slice(0, i + 1).join('/');
+            const last = i === parts.length - 1;
+            if (last) return `<span class="main-ws-crumb current">${_escHtml(p)}</span>`;
+            return `<span class="main-ws-crumb" title="${_escAttr(sub)}">${_escHtml(p)}</span><span class="main-ws-crumb-sep">›</span>`;
+        }).join('');
+    }
+
+    function _langForPath(path) {
+        const ext = (String(path || '').split('.').pop() || '').toLowerCase();
+        const fname = String(path || '').split('/').pop() || '';
+        const langMap = {
+            py: 'python', js: 'javascript', ts: 'typescript',
+            jsx: 'javascript', tsx: 'typescript',
+            html: 'html', css: 'css', scss: 'scss',
+            md: 'markdown', json: 'json', yml: 'yaml', yaml: 'yaml',
+            toml: 'ini', ini: 'ini', env: 'ini',
+            sh: 'bash', bash: 'bash', zsh: 'bash', ps1: 'powershell',
+            sql: 'sql', dockerfile: 'dockerfile',
+            go: 'go', rs: 'rust', java: 'java', cpp: 'cpp', cc: 'cpp',
+            c: 'c', h: 'cpp', hpp: 'cpp', cs: 'csharp',
+            rb: 'ruby', php: 'php', swift: 'swift', kt: 'kotlin',
+            xml: 'xml', uproject: 'json', uplugin: 'json',
+            vue: 'html', svelte: 'html',
+        };
+        if (langMap[ext]) return langMap[ext];
+        if (/^dockerfile(\.|$)/i.test(fname)) return 'dockerfile';
+        if (/^makefile$/i.test(fname)) return 'makefile';
+        if (/\.(build|target)\.cs$/i.test(fname)) return 'csharp';
+        return '';
+    }
+
+    function _highlightCode(content, path) {
+        const lang = _langForPath(path);
+        if (!window.hljs) return null;
+        try {
+            if (lang) return hljs.highlight(content, { language: lang, ignoreIllegals: true }).value;
+            return hljs.highlightAuto(content).value;
+        } catch {
+            return null;
+        }
+    }
+
+    /** 带行号 + hljs 的代码 HTML */
+    function _buildCodeLinesHtml(content, path, opts = {}) {
+        const showLn = opts.lineNumbers !== false && viewPrefs.lineNumbers;
+        const text = (content || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+        const lines = text.split('\n');
+        const hl = _highlightCode(text, path);
+        const hlLines = hl ? hl.split('\n') : null;
+        return lines.map((raw, i) => {
+            const lineContent = (hlLines && hlLines[i] !== undefined) ? hlLines[i] : _escHtml(raw);
+            const ln = showLn ? `<span class="main-ws-ln">${i + 1}</span>` : '';
+            return `<div class="main-ws-line" data-ln="${i + 1}">${ln}<span class="main-ws-line-code">${lineContent || ' '}</span></div>`;
+        }).join('');
+    }
+
+    /** unified diff：双列行号 + 着色 */
+    function _buildDiffLinesHtml(diffText) {
+        const showLn = viewPrefs.lineNumbers;
+        let oldLn = 0, newLn = 0;
+        const lines = String(diffText || '').replace(/\r\n/g, '\n').split('\n');
+        return lines.map(raw => {
+            const esc = _escHtml(raw);
+            let cls = 'ctx';
+            let o = '', n = '';
+            if (raw.startsWith('@@')) {
+                cls = 'hunk';
+                const m = raw.match(/@@\s+-(\d+)(?:,\d+)?\s+\+(\d+)/);
+                if (m) { oldLn = parseInt(m[1], 10) - 1; newLn = parseInt(m[2], 10) - 1; }
+            } else if (raw.startsWith('+') && !raw.startsWith('+++')) {
+                cls = 'add'; newLn += 1; n = String(newLn);
+            } else if (raw.startsWith('-') && !raw.startsWith('---')) {
+                cls = 'del'; oldLn += 1; o = String(oldLn);
+            } else if (raw.startsWith('diff ') || raw.startsWith('index ') || raw.startsWith('---') || raw.startsWith('+++')) {
+                cls = 'meta';
+            } else {
+                oldLn += 1; newLn += 1; o = String(oldLn); n = String(newLn);
+            }
+            const lnHtml = showLn
+                ? `<span class="main-ws-ln old">${o}</span><span class="main-ws-ln new">${n}</span>`
+                : '';
+            return `<div class="main-ws-line diff-${cls}">${lnHtml}<span class="main-ws-line-code">${esc || ' '}</span></div>`;
+        }).join('');
+    }
+
+    function _toolbarIconsHtml(tab) {
+        const safeId = tab.id.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+        return `
+            <button type="button" class="btn-icon main-ws-tool-btn" title="菜单" aria-label="菜单"
+                onclick="adsShell.toggleFileMenu(event,'${safeId}')">⋯</button>
+            <button type="button" class="btn-icon main-ws-tool-btn" title="搜索 (Ctrl+F)" aria-label="搜索"
+                onclick="adsShell.toggleFileSearch('${safeId}')">⌕</button>
+            <button type="button" class="btn-icon main-ws-tool-btn${viewPrefs.treeOpen ? ' active' : ''}" title="文件树" aria-label="文件树"
+                onclick="adsShell.toggleFileTree('${safeId}')">☰</button>`;
+    }
+
     async function _loadMainTabContent(id) {
         const tab = state.mainTabs.find(t => t.id === id);
         const host = document.getElementById('mainWsHost');
         if (!tab || !host || state.mainActiveId !== id) return;
 
+        const crumbs = _pathCrumbsHtml(tab.path || tab.title);
         host.innerHTML = `
             <div class="main-ws-pane-header">
-                <div class="main-ws-pane-path" title="${_escAttr(tab.path)}">${_escHtml(tab.path || tab.title)}</div>
-                <div class="main-ws-pane-actions" id="mainWsPaneActions"></div>
+                <div class="main-ws-pane-path" title="${_escAttr(tab.path || '')}">${crumbs}</div>
+                <div class="main-ws-pane-actions" id="mainWsPaneActions">${_toolbarIconsHtml(tab)}</div>
             </div>
-            <div class="main-ws-pane-body" id="mainWsPaneBody">
-                <div class="main-ws-loading">加载中…</div>
+            <div class="main-ws-findbar" id="mainWsFindBar" style="display:none;">
+                <input type="text" id="mainWsFindInput" placeholder="在文件中查找…" autocomplete="off"
+                    onkeydown="adsShell.onFindKeydown(event)">
+                <span class="main-ws-find-count" id="mainWsFindCount"></span>
+                <button type="button" class="btn-icon" title="上一个" onclick="adsShell.findNext(-1)">↑</button>
+                <button type="button" class="btn-icon" title="下一个" onclick="adsShell.findNext(1)">↓</button>
+                <button type="button" class="btn-icon" title="关闭" onclick="adsShell.toggleFileSearch(null,false)">✕</button>
+            </div>
+            <div class="main-ws-split">
+                <div class="main-ws-pane-body" id="mainWsPaneBody">
+                    <div class="main-ws-loading">加载中…</div>
+                </div>
+                <aside class="main-ws-tree" id="mainWsTree" style="display:${viewPrefs.treeOpen ? 'flex' : 'none'};">
+                    <div class="main-ws-tree-head">文件</div>
+                    <div class="main-ws-tree-list" id="mainWsTreeList"><div class="main-ws-loading">加载中…</div></div>
+                </aside>
             </div>`;
 
         const body = document.getElementById('mainWsPaneBody');
@@ -936,6 +1068,7 @@ const adsShell = (() => {
             } else if (tab.type === 'diff') {
                 await _fillDiffPane(tab, body, actions);
             }
+            if (viewPrefs.treeOpen) _loadMainWsTree(tab.path);
         } catch (e) {
             if (body) body.innerHTML = `<div class="main-ws-error">加载失败：${_escHtml(e.message || e)}</div>`;
         }
@@ -951,8 +1084,14 @@ const adsShell = (() => {
             body.innerHTML = `<div class="main-ws-img"><img src="${rawUrl}" alt="${_escAttr(tabRef.title)}"></div>`;
             return;
         }
+
+        // Diff View 开关：对当前文件拉 git diff
+        if (tabRef.diffView) {
+            await _fillFileAsDiff(tabRef, body, actions);
+            return;
+        }
+
         const data = await api(`/projects/${currentProjectId}/git/file?path=${encodeURIComponent(path)}`);
-        // 后端可能把裸文件名解析成真实路径（如 DefaultEngine.ini → Config/DefaultEngine.ini）
         if (data.path && data.path !== path) {
             path = String(data.path).replace(/\\/g, '/');
             const newId = 'file:' + path;
@@ -969,9 +1108,10 @@ const adsShell = (() => {
             _renderMainWorkspace();
             const pathEl = document.querySelector('.main-ws-pane-path');
             if (pathEl) {
-                pathEl.textContent = path;
+                pathEl.innerHTML = _pathCrumbsHtml(path);
                 pathEl.title = path;
             }
+            if (actions) actions.innerHTML = _toolbarIconsHtml(tabRef);
         }
         const content = (data.content || '').replace(/\r\n/g, '\n');
         tabRef._content = content;
@@ -981,7 +1121,7 @@ const adsShell = (() => {
             if (actions) {
                 actions.innerHTML = `
                     <button type="button" class="btn-icon main-ws-action" id="mainWsMdToggle" title="切换源码/预览">源码</button>
-                    <button type="button" class="btn-icon main-ws-action" onclick="navigator.clipboard.writeText(adsShell.getMainTabContent('${tabRef.id.replace(/'/g, "\\'")}'))" title="复制">⎘</button>`;
+                    ${_toolbarIconsHtml(tabRef)}`;
             }
             _renderMdOrSource(body, content, path, true);
             const btn = document.getElementById('mainWsMdToggle');
@@ -996,16 +1136,51 @@ const adsShell = (() => {
             return;
         }
 
-        if (actions) {
-            actions.innerHTML = `<button type="button" class="btn-icon main-ws-action" onclick="navigator.clipboard.writeText(adsShell.getMainTabContent('${tabRef.id.replace(/'/g, "\\'")}'))" title="复制">⎘</button>`;
+        if (actions) actions.innerHTML = _toolbarIconsHtml(tabRef);
+        _renderCodePane(body, content, path);
+    }
+
+    async function _fillFileAsDiff(tab, body, actions) {
+        if (actions) actions.innerHTML = _toolbarIconsHtml(tab);
+        try {
+            const url = `/projects/${currentProjectId}/git/file-diff?path=${encodeURIComponent(tab.path)}`;
+            const data = await api(url);
+            const diff = data.diff || '';
+            tab._content = diff || data.content || '';
+            if (diff) {
+                _renderDiffPane(body, diff);
+            } else if (data.content) {
+                body.innerHTML = `<div class="main-ws-diff-empty">相对基线无改动，显示文件内容</div>`;
+                _renderCodePane(body, data.content, tab.path, { append: true });
+            } else {
+                body.innerHTML = `<div class="main-ws-error">无 diff / 文件内容为空</div>`;
+            }
+        } catch (e) {
+            body.innerHTML = `<div class="main-ws-error">Diff 加载失败：${_escHtml(e.message || e)}</div>`;
         }
-        body.innerHTML = `<pre class="main-ws-code"><code>${_escHtml(content.slice(0, 200000))}</code></pre>`;
+    }
+
+    function _renderCodePane(body, content, path, opts = {}) {
+        const wrap = viewPrefs.wordWrap ? ' wrap' : '';
+        const html = _buildCodeLinesHtml(content.slice(0, 200000), path);
+        const block = `<div class="main-ws-code-block${wrap}" data-raw="${_escAttr(content.slice(0, 200000))}">
+            <pre class="main-ws-code hljs"><code>${html}</code></pre>
+        </div>`;
+        if (opts.append) body.insertAdjacentHTML('beforeend', block);
+        else body.innerHTML = block;
+    }
+
+    function _renderDiffPane(body, diff) {
+        const wrap = viewPrefs.wordWrap ? ' wrap' : '';
+        const html = _buildDiffLinesHtml(diff.slice(0, 200000));
+        body.innerHTML = `<div class="main-ws-code-block main-ws-diff-block${wrap}" data-raw="${_escAttr(diff.slice(0, 200000))}">
+            <pre class="main-ws-code hljs main-ws-diff"><code>${html}</code></pre>
+        </div>`;
     }
 
     function _renderMdOrSource(body, content, path, preview) {
         if (preview && window.marked) {
             body.innerHTML = `<div class="main-ws-md markdown-body">${marked.parse(content)}</div>`;
-            // 相对图片：简单处理 /api raw
             body.querySelectorAll('img').forEach(img => {
                 const src = img.getAttribute('src') || '';
                 if (src && !src.startsWith('http') && !src.startsWith('/') && !src.startsWith('data:')) {
@@ -1014,7 +1189,7 @@ const adsShell = (() => {
                 }
             });
         } else {
-            body.innerHTML = `<pre class="main-ws-code"><code>${_escHtml(content.slice(0, 200000))}</code></pre>`;
+            _renderCodePane(body, content, path);
         }
     }
 
@@ -1033,19 +1208,16 @@ const adsShell = (() => {
         tab._content = diff || content;
 
         if (actions) {
-            actions.innerHTML = diff
-                ? `<span class="main-ws-badge">vs main</span>`
-                : `<span class="main-ws-badge">文件</span>`;
-            actions.innerHTML += ` <button type="button" class="btn-icon main-ws-action" onclick="adsShell.openMain({type:'file',path:'${tab.path.replace(/'/g, "\\'")}'})" title="打开文件">📄</button>`;
+            actions.innerHTML = `
+                <span class="main-ws-badge">${diff ? 'vs main' : '文件'}</span>
+                <button type="button" class="btn-icon main-ws-action" onclick="adsShell.openMain({type:'file',path:'${tab.path.replace(/'/g, "\\'")}'})" title="打开文件">📄</button>
+                ${_toolbarIconsHtml(tab)}`;
         }
 
         if (diff) {
-            const colored = (typeof _colorDiff === 'function')
-                ? _colorDiff(_escHtml(diff.slice(0, 20000)))
-                : _escHtml(diff.slice(0, 20000));
-            body.innerHTML = `<pre class="main-ws-code main-ws-diff"><code class="diff-code">${colored}</code></pre>`;
+            _renderDiffPane(body, diff);
         } else if (content) {
-            body.innerHTML = `<pre class="main-ws-code"><code>${_escHtml(content.slice(0, 20000))}</code></pre>`;
+            _renderCodePane(body, content, tab.path);
         } else {
             body.innerHTML = `<div class="main-ws-error">无 diff / 文件内容为空</div>`;
         }
@@ -1055,6 +1227,209 @@ const adsShell = (() => {
         const tab = state.mainTabs.find(t => t.id === id);
         return tab?._content || '';
     }
+
+    function toggleFileMenu(ev, tabId) {
+        ev?.stopPropagation?.();
+        document.getElementById('mainWsFileMenu')?.remove();
+        const tab = state.mainTabs.find(t => t.id === tabId) || state.mainTabs.find(t => t.id === state.mainActiveId);
+        if (!tab) return;
+        const btn = ev?.currentTarget || document.querySelector('.main-ws-tool-btn');
+        const rect = btn?.getBoundingClientRect?.() || { bottom: 80, right: 40 };
+        const isFile = tab.type === 'file';
+        const diffOn = !!tab.diffView || tab.type === 'diff';
+        const menu = document.createElement('div');
+        menu.id = 'mainWsFileMenu';
+        menu.className = 'main-ws-file-menu';
+        menu.style.cssText = `top:${rect.bottom + 4}px;right:${Math.max(8, window.innerWidth - rect.right)}px;`;
+        menu.innerHTML = `
+            <button type="button" class="main-ws-menu-item" data-act="copy">Copy Relative Path</button>
+            <button type="button" class="main-ws-menu-item" data-act="copy-full">Copy Absolute Path</button>
+            <button type="button" class="main-ws-menu-item" data-act="copy-content">Copy File Content</button>
+            <div class="main-ws-menu-sep"></div>
+            <button type="button" class="main-ws-menu-item" data-act="reveal">Reveal in File Explorer</button>
+            <button type="button" class="main-ws-menu-item" data-act="repo">Open in Repo Tab</button>
+            <div class="main-ws-menu-sep"></div>
+            <button type="button" class="main-ws-menu-item toggle" data-act="diff" ${isFile ? '' : 'disabled'}>
+                <span>Diff View</span>
+                <span class="main-ws-switch${diffOn ? ' on' : ''}"></span>
+            </button>
+            <button type="button" class="main-ws-menu-item toggle" data-act="linenum">
+                <span>Line Numbers</span>
+                <span class="main-ws-switch${viewPrefs.lineNumbers ? ' on' : ''}"></span>
+            </button>
+            <button type="button" class="main-ws-menu-item toggle" data-act="wrap">
+                <span>Word Wrap</span>
+                <span class="main-ws-switch${viewPrefs.wordWrap ? ' on' : ''}"></span>
+            </button>`;
+        document.body.appendChild(menu);
+        menu.addEventListener('click', async (e) => {
+            const item = e.target.closest('[data-act]');
+            if (!item || item.disabled) return;
+            const act = item.dataset.act;
+            const path = tab.path || '';
+            if (act === 'copy') {
+                await navigator.clipboard.writeText(path);
+                showToast('已复制相对路径', 'success');
+            } else if (act === 'copy-full') {
+                const root = (currentProject?.local_repo_path || '').replace(/[\\/]+$/, '');
+                const full = root ? `${root.replace(/\\/g, '/')}/${path}` : path;
+                await navigator.clipboard.writeText(full);
+                showToast('已复制绝对路径', 'success');
+            } else if (act === 'copy-content') {
+                await navigator.clipboard.writeText(tab._content || '');
+                showToast('已复制文件内容', 'success');
+            } else if (act === 'reveal') {
+                const root = (currentProject?.local_repo_path || '').replace(/[\\/]+$/, '');
+                const full = root ? `${root}\\${path.replace(/\//g, '\\')}` : path;
+                await navigator.clipboard.writeText(full);
+                showToast('路径已复制（可在资源管理器打开）', 'info');
+            } else if (act === 'repo') {
+                if (typeof switchTab === 'function') switchTab('repo');
+                setTimeout(() => { if (typeof viewRepoFile === 'function') viewRepoFile(path, null); }, 300);
+            } else if (act === 'diff' && isFile) {
+                tab.diffView = !tab.diffView;
+                menu.remove();
+                _loadMainTabContent(tab.id);
+                return;
+            } else if (act === 'linenum') {
+                _setViewPref('lineNumbers', !viewPrefs.lineNumbers);
+                menu.remove();
+                _loadMainTabContent(tab.id);
+                return;
+            } else if (act === 'wrap') {
+                _setViewPref('wordWrap', !viewPrefs.wordWrap);
+                menu.remove();
+                _loadMainTabContent(tab.id);
+                return;
+            }
+            menu.remove();
+        });
+        setTimeout(() => {
+            const closer = (e) => {
+                if (!menu.contains(e.target)) { menu.remove(); document.removeEventListener('mousedown', closer); }
+            };
+            document.addEventListener('mousedown', closer);
+        }, 0);
+    }
+
+    let _findIdx = -1;
+    let _findHits = [];
+
+    function toggleFileSearch(tabId, force) {
+        const bar = document.getElementById('mainWsFindBar');
+        if (!bar) return;
+        const show = force === undefined ? bar.style.display === 'none' : !!force;
+        bar.style.display = show ? 'flex' : 'none';
+        if (show) {
+            const input = document.getElementById('mainWsFindInput');
+            input?.focus();
+            input?.select();
+        } else {
+            _clearFindHits();
+        }
+    }
+
+    function onFindKeydown(e) {
+        if (e.key === 'Escape') { toggleFileSearch(null, false); return; }
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            _runFind(e.shiftKey ? -1 : 1);
+        } else {
+            clearTimeout(onFindKeydown._t);
+            onFindKeydown._t = setTimeout(() => _runFind(0), 120);
+        }
+    }
+
+    function _clearFindHits() {
+        document.querySelectorAll('.main-ws-line.find-hit, .main-ws-line.find-active')
+            .forEach(el => el.classList.remove('find-hit', 'find-active'));
+        _findHits = [];
+        _findIdx = -1;
+        const c = document.getElementById('mainWsFindCount');
+        if (c) c.textContent = '';
+    }
+
+    function _runFind(dir) {
+        const input = document.getElementById('mainWsFindInput');
+        const q = (input?.value || '').trim();
+        _clearFindHits();
+        if (!q) return;
+        const lines = [...document.querySelectorAll('#mainWsPaneBody .main-ws-line')];
+        const low = q.toLowerCase();
+        _findHits = lines.filter(el => (el.textContent || '').toLowerCase().includes(low));
+        _findHits.forEach(el => el.classList.add('find-hit'));
+        const c = document.getElementById('mainWsFindCount');
+        if (!_findHits.length) {
+            if (c) c.textContent = '无结果';
+            return;
+        }
+        if (dir === 0) _findIdx = 0;
+        else if (dir > 0) _findIdx = (_findIdx + 1) % _findHits.length;
+        else _findIdx = (_findIdx - 1 + _findHits.length) % _findHits.length;
+        _findHits[_findIdx].classList.add('find-active');
+        _findHits[_findIdx].scrollIntoView({ block: 'center' });
+        if (c) c.textContent = `${_findIdx + 1}/${_findHits.length}`;
+    }
+
+    function findNext(dir) { _runFind(dir || 1); }
+
+    function toggleFileTree(tabId) {
+        _setViewPref('treeOpen', !viewPrefs.treeOpen);
+        const tree = document.getElementById('mainWsTree');
+        const btn = document.querySelector('.main-ws-tool-btn[aria-label="文件树"]');
+        if (tree) tree.style.display = viewPrefs.treeOpen ? 'flex' : 'none';
+        if (btn) btn.classList.toggle('active', viewPrefs.treeOpen);
+        if (viewPrefs.treeOpen) {
+            const tab = state.mainTabs.find(t => t.id === (tabId || state.mainActiveId));
+            _loadMainWsTree(tab?.path);
+        }
+    }
+
+    async function _loadMainWsTree(activePath) {
+        const list = document.getElementById('mainWsTreeList');
+        if (!list || !currentProjectId) return;
+        try {
+            const tree = await api(`/projects/${currentProjectId}/git/tree`);
+            const nodes = tree.children || tree.tree || [];
+            if (!nodes.length) {
+                list.innerHTML = `<div style="padding:12px;color:var(--text-muted);font-size:12px;">仓库为空</div>`;
+                return;
+            }
+            list.innerHTML = _renderWsTreeNodes(nodes, activePath, 0);
+        } catch (e) {
+            list.innerHTML = `<div class="main-ws-error" style="padding:8px;">树加载失败</div>`;
+        }
+    }
+
+    function _renderWsTreeNodes(nodes, activePath, depth) {
+        if (!Array.isArray(nodes)) return '';
+        return nodes.map(n => {
+            const path = (n.path || n.name || '').replace(/\\/g, '/');
+            const name = n.name || path.split('/').pop();
+            const isDir = n.type === 'directory' || n.type === 'dir' || n.type === 'tree' || Array.isArray(n.children);
+            const active = path === activePath ? ' active' : '';
+            if (isDir) {
+                const kids = n.children || n.entries || [];
+                return `<div class="main-ws-tree-dir" style="--d:${depth}">
+                    <div class="main-ws-tree-item dir">${_escHtml(name)}</div>
+                    ${_renderWsTreeNodes(kids, activePath, depth + 1)}
+                </div>`;
+            }
+            return `<div class="main-ws-tree-item file${active}" style="--d:${depth}"
+                onclick="adsShell.openMain({type:'file',path:'${path.replace(/'/g, "\\'")}'})"
+                title="${_escAttr(path)}">${_escHtml(name)}</div>`;
+        }).join('');
+    }
+
+    // Ctrl+F in file pane
+    document.addEventListener('keydown', (e) => {
+        if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'f') return;
+        if (!state.mainActiveId) return;
+        const host = document.getElementById('mainWsHost');
+        if (!host || host.style.display === 'none') return;
+        e.preventDefault();
+        toggleFileSearch(state.mainActiveId, true);
+    });
 
     return {
         init,
@@ -1080,6 +1455,11 @@ const adsShell = (() => {
         closeMainTab,
         closeAllMainTabs,
         getMainTabContent,
+        toggleFileMenu,
+        toggleFileSearch,
+        toggleFileTree,
+        onFindKeydown,
+        findNext,
         remountChatToWorkbench,
         syncSidebarToggleInTitle: () => {
             if (_layout()?.classList.contains('sidebar-collapsed')) {
