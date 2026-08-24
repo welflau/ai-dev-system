@@ -326,6 +326,9 @@ class _ChatToolExecutor:
                 # 记录写文件操作（用于汇报）
                 if self.project_id:
                     _record_file_change(tool_name, tool_input, self.project_id)
+                # confirm_* 经 MCP 时原本只靠 SSE 推卡片；SSE 丢失则前端只见「已推送」文字。
+                # 从入参合成 action，走流式 ActionEvent，与原生工具路径对齐。
+                self._capture_mcp_confirm_action(tool_name, tool_input, result)
                 return result
             except Exception as e:
                 logger.warning("MCP 工具调用异常 (%s): %s", tool_name, e)
@@ -385,6 +388,89 @@ class _ChatToolExecutor:
 
         # 返回给 LLM 的是 JSON 字符串（chat_with_tools 规范）
         return json.dumps(data, ensure_ascii=False)
+
+    def _capture_mcp_confirm_action(
+        self, tool_name: str, tool_input: Any, result_text: str,
+    ) -> None:
+        """MCP confirm_* 成功时合成 action，供 QueryEngine 发 ActionEvent。
+
+        ads_data MCP 工具本身会 HTTP 调 mcp-action → SSE；若 SSE 未达前端，
+        用户会只看到「需求草稿已推送」文字而没有确认面板。流式 action 作主路径兜底。
+        """
+        short = tool_name.rsplit("__", 1)[-1] if "__" in tool_name else tool_name
+        if short not in (
+            "confirm_requirement", "confirm_bug",
+            "confirm_direct_ticket", "confirm_requirements_batch",
+        ):
+            return
+        try:
+            parsed = json.loads(result_text) if isinstance(result_text, str) else result_text
+        except Exception:
+            parsed = {}
+        if isinstance(parsed, dict) and (
+            parsed.get("status") == "error" or parsed.get("error")
+        ):
+            return
+        inp = tool_input if isinstance(tool_input, dict) else {}
+        data: Optional[Dict[str, Any]] = None
+        if short == "confirm_requirement":
+            title = (inp.get("title") or "").strip()
+            if not title:
+                return
+            pri = inp.get("priority") or "medium"
+            if pri not in ("critical", "high", "medium", "low"):
+                pri = "medium"
+            data = {
+                "type": "confirm_requirement",
+                "title": title,
+                "description": (inp.get("description") or "").strip(),
+                "priority": pri,
+            }
+        elif short == "confirm_bug":
+            title = (inp.get("title") or "").strip()
+            if not title:
+                return
+            pri = inp.get("priority") or "high"
+            if pri not in ("critical", "high", "medium", "low"):
+                pri = "high"
+            data = {
+                "type": "confirm_bug",
+                "title": title,
+                "description": (inp.get("description") or "").strip(),
+                "priority": pri,
+                "requirement_id": inp.get("requirement_id") or "",
+            }
+        elif short == "confirm_direct_ticket":
+            title = (inp.get("title") or "").strip()
+            if not title:
+                return
+            data = {
+                "type": "confirm_direct_ticket",
+                "title": title,
+                "description": (inp.get("description") or "").strip(),
+                "ticket_type": inp.get("type") or inp.get("ticket_type") or "feature",
+                "start_from": inp.get("start_from") or "pending",
+            }
+        elif short == "confirm_requirements_batch":
+            reqs = inp.get("requirements") or []
+            if not isinstance(reqs, list) or len(reqs) < 1:
+                return
+            data = {
+                "type": "confirm_requirements_batch",
+                "requirements": reqs,
+                "summary": (inp.get("summary") or "").strip(),
+            }
+        if not data:
+            return
+        current_type = data.get("type", "")
+        current_tier = self._TYPE_PRIORITY.get(current_type, 50)
+        if current_tier <= self._primary_tier:
+            self.primary_action_result = data
+            self._primary_tier = current_tier
+        if current_type in self._COLLECT_ALL_TYPES:
+            self.all_confirm_results.append(data)
+        logger.info("MCP confirm 已合成 action（流式兜底）: %s %s",
+                    current_type, (data.get("title") or "")[:40])
 
     async def _emit_thinking(self, tool_name: str, tool_input: dict, step: str, summary: str = "") -> None:
         """推送/记录思考日志。
@@ -753,6 +839,27 @@ class ChatAssistantAgent(BaseAgent):
                 logger.debug("CLI Resume 查询失败（忽略）: %s", _e)
 
         context = {"project_id": project["id"], "agent_type": self.agent_type}
+        # 工单会话：把 ticket_id 注入 context，供 Write/Edit Checkpoint
+        _tid = (project_context or {}).get("ticket_id") or (project_context or {}).get("active_ticket_id")
+        if _tid:
+            context["ticket_id"] = _tid
+        try:
+            from checkpoint import set_checkpoint_context, clear_checkpoint_context
+            from capability_check import _get_repo_path
+            _repo = ""
+            try:
+                _repo = await _get_repo_path(project["id"]) or ""
+            except Exception:
+                pass
+            if _tid:
+                set_checkpoint_context(
+                    project_id=project["id"], ticket_id=_tid,
+                    agent_type=self.agent_type, action="chat_stream",
+                    repo_path=_repo,
+                )
+                context["repo_path"] = _repo
+        except Exception:
+            pass
         engine = QueryEngine(
             llm_client=llm_client,
             tool_executor=executor,
@@ -882,6 +989,11 @@ class ChatAssistantAgent(BaseAgent):
                     yield {"type": "error", "message": event.message}
         finally:
             clear_llm_context()
+            try:
+                from checkpoint import clear_checkpoint_context
+                clear_checkpoint_context()
+            except Exception:
+                pass
 
     # ==================== 全局聊天入口（项目列表页，无 project_id） ====================
 
@@ -1392,6 +1504,11 @@ class ChatAssistantAgent(BaseAgent):
             )
         else:
             req_summary = "  暂无需求"
+            req_summary += (
+                "\n  【空项目破冰】看板还是空的。用户寒暄、说「开始」或没给具体需求时："
+                "根据上面的项目名称/描述/特征，主动给出 3-4 个可行开发方向（含取舍），"
+                "让用户选一个后再 confirm_requirement。不要只回「请问需要什么」或通用分类。"
+            )
 
         ticket_summary = context.get("ticket_summary", "暂无工单")
         file_tree = context.get("file_tree", "")
@@ -1594,6 +1711,7 @@ UnrealBuildTool.exe {ProjectName}Editor Win64 Development "{path/to/project.upro
 - 触发：用户询问「系统功能 / 某特性怎么实现的 / 最近做了什么 / 有没有 XX 相关文档」
 - 示例：「能搜索到 harness 相关信息吗」「QueryEngine 是怎么做的」「有 Skill 相关文档吗」
 - **先用 search_knowledge，找不到才考虑 grep 搜代码**；不要第一步就 grep
+- 引用文档时用结果中的 `cite`（`[标题](ads-kb:ID)`），让用户可点击打开；不要只用反引号包标题
 
 **web_search** — 联网搜索
 - 触发：用户说「搜一下 XX」「网络搜索 XX」「联网查查」「网上找找」「搜索官方文档」
@@ -1847,6 +1965,9 @@ name: 项目名
   做二次搜索，**不要重复使用上一次已经搜过的宽泛词**（如版本号）。
 - **搜索后务必直接回答用户的具体问题**，不要只转述文档标题或版本概览。
   若搜索结果里没有具体答案，如实说明并建议用户进入项目内查看。
+- **引用文档必须可点击**：列举文档时使用结果里的 `cite` 字段（Markdown 链接格式
+  `[显示名](ads-kb:文档ID)`）。**禁止**只用反引号 `` `显示名` `` —— 用户无法点击打开。
+  表格「文档」列也要写链接，例如 `| [Skills系统管理约定](ads-kb:42) | … |`。
 
 **3. search_ticket_history** — 搜索历史工单
 - 当用户询问某类问题**历史上有没有解决过**、或**查某个 bug 怎么处理的**时调用。

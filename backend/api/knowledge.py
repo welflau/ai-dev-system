@@ -209,6 +209,294 @@ async def search_knowledge_get(q: str, project_id: str = None, limit: int = 5):
     return await _do_search_knowledge(q, project_id, limit)
 
 
+@router.get("/index")
+async def list_knowledge_index(
+    q: Optional[str] = None,
+    scope: Optional[str] = None,
+    project_id: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+):
+    """浏览 knowledge_index / FTS 索引条目（可视化面板用）。
+
+    scope: all | system | global | project
+    q: 可选，走 FTS5 全文搜索并返回 snippet
+    """
+    limit = max(1, min(int(limit or 50), 200))
+    offset = max(0, int(offset or 0))
+    scope = (scope or "all").strip().lower()
+    if scope not in ("all", "system", "global", "project"):
+        raise HTTPException(400, "scope 须为 all/system/global/project")
+
+    # ── 统计 ────────────────────────────────────────────────────────────
+    stats_rows = await db.fetch_all("""
+        SELECT
+            COUNT(*) AS total,
+            SUM(CASE WHEN filename LIKE 'sys\\_docs\\_\\_%' ESCAPE '\\'
+                       OR filename LIKE 'sys\\_devnotes\\_\\_%' ESCAPE '\\' THEN 1 ELSE 0 END) AS system_count,
+            SUM(CASE WHEN project_id IS NULL
+                      AND filename NOT LIKE 'sys\\_docs\\_\\_%' ESCAPE '\\'
+                      AND filename NOT LIKE 'sys\\_devnotes\\_\\_%' ESCAPE '\\' THEN 1 ELSE 0 END) AS global_count,
+            SUM(CASE WHEN project_id IS NOT NULL THEN 1 ELSE 0 END) AS project_count,
+            COALESCE(SUM(length(content)), 0) AS total_chars,
+            COALESCE(SUM(used_count), 0) AS total_hits
+        FROM knowledge_index
+    """)
+    stats = dict(stats_rows[0]) if stats_rows else {
+        "total": 0, "system_count": 0, "global_count": 0,
+        "project_count": 0, "total_chars": 0, "total_hits": 0,
+    }
+
+    # ── 过滤条件（alias="" 用于直查 knowledge_index；alias="ki." 用于 FTS JOIN）──
+    def _scope_where(alias: str = "") -> tuple:
+        w, p = [], []
+        col_fn = f"{alias}filename"
+        col_pid = f"{alias}project_id"
+        if scope == "system":
+            w.append(
+                f"({col_fn} LIKE 'sys\\_docs\\_\\_%' ESCAPE '\\'"
+                f" OR {col_fn} LIKE 'sys\\_devnotes\\_\\_%' ESCAPE '\\')"
+            )
+        elif scope == "global":
+            w.append(f"{col_pid} IS NULL")
+            w.append(f"{col_fn} NOT LIKE 'sys\\_docs\\_\\_%' ESCAPE '\\'")
+            w.append(f"{col_fn} NOT LIKE 'sys\\_devnotes\\_\\_%' ESCAPE '\\'")
+        elif scope == "project":
+            if project_id:
+                w.append(f"{col_pid} = ?")
+                p.append(project_id)
+            else:
+                w.append(f"{col_pid} IS NOT NULL")
+        sql = (" AND " + " AND ".join(w)) if w else ""
+        return sql, p
+
+    # ── 列表 / 搜索 ─────────────────────────────────────────────────────
+    q = (q or "").strip()
+    items = []
+    total_filtered = 0
+
+    if q:
+        where_sql, params = _scope_where("ki.")
+        try:
+            fts_params = [q] + params + [limit, offset]
+            count_params = [q] + params
+            rows = await db.fetch_all(f"""
+                SELECT ki.id, ki.project_id, ki.filename, ki.agent_scope, ki.confidence,
+                       ki.used_count, ki.updated_at, length(ki.content) AS size,
+                       snippet(knowledge_fts, 0, '**', '**', '...', 48) AS snippet
+                FROM knowledge_fts
+                JOIN knowledge_index ki ON knowledge_fts.rowid = ki.id
+                WHERE knowledge_fts MATCH ?{where_sql}
+                ORDER BY rank
+                LIMIT ? OFFSET ?
+            """, tuple(fts_params))
+            count_row = await db.fetch_one(f"""
+                SELECT COUNT(*) AS c
+                FROM knowledge_fts
+                JOIN knowledge_index ki ON knowledge_fts.rowid = ki.id
+                WHERE knowledge_fts MATCH ?{where_sql}
+            """, tuple(count_params))
+            total_filtered = (count_row or {}).get("c") or 0
+        except Exception as e:
+            logger.warning("knowledge index FTS 失败: %s", e)
+            raise HTTPException(500, f"搜索失败: {e}")
+    else:
+        where_sql, params = _scope_where("")
+        rows = await db.fetch_all(f"""
+            SELECT id, project_id, filename, agent_scope, confidence,
+                   used_count, updated_at, length(content) AS size,
+                   NULL AS snippet
+            FROM knowledge_index
+            WHERE 1=1{where_sql}
+            ORDER BY updated_at DESC
+            LIMIT ? OFFSET ?
+        """, tuple(params + [limit, offset]))
+        count_row = await db.fetch_one(
+            f"SELECT COUNT(*) AS c FROM knowledge_index WHERE 1=1{where_sql}",
+            tuple(params),
+        )
+        total_filtered = (count_row or {}).get("c") or 0
+
+    for r in rows:
+        fname = r["filename"] or ""
+        if fname.startswith("sys_docs__"):
+            item_scope = "system"
+            display = fname[len("sys_docs__"):]
+            group = "docs"
+        elif fname.startswith("sys_devnotes__"):
+            item_scope = "system"
+            display = fname[len("sys_devnotes__"):]
+            group = "devnotes"
+        elif r["project_id"]:
+            item_scope = "project"
+            display = fname
+            group = "project"
+        else:
+            item_scope = "global"
+            display = fname
+            group = "global"
+        items.append({
+            "id": r["id"],
+            "filename": fname,
+            "display_name": display,
+            "scope": item_scope,
+            "group": group,
+            "project_id": r["project_id"],
+            "size": r["size"] or 0,
+            "agent_scope": r["agent_scope"],
+            "confidence": r["confidence"],
+            "used_count": r["used_count"] or 0,
+            "updated_at": r["updated_at"],
+            "snippet": r["snippet"],
+        })
+
+    return {
+        "stats": stats,
+        "items": items,
+        "total_filtered": total_filtered,
+        "limit": limit,
+        "offset": offset,
+        "q": q or None,
+        "scope": scope,
+    }
+
+
+@router.get("/index/lookup")
+async def lookup_knowledge_index(name: str, project_id: Optional[str] = None):
+    """按显示名 / 文件名查找知识库条目（聊天链接点击用）。"""
+    raw = (name or "").strip()
+    if not raw:
+        raise HTTPException(400, "name 不能为空")
+    # 去掉可能的路径与扩展
+    base = raw.replace("\\", "/").split("/")[-1]
+    candidates = []
+    for c in (
+        base,
+        base if base.endswith(".md") else base + ".md",
+        base[len("sys_docs__"):] if base.startswith("sys_docs__") else None,
+        base[len("sys_devnotes__"):] if base.startswith("sys_devnotes__") else None,
+    ):
+        if c and c not in candidates:
+            candidates.append(c)
+
+    stem = base[:-3] if base.endswith(".md") else base
+    for prefix in ("sys_docs__", "sys_devnotes__", ""):
+        for s in (stem, stem + ".md"):
+            cand = f"{prefix}{s}" if prefix else s
+            if cand and cand not in candidates:
+                candidates.append(cand)
+
+    row = None
+    for cand in candidates:
+        if project_id:
+            row = await db.fetch_one(
+                """SELECT id, project_id, filename, agent_scope, used_count, updated_at,
+                          length(content) AS size
+                   FROM knowledge_index
+                   WHERE filename = ? AND (project_id = ? OR project_id IS NULL)
+                   ORDER BY CASE WHEN project_id = ? THEN 0 ELSE 1 END
+                   LIMIT 1""",
+                (cand, project_id, project_id),
+            )
+        else:
+            row = await db.fetch_one(
+                """SELECT id, project_id, filename, agent_scope, used_count, updated_at,
+                          length(content) AS size
+                   FROM knowledge_index WHERE filename = ? LIMIT 1""",
+                (cand,),
+            )
+        if row:
+            break
+
+    # 后缀模糊：显示名不含前缀时
+    if not row:
+        if project_id:
+            row = await db.fetch_one(
+                """SELECT id, project_id, filename, agent_scope, used_count, updated_at,
+                          length(content) AS size
+                   FROM knowledge_index
+                   WHERE (filename = ? OR filename LIKE ? OR filename LIKE ?)
+                     AND (project_id = ? OR project_id IS NULL)
+                   ORDER BY CASE WHEN project_id = ? THEN 0 ELSE 1 END, length(filename)
+                   LIMIT 1""",
+                (stem, f"%__{stem}", f"%__{stem}.md", project_id, project_id),
+            )
+        else:
+            row = await db.fetch_one(
+                """SELECT id, project_id, filename, agent_scope, used_count, updated_at,
+                          length(content) AS size
+                   FROM knowledge_index
+                   WHERE filename = ? OR filename LIKE ? OR filename LIKE ?
+                   ORDER BY length(filename) LIMIT 1""",
+                (stem, f"%__{stem}", f"%__{stem}.md"),
+            )
+
+    if not row:
+        raise HTTPException(404, f"未找到知识库文档：{raw}")
+
+    fname = row["filename"] or ""
+    if fname.startswith("sys_docs__"):
+        display = fname[len("sys_docs__"):]
+    elif fname.startswith("sys_devnotes__"):
+        display = fname[len("sys_devnotes__"):]
+    else:
+        display = fname
+    return {
+        "id": row["id"],
+        "filename": fname,
+        "display_name": display[:-3] if display.endswith(".md") else display,
+        "project_id": row["project_id"],
+        "agent_scope": row["agent_scope"],
+        "used_count": row["used_count"] or 0,
+        "updated_at": row["updated_at"],
+        "size": row["size"] or 0,
+    }
+
+
+@router.get("/index/{doc_id}")
+async def get_knowledge_index_doc(doc_id: int):
+    """读取单条索引文档正文（主舞台查看器用，最长 200KB）"""
+    row = await db.fetch_one(
+        """SELECT id, project_id, filename, agent_scope, confidence,
+                  used_count, updated_at, content
+           FROM knowledge_index WHERE id = ?""",
+        (doc_id,),
+    )
+    if not row:
+        raise HTTPException(404, "索引条目不存在")
+    content = row["content"] or ""
+    fname = row["filename"] or ""
+    if fname.startswith("sys_docs__"):
+        item_scope = "system"
+        display = fname[len("sys_docs__"):]
+    elif fname.startswith("sys_devnotes__"):
+        item_scope = "system"
+        display = fname[len("sys_devnotes__"):]
+    elif row["project_id"]:
+        item_scope = "project"
+        display = fname
+    else:
+        item_scope = "global"
+        display = fname
+    if display.endswith(".md"):
+        display = display[:-3]
+    truncated = len(content) > 200_000
+    return {
+        "id": row["id"],
+        "project_id": row["project_id"],
+        "filename": fname,
+        "display_name": display,
+        "scope": item_scope,
+        "agent_scope": row["agent_scope"],
+        "confidence": row["confidence"],
+        "used_count": row["used_count"] or 0,
+        "updated_at": row["updated_at"],
+        "size": len(content),
+        "content": content[:200_000] + ("\n\n...(truncated)" if truncated else ""),
+        "truncated": truncated,
+    }
+
+
 @router.get("/projects/{project_id}/scan-paths")
 async def get_scan_paths(project_id: str):
     """获取项目知识库扫描路径配置"""

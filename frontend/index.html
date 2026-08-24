@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI 自动开发系统</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260811a">
+    <link rel="stylesheet" href="/static/styles.css?v=20260818c">
     <!-- highlight.js 语法高亮 -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
@@ -181,14 +181,14 @@
                         <a class="nav-item" data-tab="requirements" onclick="switchTab('requirements')">
                             📋 需求列表
                         </a>
-                        <!-- 工单子菜单（抽屉式折叠） -->
-                        <div class="sidebar-tickets-menu">
-                            <a class="nav-item nav-item-tickets active" onclick="toggleTicketsPanel()">
+
+                        <div class="sidebar-nav-group">
+                            <a class="nav-item nav-item-group active" data-nav-group="tickets" onclick="toggleNavGroup('tickets')">
                                 <span class="nav-item-icon">🎫</span>
                                 <span>工单</span>
-                                <span class="nav-item-arrow" id="ticketsArrow">▾</span>
+                                <span class="nav-item-arrow expanded" id="ticketsArrow">▸</span>
                             </a>
-                            <div class="tickets-drawer open" id="ticketsDrawer">
+                            <div class="nav-drawer open" id="ticketsDrawer">
                                 <a class="nav-item nav-sub-item active" data-tab="board" onclick="switchTab('board')">
                                     <span class="nav-item-icon">📌</span> 看板
                                 </a>
@@ -198,66 +198,107 @@
                                 <a class="nav-item nav-sub-item" data-tab="ticket-graph" onclick="switchTab('ticket-graph')">
                                     <span class="nav-item-icon">🔗</span> 关系图
                                 </a>
+                                <a class="nav-item nav-sub-item" data-tab="bugs" onclick="switchTab('bugs')">
+                                    <span class="nav-item-icon">🐛</span> BUG 列表
+                                </a>
                             </div>
                         </div>
-                        <a class="nav-item" data-tab="flow" onclick="switchTab('flow')">
-                            🔄 流程
-                        </a>
-                        <a class="nav-item" data-tab="roadmap" onclick="switchTab('roadmap')">
-                            🗺️ Roadmap
-                        </a>
-                        <a class="nav-item" data-tab="bugs" onclick="switchTab('bugs')">
-                            🐛 BUG 列表
-                        </a>
-                        <a class="nav-item" data-tab="repo" onclick="switchTab('repo')">
-                            📂 仓库文件
-                        </a>
-                        <a class="nav-item" data-tab="stats" onclick="switchTab('stats')">
-                            📊 统计面板
-                        </a>
-                        <a class="nav-item" data-tab="cicd" onclick="switchTab('cicd')">
-                            🚀 交付 &amp; 环境
-                        </a>
-                        <a class="nav-item" data-tab="agents" onclick="switchTab('agents')">
-                            🤖 Agent 监控
-                        </a>
-                        <a class="nav-item" data-tab="logs" onclick="switchTab('logs')">
-                            📝 操作日志
-                        </a>
+
+                        <div class="sidebar-nav-group">
+                            <a class="nav-item nav-item-group" data-nav-group="flow" onclick="toggleNavGroup('flow')">
+                                <span class="nav-item-icon">🔄</span>
+                                <span>流程</span>
+                                <span class="nav-item-arrow" id="flowArrow">▸</span>
+                            </a>
+                            <div class="nav-drawer" id="flowDrawer">
+                                <a class="nav-item nav-sub-item" data-tab="flow" onclick="switchTab('flow')">
+                                    <span class="nav-item-icon">🔄</span> 流程
+                                </a>
+                                <a class="nav-item nav-sub-item" data-tab="roadmap" onclick="switchTab('roadmap')">
+                                    <span class="nav-item-icon">🗺️</span> Roadmap
+                                </a>
+                                <a class="nav-item nav-sub-item" data-tab="cicd" onclick="switchTab('cicd')">
+                                    <span class="nav-item-icon">🚀</span> 交付 &amp; 环境
+                                </a>
+                            </div>
+                        </div>
+
+                        <div class="sidebar-nav-group">
+                            <a class="nav-item nav-item-group" data-nav-group="files" onclick="toggleNavGroup('files')">
+                                <span class="nav-item-icon">📂</span>
+                                <span>文件</span>
+                                <span class="nav-item-arrow" id="filesArrow">▸</span>
+                            </a>
+                            <div class="nav-drawer" id="filesDrawer">
+                                <a class="nav-item nav-sub-item" data-tab="repo" onclick="switchTab('repo')">
+                                    <span class="nav-item-icon">📂</span> 仓库文件
+                                </a>
+                            </div>
+                        </div>
+
+                        <div class="sidebar-nav-group">
+                            <a class="nav-item nav-item-group" data-nav-group="agent" onclick="toggleNavGroup('agent')">
+                                <span class="nav-item-icon">🤖</span>
+                                <span>Agent</span>
+                                <span class="nav-item-arrow" id="agentArrow">▸</span>
+                            </a>
+                            <div class="nav-drawer" id="agentDrawer">
+                                <a class="nav-item nav-sub-item" data-tab="agents" onclick="switchTab('agents')">
+                                    <span class="nav-item-icon">👁</span> Agent 监控
+                                </a>
+                                <a class="nav-item nav-sub-item" data-tab="settings-agents" onclick="switchTab('settings-agents')">
+                                    <span class="nav-item-icon">🧩</span> Agent / 扩展
+                                </a>
+                            </div>
+                        </div>
+
+                        <div class="sidebar-nav-group">
+                            <a class="nav-item nav-item-group" data-nav-group="knowledge" onclick="toggleNavGroup('knowledge')">
+                                <span class="nav-item-icon">📚</span>
+                                <span>知识</span>
+                                <span class="nav-item-arrow" id="knowledgeArrow">▸</span>
+                            </a>
+                            <div class="nav-drawer" id="knowledgeDrawer">
+                                <a class="nav-item nav-sub-item" data-tab="settings-knowledge" onclick="switchTab('settings-knowledge')">
+                                    <span class="nav-item-icon">📚</span> 知识库
+                                </a>
+                                <a class="nav-item nav-sub-item" data-tab="settings-assets" onclick="switchTab('settings-assets')">
+                                    <span class="nav-item-icon">🖼️</span> 资产库
+                                </a>
+                            </div>
+                        </div>
+
                         <a class="nav-item" data-tab="automation" onclick="switchTab('automation')">
                             ⚡ 自动化
                         </a>
                     </nav>
-                    <!-- 设置菜单（抽屉式折叠） -->
                     <div class="sidebar-settings">
-                        <a class="nav-item nav-item-settings" onclick="toggleSettingsPanel()">
-                            <span class="nav-item-icon">⚙️</span>
-                            <span>设置</span>
-                            <span class="nav-item-arrow" id="settingsArrow">▸</span>
-                        </a>
-                        <div class="settings-drawer" id="settingsDrawer">
-                            <a class="nav-item nav-sub-item" data-tab="settings-general" onclick="switchTab('settings-general')">
-                                <span class="nav-item-icon">📋</span> 基本信息
+                        <div class="sidebar-nav-group">
+                            <a class="nav-item nav-item-group nav-item-settings" data-nav-group="settings" onclick="toggleNavGroup('settings')">
+                                <span class="nav-item-icon">⚙️</span>
+                                <span>设置</span>
+                                <span class="nav-item-arrow" id="settingsArrow">▸</span>
                             </a>
-                            <a class="nav-item nav-sub-item" data-tab="settings-repo" onclick="switchTab('settings-repo')">
-                                <span class="nav-item-icon">📂</span> 仓库配置
-                            </a>
-                            <a class="nav-item nav-sub-item" data-tab="settings-sop" onclick="switchTab('settings-sop')">
-                                <span class="nav-item-icon">🔧</span> 基础 SOP 模板
-                            </a>
-                            <!-- v0.19.x: 「环境管理」已合并到「🚀 交付 & 环境」主入口，这里撤下 -->
-                            <a class="nav-item nav-sub-item" data-tab="settings-agents" onclick="switchTab('settings-agents')">
-                                <span class="nav-item-icon">🤖</span> Agent / 扩展
-                            </a>
-                            <a class="nav-item nav-sub-item" data-tab="settings-knowledge" onclick="switchTab('settings-knowledge')">
-                                <span class="nav-item-icon">📚</span> 知识库
-                            </a>
-                            <a class="nav-item nav-sub-item" data-tab="settings-assets" onclick="switchTab('settings-assets')">
-                                <span class="nav-item-icon">🖼️</span> 资产库
-                            </a>
-                            <a class="nav-item nav-sub-item" data-tab="settings-danger" onclick="switchTab('settings-danger')">
-                                <span class="nav-item-icon">⚠️</span> 高级设置
-                            </a>
+                            <div class="nav-drawer" id="settingsDrawer">
+                                <a class="nav-item nav-sub-item" data-tab="stats" onclick="switchTab('stats')">
+                                    <span class="nav-item-icon">📊</span> 统计面板
+                                </a>
+                                <a class="nav-item nav-sub-item" data-tab="logs" onclick="switchTab('logs')">
+                                    <span class="nav-item-icon">📝</span> 操作日志
+                                </a>
+                                <a class="nav-item nav-sub-item" data-tab="settings-general" onclick="switchTab('settings-general')">
+                                    <span class="nav-item-icon">📋</span> 基本信息
+                                </a>
+                                <a class="nav-item nav-sub-item" data-tab="settings-repo" onclick="switchTab('settings-repo')">
+                                    <span class="nav-item-icon">📂</span> 仓库配置
+                                </a>
+                                <a class="nav-item nav-sub-item" data-tab="settings-sop" onclick="switchTab('settings-sop')">
+                                    <span class="nav-item-icon">🔧</span> 基础 SOP 模板
+                                </a>
+                                <a class="nav-item nav-sub-item" data-tab="settings-danger" onclick="switchTab('settings-danger')">
+                                    <span class="nav-item-icon">⚠️</span> 高级设置
+                                </a>
+                            </div>
                         </div>
                     </div>
                     <div class="sidebar-footer">
@@ -1415,8 +1456,34 @@
                                 </p>
                             </div>
 
-                            <!-- 系统知识库（只读，来自 docs/ 和 dev-notes/） -->
+                            <!-- FTS 索引浏览器 -->
                             <div class="settings-card">
+                                <div class="settings-card-title-row">
+                                    <h3 class="settings-card-title">🔍 FTS 索引</h3>
+                                    <button class="btn btn-xs btn-outline" onclick="loadKnowledgeIndexBrowser()" title="刷新">🔄</button>
+                                </div>
+                                <p class="settings-description" style="margin-bottom:10px;">
+                                    查看已写入 SQLite FTS5 的文档条目，可按范围筛选并用全文搜索验证命中效果。
+                                </p>
+                                <div id="kbIndexStats" class="kb-index-stats"></div>
+                                <div class="kb-index-toolbar">
+                                    <input type="text" id="kbIndexSearch" class="kb-index-search"
+                                           placeholder="全文搜索索引… 如 知识库 / FTS / v0.19"
+                                           onkeydown="if(event.key==='Enter')loadKnowledgeIndexBrowser({resetOffset:true})">
+                                    <select id="kbIndexScope" class="kb-index-scope" onchange="loadKnowledgeIndexBrowser({resetOffset:true})">
+                                        <option value="all">全部范围</option>
+                                        <option value="system">系统 (docs/dev-notes)</option>
+                                        <option value="global">全局文档</option>
+                                        <option value="project">项目文档</option>
+                                    </select>
+                                    <button class="btn btn-sm btn-primary" onclick="loadKnowledgeIndexBrowser({resetOffset:true})">搜索</button>
+                                </div>
+                                <div id="kbIndexList" class="kb-index-list"><div class="empty-state-sm">加载中...</div></div>
+                                <div id="kbIndexPager" class="kb-index-pager"></div>
+                            </div>
+
+                            <!-- 系统知识库（只读，来自 docs/ 和 dev-notes/） -->
+                            <div class="settings-card" style="margin-top:16px;">
                                 <div class="settings-card-title-row">
                                     <h3 class="settings-card-title">🗂 系统知识库</h3>
                                     <span style="font-size:12px;color:var(--text-muted);">只读 · 自动索引</span>
@@ -2239,7 +2306,7 @@
     <!-- ==================== Toast 通知 ==================== -->
     <div class="toast-container" id="toastContainer"></div>
 
-    <script src="/static/app.js?v=20260811a"></script>
+    <script src="/static/app.js?v=20260818c"></script>
 </body>
 </html>
 

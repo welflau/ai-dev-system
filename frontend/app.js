@@ -68,16 +68,11 @@ async function _restoreChatWorkspace() {
             }
         }
 
+        // 先把全屏/右栏布局稳住，再加载会话。
+        // 旧顺序是先 switchChatSession（滚到底）再 toggleChatFullscreen（appendChild 挪面板），
+        // 滚动容器高度/归属一变，scrollTop 会被重置到顶部。
         if (projectId) {
             showProjectDetail(projectId);
-            if (prefs.sessionId) {
-                try {
-                    await switchChatSession(prefs.sessionId);
-                } catch (e) {
-                    console.warn('[chat] restore session failed, use latest', e);
-                    await loadChatHistory();
-                }
-            }
             if (prefs.fullscreen) {
                 if (!_chatFullscreen) toggleChatFullscreen();
             } else {
@@ -89,14 +84,19 @@ async function _restoreChatWorkspace() {
             currentProjectId = null;
             currentProject = null;
             _updateChatPanelForContext();
-            if (prefs.sessionId) {
-                try {
-                    await switchChatSession(prefs.sessionId);
-                } catch {
-                    await loadChatHistory();
-                }
-            }
         }
+
+        if (prefs.sessionId) {
+            try {
+                await switchChatSession(prefs.sessionId);
+            } catch (e) {
+                console.warn('[chat] restore session failed, use latest', e);
+                await loadChatHistory();
+            }
+        } else {
+            await loadChatHistory();
+        }
+        scrollChatToBottom({ settle: true });
     } finally {
         _chatWsPersistReady = true;
         _persistChatWorkspace();
@@ -296,7 +296,7 @@ const adsShell = (() => {
         activeTicketId: null,
         // C 主舞台工作区
         currentPage: 'board',
-        mainTabs: [],          // { id, type:'file'|'diff', title, path, ticketId? }
+        mainTabs: [],          // { id, type:'file'|'diff'|'knowledge', title, path, ticketId?, docId? }
         mainActiveId: null,    // null = 显示页面；否则显示文档 Tab
     };
 
@@ -788,7 +788,7 @@ const adsShell = (() => {
 
     function openMain(tab, opts = {}) {
         if (!tab || !tab.type) return null;
-        if (!currentProjectId) {
+        if (tab.type !== 'knowledge' && !currentProjectId) {
             showToast('请先选择项目', 'warning');
             return null;
         }
@@ -823,6 +823,25 @@ const adsShell = (() => {
                     title: (path.split('/').pop() || 'diff') + ' ↔',
                 };
                 state.mainTabs.push(existing);
+            }
+        } else if (tab.type === 'knowledge') {
+            const docId = tab.docId != null ? tab.docId : String(tab.id || '').replace(/^kb:/, '');
+            if (docId === '' || docId == null) return null;
+            id = 'kb:' + docId;
+            let existing = state.mainTabs.find(t => t.id === id);
+            if (!existing) {
+                const title = tab.title || tab.filename || ('文档 #' + docId);
+                existing = {
+                    id,
+                    type: 'knowledge',
+                    docId: Number(docId),
+                    title,
+                    filename: tab.filename || '',
+                    path: tab.path || ('知识库/' + title),
+                };
+                state.mainTabs.push(existing);
+            } else if (tab.title) {
+                existing.title = tab.title;
             }
         } else if (tab.type === 'page') {
             if (typeof switchTab === 'function') switchTab(tab.pageId);
@@ -879,7 +898,7 @@ const adsShell = (() => {
 
         tabsEl.innerHTML = state.mainTabs.map(t => {
             const active = t.id === state.mainActiveId ? ' active' : '';
-            const icon = t.type === 'diff' ? '≠' : '📄';
+            const icon = t.type === 'diff' ? '≠' : (t.type === 'knowledge' ? '📚' : '📄');
             const safeId = t.id.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
             return `<button type="button" class="main-ws-tab${active}" role="tab"
                         onclick="adsShell.activateMainTab('${safeId}')" title="${_escAttr(t.path || t.title)}">
@@ -1022,13 +1041,15 @@ const adsShell = (() => {
 
     function _toolbarIconsHtml(tab) {
         const safeId = tab.id.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+        const treeBtn = tab.type === 'knowledge' ? '' : `
+            <button type="button" class="btn-icon main-ws-tool-btn${viewPrefs.treeOpen ? ' active' : ''}" title="文件树" aria-label="文件树"
+                onclick="adsShell.toggleFileTree('${safeId}')">☰</button>`;
         return `
             <button type="button" class="btn-icon main-ws-tool-btn" title="菜单" aria-label="菜单"
                 onclick="adsShell.toggleFileMenu(event,'${safeId}')">⋯</button>
             <button type="button" class="btn-icon main-ws-tool-btn" title="搜索 (Ctrl+F)" aria-label="搜索"
                 onclick="adsShell.toggleFileSearch('${safeId}')">⌕</button>
-            <button type="button" class="btn-icon main-ws-tool-btn${viewPrefs.treeOpen ? ' active' : ''}" title="文件树" aria-label="文件树"
-                onclick="adsShell.toggleFileTree('${safeId}')">☰</button>`;
+            ${treeBtn}`;
     }
 
     async function _loadMainTabContent(id) {
@@ -1067,8 +1088,10 @@ const adsShell = (() => {
                 await _fillFilePane(tab, body, actions);
             } else if (tab.type === 'diff') {
                 await _fillDiffPane(tab, body, actions);
+            } else if (tab.type === 'knowledge') {
+                await _fillKnowledgePane(tab, body, actions);
             }
-            if (viewPrefs.treeOpen) _loadMainWsTree(tab.path);
+            if (viewPrefs.treeOpen && tab.type !== 'knowledge') _loadMainWsTree(tab.path);
         } catch (e) {
             if (body) body.innerHTML = `<div class="main-ws-error">加载失败：${_escHtml(e.message || e)}</div>`;
         }
@@ -1138,6 +1161,45 @@ const adsShell = (() => {
 
         if (actions) actions.innerHTML = _toolbarIconsHtml(tabRef);
         _renderCodePane(body, content, path);
+    }
+
+    function _kbScopeLabel(scope) {
+        if (scope === 'system') return '系统';
+        if (scope === 'project') return '项目';
+        return '全局';
+    }
+
+    async function _fillKnowledgePane(tab, body, actions) {
+        const data = await api(`/knowledge/index/${tab.docId}`);
+        const content = String(data.content || '').replace(/\r\n/g, '\n');
+        tab._content = content;
+        const display = data.display_name || data.filename || tab.title || ('#' + tab.docId);
+        const scopeLabel = _kbScopeLabel(data.scope);
+        tab.title = display;
+        tab.filename = data.filename || tab.filename || '';
+        tab.path = `知识库/${scopeLabel}/${display}`;
+        _renderMainWorkspace();
+        const pathEl = document.querySelector('.main-ws-pane-path');
+        if (pathEl) {
+            pathEl.innerHTML = _pathCrumbsHtml(tab.path);
+            pathEl.title = tab.filename || tab.path;
+        }
+        if (actions) {
+            actions.innerHTML = `
+                <span class="main-ws-badge">${_escHtml(scopeLabel)}</span>
+                <button type="button" class="btn-icon main-ws-action" id="mainWsMdToggle" title="切换源码/预览">源码</button>
+                ${_toolbarIconsHtml(tab)}`;
+        }
+        _renderMdOrSource(body, content, display, true);
+        const btn = document.getElementById('mainWsMdToggle');
+        if (btn) {
+            let preview = true;
+            btn.onclick = () => {
+                preview = !preview;
+                btn.textContent = preview ? '源码' : '预览';
+                _renderMdOrSource(body, content, display, preview);
+            };
+        }
     }
 
     async function _fillFileAsDiff(tab, body, actions) {
@@ -1236,12 +1298,24 @@ const adsShell = (() => {
         const btn = ev?.currentTarget || document.querySelector('.main-ws-tool-btn');
         const rect = btn?.getBoundingClientRect?.() || { bottom: 80, right: 40 };
         const isFile = tab.type === 'file';
+        const isKb = tab.type === 'knowledge';
         const diffOn = !!tab.diffView || tab.type === 'diff';
         const menu = document.createElement('div');
         menu.id = 'mainWsFileMenu';
         menu.className = 'main-ws-file-menu';
         menu.style.cssText = `top:${rect.bottom + 4}px;right:${Math.max(8, window.innerWidth - rect.right)}px;`;
-        menu.innerHTML = `
+        menu.innerHTML = isKb ? `
+            <button type="button" class="main-ws-menu-item" data-act="copy">Copy Document Name</button>
+            <button type="button" class="main-ws-menu-item" data-act="copy-content">Copy File Content</button>
+            <div class="main-ws-menu-sep"></div>
+            <button type="button" class="main-ws-menu-item toggle" data-act="linenum">
+                <span>Line Numbers</span>
+                <span class="main-ws-switch${viewPrefs.lineNumbers ? ' on' : ''}"></span>
+            </button>
+            <button type="button" class="main-ws-menu-item toggle" data-act="wrap">
+                <span>Word Wrap</span>
+                <span class="main-ws-switch${viewPrefs.wordWrap ? ' on' : ''}"></span>
+            </button>` : `
             <button type="button" class="main-ws-menu-item" data-act="copy">Copy Relative Path</button>
             <button type="button" class="main-ws-menu-item" data-act="copy-full">Copy Absolute Path</button>
             <button type="button" class="main-ws-menu-item" data-act="copy-content">Copy File Content</button>
@@ -1268,8 +1342,8 @@ const adsShell = (() => {
             const act = item.dataset.act;
             const path = tab.path || '';
             if (act === 'copy') {
-                await navigator.clipboard.writeText(path);
-                showToast('已复制相对路径', 'success');
+                await navigator.clipboard.writeText(isKb ? (tab.filename || tab.title || path) : path);
+                showToast(isKb ? '已复制文档名' : '已复制相对路径', 'success');
             } else if (act === 'copy-full') {
                 const root = (currentProject?.local_repo_path || '').replace(/[\\/]+$/, '');
                 const full = root ? `${root.replace(/\\/g, '/')}/${path}` : path;
@@ -2321,7 +2395,8 @@ function _updateChatPanelForContext(opts = {}) {
     }
 
     // 流式中不要 showChatWelcome / loadChatHistory（会清空 #chatMessages）
-    if (chatPanelOpen && !chatSending && !_streamAbortController) {
+    // 刷新恢复中由 _restoreChatWorkspace 统一加载，避免和全屏布局抢跑
+    if (chatPanelOpen && !chatSending && !_streamAbortController && _chatWsPersistReady) {
         showChatWelcome();
         loadChatHistory();
     }
@@ -2333,29 +2408,11 @@ function switchTab(tab) {
         adsShell.notifyPage(tab);
     }
 
-    // 侧栏导航高亮（主导航项）
+    // 侧栏导航高亮（主导航项 + 所属分组）
     document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
     const activeNav = document.querySelector(`.nav-item[data-tab="${tab}"]`);
     if (activeNav) activeNav.classList.add('active');
-
-    // 如果是设置子 tab，高亮设置主按钮并展开抽屉
-    if (tab.startsWith('settings-')) {
-        document.querySelector('.nav-item-settings')?.classList.add('active');
-        const drawer = document.getElementById('settingsDrawer');
-        const arrow = document.getElementById('settingsArrow');
-        if (drawer) drawer.classList.add('open');
-        if (arrow) arrow.classList.add('expanded');
-    }
-
-    // 如果是工单子 tab（board, ticket-list, ticket-graph），高亮工单主按钮并展开抽屉
-    const ticketTabs = ['board', 'ticket-list', 'ticket-graph'];
-    if (ticketTabs.includes(tab)) {
-        document.querySelector('.nav-item-tickets')?.classList.add('active');
-        const drawer = document.getElementById('ticketsDrawer');
-        const arrow = document.getElementById('ticketsArrow');
-        if (drawer) drawer.classList.add('open');
-        if (arrow) { arrow.classList.add('expanded'); arrow.textContent = '▾'; }
-    }
+    _syncNavGroupForTab(tab);
 
     // 内容区切换
     document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
@@ -2658,7 +2715,7 @@ async function loadProjectPacks() {
                         </div>`;
 
                     return `
-                    <div class="skill-row pack-row-clickable" onclick="showPackDetail('${escapeHtml(p.name)}', '${escapeHtml(p.display_name || p.name)}')" style="cursor:pointer;${isRec ? 'border-left:3px solid '+barColor+';' : ''}" title="点击查看详情">
+                    <div class="skill-row pack-row-clickable" data-pack-name="${escapeHtml(p.name)}" onclick="showPackDetail('${escapeHtml(p.name)}', '${escapeHtml(p.display_name || p.name)}')" style="cursor:pointer;${isRec ? 'border-left:3px solid '+barColor+';' : ''}" title="点击查看详情">
                         <div class="skill-row-info" style="flex:1;min-width:0;">
                             <div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;">
                                 <span class="skill-row-name">📦 ${escapeHtml(p.display_name || p.name)}</span>
@@ -2675,6 +2732,7 @@ async function loadProjectPacks() {
                 }).join('');
             }
         }
+        _applyPendingPackHighlight();
     } catch (e) {
         installedEl.innerHTML = `<div class="empty-state-sm">加载失败: ${escapeHtml(e.message)}</div>`;
     }
@@ -4241,46 +4299,52 @@ async function saveProjectUEConfig() {
     }
 }
 
-// ==================== 工单子菜单 ====================
+// ==================== 侧栏分组抽屉 ====================
 
-/** 切换工单抽屉展开/收起 */
-function toggleTicketsPanel() {
-    const drawer = document.getElementById('ticketsDrawer');
-    const arrow = document.getElementById('ticketsArrow');
-    if (!drawer || !arrow) return;
+const NAV_GROUPS = {
+    tickets:   { tabs: ['board', 'ticket-list', 'ticket-graph', 'bugs'], defaultTab: 'board' },
+    flow:      { tabs: ['flow', 'roadmap', 'cicd'], defaultTab: 'flow' },
+    files:     { tabs: ['repo'], defaultTab: 'repo' },
+    agent:     { tabs: ['agents', 'settings-agents'], defaultTab: 'agents' },
+    knowledge: { tabs: ['settings-knowledge', 'settings-assets'], defaultTab: 'settings-knowledge' },
+    settings:  { tabs: ['stats', 'logs', 'settings-general', 'settings-repo', 'settings-sop', 'settings-danger'], defaultTab: 'stats' },
+};
 
-    const isOpen = drawer.classList.toggle('open');
-    arrow.classList.toggle('expanded', isOpen);
-    arrow.textContent = isOpen ? '▾' : '▸';
+function _navGroupEls(groupId) {
+    return {
+        header: document.querySelector(`.nav-item-group[data-nav-group="${groupId}"]`),
+        drawer: document.getElementById(`${groupId}Drawer`),
+        arrow: document.getElementById(`${groupId}Arrow`),
+        meta: NAV_GROUPS[groupId],
+    };
+}
 
-    // 如果展开，默认打开看板
-    if (isOpen) {
-        const activeSubItem = drawer.querySelector('.nav-sub-item.active');
-        if (!activeSubItem) {
-            switchTab('board');
-        }
+function _syncNavGroupForTab(tab) {
+    for (const [groupId, meta] of Object.entries(NAV_GROUPS)) {
+        if (!meta.tabs.includes(tab)) continue;
+        const { header, drawer, arrow } = _navGroupEls(groupId);
+        header?.classList.add('active');
+        drawer?.classList.add('open');
+        arrow?.classList.add('expanded');
+        break;
     }
 }
 
-// ==================== 设置面板 ====================
-
-/** 切换设置抽屉展开/收起 */
-function toggleSettingsPanel() {
-    const drawer = document.getElementById('settingsDrawer');
-    const arrow = document.getElementById('settingsArrow');
-    if (!drawer || !arrow) return;
+/** 切换侧栏分组抽屉；展开且当前不在该组时切到默认子页 */
+function toggleNavGroup(groupId) {
+    const { drawer, arrow, meta } = _navGroupEls(groupId);
+    if (!drawer || !meta) return;
 
     const isOpen = drawer.classList.toggle('open');
-    arrow.classList.toggle('expanded', isOpen);
+    arrow?.classList.toggle('expanded', isOpen);
+    if (!isOpen) return;
 
-    // 如果展开，默认打开第一个设置子页
-    if (isOpen) {
-        const activeSubItem = drawer.querySelector('.nav-sub-item.active');
-        if (!activeSubItem) {
-            switchTab('settings-general');
-        }
-    }
+    const activeSub = drawer.querySelector('.nav-sub-item.active');
+    if (!activeSub) switchTab(meta.defaultTab);
 }
+
+function toggleTicketsPanel() { toggleNavGroup('tickets'); }
+function toggleSettingsPanel() { toggleNavGroup('settings'); }
 
 /** 加载基本信息设置 */
 function loadSettingsGeneral() {
@@ -6108,8 +6172,8 @@ function _buildOpenSpecStampMini(stage) {
 
 function _buildCapabilityBanner(hasSP, hasOS) {
     const missing = [];
-    if (!hasOS) missing.push({ label: 'OpenSpec', icon: '📐', tab: 'openspec', desc: '规范层' });
-    if (!hasSP) missing.push({ label: 'Superpowers', icon: '⚡', tab: 'configpack', desc: '纪律层' });
+    if (!hasOS) missing.push({ label: 'OpenSpec', icon: '📐', inner: 'openspec', desc: '规范层' });
+    if (!hasSP) missing.push({ label: 'Superpowers', icon: '⚡', inner: 'packs', desc: '纪律层' });
     if (missing.length === 0) return '';  // 全装了，不显示
 
     const path = missing.length === 2 ? '标准 ADS 流水线'
@@ -6117,7 +6181,10 @@ function _buildCapabilityBanner(hasSP, hasOS) {
         : 'ADS + 规范层（OpenSpec）';
 
     const chips = missing.map(m =>
-        `<span class="cap-missing-chip" onclick="switchTab('${m.tab}')" title="点击前往安装">
+        `<span class="cap-missing-chip" role="button" tabindex="0"
+              onclick="event.stopPropagation();openCapabilityInstallPage('${m.inner}')"
+              onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openCapabilityInstallPage('${m.inner}')}"
+              title="点击前往安装">
             ${m.icon} 未安装 ${m.label}
             <span class="cap-chip-arrow">→</span>
         </span>`
@@ -6128,6 +6195,36 @@ function _buildCapabilityBanner(hasSP, hasOS) {
         <span class="cap-banner-text">${chips}</span>
         <span class="cap-banner-path">当前路径：${escHtml(path)}</span>
     </div>`;
+}
+
+/** 工单「未安装」芯片 → Agent/扩展 里对应的安装页 */
+let _pendingPackHighlight = '';
+
+function openCapabilityInstallPage(inner) {
+    const tab = inner === 'openspec' ? 'openspec' : 'packs';
+    if (tab === 'packs') _pendingPackHighlight = 'superpowers';
+    if (typeof closeDrawer === 'function') closeDrawer();
+    switchTab('settings-agents');
+    switchAgentConfigTab(tab);
+    const scrollToInstall = () => {
+        const target = tab === 'openspec'
+            ? (document.getElementById('openspecActionsCard') || document.getElementById('inner-panel-openspec'))
+            : (document.getElementById('availablePacksList') || document.getElementById('inner-panel-packs'));
+        target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        if (tab === 'packs') _applyPendingPackHighlight();
+    };
+    requestAnimationFrame(() => setTimeout(scrollToInstall, 80));
+}
+
+function _applyPendingPackHighlight() {
+    const name = _pendingPackHighlight;
+    if (!name) return;
+    const el = document.querySelector(`#availablePacksList [data-pack-name="${CSS.escape(name)}"]`);
+    if (!el) return;
+    _pendingPackHighlight = '';
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.style.boxShadow = '0 0 0 2px rgba(239,68,68,0.55)';
+    setTimeout(() => { el.style.boxShadow = ''; }, 2200);
 }
 
 /** 异步加载工单 OpenSpec 内容，有 specs 时显示面板 */
@@ -7261,6 +7358,11 @@ function renderDiagnosisPanel(ticket) {
         `).join('');
     const files = (d.related_files || []).slice(0, 5)
         .map(f => `<code class="diagnosis-file">${escHtml(f)}</code>`).join(' ');
+    const kbHits = (d.knowledge_hits || []).slice(0, 3).map(h => {
+        const id = escHtml(String(h.id || ''));
+        const name = escHtml(h.display_name || h.filename || '文档');
+        return `<a class="chat-kb-link" href="#" onclick="event.preventDefault();openKnowledgeDocFromChat('${id}')">${name}</a>`;
+    }).join(' · ');
 
     return `
     <div class="drawer-section diagnosis-panel sev-${sev}">
@@ -7273,6 +7375,7 @@ function renderDiagnosisPanel(ticket) {
         <div class="diagnosis-row"><span class="diagnosis-label">根因</span><span>${escHtml(d.root_cause || '-')}</span></div>
         ${actions ? `<div class="diagnosis-row"><span class="diagnosis-label">建议</span><ol class="diagnosis-actions">${actions}</ol></div>` : ''}
         ${files ? `<div class="diagnosis-row"><span class="diagnosis-label">相关文件</span><span>${files}</span></div>` : ''}
+        ${kbHits ? `<div class="diagnosis-row"><span class="diagnosis-label">知识库</span><span>${kbHits}</span></div>` : ''}
         ${d.note ? `<div class="diagnosis-footer">${escHtml(d.note)}</div>` : ''}
         ${d.created_at ? `<div class="diagnosis-footer">诊断时间: ${escHtml(d.created_at.replace('T', ' ').slice(0, 19))}</div>` : ''}
     </div>`;
@@ -7410,12 +7513,12 @@ function renderActionStateSummary(action) {
  * 作为 assistant 消息持久化到 chat_messages。前端这里只要保证聊天面板是开的 +
  * 强制 reload 一次历史，propose 方案卡会自然渲染出来（复用 renderUEFrameworkCard）。
  *
- * auto_next 当前只识别 propose_ue_framework；未来其他 type 在此扩展。
+ * auto_next 识别 propose_ue_framework / propose_icebreak。
  */
 function runAutoNextAfterProjectCreated(projectId, autoNext) {
     if (!projectId || !autoNext || !autoNext.type) return;
 
-    if (autoNext.type !== 'propose_ue_framework') {
+    if (autoNext.type !== 'propose_ue_framework' && autoNext.type !== 'propose_icebreak') {
         console.warn('[auto_next] unsupported type:', autoNext.type);
         return;
     }
@@ -7427,14 +7530,16 @@ function runAutoNextAfterProjectCreated(projectId, autoNext) {
         return;
     }
 
-    // 打开聊天面板（若未开）并强制重载历史拿到后端刚持久化的 propose 卡片
+    // 打开聊天面板并拉出刚写入的破冰 / UE 方案卡
     const ensureChatOpen = () => {
         if (typeof chatPanelOpen !== 'undefined' && !chatPanelOpen
             && typeof toggleChatPanel === 'function') {
-            toggleChatPanel();  // 会触发 loadChatHistory（chatMode === 'global'）
+            toggleChatPanel();
+        }
+        if (autoNext.session_id && typeof switchChatSession === 'function') {
+            switchChatSession(autoNext.session_id);
             return;
         }
-        // 面板已开：手动重载一次
         if (typeof loadChatHistory === 'function') {
             loadChatHistory();
         }
@@ -7444,7 +7549,11 @@ function runAutoNextAfterProjectCreated(projectId, autoNext) {
     setTimeout(ensureChatOpen, 600);
 
     if (typeof showToast === 'function') {
-        showToast('检测到 UE 项目，已自动生成框架方案卡片', 'info');
+        if (autoNext.type === 'propose_ue_framework') {
+            showToast('检测到 UE 项目，已自动生成框架方案卡片', 'info');
+        } else {
+            showToast('已根据项目背景给出开发方向，请选择', 'info');
+        }
     }
 }
 
@@ -7615,6 +7724,38 @@ async function createCompileFixTask(cardId) {
         const btns2 = card.querySelector('.confirm-req-btns');
         if (btns2) btns2.innerHTML = `<button class="btn btn-sm btn-primary" onclick="createCompileFixTask('${cardId}')">🔧 让 DevAgent 自动修复</button>`;
     }
+}
+
+function renderIcebreakCard(action) {
+    const options = Array.isArray(action.options) ? action.options : [];
+    const chips = options.map((o, i) => {
+        const prompt = encodeURIComponent(o.prompt || o.label || '');
+        const hint = o.hint ? `<span class="icebreak-hint">${escapeHtml(o.hint)}</span>` : '';
+        return `<button type="button" class="icebreak-option" onclick="pickIcebreakOption('${prompt}')">
+            <span class="icebreak-idx">${i + 1}</span>
+            <span class="icebreak-label">${escapeHtml(o.label || '')}</span>
+            ${hint}
+        </button>`;
+    }).join('');
+    return `
+    <div class="chat-action-card chat-icebreak-card" style="border-left-color:var(--primary);">
+        <div class="action-title">🧭 建议的开发方向</div>
+        <div class="action-detail" style="margin-bottom:8px;">${escapeHtml(action.analysis || '')}</div>
+        <div class="icebreak-options">${chips}</div>
+        <div class="icebreak-foot">点一项即作为你的决策发给助手；也可以自己输入。</div>
+    </div>`;
+}
+
+function pickIcebreakOption(encodedPrompt) {
+    let text = '';
+    try { text = decodeURIComponent(encodedPrompt || ''); } catch { text = encodedPrompt || ''; }
+    if (!text.trim()) return;
+    const input = document.getElementById('chatInput');
+    if (input) {
+        input.value = text;
+        autoResizeChatInput();
+    }
+    if (typeof sendChatMessage === 'function') sendChatMessage();
 }
 
 function renderUEFrameworkCard(action) {
@@ -13883,6 +14024,8 @@ function toggleChatFullscreen() {
         } catch { closeDrawer(); }
         _updateFullscreenProjectLabel();
         _persistChatWorkspace();
+        // 挪到 body / 改高度后必须重钉到底部，否则停在会话顶部
+        scrollChatToBottom({ settle: true });
     } else {
         document.body.classList.remove('chat-fullscreen');
         document.body.classList.remove('chat-split');
@@ -14887,7 +15030,7 @@ async function switchChatSession(sessionId) {
             appendChatBubble(msg.role, msg.content, msg.created_at, actionObj, msg.images || [], [], msg.thinking || [], container, _msgLlmMeta(msg));
             }
         }
-        scrollChatToBottom();
+        scrollChatToBottom({ settle: true });
     } catch (e) {
         console.warn('[session] 切换会话失败', e);
         showChatWelcome();
@@ -15646,7 +15789,7 @@ async function loadChatHistory() {
             );
             }
         }
-        scrollChatToBottom();
+        scrollChatToBottom({ settle: true });
     } catch (e) {
         // 可能是首次使用，表还没创建
         showChatWelcome();
@@ -17274,7 +17417,27 @@ function _formatToolResult(toolName, resultRaw) {
             (err ? `<pre class="ctr-code ctr-stderr">${escHtml(err.slice(0, 500))}</pre>` : '');
     }
 
-    // search_knowledge / search_ticket_history
+    // search_knowledge — { results: [{ id, display_name, filename, snippet, cite }] }
+    if (toolName === 'search_knowledge' || (data?.results && data.results[0]?.filename)) {
+        const results = data.results || [];
+        if (!results.length) {
+            return `<span style="opacity:.5">${escHtml(data.message || '未找到相关文档')}</span>`;
+        }
+        return results.slice(0, 12).map(r => {
+            const title = r.display_name || r.filename || '(未命名)';
+            const ref = r.id != null ? String(r.id) : (r.filename || title);
+            const safeRef = String(ref).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+            return `<div class="ctr-item">
+                <div class="ctr-title">
+                    <a class="chat-kb-link" href="#" onclick="event.preventDefault();event.stopPropagation();openKnowledgeDocFromChat('${safeRef}')" title="打开知识库文档">${escHtml(title)}</a>
+                    <span class="ctr-kb-scope">${escHtml(r.scope || '')}</span>
+                </div>
+                ${r.snippet ? `<div class="ctr-snippet">${_formatKbSnippet(r.snippet)}</div>` : ''}
+            </div>`;
+        }).join('') + (results.length > 12 ? `<div style="opacity:.5">… 共 ${results.length} 条</div>` : '');
+    }
+
+    // search_ticket_history
     if (Array.isArray(data) && data[0]?.title) {
         return data.slice(0, 10).map(r =>
             `<div class="ctr-item"><div class="ctr-title">${escHtml(r.title || '')}</div><div class="ctr-snippet">${escHtml((r.content || r.snippet || '').slice(0, 150))}</div></div>`
@@ -17998,23 +18161,11 @@ function _buildAnyActionCardHtml(action) {
         _renderConfirmProjectCard(action);
         return '__rendered__';
     }
+    if (t === 'propose_icebreak') {
+        return renderIcebreakCard(action);
+    }
     if (t === 'error_alert') {
-        // 系统错误卡片（git commit 失败等），与 _onAgentAlert 样式一致
-        const bodyHtml = escapeHtml(action.body || action.title || '').replace(/\n/g, '<br>');
-        const ticketId = action.ticket_id || '';
-        const ticketLink = (ticketId && currentProjectId)
-            ? `<div style="margin-top:8px;padding-top:7px;border-top:1px solid rgba(239,68,68,0.2);">
-                   <a class="action-link" style="color:rgba(239,68,68,0.8);font-size:11px;"
-                      onclick="openTicketDrawer('${escapeHtml(ticketId)}')" title="打开工单">
-                       🔍 查看工单 #${escapeHtml(ticketId.slice(-6))} →
-                   </a>
-               </div>`
-            : '';
-        return `<div style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.3);border-radius:6px;padding:10px 12px;white-space:normal;">
-            <div style="font-weight:600;color:var(--error,#ef4444);margin-bottom:4px;">${escapeHtml(action.title || '⚠️ 错误')}</div>
-            <div style="font-size:12px;color:var(--text-secondary);">${bodyHtml}</div>
-            ${ticketLink}
-        </div>`;
+        return renderErrorAlertCard(action);
     }
     return '';
 }
@@ -18546,6 +18697,8 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
             }, 100);
         }
         } // end else (!_state || pending)
+    } else if (action && action.type === 'propose_icebreak') {
+        actionHtml = renderIcebreakCard(action);
     } else if (action && action.type === 'propose_ue_framework') {
         actionHtml = renderUEFrameworkCard(action);
     } else if (action && action.type === 'ue_screenshot_result') {
@@ -18969,17 +19122,17 @@ async function doConfirmRequirement(cardId) {
         card.querySelector('.action-title').textContent = '✅ 需求已创建';
         if (btns) btns.innerHTML = `<span class="action-link" onclick="switchTab('requirements')">查看需求列表 →</span>`;
         showToast(`需求「${title}」已创建`, 'success');
-        // v0.19.1：状态持久化
-        const msgId = card.dataset.messageId || '';
         if (msgId) patchActionState(msgId, 'executed', { title, at: new Date().toISOString() });
         setTimeout(() => {
             if (typeof loadRequirements === 'function') loadRequirements();
             if (typeof refreshBoard === 'function') refreshBoard();
         }, 500);
     } catch (e) {
+        card.dataset.confirming = '0';
         card.style.borderLeftColor = 'var(--danger, #ea4a5a)';
         card.querySelector('.action-title').textContent = '⚠️ 创建失败';
-        if (btns) btns.innerHTML = `<span style="color:var(--danger);font-size:12px">${escapeHtml(e.message)}</span>`;
+        if (btns) btns.innerHTML = `<span style="color:var(--danger);font-size:12px">${escapeHtml(e.message)}</span>
+            <button class="btn btn-sm btn-primary" onclick="doConfirmRequirement('${cardId}')">重试</button>`;
     }
 }
 
@@ -19582,12 +19735,20 @@ function _linkifyBareFilePaths(text) {
     });
 }
 
-/** 行内格式：加粗 / 斜体 / 行内代码 / 图片 / 可点击文件路径 */
+/** 行内格式：加粗 / 斜体 / 行内代码 / 图片 / 可点击文件路径 / 知识库链接 */
 function _inlineFormat(text) {
     let html = text
+        // 知识库可点击链接：[标题](ads-kb:123) / [标题](ads-kb://123)
+        .replace(/\[([^\]]+)\]\(ads-kb:\/\/?(\d+)\)/gi, (_, label, id) => {
+            return `<a class="chat-kb-link" href="#" onclick="event.preventDefault();event.stopPropagation();openKnowledgeDocFromChat('${id}')" title="打开知识库文档 #${id}">${label}</a>`;
+        })
         .replace(/`([^`\n]+)`/g, (_, code) => {
             if (_isClickableFilePath(code)) {
                 return _chatFileAnchor(code, `<code class="chat-inline-code">${code}</code>`);
+            }
+            if (_isKnowledgeDocRef(code)) {
+                const safe = _stripPathNoise(code).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+                return `<a class="chat-kb-link" href="#" onclick="event.preventDefault();event.stopPropagation();openKnowledgeDocFromChat('${safe}')" title="打开知识库文档"><code class="chat-inline-code">${code}</code></a>`;
             }
             return `<code class="chat-inline-code">${code}</code>`;
         })
@@ -19609,6 +19770,85 @@ function _inlineFormat(text) {
     html = _linkifyBareFilePaths(html);
     html = html.replace(/\x01T(\d+)\x02/g, (_, i) => tags[+i] || '');
     return html;
+}
+
+/** 是否像知识库文档引用（反引号标题可点开） */
+function _isKnowledgeDocRef(s) {
+    const t = _stripPathNoise(s);
+    if (!t || t.length < 2 || t.length > 160) return false;
+    if (/^(https?:|mailto:|data:|#|\/api\/|ads-kb:)/i.test(t)) return false;
+    if (_isClickableFilePath(t) && /[\\\/]/.test(t)) return false; // 仓库路径留给文件链接
+    if (/^(sys_docs__|sys_devnotes__)/i.test(t)) return true;
+    if (/\.md$/i.test(t) && !/[\\\/]/.test(t)) return true;
+    // 中文文档标题（可含英文/下划线），排除常见工具名
+    if (/[\u4e00-\u9fff]/.test(t)
+        && !/[\s{}()=<>]/.test(t)
+        && !/^(确认|创建|暂停|恢复|关闭|搜索|打开)/.test(t)
+        && (t.includes('_') || t.length >= 4)) {
+        return true;
+    }
+    return false;
+}
+
+/** 从聊天打开知识库文档（id 或文件名/显示名） */
+async function openKnowledgeDocFromChat(ref) {
+    const raw = String(ref || '').trim();
+    if (!raw) return;
+    try {
+        if (/^\d+$/.test(raw)) {
+            openKnowledgeDocViewer(parseInt(raw, 10), { fromChat: true });
+            return;
+        }
+        const params = new URLSearchParams({ name: raw });
+        if (currentProjectId) params.set('project_id', currentProjectId);
+        const hit = await api(`/knowledge/index/lookup?${params}`);
+        if (hit?.id) {
+            openKnowledgeDocViewer(hit.id, {
+                fromChat: true,
+                title: hit.display_name,
+                filename: hit.filename,
+            });
+            return;
+        }
+        showToast('未找到对应知识库文档', 'warning');
+    } catch (e) {
+        showToast(`打开失败: ${e.message}`, 'error');
+    }
+}
+
+/** 知识库页 / 会话共用：在主舞台打开同一查看器 */
+function openKnowledgeDocViewer(docId, opts = {}) {
+    const id = parseInt(docId, 10);
+    if (!id) return;
+    if (typeof _exitChatFullscreenSoft === 'function') _exitChatFullscreenSoft();
+
+    const openTab = () => {
+        if (typeof adsShell === 'undefined') {
+            _previewKnowledgeIndexModal(id);
+            return;
+        }
+        if (opts.fromChat) {
+            try { adsShell.openRight({ tab: 'chat' }); } catch {}
+            try { adsShell.remountChatToWorkbench(); } catch {}
+        }
+        adsShell.openMain({
+            type: 'knowledge',
+            docId: id,
+            title: opts.title,
+            filename: opts.filename,
+        });
+    };
+
+    if (typeof adsShell !== 'undefined' && adsShell.isProjectShell()) {
+        openTab();
+        return;
+    }
+    if (currentProjectId) {
+        try { showProjectDetail(currentProjectId); } catch {}
+        setTimeout(openTab, 280);
+        return;
+    }
+    _previewKnowledgeIndexModal(id);
 }
 
 /** 生成可折叠的代码文件卡片 */
@@ -19866,18 +20106,46 @@ function extractPathFromGitMsg(msg) {
 /**
  * 显示欢迎消息
  */
+function _projectTraitsList(p) {
+    if (!p) return [];
+    const t = p.traits;
+    if (Array.isArray(t)) return t;
+    try { return JSON.parse(t || '[]'); } catch { return []; }
+}
+
 function showChatWelcome() {
     const container = document.getElementById('chatMessages');
     if (currentProjectId) {
+        const name = currentProject?.name || '本项目';
+        const desc = (currentProject?.description || '').trim();
+        const traits = _projectTraitsList(currentProject);
+        const traitLine = traits.length ? traits.slice(0, 6).join(' · ') : '';
+        const ask = encodeURIComponent(
+            `请根据项目「${name}」${desc ? '（' + desc + '）' : ''}的背景，分析 3-4 个可行开发方向（含取舍），让我选一个后再创建第一条需求。`
+        );
         container.innerHTML = `
             <div class="chat-welcome">
                 <div class="chat-welcome-icon">🤖</div>
-                <div class="chat-welcome-title">AI 开发助手</div>
+                <div class="chat-welcome-title">AI 开发助手 · ${escapeHtml(name)}</div>
                 <div class="chat-welcome-desc">
-                    我可以帮你：查看项目状态、创建需求、管理需求执行<br>
-                    <small>💡 试试说：</small><br>
-                    <small>"帮我创建一个用户登录功能需求"</small><br>
-                    <small>"暂停 XX 需求" / "恢复 XX 需求" / "关闭 XX 需求"</small>
+                    项目已就绪。我会根据名称、描述和特征给出方向，由你决策后再开工。<br>
+                    ${desc ? `<small>${escapeHtml(desc)}</small>` : ''}
+                    ${traitLine ? `<small>${escapeHtml(traitLine)}</small>` : ''}
+                </div>
+                <div class="icebreak-options" style="margin-top:16px;text-align:left;max-width:420px;margin-left:auto;margin-right:auto;">
+                    <button type="button" class="icebreak-option" onclick="pickIcebreakOption('${ask}')">
+                        <span class="icebreak-idx">1</span>
+                        <span class="icebreak-label">根据项目背景分析开发方向</span>
+                        <span class="icebreak-hint">推荐</span>
+                    </button>
+                    <button type="button" class="icebreak-option" onclick="pickIcebreakOption('${encodeURIComponent('先做最小可用原型，验证主流程。')}');">
+                        <span class="icebreak-idx">2</span>
+                        <span class="icebreak-label">先做最小可用原型</span>
+                    </button>
+                    <button type="button" class="icebreak-option" onclick="document.getElementById('chatInput')?.focus()">
+                        <span class="icebreak-idx">3</span>
+                        <span class="icebreak-label">我自己说第一个想法</span>
+                    </button>
                 </div>
             </div>
         `;
@@ -20517,21 +20785,27 @@ function autoResizeChatInput() {
 
 /**
  * 滚动聊天到底部
+ * @param {{settle?: boolean}} [opts] settle=true 时在图片/Markdown/全屏布局稳定后再钉一次
  */
-function scrollChatToBottom() {
-    // chatMessages が実際にスクロールする要素（chat-panel-body は overflow:hidden）
-    const msgs = document.getElementById('chatMessages');
-    if (msgs) {
-        requestAnimationFrame(() => {
+function scrollChatToBottom(opts = {}) {
+    // chatMessages 才是实际滚动容器（chat-panel-body 是 overflow:hidden）
+    const pin = () => {
+        const msgs = document.getElementById('chatMessages');
+        if (msgs) {
             msgs.scrollTop = msgs.scrollHeight;
-        });
-        return;
-    }
-    const body = document.getElementById('chatPanelBody');
-    if (body) {
-        requestAnimationFrame(() => {
-            body.scrollTop = body.scrollHeight;
-        });
+            return;
+        }
+        const body = document.getElementById('chatPanelBody');
+        if (body) body.scrollTop = body.scrollHeight;
+    };
+    pin();
+    requestAnimationFrame(() => {
+        pin();
+        requestAnimationFrame(pin);
+    });
+    if (opts.settle) {
+        setTimeout(pin, 80);
+        setTimeout(pin, 280);
     }
 }
 
@@ -22815,10 +23089,166 @@ async function _loadGlobalKnowledgeIntoModal() {
 /** 知识库 Tab 统一入口 */
 async function loadSettingsKnowledge() {
     await Promise.all([
+        loadKnowledgeIndexBrowser(),
         loadSystemDocs(),
         loadKnowledgeDocs(),
         ...(currentProjectId ? [loadKnowledgeScanPaths()] : []),
     ]);
+}
+
+// ===================== FTS 索引浏览器 =====================
+
+let _kbIndexOffset = 0;
+const _KB_INDEX_PAGE = 40;
+
+async function loadKnowledgeIndexBrowser(opts = {}) {
+    const listEl = document.getElementById('kbIndexList');
+    const statsEl = document.getElementById('kbIndexStats');
+    const pagerEl = document.getElementById('kbIndexPager');
+    if (!listEl) return;
+
+    if (opts.resetOffset) _kbIndexOffset = 0;
+    if (typeof opts.offset === 'number') _kbIndexOffset = opts.offset;
+
+    const q = (document.getElementById('kbIndexSearch')?.value || '').trim();
+    const scope = document.getElementById('kbIndexScope')?.value || 'all';
+    const params = new URLSearchParams({
+        scope,
+        limit: String(_KB_INDEX_PAGE),
+        offset: String(_kbIndexOffset),
+    });
+    if (q) params.set('q', q);
+    if (scope === 'project' && currentProjectId) params.set('project_id', currentProjectId);
+
+    listEl.innerHTML = '<div class="empty-state-sm">加载中...</div>';
+    try {
+        const data = await api(`/knowledge/index?${params}`);
+        _renderKbIndexStats(statsEl, data.stats || {});
+        _renderKbIndexList(listEl, data.items || [], !!q);
+        _renderKbIndexPager(pagerEl, data.total_filtered || 0, data.offset || 0, data.limit || _KB_INDEX_PAGE);
+    } catch (e) {
+        listEl.innerHTML = `<div class="empty-state-sm" style="color:var(--danger)">加载失败: ${escapeHtml(e.message)}</div>`;
+    }
+}
+
+function _renderKbIndexStats(el, stats) {
+    if (!el) return;
+    const fmtSize = (n) => n >= 1024 * 1024
+        ? `${(n / 1024 / 1024).toFixed(1)}MB`
+        : n >= 1024 ? `${(n / 1024).toFixed(0)}KB` : `${n || 0}B`;
+    el.innerHTML = `
+        <div class="kb-index-stat"><span class="kb-index-stat-n">${stats.total || 0}</span><span class="kb-index-stat-l">总条目</span></div>
+        <div class="kb-index-stat"><span class="kb-index-stat-n">${stats.system_count || 0}</span><span class="kb-index-stat-l">系统</span></div>
+        <div class="kb-index-stat"><span class="kb-index-stat-n">${stats.global_count || 0}</span><span class="kb-index-stat-l">全局</span></div>
+        <div class="kb-index-stat"><span class="kb-index-stat-n">${stats.project_count || 0}</span><span class="kb-index-stat-l">项目</span></div>
+        <div class="kb-index-stat"><span class="kb-index-stat-n">${fmtSize(stats.total_chars || 0)}</span><span class="kb-index-stat-l">正文量</span></div>
+        <div class="kb-index-stat"><span class="kb-index-stat-n">${stats.total_hits || 0}</span><span class="kb-index-stat-l">命中次数</span></div>
+    `;
+}
+
+function _kbIndexScopeBadge(scope) {
+    const map = {
+        system: { label: '系统', cls: 'kb-scope-system' },
+        global: { label: '全局', cls: 'kb-scope-global' },
+        project: { label: '项目', cls: 'kb-scope-project' },
+    };
+    const m = map[scope] || { label: scope || '?', cls: '' };
+    return `<span class="kb-scope-badge ${m.cls}">${m.label}</span>`;
+}
+
+function _renderKbIndexList(el, items, isSearch) {
+    if (!el) return;
+    if (!items.length) {
+        el.innerHTML = `<div class="empty-state-sm">${isSearch ? '未命中任何索引条目' : '索引为空（启动后端后会自动补录 docs/ 与 dev-notes/）'}</div>`;
+        return;
+    }
+    el.innerHTML = items.map(it => {
+        const sizeKb = ((it.size || 0) / 1024).toFixed(1);
+        const updated = (it.updated_at || '').slice(0, 16).replace('T', ' ');
+        const agent = it.agent_scope ? `<span class="kb-index-meta">scope:${escapeHtml(it.agent_scope)}</span>` : '';
+        const hits = (it.used_count || 0) > 0
+            ? `<span class="kb-index-meta kb-index-hits">引用 ${it.used_count}</span>` : '';
+        const pid = it.project_id
+            ? `<span class="kb-index-meta" title="${escapeHtml(it.project_id)}">${escapeHtml(String(it.project_id).slice(0, 12))}</span>`
+            : '';
+        const snippet = it.snippet
+            ? `<div class="kb-index-snippet">${_formatKbSnippet(it.snippet)}</div>`
+            : '';
+        return `
+            <div class="kb-index-row" onclick="openKnowledgeDocViewer(${it.id}, {title:'${escapeHtml(it.display_name || it.filename).replace(/'/g, "\\'")}'})">
+                <div class="kb-index-row-main">
+                    ${_kbIndexScopeBadge(it.scope)}
+                    <span class="kb-index-name" title="${escapeHtml(it.filename)}">${escapeHtml(it.display_name || it.filename)}</span>
+                    <span class="kb-index-size">${sizeKb}KB</span>
+                    ${agent}${hits}${pid}
+                    <span class="kb-index-meta">${escapeHtml(updated)}</span>
+                </div>
+                ${snippet}
+            </div>`;
+    }).join('');
+}
+
+function _formatKbSnippet(snippet) {
+    // snippet 里用 ** 标亮，转成 <mark>
+    const esc = escapeHtml(snippet || '');
+    return esc.replace(/\*\*(.*?)\*\*/g, '<mark>$1</mark>');
+}
+
+function _renderKbIndexPager(el, total, offset, limit) {
+    if (!el) return;
+    if (total <= limit) {
+        el.innerHTML = total
+            ? `<span style="color:var(--text-muted);font-size:12px;">共 ${total} 条</span>`
+            : '';
+        return;
+    }
+    const page = Math.floor(offset / limit) + 1;
+    const pages = Math.ceil(total / limit);
+    const prevDisabled = offset <= 0 ? 'disabled' : '';
+    const nextDisabled = offset + limit >= total ? 'disabled' : '';
+    el.innerHTML = `
+        <button class="btn btn-xs btn-outline" ${prevDisabled}
+            onclick="loadKnowledgeIndexBrowser({offset:${Math.max(0, offset - limit)}})">上一页</button>
+        <span style="font-size:12px;color:var(--text-muted);margin:0 8px;">${page} / ${pages}（共 ${total}）</span>
+        <button class="btn btn-xs btn-outline" ${nextDisabled}
+            onclick="loadKnowledgeIndexBrowser({offset:${offset + limit}})">下一页</button>
+    `;
+}
+
+async function previewKnowledgeIndexDoc(docId) {
+    openKnowledgeDocViewer(docId);
+}
+
+/** 无项目壳层时的兜底弹窗（与主舞台同源数据） */
+async function _previewKnowledgeIndexModal(docId) {
+    try {
+        const data = await api(`/knowledge/index/${docId}`);
+        document.getElementById('kbIndexPreviewModal')?.remove();
+        const title = escapeHtml(data.display_name || data.filename || `#${docId}`);
+        const bodyHtml = (window.marked && data.content)
+            ? `<div class="markdown-body kb-index-preview-md">${marked.parse(data.content)}</div>`
+            : `<pre class="kb-index-preview-pre">${escapeHtml(data.content || '')}</pre>`;
+        const meta = [
+            data.scope === 'system' ? '系统' : (data.project_id ? `项目: ${data.project_id}` : '全局'),
+            `${((data.size || 0) / 1024).toFixed(1)}KB`,
+        ].filter(Boolean).join(' · ');
+        document.body.insertAdjacentHTML('beforeend', `
+            <div class="modal-overlay" id="kbIndexPreviewModal"
+                 onclick="if(event.target===this)this.remove()" style="z-index:2200;">
+                <div class="modal" style="max-width:820px;width:94%;max-height:85vh;display:flex;flex-direction:column;">
+                    <div class="modal-header" style="flex-shrink:0;">
+                        <div>
+                            <h3 style="margin:0;font-size:15px;">📄 ${title}</h3>
+                            <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">${escapeHtml(meta)}</div>
+                        </div>
+                        <button class="btn-icon" onclick="document.getElementById('kbIndexPreviewModal').remove()">&times;</button>
+                    </div>
+                    <div class="modal-body" style="overflow:auto;flex:1;">${bodyHtml}</div>
+                </div>
+            </div>`);
+    } catch (e) {
+        showToast(`预览失败: ${e.message}`, 'error');
+    }
 }
 
 /** 加载系统知识库（docs/ + dev-notes/，只读） */
@@ -22841,10 +23271,10 @@ async function loadSystemDocs() {
                 <div class="sys-doc-group">
                     <div class="sys-doc-group-title">${icon} ${title}（${items.length}）</div>
                     ${items.map(d => `
-                        <div class="sys-doc-row">
+                        <div class="sys-doc-row" style="cursor:pointer;" onclick="previewSystemDoc('${escapeHtml(d.filename)}')">
                             <span class="sys-doc-name" title="${escapeHtml(d.display_name)}">${escapeHtml(d.display_name)}</span>
                             <span class="sys-doc-size">${Math.round(d.size / 1024 * 10) / 10}KB</span>
-                            <button class="btn btn-xs btn-outline" onclick="previewSystemDoc('${escapeHtml(d.filename)}')">预览</button>
+                            <button class="btn btn-xs btn-outline" onclick="event.stopPropagation();previewSystemDoc('${escapeHtml(d.filename)}')">打开</button>
                         </div>
                     `).join('')}
                 </div>
@@ -22859,15 +23289,19 @@ async function loadSystemDocs() {
     }
 }
 
-/** 预览系统文档内容（从 knowledge_index 读取） */
+/** 预览系统文档：走同一主舞台查看器 */
 async function previewSystemDoc(filename) {
     try {
-        const data = await api(`/knowledge/search?q=${encodeURIComponent(filename.replace(/^sys_(docs|devnotes)__/, ''))}&limit=1`);
-        const result = (data.results || []).find(r => r.filename === filename);
-        const content = result ? result.preview : '（无预览内容）';
-        alert(`📄 ${filename}\n\n${content}`);
+        const params = new URLSearchParams({ name: filename });
+        if (currentProjectId) params.set('project_id', currentProjectId);
+        const hit = await api(`/knowledge/index/lookup?${params}`);
+        if (hit?.id) {
+            openKnowledgeDocViewer(hit.id, { title: hit.display_name, filename: hit.filename });
+            return;
+        }
+        showToast('未找到对应知识库文档', 'warning');
     } catch (e) {
-        showToast(`预览失败: ${e.message}`, 'error');
+        showToast(`打开失败: ${e.message}`, 'error');
     }
 }
 
@@ -23060,10 +23494,12 @@ function renderKnowledgeDocList(container, docs, scope, projectId) {
         <div class="knowledge-doc-item">
             <div class="knowledge-doc-info">
                 <span class="knowledge-doc-icon">📄</span>
-                <span class="knowledge-doc-name">${escHtml(doc.filename)}</span>
+                <span class="knowledge-doc-name" style="cursor:pointer;" title="打开文档"
+                      onclick="previewSystemDoc('${escHtml(doc.filename)}')">${escHtml(doc.filename)}</span>
                 <span class="knowledge-doc-size">${_formatDocSize(doc.size || 0)}</span>
             </div>
             <div class="knowledge-doc-actions">
+                <button class="btn-sm btn-ghost" onclick="previewSystemDoc('${escHtml(doc.filename)}')">打开</button>
                 <button class="btn-sm btn-ghost" onclick="showKnowledgeEditor('${scope}', ${projectId ? `'${projectId}'` : 'null'}, '${escHtml(doc.filename)}')">编辑</button>
                 <button class="btn-sm btn-danger-ghost" onclick="deleteKnowledgeDoc('${scope}', ${projectId ? `'${projectId}'` : 'null'}, '${escHtml(doc.filename)}')">删除</button>
             </div>
@@ -23616,6 +24052,94 @@ refreshHooksMetric();
 
 let _permPendingCount = 0;
 
+function renderErrorAlertCard(action) {
+    const bodyHtml = escapeHtml(action.body || action.title || '').replace(/\n/g, '<br>');
+    const ticketId = action.ticket_id || '';
+    const ticketLink = (ticketId && currentProjectId)
+        ? `<div style="margin-top:8px;padding-top:7px;border-top:1px solid rgba(239,68,68,0.2);">
+               <a class="action-link" style="color:rgba(239,68,68,0.8);font-size:11px;"
+                  onclick="openTicketDrawer('${escapeHtml(ticketId)}')" title="打开工单">
+                   🔍 查看工单 #${escapeHtml(ticketId.slice(-6))} →
+               </a>
+           </div>`
+        : '';
+    const actions = Array.isArray(action.actions) ? action.actions : [];
+    const btns = actions.map(a => {
+        const cls = a.primary ? 'btn btn-sm btn-primary' : 'btn btn-sm';
+        return `<button type="button" class="${cls}" onclick="resolveGitPushAlert('${escapeHtml(a.id || '')}', this)">${escapeHtml(a.label || a.id)}</button>`;
+    }).join('');
+    const btnRow = btns
+        ? `<div class="git-alert-actions" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;">${btns}</div>`
+        : '';
+    const kbHits = Array.isArray(action.knowledge_hits) ? action.knowledge_hits : [];
+    const kbRow = kbHits.length
+        ? `<div class="git-alert-kb" style="margin-top:8px;font-size:11px;">
+               知识库：${kbHits.map(h => {
+                   const id = String(h.id || '');
+                   const name = escapeHtml(h.display_name || h.filename || '文档');
+                   return `<a class="chat-kb-link" href="#" onclick="event.preventDefault();openKnowledgeDocFromChat('${escapeHtml(id)}')">${name}</a>`;
+               }).join(' · ')}
+           </div>`
+        : '';
+    return `<div class="chat-action-card git-alert-card" style="border-left-color:var(--error,#ef4444);background:rgba(239,68,68,0.08);">
+        <div class="action-title" style="color:var(--error,#ef4444);">${escapeHtml(action.title || '⚠️ 错误')}</div>
+        <div class="action-detail" style="font-size:12px;color:var(--text-secondary);">${bodyHtml}</div>
+        ${kbRow}
+        ${btnRow}
+        ${ticketLink}
+    </div>`;
+}
+
+async function resolveGitPushAlert(actionId, btn) {
+    if (!currentProjectId) {
+        showToast('请先进入项目', 'warning');
+        return;
+    }
+    if (actionId === 'open_git') {
+        switchTab('settings-repo');
+        return;
+    }
+    const wrap = btn?.closest('.git-alert-actions');
+    const setBusy = (text) => {
+        if (!wrap) return;
+        wrap.querySelectorAll('button').forEach(b => { b.disabled = true; });
+        if (btn) btn.textContent = text || '处理中…';
+    };
+    const setIdle = () => {
+        if (!wrap) return;
+        wrap.querySelectorAll('button').forEach(b => { b.disabled = false; });
+    };
+    try {
+        if (actionId === 'push_now' || actionId === 'retry') {
+            setBusy('推送中…');
+            await api(`/projects/${currentProjectId}/git/push`, { method: 'POST', body: {} });
+            showToast('已推送到远端', 'success');
+            if (wrap) wrap.innerHTML = '<span style="color:var(--success);font-size:12px;">✓ 已推送到远端</span>';
+            return;
+        }
+        if (actionId === 'pull_push') {
+            setBusy('拉取并推送…');
+            await api(`/projects/${currentProjectId}/git/push`, { method: 'POST', body: { pull_first: true } });
+            showToast('已拉取并推送到远端', 'success');
+            if (wrap) wrap.innerHTML = '<span style="color:var(--success);font-size:12px;">✓ 已拉取并推送</span>';
+            return;
+        }
+        if (actionId === 'create_github') {
+            setBusy('创建仓库…');
+            const r = await api(`/projects/${currentProjectId}/git/ensure-github-and-push`, { method: 'POST', body: {} });
+            showToast(r.remote_url ? `仓库已就绪并推送：${r.remote_url}` : '已创建仓库并推送', 'success');
+            if (wrap) wrap.innerHTML = '<span style="color:var(--success);font-size:12px;">✓ 仓库已创建并推送</span>';
+            return;
+        }
+        showToast('未知操作', 'warning');
+        setIdle();
+    } catch (e) {
+        setIdle();
+        if (btn) btn.textContent = btn.getAttribute('data-label') || '重试';
+        showToast(e.message || '操作失败', 'error');
+    }
+}
+
 function _onAgentAlert(data) {
     // 1. Toast 提醒（立即可见）
     showToast(`${data.title || '⚠️ Agent 错误'}`, 'error');
@@ -23624,27 +24148,13 @@ function _onAgentAlert(data) {
     const container = document.getElementById('chatMessages');
     if (!container) return;
 
-    const body   = (data.body  || '').replace(/\n/g, '<br>');
-    const time   = formatTime(data.created_at || new Date().toISOString());
-    const ticketId = data.ticket_id || '';
-    const ticketLink = (ticketId && currentProjectId)
-        ? `<div style="margin-top:8px;padding-top:6px;border-top:1px solid rgba(239,68,68,0.2);">
-               <a class="action-link" style="color:rgba(239,68,68,0.8);font-size:12px;"
-                  onclick="openTicketDrawer('${escHtml(ticketId)}')" title="打开工单">
-                   🔍 查看工单 #${escHtml(ticketId.slice(-6))} →
-               </a>
-           </div>`
-        : '';
+    const time = formatTime(data.created_at || new Date().toISOString());
     const bubble = document.createElement('div');
     bubble.className = 'chat-msg assistant';
     bubble.innerHTML = `
         <div class="chat-msg-avatar" style="background:var(--error,#ef4444);color:#fff;font-size:14px;">⚠</div>
         <div class="chat-msg-content">
-            <div class="chat-msg-bubble" style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.3);">
-                <div style="font-weight:600;color:var(--error,#ef4444);margin-bottom:4px;">${escHtml(data.title || '⚠️ Agent 错误')}</div>
-                <div style="font-size:13px;color:var(--text-secondary);">${body}</div>
-                ${ticketLink}
-            </div>
+            ${renderErrorAlertCard(data)}
             <div class="chat-msg-time">${time}</div>
         </div>`;
     container.appendChild(bubble);
