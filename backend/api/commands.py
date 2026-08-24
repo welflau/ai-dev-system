@@ -1170,7 +1170,7 @@ summary: "一句话摘要（60字以内）"
 
 
 async def _cmd_search_knowledge(args: str, project_id: Optional[str], context: dict) -> CommandResult:
-    """搜索项目 wiki 知识库"""
+    """搜索项目 wiki；无 wiki 或无命中时回退到 knowledge_fts 系统/项目知识库。"""
     if not project_id:
         return CommandResult(success=False, output="❌ /search-knowledge 需要在项目内使用")
     if not args.strip():
@@ -1179,12 +1179,8 @@ async def _cmd_search_knowledge(args: str, project_id: Optional[str], context: d
         from database import db
         from pathlib import Path
         import re
-        row = await db.fetch_one("SELECT git_repo_path FROM projects WHERE id = ?", (project_id,))
-        repo_path = (row or {}).get("git_repo_path", "")
-        if not repo_path:
-            return CommandResult(success=False, output="❌ 项目没有配置 Git 仓库路径")
 
-        # 解析过滤器
+        # 解析过滤器（仅作用于 wiki）
         query = args
         feature_filter = ""
         type_filter = ""
@@ -1196,48 +1192,97 @@ async def _cmd_search_knowledge(args: str, project_id: Optional[str], context: d
         if tm:
             type_filter = tm.group(1)
             query = query.replace(tm.group(0), "").strip()
+        if not query:
+            return CommandResult(success=False, output="❌ 请提供搜索关键词：/search-knowledge <关键词>")
 
-        wiki_dir = Path(repo_path) / ".ads" / "wiki"
-        if not wiki_dir.exists():
-            return CommandResult(success=True, output="项目尚未创建 wiki 知识库。使用 `/save-to-knowledge` 保存第一条知识。")
+        lines = []
+        wiki_hits = 0
 
-        from scripts.gen_wiki_index import scan_wiki, _parse_frontmatter
-        entries = scan_wiki(wiki_dir)
+        # --- 1. 项目 wiki（.ads/wiki）---
+        row = await db.fetch_one("SELECT git_repo_path FROM projects WHERE id = ?", (project_id,))
+        repo_path = (row or {}).get("git_repo_path", "")
+        wiki_dir = Path(repo_path) / ".ads" / "wiki" if repo_path else None
+        if wiki_dir and wiki_dir.exists():
+            from scripts.gen_wiki_index import scan_wiki
+            entries = scan_wiki(wiki_dir)
+            if feature_filter:
+                entries = [e for e in entries if feature_filter.lower() in e["feature"].lower()]
+            if type_filter:
+                entries = [e for e in entries if type_filter.lower() in e["type"].lower()]
+            kw = query.lower()
+            scored = []
+            for e in entries:
+                score = 0
+                if kw in e["title"].lower():
+                    score += 3
+                if kw in (e.get("summary") or "").lower():
+                    score += 2
+                if any(kw in t.lower() for t in (e.get("tags") or [])):
+                    score += 1
+                if score > 0:
+                    scored.append((score, e))
+            scored.sort(key=lambda x: -x[0])
+            top = scored[:5]
+            wiki_hits = len(top)
+            if top:
+                lines.append(f"## 项目 Wiki（{wiki_hits}）\n")
+                for _, e in top:
+                    lines.append(f"**{e['title']}** [{e['type']}] feature={e['feature']}")
+                    if e.get("summary"):
+                        lines.append(f"> {e['summary']}")
+                    lines.append("")
 
-        # 过滤
-        if feature_filter:
-            entries = [e for e in entries if feature_filter.lower() in e["feature"].lower()]
-        if type_filter:
-            entries = [e for e in entries if type_filter.lower() in e["type"].lower()]
+        # --- 2. FTS 系统/项目知识库 ---
+        fts_lines = []
+        fts_count = 0
+        try:
+            clean = query.replace('"', " ").strip()
+            fts_q = f'"{clean}"' if re.search(r'[.\-+*():!]', clean) else clean
+            rows = await db.fetch_all("""
+                SELECT ki.id, ki.filename, ki.project_id,
+                       snippet(knowledge_fts, 0, '**', '**', '...', 40) AS snippet
+                FROM knowledge_fts
+                JOIN knowledge_index ki ON knowledge_fts.rowid = ki.id
+                WHERE knowledge_fts MATCH ?
+                  AND (ki.project_id = ? OR ki.project_id IS NULL)
+                ORDER BY rank
+                LIMIT 5
+            """, (fts_q, project_id))
+            fts_count = len(rows)
+            for r in rows:
+                fname = r["filename"] or ""
+                if fname.startswith("sys_docs__"):
+                    display = fname[len("sys_docs__"):]
+                elif fname.startswith("sys_devnotes__"):
+                    display = fname[len("sys_devnotes__"):]
+                else:
+                    display = fname
+                if display.endswith(".md"):
+                    display = display[:-3]
+                cite = f"[{display}](ads-kb:{r['id']})"
+                fts_lines.append(f"- {cite}")
+                if r["snippet"]:
+                    fts_lines.append(f"  > {r['snippet']}")
+        except Exception as e:
+            logger.debug("search-knowledge FTS 回退失败: %s", e)
 
-        # 关键词匹配（title + summary + tags）
-        kw = query.lower()
-        scored = []
-        for e in entries:
-            score = 0
-            if kw in e["title"].lower():
-                score += 3
-            if kw in e["summary"].lower():
-                score += 2
-            if any(kw in t.lower() for t in (e["tags"] or [])):
-                score += 1
-            if score > 0 or not kw:
-                scored.append((score, e))
-
-        scored.sort(key=lambda x: -x[0])
-        top = scored[:5]
-
-        if not top:
-            return CommandResult(success=True, output=f"未找到匹配「{query}」的知识条目。")
-
-        lines = [f"搜索「{query}」，找到 {len(top)} 条结果：\n"]
-        for _, e in top:
-            lines.append(f"**{e['title']}** [{e['type']}] feature={e['feature']}")
-            if e["summary"]:
-                lines.append(f"> {e['summary']}")
+        if fts_lines:
+            lines.append(f"## 系统/项目知识库（FTS {fts_count}）\n")
+            lines.extend(fts_lines)
             lines.append("")
+            lines.append("点击上方链接可在主舞台打开文档。")
 
-        return CommandResult(success=True, output="\n".join(lines))
+        if not lines:
+            hint = ""
+            if not (wiki_dir and wiki_dir.exists()):
+                hint = " 项目尚未创建 wiki（可用 `/save-to-knowledge` 归档）。"
+            return CommandResult(
+                success=True,
+                output=f"未找到匹配「{query}」的知识条目。{hint}".strip(),
+            )
+
+        header = f"搜索「{query}」"
+        return CommandResult(success=True, output=header + "\n\n" + "\n".join(lines))
     except Exception as e:
         return CommandResult(success=False, output=f"搜索失败: {e}")
 

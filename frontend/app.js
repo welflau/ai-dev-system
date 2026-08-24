@@ -1075,7 +1075,7 @@ const adsShell = (() => {
                 <div class="main-ws-pane-body" id="mainWsPaneBody">
                     <div class="main-ws-loading">加载中…</div>
                 </div>
-                <aside class="main-ws-tree" id="mainWsTree" style="display:${viewPrefs.treeOpen ? 'flex' : 'none'};">
+                <aside class="main-ws-tree" id="mainWsTree" style="display:${(viewPrefs.treeOpen && tab.type !== 'knowledge') ? 'flex' : 'none'};">
                     <div class="main-ws-tree-head">文件</div>
                     <div class="main-ws-tree-list" id="mainWsTreeList"><div class="main-ws-loading">加载中…</div></div>
                 </aside>
@@ -1448,13 +1448,14 @@ const adsShell = (() => {
     function findNext(dir) { _runFind(dir || 1); }
 
     function toggleFileTree(tabId) {
+        const tab = state.mainTabs.find(t => t.id === (tabId || state.mainActiveId));
+        if (tab?.type === 'knowledge') return; // 知识库文档无仓库文件树
         _setViewPref('treeOpen', !viewPrefs.treeOpen);
         const tree = document.getElementById('mainWsTree');
         const btn = document.querySelector('.main-ws-tool-btn[aria-label="文件树"]');
         if (tree) tree.style.display = viewPrefs.treeOpen ? 'flex' : 'none';
         if (btn) btn.classList.toggle('active', viewPrefs.treeOpen);
         if (viewPrefs.treeOpen) {
-            const tab = state.mainTabs.find(t => t.id === (tabId || state.mainActiveId));
             _loadMainWsTree(tab?.path);
         }
     }
@@ -19738,8 +19739,8 @@ function _linkifyBareFilePaths(text) {
 /** 行内格式：加粗 / 斜体 / 行内代码 / 图片 / 可点击文件路径 / 知识库链接 */
 function _inlineFormat(text) {
     let html = text
-        // 知识库可点击链接：[标题](ads-kb:123) / [标题](ads-kb://123)
-        .replace(/\[([^\]]+)\]\(ads-kb:\/\/?(\d+)\)/gi, (_, label, id) => {
+        // 知识库可点击链接：[标题](ads-kb:123) / [标题](ads-kb:/123) / [标题](ads-kb://123)
+        .replace(/\[([^\]]+)\]\(ads-kb:(?:\/\/?)?(\d+)\)/gi, (_, label, id) => {
             return `<a class="chat-kb-link" href="#" onclick="event.preventDefault();event.stopPropagation();openKnowledgeDocFromChat('${id}')" title="打开知识库文档 #${id}">${label}</a>`;
         })
         .replace(/`([^`\n]+)`/g, (_, code) => {
