@@ -1307,6 +1307,7 @@ const adsShell = (() => {
         menu.innerHTML = isKb ? `
             <button type="button" class="main-ws-menu-item" data-act="copy">Copy Document Name</button>
             <button type="button" class="main-ws-menu-item" data-act="copy-content">Copy File Content</button>
+            <button type="button" class="main-ws-menu-item" data-act="cite-chat">引用到 AI 聊天</button>
             <div class="main-ws-menu-sep"></div>
             <button type="button" class="main-ws-menu-item toggle" data-act="linenum">
                 <span>Line Numbers</span>
@@ -1319,6 +1320,7 @@ const adsShell = (() => {
             <button type="button" class="main-ws-menu-item" data-act="copy">Copy Relative Path</button>
             <button type="button" class="main-ws-menu-item" data-act="copy-full">Copy Absolute Path</button>
             <button type="button" class="main-ws-menu-item" data-act="copy-content">Copy File Content</button>
+            <button type="button" class="main-ws-menu-item" data-act="cite-chat">引用到 AI 聊天</button>
             <div class="main-ws-menu-sep"></div>
             <button type="button" class="main-ws-menu-item" data-act="reveal">Reveal in File Explorer</button>
             <button type="button" class="main-ws-menu-item" data-act="repo">Open in Repo Tab</button>
@@ -1360,6 +1362,12 @@ const adsShell = (() => {
             } else if (act === 'repo') {
                 if (typeof switchTab === 'function') switchTab('repo');
                 setTimeout(() => { if (typeof viewRepoFile === 'function') viewRepoFile(path, null); }, 300);
+            } else if (act === 'cite-chat') {
+                menu.remove();
+                if (typeof citeDocumentToChat === 'function') {
+                    await citeDocumentToChat(tab);
+                }
+                return;
             } else if (act === 'diff' && isFile) {
                 tab.diffView = !tab.diffView;
                 menu.remove();
@@ -20006,6 +20014,61 @@ function _normalizeChatFilePath(filePath) {
  * 软退出全屏：不走 toggleChatFullscreen 退出分支（避免 reload 项目页 / 打断对话）。
  * 用于从全屏聊天点击工单/文件链接时缩回右侧工作台。
  */
+
+/** 从主舞台文档菜单：新建会话并把当前文档挂到 AI 聊天 */
+async function citeDocumentToChat(tab) {
+    if (!tab) return;
+    let text = tab._content || '';
+    if (!text && tab.type === 'knowledge' && tab.docId) {
+        try {
+            const data = await api(`/knowledge/index/${tab.docId}`);
+            text = data.content || '';
+            tab._content = text;
+        } catch (e) {
+            showToast(`读取文档失败: ${e.message}`, 'error');
+            return;
+        }
+    }
+    if (!text) {
+        showToast('当前文档还没有内容可引用', 'warning');
+        return;
+    }
+
+    const basename = String(
+        tab.type === 'knowledge'
+            ? (tab.filename || tab.title || 'document.md')
+            : (tab.path || tab.title || 'file')
+    ).replace(/\\/g, '/').split('/').pop();
+    const filename = /\.\w+$/.test(basename) ? basename : `${basename}.md`;
+
+    if (typeof adsShell !== 'undefined') {
+        try { adsShell.openRight({ tab: 'chat' }); } catch {}
+        try { adsShell.remountChatToWorkbench?.(); } catch {}
+    } else if (typeof toggleChatPanel === 'function' && !chatPanelOpen) {
+        toggleChatPanel();
+    }
+
+    try {
+        await newChatSession();
+    } catch (e) {
+        console.warn('[cite-chat] 新建会话失败，沿用当前会话', e);
+    }
+
+    chatPendingDocs = [{ filename, text, chars: text.length }];
+    if (typeof renderChatDocPreviews === 'function') renderChatDocPreviews();
+
+    const input = document.getElementById('chatInput');
+    if (input) {
+        const hint = tab.type === 'knowledge' && tab.docId
+            ? `请结合附件「${filename}」（知识库 ads-kb:${tab.docId}）`
+            : `请结合附件「${filename}」`;
+        input.value = hint + ' ';
+        input.focus();
+        if (typeof autoResizeChatInput === 'function') autoResizeChatInput();
+    }
+    showToast(`已新建会话并引用 ${filename}`, 'success');
+}
+
 function _exitChatFullscreenSoft() {
     if (!_chatFullscreen && !document.body.classList.contains('chat-fullscreen')) return false;
     _chatFullscreen = false;
