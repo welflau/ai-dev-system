@@ -214,6 +214,7 @@ async def list_knowledge_index(
     q: Optional[str] = None,
     scope: Optional[str] = None,
     project_id: Optional[str] = None,
+    sort: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
 ):
@@ -221,12 +222,17 @@ async def list_knowledge_index(
 
     scope: all | system | global | project
     q: 可选，走 FTS5 全文搜索并返回 snippet
+    sort: updated | hits | rank（有 q 时默认 rank，否则默认 updated）
     """
     limit = max(1, min(int(limit or 50), 200))
     offset = max(0, int(offset or 0))
     scope = (scope or "all").strip().lower()
     if scope not in ("all", "system", "global", "project"):
         raise HTTPException(400, "scope 须为 all/system/global/project")
+    q_stripped = (q or "").strip()
+    sort = (sort or ("rank" if q_stripped else "updated")).strip().lower()
+    if sort not in ("updated", "hits", "rank"):
+        sort = "rank" if q_stripped else "updated"
 
     # ── 统计 ────────────────────────────────────────────────────────────
     stats_rows = await db.fetch_all("""
@@ -271,9 +277,22 @@ async def list_knowledge_index(
         return sql, p
 
     # ── 列表 / 搜索 ─────────────────────────────────────────────────────
-    q = (q or "").strip()
+    q = q_stripped
     items = []
     total_filtered = 0
+
+    def _order_sql(alias: str = "") -> str:
+        """alias 如 'ki.'；无别名时传空串。"""
+        col_hits = f"{alias}used_count"
+        col_upd = f"{alias}updated_at"
+        if sort == "hits":
+            return f"{col_hits} DESC, {col_upd} DESC"
+        if sort == "updated":
+            return f"{col_upd} DESC"
+        # rank：仅 FTS 有意义；无 q 时回退更新时间
+        if q:
+            return "rank"
+        return f"{col_upd} DESC"
 
     if q:
         where_sql, params = _scope_where("ki.")
@@ -287,7 +306,7 @@ async def list_knowledge_index(
                 FROM knowledge_fts
                 JOIN knowledge_index ki ON knowledge_fts.rowid = ki.id
                 WHERE knowledge_fts MATCH ?{where_sql}
-                ORDER BY rank
+                ORDER BY {_order_sql("ki.")}
                 LIMIT ? OFFSET ?
             """, tuple(fts_params))
             count_row = await db.fetch_one(f"""
@@ -308,7 +327,7 @@ async def list_knowledge_index(
                    NULL AS snippet
             FROM knowledge_index
             WHERE 1=1{where_sql}
-            ORDER BY updated_at DESC
+            ORDER BY {_order_sql("")}
             LIMIT ? OFFSET ?
         """, tuple(params + [limit, offset]))
         count_row = await db.fetch_one(
@@ -358,6 +377,7 @@ async def list_knowledge_index(
         "offset": offset,
         "q": q or None,
         "scope": scope,
+        "sort": sort,
     }
 
 

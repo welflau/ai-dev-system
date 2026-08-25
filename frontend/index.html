@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI 自动开发系统</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260824b">
+    <link rel="stylesheet" href="/static/styles.css?v=20260825a">
     <!-- highlight.js 语法高亮 -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
@@ -1476,6 +1476,11 @@
                                         <option value="global">全局文档</option>
                                         <option value="project">项目文档</option>
                                     </select>
+                                    <select id="kbIndexSort" class="kb-index-scope" title="排序" onchange="loadKnowledgeIndexBrowser({resetOffset:true})">
+                                        <option value="updated">按更新时间</option>
+                                        <option value="hits">按命中次数</option>
+                                        <option value="rank">按相关度</option>
+                                    </select>
                                     <button class="btn btn-sm btn-primary" onclick="loadKnowledgeIndexBrowser({resetOffset:true})">搜索</button>
                                 </div>
                                 <div id="kbIndexList" class="kb-index-list"><div class="empty-state-sm">加载中...</div></div>
@@ -2306,7 +2311,7 @@
     <!-- ==================== Toast 通知 ==================== -->
     <div class="toast-container" id="toastContainer"></div>
 
-    <script src="/static/app.js?v=20260824c"></script>
+    <script src="/static/app.js?v=20260825a"></script>
 </body>
 </html>
 

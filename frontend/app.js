@@ -1185,7 +1185,9 @@ const adsShell = (() => {
             pathEl.title = tab.filename || tab.path;
         }
         if (actions) {
+            const browseNav = (typeof kbBrowseNavHtml === 'function') ? kbBrowseNavHtml(tab.docId) : '';
             actions.innerHTML = `
+                ${browseNav}
                 <span class="main-ws-badge">${_escHtml(scopeLabel)}</span>
                 <button type="button" class="btn-icon main-ws-action" id="mainWsMdToggle" title="切换源码/预览">源码</button>
                 ${_toolbarIconsHtml(tab)}`;
@@ -23165,6 +23167,56 @@ async function loadSettingsKnowledge() {
 let _kbIndexOffset = 0;
 const _KB_INDEX_PAGE = 40;
 
+/** 当前 FTS 列表页（供主舞台上一条/下一条） */
+let _kbBrowseQueue = [];
+let _kbBrowseCursor = -1;
+
+function _syncKbBrowseQueue(items) {
+    _kbBrowseQueue = (items || []).map(it => ({
+        id: it.id,
+        title: it.display_name || it.filename || ('#' + it.id),
+        filename: it.filename || '',
+    }));
+    _kbBrowseCursor = -1;
+}
+
+function kbBrowseNavHtml(docId) {
+    const id = parseInt(docId, 10);
+    if (!_kbBrowseQueue.length || !id) return '';
+    const idx = _kbBrowseQueue.findIndex(x => x.id === id);
+    if (idx < 0) return ''; // 当前文档不在最近一次 FTS 列表中
+    _kbBrowseCursor = idx;
+    if (_kbBrowseQueue.length < 2) return '';
+    const at = _kbBrowseCursor + 1;
+    const prevDis = _kbBrowseCursor <= 0 ? 'disabled' : '';
+    const nextDis = _kbBrowseCursor >= _kbBrowseQueue.length - 1 ? 'disabled' : '';
+    return `
+        <span class="main-ws-badge kb-browse-pos" title="当前列表位置">${at}/${_kbBrowseQueue.length}</span>
+        <button type="button" class="btn-icon main-ws-action" ${prevDis}
+            title="上一条（列表）" onclick="navigateKbBrowse(-1)">↑</button>
+        <button type="button" class="btn-icon main-ws-action" ${nextDis}
+            title="下一条（列表）" onclick="navigateKbBrowse(1)">↓</button>`;
+}
+
+function navigateKbBrowse(delta) {
+    if (!_kbBrowseQueue.length) {
+        showToast('请先在知识库 FTS 列表打开文档', 'info');
+        return;
+    }
+    const next = _kbBrowseCursor + delta;
+    if (next < 0) {
+        showToast('已是列表第一条', 'info');
+        return;
+    }
+    if (next >= _kbBrowseQueue.length) {
+        showToast('已是列表最后一条', 'info');
+        return;
+    }
+    _kbBrowseCursor = next;
+    const it = _kbBrowseQueue[next];
+    openKnowledgeDocViewer(it.id, { title: it.title, filename: it.filename });
+}
+
 async function loadKnowledgeIndexBrowser(opts = {}) {
     const listEl = document.getElementById('kbIndexList');
     const statsEl = document.getElementById('kbIndexStats');
@@ -23176,8 +23228,12 @@ async function loadKnowledgeIndexBrowser(opts = {}) {
 
     const q = (document.getElementById('kbIndexSearch')?.value || '').trim();
     const scope = document.getElementById('kbIndexScope')?.value || 'all';
+    const sortEl = document.getElementById('kbIndexSort');
+    let sort = sortEl?.value || '';
+    if (!sort) sort = q ? 'rank' : 'updated';
     const params = new URLSearchParams({
         scope,
+        sort,
         limit: String(_KB_INDEX_PAGE),
         offset: String(_kbIndexOffset),
     });
@@ -23222,11 +23278,12 @@ function _kbIndexScopeBadge(scope) {
 
 function _renderKbIndexList(el, items, isSearch) {
     if (!el) return;
+    _syncKbBrowseQueue(items);
     if (!items.length) {
         el.innerHTML = `<div class="empty-state-sm">${isSearch ? '未命中任何索引条目' : '索引为空（启动后端后会自动补录 docs/ 与 dev-notes/）'}</div>`;
         return;
     }
-    el.innerHTML = items.map(it => {
+    el.innerHTML = items.map((it, i) => {
         const sizeKb = ((it.size || 0) / 1024).toFixed(1);
         const updated = (it.updated_at || '').slice(0, 16).replace('T', ' ');
         const agent = it.agent_scope ? `<span class="kb-index-meta">scope:${escapeHtml(it.agent_scope)}</span>` : '';
@@ -23238,8 +23295,9 @@ function _renderKbIndexList(el, items, isSearch) {
         const snippet = it.snippet
             ? `<div class="kb-index-snippet">${_formatKbSnippet(it.snippet)}</div>`
             : '';
+        const safeTitle = escapeHtml(it.display_name || it.filename).replace(/'/g, "\\'");
         return `
-            <div class="kb-index-row" onclick="openKnowledgeDocViewer(${it.id}, {title:'${escapeHtml(it.display_name || it.filename).replace(/'/g, "\\'")}'})">
+            <div class="kb-index-row" onclick="_kbBrowseCursor=${i};openKnowledgeDocViewer(${it.id}, {title:'${safeTitle}'})">
                 <div class="kb-index-row-main">
                     ${_kbIndexScopeBadge(it.scope)}
                     <span class="kb-index-name" title="${escapeHtml(it.filename)}">${escapeHtml(it.display_name || it.filename)}</span>

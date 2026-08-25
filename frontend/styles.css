@@ -3388,6 +3388,11 @@ input[readonly]:focus {
     color: var(--text);
     font-size: 12px;
 }
+.kb-browse-pos {
+    font-variant-numeric: tabular-nums;
+    min-width: 2.5em;
+    text-align: center;
+}
 .kb-index-list {
     max-height: 420px;
     overflow-y: auto;
