@@ -135,6 +135,7 @@ class ChatRequest(BaseModel):
     chat_session_id: Optional[str] = Field(default=None, description="v0.20 会话 ID")
     msg_group_key: Optional[str] = Field(default=None, description="消息级任务分组 key，每次发送唯一，用于后台任务面板按对话分组")
     agent: Optional[str] = Field(default=None, description="@mention Agent 名称，如 DevAgent / TestAgent，注入 persona 并走流式路径")
+    ticket_id: Optional[str] = Field(default=None, description="关联工单 ID（抽屉/看板聚焦时传入，供 Write Checkpoint）")
 
 
 class ChatResponse(BaseModel):
@@ -569,6 +570,14 @@ async def chat_stream(project_id: str, req: ChatRequest):
         raise HTTPException(404, "项目不存在")
 
     project_context = await _build_project_context(project_id, dict(project))
+    # 前端传入聚焦工单 → Checkpoint 写前快照可归属到该工单
+    if req.ticket_id:
+        trow = await db.fetch_one(
+            "SELECT id FROM tickets WHERE id = ? AND project_id = ?",
+            (req.ticket_id, project_id),
+        )
+        if trow:
+            project_context["ticket_id"] = req.ticket_id
 
     return StreamingResponse(
         _chat_stream_generator(project_id, dict(project), project_context, req),

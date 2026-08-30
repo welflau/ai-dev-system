@@ -254,6 +254,22 @@ async def lifespan(app: FastAPI):
     auto_task = asyncio.create_task(automation_loop())
     logger.info("自动化任务调度器已启动（60s 轮询）")
 
+    # Checkpoint GC：启动时跑一次，之后每 6 小时
+    async def _checkpoint_gc_loop():
+        await asyncio.sleep(30)
+        while True:
+            try:
+                from checkpoint.service import checkpoint_service
+                stats = await checkpoint_service.gc_expired(ttl_days=14)
+                if stats.get("checkpoints_deleted") or stats.get("blobs_deleted"):
+                    logger.info("Checkpoint GC: %s", stats)
+            except Exception as e:
+                logger.debug("Checkpoint GC 跳过: %s", e)
+            await asyncio.sleep(6 * 3600)
+
+    gc_task = asyncio.create_task(_checkpoint_gc_loop())
+    logger.info("Checkpoint GC 已调度（TTL 14 天，6h 轮询）")
+
     logger.info("Server: http://localhost:%s", settings.PORT)
     logger.info("App:    http://localhost:%s/app", settings.PORT)
     logger.info("=" * 60)
@@ -265,6 +281,7 @@ async def lifespan(app: FastAPI):
     poll_task.cancel()
     ci_task.cancel()
     auto_task.cancel()
+    gc_task.cancel()
     try:
         from mcp_client import mcp_client
         await mcp_client.stop_all_servers()

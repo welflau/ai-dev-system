@@ -133,6 +133,39 @@ class WriteFileAction(ActionBase):
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
             cleaned = _strip_fences(str(content))
+            # 写前 Checkpoint（OpenSpec / Apply）
+            try:
+                from checkpoint.service import checkpoint_service
+                from checkpoint.context import set_checkpoint_context
+                pid = context.get("project_id") or ""
+                tid = context.get("ticket_id") or ""
+                repo_for_cp = context.get("repo_path") or ""
+                # skill 模式：path 相对产出目录 → 换成相对仓库根
+                repo_rel = rel
+                if self._write_mode == "skill" and repo_for_cp:
+                    try:
+                        repo_root = Path(repo_for_cp).resolve()
+                        repo_rel = str(target.relative_to(repo_root)).replace("\\", "/")
+                    except Exception:
+                        change_id = context.get("change_id") or ""
+                        if change_id:
+                            repo_rel = f"openspec/changes/{change_id}/{rel}"
+                if pid and tid and repo_rel:
+                    set_checkpoint_context(
+                        project_id=pid, ticket_id=tid,
+                        agent_type=context.get("agent_type") or "SkillRunner",
+                        action=context.get("action") or "write_file",
+                        repo_path=repo_for_cp,
+                    )
+                    await checkpoint_service.capture_before_write(
+                        pid, tid, [repo_rel],
+                        repo_path=repo_for_cp,
+                        agent_type=context.get("agent_type") or "SkillRunner",
+                        action=context.get("action") or "write_file",
+                    )
+            except Exception as _ce:
+                logger.debug("write_file checkpoint 跳过: %s", _ce)
+
             target.write_text(cleaned, encoding="utf-8")
             # 供 orchestrator / DevAgent 收集 commit 文件
             written = context.setdefault("_skill_written_files", {})

@@ -972,6 +972,33 @@ CREATE TABLE IF NOT EXISTS ticket_spec_versions (
     created_at     TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_spec_versions_ticket ON ticket_spec_versions(ticket_id);
+
+-- ============================================================
+-- 工单 Checkpoint（写前快照，对标 Cursor）
+-- ============================================================
+CREATE TABLE IF NOT EXISTS checkpoints (
+    id              TEXT PRIMARY KEY,
+    project_id      TEXT NOT NULL,
+    ticket_id       TEXT NOT NULL,
+    trigger         TEXT NOT NULL,
+    parent_id       TEXT,
+    agent_type      TEXT,
+    action          TEXT,
+    note            TEXT,
+    created_at      TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS checkpoint_files (
+    id              TEXT PRIMARY KEY,
+    checkpoint_id   TEXT NOT NULL REFERENCES checkpoints(id),
+    path            TEXT NOT NULL,
+    kind            TEXT NOT NULL,
+    before_hash     TEXT,
+    byte_size       INTEGER,
+    skipped_reason  TEXT,
+    UNIQUE(checkpoint_id, path)
+);
+CREATE INDEX IF NOT EXISTS idx_cp_ticket ON checkpoints(ticket_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_cpf_cp ON checkpoint_files(checkpoint_id);
 """
 
 
