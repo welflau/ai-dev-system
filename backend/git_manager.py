@@ -182,6 +182,11 @@ Thumbs.db
 
     async def write_file(self, project_id: str, file_path: str, content: str) -> str:
         """写入单个文件到仓库（相对路径）"""
+        try:
+            from checkpoint.service import checkpoint_service
+            await checkpoint_service.capture_from_active_context([file_path])
+        except Exception:
+            pass
         repo_dir = self._repo_path(project_id)
         target = repo_dir / file_path
 
@@ -194,10 +199,19 @@ Thumbs.db
 
     async def write_files(self, project_id: str, files: Dict[str, str]) -> List[str]:
         """批量写入文件到仓库"""
+        try:
+            from checkpoint.service import checkpoint_service
+            await checkpoint_service.capture_from_active_context(list(files.keys()))
+        except Exception:
+            pass
         written = []
         for file_path, content in files.items():
-            path = await self.write_file(project_id, file_path, content)
-            written.append(path)
+            # 路径已在批量 capture 中拍过快照；此处直接写盘，避免 write_file 二次 capture
+            repo_dir = self._repo_path(project_id)
+            target = repo_dir / file_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+            written.append(str(target))
         return written
 
     # ==================== Git 操作 ====================
@@ -1023,6 +1037,99 @@ Thumbs.db
         """检查项目仓库是否存在"""
         repo_dir = self._repo_path(project_id)
         return (repo_dir / ".git").exists()
+
+    async def path_exists_in_ref(self, project_id: str, file_path: str, ref: str) -> bool:
+        """指定 ref 里是否存在该相对路径文件。"""
+        if not file_path or not ref:
+            return False
+        rel = self._normalize_rel_path(file_path)
+        repo_dir = str(self._repo_path(project_id))
+        rc, _, _ = await self._run_git(repo_dir, "cat-file", "-e", f"{ref}:{rel}")
+        return rc == 0
+
+    async def revert_paths(
+        self,
+        project_id: str,
+        paths: List[str],
+        *,
+        base_ref: Optional[str] = None,
+        commit: bool = True,
+        message: str = "revert: cancel ticket",
+        author: str = "Operator",
+    ) -> Dict[str, Any]:
+        """按路径回滚到 base_ref（默认主分支）：存在则 checkout，不存在则删除。
+
+        不做整分支 reset，避免误伤同需求下其它工单的改动。
+        返回 {restored, deleted, skipped, commit_hash, base_ref, errors}。
+        """
+        result: Dict[str, Any] = {
+            "restored": [], "deleted": [], "skipped": [],
+            "commit_hash": None, "base_ref": base_ref, "errors": [],
+        }
+        if not paths:
+            return result
+        if not self.repo_exists(project_id):
+            result["errors"].append("仓库不存在")
+            return result
+
+        repo_path = self._repo_path(project_id)
+        repo_dir = str(repo_path)
+
+        if not base_ref:
+            try:
+                base_ref = await self.get_primary_branch(project_id)
+            except Exception:
+                base_ref = "HEAD"
+            # 确认 ref 可用；主分支名可能是 origin/main 本地无跟踪
+            rc, _, _ = await self._run_git(repo_dir, "rev-parse", "--verify", base_ref)
+            if rc != 0:
+                for cand in ("main", "master", "develop", "HEAD"):
+                    rc2, _, _ = await self._run_git(repo_dir, "rev-parse", "--verify", cand)
+                    if rc2 == 0:
+                        base_ref = cand
+                        break
+        result["base_ref"] = base_ref
+
+        seen = set()
+        for raw in paths:
+            rel = self._normalize_rel_path(raw or "")
+            if not rel or rel in seen:
+                continue
+            seen.add(rel)
+            # 禁止逃逸
+            if ".." in rel.split("/"):
+                result["skipped"].append(rel)
+                continue
+            try:
+                existed = await self.path_exists_in_ref(project_id, rel, base_ref)
+                target = repo_path.joinpath(*rel.split("/"))
+                if existed:
+                    rc, _, err = await self._run_git(
+                        repo_dir, "checkout", base_ref, "--", rel,
+                    )
+                    if rc != 0:
+                        result["errors"].append(f"{rel}: checkout 失败 {err[:120]}")
+                        continue
+                    result["restored"].append(rel)
+                else:
+                    if target.exists():
+                        if target.is_dir():
+                            import shutil
+                            shutil.rmtree(target)
+                        else:
+                            target.unlink()
+                        # 从 index 移除（若已跟踪）
+                        await self._run_git(repo_dir, "rm", "-rf", "--ignore-unmatch", "--", rel)
+                        result["deleted"].append(rel)
+                    else:
+                        result["skipped"].append(rel)
+            except Exception as e:
+                result["errors"].append(f"{rel}: {e}")
+
+        if commit and (result["restored"] or result["deleted"]):
+            hash_ = await self.commit(project_id, message, author=author)
+            result["commit_hash"] = hash_
+        return result
 
 
 # 全局实例

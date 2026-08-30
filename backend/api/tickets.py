@@ -3,7 +3,7 @@ AI 自动开发系统 - 工单 API
 """
 import json
 import logging
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Body
 from database import db
 from models import (
     TicketStatus,
@@ -294,8 +294,16 @@ async def update_ticket(project_id: str, ticket_id: str, req: TicketUpdate):
 
 
 @router.delete("/api/projects/{project_id}/tickets/{ticket_id}")
-async def cancel_ticket(project_id: str, ticket_id: str):
-    """取消工单"""
+async def cancel_ticket(
+    project_id: str,
+    ticket_id: str,
+    revert: bool = False,
+):
+    """取消工单。
+
+    revert=true 时优先 Checkpoint 还原到 ticket_start；无快照则 Git 路径级回滚。
+    默认 revert=false，仅改状态。
+    """
     existing = await db.fetch_one(
         "SELECT * FROM tickets WHERE id = ? AND project_id = ?",
         (ticket_id, project_id),
@@ -307,6 +315,26 @@ async def cancel_ticket(project_id: str, ticket_id: str):
         raise HTTPException(400, "工单已完成或已取消")
 
     old_status = existing["status"]
+    revert_result = None
+
+    if revert:
+        try:
+            revert_result = await _revert_ticket_changes(project_id, ticket_id, existing)
+        except Exception as e:
+            logger.warning("取消工单 revert 失败（仍将取消状态）: %s", e, exc_info=True)
+            revert_result = {"ok": False, "error": str(e)}
+
+    # 尽量从编排器在途集合里摘掉
+    try:
+        from orchestrator import orchestrator
+        release = getattr(orchestrator, "_release_ticket", None) or getattr(orchestrator, "release_ticket", None)
+        if callable(release):
+            maybe = release(ticket_id)
+            if hasattr(maybe, "__await__"):
+                await maybe
+    except Exception:
+        pass
+
     await db.update(
         "tickets",
         {"status": "cancelled", "updated_at": now_iso()},
@@ -314,12 +342,392 @@ async def cancel_ticket(project_id: str, ticket_id: str):
         (ticket_id,),
     )
 
+    msg = "工单已取消"
+    if revert:
+        rr = revert_result or {}
+        strategy = rr.get("strategy") or "git"
+        n = len(rr.get("restored") or []) + len(rr.get("deleted") or [])
+        if rr.get("openspec_removed"):
+            n += 1
+        if n:
+            msg = f"工单已取消并回滚（{strategy}，{n} 项）"
+        else:
+            msg = f"工单已取消（{strategy}，无可回滚改动）"
+
     await _log_ticket(
         project_id, existing["requirement_id"], ticket_id,
-        None, "update_status", old_status, "cancelled", "工单已取消"
+        None, "update_status", old_status, "cancelled", msg
     )
+    if revert and revert_result:
+        try:
+            action = "checkpoint_restore" if revert_result.get("strategy") == "checkpoint" else "revert"
+            detail_payload = dict(revert_result) if isinstance(revert_result, dict) else {"raw": revert_result}
+            if isinstance(detail_payload, dict) and "message" not in detail_payload:
+                detail_payload["message"] = _format_restore_message(detail_payload) if action == "checkpoint_restore" else msg
+            await _log_ticket(
+                project_id, existing["requirement_id"], ticket_id,
+                "Operator", action, old_status, "cancelled",
+                json.dumps(detail_payload, ensure_ascii=False)[:2000],
+                level="info" if revert_result.get("ok", True) else "warning",
+            )
+        except Exception:
+            pass
 
-    return {"message": "工单已取消"}
+    return {
+        "message": msg,
+        "reverted": bool(revert),
+        "revert": revert_result,
+    }
+
+
+@router.post("/api/projects/{project_id}/checkpoints/gc")
+async def run_checkpoint_gc(project_id: str, body: dict = Body(default={})):
+    """手动触发 Checkpoint GC（TTL + 孤儿 blob）。project_id 仅作鉴权锚点。"""
+    project = await db.fetch_one("SELECT id FROM projects WHERE id = ?", (project_id,))
+    if not project:
+        raise HTTPException(404, "项目不存在")
+    from checkpoint.service import checkpoint_service
+    ttl = int(body.get("ttl_days") or 14)
+    keep = int(body.get("keep_active_writes") or 50)
+    stats = await checkpoint_service.gc_expired(ttl_days=max(1, ttl), keep_active_writes=max(5, keep))
+    return {"ok": True, "project_id": project_id, **stats}
+
+
+@router.get("/api/projects/{project_id}/tickets/{ticket_id}/checkpoints")
+async def list_ticket_checkpoints(project_id: str, ticket_id: str):
+    existing = await db.fetch_one(
+        "SELECT id FROM tickets WHERE id=? AND project_id=?",
+        (ticket_id, project_id),
+    )
+    if not existing:
+        raise HTTPException(404, "工单不存在")
+    from checkpoint.service import checkpoint_service
+    items = await checkpoint_service.list_checkpoints(ticket_id)
+    return {"checkpoints": items, "total": len(items)}
+
+
+@router.get("/api/projects/{project_id}/tickets/{ticket_id}/checkpoints/{checkpoint_id}")
+async def get_ticket_checkpoint(project_id: str, ticket_id: str, checkpoint_id: str):
+    existing = await db.fetch_one(
+        "SELECT id FROM tickets WHERE id=? AND project_id=?",
+        (ticket_id, project_id),
+    )
+    if not existing:
+        raise HTTPException(404, "工单不存在")
+    from checkpoint.service import checkpoint_service
+    item = await checkpoint_service.get_checkpoint(checkpoint_id, ticket_id)
+    if not item:
+        raise HTTPException(404, "checkpoint 不存在")
+    return item
+
+
+@router.post("/api/projects/{project_id}/tickets/{ticket_id}/checkpoints/{checkpoint_id}/restore")
+async def restore_ticket_checkpoint(
+    project_id: str, ticket_id: str, checkpoint_id: str, body: dict = Body(default={}),
+):
+    if not body.get("confirm"):
+        raise HTTPException(400, "需要 confirm=true")
+    existing = await db.fetch_one(
+        "SELECT * FROM tickets WHERE id=? AND project_id=?",
+        (ticket_id, project_id),
+    )
+    if not existing:
+        raise HTTPException(404, "工单不存在")
+    from checkpoint.service import checkpoint_service
+    project = await db.fetch_one("SELECT mode FROM projects WHERE id=?", (project_id,))
+    mode = (project or {}).get("mode", "auto")
+    result = await checkpoint_service.restore_after_checkpoint(
+        project_id, ticket_id, checkpoint_id,
+        commit=(mode != "manual"),
+        message=f"[Operator] restore checkpoint {checkpoint_id[-8:]} ({ticket_id[-8:]})",
+    )
+    try:
+        await _log_ticket(
+            project_id, existing["requirement_id"], ticket_id,
+            "Operator", "checkpoint_restore", existing["status"], existing["status"],
+            json.dumps({
+                **{k: result.get(k) for k in (
+                    "ok", "strategy", "checkpoint_id", "restored", "deleted",
+                    "skipped", "errors", "commit_hash", "file_count",
+                )},
+                "message": _format_restore_message(result),
+            }, ensure_ascii=False)[:2000],
+            level="warning" if (result.get("errors") or not result.get("ok")) else "info",
+        )
+    except Exception:
+        pass
+    return result
+
+
+def _format_restore_message(result: dict) -> str:
+    """还原结果人可读摘要（主轴展示 / Toast）。"""
+    if result.get("ok") is False and not (result.get("restored") or result.get("deleted")):
+        return f"还原失败：{result.get('error') or '未知错误'}"
+    n = len(result.get("restored") or []) + len(result.get("deleted") or [])
+    parts = [f"已还原 {n} 项"]
+    sk = len(result.get("skipped") or [])
+    er = len(result.get("errors") or [])
+    if sk:
+        parts.append(f"跳过 {sk}")
+    if er:
+        parts.append(f"错误 {er}")
+    if result.get("commit_hash"):
+        parts.append(str(result["commit_hash"])[:8])
+    return " · ".join(parts)
+
+
+@router.get("/api/projects/{project_id}/tickets/{ticket_id}/revert-preview")
+async def revert_preview(project_id: str, ticket_id: str):
+    """取消前回滚预览：优先 Checkpoint，否则 Git 路径计划。"""
+    existing = await db.fetch_one(
+        "SELECT id, project_id, title, status FROM tickets WHERE id = ? AND project_id = ?",
+        (ticket_id, project_id),
+    )
+    if not existing:
+        raise HTTPException(404, "工单不存在")
+
+    # 1) Checkpoint
+    try:
+        from checkpoint.service import checkpoint_service
+        cp_plan = await checkpoint_service.preview_restore_to_start(ticket_id)
+        if cp_plan.get("has_checkpoint") and cp_plan.get("file_count", 0) > 0:
+            return {
+                "ticket_id": ticket_id,
+                "status": existing["status"],
+                "strategy": "checkpoint",
+                "has_changes": True,
+                "has_checkpoint": True,
+                "checkpoint_id": cp_plan.get("checkpoint_id"),
+                "files": cp_plan.get("files") or [],
+                "file_count": cp_plan.get("file_count") or 0,
+                "to_restore": cp_plan.get("to_restore") or [],
+                "to_delete": cp_plan.get("to_delete") or [],
+                "openspec_change": None,
+                "openspec_path": None,
+                "commits": [],
+            }
+        if cp_plan.get("has_checkpoint"):
+            # 有锚点但尚无写文件：仍算 checkpoint 策略（空回滚）
+            git_plan = await _build_ticket_revert_plan(project_id, ticket_id)
+            if git_plan.get("has_changes"):
+                return {
+                    "ticket_id": ticket_id,
+                    "status": existing["status"],
+                    "strategy": "git",
+                    "has_checkpoint": True,
+                    "checkpoint_id": cp_plan.get("checkpoint_id"),
+                    **git_plan,
+                }
+            return {
+                "ticket_id": ticket_id,
+                "status": existing["status"],
+                "strategy": "checkpoint",
+                "has_changes": False,
+                "has_checkpoint": True,
+                "checkpoint_id": cp_plan.get("checkpoint_id"),
+                "files": [],
+                "file_count": 0,
+                "openspec_change": None,
+                "openspec_path": None,
+                "commits": [],
+            }
+    except Exception as e:
+        logger.debug("checkpoint preview 失败，回退 Git: %s", e)
+
+    plan = await _build_ticket_revert_plan(project_id, ticket_id)
+    return {
+        "ticket_id": ticket_id,
+        "status": existing["status"],
+        "strategy": "git" if plan.get("has_changes") else "none",
+        "has_checkpoint": False,
+        **plan,
+    }
+
+
+async def _build_ticket_revert_plan(project_id: str, ticket_id: str) -> dict:
+    """汇总本工单可回滚的文件路径与 OpenSpec change。"""
+    import re
+    files: set = set()
+    commits: list = []
+
+    # 1) ticket_commands.write_file
+    cmds = await db.fetch_all(
+        "SELECT command_type, command, created_at FROM ticket_commands "
+        "WHERE ticket_id = ? ORDER BY created_at ASC",
+        (ticket_id,),
+    )
+    for c in cmds or []:
+        ctype = c.get("command_type") or ""
+        cmd = c.get("command") or ""
+        if ctype == "write_file":
+            m = re.match(r"^写入文件:\s*(.+)$", cmd.strip())
+            if m:
+                files.add(m.group(1).strip().replace("\\", "/"))
+        elif ctype == "git_commit":
+            m = re.search(r"→\s*([0-9a-fA-F]{7,40})\s*$", cmd)
+            if m:
+                commits.append({"hash": m.group(1), "at": c.get("created_at")})
+
+    # 2) artifacts.metadata.git
+    arts = await db.fetch_all(
+        "SELECT path, metadata, type FROM artifacts WHERE ticket_id = ?",
+        (ticket_id,),
+    )
+    for a in arts or []:
+        if a.get("path") and a.get("type") in ("code", "file", None):
+            p = str(a["path"]).replace("\\", "/").lstrip("/")
+            if p and not p.startswith("http"):
+                files.add(p)
+        meta_raw = a.get("metadata")
+        if not meta_raw:
+            continue
+        try:
+            meta = json.loads(meta_raw) if isinstance(meta_raw, str) else meta_raw
+        except Exception:
+            continue
+        git = (meta or {}).get("git") or {}
+        for fp in git.get("files") or []:
+            if fp:
+                files.add(str(fp).replace("\\", "/"))
+        if git.get("commit_hash"):
+            commits.append({"hash": git["commit_hash"], "at": None})
+
+    # 3) OpenSpec change 目录
+    openspec_change = None
+    openspec_rel = None
+    try:
+        from capability_check import _short_ticket_id, _get_repo_path, get_ticket_change_dir
+        repo_path = await _get_repo_path(project_id)
+        if repo_path:
+            change_id = _short_ticket_id(ticket_id)
+            change_dir = get_ticket_change_dir(repo_path, ticket_id)
+            if change_dir.exists():
+                openspec_change = change_id
+                openspec_rel = f"openspec/changes/{change_id}"
+    except Exception:
+        pass
+
+    # 去重 commits（保序）
+    seen_h = set()
+    uniq_commits = []
+    for c in commits:
+        h = c["hash"]
+        if h and h not in seen_h:
+            seen_h.add(h)
+            uniq_commits.append(c)
+
+    file_list = sorted(files)
+    return {
+        "files": file_list,
+        "file_count": len(file_list),
+        "commits": uniq_commits,
+        "openspec_change": openspec_change,
+        "openspec_path": openspec_rel,
+        "has_changes": bool(file_list or openspec_rel),
+    }
+
+
+async def _revert_ticket_changes(project_id: str, ticket_id: str, ticket_row: dict) -> dict:
+    """优先 Checkpoint 还原到 ticket_start；否则 Git 路径级回滚。"""
+    from git_manager import git_manager
+
+    project = await db.fetch_one("SELECT * FROM projects WHERE id = ?", (project_id,))
+    if project and project.get("git_repo_path"):
+        from git_manager import PROJECTS_DIR
+        default_path = str(PROJECTS_DIR / project_id)
+        if project["git_repo_path"] != default_path:
+            git_manager.set_project_path(project_id, project["git_repo_path"])
+
+    mode = (project or {}).get("mode", "auto") if project else "auto"
+    title = (ticket_row.get("title") or ticket_id)[:40]
+
+    # ── 1) Checkpoint 主路径 ────────────────────────────────
+    try:
+        from checkpoint.service import checkpoint_service
+        cp_prev = await checkpoint_service.preview_restore_to_start(ticket_id)
+        if cp_prev.get("has_checkpoint") and cp_prev.get("file_count", 0) > 0:
+            result = await checkpoint_service.restore_to_ticket_start(
+                project_id, ticket_id,
+                commit=(mode != "manual"),
+                message=f"[Operator] restore checkpoint (cancel): {title} ({ticket_id[-8:]})",
+            )
+            result.setdefault("strategy", "checkpoint")
+            if mode == "manual":
+                result["manual_mode"] = True
+            return result
+        if cp_prev.get("has_checkpoint") and not cp_prev.get("file_count"):
+            plan0 = await _build_ticket_revert_plan(project_id, ticket_id)
+            if not plan0.get("has_changes"):
+                return {
+                    "ok": True, "strategy": "checkpoint",
+                    "checkpoint_id": cp_prev.get("checkpoint_id"),
+                    "restored": [], "deleted": [], "files": [], "file_count": 0,
+                }
+    except Exception as e:
+        logger.warning("Checkpoint 还原失败，回退 Git: %s", e, exc_info=True)
+
+    # ── 2) Git 兜底 ─────────────────────────────────────────
+    plan = await _build_ticket_revert_plan(project_id, ticket_id)
+    out = {
+        "ok": True,
+        "strategy": "git",
+        "files": plan["files"],
+        "restored": [],
+        "deleted": [],
+        "skipped": [],
+        "errors": [],
+        "openspec_removed": False,
+        "commit_hash": None,
+        "base_ref": None,
+    }
+
+    if not git_manager.repo_exists(project_id):
+        out["ok"] = False
+        out["errors"].append("仓库不存在，跳过文件回滚")
+        return out
+
+    base_ref = None
+    if plan["commits"]:
+        first = plan["commits"][0]["hash"]
+        repo_dir = str(git_manager._repo_path(project_id))
+        rc, parent, _ = await git_manager._run_git(repo_dir, "rev-parse", f"{first}^")
+        if rc == 0 and parent:
+            base_ref = parent.strip()
+
+    paths = list(plan["files"])
+    if plan.get("openspec_path") and plan["openspec_path"] not in paths:
+        paths.append(plan["openspec_path"])
+
+    if not paths:
+        out["ok"] = True
+        return out
+
+    gr = await git_manager.revert_paths(
+        project_id,
+        paths,
+        base_ref=base_ref,
+        commit=(mode != "manual"),
+        message=f"[Operator] revert(cancel): {title} ({ticket_id[-8:]})",
+        author="Operator",
+    )
+    out["restored"] = gr.get("restored") or []
+    out["deleted"] = gr.get("deleted") or []
+    out["skipped"] = gr.get("skipped") or []
+    out["errors"].extend(gr.get("errors") or [])
+    out["commit_hash"] = gr.get("commit_hash")
+    out["base_ref"] = gr.get("base_ref")
+    out["openspec_removed"] = bool(
+        plan.get("openspec_path") and (
+            plan["openspec_path"] in out["deleted"]
+            or plan["openspec_path"] in out["restored"]
+        )
+    )
+    if mode == "manual" and (out["restored"] or out["deleted"]):
+        out["manual_mode"] = True
+    if gr.get("errors") and not (out["restored"] or out["deleted"]):
+        out["ok"] = False
+
+    return out
 
 
 # ==================== 直接创建独立工单 ====================
@@ -912,6 +1320,15 @@ def _classify_tier(item: dict) -> str:
         return "primary"
     # 状态变更 → primary
     if item.get("from_status") or item.get("to_status"):
+        return "primary"
+    # Checkpoint：写前增量进详细日志；起点/阶段边界留主轴（可还原）
+    if action == "checkpoint":
+        trigger = (item.get("_detail") or {}).get("trigger") or ""
+        if trigger == "before_write":
+            return "secondary"
+        return "primary"
+    # 还原/回滚是人工操作，必须上主轴
+    if action in ("checkpoint_restore", "revert"):
         return "primary"
     # 步骤完成 → primary
     if action == "skill_step_done":
