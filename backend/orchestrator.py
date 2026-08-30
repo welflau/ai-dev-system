@@ -1261,6 +1261,21 @@ class TicketOrchestrator:
             if not ticket:
                 return
 
+            # Checkpoint：工单处理起点锚点 + 写上下文（供 git_manager 写钩子读取）
+            try:
+                from checkpoint import set_checkpoint_context
+                from checkpoint.service import checkpoint_service
+                from capability_check import _get_repo_path
+                _repo = await _get_repo_path(project_id)
+                set_checkpoint_context(
+                    project_id=project_id, ticket_id=ticket_id,
+                    agent_type="Orchestrator", action="process_ticket",
+                    repo_path=_repo or "",
+                )
+                await checkpoint_service.ensure_ticket_start(project_id, ticket_id)
+            except Exception as _cpe:
+                logger.debug("ticket_start checkpoint 跳过: %s", _cpe)
+
             # 检查需求是否被暂停或取消
             requirement = await db.fetch_one(
                 "SELECT status FROM requirements WHERE id = ?",
@@ -1641,6 +1656,18 @@ class TicketOrchestrator:
             # 处理结果
             await self._handle_agent_result(project_id, ticket_id, ticket, agent_name, action, result)
 
+            # Checkpoint：成功跑完一轮后打阶段边界（时间轴可「还原到此」）
+            try:
+                if isinstance(result, dict) and result.get("status") != "error":
+                    from checkpoint.service import checkpoint_service
+                    await checkpoint_service.create_phase_boundary(
+                        project_id, ticket_id,
+                        agent_type=agent_name, action=action,
+                        note=f"{agent_name}.{action} 完成",
+                    )
+            except Exception as _pbe:
+                logger.debug("phase_boundary checkpoint 跳过: %s", _pbe)
+
             # === 事件驱动：触发后续工单立即处理 ===
             updated = await db.fetch_one("SELECT status FROM tickets WHERE id = ?", (ticket_id,))
             if updated:
@@ -1667,6 +1694,12 @@ class TicketOrchestrator:
                 )
             except Exception as log_err:
                 logger.error("记录工单错误日志也失败了: %s", log_err)
+        finally:
+            try:
+                from checkpoint import clear_checkpoint_context
+                clear_checkpoint_context()
+            except Exception:
+                pass
 
     async def _handle_agent_result(
         self,
