@@ -18,12 +18,13 @@ BACKEND = ROOT / "backend"
 datas = [
     # 前端
     (str(ROOT / "frontend"),                 "frontend"),
-    # 后端数据目录
-    (str(BACKEND / "skills"),                "backend/skills"),
-    (str(BACKEND / "sop"),                   "backend/sop"),
-    (str(BACKEND / "templates"),             "backend/templates"),
-    (str(BACKEND / "knowledge_config.yaml"), "backend"),
-    (str(BACKEND / "mcp_servers.json"),      "backend"),
+    # 与 Python 包同级（skills.loader / sop / pack_installer 用 Path(__file__).parent）
+    (str(BACKEND / "skills"),                "skills"),
+    (str(BACKEND / "sop"),                   "sop"),
+    (str(BACKEND / "templates"),             "templates"),
+    (str(BACKEND / "config_packs"),          "config_packs"),
+    (str(BACKEND / "knowledge_config.yaml"), "."),
+    (str(BACKEND / "mcp_servers.json"),      "."),
     # 图标
     (str(ROOT / "assets"),                   "assets"),
 ]
@@ -51,6 +52,12 @@ hiddenimports = [
     "yaml",
     "dotenv",
     # 后端模块（相对导入）
+    "main",
+    "config",
+    "database",
+    "orchestrator",
+    "llm_client",
+    "agent_registry",
     "agents",
     "agents.chat_assistant",
     "agents.base",
@@ -65,6 +72,10 @@ hiddenimports = [
     "mcp_client",
     "event_bus",
     "session_logger",
+    "api",
+    "api.tickets",
+    "api.chat",
+    "api.projects",
     # pywebview 后端
     "webview",
     "webview.guilib",
@@ -92,7 +103,7 @@ a = Analysis(
         "scipy", "IPython", "jupyter",
     ],
     noarchive=False,
-    optimize=1,
+    optimize=0,
 )
 
 pyz = PYZ(a.pure)
@@ -107,7 +118,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=False,          # 无控制台窗口
+    console=False,          # 无控制台窗口；排查启动问题时可临时改 True
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
