@@ -38,6 +38,48 @@
 
 ---
 
+## 工单系统时序
+
+`User` → `Orchestrator` → `BaseAgent` → `Frontend`（代码实名，对标 AgentFlow 总览）：
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Orchestrator
+    participant BaseAgent
+    participant Frontend
+
+    User->>+Orchestrator: create ticket
+    Orchestrator-->>-User: ticket created
+
+    BaseAgent->>+Orchestrator: claim ticket
+    Orchestrator-->>-BaseAgent: dispatch action
+
+    BaseAgent->>Orchestrator: report progress
+    Orchestrator->>Frontend: publish status
+
+    BaseAgent->>+Orchestrator: report result
+    Orchestrator->>Orchestrator: handle result
+    Orchestrator->>Orchestrator: finalize
+    Orchestrator-->>-BaseAgent: ack
+
+    Frontend->>User: show board
+```
+
+| 图上短文案 | 代码实际调用 |
+|------------|--------------|
+| `create ticket` | `POST .../confirm-create-requirement` 或 `POST .../tickets/create-direct` |
+| `claim ticket` | `poll_loop` / `ticket_ready` → `process_ticket` → `_try_claim_ticket` |
+| `dispatch action` | `compose_sop(traits)[status]` → `{agent, action, next_status}` |
+| `publish status` | `event_manager.publish_to_project(..., "ticket_status_changed", ...)` |
+| `report result` | Agent return → `Orchestrator._handle_agent_result` |
+| `finalize` | `_finalize_openspec_after_done` / Checkpoint / merge |
+| `show board` | `frontend/app.js` 看板 + 时间轴 + `STATUS_LABELS` |
+
+完整路径（需求拆单 / 直接建单 / SOP 流水线 / 状态机）：见 [docs/20260817_01_ADS工单系统流程时序图.md](docs/20260817_01_ADS工单系统流程时序图.md)。
+
+---
+
 ## 核心功能
 
 ### 🤖 AI 助手（对标 Claude Code）
@@ -118,27 +160,61 @@ pip install -r requirements.txt
 
 ### 桌面版（推荐）
 
+技术方案：**pywebview + pystray** 包装现有 Web UI，PyInstaller 打包为 exe（详见 `dev-notes/2026-06-11_02_Desktop_桌面版封装.md`）。
+
 额外安装桌面依赖：
 
 ```bash
 pip install pywebview pystray
 ```
 
-双击运行或从项目根目录启动：
+从项目根目录启动（开发模式）：
 
 ```bash
 python desktop.py
 ```
 
-启动后自动弹出原生窗口，系统托盘常驻，支持最小化到后台。
+启动后自动弹出原生窗口，系统托盘常驻，支持最小化到后台。桌面版后端端口 **18000**（与开发服务 8000 不冲突）。
 
 ### 打包为 exe
 
 ```bash
 pip install pyinstaller
 pyinstaller desktop.spec
-# 输出：dist/AI-Dev-System/AI-Dev-System.exe
+# 输出：dist/AI-Dev-System/AI-Dev-System.exe（目录模式，约 230MB）
 ```
+
+默认 `desktop.spec` 中 `console=False`，**双击 exe 不会弹出命令行窗口**。
+
+### 带 log 窗口启动 / 查看日志
+
+| 方式 | 主进程 log | 后端 log |
+|------|------------|----------|
+| 双击 exe | 无窗口 → `desktop.log` | `desktop-backend-stdout.log` |
+| `python desktop.py` | 当前终端可见 | 同上（项目根目录） |
+| `console=True` 重打包后 exe | 控制台可见 | 同上（exe 同目录） |
+
+**开发模式（推荐排查问题）：**
+
+```bash
+python desktop.py
+```
+
+**实时跟踪后端 log（PowerShell）：**
+
+```powershell
+Get-Content desktop-backend-stdout.log -Wait -Tail 50
+```
+
+**打包带控制台窗口的 exe：** 将 `desktop.spec` 中 `console=False` 改为 `console=True`，重新执行 `pyinstaller desktop.spec`。
+
+日志文件（与 exe 或 `desktop.py` 同目录）：
+
+- `desktop.log` — 主进程（启动、托盘、服务就绪）
+- `desktop-backend-stdout.log` — 后端 uvicorn 输出
+- `desktop-backend-error.log` — 后端异常
+
+后端启动超时时，窗口内也会显示上述 log 末尾内容。
 
 ### 配置 LLM
 
