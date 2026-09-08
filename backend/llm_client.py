@@ -190,6 +190,7 @@ def _tools_to_action_protocol(tools: list) -> str:
         "### 触发时机",
         "- 用户明确说要新增功能/需求（「帮我做…」「创建一个…」「新增…」「我需要…功能」）→ 输出 `CONFIRM_REQUIREMENT` 指令块",
         "- 用户描述 Bug/报错/崩溃/功能异常 → 输出 `CONFIRM_BUG` 指令块",
+        "- 用户说「安装 UCP」「部署 UnrealClientProtocol」「装一下 UCP 插件」→ 先走本地 `INSTALL_UCP` / `deploy_ucp.py`；**仅本地失败后再** WebSearch",
         "- 其他指令按各自描述中的时机使用",
         "- **纯问答、解释代码、讨论方案时不输出任何指令块**",
         "- **每次回复最多输出一个指令块，放在回复末尾**",

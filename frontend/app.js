@@ -260,6 +260,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initLogPanel();
     initProjectNameListener();
     adsShell.init();
+    initChatBubbleContextMenu();
     // 刷新后恢复上次聊天页（项目/全局、会话、全屏）；无记录时默认全屏全局助手
     _restoreChatWorkspace().catch(e => {
         console.warn('[chat] restore workspace failed', e);
@@ -717,6 +718,7 @@ const adsShell = (() => {
             const onUp = () => {
                 document.removeEventListener('mousemove', onMove);
                 document.removeEventListener('mouseup', onUp);
+                window.removeEventListener('blur', onUp);
                 document.body.style.cursor = '';
                 document.body.style.userSelect = '';
                 _lsSet(KEYS.rightWidth, state.rightWidth);
@@ -725,6 +727,7 @@ const adsShell = (() => {
             document.body.style.userSelect = 'none';
             document.addEventListener('mousemove', onMove);
             document.addEventListener('mouseup', onUp);
+            window.addEventListener('blur', onUp);
         });
     }
 
@@ -14644,6 +14647,14 @@ function toggleChatPanel() {
     let startX = 0;
     let startWidth = 0;
 
+    const _endDrag = () => {
+        if (!isDragging) return;
+        isDragging = false;
+        document.getElementById('chatPanelResize')?.classList.remove('dragging');
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+    };
+
     document.addEventListener('mousedown', (e) => {
         const handle = e.target.closest('#chatPanelResize');
         if (!handle) return;
@@ -14668,13 +14679,8 @@ function toggleChatPanel() {
         document.documentElement.style.setProperty('--chat-panel-width', newWidth + 'px');
     });
 
-    document.addEventListener('mouseup', () => {
-        if (!isDragging) return;
-        isDragging = false;
-        document.getElementById('chatPanelResize')?.classList.remove('dragging');
-        document.body.style.cursor = '';
-        document.body.style.userSelect = '';
-    });
+    document.addEventListener('mouseup', _endDrag);
+    window.addEventListener('blur', _endDrag);
 })();
 
 /**
@@ -15596,13 +15602,23 @@ async function _sendChatStreaming(url, body) {
     // 流结束：取消节流，完整 Markdown 渲染
     if (_renderTimer) { clearTimeout(_renderTimer); _renderTimer = null; }
 
+    document.getElementById('chatTyping')?.remove();
+
     const _willFlushMcp = (typeof _pendingMcpCards !== 'undefined' && _pendingMcpCards.length > 0);
     const _actionCardHtml = finalAction ? _buildAnyActionCardHtml(finalAction) : '';
+    const _confirmCardInBubble = bubbleWrapper.isConnected
+        ? bubbleWrapper.querySelector('.chat-confirm-project-card') : null;
     const _hasActionCard = !!(!_actionCardHtml ? false : _actionCardHtml === '__rendered__' || _actionCardHtml);
-    // 无正文 + 仅有确认卡：去掉「操作已完成。」空助手气泡（卡由下方插入或 MCP flush 展示）
-    const _dropEmptyStreamBubble = !fullText.trim() && (_willFlushMcp || _hasActionCard) && !_roundsPanel;
+    // 无正文 + 仅有确认卡：去掉空助手气泡；但 confirm_project 已渲染进 bubble 时不能 remove 整颗 wrapper
+    const _dropEmptyStreamBubble = !fullText.trim()
+        && (_willFlushMcp || (_hasActionCard && !_confirmCardInBubble))
+        && !_roundsPanel;
     if (_dropEmptyStreamBubble) {
         bubbleWrapper.remove();
+    } else if (!fullText.trim() && _confirmCardInBubble) {
+        bubbleWrapper.querySelector('._stream-bubble')?.remove();
+        bubbleWrapper.classList.remove('_streaming');
+        bubbleWrapper.style.display = '';
     } else {
         bubbleEl.innerHTML = formatChatContent(fullText || (_hasActionCard || _willFlushMcp ? '' : '操作已完成。'));
         bubbleWrapper.classList.remove('_streaming');
@@ -15679,6 +15695,10 @@ async function _sendChatStreaming(url, body) {
             }
         }
         // '__rendered__'：已由 _buildAnyActionCardHtml / _renderConfirmProjectCard 直接渲染
+        if (_actionCardHtml === '__rendered__' && finalAction?.type === 'confirm_project'
+            && !document.querySelector('#chatMessages .chat-confirm-project-card')) {
+            _renderConfirmProjectCard(finalAction);
+        }
     } else if (bubbleWrapper.isConnected) {
         const timeEl = bubbleWrapper.querySelector('.chat-msg-time');
         if (timeEl) timeEl.textContent = formatTime(new Date().toISOString());
@@ -18181,12 +18201,118 @@ function _buildAnyActionCardHtml(action) {
     return '';
 }
 
+/** 确认创建项目卡：Traits 行（含重新识别按钮） */
+function _buildConfirmProjectTraitsRowHtml(cardId, traitsArr, detectedTraits) {
+    const refreshBtn = `<button type="button" class="btn btn-xs btn-outline confirm-traits-refresh"
+        onclick="refreshConfirmProjectTraits('${cardId}')" title="重新扫描本地目录识别 traits">🔄 重新识别</button>`;
+    const chips = (traitsArr || []).map(t =>
+        `<code class="mcp-tool-tag" style="background:rgba(163,113,247,0.1); border-color:rgba(163,113,247,0.4);">${escHtml(t)}</code>`
+    ).join('');
+    let hint = '';
+    if (!(traitsArr || []).length && Array.isArray(detectedTraits) && detectedTraits.length) {
+        const top = detectedTraits.slice(0, 5).map(t =>
+            `<div style="font-size:10px;color:var(--text-muted);margin-top:2px;">· ${escHtml(t.trait)} (${Math.round((t.confidence || 0) * 100)}%) ${escHtml(t.evidence || '')}</div>`
+        ).join('');
+        hint = `<div style="margin-top:4px;">${top}${detectedTraits.length > 5 ? '<div style="font-size:10px;color:var(--text-muted);">…</div>' : ''}</div>`;
+    }
+    if ((traitsArr || []).length) {
+        return `<div id="traitsRow_${cardId}" class="confirm-req-meta" style="margin-top:6px; display:flex; flex-wrap:wrap; align-items:center; gap:4px 6px;">
+            <span style="flex:0 0 auto;">🏷 Traits:</span>
+            ${chips}
+            ${refreshBtn}
+        </div>`;
+    }
+    return `<div id="traitsRow_${cardId}" class="confirm-req-meta" style="margin-top:6px;">
+        <div style="display:flex; flex-wrap:wrap; align-items:center; gap:6px;">
+            <span style="color:var(--warning, #f59e0b); font-size:11px;">⚠️ 未识别到 traits</span>
+            ${refreshBtn}
+        </div>
+        ${hint}
+    </div>`;
+}
+
+function _traitsFromScanResult(scan) {
+    let traits = scan?.traits || [];
+    if (!traits.length && Array.isArray(scan?.detected_traits) && scan.detected_traits.length) {
+        traits = [...new Set(
+            scan.detected_traits.filter(t => (t.confidence || 0) >= 0.5).map(t => t.trait)
+        )];
+    }
+    return traits;
+}
+
+function _applyConfirmProjectTraits(card, scan) {
+    if (!card || !scan) return [];
+    const traits = _traitsFromScanResult(scan);
+    card.dataset.traits = JSON.stringify(traits);
+    if (scan.suggested_preset) card.dataset.presetId = scan.suggested_preset;
+    if (scan.tech_stack) card.dataset.techStack = scan.tech_stack;
+    const row = document.getElementById(`traitsRow_${card.id}`);
+    if (row) {
+        row.outerHTML = _buildConfirmProjectTraitsRowHtml(card.id, traits, scan.detected_traits || []);
+    }
+    return traits;
+}
+
+/** 重新扫描本地目录，刷新 confirm_project 卡上的 traits 与预计组装预览 */
+async function refreshConfirmProjectTraits(cardId) {
+    const card = document.getElementById(cardId);
+    if (!card || card.dataset.scanningTraits === '1') return;
+    const path = (card.dataset.localRepoPath || '').trim();
+    if (!path) {
+        showToast('无本地路径，无法识别 traits', 'warning');
+        return;
+    }
+    card.dataset.scanningTraits = '1';
+    const btn = card.querySelector('.confirm-traits-refresh');
+    const btnOrig = btn ? btn.innerHTML : '';
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = '识别中…';
+    }
+    try {
+        const scan = await api('/projects/scan-directory', { method: 'POST', body: { path } });
+        if (scan.already_exists) {
+            showToast(`项目已存在：${scan.project_name || scan.project_id}`, 'info');
+            return;
+        }
+        const traits = _applyConfirmProjectTraits(card, scan);
+        await loadProjectAssemblyPreview(cardId, traits);
+        showToast(
+            traits.length ? `已识别 ${traits.length} 个 traits` : '仍未识别到 traits，可创建后在项目设置手动补充',
+            traits.length ? 'success' : 'warning'
+        );
+    } catch (e) {
+        showToast(`traits 识别失败: ${e.message}`, 'error');
+    } finally {
+        card.dataset.scanningTraits = '0';
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = btnOrig || '🔄 重新识别';
+        }
+    }
+}
+
 /** 流式结束后直接渲染 confirm_project 卡片（带 setTimeout 副作用）*/
 function _renderConfirmProjectCard(action) {
-    // 找到最后一个 assistant 消息气泡的 .chat-msg-content
-    const msgs = document.querySelectorAll('#chatMessages .chat-msg.assistant .chat-msg-content');
-    const contentEl = msgs.length ? msgs[msgs.length - 1] : null;
-    if (!contentEl) return;
+    // 找到最后一个 assistant 消息气泡的 .chat-msg-content（优先流式 wrapper，排除仅含 typing 的占位）
+    const msgs = [...document.querySelectorAll('#chatMessages .chat-msg.assistant .chat-msg-content')]
+        .filter(el => el.id !== 'chatTyping' && !el.closest('#chatTyping'));
+    let contentEl = msgs.length ? msgs[msgs.length - 1] : null;
+    if (!contentEl) {
+        const container = document.getElementById('chatMessages');
+        if (!container) return false;
+        const bubble = document.createElement('div');
+        bubble.className = 'chat-msg assistant';
+        bubble.innerHTML = `
+            ${_buildAssistantAvatar()}
+            <div class="chat-msg-content">
+                <div class="chat-msg-time"></div>
+            </div>`;
+        container.appendChild(bubble);
+        contentEl = bubble.querySelector('.chat-msg-content');
+    }
+    if (!contentEl) return false;
 
     const safeId = _nextCardId('proj_confirm');
     const traitsArr = Array.isArray(action.traits) ? action.traits : [];
@@ -18215,12 +18341,11 @@ function _renderConfirmProjectCard(action) {
             </div>
         </div>` : '';
 
-    const traitChips = traitsArr.length
-        ? `<div class="confirm-req-meta" style="margin-top:6px; display:flex; flex-wrap:wrap; align-items:center; gap:4px 6px;">
-             <span style="flex:0 0 auto;">🏷 Traits:</span>
-             ${traitsArr.map(t => `<code class="mcp-tool-tag" style="background:rgba(163,113,247,0.1); border-color:rgba(163,113,247,0.4);">${escHtml(t)}</code>`).join('')}
-           </div>`
-        : '<div class="confirm-req-meta" style="color:var(--warning, #f59e0b); font-size:11px;">⚠️ 未识别到 traits</div>';
+    const traitChips = _buildConfirmProjectTraitsRowHtml(
+        safeId,
+        traitsArr,
+        action.detected_traits || action.scan_result?.detected_traits || []
+    );
     const presetBadge = action.preset_id
         ? `<div class="confirm-req-meta" style="font-size:11px; color:var(--text-muted);">📦 Preset: ${escHtml(action.preset_id)}</div>`
         : '';
@@ -18323,6 +18448,7 @@ function _renderConfirmProjectCard(action) {
         }, 100);
     }
     scrollChatToBottom();
+    return true;
 }
 
 /** 构建批量需求卡片 HTML */
@@ -18642,12 +18768,11 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
         const safeId = _nextCardId('proj_confirm');
         const traitsArr = Array.isArray(action.traits) ? action.traits : [];
         const traitsJsonAttr = escapeHtml(JSON.stringify(traitsArr));
-        const traitChips = traitsArr.length
-            ? `<div class="confirm-req-meta" style="margin-top:6px; display:flex; flex-wrap:wrap; align-items:center; gap:4px 6px;">
-                 <span style="flex:0 0 auto;">🏷 Traits:</span>
-                 ${traitsArr.map(t => `<code class="mcp-tool-tag" style="background:rgba(163,113,247,0.1); border-color:rgba(163,113,247,0.4);">${escapeHtml(t)}</code>`).join('')}
-               </div>`
-            : '<div class="confirm-req-meta" style="color:var(--warning, #f59e0b); font-size:11px;">⚠️ 未带 traits</div>';
+        const traitChips = _buildConfirmProjectTraitsRowHtml(
+            safeId,
+            traitsArr,
+            action.detected_traits || action.scan_result?.detected_traits || []
+        );
         const presetBadge = action.preset_id
             ? `<div class="confirm-req-meta" style="font-size:11px; color:var(--text-muted);">📦 Preset: ${escapeHtml(action.preset_id)}</div>`
             : '';
@@ -18845,7 +18970,7 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
           ).join('')}</div>`
         : '';
 
-    // assistant 消息底部工具栏（复制 + 保存为文件 + 保存到仓库）
+    // assistant 消息底部工具栏（复制 + 保存为文件 + 保存到仓库）；用户气泡不显示工具栏，直接拖选复制
     const toolbarHtml = (role === 'assistant' && content && content.trim())
         ? `<div class="chat-bubble-toolbar">
             <button class="chat-bubble-tool-btn" onclick="copyChatBubble(this)" title="复制内容">
@@ -19318,10 +19443,15 @@ async function doConfirmProject(cardId) {
         });
         card.style.borderLeftColor = 'var(--success, #34d058)';
         card.querySelector('.action-title').textContent = '✅ 项目已创建';
+        const ucp = result.ucp_deploy;
+        const ucpHint = ucp?.installed
+            ? `<div class="confirm-ucp-hint" style="margin-top:6px;font-size:12px;color:var(--text-muted)">${escHtml(ucp.message || 'UCP 插件已部署')}</div>`
+            : '';
         if (btns) {
-            btns.innerHTML = `<span class="action-link" onclick="showProjectDetail('${escHtml(result.project_id || '')}')">进入项目 →</span>`;
+            btns.innerHTML = `${ucpHint}<span class="action-link" onclick="showProjectDetail('${escHtml(result.project_id || '')}')">进入项目 →</span>`;
         }
-        showToast(`项目「${result.name || name}」已创建（${mode === 'manual' ? '手动挡' : '自动挡'}）`, 'success');
+        const toastExtra = ucp?.installed ? ` · ${ucp.message || 'UCP 已部署'}` : '';
+        showToast(`项目「${result.name || name}」已创建（${mode === 'manual' ? '手动挡' : '自动挡'}）${toastExtra}`, 'success');
 
         const msgId = card.dataset.messageId || '';
         if (msgId) {
@@ -19369,6 +19499,113 @@ function copyChatBubble(btn) {
         btn.style.color = 'var(--success, #34d058)';
         setTimeout(() => { btn.innerHTML = orig; btn.style.color = ''; }, 2000);
     }).catch(() => showToast('复制失败', 'error'));
+}
+
+function _hideChatBubbleContextMenu() {
+    document.getElementById('chatBubbleCtxMenu')?.remove();
+}
+
+function _selectChatBubbleContents(bubble) {
+    if (!bubble) return;
+    const range = document.createRange();
+    range.selectNodeContents(bubble);
+    const sel = window.getSelection();
+    if (!sel) return;
+    sel.removeAllRanges();
+    sel.addRange(range);
+}
+
+function _showChatBubbleContextMenu(x, y, opts) {
+    _hideChatBubbleContextMenu();
+    const selected = (opts.selectedText || '').trim();
+    const fullText = (opts.fullText || '').trim();
+    const menu = document.createElement('div');
+    menu.id = 'chatBubbleCtxMenu';
+    menu.className = 'chat-bubble-ctx-menu';
+    const items = [
+        {
+            label: '复制',
+            disabled: !selected,
+            run: () => navigator.clipboard.writeText(selected),
+        },
+        {
+            label: '复制全部',
+            disabled: !fullText,
+            run: () => navigator.clipboard.writeText(fullText),
+        },
+        {
+            label: '全选',
+            disabled: !fullText,
+            run: async () => { _selectChatBubbleContents(opts.bubble); },
+        },
+    ];
+    menu.innerHTML = items.map((it, i) =>
+        `<button type="button" class="chat-bubble-ctx-item" data-idx="${i}"${it.disabled ? ' disabled' : ''}>${escHtml(it.label)}</button>`
+    ).join('');
+    document.body.appendChild(menu);
+    const pad = 6;
+    const mw = menu.offsetWidth;
+    const mh = menu.offsetHeight;
+    const left = Math.min(x, window.innerWidth - mw - pad);
+    const top = Math.min(y, window.innerHeight - mh - pad);
+    menu.style.left = `${Math.max(pad, left)}px`;
+    menu.style.top = `${Math.max(pad, top)}px`;
+    menu.querySelectorAll('.chat-bubble-ctx-item').forEach(btn => {
+        btn.addEventListener('click', async (ev) => {
+            ev.stopPropagation();
+            const item = items[+btn.dataset.idx];
+            if (!item || item.disabled) return;
+            try {
+                await item.run();
+                if (item.label !== '全选') showToast('已复制', 'success');
+            } catch {
+                showToast('复制失败', 'error');
+            }
+            _hideChatBubbleContextMenu();
+        });
+    });
+}
+
+/** 聊天气泡：选中文字后右键复制（桌面 WebView 常无系统菜单） */
+function initChatBubbleContextMenu() {
+    if (document.body.dataset.chatBubbleCtxBound === '1') return;
+    document.body.dataset.chatBubbleCtxBound = '1';
+
+    const bubbleFromEvent = (target) => {
+        const bubble = target?.closest?.('.chat-msg-bubble');
+        if (!bubble) return null;
+        if (bubble.closest('#chatMessages, #groupChatMessages, .chat-messages, .chat-split-pane')) return bubble;
+        return null;
+    };
+
+    document.addEventListener('contextmenu', (e) => {
+        const bubble = bubbleFromEvent(e.target);
+        if (!bubble) return;
+        e.preventDefault();
+        e.stopPropagation();
+        const sel = window.getSelection();
+        let selectedText = '';
+        if (sel && sel.rangeCount && !sel.isCollapsed) {
+            const anchor = sel.anchorNode;
+            const focus = sel.focusNode;
+            if (bubble.contains(anchor) && bubble.contains(focus)) {
+                selectedText = sel.toString();
+            }
+        }
+        _showChatBubbleContextMenu(e.clientX, e.clientY, {
+            bubble,
+            selectedText,
+            fullText: bubble.innerText || bubble.textContent || '',
+        });
+    });
+
+    document.addEventListener('mousedown', (e) => {
+        if (!e.target.closest('#chatBubbleCtxMenu')) _hideChatBubbleContextMenu();
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') _hideChatBubbleContextMenu();
+    });
+    window.addEventListener('blur', _hideChatBubbleContextMenu);
 }
 
 /** 保存气泡内容为 Markdown 文件到项目仓库 */

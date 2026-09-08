@@ -7,6 +7,26 @@ description: Interact with the running Unreal Engine editor via TCP bridge. Use 
 
 Communicate with a running UE editor through the UnrealClientProtocol TCP plugin. UCP exposes a single command — call any UFunction on any UObject via JSON. All functionality is provided through Blueprint Function Libraries that you invoke this way.
 
+## Installation（插件未装时）
+
+UCP **不是** MCP 工具，而是要复制到工程 `Plugins/` 的 C++ 插件。
+
+检查：`Plugins/UnrealClientProtocol/UnrealClientProtocol.uplugin` 是否存在。
+
+安装（在项目根目录执行其一）：
+
+```powershell
+# 优先：项目已安装 ue5-prod-skills pack
+python .codebuddy/packs/ue5-prod-skills/scripts/deploy_ucp.py --project-path .
+
+# 或直接用 ADS 仓库脚本
+python F:/A_Works/ai-dev-system/backend/config_packs/ue5-prod-skills/shared/scripts/deploy_ucp.py --project-path .
+```
+
+安装后：**重启 UE Editor**，Edit → Plugins 确认 UnrealClientProtocol 已启用（监听 TCP 9876）。
+
+在 ADS 网页助手里也可以说「安装 UCP」调用 `install_ucp` tool；CodeBuddy CLI 请用上面的脚本。
+
 ## Invocation
 
 When you read this SKILL.md, you already know its absolute path. Replace the filename with `scripts/UCP.py` to get UCP.py's path. For example, if this file is at `X/Skills/unreal-client-protocol/SKILL.md`, then UCP.py is at `X/Skills/unreal-client-protocol/scripts/UCP.py`. **Do NOT search or glob for UCP.py.**

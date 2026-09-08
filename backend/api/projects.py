@@ -234,6 +234,15 @@ async def create_project(req: ProjectCreate):
         except Exception as e:
             logger.debug("自动初始化 .ads/ 失败（忽略）: %s", e)
 
+        # UE 项目：自动部署 UCP 插件
+        ucp_deploy = None
+        try:
+            from ue_ucp_deploy import deploy_ucp_to_project, is_ue_project_path
+            if is_ue_project_path(repo_path, traits_list):
+                ucp_deploy = deploy_ucp_to_project(repo_path)
+        except Exception as e:
+            logger.warning("UCP 自动部署异常: %s", e)
+
         # P4: 读取 .ads/config.json，覆盖 traits 等配置
         try:
             _ads_cfg = _load_ads_config(repo_path)
@@ -265,11 +274,26 @@ async def create_project(req: ProjectCreate):
             project_id, req.name, req.description or ""
         ))
 
-        return {
+        # 非 UE：写入破冰方向卡（UE 仍走对话里的 propose_ue_framework）
+        try:
+            is_ue = any(str(t).startswith("engine:ue") for t in traits_list)
+            if not is_ue:
+                from actions.chat.propose_project_icebreak import persist_project_icebreak
+                await persist_project_icebreak(
+                    project_id, req.name, req.description or "",
+                    traits_list, req.tech_stack or "",
+                )
+        except Exception as e:
+            logger.warning("项目破冰写入失败: %s", e)
+
+        resp = {
             "id": project_id,
             **data,
             "push_success": push_success,
         }
+        if ucp_deploy is not None:
+            resp["ucp_deploy"] = ucp_deploy
+        return resp
 
     except Exception as e:
         error_detail = traceback.format_exc()
@@ -806,6 +830,69 @@ async def set_push_remote(project_id: str, body: dict):
 
     remotes = json.loads(project.get("git_remotes") or "[]")
     return await _remotes_response(project_id, remote_name)
+
+
+def _push_fail_http(project_id: str):
+    st = git_manager.get_last_push_status(project_id) or {}
+    msg = st.get("summary") or "推送失败"
+    if st.get("next_step"):
+        msg += " " + st["next_step"]
+    raise HTTPException(400, msg)
+
+
+@router.post("/{project_id}/git/push")
+async def git_push_now(project_id: str, body: dict = None):
+    """用户手动推送（允许推 main）。可选 pull_first=true 先拉取再推。"""
+    project = await db.fetch_one("SELECT * FROM projects WHERE id = ?", (project_id,))
+    if not project:
+        raise HTTPException(404, "项目不存在")
+    _ensure_git_path(project)
+    body = body or {}
+    if body.get("pull_first"):
+        await git_manager.pull(project_id)
+    ok = await git_manager.push(project_id, allow_protected=True)
+    if not ok:
+        _push_fail_http(project_id)
+    return {"status": "ok", "pushed": True}
+
+
+@router.post("/{project_id}/git/ensure-github-and-push")
+async def git_ensure_github_and_push(project_id: str):
+    """远端不存在或未配置时：创建 GitHub 仓库、设 remote，再推送。"""
+    project = await db.fetch_one("SELECT * FROM projects WHERE id = ?", (project_id,))
+    if not project:
+        raise HTTPException(404, "项目不存在")
+    _ensure_git_path(project)
+
+    url = (project.get("git_remote_url") or "").strip()
+    if url:
+        from actions.chat.create_project import _ensure_github_repo_exists
+        await _ensure_github_repo_exists(url, project["name"])
+        await git_manager.set_remote(project_id, url)
+    else:
+        from actions.chat.create_github_repo import CreateGithubRepoAction
+        import re as _re
+        safe = _re.sub(r"[^a-zA-Z0-9_\-]", "-", project["name"] or "").strip("-") or "new-project"
+        result = await CreateGithubRepoAction().run({
+            "repo_name": safe,
+            "description": project.get("description") or project["name"],
+            "private": False,
+        })
+        if not result.success:
+            raise HTTPException(400, result.error or "创建 GitHub 仓库失败（请先 gh auth login）")
+        url = (result.data or {}).get("clone_url") or (result.data or {}).get("html_url") or ""
+        if not url:
+            raise HTTPException(400, "GitHub 仓库已创建但未返回 URL")
+        await git_manager.set_remote(project_id, url)
+        await db.update("projects", {
+            "git_remote_url": url,
+            "updated_at": now_iso(),
+        }, "id = ?", (project_id,))
+
+    ok = await git_manager.push(project_id, allow_protected=True)
+    if not ok:
+        _push_fail_http(project_id)
+    return {"status": "ok", "pushed": True, "remote_url": url}
 
 
 @router.get("/{project_id}/git/tree")
@@ -1886,12 +1973,22 @@ async def scan_directory(body: dict):
         detection = await detector.run({"repo_path": local_path})
         det_data = detection.data if detection.success else {}
         candidates = det_data.get("candidates", [])
+        result["detected_traits"] = [
+            {
+                "trait": c["trait"],
+                "confidence": c.get("confidence", 0),
+                "evidence": c.get("evidence", ""),
+            }
+            for c in candidates
+        ]
+        result["trait_warnings"] = det_data.get("warnings") or []
         suggested_traits = [c["trait"] for c in candidates if c.get("confidence", 0) >= 0.7]
         result["traits"] = suggested_traits
         result["suggested_preset"] = det_data.get("suggested_preset")
         result["tech_stack"] = _infer_tech_stack(suggested_traits)
     except Exception as e:
         result["traits"] = []
+        result["detected_traits"] = []
         result["traits_warning"] = str(e)
 
     # ── 6. 推荐模式 ──────────────────────────────────────

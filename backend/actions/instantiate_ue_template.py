@@ -452,17 +452,14 @@ class InstantiateUETemplateAction(ActionBase):
         # v0.20 UCP：若用户选择启用编辑态 AI 控制，复制 UCP 插件到 Plugins/
         ucp_installed = False
         if context.get("install_ucp"):
-            ucp_src = Path(__file__).parent.parent / "ue_plugins" / "UnrealClientProtocol"
-            if ucp_src.is_dir():
-                import shutil as _shutil
-                ucp_dst = target / "Plugins" / "UnrealClientProtocol"
-                ucp_dst.parent.mkdir(parents=True, exist_ok=True)
-                _shutil.copytree(str(ucp_src), str(ucp_dst), dirs_exist_ok=True)
-                ucp_installed = True
-                notes.append("UCP 插件已复制到 Plugins/UnrealClientProtocol（请重启 Editor 完成编译）")
+            from ue_ucp_deploy import deploy_ucp_to_project
+            ucp_result = deploy_ucp_to_project(str(target))
+            ucp_installed = bool(ucp_result.get("installed"))
+            if ucp_installed:
+                notes.append(ucp_result.get("message", "UCP 插件已部署"))
                 await _log("[ucp] UnrealClientProtocol 插件已复制到 Plugins/")
             else:
-                await _log("[ucp] 警告：ue_plugins/UnrealClientProtocol 快照不存在，跳过安装")
+                await _log(f"[ucp] 警告：{ucp_result.get('message', 'UCP 部署跳过')}")
 
         return ActionResult(
             success=True,

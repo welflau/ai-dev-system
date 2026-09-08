@@ -280,6 +280,15 @@ class CreateProjectAction(ActionBase):
 
             logger.info("AI助手创建项目完成: %s (%s)", name, project_id)
 
+            # UE 项目：自动部署 UCP 插件到 Plugins/UnrealClientProtocol
+            ucp_deploy = None
+            try:
+                from ue_ucp_deploy import deploy_ucp_to_project, is_ue_project_path
+                if is_ue_project_path(repo_path, traits):
+                    ucp_deploy = deploy_ucp_to_project(repo_path)
+            except Exception as e:
+                logger.warning("UCP 自动部署异常: %s", e)
+
             # 异步生成初版 Roadmap（fire-and-forget）
             from api.milestones import generate_roadmap_for_project
             asyncio.create_task(generate_roadmap_for_project(project_id, name, description))
@@ -297,7 +306,8 @@ class CreateProjectAction(ActionBase):
             # v0.19.1 对话一键流：UE 项目自动弹 propose 方案卡，持久化到项目聊天
             # 前端跳转到项目详情后，loadChatHistory 自然能拿到这条消息，无需前端再串 API。
             auto_next: Optional[Dict[str, Any]] = None
-            is_ue_project = any(t.startswith("engine:ue") for t in traits)
+            from ue_ucp_deploy import is_ue_project_path
+            is_ue_project = is_ue_project_path(repo_path, traits)
             if is_ue_project:
                 try:
                     from actions.chat.propose_ue_framework import ProposeUEFrameworkAction
@@ -330,6 +340,14 @@ class CreateProjectAction(ActionBase):
                         )
                 except Exception as e:
                     logger.warning("UE auto-propose 异常: %s", e)
+            else:
+                try:
+                    from actions.chat.propose_project_icebreak import persist_project_icebreak
+                    auto_next = await persist_project_icebreak(
+                        project_id, name, description, traits, tech_stack,
+                    )
+                except Exception as e:
+                    logger.warning("项目破冰写入失败: %s", e)
 
             data = {
                 "type": "project_created",
@@ -345,6 +363,8 @@ class CreateProjectAction(ActionBase):
             }
             if auto_next:
                 data["auto_next"] = auto_next
+            if ucp_deploy is not None:
+                data["ucp_deploy"] = ucp_deploy
 
             return ActionResult(success=True, data=data)
 

@@ -37,6 +37,35 @@ from query_engine.executor import ToolExecutorProtocol
 
 logger = logging.getLogger("query_engine.engine")
 
+_SKIP_ERROR_KB_TOOLS = frozenset({
+    "search_knowledge", "web_search", "search_ticket_history",
+})
+
+
+async def _attach_error_playbooks(
+    content: str,
+    tool_name: str,
+    error_text: str,
+    context: Optional[Dict[str, Any]],
+) -> str:
+    """工具报错后自动检索知识库，把手册拼进下一轮 LLM 的 tool_result。"""
+    short = (tool_name or "").rsplit("__", 1)[-1]
+    if short in _SKIP_ERROR_KB_TOOLS:
+        return content
+    try:
+        from actions.chat.search_knowledge import format_playbooks_for_llm, lookup_error_playbook
+        hits = await lookup_error_playbook(
+            error_text or "",
+            (context or {}).get("project_id"),
+            tool_name=tool_name or "",
+        )
+        block = format_playbooks_for_llm(hits)
+        if block:
+            return f"{content}\n\n{block}"
+    except Exception as e:
+        logger.debug("报错知识库检索失败（忽略）: %s", e)
+    return content
+
 # args_hint 取值 key 映射（与 _ChatToolExecutor._emit_thinking 保持一致）
 _ARGS_HINT_KEY: Dict[str, str] = {
     "search_knowledge": "query", "search_ticket_history": "query",
@@ -455,7 +484,7 @@ class QueryEngine:
                 if full_cli_text:
                     yield ThinkingDoneEvent(text="")  # 折叠思考面板
 
-                # CLI 文本里解析 [ACTION:xxx]...[/ACTION] 标签
+                # CLI 文本里解析 [ACTION:xxx]...[/ACTION] 标签，并真正执行对应工具
                 _cli_action = None
                 _clean_text = full_cli_text
                 import re as _re_act, json as _json_act
@@ -465,25 +494,73 @@ class QueryEngine:
                 if _act_m:
                     _act_type = _act_m.group(1)
                     _act_body = _act_m.group(2).strip()
-                    # 尝试 JSON 解析，失败则用 key: value 格式解析
+                    _act_params: dict = {}
                     try:
-                        _cli_action = _json_act.loads(_act_body)
-                        _cli_action["type"] = _act_type
+                        _loaded = _json_act.loads(_act_body)
+                        if isinstance(_loaded, dict):
+                            _act_params = _loaded
                     except Exception:
-                        _parsed = {"type": _act_type}
                         for _line in _act_body.splitlines():
                             if ':' in _line:
                                 _k, _, _v = _line.partition(':')
                                 _k, _v = _k.strip(), _v.strip()
                                 if _k == "traits":
-                                    _parsed[_k] = [t.strip() for t in _v.split(',') if t.strip()]
+                                    _act_params[_k] = [t.strip() for t in _v.split(',') if t.strip()]
                                 elif _k:
-                                    _parsed[_k] = _v
-                        _cli_action = _parsed if len(_parsed) > 1 else None
+                                    _act_params[_k] = _v
+
                     # 从显示文本中去掉 action 块
                     _clean_text = _re_act.sub(
                         r'\[ACTION:\w+\][\s\S]*?\[/ACTION\]', '', full_cli_text
                     ).strip()
+
+                    # 真正执行 ADS 内置工具（install_ucp / confirm_* 等）
+                    _tool_name = _act_type.lower()
+                    try:
+                        yield ToolStartEvent(
+                            tool=_tool_name,
+                            input=_act_params,
+                            tool_use_id=f"action-{_tool_name}",
+                        )
+                        _t0 = __import__("time").time()
+                        _result_text, _action_data = await self.executor.execute(
+                            _tool_name, _act_params, context or {},
+                        )
+                        _elapsed = (__import__("time").time() - _t0) * 1000
+                        _summary = _format_result_summary(_tool_name, _result_text or "")
+                        thinking_steps.append({
+                            "tool": _tool_name,
+                            "args_hint": _extract_args_hint(_tool_name, _act_params),
+                            "summary": _summary,
+                            "duration_ms": round(_elapsed),
+                        })
+                        yield ToolDoneEvent(
+                            tool=_tool_name,
+                            summary=_summary,
+                            args_hint=_extract_args_hint(_tool_name, _act_params),
+                            duration_ms=_elapsed,
+                            result=_result_text or "",
+                            tool_use_id=f"action-{_tool_name}",
+                        )
+                        if _action_data and isinstance(_action_data, dict):
+                            _cli_action = _action_data
+                        else:
+                            # 无前端卡片时，把执行结果写进回复正文
+                            try:
+                                _parsed_res = _json_act.loads(_result_text) if (_result_text or "").strip().startswith("{") else {}
+                            except Exception:
+                                _parsed_res = {}
+                            _msg = ""
+                            if isinstance(_parsed_res, dict):
+                                _msg = _parsed_res.get("message") or _parsed_res.get("error") or ""
+                            if not _msg:
+                                _msg = (_result_text or "").strip()[:500]
+                            if _msg:
+                                _clean_text = ((_clean_text + "\n\n") if _clean_text else "") + _msg
+                    except Exception as _exec_err:
+                        logger.warning("CLI ACTION 执行失败 [%s]: %s", _tool_name, _exec_err)
+                        _cli_action = {"type": _act_type, **_act_params}
+                        _clean_text = ((_clean_text + "\n\n") if _clean_text else "") + f"执行 {_tool_name} 失败: {_exec_err}"
 
                 if _cli_action:
                     final_action = _cli_action
@@ -659,6 +736,12 @@ class QueryEngine:
                     )
                     duration_ms = (time.monotonic() - start_ts) * 1000
 
+                    # Orchestrator 适配器吞掉异常时，仍走报错知识库检索
+                    if isinstance(result_text, str) and result_text.startswith("工具执行失败"):
+                        result_text = await _attach_error_playbooks(
+                            result_text, tool_name, result_text, context
+                        )
+
                     # POST_TOOL_USE Hook（fail-open）
                     if self.hooks:
                         from hooks.types import HookEvent, ToolHookContext
@@ -722,10 +805,13 @@ class QueryEngine:
                     yield ToolErrorEvent(
                         tool=tool_name, error=str(e), duration_ms=duration_ms
                     )
+                    err_content = await _attach_error_playbooks(
+                        f"Error: {e}", tool_name, str(e), context
+                    )
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": tool_use_id,
-                        "content": f"Error: {e}",
+                        "content": err_content,
                         "is_error": True,
                     })
 

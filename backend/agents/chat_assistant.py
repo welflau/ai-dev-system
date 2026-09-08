@@ -56,6 +56,7 @@ from actions.ue_run_python import UERunPythonAction                        # B-0
 from actions.ue_blueprint_gen import BlueprintGenAction                    # B-1 Blueprint 生成
 from actions.ue_level_gen import LevelGenAction                            # B-2 關卡生成
 from actions.chat.install_project_skill import InstallProjectSkillAction   # 项目 Skill 安装/卸载
+from actions.chat.install_ucp import InstallUCPAction                         # UE UCP 插件部署
 from actions.chat.browse_marketplace import BrowseMarketplaceAction        # 浏览/安装/卸载市场 Skill
 from actions.chat.glob_search import GlobAction, GrepAction, ListDirectoryAction  # 文件系统搜索
 from actions.chat.web_search import WebSearchAction                        # 联网搜索
@@ -173,6 +174,7 @@ _TOOL_LABELS_PY: dict = {
     "read_files": "📄 批量读文件",
     "browse_marketplace": "🛒 浏览技能市场",
     "install_project_skill": "📦 安装 Skill",
+    "install_ucp": "🔌 安装 UCP",
     "manage_skill": "🔧 管理 Skill",
     "create_github_repo": "🐙 创建 GitHub 仓库",
     "set_session_flag": "🎛 调整 AI 行为设置",
@@ -491,6 +493,7 @@ class _ChatToolExecutor:
                 "shell": "command", "web_search": "query",
                 "save_memory": "title", "read_files": "paths",
                 "browse_marketplace": "dir_name", "install_project_skill": "dir_name",
+                "install_ucp": "action",
                 "manage_skill": "action",
                 "set_session_flag": "flag",
                 "dispatch_subtask": "title",
@@ -575,6 +578,7 @@ class ChatAssistantAgent(BaseAgent):
         BlueprintGenAction,            # B-1 Blueprint 生成
         LevelGenAction,                # B-2 關卡生成
         InstallProjectSkillAction,     # 对话中为项目安装/卸载 Marketplace Skill
+        InstallUCPAction,                # 对话中部署 UCP 插件到 Plugins/
         BrowseMarketplaceAction,       # 浏览/安装/卸载市场 Skill（系统级+项目级）
         LoadSkillAction,               # v0.20 主动触发：按需加载 Skill 全文
         # ── 新增工具（对标 Gemini CLI）──
@@ -628,7 +632,11 @@ class ChatAssistantAgent(BaseAgent):
             action_traits_cfg = getattr(action, "available_for_traits", None)
             if action_traits_cfg and traits is not None:
                 from actions.base import _match_traits
-                if not _match_traits(action_traits_cfg, set(traits)):
+                matched = _match_traits(action_traits_cfg, set(traits))
+                if not matched and repo_path and getattr(action, "expose_for_ue_repo", False):
+                    from ue_ucp_deploy import is_ue_project_path
+                    matched = is_ue_project_path(repo_path, traits)
+                if not matched:
                     continue
             schema = getattr(action, "tool_schema", None)
             if schema:
@@ -685,7 +693,9 @@ class ChatAssistantAgent(BaseAgent):
             project_traits = []
 
         _repo_path = project.get("git_repo_path") or ""
-        tools = self._exposed_tool_schemas(scope="project", traits=project_traits)
+        tools = self._exposed_tool_schemas(
+            scope="project", traits=project_traits, repo_path=_repo_path or None,
+        )
         tools += await self._get_mcp_schemas(traits=project_traits, repo_path=_repo_path or None)
 
         executor = _ChatToolExecutor(self, project["id"])
@@ -811,7 +821,9 @@ class ChatAssistantAgent(BaseAgent):
             project_traits = []
 
         _repo_path = project.get("git_repo_path") or ""
-        tools = self._exposed_tool_schemas(scope="project", traits=project_traits)
+        tools = self._exposed_tool_schemas(
+            scope="project", traits=project_traits, repo_path=_repo_path or None,
+        )
         tools += await self._get_mcp_schemas(traits=project_traits, repo_path=_repo_path or None)
         inner_executor = _ChatToolExecutor(self, project["id"], session_id=session_id)
         executor = ChatToolExecutorAdapter(inner_executor)
@@ -1633,6 +1645,14 @@ class ChatAssistantAgent(BaseAgent):
 如当前问题需要以上领域的深度规范知识，请先调用 load_skill 加载对应文档，再回答用户。不确定是否需要时可直接回答。
 """ if _skills_index else ""
         is_ue_project = any(t.startswith("engine:ue") for t in project_traits)
+        if not is_ue_project:
+            try:
+                from ue_ucp_deploy import is_ue_project_path
+                is_ue_project = is_ue_project_path(
+                    project.get("git_repo_path") or "", project_traits
+                )
+            except Exception:
+                pass
 
         traits_line = (
             f"- 项目特征：{', '.join(project_traits)}"
@@ -1641,7 +1661,14 @@ class ChatAssistantAgent(BaseAgent):
 
         ue_routing = ""
         if is_ue_project:
-            ue_routing = """
+            _repo_for_ucp = (project.get("git_repo_path") or "").replace("\\", "/")
+            _ucp_script = "F:/A_Works/ai-dev-system/backend/config_packs/ue5-prod-skills/shared/scripts/deploy_ucp.py"
+            _ucp_bash = (
+                f'python {_ucp_script} --project-path "{_repo_for_ucp}"'
+                if _repo_for_ucp
+                else f"python {_ucp_script} --project-path ."
+            )
+            ue_routing = f"""
 
 ## 🎮 UE 项目意图路由（优先级最高，在 confirm_requirement 之前判断）
 - "生成框架 / 创建骨架 / 初始化工程 / 基于 TP_* 模板 / 做个 FPS / TPS / TopDown 游戏 / 从模板开始" 等
@@ -1662,11 +1689,25 @@ class ChatAssistantAgent(BaseAgent):
 
 **触发方式**：直接用 Bash 调用 UBT：
 ```
-UnrealBuildTool.exe {ProjectName}Editor Win64 Development "{path/to/project.uproject}" -WaitMutex -FromMsBuild
+UnrealBuildTool.exe {{ProjectName}}Editor Win64 Development "{{path/to/project.uproject}}" -WaitMutex -FromMsBuild
 ```
 或使用项目内的 `ue_build.js` 脚本。
 
-**不要**等用户说"编译一下"才编译——这些操作后项目必然需要重新编译，应主动执行。"""
+**不要**等用户说"编译一下"才编译——这些操作后项目必然需要重新编译，应主动执行。
+
+## 🔌 UCP 插件（Editor 桥接）
+- 用户说「安装 UCP」「部署 UnrealClientProtocol」「装一下 UCP 插件」时，**本地优先、失败再联网**：
+  1. 先查本地：`Plugins/UnrealClientProtocol/UnrealClientProtocol.uplugin` 是否已存在；ADS 快照 / `deploy_ucp.py` / ACTION 协议是否可用
+  2. 本地可用时：直接在回复末尾输出（不要说「工具不可用」）：
+```
+[ACTION:INSTALL_UCP]
+{{"action":"install"}}
+[/ACTION]
+```
+     或 Bash：`{_ucp_bash}`
+  3. **仅当**本地路径都不存在、ACTION 执行失败、且脚本找不到 ADS 源码时，才允许 WebSearch / WebFetch 查找替代安装方式
+  4. 不要一上来就 ToolSearch「install_ucp」或联网搜插件文档——先走本地部署
+- 安装后提醒用户**重启 UE Editor**，Edit → Plugins 确认 UnrealClientProtocol 已启用"""
 
         # <!--CACHE_BOUNDARY--> 之前为稳定内容（Prompt Cache 命中），之后为动态内容（每次不同）
         # 稳定：Rules + 项目基本信息 + Skills + 能力描述
