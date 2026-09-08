@@ -2381,6 +2381,7 @@ class LLMClient:
           budget_exceeded（预算超限时）
         """
         ctx = _ctx_label()
+        history = list(messages)  # 不修改原始列表
 
         if not self.is_configured:
             yield {"type": "text_delta", "delta": "[LLM 未配置，无法回复]"}

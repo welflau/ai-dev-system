@@ -5,7 +5,7 @@ Agent = Role + Actions + State Machine
 """
 from abc import ABC, abstractmethod
 from enum import Enum
-from typing import Any, Dict, List, Type, Set
+from typing import Any, Dict, List, Optional, Type, Set
 import logging
 
 logger = logging.getLogger("agent.base")

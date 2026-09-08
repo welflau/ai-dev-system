@@ -978,8 +978,8 @@ class ChatAssistantAgent(BaseAgent):
                     return
                 elif isinstance(event, MessageDoneEvent):
                     # 手动挡：先推文件改动汇报（必须在 message_done 之前，否则上层会提前结束流）
-                    _pid = project_id if 'project_id' in dir() else None
-                    _proj = project if 'project' in dir() else None
+                    _pid = project.get("id") if isinstance(project, dict) else None
+                    _proj = project if isinstance(project, dict) else None
                     changes = _session_file_changes.pop(_pid, []) if _pid else []
                     if changes and _proj and _proj.get("mode") == "manual":
                         change_text = "\n".join(f"  - `{f}`" for f in changes)
@@ -1590,8 +1590,9 @@ class ChatAssistantAgent(BaseAgent):
             pass
         # P1: 追加 .ads/rules/ 项目级规则（优先级低于全局 rules，注入在全局之后）
         try:
+            from database import db as _db
             from skills import skill_loader as _sl
-            _repo_row = await db.fetch_one(
+            _repo_row = await _db.fetch_one(
                 "SELECT git_repo_path FROM projects WHERE id = ?", (project.get("id", ""),)
             )
             _repo_path = _repo_row.get("git_repo_path", "") if _repo_row else ""

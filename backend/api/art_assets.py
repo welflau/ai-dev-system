@@ -1,6 +1,6 @@
 """美术资产库 API"""
 import json
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional, List
 from database import db
