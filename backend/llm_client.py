@@ -1294,16 +1294,24 @@ class LLMClient:
         temperature: float,
         max_tokens: int,
         resume_session_id: str = "",
+        timeout_override: Optional[float] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         流式版 CLI 调用，实时 yield text_delta 事件（供 QueryEngine CLI 模式使用）。
         stream-json 格式：每行一个 JSON，assistant 消息块里有文本。
 
         resume_session_id: 非空时追加 --resume <id>，让 CLI 恢复上一轮对话上下文。
+        timeout_override:  单次调用的超时秒数上限（取与 cli_timeout 的较小值）。
+                           调用方有更紧的预算时传入 —— 否则单轮会一直跑到
+                           cli_timeout(默认 1800s)，让 skill 声明的 max_seconds 形同虚设。
         """
         import asyncio as _asyncio
         import json as _json
         import os as _os
+
+        effective_timeout = self.cli_timeout
+        if timeout_override is not None and timeout_override > 0:
+            effective_timeout = min(self.cli_timeout, float(timeout_override))
 
         adapter    = _CLI_ADAPTERS.get(self.cli_type, _CLI_ADAPTERS["custom"])
         prompt     = self._messages_to_prompt(messages)
@@ -1535,7 +1543,7 @@ class LLMClient:
 
                 reader_task = _asyncio.create_task(_reader())
                 stderr_task = _asyncio.create_task(_stderr_reader())
-                deadline = _asyncio.get_event_loop().time() + self.cli_timeout
+                deadline = _asyncio.get_event_loop().time() + effective_timeout
 
                 # 工单 token 流式推送：累积缓冲，每 ~60 字符推一次 SSE 事件
                 _tok_buf: list = []
@@ -1548,9 +1556,10 @@ class LLMClient:
                         if remaining <= 0:
                             reader_task.cancel()
                             proc.kill()
-                            logger.error("CLI 流式调用超时（%ds）", self.cli_timeout)
+                            logger.error("CLI 流式调用超时（%.0fs）", effective_timeout)
                             if not full_text:
-                                yield {"type": "text_delta", "delta": "[CLI错误] 调用超时"}
+                                yield {"type": "text_delta",
+                                       "delta": f"[CLI错误] 调用超时（{effective_timeout:.0f}s）"}
                             break
                         try:
                             item = await _asyncio.wait_for(queue.get(), timeout=min(remaining, 5.0))
@@ -1637,7 +1646,7 @@ class LLMClient:
                 # 非流式 CLI：等待全部输出，一次性 yield
                 try:
                     stdout, stderr = await _asyncio.wait_for(
-                        proc.communicate(), timeout=self.cli_timeout
+                        proc.communicate(), timeout=effective_timeout
                     )
                     full_text = self._decode_cli_text(stdout).strip()
                     if not full_text:
@@ -1647,7 +1656,8 @@ class LLMClient:
                     yield {"type": "text_delta", "delta": full_text}
                 except _asyncio.TimeoutError:
                     proc.kill()
-                    yield {"type": "text_delta", "delta": "[CLI错误] 调用超时"}
+                    yield {"type": "text_delta",
+                           "delta": f"[CLI错误] 调用超时（{effective_timeout:.0f}s）"}
 
         except FileNotFoundError:
             yield {"type": "text_delta", "delta": f"[CLI错误] 找不到可执行文件: {self.cli_cmd}"}

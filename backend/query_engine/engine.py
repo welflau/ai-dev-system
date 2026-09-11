@@ -407,9 +407,16 @@ class QueryEngine:
                 if system:
                     cli_messages = [{"role": "system", "content": system}] + current_messages
 
+                # 把预算剩余时间传给 CLI 单轮调用。
+                # Budget.check() 只在轮与轮之间生效；不传的话单轮会一直跑到
+                # LLM_CLI_TIMEOUT（默认 1800s），skill 声明的 max_seconds 完全失效。
+                # 实测 OpenSpec Propose 单轮跑了 938s，而它声明的上限是 300s。
+                _remaining = self.budget.max_seconds - self.budget.elapsed_seconds
+
                 async for ev in self.llm._call_cli_stream(
                     cli_messages, temperature=0.7, max_tokens=4000,
                     resume_session_id=self.resume_session_id,
+                    timeout_override=_remaining,
                 ):
                     etype = ev.get("type", "")
                     if etype == "text_delta":
