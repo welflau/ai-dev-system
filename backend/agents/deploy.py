@@ -98,10 +98,19 @@ class DeployAgent(BaseAgent):
         project_id = context.get("project_id", "")
 
         preview_url = None
+        skip_reason = None
         if project_id:
-            preview_url = await self.deploy_env(project_id, "dev")
+            from git_manager import git_manager
+            skip_reason = await self._skip_preview_reason(
+                project_id, "dev", str(git_manager._repo_path(project_id)),
+            )
+            if not skip_reason:
+                preview_url = await self.deploy_env(project_id, "dev")
 
-        files = self._generate_deploy_files(ticket_title, docs_prefix, preview_url)
+        files = self._generate_deploy_files(
+            ticket_title, docs_prefix, preview_url,
+            engine_project=bool(skip_reason),
+        )
 
         # OpenSpec Archive（规范层，可选，merge 后归档到 openspec/archive/）
         await self._run_openspec_archive(context)
@@ -111,6 +120,7 @@ class DeployAgent(BaseAgent):
             "deploy_result": {
                 "preview_url": preview_url,
                 "environment": "dev",
+                "preview_skipped": skip_reason,
             },
             "files": files,
         }
@@ -170,6 +180,51 @@ class DeployAgent(BaseAgent):
         except Exception as e:
             logger.debug("_run_openspec_archive 失败（忽略）: %s", e)
 
+    @staticmethod
+    async def _skip_preview_reason(
+        project_id: str, env_type: str, repo_path: str,
+    ) -> Optional[str]:
+        """判断该项目是否不适合起 HTTP 静态预览服务，返回跳过原因（None 表示照常部署）。
+
+        `python -m http.server` 只对能用浏览器打开的静态站点有意义。
+        游戏引擎项目（UE / Unity / Godot）的产物是 .uproject / Source / Content，
+        起 HTTP 服务纯属占端口 —— 实测 TestFPS 被起了 9096，目录里连 index.html
+        都没有，访问只会看到一个目录列表。
+
+        例外：引擎项目里确实带 web 前端（根目录有 index.html）时照常部署。
+        """
+        engine_traits = ("engine:ue", "engine:unity", "engine:godot")
+        try:
+            from database import db as _db
+            proj = await _db.fetch_one(
+                "SELECT traits FROM projects WHERE id = ?", (project_id,)
+            )
+            if not proj:
+                return None
+            import json as _j
+            traits = _j.loads(proj.get("traits") or "[]")
+            if not isinstance(traits, list):
+                return None
+            hit = next(
+                (t for t in traits
+                 if any(str(t).startswith(e) for e in engine_traits)),
+                None,
+            )
+            if not hit:
+                return None
+
+            # 引擎项目但带 web 前端 → 仍然部署
+            if repo_path and (Path(repo_path) / "index.html").is_file():
+                return None
+
+            if env_type != "dev":
+                # 隔离目录要 clone 整个仓库，UE 动辄数 GB
+                return f"{hit} 项目不支持 {env_type} 隔离部署（仓库体积过大，clone 易产生损坏副本）"
+            return f"{hit} 项目无静态站点入口（无 index.html），HTTP 预览无意义"
+        except Exception as e:
+            logger.debug("_skip_preview_reason 判定失败（按不跳过处理）: %s", e)
+        return None
+
     @classmethod
     async def deploy_env(cls, project_id: str, env_type: str, branch: str = None) -> Optional[str]:
         """按环境部署预览服务
@@ -192,19 +247,12 @@ class DeployAgent(BaseAgent):
         config = ENV_CONFIG[env_type]
         repo_path = str(git_manager._repo_path(project_id))
 
-        # UE/game 项目体积巨大，test/prod 隔离 clone 会产生数 GB 的损坏副本，直接跳过
-        if env_type != "dev":
-            try:
-                from database import db as _db
-                proj = await _db.fetch_one("SELECT traits FROM projects WHERE id = ?", (project_id,))
-                if proj:
-                    import json as _j
-                    traits = _j.loads(proj.get("traits") or "[]")
-                    if any(t.startswith("engine:ue") or t.startswith("engine:unity") for t in traits):
-                        logger.info("跳过 %s 环境 clone：UE/Unity 项目不支持隔离部署（project_id=%s）", env_type, project_id)
-                        return None
-            except Exception:
-                pass
+        # 游戏引擎项目跳过 HTTP 静态预览（dev 无入口文件 / test+prod clone 体积过大）
+        skip_reason = await cls._skip_preview_reason(project_id, env_type, repo_path)
+        if skip_reason:
+            logger.info("⏭ 跳过 %s 环境预览部署：%s（project_id=%s）",
+                        env_type, skip_reason, project_id[:12])
+            return None
 
         base_port = 9000 + (abs(hash(project_id)) % 100)
         port = base_port + config["port_offset"]
@@ -342,11 +390,21 @@ class DeployAgent(BaseAgent):
         )
         logger.info("🛑 [%s] 环境已停止: project=%s", env_type, project_id[:12])
 
-    def _generate_deploy_files(self, title: str, docs_prefix: str, preview_url: str = None) -> Dict:
-        """生成部署配置文件"""
+    def _generate_deploy_files(
+        self, title: str, docs_prefix: str, preview_url: str = None,
+        engine_project: bool = False,
+    ) -> Dict:
+        """生成部署配置文件。
+
+        engine_project=True（UE/Unity/Godot）时不产出 Dockerfile / docker-compose ——
+        这套模板是 Python + uvicorn 的，对引擎项目毫无意义，实测在 TestFPS 和
+        TestGame 仓库里都留下了 `FROM python:3.10-slim` 的垃圾文件。
+        引擎项目的交付走 deploy_ue fragment（RunUAT 打包），不靠 Docker。
+        """
         files = {}
 
-        files["build/Dockerfile"] = """FROM python:3.10-slim
+        if not engine_project:
+            files["build/Dockerfile"] = """FROM python:3.10-slim
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
@@ -356,7 +414,7 @@ EXPOSE 8000
 CMD ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
 """
 
-        files["build/docker-compose.yml"] = f"""version: '3.8'
+            files["build/docker-compose.yml"] = f"""version: '3.8'
 services:
   app:
     build: .
@@ -369,7 +427,21 @@ services:
         if preview_url:
             preview_section = f"\n## 本地预览\n\n- 预览地址: {preview_url}\n"
 
-        files[f"{docs_prefix}deploy.md"] = f"""# 部署文档 - {title}
+        if engine_project:
+            files[f"{docs_prefix}deploy.md"] = f"""# 部署文档 - {title}
+
+## 交付方式
+
+本项目为游戏引擎项目，交付产物由引擎打包流程生成，不使用 Docker 镜像。
+
+1. 编译：UnrealBuildTool / 引擎编辑器构建目标平台
+2. 打包：RunUAT BuildCookRun（Cook + Pak + Archive）
+3. 产物：打包输出目录下的可执行文件与资源包
+
+> HTTP 静态预览对引擎项目不适用，已跳过。
+"""
+        else:
+            files[f"{docs_prefix}deploy.md"] = f"""# 部署文档 - {title}
 {preview_section}
 ## 部署步骤
 

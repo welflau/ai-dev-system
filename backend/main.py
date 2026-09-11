@@ -123,6 +123,22 @@ async def lifespan(app: FastAPI):
     if restored:
         logger.info("已恢复 %d 个项目的自定义仓库路径映射", restored)
 
+    # 清理僵尸环境记录：预览服务是 subprocess，随后端进程退出而死，
+    # 但 project_environments.status 仍停留在 'running'，前端会显示"运行中"
+    # 并给出一个点进去 404 的链接。启动时统一重置。
+    # 状态值与 api/projects.py 的自愈逻辑保持一致（inactive，不是 stopped）。
+    try:
+        stale = await db.fetch_all(
+            "SELECT id FROM project_environments WHERE status = 'running'"
+        )
+        if stale:
+            await db.execute(
+                "UPDATE project_environments SET status = 'inactive' WHERE status = 'running'"
+            )
+            logger.info("已重置 %d 条僵尸环境记录（上次退出时未清理的 running）", len(stale))
+    except Exception as e:
+        logger.warning("清理僵尸环境记录失败（非致命）: %s", e)
+
     # 补录现有 docs 文件到 knowledge_index（首次启动迁移）
     try:
         from api.knowledge import _upsert_knowledge_index, GLOBAL_DOCS_DIR, PROJECTS_DIR as K_PROJECTS_DIR

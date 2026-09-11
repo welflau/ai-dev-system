@@ -1204,6 +1204,15 @@ async def deploy_environment(project_id: str, env_type: str):
         raise HTTPException(404, "项目不存在")
 
     _ensure_git_path(project)
+
+    # 引擎项目不适合 HTTP 静态预览 —— 返回明确原因，不要报 500「部署失败」
+    from git_manager import git_manager
+    skip_reason = await DeployAgent._skip_preview_reason(
+        project_id, env_type, str(git_manager._repo_path(project_id)),
+    )
+    if skip_reason:
+        return {"status": "skipped", "env_type": env_type, "reason": skip_reason}
+
     url = await DeployAgent.deploy_env(project_id, env_type)
     if url:
         return {"status": "ok", "url": url, "env_type": env_type}
