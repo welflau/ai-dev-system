@@ -1,0 +1,10 @@
+{
+  "name": "ue5-prod-skills",
+  "display_name": "UE5 生产级技能套件",
+  "description": "P110_2 项目 17 天实战验证的 9 个 UE5 生产级技能：MCP 通信桥（Actions/Toolset/Launcher 路由）、C++ 开发（21 个场景卡片+风险分级）、蓝图/Widget/Input 编辑、编辑器资产管理、Material/HLSL 材质编辑、Niagara 粒子特效工作流、Python 生态（lib/references/examples/scripts/plugins）、性能分析（.utrace 热点诊断）、编辑器构建/重启/验证工作流。是 ue5-dev 基础套件的技能补充层。",
+  "version": "1.0.0",
+  "tags": ["ue5", "unreal", "gamedev", "cpp", "blueprint", "niagara", "material", "mcp", "python", "production"],
+  "auto_traits": ["engine:ue5", "engine:ue4"],
+  "contains": ["rules", "skills"],
+  "targets": ["codebuddy"]
+}

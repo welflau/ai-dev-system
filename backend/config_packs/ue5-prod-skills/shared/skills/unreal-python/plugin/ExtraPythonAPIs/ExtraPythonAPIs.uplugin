@@ -1,0 +1,23 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0.0",
+	"FriendlyName": "Extra Python APIs",
+	"Description": "Provides extra Python-accessible APIs for UE5 that are not exposed by default, including Blueprint component manipulation and socket attachment for SCS_Node properties.",
+	"Category": "Scripting",
+	"CreatedBy": "URF Team",
+	"CreatedByURL": "",
+	"DocsURL": "",
+	"MarketplaceURL": "",
+	"CanContainContent": false,
+	"IsBetaVersion": false,
+	"IsExperimentalVersion": false,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "ExtraPythonAPIs",
+			"Type": "Editor",
+			"LoadingPhase": "Default"
+		}
+	]
+}

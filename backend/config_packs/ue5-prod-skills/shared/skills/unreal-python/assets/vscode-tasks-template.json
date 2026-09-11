@@ -1,0 +1,75 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "ue5-start-debug-server",
+      "type": "shell",
+      "command": "python3",
+      "args": [
+        "${workspaceFolder}/.github/skills/unreal-python/scripts/remote-execute.py",
+        "--file",
+        "${workspaceFolder}/.github/skills/unreal-python/scripts/start_debug_server.py",
+        "--project-name",
+        "${workspaceFolderBasename}"
+      ],
+      "isBackground": false,
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
+      "problemMatcher": {
+        "owner": "ue5-debug",
+        "pattern": {
+          "regexp": "^\\[UE5-DEBUG\\] ERROR: (.*)$",
+          "message": 1
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "^\\[UE5-DEBUG\\] Starting debug server setup",
+          "endsPattern": "^\\[UE5-DEBUG\\] READY"
+        }
+      }
+    },
+    {
+      "label": "ue5-execute-python",
+      "type": "shell",
+      "command": "python3",
+      "args": [
+        "${workspaceFolder}/.github/skills/unreal-python/scripts/remote-execute.py",
+        "--file",
+        "${file}",
+        "--project-name",
+        "${workspaceFolderBasename}",
+        "--detached",
+        "--wait",
+        "1"
+      ],
+      "isBackground": true,
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": {
+        "pattern": {
+          "regexp": "^$",
+          "file": 1
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": ".*",
+          "endsPattern": "^$"
+        }
+      }
+    },
+    {
+      "label": "ue5-start-debug-and-execute",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "ue5-start-debug-server",
+        "ue5-execute-python"
+      ],
+      "problemMatcher": []
+    }
+  ]
+}
