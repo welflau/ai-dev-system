@@ -1,0 +1,3 @@
+# Runtime dependencies (deployed to all machines)
+mcp>=1.0.0
+psutil>=5.9.0
