@@ -86,3 +86,17 @@ brain/
 
 # Marketplace 临时下载目录
 backend/skills/marketplace/download_*
+
+# 运行期产物（用户上传 / Agent 生成，不属于源码）
+backend/chat_images/
+backend/screenshots/
+backend/run_build_called.txt
+*.db.bak
+
+# API 响应转存（调试时 curl > file 留下的，代码中零引用）
+/m.json
+/pre.json
+/tax.json
+
+# 本地 IDE / 工具配置
+.claude/
