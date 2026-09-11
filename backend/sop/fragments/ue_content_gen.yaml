@@ -21,7 +21,9 @@ stage:
   trigger_on: ue_content_pending
   success_status: ue_content_done
   reject_status: ue_content_failed
-  reject_goto: ue_content_pending   # 失败可重试
+  # reject_goto 必须是 **stage id**（sop_to_transition_rules 用 stages_by_id 查），
+  # 不能写状态名。指回本 stage = 失败后重试本阶段，由 config.max_retries 兜底止损。
+  reject_goto: ue_content_gen
   config:
     max_retries: 2
     timeout_seconds: 300

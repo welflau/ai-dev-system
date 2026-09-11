@@ -25,6 +25,18 @@ from git_manager import git_manager
 
 logger = logging.getLogger("orchestrator")
 
+# 二进制媒体文件的 commit 消息标签。key 可以是 (agent, action) 或仅 agent。
+# 这条通道被多个 Agent 复用（TestAgent 截图 / ArtistAgent 占位图），
+# 不按来源区分会产出「[ArtistAgent] 测试截图」这种自相矛盾的提交记录。
+_MEDIA_COMMIT_LABELS = {
+    ("TestAgent", "run_tests"):          "测试截图",
+    ("TestAgent", "run_playtest"):       "Playtest 截图",
+    ("ArtistAgent", "generate_assets"):  "资产占位图",
+    "TestAgent":    "测试截图",
+    "ArtistAgent":  "美术资产",
+    "UEEditorAgent": "UE 编辑器截图",
+}
+
 # Agent 注册中心（自动发现 + 自定义 Agent）
 from agent_registry import instantiate_agents
 
@@ -36,17 +48,27 @@ class TicketOrchestrator:
         # Agent 池（通过注册中心自动发现和实例化）
         self.agents = instantiate_agents()
 
-        # 正在处理的工单（防止重复处理）
+        # 正在处理的工单（防止重复处理）。claim 必须在 process_ticket 入口、且在任何 await 之前完成。
         self._processing: set = set()
 
         # 每个项目的并发限制，防止大批需求同时涌入耗尽 LLM 配额
         self._MAX_CONCURRENT_PER_PROJECT = 1   # 顶层工单：每项目同时处理 1 个（DB 稳定）
         # L8: 子任务独立并发槽，最多 3 个子任务并行（不占顶层槽位）
         self._MAX_CONCURRENT_SUBTASKS = 3
-        # 每个项目当前活跃的工单集合（顶层）
+        # 每个项目当前活跃的工单集合（顶层）— 仅用于项目级限流，不替代 _processing
         self._project_active: Dict[str, set] = {}
         # L8: 每个项目当前活跃的子任务集合（独立于顶层槽位）
         self._project_subtask_active: Dict[str, set] = {}
+
+        # 硬终态：不再自动派单；迟到的 Agent 结果一律丢弃
+        self._HARD_TERMINAL = {
+            TicketStatus.BLOCKED.value,
+            TicketStatus.CANCELLED.value,
+            TicketStatus.TESTING_DONE.value,
+            TicketStatus.DEPLOYED.value,
+            TicketStatus.DONE.value,
+            "completed",
+        }
 
         # Agent 实时状态追踪
         self._agent_status: Dict[str, Dict] = {
@@ -143,18 +165,78 @@ class TicketOrchestrator:
         text = f"{ticket.get('title', '')} {ticket.get('description', '')}".lower()
         return any(kw in text for kw in self._NONCODE_TICKET_KEYWORDS)
 
+    # ── 界面/视觉相关信号 ──────────────────────────────────────────
+    # ux_design / art_design fragment 的 trait 条件是 platform:* / category:game，
+    # 任何桌面或游戏项目都必然命中，跟工单本身是否涉及界面无关。
+    # 实测：给 UE 项目加一个纯 C++ 的 SprintComponent，也会跑完整 UX 设计 +
+    # 视觉规范 + design_tokens.json，空转 153s。
+    #
+    # 判定策略与 _is_noncode_ticket 相反：这里要的是"确定不需要 UI"才跳过，
+    # 所以采用白名单（命中任一 UI 信号 → 正常走设计阶段），宁可多跑不可漏跑。
+    #
+    # 中文按子串匹配（无词边界概念）；英文必须按**单词**匹配 ——
+    # 子串匹配会让 "ui" 命中 build/guide/require/suite，"form" 命中
+    # format/performance/platform，"icon" 命中 silicon，几乎全部工单都会误判为需要设计。
+    _UI_KEYWORDS_CN = (
+        "界面", "页面", "视图", "布局", "样式", "主题", "配色", "图标", "字体",
+        "按钮", "弹窗", "对话框", "菜单", "表单", "列表页", "面板", "控件",
+        "交互", "动效", "动画", "过渡", "美术", "视觉",
+        "素材", "贴图", "材质", "特效", "蓝图界面", "响应式", "适配",
+        "前端", "原型", "线框", "设计稿", "可视化", "图表", "渲染",
+    )
+    _UI_KEYWORDS_EN = frozenset({
+        "ui", "ux", "hud", "gui", "interface", "layout", "style", "styles",
+        "styling", "theme", "themes", "palette", "icon", "icons", "button",
+        "buttons", "dialog", "modal", "menu", "menus", "form", "forms",
+        "panel", "widget", "widgets", "screen", "screens", "animation",
+        "animations", "transition", "frontend", "front-end", "responsive",
+        "chart", "charts", "visual", "visuals", "texture", "textures",
+        "material", "materials", "shader", "shaders", "sprite", "sprites",
+        "css", "scss", "wireframe", "mockup", "render", "rendering",
+    })
+    _WORD_RE = __import__("re").compile(r"[a-z][a-z\-]*")
+
+    # 明确不涉及界面的模块类型（module 字段）
+    _NON_UI_MODULES = frozenset({"backend", "api", "database", "test"})
+
+    def _needs_design_stage(self, ticket: Dict) -> bool:
+        """工单是否真的需要 UX / 美术设计阶段。
+
+        任一成立即认为需要：
+          1. module 是界面相关类型（frontend / design / character 等）
+          2. 标题或描述命中 UI 信号（中文子串 / 英文整词）
+
+        module ∈ {backend, api, database, test} 或 other，且无任何 UI 信号
+        → 跳过设计阶段。判不准时一律走（宁可多跑 153s，不可漏做设计）。
+        """
+        module = (ticket.get("module") or "").lower()
+        # 非 "other" 的界面相关 module 直接放行
+        if module and module not in self._NON_UI_MODULES and module != "other":
+            return True
+
+        text = f"{ticket.get('title', '')} {ticket.get('description', '')}".lower()
+        if any(kw in text for kw in self._UI_KEYWORDS_CN):
+            return True
+        # 英文按整词匹配，避免 build→ui / platform→form 之类的子串误命中
+        return bool(self._UI_KEYWORDS_EN & set(self._WORD_RE.findall(text)))
+
     async def _get_rules_for_project(
         self,
         project_id: str,
         traits_json: Optional[str] = None,
+        ticket_type: Optional[str] = None,
     ) -> Dict:
-        """按项目 traits 派生 transition_rules。
+        """按项目 traits + 工单 type 派生 transition_rules。
 
         无 traits（老 web 项目 / 未迁移）→ 用 default `self.transition_rules`。
         有 traits → 调 compose_sop + sop_to_transition_rules，cache 一份。
 
-        cache key 是 (project_id, traits_tuple)；traits 变动自然 miss，
-        旧条目不会被读到（内存占用可忽略）。
+        ticket_type 参与 compose：fragment 可声明 required_ticket_type
+        （如 ue_content_gen 只对 type=ue_content 工单生效）。不传则该类
+        fragment 不会被组装进来 —— 所以扫状态/续跑时务必带上工单自己的 type，
+        否则派生出的规则集和实际派单用的规则集会不一致。
+
+        cache key 是 (project_id, traits_tuple, ticket_type)；任一变动自然 miss。
         """
         if traits_json is None:
             row = await db.fetch_one(
@@ -175,19 +257,19 @@ class TicketOrchestrator:
             return self.transition_rules
 
         traits_tuple = tuple(sorted(traits))
-        cache_key = (project_id, traits_tuple)
+        cache_key = (project_id, traits_tuple, ticket_type)
 
         if cache_key in self._project_rules_cache:
             return self._project_rules_cache[cache_key]
 
         try:
             from sop.loader import compose_sop, sop_to_transition_rules
-            sop_config = compose_sop(traits=traits, ticket_type=None)
+            sop_config = compose_sop(traits=traits, ticket_type=ticket_type)
             rules = sop_to_transition_rules(sop_config)
             self._project_rules_cache[cache_key] = rules
             logger.info(
-                "📋 项目 %s traits=%s → SOP %d 条规则",
-                project_id[:12], traits, len(rules),
+                "📋 项目 %s traits=%s type=%s → SOP %d 条规则",
+                project_id[:12], traits, ticket_type or "(无)", len(rules),
             )
             return rules
         except Exception as e:
@@ -196,6 +278,43 @@ class TicketOrchestrator:
                 project_id[:12], e,
             )
             return self.transition_rules
+
+    async def _sop_stage_for(
+        self, project_id: str, action: str, ticket_type: Optional[str] = None,
+    ) -> Optional[Dict]:
+        """查该项目 SOP 里执行 `action` 的 stage 定义。
+
+        同一个 action 会被多个 fragment 复用但状态语义不同 —— 例如
+        run_ci_deploy 在 deploy_ue 产出 packaged（中间态）、在 deploy_web 产出
+        deployed（终态）；run_tests 在 smoke_test 产出 smoke_test_passed、
+        在基础 testing 阶段产出 testing_done。硬编码任一个都会弄坏另一类项目，
+        所以按项目 traits + 工单 type 读 SOP 声明。
+
+        找不到（无 traits / compose 失败 / action 不在 SOP 里）→ None，调用方兜底。
+        """
+        try:
+            row = await db.fetch_one(
+                "SELECT traits FROM projects WHERE id = ?", (project_id,)
+            )
+            traits = json.loads((row or {}).get("traits") or "[]")
+            if not isinstance(traits, list) or not traits:
+                return None
+
+            from sop.loader import compose_sop
+            for stage in compose_sop(traits=traits, ticket_type=ticket_type).get("stages", []):
+                if stage.get("action") == action:
+                    return stage
+        except Exception as e:
+            logger.warning("读取 SOP stage 失败（action=%s）: %s", action, e)
+        return None
+
+    async def _sop_success_status_for(
+        self, project_id: str, action: str, *, default: str,
+        ticket_type: Optional[str] = None,
+    ) -> str:
+        """该项目 SOP 里 `action` 阶段声明的 success_status，找不到返回 default。"""
+        stage = await self._sop_stage_for(project_id, action, ticket_type)
+        return (stage or {}).get("success_status") or default
 
     def invalidate_project_rules(self, project_id: str):
         """清除指定项目的 rules 缓存（当 traits 变动时调用）"""
@@ -215,8 +334,12 @@ class TicketOrchestrator:
     async def _get_all_actionable_statuses(self) -> List[str]:
         """轮询扫 ticket 用的 WHERE IN (...) 集合。
 
-        = default rules keys ∪ 所有活跃项目按其 traits compose 出来的 rules keys
-        （union，不重复），再排除硬编码的终态（防止 SOP 配置错误导致无限循环）。
+        = default rules keys ∪ 所有活跃项目 × 其在用的工单 type compose 出来的
+        rules keys（union，不重复），再排除硬编码的终态。
+
+        必须按 type 展开：type 相关的 fragment（如 ue_content_gen 的
+        ue_content_pending）只在传对 ticket_type 时才会出现在规则里。
+        漏掉就会导致这些状态的工单永远扫不到、卡死不动。
         """
         all_statuses = set(self.transition_rules.keys())
 
@@ -225,8 +348,17 @@ class TicketOrchestrator:
                 "SELECT id, traits FROM projects WHERE status = 'active'"
             )
             for p in projects:
-                rules = await self._get_rules_for_project(p["id"], p.get("traits"))
-                all_statuses.update(rules.keys())
+                # 该项目现存工单用到的 type（None 代表"无 type 限定"的基础流程）
+                type_rows = await db.fetch_all(
+                    "SELECT DISTINCT type FROM tickets WHERE project_id = ?", (p["id"],)
+                )
+                ticket_types = {r["type"] for r in type_rows if r.get("type")}
+                ticket_types.add(None)
+                for tt in ticket_types:
+                    rules = await self._get_rules_for_project(
+                        p["id"], p.get("traits"), ticket_type=tt,
+                    )
+                    all_statuses.update(rules.keys())
         except Exception as e:
             logger.warning("汇总 actionable_statuses 异常（只用 default）: %s", e)
 
@@ -418,6 +550,40 @@ class TicketOrchestrator:
 
     # ==================== 轮询调度 ====================
 
+    def _try_claim_ticket(self, ticket_id: str) -> bool:
+        """无 await 地占用工单处理权。已占用则返回 False（asyncio 单线程下 check+add 原子）。"""
+        if ticket_id in self._processing:
+            return False
+        self._processing.add(ticket_id)
+        return True
+
+    def _release_ticket(self, ticket_id: str) -> None:
+        self._processing.discard(ticket_id)
+
+    def _enqueue_ticket(
+        self, project_id: str, ticket_id: str, *, is_subtask: bool = False, source: str = "",
+    ) -> bool:
+        """轮询侧调度：占项目槽 + create_task(_poll_process)。
+
+        真正互斥在 process_ticket claim。不要在此处因 `_processing` 拒绝调度——
+        续跑发布 ticket_ready 时当前协程往往尚未 finally release。
+        """
+        if is_subtask:
+            subtask_set = self._project_subtask_active.setdefault(project_id, set())
+            if ticket_id not in subtask_set:
+                if len(subtask_set) >= self._MAX_CONCURRENT_SUBTASKS:
+                    return False
+                subtask_set.add(ticket_id)
+        else:
+            active_set = self._project_active.setdefault(project_id, set())
+            if ticket_id not in active_set:
+                if len(active_set) >= self._MAX_CONCURRENT_PER_PROJECT:
+                    return False
+                active_set.add(ticket_id)
+        logger.info("⚡ 调度工单 %s（%s）", ticket_id[:12], source or "enqueue")
+        asyncio.create_task(self._poll_process(project_id, ticket_id, is_subtask=is_subtask))
+        return True
+
     async def start_event_bus(self):
         """启动内部事件总线"""
         from event_bus import internal_bus
@@ -428,8 +594,11 @@ class TicketOrchestrator:
                 project_id = data.get("project_id")
                 ticket_id = data.get("ticket_id")
                 if project_id and ticket_id:
-                    logger.info("⚡ 事件驱动: 立即处理工单 %s", ticket_id[:12])
-                    asyncio.create_task(self._poll_process(project_id, ticket_id))
+                    # 不经项目槽：续跑时槽位常仍被当前 _poll_process 占用。
+                    # 互斥只靠 process_ticket claim（发布时若仍持锁，新任务会跳过，
+                    # 等 release 后由轮询兜底；为减少窗口，发布前会先 release）。
+                    logger.info("⚡ 事件驱动: 续跑工单 %s", ticket_id[:12])
+                    asyncio.create_task(self.process_ticket(project_id, ticket_id))
 
         internal_bus.set_handler(_on_event)
         await internal_bus.start()
@@ -567,31 +736,12 @@ class TicketOrchestrator:
                     if not all_deps_done:
                         continue
 
-            # L8: 区分子任务（有 parent_ticket_id）和顶层任务，使用独立并发槽
+            # L8: 区分子任务 / 顶层任务；互斥与槽位统一走 _enqueue_ticket
             is_subtask = bool(t.get("parent_ticket_id"))
-
             if is_subtask:
-                # 子任务：独立并发槽，最多 _MAX_CONCURRENT_SUBTASKS 个并行
-                subtask_set = self._project_subtask_active.setdefault(project_id, set())
-                if len(subtask_set) >= self._MAX_CONCURRENT_SUBTASKS:
-                    continue
-                self._processing.add(ticket_id)
-                subtask_set.add(ticket_id)
-                logger.info("⚡ 子任务并行 [%d/%d]: %s「%s」",
-                            len(subtask_set), self._MAX_CONCURRENT_SUBTASKS,
-                            ticket_id[:12], t["title"][:20])
-                asyncio.create_task(self._poll_process(project_id, ticket_id, is_subtask=True))
+                self._enqueue_ticket(project_id, ticket_id, is_subtask=True, source="poll-sub")
             else:
-                # 顶层任务：每项目 1 个槽位，保证 DB 稳定
-                active_set = self._project_active.setdefault(project_id, set())
-                if len(active_set) >= self._MAX_CONCURRENT_PER_PROJECT:
-                    continue
-                self._processing.add(ticket_id)
-                active_set.add(ticket_id)
-                logger.info("🔄 轮询拾取工单 [%d/%d]: %s「%s」",
-                            len(active_set), self._MAX_CONCURRENT_PER_PROJECT,
-                            ticket_id[:12], t["title"][:20])
-                asyncio.create_task(self._poll_process(project_id, ticket_id, is_subtask=False))
+                self._enqueue_ticket(project_id, ticket_id, is_subtask=False, source="poll")
 
         # ── 自动拾取 open BUG ──
         # 扫描所有项目中 status=open 且未关联 ticket 的 BUG，自动触发修复工作流
@@ -701,11 +851,10 @@ class TicketOrchestrator:
             pass
 
     async def _poll_process(self, project_id: str, ticket_id: str, is_subtask: bool = False):
-        """轮询触发的工单处理（调度时已限流，此处直接执行）"""
+        """调度触发的工单处理。_processing 由 process_ticket claim/release；此处只清项目槽。"""
         try:
             await self.process_ticket(project_id, ticket_id)
         finally:
-            self._processing.discard(ticket_id)
             if is_subtask:
                 self._project_subtask_active.get(project_id, set()).discard(ticket_id)
             else:
@@ -803,10 +952,9 @@ class TicketOrchestrator:
                 {"ticket_id": ticket_id, "title": f"[BUG] {bug['title']}", "type": "bug"},
             )
 
-        # ── 立即触发处理（不等下一轮询周期）——同样受项目并发限制 ──
+        # ── 立即触发处理（不等下一轮询周期）——项目槽限流；互斥由 process_ticket claim ──
         active_set = self._project_active.setdefault(project_id, set())
         if len(active_set) < self._MAX_CONCURRENT_PER_PROJECT:
-            self._processing.add(ticket_id)
             active_set.add(ticket_id)
             asyncio.create_task(self._run_bug_ticket(project_id, ticket_id, bug_id))
         else:
@@ -816,47 +964,50 @@ class TicketOrchestrator:
         """执行 BUG ticket 流转，并在测试完成后同步更新 bugs 表状态"""
         try:
             await self.process_ticket(project_id, ticket_id)
-            # process_ticket 完成后读取 ticket 最终状态
-            ticket = await db.fetch_one("SELECT status FROM tickets WHERE id = ?", (ticket_id,))
-            final_status = ticket["status"] if ticket else ""
-            if final_status == TicketStatus.TESTING_DONE.value:
-                version_id = await self._find_current_version(project_id)
-                fixed_at = now_iso()
-                await db.update("bugs", {
-                    "status": "fixed",
-                    "fixed_at": fixed_at,
-                    "version_id": version_id,
-                    "updated_at": fixed_at,
-                }, "id = ?", (bug_id,))
-                bug = await db.fetch_one("SELECT title FROM bugs WHERE id = ?", (bug_id,))
-                await event_manager.publish_to_project(
-                    project_id, "bug_fixed",
-                    {"bug_id": bug_id, "title": bug["title"] if bug else "", "version_id": version_id},
-                )
-                await event_manager.publish_to_project(
-                    project_id, "bug_status_changed",
-                    {"bug_id": bug_id, "status": "fixed"},
-                )
-            elif final_status in (TicketStatus.TESTING_FAILED.value, ""):
-                await db.update("bugs", {
-                    "status": "open", "updated_at": now_iso(),
-                }, "id = ?", (bug_id,))
-                await event_manager.publish_to_project(
-                    project_id, "bug_status_changed",
-                    {"bug_id": bug_id, "status": "open", "reason": "测试未通过"},
-                )
-            else:
-                # 开发完成，等待测试
-                await db.update("bugs", {
-                    "status": "in_test", "updated_at": now_iso(),
-                }, "id = ?", (bug_id,))
-                await event_manager.publish_to_project(
-                    project_id, "bug_status_changed",
-                    {"bug_id": bug_id, "status": "in_test"},
-                )
+            await self._sync_bug_status_from_ticket(project_id, ticket_id, bug_id)
         finally:
-            self._processing.discard(ticket_id)
             self._project_active.get(project_id, set()).discard(ticket_id)
+
+    async def _sync_bug_status_from_ticket(self, project_id: str, ticket_id: str, bug_id: str):
+        """按 ticket 最终状态回写 bugs 表。"""
+        ticket = await db.fetch_one("SELECT status FROM tickets WHERE id = ?", (ticket_id,))
+        final_status = ticket["status"] if ticket else ""
+        if final_status == TicketStatus.TESTING_DONE.value:
+            version_id = await self._find_current_version(project_id)
+            fixed_at = now_iso()
+            await db.update("bugs", {
+                "status": "fixed",
+                "fixed_at": fixed_at,
+                "version_id": version_id,
+                "updated_at": fixed_at,
+            }, "id = ?", (bug_id,))
+            bug = await db.fetch_one("SELECT title FROM bugs WHERE id = ?", (bug_id,))
+            await event_manager.publish_to_project(
+                project_id, "bug_fixed",
+                {"bug_id": bug_id, "title": bug["title"] if bug else "", "version_id": version_id},
+            )
+            await event_manager.publish_to_project(
+                project_id, "bug_status_changed",
+                {"bug_id": bug_id, "status": "fixed"},
+            )
+        elif final_status in (TicketStatus.TESTING_FAILED.value, TicketStatus.BLOCKED.value, ""):
+            await db.update("bugs", {
+                "status": "open", "updated_at": now_iso(),
+            }, "id = ?", (bug_id,))
+            await event_manager.publish_to_project(
+                project_id, "bug_status_changed",
+                {"bug_id": bug_id, "status": "open",
+                 "reason": "blocked" if final_status == TicketStatus.BLOCKED.value else "测试未通过"},
+            )
+        else:
+            # 开发完成，等待测试
+            await db.update("bugs", {
+                "status": "in_test", "updated_at": now_iso(),
+            }, "id = ?", (bug_id,))
+            await event_manager.publish_to_project(
+                project_id, "bug_status_changed",
+                {"bug_id": bug_id, "status": "in_test"},
+            )
 
     async def _find_current_version(self, project_id: str) -> Optional[str]:
         """查找当前进行中的版本（milestone），用于 BUG 并入版本"""
@@ -1253,7 +1404,14 @@ class TicketOrchestrator:
     # ==================== 工单流转 ====================
 
     async def process_ticket(self, project_id: str, ticket_id: str):
-        """根据当前状态自动分派到对应 Agent"""
+        """根据当前状态自动分派到对应 Agent。
+
+        单工单互斥：入口 claim，退出 release。事件/轮询/create_task 共用此门闩，
+        避免并发重复 assign / 重复止损。
+        """
+        if not self._try_claim_ticket(ticket_id):
+            logger.info("⏭ 跳过工单 %s（已有处理中任务）", ticket_id[:12])
+            return
         try:
             ticket = await db.fetch_one(
                 "SELECT * FROM tickets WHERE id = ?", (ticket_id,)
@@ -1261,9 +1419,9 @@ class TicketOrchestrator:
             if not ticket:
                 return
 
-            # Checkpoint：工单处理起点锚点 + 写上下文（供 git_manager 写钩子读取）
+            # Checkpoint：工单处理起点锚点 + 写上下文（供 git_manager 钩子）
             try:
-                from checkpoint import set_checkpoint_context
+                from checkpoint import set_checkpoint_context, clear_checkpoint_context
                 from checkpoint.service import checkpoint_service
                 from capability_check import _get_repo_path
                 _repo = await _get_repo_path(project_id)
@@ -1275,6 +1433,14 @@ class TicketOrchestrator:
                 await checkpoint_service.ensure_ticket_start(project_id, ticket_id)
             except Exception as _cpe:
                 logger.debug("ticket_start checkpoint 跳过: %s", _cpe)
+
+            # 硬终态：不再派单（含 blocked——需人工 unblock）
+            if ticket["status"] in self._HARD_TERMINAL:
+                logger.info(
+                    "⏭ 工单 %s 已终态 %s，跳过自动流转",
+                    ticket_id[:12], ticket["status"],
+                )
+                return
 
             # 检查需求是否被暂停或取消
             requirement = await db.fetch_one(
@@ -1288,23 +1454,46 @@ class TicketOrchestrator:
                 )
                 return
 
-            # === 检查重试次数（防止无限循环打回）===
+            # === 全局 reject 上限：硬停 blocked（不再伪装成 testing_done）===
+            # 旧 force_pass→testing_done 会把「编译环空转」标成已完成，跳过 Test/Deploy，
+            # 前端显示「已完成」但 OpenSpec/验收实际未跑。正确语义：转人工介入。
             MAX_RETRIES = 5
             retry_count = await db.fetch_one(
                 "SELECT COUNT(*) as cnt FROM ticket_logs WHERE ticket_id = ? AND action = 'reject'",
                 (ticket_id,),
             )
             if retry_count and retry_count["cnt"] >= MAX_RETRIES:
-                logger.warning("🛑 工单 %s 已被打回 %d 次，强制通过", ticket_id[:12], retry_count["cnt"])
+                from_status = ticket["status"]
+                logger.warning(
+                    "🛑 工单 %s 已被打回 %d 次，标记 blocked（停止自动流转，转人工）",
+                    ticket_id[:12], retry_count["cnt"],
+                )
                 await db.update("tickets", {
-                    "status": TicketStatus.TESTING_DONE.value,
+                    "status": TicketStatus.BLOCKED.value,
                     "updated_at": now_iso(),
                 }, "id = ?", (ticket_id,))
                 await self._log(
                     project_id, ticket.get("requirement_id"), ticket_id, "Orchestrator",
-                    "force_pass", ticket["status"], TicketStatus.TESTING_DONE.value,
-                    f"工单已被打回 {retry_count['cnt']} 次，超过上限 {MAX_RETRIES} 次，强制标记完成",
+                    "blocked", from_status, TicketStatus.BLOCKED.value,
+                    f"工单已被打回 {retry_count['cnt']} 次，超过上限 {MAX_RETRIES} 次，"
+                    f"停止自动流转并标记 blocked（不再强制标记完成）。"
+                    f"请人工排查环境/编译/需求后解除阻塞。",
                     "warning",
+                    detail_data={
+                        "reject_count": retry_count["cnt"],
+                        "max_retries": MAX_RETRIES,
+                        "reason": "global_reject_limit",
+                        "legacy_action": "force_pass",
+                    },
+                )
+                await event_manager.publish_to_project(
+                    project_id, "ticket_blocked",
+                    {
+                        "ticket_id": ticket_id,
+                        "from": from_status,
+                        "to": TicketStatus.BLOCKED.value,
+                        "reason": "global_reject_limit",
+                    },
                 )
                 return
 
@@ -1343,8 +1532,10 @@ class TicketOrchestrator:
                     return  # 依赖未完成，跳过
 
             current_status = ticket["status"]
-            # v0.17: 按项目 traits 派生 rules（无 traits → 回退 default，向后兼容）
-            project_rules = await self._get_rules_for_project(project_id)
+            # v0.17: 按项目 traits + 工单 type 派生 rules（无 traits → 回退 default）
+            project_rules = await self._get_rules_for_project(
+                project_id, ticket_type=ticket.get("type"),
+            )
             rule = project_rules.get(current_status)
 
             if not rule:
@@ -1398,8 +1589,32 @@ class TicketOrchestrator:
             # engine_compile fragment 对所有工单触发，但"验证 OpenSpec 流程 / 跑通某流程 /
             # 测试 N 件套"这类非代码工单没有可编译的 C++，硬编译只会空转报错。
             # 启发式：标题+描述命中非代码关键词 → 跳过编译，直接推进到 engine_compile_passed。
+            #
+            # ── P2：无界面工单跳过 UX / 美术设计 ───────────────────────
+            # 同理，ux_design / art_design 的 trait 条件（platform:* / category:game）
+            # 对桌面和游戏项目必然命中，纯后端/纯 C++ 逻辑工单也会被拉去做
+            # 交互设计和视觉规范，实测空转 153s 且产出无人使用。
+            _skip_reason = None
             if action == "run_engine_compile" and self._is_noncode_ticket(ticket):
-                skip_to = "engine_compile_passed"
+                _skip_reason = ("noncode_ticket", "engine_compile_passed",
+                                "检测到非代码工单（验证/流程类，无可编译 C++），"
+                                "跳过 UE 引擎编译，直接进入后续阶段。")
+            elif (action in ("write_ux_design", "write_art_design")
+                    and not self._needs_design_stage(ticket)):
+                # 跳到该阶段的 success_status，让流水线接着往下走
+                _skip_to = await self._sop_success_status_for(
+                    project_id, action,
+                    default=("ux_design_done" if action == "write_ux_design"
+                             else "art_design_done"),
+                    ticket_type=ticket.get("type"),
+                )
+                _label = "UX 交互设计" if action == "write_ux_design" else "美术视觉设计"
+                _skip_reason = ("no_ui_ticket", _skip_to,
+                                f"工单不涉及界面/视觉（module={ticket.get('module')}，"
+                                f"标题描述无 UI 相关信号），跳过{_label}阶段。")
+
+            if _skip_reason:
+                reason_code, skip_to, skip_msg = _skip_reason
                 await db.update("tickets", {
                     "status": skip_to,
                     "assigned_agent": agent_name,
@@ -1407,12 +1622,10 @@ class TicketOrchestrator:
                 }, "id = ?", (ticket_id,))
                 await self._log(
                     project_id, ticket["requirement_id"], ticket_id, "Orchestrator",
-                    "skip", current_status, skip_to,
-                    f"检测到非代码工单（验证/流程类，无可编译 C++），跳过 UE 引擎编译，"
-                    f"直接进入后续阶段。",
-                    "info",
-                    detail_data={"skipped_action": "run_engine_compile",
-                                 "reason": "noncode_ticket",
+                    "skip", current_status, skip_to, skip_msg, "info",
+                    detail_data={"skipped_action": action,
+                                 "reason": reason_code,
+                                 "module": ticket.get("module"),
                                  "title": ticket.get("title", "")[:80]},
                 )
                 await event_manager.publish_to_project(
@@ -1420,19 +1633,39 @@ class TicketOrchestrator:
                     {"ticket_id": ticket_id, "from": current_status, "to": skip_to,
                      "agent": "Orchestrator"},
                 )
-                logger.info("⏭ 工单 %s 非代码，跳过 engine_compile → %s",
-                            ticket_id[:12], skip_to)
-                # 触发下一步流转
-                asyncio.create_task(self.process_ticket(project_id, ticket_id))
+                logger.info("⏭ 工单 %s 跳过 %s（%s）→ %s",
+                            ticket_id[:12], action, reason_code, skip_to)
+                # 先释放再续跑，避免事件侧撞 claim
+                self._release_ticket(ticket_id)
+                await self._publish_ticket_ready(project_id, ticket_id)
                 return
 
             agent = self.agents.get(agent_name)
             if not agent:
-                logger.error("Agent %s 不存在!", agent_name)
+                # 不能只 return —— 状态没变，下一轮轮询会再命中同一条 rule，
+                # 无限重试刷错误日志。SOP 引用了未注册的 Agent 属于配置错误，
+                # 只能转人工，标 blocked 止损。
+                logger.error(
+                    "Agent %s 不存在（SOP 配置错误），工单 %s 标记 blocked",
+                    agent_name, ticket_id[:12],
+                )
+                await db.update("tickets", {
+                    "status": TicketStatus.BLOCKED.value,
+                    "updated_at": now_iso(),
+                }, "id = ?", (ticket_id,))
                 await self._log(
                     project_id, ticket["requirement_id"], ticket_id, agent_name,
-                    "error", current_status, current_status,
-                    f"Agent {agent_name} 不存在", "error"
+                    "blocked", current_status, TicketStatus.BLOCKED.value,
+                    f"SOP 声明的 Agent「{agent_name}」未在 agent_registry 注册，"
+                    f"无法派单。请修正 SOP fragment 或实现该 Agent 后解除阻塞。",
+                    "error",
+                    detail_data={"missing_agent": agent_name, "action": action},
+                )
+                await event_manager.publish_to_project(
+                    project_id, "ticket_blocked",
+                    {"ticket_id": ticket_id, "from": current_status,
+                     "to": TicketStatus.BLOCKED.value, "reason": "agent_not_registered",
+                     "agent": agent_name},
                 )
                 return
 
@@ -1656,7 +1889,7 @@ class TicketOrchestrator:
             # 处理结果
             await self._handle_agent_result(project_id, ticket_id, ticket, agent_name, action, result)
 
-            # Checkpoint：成功跑完一轮后打阶段边界（时间轴可「还原到此」）
+            # Checkpoint：成功跑完一轮后打阶段边界（可供时间轴「还原到此」）
             try:
                 if isinstance(result, dict) and result.get("status") != "error":
                     from checkpoint.service import checkpoint_service
@@ -1668,11 +1901,15 @@ class TicketOrchestrator:
             except Exception as _pbe:
                 logger.debug("phase_boundary checkpoint 跳过: %s", _pbe)
 
-            # === 事件驱动：触发后续工单立即处理 ===
+            # === 事件驱动：触发后续阶段立即处理 ===
             updated = await db.fetch_one("SELECT status FROM tickets WHERE id = ?", (ticket_id,))
             if updated:
-                project_rules = await self._get_rules_for_project(project_id)
+                project_rules = await self._get_rules_for_project(
+                    project_id, ticket_type=ticket.get("type"),
+                )
                 if updated["status"] in project_rules:
+                    # 先释放互斥，再发布；否则事件侧 process_ticket 会撞 claim 被跳过
+                    self._release_ticket(ticket_id)
                     await self._publish_ticket_ready(project_id, ticket_id)
 
         except Exception as e:
@@ -1695,6 +1932,7 @@ class TicketOrchestrator:
             except Exception as log_err:
                 logger.error("记录工单错误日志也失败了: %s", log_err)
         finally:
+            self._release_ticket(ticket_id)
             try:
                 from checkpoint import clear_checkpoint_context
                 clear_checkpoint_context()
@@ -1714,6 +1952,25 @@ class TicketOrchestrator:
         requirement_id = ticket["requirement_id"]
         current_ticket = await db.fetch_one("SELECT * FROM tickets WHERE id = ?", (ticket_id,))
         current_status = current_ticket["status"] if current_ticket else ticket["status"]
+
+        # === 终态门闩：丢弃迟到的在途结果（blocked 后仍跑完的 fix_issues 等）===
+        if current_status in self._HARD_TERMINAL:
+            logger.warning(
+                "⏭ 工单 %s 已终态 %s，忽略迟到的 %s.%s 结果",
+                ticket_id[:12], current_status, agent_name, action,
+            )
+            await self._log(
+                project_id, requirement_id, ticket_id, "Orchestrator",
+                "stale_ignored", current_status, current_status,
+                f"工单已终态 {current_status}，忽略迟到的 {agent_name}.{action} 结果，不改写状态",
+                "warning",
+                detail_data={
+                    "ignored_agent": agent_name,
+                    "ignored_action": action,
+                    "result_status": (result or {}).get("status") if isinstance(result, dict) else None,
+                },
+            )
+            return
 
         # === 止血：Agent 返回 error 直接标记 blocked，阻止 orchestrator 再次分派 ===
         # 典型场景：fragment 声明的 action（如 run_engine_compile）未在 Agent 中实现，
@@ -1818,6 +2075,52 @@ class TicketOrchestrator:
             )
             return
 
+        if agent_name == "ArtistAgent":
+            # 美术资产落地（asset_gen fragment）。没有这个分支会落到函数末尾的
+            # else: new_status = current_status —— 状态不推进，同一条 rule 反复命中。
+            new_status = "assets_ready"
+            await db.update("tickets", {
+                "status": new_status, "result": result_json, "updated_at": now_iso(),
+            }, "id = ?", (ticket_id,))
+            _total = result.get("assets_total", 0)
+            _sourced = result.get("sourced", 0)
+            _ph = result.get("placeholder", 0)
+            _skip = result.get("skipped", 0)
+            if _total:
+                await db.insert("artifacts", {
+                    "id": generate_id("ART"),
+                    "project_id": project_id,
+                    "requirement_id": requirement_id,
+                    "ticket_id": ticket_id,
+                    "type": "asset_manifest",
+                    "name": f"资产落地 - {ticket['title']}",
+                    "path": None,
+                    "content": result_json,
+                    "metadata": json.dumps({
+                        "total": _total, "sourced": _sourced,
+                        "placeholder": _ph, "skipped": _skip,
+                    }, ensure_ascii=False),
+                    "created_at": now_iso(),
+                })
+            await self._log(
+                project_id, requirement_id, ticket_id, agent_name,
+                action, current_status, new_status,
+                f"资产落地完成：{_sourced} 命中资产库 / {_ph} 占位图 / {_skip} 待人工",
+                detail_data={"total": _total, "sourced": _sourced,
+                             "placeholder": _ph, "skipped": _skip},
+            )
+            # 占位图和待人工项需要美术介入，写进评论让人看得见
+            _warn = ""
+            if _ph or _skip:
+                _warn = (f"\n⚠️ {_ph} 个占位图需替换"
+                         + (f"，{_skip} 项需人工提供" if _skip else ""))
+            await self._write_phase_comment(
+                project_id, ticket_id, agent_name,
+                f"✅ 资产落地完成：共 {_total} 项，{_sourced} 个命中资产库。{_warn}",
+                phase=new_status,
+            )
+            return
+
         if agent_name == "ArtAgent":
             new_status = TicketStatus.ART_DESIGN_DONE.value
             await db.update("tickets", {
@@ -1906,6 +2209,63 @@ class TicketOrchestrator:
                 f"✅ PRD 已生成。验收标准：{str(result.get('acceptance_criteria','无'))[:200]}",
                 phase=new_status,
             )
+            return
+
+        if agent_name == "UEEditorAgent":
+            # UE 内容生成（BP / 关卡 / Python）。没有这个分支的话会落到函数末尾的
+            # else: new_status = current_status —— 状态不推进，同一条 rule 反复命中，
+            # UEEditorAgent 被无限重跑。
+            #
+            # Agent 返回 status=error 的情况已在函数开头统一转 blocked，此处只需
+            # 区分 success 与业务失败。
+            if result.get("status") == "success":
+                new_status = "ue_content_done"
+                await db.update("tickets", {
+                    "status": new_status,
+                    "result": result_json,
+                    "updated_at": now_iso(),
+                }, "id = ?", (ticket_id,))
+                await db.insert("artifacts", {
+                    "id": generate_id("ART"),
+                    "project_id": project_id,
+                    "requirement_id": requirement_id,
+                    "ticket_id": ticket_id,
+                    "type": "ue_content",
+                    "name": f"UE 内容 - {ticket['title']}",
+                    "path": None,
+                    "content": result_json,
+                    "metadata": None,
+                    "created_at": now_iso(),
+                })
+                await self._log(
+                    project_id, requirement_id, ticket_id, agent_name,
+                    "complete", current_status, new_status,
+                    f"UE 内容已生成：{str(result.get('message', ''))[:120]}",
+                    detail_data={
+                        "imported": result.get("imported"),
+                        "assets": result.get("assets"),
+                    },
+                )
+                await self._write_phase_comment(
+                    project_id, ticket_id, agent_name,
+                    f"✅ UE 内容已写入 Editor。{str(result.get('message', ''))[:150]}",
+                    phase=new_status,
+                )
+            else:
+                new_status = "ue_content_failed"
+                fail_msg = str(result.get("message") or "UE 内容生成未成功")
+                await db.update("tickets", {
+                    "status": new_status,
+                    "result": result_json,
+                    "updated_at": now_iso(),
+                }, "id = ?", (ticket_id,))
+                await self._log(
+                    project_id, requirement_id, ticket_id, agent_name,
+                    "reject", current_status, new_status,
+                    f"UE 内容生成失败 · {fail_msg[:200]}",
+                    "warning",
+                    detail_data={"error": fail_msg, "failed": result.get("failed")},
+                )
             return
 
         if agent_name == "ArchitectAgent":
@@ -2081,17 +2441,15 @@ class TicketOrchestrator:
 
             new_status = TicketStatus.DEVELOPMENT_DONE.value
 
-            # 写入前重新读一次最新状态，防止 force_pass / 外部修改被覆盖
+            # 写入前再读一次：终态 / 已越过 development_done 则丢弃迟到结果
             latest = await db.fetch_one("SELECT status FROM tickets WHERE id = ?", (ticket_id,))
             latest_status = (latest or {}).get("status", current_status)
-            _TERMINAL_STATUSES = {
+            if latest_status in self._HARD_TERMINAL or latest_status in {
                 TicketStatus.TESTING_DONE.value,
                 TicketStatus.DEPLOYED.value,
-                "cancelled",
-            }
-            if latest_status in _TERMINAL_STATUSES:
+            }:
                 logger.info(
-                    "⏭ 工单 %s 当前状态 %s 已超过 development_done，跳过写入（防止 force_pass 被覆盖）",
+                    "⏭ 工单 %s 当前状态 %s，跳过写入 development_done（终态/已越过开发）",
                     ticket_id[:12], latest_status,
                 )
                 return
@@ -2315,6 +2673,15 @@ class TicketOrchestrator:
             test_status = result.get("status", "testing_done")
             if test_status not in (TicketStatus.TESTING_DONE.value, TicketStatus.TESTING_FAILED.value):
                 test_status = TicketStatus.TESTING_DONE.value
+
+            # run_tests 也被 smoke_test fragment 复用，但它的 success_status 是
+            # smoke_test_passed（中间态，后面还有 code_review/acceptance），
+            # 不是 testing_done（_HARD_TERMINAL）。写错会让工单提前终结。
+            if test_status == TicketStatus.TESTING_DONE.value:
+                test_status = await self._sop_success_status_for(
+                    project_id, action, default=TicketStatus.TESTING_DONE.value,
+                    ticket_type=ticket.get("type"),
+                )
             new_status = test_status
 
             await db.update("tickets", {
@@ -2323,7 +2690,9 @@ class TicketOrchestrator:
                 "updated_at": now_iso(),
             }, "id = ?", (ticket_id,))
 
-            if new_status == TicketStatus.TESTING_DONE.value:
+            # 成功分支要认所有"非失败"状态 —— smoke_test 阶段成功时是
+            # smoke_test_passed 而非 testing_done，用 == 判会被误当成失败打回。
+            if new_status != TicketStatus.TESTING_FAILED.value:
                 await self._log(
                     project_id, requirement_id, ticket_id, agent_name,
                     "complete", current_status, new_status,
@@ -2412,6 +2781,38 @@ class TicketOrchestrator:
                 )
 
         elif agent_name == "DeployAgent":
+            # deploy_ue / deploy_web fragment 都用 action=run_ci_deploy，但 success_status
+            # 不同：deploy_ue 是 packaged（后面还有 code_review → acceptance → deploy），
+            # deploy_web 是 deployed（终态）。必须读 SOP 声明，不能硬编码成 deployed ——
+            # 否则 UE 项目会提前撞进 _HARD_TERMINAL，审查和验收整段被跳过。
+            if action == "run_ci_deploy":
+                new_status = await self._sop_success_status_for(
+                    project_id, action, default=TicketStatus.DEPLOYED.value,
+                    ticket_type=ticket.get("type"),
+                )
+                if new_status != TicketStatus.DEPLOYED.value:
+                    await db.update("tickets", {
+                        "status": new_status,
+                        "result": result_json,
+                        "updated_at": now_iso(),
+                    }, "id = ?", (ticket_id,))
+                    deploy_info = result.get("deploy_result", {}) or {}
+                    await self._log(
+                        project_id, requirement_id, ticket_id, agent_name,
+                        "complete", current_status, new_status,
+                        f"打包已触发（strategy={deploy_info.get('strategy')}，"
+                        f"build_type={deploy_info.get('build_type')}）",
+                        detail_data={
+                            "strategy": deploy_info.get("strategy"),
+                            "build_type": deploy_info.get("build_type"),
+                            "build_id": deploy_info.get("build_id"),
+                            "git_commit": git_result.get("commit_hash") if git_result else None,
+                        },
+                    )
+                    # 不落 deploy_config 产物、不做需求完成检查 —— 留给真正的 deploy 阶段。
+                    # 状态已推进，交由 process_ticket 末尾的事件驱动继续流转。
+                    return
+
             # 部署完成
             new_status = TicketStatus.DEPLOYED.value
 
@@ -2576,7 +2977,7 @@ class TicketOrchestrator:
                 project_id, files, commit_msg, agent=agent_name
             )
 
-        # 写入二进制媒体文件（截图等），手动挡也只写不 commit
+        # 写入二进制媒体文件（截图 / 占位图等），手动挡也只写不 commit
         media_files: dict = result.pop("_media_files", {}) or {}
         if media_files:
             try:
@@ -2587,13 +2988,19 @@ class TicketOrchestrator:
                     dest.write_bytes(img_bytes)
                     logger.info("🖼️ 媒体文件写入: %s (%d bytes)", media_path, len(img_bytes))
                 if project_mode != "manual":
+                    # 这条通道最早只给 TestAgent 的截图用，消息写死了「测试截图」。
+                    # 现在 ArtistAgent 的占位图也走这里，硬编码会产出
+                    # 「[ArtistAgent] 测试截图: ...」这种驴唇不对马嘴的 commit。
+                    media_label = _MEDIA_COMMIT_LABELS.get(
+                        (agent_name, action), _MEDIA_COMMIT_LABELS.get(agent_name, "媒体文件"),
+                    )
                     media_commit = await git_manager.commit(
                         project_id,
-                        f"[{agent_name}] 测试截图: {ticket_title}",
+                        f"[{agent_name}] {media_label}: {ticket_title}",
                         author=agent_name,
                     )
                     await git_manager.push(project_id)
-                    logger.info("📸 测试截图已提交: %s", media_commit)
+                    logger.info("🖼️ %s已提交: %s", media_label, media_commit)
             except Exception as me:
                 logger.warning("媒体文件提交失败（不影响主流程）: %s", me)
         # 记录当前分支名到 git_result
@@ -2623,30 +3030,19 @@ class TicketOrchestrator:
                     step, "git_push", "git push origin main", "success"
                 )
             else:
-                # push 失败：写日志 + 通过 HookRegistry emit TOOL_ERROR
+                # push 失败：git_manager 已按原因分类并推送可执行的修复卡
+                status = git_manager.get_last_push_status(project_id) or {}
                 push_err_msg = (
-                    f"{agent_name}.{action} git push 失败，代码已 commit 但未推送到远端。"
-                    f" 工单: {(ticket_id or '')[-8:] or '(需求级)'} | 请检查仓库是否存在及网络连通性。"
+                    f"{agent_name}.{action} {status.get('title') or 'git push 失败'}。"
+                    f"{status.get('summary') or '代码已 commit 但未推送到远端。'}"
+                    f" 工单: {(ticket_id or '')[-8:] or '(需求级)'}。"
+                    f"{status.get('next_step') or ''}"
                 )
                 logger.warning("⚠️ %s", push_err_msg)
                 await self._log(
                     project_id, requirement_id, ticket_id, agent_name,
                     "git_push_failed", None, None, push_err_msg, "warn",
                 )
-                try:
-                    from hooks.registry import hook_registry
-                    from hooks.types import HookEvent, ToolHookContext
-                    await hook_registry.emit(ToolHookContext(
-                        event=HookEvent.TOOL_ERROR,
-                        tool_name="git:push_failed",
-                        input={"action": action},
-                        error=RuntimeError(push_err_msg),
-                        project_id=project_id,
-                        ticket_id=ticket_id,
-                        agent_type=agent_name,
-                    ))
-                except Exception:
-                    pass
 
             # 自动部署 dev 环境（Agent 完成文件提交后）
             if agent_name in ("DevAgent", "ArchitectAgent"):
@@ -3091,8 +3487,8 @@ class TicketOrchestrator:
                     "info", "pending", "pending",
                     f"前置依赖已全部完成（包括 #{completed_ticket_id[-6:]}），开始自动流转", "info"
                 )
-                # 异步触发后续工单流转
-                import asyncio
+                # 直接续跑依赖工单：此时当前工单仍占项目槽，enqueue 会被槽满挡住；
+                # 互斥由 process_ticket claim 保证，不会与轮询双开同一张单。
                 asyncio.create_task(self.process_ticket(project_id, pt["id"]))
 
     async def _build_context(self, ticket: Dict, agent_name: str = "") -> Dict:
@@ -3889,6 +4285,53 @@ class TicketOrchestrator:
         )
         logger.info("reset_phases: ticket %s from=%s reason=%s", ticket_id, from_phase, reason)
         return True
+
+    async def _finalize_openspec_after_done(
+        self, project_id: str, ticket_id: str,
+    ) -> None:
+        """工单已到 testing_done/deployed 但 OpenSpec 停在 applied 时，软收尾 Verify→Archive。
+
+        用于历史单（含旧 force_pass）打开详情时补跑；新路径 reject 上限改为 blocked，不再走此收尾。
+        Verify 失败不回 blocked（block_on_fail=False）。
+        """
+        row = await db.fetch_one(
+            "SELECT openspec_stage, status FROM tickets WHERE id = ?", (ticket_id,),
+        )
+        if not row:
+            return
+        stage = (row.get("openspec_stage") or "").strip()
+        if stage in ("", "archived"):
+            return
+        if stage not in ("proposed", "applied", "verified"):
+            return
+
+        ctx = {"project_id": project_id, "ticket_id": ticket_id}
+        if stage in ("proposed", "applied"):
+            from agents.test import TestAgent
+            ok = await TestAgent()._run_openspec_verify(ctx, block_on_fail=False)
+            if not ok:
+                logger.info(
+                    "📐 OpenSpec 终态收尾：Verify 未通过，跳过 Archive（ticket=%s）",
+                    ticket_id[:12],
+                )
+                return
+            row = await db.fetch_one(
+                "SELECT openspec_stage FROM tickets WHERE id = ?", (ticket_id,),
+            )
+            stage = ((row or {}).get("openspec_stage") or "").strip()
+
+        if stage == "verified":
+            from agents.deploy import DeployAgent
+            await DeployAgent()._run_openspec_archive(ctx)
+            # archive 成功时 DeployAgent 会写 openspec_stage=archived；补一条 layer 日志便于时间轴跳转
+            row2 = await db.fetch_one(
+                "SELECT openspec_stage FROM tickets WHERE id = ?", (ticket_id,),
+            )
+            if (row2 or {}).get("openspec_stage") == "archived":
+                await self._add_layer_log(
+                    ticket_id, project_id, action="openspec_archive",
+                    layer="spec", detail={"message": "终态收尾 Archive 完成"},
+                )
 
     async def post_milestone_comment(
         self,
