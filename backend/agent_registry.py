@@ -74,6 +74,7 @@ def _register_builtin_agents():
     from agents.planner import PlannerAgent
     from agents.ux import UXAgent
     from agents.art import ArtAgent
+    from agents.artist import ArtistAgent
     from agents.architect import ArchitectAgent
     from agents.dev import DevAgent
     from agents.test import TestAgent
@@ -88,6 +89,7 @@ def _register_builtin_agents():
         "PlannerAgent": PlannerAgent,
         "UXAgent": UXAgent,
         "ArtAgent": ArtAgent,
+        "ArtistAgent": ArtistAgent,              # 资产落地（检索资产库 / 占位图）
         "ArchitectAgent": ArchitectAgent,
         "DevAgent": DevAgent,
         "TestAgent": TestAgent,

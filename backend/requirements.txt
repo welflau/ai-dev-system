@@ -1,5 +1,6 @@
 # Core
-fastapi>=0.109.0
+fastapi>=0.141.0
+starlette>=0.46.0,<1.0
 uvicorn[standard]>=0.27.0
 pydantic>=2.6.0
 
@@ -30,3 +31,6 @@ playwright>=1.40.0    # 自动化截图（DevAgent 自测）
 # Testing
 pytest>=8.0.0
 pytest-asyncio>=0.23.0
+
+# ArtistAgent 占位图生成（缺失时降级为 not_found，不阻断流水线）
+Pillow>=10.0.0
