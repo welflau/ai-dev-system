@@ -28,8 +28,8 @@ _TEMPLATE_VARS = {"project_name", "repo_path", "tech_stack", "git_remote"}
 
 # traits → pack 名称映射
 _TRAIT_PACK_MAP: Dict[str, List[str]] = {
-    "engine:ue5":       ["ue5-dev"],
-    "engine:ue4":       ["ue5-dev"],
+    "engine:ue5":       ["ue5-dev", "ue5-prod-skills"],
+    "engine:ue4":       ["ue5-dev", "ue5-prod-skills"],
     "engine:godot":     ["godot-dev"],
     "engine:unity":     ["unity-dev"],
     "platform:web":     ["web-dev"],

@@ -96,6 +96,17 @@ async def get_ticket(project_id: str, ticket_id: str):
     if not ticket:
         raise HTTPException(404, "工单不存在")
 
+    # 终态但 OpenSpec 停在 applied/proposed：后台软收尾 Verify→Archive（不阻塞响应）
+    try:
+        _st = ticket.get("status") or ""
+        _os = (ticket.get("openspec_stage") or "").strip()
+        if _st in ("testing_done", "deployed", "done") and _os in ("proposed", "applied", "verified"):
+            import asyncio
+            from orchestrator import orchestrator as _orch
+            asyncio.create_task(_orch._finalize_openspec_after_done(project_id, ticket_id))
+    except Exception:
+        pass
+
     # 子任务
     subtasks = await db.fetch_all(
         "SELECT * FROM subtasks WHERE ticket_id = ? ORDER BY sort_order, created_at",
@@ -1307,6 +1318,22 @@ async def get_ticket_logs(ticket_id: str):
 _SECONDARY_ACTIONS = {"chat:", "llm_call", "tool_call", "shell_exec",
                       "react_tool", "skill_step_start"}
 
+# OpenSpec / 建单等生命周期事件必须进主时间轴（否则 started=info 会被扔进「详细日志」
+# 而 partial=warning 留在主轴，出现「部分完成在前、启动在后」的假乱序）
+_PRIMARY_ACTIONS = {
+    "create", "assign", "accept", "complete", "blocked", "cancelled",
+    "openspec_propose_started", "openspec_propose", "openspec_propose_partial",
+    "openspec_propose_failed", "openspec_artifact",
+    "openspec_apply_started", "openspec_apply", "openspec_apply_partial",
+    "openspec_apply_failed", "openspec_verify", "openspec_verify_failed",
+    "openspec_archive",
+    "skill_workflow_start", "thought_start",
+    "phase_complete", "manual_action", "verification_approved",
+    "verification_rejected", "artifact_added", "milestone_architecture",
+    # checkpoint / before_write 单独分流；仅 ticket_start、phase_boundary、restore 上主轴
+    "checkpoint_restore", "revert",
+}
+
 
 def _classify_tier(item: dict) -> str:
     """判断时间轴条目的展示级别：primary / secondary"""
@@ -1327,8 +1354,8 @@ def _classify_tier(item: dict) -> str:
         if trigger == "before_write":
             return "secondary"
         return "primary"
-    # 还原/回滚是人工操作，必须上主轴
-    if action in ("checkpoint_restore", "revert"):
+    # 明确的主轴生命周期事件（含 OpenSpec started，避免与 partial 分层导致假乱序）
+    if action in _PRIMARY_ACTIONS:
         return "primary"
     # 步骤完成 → primary
     if action == "skill_step_done":
@@ -1340,10 +1367,6 @@ def _classify_tier(item: dict) -> str:
     for prefix in _SECONDARY_ACTIONS:
         if action.startswith(prefix) or action == prefix:
             return "secondary"
-    # phase_complete / artifact / 人工操作 → primary
-    if action in ("phase_complete", "manual_action", "verification_approved",
-                  "verification_rejected", "artifact_added"):
-        return "primary"
     return "secondary"
 
 

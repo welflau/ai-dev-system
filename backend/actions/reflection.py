@@ -86,6 +86,18 @@ def _format_similar_failures(cases: List[Dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _format_error_playbooks(hits: List[Dict[str, Any]]) -> str:
+    if not hits:
+        return ""
+    lines = ["\n## 知识库相关条目（报错后自动检索，优先按此处理）"]
+    for h in hits[:3]:
+        snippet = (h.get("snippet") or h.get("preview") or "")[:240].replace("\n", " ")
+        name = h.get("display_name") or h.get("filename") or "文档"
+        lines.append(f"- {name}: {snippet}")
+    lines.append("请优先采用手册中的步骤，不要只复述失败信号。")
+    return "\n".join(lines)
+
+
 def _format_previous_code(previous_code: Dict[str, str], max_files: int = 5,
                          max_chars_per_file: int = 200) -> str:
     """上次代码摘要（前几个文件的前几百字）"""
@@ -157,6 +169,7 @@ class ReflectionAction(ActionBase):
         retry_count = int(context.get("retry_count") or 1)
         previous_reflections = context.get("previous_reflections") or []
         similar_failures = context.get("similar_failures") or []
+        error_playbooks = context.get("error_playbooks") or []
 
         # 构建失败信号段
         compile_errors = context.get("compile_errors") or []
@@ -301,6 +314,7 @@ class ReflectionAction(ActionBase):
 
         # 跨工单相似失败段（Failure Library 检索结果；可能为空）
         similar_block = _format_similar_failures(similar_failures)
+        playbook_block = _format_error_playbooks(error_playbooks)
 
         user_prompt = f"""## 任务
 复盘开发失败并产出结构化反思。
@@ -313,6 +327,7 @@ class ReflectionAction(ActionBase):
 {code_block}
 {prev_block}
 {similar_block}
+{playbook_block}
 
 ## 输出要求：严格 JSON（不要 markdown 包裹）
 {{

@@ -28,14 +28,20 @@ class UERunPythonAction(ActionBase):
             "description": (
                 "在當前項目關聯的 UE Editor 中執行 Python 代碼。\n"
                 "適用：查詢資產信息、創建 Blueprint、修改 Actor 屬性、布置關卡等。\n"
-                "前置：UE Editor 已運行，Remote Execution Server 已啟用。"
+                "前置：UE Editor 已運行，Remote Execution Server 已啟用。\n\n"
+                "⚠️ 重要：若使用者提供了自然語言描述（如「列出所有Actor」），\n"
+                "你必須先根據描述生成合適的 import unreal Python 代碼，\n"
+                "然後將生成的代碼作為 code 參數傳入。不要直接傳遞自然語言描述！"
             ),
             "input_schema": {
                 "type": "object",
                 "properties": {
                     "code": {
                         "type": "string",
-                        "description": "要在 UE Editor 中執行的 Python 代碼",
+                        "description": (
+                            "要在 UE Editor 中執行的 Python 代碼。必須是合法的 Python 代碼，\n"
+                            "包含 import unreal。若使用者輸入自然語言，請先生成對應的 Python 代碼再傳入"
+                        ),
                     },
                     "timeout": {
                         "type": "number",
@@ -53,6 +59,21 @@ class UERunPythonAction(ActionBase):
 
         if not code:
             return ActionResult(success=False, error="code 不能為空")
+
+        # 檢測：如果 code 看起來不像 Python 代碼（不含關鍵詞），提醒 LLM 重新生成
+        _has_import = "import " in code
+        _has_print  = "print(" in code or "print " in code or code.strip().startswith("print")
+        _has_func   = "def " in code or "class " in code or "for " in code or "if " in code
+        _has_unreal = "unreal" in code.lower()
+        if not (_has_import or _has_print or _has_func or _has_unreal):
+            return ActionResult(
+                success=False,
+                error=(
+                    f"代碼無效：傳入的參數 '{code[:80]}' 不是合法的 Python 代碼。\n"
+                    "請根據使用者需求生成 import unreal 的 Python 代碼，然後重新調用本工具。\n"
+                    "例如：import unreal; actors = unreal.EditorLevelLibrary.get_all_level_actors(); print(len(actors))"
+                ),
+            )
 
         try:
             from engines.ue_python_bridge import run_python

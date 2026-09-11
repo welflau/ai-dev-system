@@ -14,7 +14,115 @@ from config import BASE_DIR
 logger = logging.getLogger("git")
 
 
-async def _emit_git_error_hook(project_id: str | None, action: str, err: str) -> None:
+def classify_push_failure(
+    stderr: str = "",
+    *,
+    blocked_main: bool = False,
+    no_remote: bool = False,
+    branch: str = "",
+    remote: str = "",
+) -> Dict[str, Any]:
+    """把 git push 失败归成可执行的下一步，而不是「请自行排查」。"""
+    branch = branch or "当前分支"
+    remote = remote or "origin"
+    if blocked_main:
+        return {
+            "reason": "blocked_main",
+            "title": "未推送到远端（保护策略）",
+            "summary": (
+                f"代码已提交到本地「{branch}」。"
+                "系统禁止 Agent 直接推送到 main/master，避免绕过合并流程。"
+            ),
+            "next_step": "本地提交已成功，流水线会继续。若要同步远端，点「推送到远端」。",
+            "actions": [
+                {"id": "push_now", "label": "推送到远端", "primary": True},
+                {"id": "open_git", "label": "打开仓库设置"},
+            ],
+        }
+    if no_remote:
+        return {
+            "reason": "no_remote",
+            "title": "还没有配置远程仓库",
+            "summary": "代码已提交到本地，但项目没有 origin，无法推送。",
+            "next_step": "一键创建 GitHub 仓库并推送，或到仓库设置里填写已有地址。",
+            "actions": [
+                {"id": "create_github", "label": "创建 GitHub 仓库并推送", "primary": True},
+                {"id": "open_git", "label": "填写仓库地址"},
+            ],
+        }
+    err = (stderr or "").lower()
+    if "repository not found" in err or ("not found" in err and "repositor" in err):
+        return {
+            "reason": "repo_missing",
+            "title": "远端仓库不存在",
+            "summary": f"远程「{remote}」指向的仓库不存在，或当前账号没有权限。",
+            "next_step": "创建这个 GitHub 仓库后再推送，或改成一个已有仓库。",
+            "detail": (stderr or "")[:240],
+            "actions": [
+                {"id": "create_github", "label": "创建仓库并重试推送", "primary": True},
+                {"id": "open_git", "label": "修改远程地址"},
+                {"id": "retry", "label": "重试推送"},
+            ],
+        }
+    if any(k in err for k in (
+        "authentication", "permission denied", "could not read username",
+        "403", "401", "invalid credentials", "access denied",
+    )):
+        return {
+            "reason": "auth",
+            "title": "Git 认证失败",
+            "summary": "没有权限推送到这个仓库。常见原因：未登录 gh、token 过期、没有写权限。",
+            "next_step": "本机执行 gh auth login（或检查仓库写权限）后点重试。",
+            "detail": (stderr or "")[:240],
+            "actions": [
+                {"id": "retry", "label": "我已登录，重试推送", "primary": True},
+                {"id": "open_git", "label": "打开仓库设置"},
+            ],
+        }
+    if any(k in err for k in ("non-fast-forward", "fetch first", "updates were rejected", "[rejected]")):
+        return {
+            "reason": "rejected",
+            "title": "远端有更新，推送被拒绝",
+            "summary": f"远端「{branch}」比本地新，需要先拉取再推送。",
+            "next_step": "先拉取远端再推送。本地提交不会丢。",
+            "detail": (stderr or "")[:240],
+            "actions": [
+                {"id": "pull_push", "label": "拉取后推送", "primary": True},
+                {"id": "open_git", "label": "打开仓库设置"},
+            ],
+        }
+    if any(k in err for k in (
+        "could not resolve", "failed to connect", "timed out", "network",
+        "connection refused", "unable to access",
+    )):
+        return {
+            "reason": "network",
+            "title": "网络连不上 Git 远端",
+            "summary": "DNS 或网络不通，暂时无法推送。本地提交已保存。",
+            "next_step": "检查网络后点重试。",
+            "detail": (stderr or "")[:240],
+            "actions": [{"id": "retry", "label": "重试推送", "primary": True}],
+        }
+    return {
+        "reason": "unknown",
+        "title": "Git 推送失败",
+        "summary": "代码已提交到本地，但推送远端失败。",
+        "next_step": "先重试；仍失败则创建远端仓库或检查权限。",
+        "detail": (stderr or "")[:240],
+        "actions": [
+            {"id": "retry", "label": "重试推送", "primary": True},
+            {"id": "create_github", "label": "创建 GitHub 仓库并推送"},
+            {"id": "open_git", "label": "打开仓库设置"},
+        ],
+    }
+
+
+async def _emit_git_error_hook(
+    project_id: str | None,
+    action: str,
+    err: str,
+    extra_input: Optional[Dict[str, Any]] = None,
+) -> None:
     """git 操作失败时通过 HookRegistry emit TOOL_ERROR，
     让 audit_log_hook / failure_library_hook / chat_alert_hook 统一处理"""
     try:
@@ -23,7 +131,7 @@ async def _emit_git_error_hook(project_id: str | None, action: str, err: str) ->
         ctx = ToolHookContext(
             event=HookEvent.TOOL_ERROR,
             tool_name=f"git:{action}",
-            input={},
+            input=dict(extra_input or {}),
             error=RuntimeError(err[:300]),
             project_id=project_id,
             agent_type="Git",
@@ -58,6 +166,8 @@ class GitManager:
         self._custom_paths: Dict[str, str] = {}
         # 存储项目 ID 到默认 push remote 名的映射
         self._push_remotes: Dict[str, str] = {}
+        # 最近一次 push 诊断（供编排器/API 展示下一步）
+        self._last_push_status: Dict[str, Dict[str, Any]] = {}
 
     def set_project_path(self, project_id: str, path: str):
         """设置项目的自定义仓库路径"""
@@ -206,7 +316,8 @@ Thumbs.db
             pass
         written = []
         for file_path, content in files.items():
-            # 路径已在批量 capture 中拍过快照；此处直接写盘，避免 write_file 二次 capture
+            # 单文件路径已在批量 capture；避免重复拍快照：临时清 context 再写？ 
+            # 更简单：直接写盘，跳过 write_file 的再次 capture
             repo_dir = self._repo_path(project_id)
             target = repo_dir / file_path
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -242,18 +353,42 @@ Thumbs.db
         rc, hash_out, _ = await self._run_git(repo_dir, "rev-parse", "--short", "HEAD")
         return hash_out if rc == 0 else None
 
-    async def push(self, project_id: str, remote: str = None, branch: str = None) -> bool:
-        """git push（仅在配置了远程仓库时执行，禁止 Agent 直接 push 到 main/master）"""
+    def get_last_push_status(self, project_id: str) -> Dict[str, Any]:
+        return dict(self._last_push_status.get(project_id) or {})
+
+    async def push(
+        self,
+        project_id: str,
+        remote: str = None,
+        branch: str = None,
+        *,
+        allow_protected: bool = False,
+    ) -> bool:
+        """git push（仅在配置了远程仓库时执行，禁止 Agent 直接 push 到 main/master）
+
+        allow_protected=True：用户点「推送到远端」时允许推 main/master。
+        """
         # remote=None 时使用项目配置的 push remote，fallback "origin"
         if remote is None:
             remote = self._push_remotes.get(project_id, "origin")
 
         repo_dir = str(self._repo_path(project_id))
 
+        async def _fail(status: Dict[str, Any]) -> bool:
+            self._last_push_status[project_id] = status
+            logger.warning("git push 失败 [%s]: %s", status.get("reason"), status.get("summary"))
+            await _emit_git_error_hook(
+                project_id,
+                "push_failed",
+                status.get("summary") or "git push 失败",
+                extra_input={"diagnosis": status},
+            )
+            return False
+
         # check if remote exists
         rc, out, _ = await self._run_git(repo_dir, "remote")
-        if rc != 0 or remote not in out:
-            return False  # no remote configured
+        if rc != 0 or remote not in (out or ""):
+            return await _fail(classify_push_failure(no_remote=True, remote=remote))
 
         # 自动检测当前分支名
         if not branch:
@@ -261,20 +396,24 @@ Thumbs.db
             branch = branch_out if rc == 0 and branch_out else "main"
 
         # 保护：Agent 不能直接 push 到 main/master（只能通过 CI/CD merge）
-        if branch in ("main", "master"):
+        if branch in ("main", "master") and not allow_protected:
             # 检查调用来源：如果是从 write_and_commit 调的（Agent 提交），阻止
             import traceback
             stack = traceback.format_stack()
             is_agent_push = any("write_and_commit" in frame or "_handle_git_files" in frame for frame in stack)
             if is_agent_push:
                 logger.warning("🛑 阻止 Agent 直接 push 到 %s（应在 feat 分支上）", branch)
-                return False
+                return await _fail(classify_push_failure(
+                    blocked_main=True, branch=branch, remote=remote,
+                ))
 
         rc, _, err = await self._run_git(repo_dir, "push", remote, branch)
         if rc != 0:
             logger.error("git push failed: %s", err)
-            await _emit_git_error_hook(project_id, "push_failed", err)
-            return False
+            return await _fail(classify_push_failure(
+                err, branch=branch, remote=remote,
+            ))
+        self._last_push_status[project_id] = {"ok": True, "reason": "ok"}
         return True
 
     async def clone(self, url: str, dest_path: str) -> bool:
@@ -1130,6 +1269,21 @@ Thumbs.db
             hash_ = await self.commit(project_id, message, author=author)
             result["commit_hash"] = hash_
         return result
+
+    async def remove_tree(self, project_id: str, rel_dir: str) -> bool:
+        """删除仓库内相对目录（如 openspec/changes/c-xxx），不自动 commit。"""
+        rel = self._normalize_rel_path(rel_dir or "")
+        if not rel or ".." in rel.split("/"):
+            return False
+        target = self._repo_path(project_id).joinpath(*rel.split("/"))
+        if not target.exists():
+            return False
+        import shutil
+        if target.is_dir():
+            shutil.rmtree(target)
+        else:
+            target.unlink()
+        return True
 
 
 # 全局实例

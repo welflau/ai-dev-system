@@ -144,6 +144,16 @@ class ArchitectAgent(BaseAgent):
 
             logger.info("📐 [规范层] OpenSpec Propose (SkillRunner): change=%s", change_id)
 
+            try:
+                from checkpoint import set_checkpoint_context
+                set_checkpoint_context(
+                    project_id=project_id, ticket_id=ticket_id,
+                    agent_type="ArchitectAgent", action="openspec_propose",
+                    repo_path=repo_path or "",
+                )
+            except Exception:
+                pass
+
             from orchestrator import orchestrator as orch
             # started 记录（不依赖 LLM，先落，保证可见）
             await db.execute(

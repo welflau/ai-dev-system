@@ -49,8 +49,9 @@ _SYSTEM_PROMPT = """你是资深 DevOps 运维工程师，正在诊断一条自�
 硬要求：
 - 根因定位要具体（到 action 名 / agent 名 / 配置项 / 代码路径），不要空话
 - 建议动作必须可操作：重试 / 跳过阶段 / 实现某方法 / 移除某 trait
+- 若「知识库相关条目」有命中，根因和建议必须优先对齐手册，不要另编一套空话
 - 输出严格 JSON，不要 markdown 包裹
-- confidence: 证据充分（有明确 error + 已知模式）0.8+；证据间接 0.4~0.7；基本靠猜 <0.3"""
+- confidence: 证据充分（有明确 error + 已知模式 / 知识库命中）0.8+；证据间接 0.4~0.7；基本靠猜 <0.3"""
 
 
 def _parse_json_lenient(raw: str) -> Dict[str, Any]:
@@ -122,6 +123,25 @@ class DiagnoseTicketAction(ActionBase):
         recent_logs = context.get("recent_logs") or []
         sop_stage = context.get("sop_stage") or {}
         project_traits = context.get("project_traits") or []
+        project_id = context.get("project_id")
+
+        # Agent 报错流程：先搜知识库，再交给 LLM 诊断
+        kb_hits: List[Dict[str, Any]] = []
+        kb_block = ""
+        try:
+            from actions.chat.search_knowledge import (
+                format_playbooks_for_llm,
+                lookup_error_playbook,
+            )
+            kb_hits = await lookup_error_playbook(
+                error_msg,
+                project_id,
+                tool_name=f"{failed_agent}.{failed_action}",
+                extra=ticket_title,
+            )
+            kb_block = format_playbooks_for_llm(kb_hits) if kb_hits else ""
+        except Exception as e:
+            logger.debug("诊断前知识库检索失败（忽略）: %s", e)
 
         # 构建 LLM 输入
         sop_block = "(无 SOP 阶段上下文)"
@@ -154,6 +174,8 @@ class DiagnoseTicketAction(ActionBase):
 
 ## 最近日志（最新在前）
 {_format_recent_logs(recent_logs)}
+
+{kb_block or "## 知识库相关条目\n(无命中)"}
 
 ## 输出要求：严格 JSON（不要 markdown 包裹）
 {{
@@ -193,6 +215,9 @@ class DiagnoseTicketAction(ActionBase):
             except (TypeError, ValueError):
                 diag["confidence"] = 0.5
             diag["created_at"] = datetime.utcnow().isoformat() + "Z"
+            if kb_hits:
+                from actions.chat.search_knowledge import compact_knowledge_hits
+                diag["knowledge_hits"] = compact_knowledge_hits(kb_hits)
 
             logger.info(
                 "🩺 诊断: %s | 根因: %s | 置信度=%.2f",
@@ -203,5 +228,8 @@ class DiagnoseTicketAction(ActionBase):
         except Exception as e:
             logger.warning("🩺 诊断降级（LLM/JSON 失败）: %s", e)
             diag = _minimal_diagnosis(error_msg, note=f"LLM 失败: {e}")
+            if kb_hits:
+                from actions.chat.search_knowledge import compact_knowledge_hits
+                diag["knowledge_hits"] = compact_knowledge_hits(kb_hits)
 
         return ActionResult(success=True, data={"diagnosis": diag})

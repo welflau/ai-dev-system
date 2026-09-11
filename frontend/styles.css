@@ -7315,6 +7315,54 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
     line-height: 1.6;
     word-break: break-word;
     white-space: pre-wrap;
+    user-select: text;
+    -webkit-user-select: text;
+    cursor: text;
+}
+
+.chat-msg-bubble .chat-bubble-toolbar,
+.chat-msg-bubble .chat-bubble-tool-btn,
+.chat-msg-bubble .confirm-req-btns,
+.chat-msg-bubble .confirm-req-btns button,
+.chat-msg-bubble .chat-action-card button {
+    user-select: none;
+    cursor: pointer;
+}
+
+.chat-msg-bubble .chat-file-link,
+.chat-msg-bubble .chat-kb-link {
+    cursor: pointer;
+}
+
+/* 聊天气泡文字右键菜单（WebView / 桌面壳无系统菜单时用） */
+.chat-bubble-ctx-menu {
+    position: fixed;
+    z-index: 10050;
+    min-width: 120px;
+    padding: 4px 0;
+    background: var(--bg-card, #1a1d27);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+.chat-bubble-ctx-item {
+    display: block;
+    width: 100%;
+    padding: 7px 14px;
+    border: none;
+    background: transparent;
+    color: var(--text);
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
+}
+.chat-bubble-ctx-item:hover {
+    background: var(--bg-elevated);
+    color: var(--primary-light, #a5b4fc);
+}
+.chat-bubble-ctx-item:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
 }
 
 .chat-msg.user .chat-msg-bubble {

@@ -3325,6 +3325,7 @@ async def _detect_and_handle_path(message: str, projects: list) -> dict | None:
         "tech_stack": scan.get("tech_stack", ""),
         "description": "",
         "traits": scan.get("traits", []),
+        "detected_traits": scan.get("detected_traits", []),
         "preset_id": scan.get("suggested_preset"),
         "mode": scan.get("suggested_mode", "manual"),
         "extra_paths": scan.get("extra_paths", []),

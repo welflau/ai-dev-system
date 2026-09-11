@@ -277,11 +277,31 @@ async def chat_alert_hook(ctx: ToolHookContext) -> None:
     error_msg = str(ctx.error) if ctx.error else f"工具 {tool} 执行失败（无详细错误信息）"
     ticket_id  = ctx.ticket_id
     agent_type = ctx.agent_type or "System"
+    diagnosis = (ctx.input or {}).get("diagnosis") if isinstance(ctx.input, dict) else None
+    if not isinstance(diagnosis, dict):
+        diagnosis = None
 
-    # 构建友好提示
-    if tool.startswith("git:push"):
+    # 构建友好提示：有诊断时给「下一步 + 按钮」，不要让用户自己猜
+    actions = []
+    if diagnosis:
+        title = diagnosis.get("title") or "⚠️ Git 操作失败"
+        body = diagnosis.get("summary") or error_msg[:200]
+        next_step = diagnosis.get("next_step") or ""
+        if next_step:
+            body += f"\n\n下一步：{next_step}"
+        detail = diagnosis.get("detail") or ""
+        if detail:
+            body += f"\n\n技术细节：{detail}"
+        actions = diagnosis.get("actions") or []
+    elif tool.startswith("git:push"):
         title = "⚠️ Git Push 失败"
         body  = f"代码已提交但未推送到远端仓库。\n原因：{error_msg[:200]}"
+        actions = [
+            {"id": "retry", "label": "重试推送", "primary": True},
+            {"id": "create_github", "label": "创建 GitHub 仓库并推送"},
+            {"id": "open_git", "label": "打开仓库设置"},
+        ]
+        body += "\n\n下一步：先点「重试推送」；若仓库不存在，点「创建 GitHub 仓库并推送」。"
     elif tool.startswith("git:commit"):
         title = "⚠️ Git Commit 失败"
         body  = f"文件写入失败，代码未提交。\n原因：{error_msg[:200]}"
@@ -290,7 +310,32 @@ async def chat_alert_hook(ctx: ToolHookContext) -> None:
         body  = error_msg[:300]
 
     if ticket_id:
-        body += f"\n\n工单 ID：`{ticket_id[-8:]}`，可发送「查看工单状态」了解详情。"
+        body += f"\n\n工单 ID：`{ticket_id[-8:]}`"
+
+    knowledge_hits = []
+    try:
+        from actions.chat.search_knowledge import compact_knowledge_hits, lookup_error_playbook
+        extra = ""
+        if diagnosis:
+            extra = " ".join(
+                str(x) for x in (
+                    diagnosis.get("reason"),
+                    diagnosis.get("title"),
+                ) if x
+            )
+        knowledge_hits = compact_knowledge_hits(await lookup_error_playbook(
+            error_msg,
+            project_id,
+            tool_name=tool,
+            extra=extra,
+        ))
+        if knowledge_hits:
+            cites = " · ".join(h.get("display_name") or "" for h in knowledge_hits if h.get("display_name"))
+            if cites:
+                body += f"\n\n知识库：{cites}"
+    except Exception as e:
+        logger.debug("chat_alert_hook 知识库检索失败: %s", e)
+        knowledge_hits = []
 
     try:
         from events import event_manager
@@ -302,6 +347,8 @@ async def chat_alert_hook(ctx: ToolHookContext) -> None:
             "tool":       tool,
             "ticket_id":  ticket_id,
             "agent_type": agent_type,
+            "actions":    actions,
+            "knowledge_hits": knowledge_hits,
             "created_at": now_iso(),
         })
         # 持久化到 chat_messages，刷新后可还原
@@ -319,7 +366,8 @@ async def chat_alert_hook(ctx: ToolHookContext) -> None:
                     project_id, "assistant", "",  # content 为空，由 action card 展示
                     action={"type": "error_alert", "title": title, "body": body,
                             "tool": tool, "ticket_id": ticket_id or "",
-                            "agent": agent_type},
+                            "agent": agent_type, "actions": actions,
+                            "knowledge_hits": knowledge_hits},
                     session_id=row["id"],
                 )
         except Exception as _pe:

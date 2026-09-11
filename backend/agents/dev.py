@@ -564,6 +564,26 @@ class DevAgent(BaseAgent):
             logger.warning("查询 similar_failures 失败: %s", e)
             context["similar_failures"] = []
 
+        # 知识库 FAQ / 手册：报错后先查，再反思（与 failure_cases 互补）
+        try:
+            from actions.chat.search_knowledge import lookup_error_playbook
+            err_blob = " ".join(str(x) for x in (
+                context.get("failure_type"),
+                context.get("rejection_reason"),
+                " ".join(context.get("test_issues") or []),
+                context.get("ticket_description") or "",
+            ) if x)
+            context["error_playbooks"] = await lookup_error_playbook(
+                err_blob,
+                context.get("project_id"),
+                extra=context.get("failure_type") or "",
+            )
+            if context["error_playbooks"]:
+                logger.info("🔎 重试知识库命中 %d 条", len(context["error_playbooks"]))
+        except Exception as e:
+            logger.warning("查询 error_playbooks 失败: %s", e)
+            context["error_playbooks"] = []
+
     # ──────────────────────────────────────────────────────────────
     # Superpowers 纪律注入
     # ──────────────────────────────────────────────────────────────

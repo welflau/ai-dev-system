@@ -253,9 +253,26 @@ class BaseAgent(ABC):
         skills_prompt = await self._resolve_skills_prompt(context)
         token = _current_skills.set(skills_prompt)
         try:
+            try:
+                from checkpoint import set_checkpoint_context, clear_checkpoint_context
+                if context.get("project_id") and context.get("ticket_id"):
+                    set_checkpoint_context(
+                        project_id=context.get("project_id") or "",
+                        ticket_id=context.get("ticket_id") or "",
+                        agent_type=getattr(self, "name", "") or context.get("agent_type") or "",
+                        action=task_name or "",
+                        repo_path=context.get("repo_path") or "",
+                    )
+            except Exception:
+                pass
             return await self._react_with_think_inner(task_name, context)
         finally:
             _current_skills.reset(token)
+            try:
+                from checkpoint import clear_checkpoint_context
+                clear_checkpoint_context()
+            except Exception:
+                pass
 
     async def _react_with_think_inner(self, task_name: str, context: Dict[str, Any]) -> Dict[str, Any]:
         """REACT 模式核心循环：使用 QueryEngine + tool_use 格式（替代旧文本协议）。"""
