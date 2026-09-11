@@ -25,6 +25,20 @@ TEST_STRATEGIES = {
     "other":    "通用测试（文件完整性 + 语法检查）",
 }
 
+# UE 项目专属策略（按 traits 判定，优先于 module）
+UE_TEST_STRATEGY = "UE 测试（uproject/模块完整性 + C++ 静态规则 lint + 资产命名）"
+
+
+def _is_ue_project(context: Dict[str, Any]) -> bool:
+    """项目是否为 UE —— 以 orchestrator 注入的 traits 为准。
+
+    traits 由 _build_context 从 projects.traits 注入（v0.19.x 起）。
+    """
+    traits = context.get("traits")
+    if not isinstance(traits, list):
+        return False
+    return any(str(t).startswith("engine:ue") for t in traits)
+
 
 class TestAgent(BaseAgent):
 
@@ -80,7 +94,11 @@ class TestAgent(BaseAgent):
         tests_prefix = context.get("tests_prefix", "tests/")
         dev_result = context.get("dev_result", {})
 
-        strategy = TEST_STRATEGIES.get(module, TEST_STRATEGIES["other"])
+        # UE 项目的产物是 .uproject / Source/ / Content/，不存在 index.html、
+        # src/**、main.py，通用检查项会整片判 fail 把通过率压到阈值以下。
+        # 按 traits 走 UE 专属分支（静态分析 + 功能测试 + 跳过 pytest 生成）。
+        is_ue = _is_ue_project(context)
+        strategy = UE_TEST_STRATEGY if is_ue else TEST_STRATEGIES.get(module, TEST_STRATEGIES["other"])
         logger.info("🧪 TestAgent 开始测试: %s (策略: %s)", title, strategy)
 
         results = {
@@ -93,7 +111,8 @@ class TestAgent(BaseAgent):
         total_passed = 0
 
         # === Phase 1: 静态分析 ===
-        static = await self._static_analysis(project_id, module)
+        static = (await self._static_analysis_ue(project_id, context) if is_ue
+                  else await self._static_analysis(project_id, module))
         results["phases"].append({"name": "静态分析", **static})
         total_checks += static["total"]
         total_passed += static["passed_count"]
@@ -114,22 +133,33 @@ class TestAgent(BaseAgent):
                       "detail": "(已独立为 ReviewAgent.code_review 阶段，此处跳过)"}
 
         # === Phase 3: 功能测试（按类型分发）===
-        func_test = await self._functional_test(project_id, module, dev_result, docs_prefix)
+        func_test = (await self._test_ue(project_id, context) if is_ue
+                     else await self._functional_test(project_id, module, dev_result, docs_prefix))
         screenshots = func_test.pop("screenshots", [])  # 取出截图列表，不进入 phases
         results["phases"].append({"name": "功能测试", **func_test})
         total_checks += func_test["total"]
         total_passed += func_test["passed_count"]
         all_issues.extend(func_test.get("issues", []))
 
-        # === Phase 4: 生成测试用例 (LLM) ===
-        test_code = await self._generate_test_cases(context, module)
-
-        # === Phase 5: 执行测试用例 ===
-        unit = await self._run_pytest(project_id, tests_prefix, test_code)
-        results["phases"].append({"name": "测试用例执行", **unit})
-        total_checks += unit["total"]
-        total_passed += unit["passed_count"]
-        all_issues.extend(unit.get("issues", []))
+        # === Phase 4 / 5: 生成 + 执行 pytest 用例 ===
+        # UE 项目跳过：C++ / Blueprint / uasset 不是 pytest 能跑的东西，
+        # LLM 只会编出 assert Path("index.html").exists() 之类的假用例，
+        # 既污染仓库又必然 fail。真正的运行时验证由 play_test 阶段的
+        # UE Automation Framework（TestAgent.run_playtest）负责。
+        test_code = None
+        if is_ue:
+            results["phases"].append({
+                "name": "测试用例执行", "total": 0, "passed_count": 0, "checks": [],
+                "issues": [],
+                "detail": "UE 项目跳过 pytest（运行时验证由 play_test 阶段的 UE Automation 负责）",
+            })
+        else:
+            test_code = await self._generate_test_cases(context, module)
+            unit = await self._run_pytest(project_id, tests_prefix, test_code)
+            results["phases"].append({"name": "测试用例执行", **unit})
+            total_checks += unit["total"]
+            total_passed += unit["passed_count"]
+            all_issues.extend(unit.get("issues", []))
 
         # === 汇总 ===
         pass_rate = round(total_passed / total_checks * 100) if total_checks > 0 else 0
@@ -242,7 +272,119 @@ class TestAgent(BaseAgent):
 
         return {"total": total, "passed_count": passed, "checks": checks, "issues": issues}
 
-    # ==================== Phase 2: 代码审查（委托 CodeReviewAction）====================
+    # ==================== Phase 1（UE）: 静态分析 ====================
+
+    async def _static_analysis_ue(self, project_id: str, context: Dict) -> Dict:
+        """UE 静态分析：.uproject 存在性/可解析 + Source 模块声明 + C++ lint 规则。
+
+        复用 DevAgent 自测用的 actions.ue_lint 规则集（R1-R8），
+        但这里扫的是**仓库里全部 C++**，而非 DevAgent 本次写的文件 —— TestAgent
+        的职责是验收整体质量，不只是增量。
+        """
+        from git_manager import git_manager
+
+        checks: List[Dict] = []
+        passed = 0
+        total = 0
+        issues: List[str] = []
+
+        try:
+            repo_dir = git_manager._repo_path(project_id)
+            if not repo_dir.exists():
+                return {"total": 1, "passed_count": 0, "checks": [], "issues": ["仓库不存在"]}
+
+            # 1. .uproject 存在
+            total += 1
+            uprojects = list(repo_dir.glob("*.uproject"))
+            has_uproject = bool(uprojects)
+            checks.append({
+                "name": ".uproject 存在", "passed": has_uproject,
+                "detail": uprojects[0].name if has_uproject else "仓库根目录无 .uproject",
+            })
+            if has_uproject:
+                passed += 1
+            else:
+                issues.append("仓库根目录缺少 .uproject 文件")
+
+            # 2. .uproject 可解析 + 有 EngineAssociation
+            if has_uproject:
+                total += 1
+                try:
+                    up = json.loads(uprojects[0].read_text(encoding="utf-8", errors="replace"))
+                    engine = up.get("EngineAssociation", "")
+                    ok = bool(engine)
+                    checks.append({
+                        "name": ".uproject 格式", "passed": ok,
+                        "detail": f"EngineAssociation={engine}" if ok else "缺少 EngineAssociation",
+                    })
+                    if ok:
+                        passed += 1
+                    else:
+                        issues.append(".uproject 缺少 EngineAssociation 字段")
+                except Exception as e:
+                    checks.append({"name": ".uproject 格式", "passed": False,
+                                   "detail": f"JSON 解析失败: {str(e)[:80]}"})
+                    issues.append(f".uproject 解析失败: {str(e)[:80]}")
+
+            # 3. 有源码或内容资产（两者皆无说明工单没产出）
+            total += 1
+            cpp_files = [p for p in repo_dir.glob("Source/**/*.*")
+                         if p.suffix in (".cpp", ".h", ".cs")]
+            uassets = list(repo_dir.glob("Content/**/*.uasset"))[:200]
+            has_content = bool(cpp_files or uassets)
+            checks.append({
+                "name": "源码/资产产出", "passed": has_content,
+                "detail": f"Source/ {len(cpp_files)} 个源文件，Content/ {len(uassets)} 个资产"
+                          if has_content else "Source/ 和 Content/ 均为空",
+            })
+            if has_content:
+                passed += 1
+            else:
+                issues.append("Source/ 无 C++ 源文件且 Content/ 无资产")
+
+            # 4. C++ 静态规则（复用 DevAgent 自测的 ue_lint 规则集）
+            if cpp_files:
+                total += 1
+                try:
+                    from actions.ue_lint import run_all_rules
+                    rel_files = [
+                        p.relative_to(repo_dir).as_posix()
+                        for p in cpp_files if p.suffix in (".cpp", ".h")
+                    ][:80]   # 大项目截断，避免单次测试跑太久
+                    lint_issues = run_all_rules(rel_files, repo_dir, {
+                        "ue_engine_version": context.get("ue_engine_version") or "5.3",
+                    })
+                    blocking = [i for i in lint_issues if i.get("blocking")]
+                    ok = not blocking
+                    brief = "; ".join(
+                        f"[{i.get('rule')}] {(i.get('file') or '?').split('/')[-1]}"
+                        f":{i.get('line') or '?'} {(i.get('msg') or '')[:60]}"
+                        for i in blocking[:3]
+                    )
+                    checks.append({
+                        "name": "C++ 静态规则", "passed": ok,
+                        "detail": (f"{len(rel_files)} 个文件，无 blocking 问题"
+                                   f"（{len(lint_issues) - len(blocking)} 个 warning）") if ok
+                                  else f"{len(blocking)} 个 blocking：{brief}",
+                    })
+                    if ok:
+                        passed += 1
+                    else:
+                        issues.extend(
+                            f"[{i.get('rule')}] {(i.get('msg') or '')[:100]}" for i in blocking[:3]
+                        )
+                except Exception as e:
+                    # lint 自身异常不该判工单失败 —— 记为通过并留痕
+                    logger.warning("UE lint 执行异常: %s", e)
+                    checks.append({"name": "C++ 静态规则", "passed": True,
+                                   "detail": f"lint 执行异常，跳过: {str(e)[:80]}"})
+                    passed += 1
+
+        except Exception as e:
+            issues.append(f"UE 静态分析异常: {str(e)[:100]}")
+
+        return {"total": total, "passed_count": passed, "checks": checks, "issues": issues}
+
 
     async def _code_review(self, context: Dict) -> Dict:
         """代码审查：委托给 CodeReviewAction（ActionNode，读取实际代码）"""
@@ -477,6 +619,87 @@ class TestAgent(BaseAgent):
             "checks": [{"name": "文件存在性", "passed": has_files, "detail": f"{len(src_files)} 个源文件"}],
             "issues": [] if has_files else ["无源文件"],
         }
+
+    # ==================== Phase 3（UE）: 功能测试 ====================
+
+    async def _test_ue(self, project_id: str, context: Dict) -> Dict:
+        """UE 功能测试：资产命名规范 + 目录结构 + Build.cs 模块声明一致性。
+
+        不启服务、不截图 —— UE 的运行时验证由 play_test 阶段的
+        UE Automation Framework 负责，这里只做仓库层面的可检查项。
+        """
+        from git_manager import git_manager
+
+        checks: List[Dict] = []
+        passed = 0
+        total = 0
+        issues: List[str] = []
+        repo_dir = git_manager._repo_path(project_id)
+
+        # 1. 资产命名前缀规范（全局 rules 里定的 BP_/SM_/M_/WBP_ 等）
+        uassets = list(repo_dir.glob("Content/**/*.uasset"))[:300]
+        if uassets:
+            total += 1
+            known_prefixes = (
+                "BP_", "SM_", "SK_", "ABP_", "AM_", "AS_", "BS_", "T_", "M_", "MI_",
+                "MF_", "P_", "NS_", "NE_", "WBP_", "DT_", "DA_", "GA_", "GE_", "GC_",
+                "GT_", "BT_", "BB_", "ST_", "S_", "SC_", "LM_", "SS_",
+            )
+            bad = [p.stem for p in uassets if not p.stem.startswith(known_prefixes)]
+            ok = not bad
+            checks.append({
+                "name": "资产命名规范", "passed": ok,
+                "detail": f"{len(uassets)} 个资产全部符合前缀规范" if ok
+                          else f"{len(bad)} 个资产缺少类型前缀：{', '.join(bad[:5])}",
+            })
+            if ok:
+                passed += 1
+            else:
+                issues.append(f"资产命名不规范（缺类型前缀）：{', '.join(bad[:5])}")
+
+            # 2. 资产不得直接堆在 Content/ 根目录
+            total += 1
+            at_root = [p.name for p in uassets if p.parent == repo_dir / "Content"]
+            ok = not at_root
+            checks.append({
+                "name": "资产目录结构", "passed": ok,
+                "detail": "资产均已归类到子目录" if ok
+                          else f"{len(at_root)} 个资产直接放在 Content/ 根目录：{', '.join(at_root[:5])}",
+            })
+            if ok:
+                passed += 1
+            else:
+                issues.append(f"资产未归类，直接放在 Content/ 根：{', '.join(at_root[:5])}")
+
+        # 3. 每个 Build.cs 模块目录下都要有源文件（空模块会让 UBT 报错）
+        build_files = list(repo_dir.glob("Source/**/*.Build.cs"))
+        if build_files:
+            total += 1
+            empty_mods = []
+            for bf in build_files:
+                srcs = [p for p in bf.parent.rglob("*") if p.suffix in (".cpp", ".h")]
+                if not srcs:
+                    empty_mods.append(bf.stem.replace(".Build", ""))
+            ok = not empty_mods
+            checks.append({
+                "name": "模块源文件完整性", "passed": ok,
+                "detail": f"{len(build_files)} 个模块均有源文件" if ok
+                          else f"空模块（有 Build.cs 无源码）：{', '.join(empty_mods)}",
+            })
+            if ok:
+                passed += 1
+            else:
+                issues.append(f"模块目录无任何 .cpp/.h：{', '.join(empty_mods)}")
+
+        if total == 0:
+            return {
+                "total": 1, "passed_count": 0,
+                "checks": [{"name": "UE 产物", "passed": False,
+                            "detail": "既无 Content/ 资产也无 Source/ 模块"}],
+                "issues": ["工单未产出任何 UE 资产或模块"],
+            }
+
+        return {"total": total, "passed_count": passed, "checks": checks, "issues": issues}
 
     # ==================== Phase 4: 生成测试用例 ====================
 
@@ -728,35 +951,46 @@ def test_no_syntax_errors():
         md += f"\n---\n*由 AI 自动开发系统 TestAgent 生成*\n"
         return md
 
-    async def _run_openspec_verify(self, context: Dict[str, Any]) -> None:
+    async def _run_openspec_verify(
+        self, context: Dict[str, Any], *, block_on_fail: bool = True,
+    ) -> bool:
         """
-        触发 opsx:verify，对账 specs.md 的 GIVEN/WHEN/THEN。
-        只在测试全绿后调用，项目未安装 OpenSpec 或无 specs 时静默跳过。
-        Verify 失败 → 工单 blocked + 人工介入通知。
+        触发 OpenSpec verify（CLI: validate <change> --no-interactive）。
+        只在测试全绿 / 终态收尾时调用；项目未装 OpenSpec 或无 specs 时静默跳过。
+        block_on_fail=True（默认）：Verify 失败 → 工单 blocked。
+        block_on_fail=False：仅记日志，不改工单 status（供历史单/已完成态软收尾）。
+        返回是否 verify 成功（跳过视为 False）。
         """
         try:
             project_id = context.get("project_id", "")
             ticket_id = context.get("ticket_id", "")
             if not project_id or not ticket_id:
-                return
+                return False
 
             from capability_check import has_openspec, get_openspec_cli, _get_repo_path, ticket_has_specs
             repo_path = context.get("repo_path") or await _get_repo_path(project_id)
             if not repo_path or not await has_openspec(project_id, repo_path):
-                return
+                return False
             if not ticket_has_specs(repo_path, ticket_id):
                 logger.info("📐 OpenSpec 已安装但无 specs，跳过 Verify（ticket=%s）", ticket_id[:12])
-                return
+                return False
 
             cli = get_openspec_cli()
             if not cli:
-                return
+                return False
 
-            logger.info("📐 [规范层] OpenSpec Verify（ticket=%s）", ticket_id[:12])
+            from capability_check import _short_ticket_id
+            change_id = _short_ticket_id(ticket_id)
+            if not change_id:
+                return False
+
+            logger.info("📐 [规范层] OpenSpec Verify（ticket=%s, change=%s, block_on_fail=%s）",
+                        ticket_id[:12], change_id, block_on_fail)
 
             import asyncio
+            # OpenSpec CLI 没有 `verify` 子命令，verify 等价于 `validate <change> --no-interactive`
             proc = await asyncio.create_subprocess_shell(
-                f"{cli} verify",
+                f"{cli} validate {change_id} --no-interactive",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 cwd=repo_path,
@@ -776,10 +1010,9 @@ def test_no_syntax_errors():
                 output = "(超时)"
                 rc = -1
 
-            from orchestrator import Orchestrator
+            from orchestrator import orchestrator as orch
             from database import db
             from utils import now_iso
-            orch = Orchestrator()
 
             if rc == 0:
                 await db.execute(
@@ -795,8 +1028,14 @@ def test_no_syntax_errors():
                     layer="spec", detail={"rc": 0, "output": output[:300]},
                 )
                 logger.info("📐 OpenSpec Verify 通过（ticket=%s）", ticket_id[:12])
-            else:
-                # Verify 不通过 → blocked + 人工介入
+                return True
+
+            await orch._add_layer_log(
+                ticket_id, project_id, action="openspec_verify_failed",
+                layer="spec", level="warning",
+                detail={"rc": rc, "output": output[:400], "block_on_fail": block_on_fail},
+            )
+            if block_on_fail:
                 await db.execute(
                     "UPDATE tickets SET status='blocked', updated_at=? WHERE id=?",
                     (now_iso(), ticket_id),
@@ -807,13 +1046,19 @@ def test_no_syntax_errors():
                     f"```\n{output[:400]}\n```\n请修复后重新运行测试。",
                     level="error",
                 )
-                await orch._add_layer_log(
-                    ticket_id, project_id, action="openspec_verify_failed",
-                    layer="spec", detail={"rc": rc, "output": output[:400]},
-                )
                 logger.warning("📐 OpenSpec Verify 失败，工单 blocked（ticket=%s）", ticket_id[:12])
+            else:
+                await orch.post_milestone_comment(
+                    ticket_id, project_id,
+                    f"📐 [规范层] **OpenSpec Verify 未通过**（工单已终态，未重新 blocked）\n"
+                    f"```\n{output[:400]}\n```",
+                    level="warning",
+                )
+                logger.warning("📐 OpenSpec Verify 失败（soft，ticket=%s）", ticket_id[:12])
+            return False
         except Exception as e:
             logger.debug("_run_openspec_verify 失败（忽略）: %s", e)
+            return False
 
 
 async def _async_sleep(seconds):

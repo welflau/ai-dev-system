@@ -69,7 +69,7 @@ if not chosen:
 
 re.open_command_connection(chosen['node_id'])
 try:
-    result = re.run_command({code!r}, unattended=True, exec_mode='ExecuteFile')
+    result = re.run_command({code!r}, unattended=True, exec_mode='ExecuteStatement')
 finally:
     re.close_command_connection()
     re.stop()
@@ -131,18 +131,32 @@ def _find_re_dir(engine_path: Optional[str] = None) -> Optional[str]:
 
 
 async def _get_project_hint(project_id: Optional[str]) -> str:
-    """取項目根路徑作為 Editor 匹配提示（多 Editor 同時運行時使用）"""
+    """取項目根路徑作為 Editor 匹配提示（多 Editor 同時運行時使用）
+
+    projects 表沒有 local_repo_path 列（實際列名 git_repo_path）——
+    查錯列名會拋 OperationalError 被下面的 except 吞掉，hint 永遠是空串，
+    多 Editor 場景只能盲取 nodes[0]，打到別的項目上。
+    uproject_path 更精準（能直接匹配 project_root），優先用它。
+    """
     if not project_id:
         return ""
     try:
         from database import db
         row = await db.fetch_one(
-            "SELECT local_repo_path FROM projects WHERE id = ?", (project_id,)
+            "SELECT git_repo_path, uproject_path FROM projects WHERE id = ?",
+            (project_id,),
         )
-        if row and row.get("local_repo_path"):
-            return str(row["local_repo_path"])
+        if not row:
+            return ""
+        up = row.get("uproject_path")
+        if up:
+            # uproject_path 指向 .uproject 文件，取其所在目錄
+            return str(Path(str(up)).parent)
+        repo = row.get("git_repo_path")
+        if repo:
+            return str(repo)
     except Exception as e:
-        logger.debug("取 project hint 失敗: %s", e)
+        logger.warning("取 project hint 失敗（將盲選 Editor）: %s", e)
     return ""
 
 

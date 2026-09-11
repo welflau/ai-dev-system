@@ -249,6 +249,16 @@ def rule_R3_include_paths(
             private = module_root / "Private"
             ok = False
             for p in paths:
+                # flat layout（模块根目录直接放 .h/.cpp，无 Public/Private 分层）：
+                # UBT 会把模块根加进 include 路径，同级 #include "Xxx.h" 合法。
+                # 漏掉这种情况会对所有小型模块误报 —— 且给出的 suggest 与原文
+                # 一模一样，DevAgent 拿到后无从修改，只能空转到 blocked。
+                try:
+                    if p.resolve().parent == module_root.resolve():
+                        ok = True
+                        break
+                except Exception:
+                    pass
                 try:
                     # Public / Private 根目录下的直接文件 = OK
                     rel = p.resolve().relative_to(public.resolve()) if public.exists() else None
@@ -320,18 +330,44 @@ def rule_R3_include_paths(
             })
             continue
 
-        # 彻底找不到
+        # 彻底找不到 —— 但"找不到"只是"在项目 Source/ 里找不到"。
+        # 引擎头（TimerManager.h）和插件头（EnhancedInputComponent.h 等）都不在
+        # 项目里，UBT 靠模块 include 路径解析，无路径前缀的写法完全合法。
+        # 实测 TestFPS：UBT 编译只报 2 个错，而这里曾误报 8 个 blocking，
+        # 且全是引擎/插件头 —— 会把能编过的工单打回 fix_issues 空转到 blocked。
+        # 判不了就别判：降级为 warning，交给下游 engine_compile 用真实编译定性。
+        known_external = _is_known_engine_or_plugin_header(header_name)
         issues.append({
             "rule": "R3",
             "file": file_path_rel,
             "line": i,
-            "blocking": True,
+            "blocking": False,
             "category": "include-not-found",
-            "msg": f"{file_path_rel}:{i} #include \"{inc}\" 找不到头文件",
+            "msg": (
+                f"{file_path_rel}:{i} #include \"{inc}\" 在项目 Source/ 内找不到。"
+                + ("已知的引擎/插件头，通常正常（需确认 Build.cs 有对应模块依赖）"
+                   if known_external else
+                   "若非引擎/插件头则可能是笔误；真实存在性由 engine_compile 阶段判定")
+            ),
             "suggest": None,
         })
 
     return issues
+
+
+def _is_known_engine_or_plugin_header(header_name: str) -> bool:
+    """该 header 是否为已知的引擎/插件头（出现在 R7 的类型→header 映射值里）。
+
+    仅用于把 R3 的提示语说得更准，不影响 blocking 判定（一律 False）。
+    """
+    try:
+        from actions.ue_lint.data import UE_TYPE_REQUIRED_HEADERS
+    except Exception:
+        return False
+    for h in UE_TYPE_REQUIRED_HEADERS.values():
+        if h == header_name or h.endswith("/" + header_name):
+            return True
+    return False
 
 
 # ==================== R4: Build.cs 模块依赖有效 ====================
@@ -627,19 +663,39 @@ def rule_R7_type_headers(
             snippet = content[max(0, m.start() - 100):m.end() + 50]
             if _is_skipped_by_escape(snippet, "R7"):
                 continue
+            # UE 的 SharedPCH 会预置 GameFramework/Engine 的核心类型，
+            # 只看单文件 include 判不出真实可见性 —— 实测 TestFPS 的
+            # FPSCharacter.cpp 未 include PlayerController.h 但编译通过，
+            # 而 R7 判了 blocking。把 blocking 收窄到"PCH 覆盖不到"的类型，
+            # 其余降级 warning，真值交给 engine_compile。
+            is_pch_covered = tname in _PCH_LIKELY_COVERED_TYPES
             issues.append({
                 "rule": "R7",
                 "file": file_path_rel,
                 "line": line_no,
-                "blocking": True,
+                "blocking": not is_pch_covered,
                 "category": "missing-type-header",
                 "msg": (
                     f"{file_path_rel}:{line_no} 使用了 {tname} 但未 #include \"{required_header}\"。"
-                    f"编译会报 C2027 (undefined type)"
+                    + ("该类型通常已由 SharedPCH 预置，多数情况可编过；"
+                       "显式 include 更稳妥（IWYU）"
+                       if is_pch_covered else "编译会报 C2027 (undefined type)")
                 ),
                 "suggest": f'文件顶部加 #include "{required_header}"',
             })
     return issues
+
+
+# SharedPCH（CoreMinimal + Engine/UnrealEd PCH）通常已带进来的高频类型。
+# 缺 include 属于 IWYU 风格问题，不该阻断流水线 —— 实测会把能编过的工单
+# 打回 fix_issues 空转。真正的缺失由 UBT 编译报 C2027 定性。
+_PCH_LIKELY_COVERED_TYPES: Set[str] = {
+    "ACharacter", "APawn", "AActor", "APlayerController", "AController",
+    "AGameMode", "AGameModeBase", "AGameState", "AGameStateBase", "APlayerState",
+    "AHUD", "UWorld", "ULevel", "UGameInstance", "ULocalPlayer", "UEngine",
+    "USceneComponent", "UActorComponent", "UPrimitiveComponent",
+    "FTimerHandle", "FTimerManager",
+}
 
 
 # ==================== 主入口 ====================
