@@ -7671,11 +7671,27 @@ async function diagnoseTicket(ticketId) {
 
 async function unblockTicket(ticketId) {
     if (!currentProjectId) return;
-    const target = prompt('解除到哪个状态？（默认 pending 重新跑）', 'pending');
-    if (!target) return;
+    // 原先用 prompt() 让用户手敲状态名（敲错就 400）。改成固定几个有意义的入口。
+    const OPTIONS = [
+        ['architecture_done', '退回开发（推荐）— 保留架构，重写代码'],
+        ['pending',           '从头重跑 — 需求/架构/开发全走一遍'],
+        ['development_done',  '跳过开发 — 直接进审查/验收'],
+    ];
+    const menu = OPTIONS.map(([, label], i) => `${i + 1}. ${label}`).join('\n');
+    const pick = prompt(
+        `解除 blocked 后从哪里继续？输入序号：\n\n${menu}\n\n`
+        + `（解除会清零 reject 计数，工单重新获得 5 次机会）`,
+        '1',
+    );
+    if (!pick) return;
+    const idx = parseInt(pick.trim(), 10) - 1;
+    const target = OPTIONS[idx]?.[0];
+    if (!target) { showToast('序号无效，已取消', 'error'); return; }
     try {
-        await api(`/projects/${currentProjectId}/tickets/${ticketId}/unblock?target_status=${encodeURIComponent(target)}`, { method: 'POST' });
-        showToast(`已解除 → ${target}`, 'success');
+        const res = await api(`/projects/${currentProjectId}/tickets/${ticketId}/unblock?target_status=${encodeURIComponent(target)}`, { method: 'POST' });
+        const cleared = res.reject_count_cleared
+            ? `，已清零 ${res.reject_count_cleared} 次 reject` : '';
+        showToast(`已解除 → ${target}${cleared}`, 'success');
         closeDrawer();
         setTimeout(refreshBoard, 500);
     } catch (e) {
