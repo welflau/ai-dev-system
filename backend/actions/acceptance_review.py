@@ -178,11 +178,15 @@ class AcceptanceReviewAction(ActionBase):
         # 验收通过后异步触发 Skill 提取（不阻塞主流程）
         if passed:
             import asyncio as _asyncio
+            # agent_type 从 context 取：Action 基类没有这个属性（那是 Agent 的），
+            # 原先写 self.agent_type 会抛 AttributeError —— 而且它在 `if passed`
+            # 里，等于「验收一通过就崩」，工单永远拿不到 acceptance_passed。
+            # TK-20260817-39e0d4 就是这么卡住的：321 轮全崩在这一行。
             _asyncio.create_task(
                 _async_extract_skill(
                     ticket_id=context.get("ticket_id", ""),
                     project_id=context.get("project_id", ""),
-                    agent_type=self.agent_type,
+                    agent_type=context.get("agent_type") or "ProductAgent",
                     project_traits=context.get("project_traits", []),
                 )
             )
