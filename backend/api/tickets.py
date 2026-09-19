@@ -1110,6 +1110,10 @@ async def diagnose_ticket(project_id: str, ticket_id: str, background_tasks: Bac
 async def unblock_ticket(project_id: str, ticket_id: str, target_status: str = "pending"):
     """解除 blocked 工单（人工介入后使用）。
     target_status 默认回到 pending 重新跑，也可指定其他状态（如 development_done 跳过未实现的 action）。
+
+    注意：这条 unblock 日志同时是 reject 计数的**清零标记** ——
+    orchestrator._reject_count_since_reset() 只数最近一次 unblock 之后的 reject。
+    没有它，撞过 max_retries 的工单解除后会立刻被重新判定超限、秒回 blocked。
     """
     existing = await db.fetch_one(
         "SELECT * FROM tickets WHERE id = ? AND project_id = ?",
@@ -1126,6 +1130,20 @@ async def unblock_ticket(project_id: str, ticket_id: str, target_status: str = "
     if target_status not in valid_statuses:
         raise HTTPException(400, f"目标状态「{target_status}」非法")
 
+    # 解除后不应再停在 blocked（否则等于没解除）
+    if target_status == TicketStatus.BLOCKED.value:
+        raise HTTPException(400, "目标状态不能仍是 blocked")
+
+    # 清零前**实际生效**的 reject 数，写进日志便于回溯「这次给了几次新机会」。
+    # 必须跟 orchestrator 用同一套口径：数全部历史会把上几轮 unblock 之前的
+    # 也算进来（解除过两次的工单能报出 12 次），而真正把它顶到上限的只有 5 次。
+    try:
+        from orchestrator import orchestrator
+        cleared = await orchestrator._reject_count_since_reset(ticket_id)
+    except Exception as e:
+        logger.warning("统计 reject 次数失败: %s", e)
+        cleared = 0
+
     await db.update(
         "tickets",
         {"status": target_status, "updated_at": now_iso()},
@@ -1136,7 +1154,8 @@ async def unblock_ticket(project_id: str, ticket_id: str, target_status: str = "
     await _log_ticket(
         project_id, existing["requirement_id"], ticket_id,
         "Operator", "unblock", TicketStatus.BLOCKED.value, target_status,
-        f"工单已从 blocked 解除 → {target_status}",
+        f"工单已从 blocked 解除 → {target_status}"
+        + (f"（reject 计数清零，此前累计 {cleared} 次）" if cleared else ""),
     )
 
     await event_manager.publish_to_project(
@@ -1145,7 +1164,18 @@ async def unblock_ticket(project_id: str, ticket_id: str, target_status: str = "
         {"ticket_id": ticket_id, "from": TicketStatus.BLOCKED.value, "to": target_status},
     )
 
-    return {"message": "工单已解除 blocked", "new_status": target_status}
+    # 立刻派单，别等 30s 轮询
+    try:
+        from orchestrator import orchestrator
+        await orchestrator._publish_ticket_ready(project_id, ticket_id)
+    except Exception as e:
+        logger.warning("unblock 后触发派单失败（将由轮询兜底）: %s", e)
+
+    return {
+        "message": "工单已解除 blocked",
+        "new_status": target_status,
+        "reject_count_cleared": cleared,
+    }
 
 
 # ==================== 子任务 ====================

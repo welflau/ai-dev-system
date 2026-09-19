@@ -11,11 +11,27 @@ from typing import List, Optional
 
 logger = logging.getLogger("change_impact")
 
-# 只在这些状态的工单上触发变更分析
-ACTIVE_PHASES = {
-    "in_progress", "development", "testing", "in_review", "verify",
-    "architecture_done", "development_in_progress",
-}
+# 不触发变更分析的状态（黑名单）。
+#
+# 原先用白名单 ACTIVE_PHASES = {"development", "testing", "in_review", "verify", ...}，
+# 但这些字符串**不是** TicketStatus 的真实取值 —— 真实值是 development_in_progress /
+# testing_in_progress / testing_failed / review_in_progress …，所以测试、审查、验收
+# 阶段的评论永远命中不到分析器，只能得到一段 LLM 客套回复。
+# 而 fragments（engine_compile / play_test / smoke_test / ue_content_gen …）还会动态
+# 派生更多状态，白名单注定追不上。改为黑名单：除下列状态外一律参与分析。
+INACTIVE_PHASES = frozenset({
+    # 尚未启动：改工单描述即可，重置阶段无意义
+    "pending", "todo",
+    # 需人工介入 / 已由人工接管
+    "blocked", "cancelled",
+    # 已收尾（对齐 orchestrator._HARD_TERMINAL）
+    "testing_done", "deployed", "done", "completed",
+})
+
+
+def is_active_phase(status: Optional[str]) -> bool:
+    """该状态的工单是否参与评论变更分析。"""
+    return bool(status) and status.strip() not in INACTIVE_PHASES
 
 
 @dataclass
@@ -82,8 +98,8 @@ class ChangeImpactAnalyzer:
         Returns:
             ChangeImpact，type 为 none/tweak/partial/breaking
         """
-        # 只在活跃阶段分析
-        if ticket_status not in ACTIVE_PHASES:
+        # 未启动 / 终态 / 待人工的工单不分析
+        if not is_active_phase(ticket_status):
             return ChangeImpact.none()
 
         # 过短评论（≤10字）大概率不是需求变更

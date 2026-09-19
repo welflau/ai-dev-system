@@ -86,6 +86,11 @@ class TicketOrchestrator:
         # value = dict of transition_rules
         self._project_rules_cache: Dict = {}
 
+        # 阶段重置时工单正在执行 → 记下目标状态，等在途 run 收尾后再改写并续跑。
+        # 直接改 status 会被在途 Agent 的结果覆盖（_handle_agent_result 只防终态回写）。
+        # key = ticket_id, value = {"status", "reason", "from_phase"}
+        self._pending_restart: Dict[str, Dict] = {}
+
     def _load_transition_rules(self) -> Dict:
         """从 SOP YAML 加载状态转换规则（默认 web 项目）"""
         try:
@@ -1403,6 +1408,38 @@ class TicketOrchestrator:
 
     # ==================== 工单流转 ====================
 
+    async def _reject_count_since_reset(
+        self, ticket_id: str, to_status: Optional[str] = None,
+    ) -> int:
+        """工单被打回的次数，**只数最近一次人工解除 blocked 之后的**。
+
+        原先直接 `COUNT(*) ... action='reject'` 数的是全部历史，从不清零：
+        撞上限 blocked → 人工点「解除 blocked」→ 下一轮派单又数出同样的次数 →
+        秒回 blocked，按钮等于无效。人工介入的语义就是「问题已排查，重新给机会」，
+        所以以 unblock 日志为界重新计数。
+
+        to_status 非空时只数打回到该状态的（供按阶段止损的 max_retries 用）。
+        """
+        reset_row = await db.fetch_one(
+            """SELECT created_at FROM ticket_logs
+               WHERE ticket_id = ? AND action IN ('unblock', 'reject_reset')
+               ORDER BY created_at DESC LIMIT 1""",
+            (ticket_id,),
+        )
+        since = (reset_row or {}).get("created_at")
+
+        sql = "SELECT COUNT(*) AS c FROM ticket_logs WHERE ticket_id = ? AND action = 'reject'"
+        params: list = [ticket_id]
+        if to_status:
+            sql += " AND to_status = ?"
+            params.append(to_status)
+        if since:
+            sql += " AND created_at > ?"
+            params.append(since)
+
+        row = await db.fetch_one(sql, tuple(params))
+        return (row or {}).get("c", 0) or 0
+
     async def process_ticket(self, project_id: str, ticket_id: str):
         """根据当前状态自动分派到对应 Agent。
 
@@ -1412,6 +1449,7 @@ class TicketOrchestrator:
         if not self._try_claim_ticket(ticket_id):
             logger.info("⏭ 跳过工单 %s（已有处理中任务）", ticket_id[:12])
             return
+        ticket = None  # except/finally 都会读它，取工单本身失败时别再抛 NameError
         try:
             ticket = await db.fetch_one(
                 "SELECT * FROM tickets WHERE id = ?", (ticket_id,)
@@ -1458,15 +1496,12 @@ class TicketOrchestrator:
             # 旧 force_pass→testing_done 会把「编译环空转」标成已完成，跳过 Test/Deploy，
             # 前端显示「已完成」但 OpenSpec/验收实际未跑。正确语义：转人工介入。
             MAX_RETRIES = 5
-            retry_count = await db.fetch_one(
-                "SELECT COUNT(*) as cnt FROM ticket_logs WHERE ticket_id = ? AND action = 'reject'",
-                (ticket_id,),
-            )
-            if retry_count and retry_count["cnt"] >= MAX_RETRIES:
+            reject_cnt_global = await self._reject_count_since_reset(ticket_id)
+            if reject_cnt_global >= MAX_RETRIES:
                 from_status = ticket["status"]
                 logger.warning(
                     "🛑 工单 %s 已被打回 %d 次，标记 blocked（停止自动流转，转人工）",
-                    ticket_id[:12], retry_count["cnt"],
+                    ticket_id[:12], reject_cnt_global,
                 )
                 await db.update("tickets", {
                     "status": TicketStatus.BLOCKED.value,
@@ -1475,12 +1510,12 @@ class TicketOrchestrator:
                 await self._log(
                     project_id, ticket.get("requirement_id"), ticket_id, "Orchestrator",
                     "blocked", from_status, TicketStatus.BLOCKED.value,
-                    f"工单已被打回 {retry_count['cnt']} 次，超过上限 {MAX_RETRIES} 次，"
+                    f"工单已被打回 {reject_cnt_global} 次，超过上限 {MAX_RETRIES} 次，"
                     f"停止自动流转并标记 blocked（不再强制标记完成）。"
                     f"请人工排查环境/编译/需求后解除阻塞。",
                     "warning",
                     detail_data={
-                        "reject_count": retry_count["cnt"],
+                        "reject_count": reject_cnt_global,
                         "max_retries": MAX_RETRIES,
                         "reason": "global_reject_limit",
                         "legacy_action": "force_pass",
@@ -1549,12 +1584,9 @@ class TicketOrchestrator:
             rework_source = rule.get("_rework_source_stage")
             max_retries = int((rule.get("config") or {}).get("max_retries") or 0)
             if rework_source and max_retries > 0:
-                cnt_row = await db.fetch_one(
-                    """SELECT COUNT(*) AS c FROM ticket_logs
-                       WHERE ticket_id = ? AND action = 'reject' AND to_status = ?""",
-                    (ticket_id, current_status),
+                reject_cnt = await self._reject_count_since_reset(
+                    ticket_id, to_status=current_status,
                 )
-                reject_cnt = (cnt_row or {}).get("c", 0) or 0
                 if reject_cnt >= max_retries:
                     logger.warning(
                         "🛑 工单 %s 在 %s 已 reject %d 次（≥max_retries=%d），blocked 止损",
@@ -1901,6 +1933,36 @@ class TicketOrchestrator:
             except Exception as _pbe:
                 logger.debug("phase_boundary checkpoint 跳过: %s", _pbe)
 
+            # === 阶段重置排队：在途 run 已收尾，此刻应用回退（优先于正常流转）===
+            # 评论触发的 tweak/partial 在工单执行中登记到 _pending_restart，
+            # 这里应用才不会被刚写完的 Agent 结果覆盖。
+            pending = self._pending_restart.pop(ticket_id, None)
+            if pending:
+                cur = await db.fetch_one("SELECT status FROM tickets WHERE id = ?", (ticket_id,))
+                cur_status = (cur or {}).get("status") or ""
+                if cur_status in self._HARD_TERMINAL:
+                    logger.info(
+                        "⏭ 工单 %s 已终态 %s，放弃排队中的阶段回退",
+                        ticket_id[:12], cur_status,
+                    )
+                elif await self._is_forward_jump(
+                    project_id, cur_status, pending["status"], ticket.get("type"),
+                ):
+                    # 刚收尾的这一跑可能已经把工单退得比回退目标更靠前（如 rework
+                    # 把状态打回 development_done，而排队目标是 acceptance_passed），
+                    # 此时应用回退反而会跳过中间阶段。评论已注入，让它自然往下跑。
+                    logger.info(
+                        "⏭ 工单 %s 收尾后已在 %s，排队的回退目标 %s 会前跳，放弃改写",
+                        ticket_id[:12], cur_status, pending["status"],
+                    )
+                else:
+                    self._release_ticket(ticket_id)
+                    await self._apply_status_rewind(
+                        ticket_id, project_id, cur_status,
+                        pending["status"], pending["reason"],
+                    )
+                    return
+
             # === 事件驱动：触发后续阶段立即处理 ===
             updated = await db.fetch_one("SELECT status FROM tickets WHERE id = ?", (ticket_id,))
             if updated:
@@ -1933,6 +1995,28 @@ class TicketOrchestrator:
                 logger.error("记录工单错误日志也失败了: %s", log_err)
         finally:
             self._release_ticket(ticket_id)
+            # 兜底：异常路径下排队的阶段回退也要生效，否则用户看到「已重置」但工单不动
+            try:
+                leftover = self._pending_restart.pop(ticket_id, None)
+                if leftover:
+                    cur = await db.fetch_one(
+                        "SELECT status FROM tickets WHERE id = ?", (ticket_id,)
+                    )
+                    cur_status = (cur or {}).get("status") or ""
+                    if (
+                        cur_status
+                        and cur_status not in self._HARD_TERMINAL
+                        and not await self._is_forward_jump(
+                            project_id, cur_status, leftover["status"],
+                            (ticket or {}).get("type"),
+                        )
+                    ):
+                        await self._apply_status_rewind(
+                            ticket_id, project_id, cur_status,
+                            leftover["status"], leftover["reason"],
+                        )
+            except Exception as _pre:
+                logger.warning("应用排队的阶段回退失败: %s", _pre)
             try:
                 from checkpoint import clear_checkpoint_context
                 clear_checkpoint_context()
@@ -4207,6 +4291,59 @@ class TicketOrchestrator:
     ]
     MAX_RESET_COUNT = 3  # 超过此次数自动 blocked
 
+    # 阶段 → 「重跑该阶段所需的入口状态」。
+    # 写的是 *触发* 状态而不是阶段自身状态：orchestrator 靠 SOP 的 trigger_on 派单，
+    # 把 status 退回上一阶段的 success_status，下一轮轮询/事件才会重新派发该阶段。
+    # 例：development 要重跑 → status 退到 architecture_done（development 的 trigger_on）。
+    _PHASE_ENTRY_STATUS = {
+        "propose": TicketStatus.PLANNING_DONE.value,
+        "architecture": TicketStatus.PLANNING_DONE.value,
+        "development": TicketStatus.ARCHITECTURE_DONE.value,
+        "testing": TicketStatus.ACCEPTANCE_PASSED.value,
+        "verify": TicketStatus.ACCEPTANCE_PASSED.value,
+        "review": TicketStatus.DEVELOPMENT_DONE.value,
+        "deploy": TicketStatus.ACCEPTANCE_PASSED.value,
+    }
+
+    async def _resolve_phase_entry_status(
+        self, project_id: str, from_phase: str, ticket_type: Optional[str] = None,
+    ) -> Optional[str]:
+        """查该项目 SOP 里重跑 `from_phase` 应该退回的状态。
+
+        优先读 SOP（trait-first 项目插了 fragment 后，development 的 trigger_on 可能
+        不是 architecture_done），SOP 里查不到再用 `_PHASE_ENTRY_STATUS` 兜底。
+        """
+        # SOP 的 stage id 与 PHASE_ORDER 命名并不完全一致
+        stage_aliases = {
+            "development": ("development",),
+            "architecture": ("architecture",),
+            "testing": ("testing", "smoke_test", "play_test"),
+            "review": ("code_review",),
+            "deploy": ("deploy",),
+            "verify": ("testing",),
+            "propose": ("planning", "architecture"),
+        }.get(from_phase, (from_phase,))
+
+        try:
+            row = await db.fetch_one(
+                "SELECT traits FROM projects WHERE id = ?", (project_id,)
+            )
+            traits = json.loads((row or {}).get("traits") or "[]")
+            if isinstance(traits, list) and traits:
+                from sop.loader import compose_sop
+                stages = compose_sop(traits=traits, ticket_type=ticket_type).get("stages", [])
+            else:
+                stages = (self._sop_config or {}).get("stages", [])
+
+            for sid in stage_aliases:
+                for stage in stages:
+                    if stage.get("id") == sid and stage.get("trigger_on"):
+                        return stage["trigger_on"]
+        except Exception as e:
+            logger.debug("_resolve_phase_entry_status 读 SOP 失败，用兜底表: %s", e)
+
+        return self._PHASE_ENTRY_STATUS.get(from_phase)
+
     async def reset_phases(
         self,
         ticket_id: str,
@@ -4215,7 +4352,7 @@ class TicketOrchestrator:
         reason: str,
     ) -> bool:
         """
-        将指定阶段及后续所有阶段重置为 pending。
+        将指定阶段及后续所有阶段重置为 pending，并把工单退回该阶段入口状态重新跑。
         保留历史日志（可追溯），返回是否成功。
         reset_count >= MAX_RESET_COUNT 时自动 blocked 并通知人工介入。
         """
@@ -4242,6 +4379,7 @@ class TicketOrchestrator:
                 "UPDATE tickets SET status='blocked', updated_at=? WHERE id=?",
                 (ts, ticket_id),
             )
+            self._pending_restart.pop(ticket_id, None)
             await self.post_milestone_comment(
                 ticket_id, project_id,
                 f"⚠️ 阶段 `{from_phase}` 已重置 {new_count} 次，超过上限（{self.MAX_RESET_COUNT}次），"
@@ -4283,8 +4421,243 @@ class TicketOrchestrator:
                 "reset_count": new_count,
             },
         )
-        logger.info("reset_phases: ticket %s from=%s reason=%s", ticket_id, from_phase, reason)
+
+        # === 真正把工单退回去重跑 ===
+        # ticket_phase_status 只是审计记录，orchestrator 派单看的是 tickets.status，
+        # 光写上面那张表工单会原地不动（用户却看到「已重置」）。
+        restarted = await self._rewind_ticket_status(
+            ticket_id, project_id, from_phase, reason,
+        )
+
+        logger.info(
+            "reset_phases: ticket %s from=%s reason=%s restarted=%s",
+            ticket_id, from_phase, reason, restarted,
+        )
         return True
+
+    async def _sop_status_sequence(
+        self, project_id: str, ticket_type: Optional[str] = None,
+    ) -> List[str]:
+        """该项目 SOP 线性主链上的状态顺序。
+
+        用于判断「回退」是否真的在往后退 —— 工单还没跑到 development 时把 status
+        改成 architecture_done 是**前跳**，会把架构阶段整段跳过。
+
+        复用 loader 的 `_statuses_for_sop_stage`：它每个 stage 收 [in_progress,
+        success_status, reject_status]，**带上了执行中态**。只收 trigger_on /
+        success_status 是不够的 —— 那样 architecture_in_progress 之类的执行中态
+        根本不在序列里，防前跳判断会静默失效。
+        branch_only 的 stage（rework 等）不在主链上，不参与排序。
+        """
+        seq: List[str] = ["pending"]
+        try:
+            from sop.loader import _statuses_for_sop_stage, _TERMINAL_STATUSES
+
+            row = await db.fetch_one(
+                "SELECT traits FROM projects WHERE id = ?", (project_id,)
+            )
+            traits = json.loads((row or {}).get("traits") or "[]")
+            if isinstance(traits, list) and traits:
+                from sop.loader import compose_sop
+                stages = compose_sop(traits=traits, ticket_type=ticket_type).get("stages", [])
+            else:
+                stages = (self._sop_config or {}).get("stages", [])
+
+            for stage in stages:
+                if stage.get("branch_only"):
+                    continue
+                for val in _statuses_for_sop_stage(stage):
+                    if val not in seq:
+                        seq.append(val)
+            for val in _TERMINAL_STATUSES:
+                if val not in seq:
+                    seq.append(val)
+        except Exception as e:
+            logger.debug("_sop_status_sequence 失败: %s", e)
+        return seq
+
+    # 状态后缀 → 去掉后得到「阶段词根」，用于把序列里没显式出现的状态定位到
+    # 它所属阶段。loader._get_next_status 是张硬编码表（只覆盖 Architect/Dev/Test），
+    # review_in_progress / acceptance_in_progress 这些不在表里，缺了它们防前跳
+    # 判断会漏。按词根归位比继续堆表可靠。
+    _STATUS_SUFFIXES = ("_in_progress", "_done", "_passed", "_failed", "_rejected")
+
+    async def _is_forward_jump(
+        self,
+        project_id: str,
+        current_status: str,
+        target_status: str,
+        ticket_type: Optional[str] = None,
+    ) -> bool:
+        """把 status 从 current 改成 target 是否属于「前跳」（跳过中间阶段）。
+
+        无法定位其中任一状态（如 blocked / fragment 派生态）时返回 False —— 宁可
+        放行也不要静默拦掉正常回退。
+        """
+        seq = await self._sop_status_sequence(project_id, ticket_type)
+        cur_idx = self._seq_index(seq, current_status)
+        tgt_idx = self._seq_index(seq, target_status)
+        return cur_idx is not None and tgt_idx is not None and tgt_idx > cur_idx
+
+    @staticmethod
+    def _seq_index(seq: List[str], status: str) -> Optional[int]:
+        """status 在线性序中的位置；不在序列里则按阶段词根归到同阶段最早的位置。"""
+        if not status:
+            return None
+        if status in seq:
+            return seq.index(status)
+
+        root = status
+        for suffix in TicketOrchestrator._STATUS_SUFFIXES:
+            if status.endswith(suffix):
+                root = status[: -len(suffix)]
+                break
+        if root == status:
+            return None  # 无法识别词根（如 deploying），不参与判断
+
+        prefix = root + "_"
+        for i, s in enumerate(seq):
+            if s == root or s.startswith(prefix):
+                return i
+        return None
+
+    async def _rewind_ticket_status(
+        self,
+        ticket_id: str,
+        project_id: str,
+        from_phase: str,
+        reason: str,
+    ) -> bool:
+        """把 tickets.status 退回 from_phase 的入口状态并触发重新派单。
+
+        工单正在执行时不能直接改 —— 在途 Agent 收尾会用旧上下文覆盖 status。
+        这种情况登记 `_pending_restart`，由 process_ticket 的 finally 收口时应用。
+        """
+        ticket = await db.fetch_one(
+            "SELECT status, type FROM tickets WHERE id = ?", (ticket_id,)
+        )
+        if not ticket:
+            return False
+
+        current_status = ticket.get("status") or ""
+        if current_status in self._HARD_TERMINAL:
+            logger.info(
+                "⏭ 工单 %s 已终态 %s，不做阶段回退", ticket_id[:12], current_status,
+            )
+            return False
+
+        ticket_type = ticket.get("type")
+        target = await self._resolve_phase_entry_status(
+            project_id, from_phase, ticket_type,
+        )
+        if not target:
+            logger.warning(
+                "reset_phases: 无法确定 phase '%s' 的入口状态，工单 %s 未回退",
+                from_phase, ticket_id[:12],
+            )
+            return False
+
+        if target == current_status:
+            # 已经站在入口状态上（如刚被打回），无需改写，直接催一脚重跑
+            await self._publish_ticket_ready(project_id, ticket_id)
+            return True
+
+        # 防前跳：工单还没跑到该阶段时，回退目标可能在当前状态之后，
+        # 直接改写会把中间阶段整段跳过。此时不动 status，评论已作为
+        # human_instructions 注入，工单跑到该阶段自然会读到。
+        if await self._is_forward_jump(project_id, current_status, target, ticket_type):
+            logger.info(
+                "⏭ 工单 %s 尚未跑到 %s 阶段（当前 %s），跳过回退，评论已作为指令注入",
+                ticket_id[:12], from_phase, current_status,
+            )
+            return False
+
+        # 在途执行：延后应用，避免被 Agent 结果覆盖
+        if ticket_id in self._processing:
+            self._pending_restart[ticket_id] = {
+                "status": target,
+                "reason": reason,
+                "from_phase": from_phase,
+            }
+            logger.info(
+                "⏳ 工单 %s 正在执行，阶段回退 → %s 已排队（等在途 run 收尾）",
+                ticket_id[:12], target,
+            )
+            return True
+
+        await self._apply_status_rewind(ticket_id, project_id, current_status, target, reason)
+        return True
+
+    async def _apply_status_rewind(
+        self,
+        ticket_id: str,
+        project_id: str,
+        from_status: str,
+        target_status: str,
+        reason: str,
+    ) -> None:
+        """写回退状态 + 记日志 + 发 ticket_ready 让 orchestrator 立刻重新派单。"""
+        await db.update("tickets", {
+            "status": target_status,
+            "updated_at": now_iso(),
+        }, "id = ?", (ticket_id,))
+
+        requirement_id = None
+        try:
+            row = await db.fetch_one(
+                "SELECT requirement_id FROM tickets WHERE id = ?", (ticket_id,)
+            )
+            requirement_id = (row or {}).get("requirement_id")
+        except Exception:
+            pass
+
+        await self._log(
+            project_id, requirement_id, ticket_id, "Orchestrator",
+            "phase_rewind", from_status, target_status,
+            f"阶段重置：工单退回 {target_status} 重新执行 | {reason}"[:500],
+            detail_data={"reason": reason},
+        )
+        await event_manager.publish_to_project(project_id, "ticket_status_changed", {
+            "ticket_id": ticket_id,
+            "from_status": from_status,
+            "to_status": target_status,
+        })
+        await self._publish_ticket_ready(project_id, ticket_id)
+
+    async def _maybe_openspec_verify(
+        self, project_id: str, ticket_id: str, *, stage_label: str = "",
+    ) -> bool:
+        """测试阶段通过后触发 OpenSpec Verify（规范层，可选增强）。
+
+        为什么放 orchestrator 而不是 Agent 里：Verify 失败要把工单打成 blocked，
+        而 orchestrator 在 Agent 返回之后才写状态 —— Agent 内部写的 blocked 会被
+        随后的 play_test_passed 覆盖掉。run_tests 那条路径侥幸没踩到是因为它写
+        状态的时机恰好在后面，但同一件事分两处实现迟早走样，所以统一收口到这里。
+
+        幂等：openspec_stage 已经是 verified / archived 就不重跑。
+        """
+        try:
+            row = await db.fetch_one(
+                "SELECT openspec_stage FROM tickets WHERE id = ?", (ticket_id,),
+            )
+            stage = ((row or {}).get("openspec_stage") or "").strip()
+            # 没有 OpenSpec（空）→ _run_openspec_verify 自己会静默跳过；
+            # 已 verified/archived → 重复 validate 没意义，还会多发一条里程碑评论
+            if stage in ("verified", "archived"):
+                return True
+
+            from agents.test import TestAgent
+            ctx = {"project_id": project_id, "ticket_id": ticket_id}
+            ok = await TestAgent()._run_openspec_verify(ctx)
+            if ok and stage_label:
+                logger.info(
+                    "📐 OpenSpec Verify 由 %s 阶段触发并通过（ticket=%s）",
+                    stage_label, ticket_id[:12],
+                )
+            return ok
+        except Exception as e:
+            logger.debug("_maybe_openspec_verify 失败（忽略）: %s", e)
+            return False
 
     async def _finalize_openspec_after_done(
         self, project_id: str, ticket_id: str,
@@ -4516,10 +4889,10 @@ class TicketOrchestrator:
         返回 True 表示已处理（不再走普通回复），False 表示无变更正常回复。
         """
         try:
-            from change_impact import change_analyzer, ACTIVE_PHASES
+            from change_impact import change_analyzer, is_active_phase
 
             ticket_status = ticket.get("status", "")
-            if ticket_status not in ACTIVE_PHASES:
+            if not is_active_phase(ticket_status):
                 return False
 
             # 读取 OpenSpec specs（有则辅助分析）
@@ -4600,15 +4973,36 @@ class TicketOrchestrator:
         from_phase = "development"
         reason = f"{impact.type}: {impact.reason} （来自评论 {comment[:60]}）"
 
+        before = await db.fetch_one("SELECT status FROM tickets WHERE id = ?", (ticket_id,))
+        before_status = (before or {}).get("status") or ""
+
         reset_ok = await self.reset_phases(ticket_id, project_id, from_phase, reason)
 
         if reset_ok:
-            # 3. 回复用户确认
-            msg = (
-                f"✅ 已收到需求调整：{impact.reason}\n"
-                f"已重置**开发阶段**，将根据最新要求重新实现。\n"
-                f"（变更类型：{impact.type}）"
-            )
+            # 3. 回复用户确认。区分「真回退了」和「尚未跑到该阶段，只记指令」，
+            #    否则用户看到「已重置」但工单没动会以为系统骗人。
+            after = await db.fetch_one("SELECT status FROM tickets WHERE id = ?", (ticket_id,))
+            after_status = (after or {}).get("status") or ""
+            queued = ticket_id in self._pending_restart
+            if queued:
+                msg = (
+                    f"✅ 已收到需求调整：{impact.reason}\n"
+                    f"当前阶段正在执行，收尾后将回到**开发阶段**按最新要求重做。\n"
+                    f"（变更类型：{impact.type}）"
+                )
+            elif after_status != before_status:
+                msg = (
+                    f"✅ 已收到需求调整：{impact.reason}\n"
+                    f"已重置**开发阶段**（状态回退到 `{after_status}`），将根据最新要求重新实现。\n"
+                    f"（变更类型：{impact.type}）"
+                )
+            else:
+                msg = (
+                    f"📝 已记录需求调整：{impact.reason}\n"
+                    f"工单尚未进入开发阶段，该要求已作为最高优先级指令，"
+                    f"开发时会直接按新要求执行（不重跑已完成阶段）。\n"
+                    f"（变更类型：{impact.type}）"
+                )
         else:
             msg = (
                 f"⚠️ 检测到需求调整（{impact.reason}），但阶段重置次数已超限，"
@@ -4690,6 +5084,10 @@ class TicketOrchestrator:
             from_phase = "architecture" if needs_arch else "development"
 
             reason = f"partial({ver}→{spec_mgr.current_version}): {impact.reason}"
+            before = await db.fetch_one(
+                "SELECT status FROM tickets WHERE id = ?", (ticket_id,)
+            )
+            before_status = (before or {}).get("status") or ""
             reset_ok = await self.reset_phases(ticket_id, project_id, from_phase, reason)
 
             # 7. 写时间轴日志
@@ -4703,15 +5101,39 @@ class TicketOrchestrator:
                 },
             )
 
-            # 8. 回复用户
+            # 8. 回复用户。同 _tweak_flow：区分「真回退」「排队中」「尚未跑到该阶段」，
+            #    不能一律说「已重置」——工单没动的话用户会以为系统在骗人。
             phase_desc = "架构 → 开发 → 测试 → 验证" if needs_arch else "开发 → 测试 → 验证"
-            msg = (
-                f"📐 已收到局部需求变更：{impact.reason}\n"
-                f"规范已更新至 **v{spec_mgr.current_version}**（原 v{ver}），"
-                f"重置阶段：{phase_desc}。"
-            ) if reset_ok else (
-                f"📐 检测到局部变更（{impact.reason}），规范已更新，但阶段重置次数超限，请人工确认。"
+            spec_line = (
+                f"规范已更新至 **v{spec_mgr.current_version}**（原 v{ver}）"
             )
+            if not reset_ok:
+                msg = (
+                    f"📐 检测到局部变更（{impact.reason}），{spec_line}，"
+                    f"但阶段重置次数超限，请人工确认。"
+                )
+            else:
+                after = await db.fetch_one(
+                    "SELECT status FROM tickets WHERE id = ?", (ticket_id,)
+                )
+                after_status = (after or {}).get("status") or ""
+                if ticket_id in self._pending_restart:
+                    msg = (
+                        f"📐 已收到局部需求变更：{impact.reason}\n"
+                        f"{spec_line}。当前阶段正在执行，收尾后将重跑：{phase_desc}。"
+                    )
+                elif after_status != before_status:
+                    msg = (
+                        f"📐 已收到局部需求变更：{impact.reason}\n"
+                        f"{spec_line}，状态回退到 `{after_status}`，"
+                        f"重置阶段：{phase_desc}。"
+                    )
+                else:
+                    msg = (
+                        f"📐 已收到局部需求变更：{impact.reason}\n"
+                        f"{spec_line}。工单尚未跑到该阶段，新规范会在执行时直接生效"
+                        f"（不重跑已完成阶段）。"
+                    )
 
             await self._write_phase_comment(
                 project_id, ticket_id, "System", msg,
