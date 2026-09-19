@@ -2572,6 +2572,7 @@ async function loadMCPStatus() {
             const data = await api(`/projects/${currentProjectId}/mcp/all`);
             const wrapper = container.closest('.settings-card') || container.parentElement;
             _injectSourceFilter(wrapper, 'mcpServerList', data.counts, 'switchMcpSourceFilter');
+            _injectSearchBox(wrapper, 'mcpServerList', 'switchMcpSourceFilter', '搜索 MCP 名称 / 工具 / 命令…');
             container._mcpData = data;
             _renderMcpView(container, data, 'all');
         } else {
@@ -2648,6 +2649,11 @@ function _renderLegacyMcp(container, servers) {
 
 // ==================== ConfigPack 管理 ====================
 
+// ConfigPack 是本页唯一「一个 Tab 两个列表」的情况（已安装 / 可安装）。
+// 两个列表装的是同一种东西，所以给整个 Tab 一个搜索框、同时过滤两边 ——
+// 用户搜「ue5」时想知道的正是「装了没有」，拆成两个框反而要输两遍。
+let _packsCache = null;
+
 async function loadProjectPacks() {
     if (!currentProjectId) return;
     const installedEl = document.getElementById('installedPacksList');
@@ -2661,14 +2667,65 @@ async function loadProjectPacks() {
             api(`/projects/${currentProjectId}/packs`),
             api(`/projects/${currentProjectId}/packs/available`),
         ]);
+        _packsCache = {
+            installed: installedData.packs || [],
+            available: availableData.packs || [],
+        };
+        _injectPackSearchBox();
+        _renderPacksView();
+        _applyPendingPackHighlight();
+    } catch (e) {
+        installedEl.innerHTML = `<div class="empty-state-sm">加载失败: ${escapeHtml(e.message)}</div>`;
+    }
+}
 
-        const installed = installedData.packs || [];
-        const available = availableData.packs || [];
+function _injectPackSearchBox() {
+    const panel = document.getElementById('inner-panel-packs');
+    if (!panel || panel.querySelector('#packSearchRow')) return;
+    const row = document.createElement('div');
+    row.id = 'packSearchRow';
+    row.className = 'ext-search-row ext-search-row-standalone';
+    row.innerHTML = `
+        <input type="search" class="log-search-input ext-search-input" id="packSearchInput"
+               placeholder="搜索 Pack 名称 / 描述 / 包含内容（agents、skills…）"
+               oninput="_onPackSearch(this.value)"
+               onkeydown="if(event.key==='Escape'){this.value='';_onPackSearch('');}"
+               title="空格分隔多个关键词（需同时命中）；同时过滤「已安装」和「可安装」两个列表；Esc 清空">
+        <span class="ext-search-hint" id="packSearchHint"></span>`;
+    panel.insertBefore(row, panel.firstElementChild);
+}
 
-        // 已安装列表
-        if (installed.length === 0) {
-            installedEl.innerHTML = '<div class="empty-state-sm">未安装任何 ConfigPack</div>';
-        } else {
+function _onPackSearch(value) {
+    _extSearchQuery['packs'] = value;
+    _renderPacksView();
+}
+
+function _renderPacksView() {
+    const installedEl = document.getElementById('installedPacksList');
+    const availableEl = document.getElementById('availablePacksList');
+    if (!installedEl || !_packsCache) return;
+
+    const tokens = _extTokens(_extSearchQuery['packs']);
+    const q = (_extSearchQuery['packs'] || '').trim();
+    const allInstalled = _packsCache.installed;
+    const allAvailable = _packsCache.available;
+    const installed = allInstalled.filter(p => _extItemMatches(p, tokens));
+    const available = allAvailable.filter(p => _extItemMatches(p, tokens));
+
+    const hint = document.getElementById('packSearchHint');
+    if (hint) {
+        const shown = installed.length + available.length;
+        const total = allInstalled.length + allAvailable.length;
+        hint.textContent = q ? `匹配 ${shown} / ${total}（已装 ${installed.length} · 可装 ${available.length}）` : '';
+        hint.style.color = (q && shown === 0) ? 'var(--warning, #f97316)' : 'var(--text-muted)';
+    }
+
+    // 已安装列表
+    if (installed.length === 0) {
+        installedEl.innerHTML = q
+            ? `<div class="empty-state-sm">已安装的 Pack 里没有匹配「${escapeHtml(q)}」的</div>`
+            : '<div class="empty-state-sm">未安装任何 ConfigPack</div>';
+    } else {
             const migrationHint = `<div style="font-size:11px;padding:6px 10px;border-radius:6px;background:rgba(249,115,22,.08);color:#f97316;margin-bottom:8px;">
                 ⚠️ 套件文件现在安装到 <code>.codebuddy/packs/{pack名}/</code> 子目录。点击 <strong>↩ 重装</strong> 可将已有套件迁移到新路径。
             </div>`;
@@ -2705,7 +2762,9 @@ async function loadProjectPacks() {
         // 可安装列表
         if (availableEl) {
             if (available.length === 0) {
-                availableEl.innerHTML = '<div class="empty-state-sm">所有 Pack 均已安装</div>';
+                availableEl.innerHTML = q
+                    ? `<div class="empty-state-sm">可安装的 Pack 里没有匹配「${escapeHtml(q)}」的</div>`
+                    : '<div class="empty-state-sm">所有 Pack 均已安装</div>';
             } else {
                 availableEl.innerHTML = available.map(p => {
                     const score = p.match_score || 0;
@@ -2746,10 +2805,6 @@ async function loadProjectPacks() {
                 }).join('');
             }
         }
-        _applyPendingPackHighlight();
-    } catch (e) {
-        installedEl.innerHTML = `<div class="empty-state-sm">加载失败: ${escapeHtml(e.message)}</div>`;
-    }
 }
 
 async function installPack(packName) {
@@ -3043,6 +3098,130 @@ const _SOURCE_META = {
     openspec: { label: 'OpenSpec', color: '#a855f7', bg: 'rgba(168,85,247,.12)' },
 };
 
+// ==================== 扩展面板关键词搜索 ====================
+// 每个 Tab 各有一个搜索框（不是共用一个）：8 个面板的数据结构、来源芯片、条目
+// 量级都不一样，而搜索必须能跟本面板的「来源」芯片求交集（「只看 Pack 来源里带
+// ue5 的 skill」）—— 一个跨 Tab 的全局框做不到这层配对。共用的是下面这套实现。
+//
+// 数据在 loadXxx 时已整份缓存在容器上（container._skillData 等），所以过滤纯在
+// 客户端做，不发请求、不改后端接口。
+
+const _extSearchQuery = {};   // containerId -> 关键词
+const _extSourceState = {};   // containerId -> 当前来源芯片（搜索时要保持住）
+const _extRerenderFn = {};    // containerId -> 重渲染函数名
+
+const _EXT_SOURCE_KEYS = ['builtin', 'project', 'user', 'pack', 'openspec'];
+
+// 参与匹配的字段：只搜元数据，不搜文件正文（content / preview）——
+// 正文命中会让「这条为什么出现在结果里」变得没法解释。
+const _EXT_SEARCH_KEYS = [
+    'name', 'display_name', 'id', 'description', 'role',
+    'event', 'matcher', 'command', 'globs', 'transport',
+    'cli', 'args_hint', 'pack_name', 'file', 'rel_path',
+    'contains', 'tools', 'actions', 'matched_traits', 'targets',
+];
+
+function _extHaystack(item) {
+    if (!item || typeof item !== 'object') return '';
+    const parts = [];
+    for (const k of _EXT_SEARCH_KEYS) {
+        const v = item[k];
+        if (typeof v === 'string') parts.push(v);
+        else if (Array.isArray(v)) {
+            for (const x of v) {
+                if (typeof x === 'string') parts.push(x);
+                else if (x && typeof x === 'object' && typeof x.name === 'string') parts.push(x.name);
+            }
+        }
+    }
+    return parts.join('  ').toLowerCase();
+}
+
+/** 关键词切分：空格分隔，多个词之间是 AND（「ue5 skill」= 同时含两者） */
+function _extTokens(query) {
+    return String(query || '').toLowerCase().split(/\s+/).filter(Boolean);
+}
+
+function _extItemMatches(item, tokens) {
+    if (!tokens.length) return true;
+    const hay = _extHaystack(item);
+    return tokens.every(t => hay.includes(t));
+}
+
+/** 按面板当前关键词过滤 {builtin:[],project:[],...,counts:{}}；无关键词时原样返回 */
+function _filterExtData(containerId, data) {
+    const tokens = _extTokens(_extSearchQuery[containerId]);
+    if (!tokens.length || !data) return data;
+    const out = { ...data };
+    const counts = { ...(data.counts || {}) };
+    let total = 0;
+    for (const key of _EXT_SOURCE_KEYS) {
+        if (!Array.isArray(data[key])) continue;
+        out[key] = data[key].filter(it => _extItemMatches(it, tokens));
+        counts[key] = out[key].length;
+        total += out[key].length;
+    }
+    counts.total = total;
+    out.counts = counts;
+    return out;
+}
+
+function _extSumSources(data) {
+    return _EXT_SOURCE_KEYS.reduce((n, k) => n + ((data && data[k] || []).length), 0);
+}
+
+/**
+ * 给面板注入搜索框。rerenderFn 是该面板已有的 switchXxxSourceFilter 名字 ——
+ * 走它重渲染，搜索就自动继承了来源芯片的当前选择，不用另开一条渲染路径。
+ */
+function _injectSearchBox(wrapper, containerId, rerenderFn, placeholder, anchorSel) {
+    _extRerenderFn[containerId] = rerenderFn;
+    let box = wrapper.querySelector(`#${containerId}_search`);
+    if (box) return box;
+    box = document.createElement('div');
+    box.id = `${containerId}_search`;
+    box.className = 'ext-search-row';
+    box.innerHTML = `
+        <input type="search" class="log-search-input ext-search-input"
+               id="${containerId}_searchInput"
+               placeholder="${escapeHtml(placeholder || '搜索名称 / 描述 / 来源…')}"
+               oninput="_onExtSearch('${containerId}', this.value)"
+               onkeydown="if(event.key==='Escape'){this.value='';_onExtSearch('${containerId}','');}"
+               title="空格分隔多个关键词（需同时命中）；Esc 清空">
+        <span class="ext-search-hint" id="${containerId}_searchHint"></span>`;
+    // 放在来源芯片之前（芯片可能还没注入，那就退到列表容器之前）
+    const anchor = (anchorSel && wrapper.querySelector(anchorSel))
+        || wrapper.querySelector(`#${containerId}_filter`)
+        || document.getElementById(containerId);
+    if (anchor) wrapper.insertBefore(box, anchor);
+    return box;
+}
+
+function _onExtSearch(containerId, value) {
+    _extSearchQuery[containerId] = value;
+    const fnName = _extRerenderFn[containerId];
+    const fn = fnName && window[fnName];
+    if (typeof fn === 'function') fn(_extSourceState[containerId] || 'all');
+}
+
+function _updateSearchHint(containerId, shown, total) {
+    const el = document.getElementById(`${containerId}_searchHint`);
+    if (!el) return;
+    const q = (_extSearchQuery[containerId] || '').trim();
+    el.textContent = q ? `匹配 ${shown} / ${total}` : '';
+    el.style.color = (q && shown === 0) ? 'var(--warning, #f97316)' : 'var(--text-muted)';
+}
+
+/** 无匹配时的提示（区分「本来就没有」和「被关键词滤空了」） */
+function _extEmptyHtml(containerId, fallback) {
+    const q = (_extSearchQuery[containerId] || '').trim();
+    return q
+        ? `<div class="empty-state-sm">没有匹配「${escapeHtml(q)}」的条目</div>`
+        : `<div class="empty-state-sm">${fallback}</div>`;
+}
+
+const _extChipBaseLabel = {};  // containerId -> { source: '内置' }  （去掉数字的芯片文案）
+
 function _injectSourceFilter(wrapper, containerId, counts, switchFn) {
     let bar = wrapper.querySelector(`#${containerId}_filter`);
     if (!bar) {
@@ -3053,21 +3232,34 @@ function _injectSourceFilter(wrapper, containerId, counts, switchFn) {
         wrapper.insertBefore(bar, container);
     }
     const chips = [
-        { key: 'all',      label: `全部 ${counts.total}` },
-        { key: 'builtin',  label: `内置 ${counts.builtin}` },
-        { key: 'project',  label: `项目 ${counts.project}`,    hide: !counts.project },
-        { key: 'user',     label: `用户 ${counts.user}`,       hide: !counts.user },
-        { key: 'pack',     label: `Pack ${counts.pack}`,       hide: !counts.pack },
-        { key: 'openspec', label: `OpenSpec ${counts.openspec || 0}`, hide: !counts.openspec },
+        { key: 'all',      label: '全部',   n: counts.total },
+        { key: 'builtin',  label: '内置',   n: counts.builtin },
+        { key: 'project',  label: '项目',   n: counts.project,        hide: !counts.project },
+        { key: 'user',     label: '用户',   n: counts.user,           hide: !counts.user },
+        { key: 'pack',     label: 'Pack',   n: counts.pack,           hide: !counts.pack },
+        { key: 'openspec', label: 'OpenSpec', n: counts.openspec || 0, hide: !counts.openspec },
     ].filter(c => !c.hide);
     bar.innerHTML = chips.map(c => `
         <button class="src-filter-chip" data-panel="${containerId}" data-source="${c.key}"
+                data-base-label="${escapeHtml(c.label)}"
                 onclick="${switchFn}('${c.key}')"
                 style="font-size:11px;padding:3px 10px;border-radius:12px;border:1px solid var(--border-color);cursor:pointer;
                        background:${c.key==='all'?'var(--primary)':'var(--bg-elevated)'};
                        color:${c.key==='all'?'#fff':'var(--text-secondary)'};">
-            ${escapeHtml(c.label)}
+            ${escapeHtml(`${c.label} ${c.n || 0}`)}
         </button>`).join('');
+}
+
+/** 搜索后刷新芯片上的数字 —— 芯片写着「Pack 12」却点进去空的，比不显示更误导 */
+function _updateSourceChipCounts(containerId, counts) {
+    if (!counts) return;
+    document.querySelectorAll(`.src-filter-chip[data-panel="${containerId}"]`).forEach(el => {
+        const key = el.dataset.source;
+        const base = el.dataset.baseLabel || '';
+        const n = key === 'all' ? (counts.total || 0) : (counts[key] || 0);
+        el.textContent = `${base} ${n}`;
+        el.style.opacity = n ? '' : '.45';
+    });
 }
 
 function _setSourceFilter(containerId, source) {
@@ -3088,13 +3280,26 @@ function _toggleSourceGroup(headerEl) {
 }
 
 function _renderSourceGroups(container, data, source, renderItem, groupTitles) {
+    // 记住来源选择：搜索框重渲染时要沿用它，不能把用户选的芯片重置成「全部」
+    const cid = container.id;
+    if (cid) _extSourceState[cid] = source;
+
+    // 关键词过滤在这里统一做 —— MCP / Skills / Commands / Rules / Hooks
+    // 五个面板都走这条渲染路径，各自的 _renderXxxView 不需要重复实现搜索
+    const fullTotal = _extSumSources(data);
+    if (cid) data = _filterExtData(cid, data);
+    if (cid) {
+        _updateSearchHint(cid, _extSumSources(data), fullTotal);
+        _updateSourceChipCounts(cid, data.counts);
+    }
+
     // 每次渲染全量视图时更新条目 registry（供详情列表使用）
     if (source === 'all') _registerExtItems(data, groupTitles);
     // groupTitles: { builtin, user, pack }
     if (source !== 'all') {
         const list = data[source] || [];
         if (list.length === 0) {
-            container.innerHTML = `<div class="empty-state-sm">暂无${_SOURCE_META[source]?.label || source}来源</div>`;
+            container.innerHTML = _extEmptyHtml(cid, `暂无${_SOURCE_META[source]?.label || source}来源`);
         } else {
             container.innerHTML = list.map(renderItem).join('');
         }
@@ -3132,7 +3337,7 @@ function _renderSourceGroups(container, data, source, renderItem, groupTitles) {
             <div class="src-grp-items">${cardsHtml}</div>
         </div>`;
     }
-    container.innerHTML = html || '<div class="empty-state-sm">暂无数据</div>';
+    container.innerHTML = html || _extEmptyHtml(cid, '暂无数据');
 }
 
 // ── Skills ────────────────────────────────────────────────────────────────────
@@ -3161,6 +3366,7 @@ async function loadProjectSkills() {
         const counts = data.counts;
         const wrapper = sysContainer.closest('.settings-card') || sysContainer.parentElement;
         _injectSourceFilter(wrapper, 'skillsListSettings', counts, 'switchSkillSourceFilter');
+        _injectSearchBox(wrapper, 'skillsListSettings', 'switchSkillSourceFilter', '搜索 Skill 名称 / 描述 / 所属 Pack…');
         sysContainer._skillData = data;
         _renderSkillView(sysContainer, data, 'all');
 
@@ -3255,6 +3461,7 @@ async function loadProjectCommands() {
         const data = await api(`/projects/${currentProjectId}/commands/all`);
         const wrapper = container.closest('.settings-card') || container.parentElement;
         _injectSourceFilter(wrapper, 'commandListSettings', data.counts, 'switchCommandSourceFilter');
+        _injectSearchBox(wrapper, 'commandListSettings', 'switchCommandSourceFilter', '搜索命令名 / 描述 / 所属 Pack…');
         container._cmdData = data;
         _renderCommandView(container, data, 'all');
     } catch (e) {
@@ -3305,6 +3512,7 @@ async function loadProjectRules() {
         const data = await api(`/projects/${currentProjectId}/rules/all`);
         const wrapper = container.closest('.settings-card') || container.parentElement;
         _injectSourceFilter(wrapper, 'rulesListSettings', data.counts, 'switchRuleSourceFilter');
+        _injectSearchBox(wrapper, 'rulesListSettings', 'switchRuleSourceFilter', '搜索规则名 / 描述 / globs…');
         container._ruleData = data;
         _renderRulesView(container, data, 'all');
     } catch (e) {
@@ -3353,6 +3561,7 @@ async function loadProjectHooks() {
         const data = await api(`/projects/${currentProjectId}/hooks/all`);
         const wrapper = container.closest('.settings-card') || container.parentElement;
         _injectSourceFilter(wrapper, 'hooksListSettings', data.counts, 'switchHookSourceFilter');
+        _injectSearchBox(wrapper, 'hooksListSettings', 'switchHookSourceFilter', '搜索事件 / matcher / 命令…');
         container._hookData = data;
         _renderHooksView(container, data, 'all');
     } catch (e) {
@@ -3773,28 +3982,76 @@ function _renderOpenSpecStatus(data) {
     if (installedCard) {
         installedCard.style.display = data.initialized ? '' : 'none';
         if (data.initialized) {
-            const content = document.getElementById('openspecInstalledContent');
-            if (content) {
-                const rules = data.installed_rules || [];
-                const skills = data.installed_skills || [];
-                const parts = [];
-                if (rules.length) {
-                    parts.push(`<div style="margin-bottom:8px;"><span style="font-size:12px;font-weight:500;color:var(--text-secondary);">📋 Rules</span><div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:4px;">${
-                        rules.map(r => `<code style="font-size:11px;padding:1px 6px;border-radius:3px;background:var(--bg-tertiary);">${escapeHtml(r)}</code>`).join('')
-                    }</div></div>`);
-                }
-                if (skills.length) {
-                    parts.push(`<div><span style="font-size:12px;font-weight:500;color:var(--text-secondary);">⚡ Skills</span><div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:4px;">${
-                        skills.map(s => `<code style="font-size:11px;padding:1px 6px;border-radius:3px;background:var(--bg-tertiary);">${escapeHtml(s)}</code>`).join('')
-                    }</div></div>`);
-                }
-                if (!parts.length) {
-                    parts.push(`<div style="font-size:12px;color:var(--text-muted);">openspec/ 目录已存在，Rules 与 Skills 将在各面板中以「来源：OpenSpec」标注显示。</div>`);
-                }
-                content.innerHTML = parts.join('');
-            }
+            _openspecInstalledCache = {
+                rules: data.installed_rules || [],
+                skills: data.installed_skills || [],
+            };
+            _injectOpenSpecSearchBox();
+            _renderOpenSpecInstalled();
         }
     }
+}
+
+// OpenSpec Tab 里唯一「可检索」的是已安装的 Rules / Skills 名单（其余是安装按钮
+// 和控制台，没有条目可搜）。所以框只放在那张卡上，不给整个 Tab 加。
+let _openspecInstalledCache = null;
+
+function _injectOpenSpecSearchBox() {
+    const card = document.getElementById('openspecInstalledCard');
+    const content = document.getElementById('openspecInstalledContent');
+    if (!card || !content || card.querySelector('#openspecSearchRow')) return;
+    const row = document.createElement('div');
+    row.id = 'openspecSearchRow';
+    row.className = 'ext-search-row';
+    row.innerHTML = `
+        <input type="search" class="log-search-input ext-search-input" id="openspecSearchInput"
+               placeholder="搜索已安装的 Rule / Skill 名称…"
+               oninput="_onOpenSpecSearch(this.value)"
+               onkeydown="if(event.key==='Escape'){this.value='';_onOpenSpecSearch('');}"
+               title="空格分隔多个关键词（需同时命中）；Esc 清空">
+        <span class="ext-search-hint" id="openspecSearchHint"></span>`;
+    card.insertBefore(row, content);
+}
+
+function _onOpenSpecSearch(value) {
+    _extSearchQuery['openspecInstalled'] = value;
+    _renderOpenSpecInstalled();
+}
+
+function _renderOpenSpecInstalled() {
+    const content = document.getElementById('openspecInstalledContent');
+    if (!content || !_openspecInstalledCache) return;
+
+    const tokens = _extTokens(_extSearchQuery['openspecInstalled']);
+    const q = (_extSearchQuery['openspecInstalled'] || '').trim();
+    const hit = (s) => tokens.every(t => String(s).toLowerCase().includes(t));
+    const allRules = _openspecInstalledCache.rules;
+    const allSkills = _openspecInstalledCache.skills;
+    const rules = allRules.filter(hit);
+    const skills = allSkills.filter(hit);
+
+    const hintEl = document.getElementById('openspecSearchHint');
+    if (hintEl) {
+        const shown = rules.length + skills.length;
+        const total = allRules.length + allSkills.length;
+        hintEl.textContent = q ? `匹配 ${shown} / ${total}` : '';
+        hintEl.style.color = (q && shown === 0) ? 'var(--warning, #f97316)' : 'var(--text-muted)';
+    }
+
+    const chip = (s) => `<code style="font-size:11px;padding:1px 6px;border-radius:3px;background:var(--bg-tertiary);">${escapeHtml(s)}</code>`;
+    const parts = [];
+    if (rules.length) {
+        parts.push(`<div style="margin-bottom:8px;"><span style="font-size:12px;font-weight:500;color:var(--text-secondary);">📋 Rules (${rules.length})</span><div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:4px;">${rules.map(chip).join('')}</div></div>`);
+    }
+    if (skills.length) {
+        parts.push(`<div><span style="font-size:12px;font-weight:500;color:var(--text-secondary);">⚡ Skills (${skills.length})</span><div style="margin-top:4px;display:flex;flex-wrap:wrap;gap:4px;">${skills.map(chip).join('')}</div></div>`);
+    }
+    if (!parts.length) {
+        parts.push(q
+            ? `<div style="font-size:12px;color:var(--text-muted);">没有匹配「${escapeHtml(q)}」的 Rule / Skill。</div>`
+            : `<div style="font-size:12px;color:var(--text-muted);">openspec/ 目录已存在，Rules 与 Skills 将在各面板中以「来源：OpenSpec」标注显示。</div>`);
+    }
+    content.innerHTML = parts.join('');
 }
 
 let _openspecRunning = false;
@@ -6233,6 +6490,13 @@ function openCapabilityInstallPage(inner) {
 function _applyPendingPackHighlight() {
     const name = _pendingPackHighlight;
     if (!name) return;
+    // 有搜索关键词时目标可能被过滤掉了 —— 深链跳转优先于搜索，先清掉再定位
+    if ((_extSearchQuery['packs'] || '').trim()) {
+        const input = document.getElementById('packSearchInput');
+        if (input) input.value = '';
+        _extSearchQuery['packs'] = '';
+        _renderPacksView();
+    }
     const el = document.querySelector(`#availablePacksList [data-pack-name="${CSS.escape(name)}"]`);
     if (!el) return;
     _pendingPackHighlight = '';
@@ -11944,19 +12208,23 @@ async function loadAgentList() {
         const counts = allData.counts;
         // 渲染 filter 芯片
         const chips = [
-            { key: 'all',     label: `全部 ${counts.total}` },
-            { key: 'builtin', label: `内置 ${counts.builtin}` },
-            { key: 'user',    label: `用户 ${counts.user}`,   hide: counts.user === 0 },
-            { key: 'pack',    label: `Pack ${counts.pack}`,   hide: counts.pack === 0 },
+            { key: 'all',     label: '全部', n: counts.total },
+            { key: 'builtin', label: '内置', n: counts.builtin },
+            { key: 'user',    label: '用户', n: counts.user, hide: counts.user === 0 },
+            { key: 'pack',    label: 'Pack', n: counts.pack, hide: counts.pack === 0 },
         ].filter(c => !c.hide);
 
         filterBar.innerHTML = chips.map(c => `
             <button class="agent-source-chip ${c.key === 'all' ? 'active' : ''}"
-                    data-source="${c.key}"
+                    data-source="${c.key}" data-base-label="${escHtml(c.label)}"
                     onclick="switchAgentSourceFilter('${c.key}')"
                     style="font-size:11px;padding:3px 10px;border-radius:12px;border:1px solid var(--border-color);background:${c.key==='all'?'var(--primary)':'var(--bg-elevated)'};color:${c.key==='all'?'#fff':'var(--text-secondary)'};cursor:pointer;">
-                ${escHtml(c.label)}
+                ${escHtml(`${c.label} ${c.n || 0}`)}
             </button>`).join('');
+
+        // 搜索框（Agent 面板走自己的渲染路径，芯片容器 id 也不同，需显式指定锚点）
+        _injectSearchBox(wrapper, 'agentListSettings', 'switchAgentSourceFilter',
+                         '搜索 Agent 名称 / 职责 / Action…', '#agentSourceFilter');
 
         // 缓存 allData 供切换 filter 使用
         container._agentData = allData;
@@ -11973,6 +12241,7 @@ async function loadAgentList() {
 }
 
 function switchAgentSourceFilter(source) {
+    _extSourceState['agentListSettings'] = source;
     // 更新芯片高亮
     document.querySelectorAll('.agent-source-chip').forEach(el => {
         const isActive = el.dataset.source === source;
@@ -11986,6 +12255,21 @@ function switchAgentSourceFilter(source) {
 }
 
 function _renderAgentView(container, allData, source) {
+    // 关键词过滤（Agent 面板不走 _renderSourceGroups，这里自己接一次）
+    _extSourceState['agentListSettings'] = source;
+    const _fullTotal = _extSumSources(allData);
+    allData = _filterExtData('agentListSettings', allData);
+    _updateSearchHint('agentListSettings', _extSumSources(allData), _fullTotal);
+    // Agent 面板芯片是 .agent-source-chip，走自己的计数刷新
+    document.querySelectorAll('.agent-source-chip').forEach(el => {
+        const base = el.dataset.baseLabel;
+        if (!base) return;
+        const k = el.dataset.source;
+        const n = k === 'all' ? (allData.counts?.total || 0) : (allData.counts?.[k] || 0);
+        el.textContent = `${base} ${n}`;
+        el.style.opacity = n ? '' : '.45';
+    });
+
     const modeLabels = {single: '单步', by_order: '顺序', react: '自主'};
     const modeColors = {single: 'var(--text-muted)', by_order: 'var(--primary)', react: 'var(--success)'};
     const SOURCE_META = {
@@ -12030,7 +12314,7 @@ function _renderAgentView(container, allData, source) {
                    : source === 'user'    ? allData.user
                    : allData.pack;
         if (!list || list.length === 0) {
-            container.innerHTML = `<div class="empty-state-sm">暂无 ${SOURCE_META[source]?.label || source} Agent</div>`;
+            container.innerHTML = _extEmptyHtml('agentListSettings', `暂无 ${SOURCE_META[source]?.label || source} Agent`);
             return;
         }
         container.innerHTML = list.map(_agentCard).join('');
@@ -12077,7 +12361,7 @@ function _renderAgentView(container, allData, source) {
         </div>`;
     }
 
-    container.innerHTML = html || '<div class="empty-state-sm">暂无 Agent</div>';
+    container.innerHTML = html || _extEmptyHtml('agentListSettings', '暂无 Agent');
 }
 
 /** 高亮提示词中的变量占位符 {xxx} */

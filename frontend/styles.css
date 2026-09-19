@@ -1922,6 +1922,36 @@ body.shell-project .main-ws-tabbar,
 }
 .log-search-input::placeholder { color: var(--text-muted); }
 
+/* ── 扩展面板搜索框（Agent / MCP / Skills / Commands / Rules / Hooks /
+      ConfigPack / OpenSpec 各一个，复用 .log-search-input 的外观） ── */
+.ext-search-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+/* ConfigPack 的框在两张卡之上，需要自己撑开间距 */
+.ext-search-row-standalone { margin-bottom: 12px; }
+
+.ext-search-input {
+    flex: 1;
+    min-width: 0;
+    max-width: 380px;
+    width: auto;
+    font-size: 12px;
+    padding: 4px 10px;
+}
+/* 覆盖 .log-search-input:focus 里的固定宽度 —— 这里是弹性布局，
+   focus 时再改 width 会让整行跳动 */
+.ext-search-input:focus { width: auto; }
+
+.ext-search-hint {
+    font-size: 11px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
 .log-panel-btn {
     font-size: 14px !important;
     padding: 2px 4px !important;
