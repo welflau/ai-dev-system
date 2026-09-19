@@ -20,6 +20,7 @@ from actions.plan_code_change import PlanCodeChangeAction
 from actions.self_test import SelfTestAction
 from actions.reflection import ReflectionAction
 from actions.write_html_prototype import WriteHtmlPrototypeAction
+from actions.ue_test_gen import UETestGenAction
 
 logger = logging.getLogger("dev_agent")
 
@@ -27,7 +28,7 @@ logger = logging.getLogger("dev_agent")
 class DevAgent(BaseAgent):
 
     action_classes = [WriteCodeAction, PlanCodeChangeAction, SelfTestAction, ReflectionAction,
-                      WriteHtmlPrototypeAction]
+                      WriteHtmlPrototypeAction, UETestGenAction]
     react_mode = ReactMode.SINGLE  # 自己控制流程，不用 BY_ORDER
     watch_actions = {"design_architecture"}
 
@@ -44,6 +45,8 @@ class DevAgent(BaseAgent):
             return await self._do_fix_issues(context)
         elif task_name == "run_engine_compile":
             return await self._do_run_engine_compile(context)
+        elif task_name == "generate_ue_tests":
+            return await self._do_generate_ue_tests(context)
         elif task_name == "write_html_prototype":
             return await self._do_write_html_prototype(context)
         return {"status": "error", "message": f"未知任务: {task_name}"}
@@ -56,6 +59,16 @@ class DevAgent(BaseAgent):
         if result.success:
             return result.data or {"status": "success"}
         return {"status": "error", "message": result.message or "HTML 原型生成失败"}
+
+    async def _do_generate_ue_tests(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """UE Automation 测试生成 —— 为本次改动的类补最小测试。
+
+        永不返回失败：测试生成是增强不是门禁，它挂了不该让功能工单进不去
+        （Action 内部已把所有失败路径收敛成 success + warnings）。
+        编不过的生成结果会在 Action 里就地回滚，不会留到下游 engine_compile。
+        """
+        result = await UETestGenAction().run(context)
+        return result.to_dict()
 
     async def _do_run_engine_compile(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """UE 引擎编译验证（v0.18 Phase A）—— 调 UnrealBuildTool 编译项目。

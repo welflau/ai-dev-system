@@ -1,0 +1,43 @@
+# UE Automation 测试生成 —— develop 之后、engine_compile 之前补测试
+#
+# 为什么放在 engine_compile 前面：生成的测试要在进入全量编译之前就确定是「编得过的」。
+# Action 内部用 UBT -SingleFile 自己验一遍（30~90s，不是全量 3~5min），编不过就地
+# 删掉。这样 engine_compile 拿到的永远是干净的树 —— 否则一份编不过的生成测试会让
+# 工单因为「DevAgent 自己没写的代码」被 reject 回 development 反复空转。
+#
+# 背景见 docs/20260918_01_OpenSpec四阶段闭环修复方案.md §4：
+# UE 侧长期只有「执行测试」没有「生成测试」，导致 ue_playtest 的
+# no_tests → success 分支实际含义是「没测试就算通过」。
+id: ue_test_gen
+name: UE 测试生成
+insert_after: development
+priority: 97   # > engine_compile(95)：loader 按 priority 升序插入，大的更靠近锚点
+description: 为本次改动的 UE 类生成最小 Automation 测试，并验证其可编译
+
+required_traits:
+  any_of:
+    - engine:ue5
+    - engine:ue4
+
+stage:
+  agent: DevAgent
+  action: generate_ue_tests
+  trigger_on: ue_test_gen_pending
+  success_status: ue_test_gen_passed
+  # 生成失败不阻塞工单（Action 恒返回 success），这里配 reject 只是兜底语义完整
+  reject_status: ue_test_gen_failed
+  reject_goto: development
+  config:
+    max_retries: 1
+    timeout_seconds: 420
+    ue_test_gen_enabled: true
+    ue_test_gen_compile: true      # 关掉则只有静态保证，不跑 UBT
+    ue_test_gen_timeout: 180       # 单文件 SingleFile 编译上限
+    ue_test_gen_max_targets: 2     # 一次最多给 2 个类生成，避免拖长工单
+
+pipeline_view_contrib:
+  group: testing
+  create_if_missing:
+    name: 测试验证
+    icon: 🧪
+    insert_after: development

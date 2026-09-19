@@ -19,6 +19,7 @@ Issue 结构（跨规则统一）：
 from __future__ import annotations
 
 import logging
+import os
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -240,27 +241,38 @@ def rule_R3_include_paths(
             continue
 
         found_in_module = header_name in module_headers
-        # 如果在本模块根目录里（不是 Public/Private 子目录），UE 默认能 include
-        # 如果在子目录里，必须写子目录前缀
+        # 无路径前缀的 `#include "Xxx.h"` 何时合法，按 C++ / UBT 的实际解析顺序判：
+        #   ① 引用方所在目录（quoted include 的相对查找）—— 永远命中
+        #   ② UBT 加进 include 搜索路径的锚点：模块的 Public/ 与 Private/ 根
+        # 模块根目录本身**不是**锚点（flat layout 也不是），见下方注释。
         if found_in_module:
             paths = module_headers[header_name]
-            # 把 module root 下的 Public/Private 视为"直接可 include"的锚点
             public = module_root / "Public"
             private = module_root / "Private"
+            try:
+                includer_dir = (repo_path / file_path_rel).resolve().parent
+            except Exception:
+                includer_dir = None
             ok = False
             for p in paths:
-                # flat layout（模块根目录直接放 .h/.cpp，无 Public/Private 分层）：
-                # UBT 会把模块根加进 include 路径，同级 #include "Xxx.h" 合法。
-                # 漏掉这种情况会对所有小型模块误报 —— 且给出的 suggest 与原文
-                # 一模一样，DevAgent 拿到后无从修改，只能空转到 blocked。
+                # ① 与引用方同级 —— 相对查找直接命中。
+                #
+                # 这里曾经写的是「头文件位于模块根目录就放行」（理由：flat layout
+                # 下 UBT 会把模块根加进 include 路径）。那个前提是错的：flat layout
+                # 的同级引用能过，靠的是 quoted include 的相对查找，不是 include 路径。
+                # 于是子目录引用方被误放行 —— Source/TestFPS/Tests/ 里写
+                # #include "SprintComponent.h"（头在 Source/TestFPS/ 下）lint 报 0 issue，
+                # 真编译 C1083。反过来同级的 Tests/Helper.h ← Tests/Foo.cpp 又被误报，
+                # 且 suggest 与原文逐字相同，DevAgent 拿到无从下手，只能空转到 blocked。
+                # 换成「与引用方同级」两头都对。
                 try:
-                    if p.resolve().parent == module_root.resolve():
+                    if includer_dir is not None and p.resolve().parent == includer_dir:
                         ok = True
                         break
                 except Exception:
                     pass
                 try:
-                    # Public / Private 根目录下的直接文件 = OK
+                    # ② Public / Private 根目录下的直接文件 = OK
                     rel = p.resolve().relative_to(public.resolve()) if public.exists() else None
                     if rel is not None and rel.parent == Path("."):
                         ok = True
@@ -275,18 +287,27 @@ def rule_R3_include_paths(
                 except Exception:
                     pass
             if not ok:
-                # 头文件在 Public 或 Private 的**子目录**里 → 给出正确路径建议
+                # 头文件既不与引用方同级，也不在 Public/Private 根 → 给出可直接照抄的写法
                 first = paths[0]
-                # 相对 Public 或 Private 的子路径
                 suggest = None
-                for anchor in (module_root / "Public", module_root / "Private"):
+                # 有 Public/Private 分层时，相对锚点的路径才是 UE 的惯用写法
+                for anchor in (public, private):
                     if anchor.exists():
                         try:
-                            rel = first.resolve().relative_to(anchor.resolve())
-                            suggest = rel.as_posix()
+                            suggest = first.resolve().relative_to(
+                                anchor.resolve()).as_posix()
                             break
                         except Exception:
                             pass
+                if suggest is None and includer_dir is not None:
+                    # flat layout：给相对路径（如 "../SprintComponent.h"）。
+                    # 不能退化成 first.name —— 那跟原文一模一样，等于没给建议。
+                    try:
+                        suggest = os.path.relpath(
+                            str(first.resolve()), str(includer_dir),
+                        ).replace("\\", "/")
+                    except Exception:
+                        pass
                 if suggest is None:
                     suggest = first.name
                 issues.append({
@@ -296,8 +317,9 @@ def rule_R3_include_paths(
                     "blocking": True,
                     "category": "include-path",
                     "msg": (
-                        f"{file_path_rel}:{i} #include \"{inc}\" 在本模块同级找不到；"
-                        f"文件位于 {first.relative_to(repo_path).as_posix()}"
+                        f"{file_path_rel}:{i} #include \"{inc}\" 与引用方不同级，"
+                        f"也不在模块 Public/ 或 Private/ 根下（UBT 的 include 锚点）；"
+                        f"头文件实际位于 {first.relative_to(repo_path).as_posix()}"
                     ),
                     "suggest": f'应改成 #include "{suggest}"',
                 })

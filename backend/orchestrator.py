@@ -2491,6 +2491,48 @@ class TicketOrchestrator:
                     )
                 return   # 不进入下面的产物落库
 
+            # UE Automation 测试生成（action=generate_ue_tests）同样有自己的结果语义。
+            #
+            # 少了这个分支会出两件事，真机跑一张工单就撞上了（114 次空转）：
+            #   ① 落到下面「常规 develop」的收尾，status 被写回 development_done，
+            #      而 development_done 的 trigger 正是 generate_ue_tests 本身 ——
+            #      派单 → 成功 → 写回原状态 → 再派单，每秒一轮的死循环。
+            #   ② 顺带把本 Action 的结果存成 type='code' 的 artifact，把 develop 阶段的
+            #      dev_result **覆盖掉**。于是第 2 轮起 _pick_targets 读到的 dev_result
+            #      里没有 files，报「本次改动里没有可测的 UE 头文件」—— 症状指向选目标
+            #      逻辑，根因其实在这儿，很难查。
+            # 所以：自己写状态、自己 return，不碰产物表。
+            if action == "generate_ue_tests":
+                r_status = result.get("status")
+                tg = result.get("ue_test_gen") or {}
+                gen_list = tg.get("generated") or []
+                warns = tg.get("warnings") or []
+                # 状态从 SOP 声明里取，不写死字符串：fragment 改了名这里不用跟着改。
+                if r_status == "success":
+                    new_status = await self._sop_success_status_for(
+                        project_id, action, default="ue_test_gen_passed",
+                        ticket_type=ticket.get("type"),
+                    )
+                else:
+                    # 生成器设计上永不返回失败（失败都收敛成 success + warnings），
+                    # 这条是防御：真出了非 success 就走 SOP 声明的返工路径，
+                    # 而不是默默当成功放行。
+                    stage = await self._sop_stage_for(project_id, action, ticket.get("type"))
+                    new_status = (stage or {}).get("reject_status") or "ue_test_gen_failed"
+                await db.update("tickets", {
+                    "status": new_status,
+                    "result": result_json,
+                    "updated_at": now_iso(),
+                }, "id = ?", (ticket_id,))
+                await self._log(
+                    project_id, requirement_id, ticket_id, agent_name,
+                    "complete", current_status, new_status,
+                    tg.get("summary") or "未生成测试",
+                    level="warning" if warns else "info",
+                    detail_data={"generated": gen_list, "warnings": warns[:10]},
+                )
+                return   # 不进入下面的产物落库（别覆盖 dev_result）
+
             # 常规 develop / rework / fix_issues → development_done
             # v0.19.x A 方案：若 self_test 失败（UE blocking 静态错）→ self_test_failed
             # → SOP 派生 self_test_failed → DevAgent.fix_issues 自动回跳
