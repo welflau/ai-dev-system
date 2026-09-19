@@ -84,19 +84,28 @@ backend/A_Works/
 .workbuddy/
 brain/
 
-# Marketplace ÁÙÊ±ÏÂÔØÄ¿Â¼
+# Marketplace ï¿½ï¿½Ê±ï¿½ï¿½ï¿½ï¿½Ä¿Â¼
 backend/skills/marketplace/download_*
 
-# ÔËĞĞÆÚ²úÎï£¨ÓÃ»§ÉÏ´« / Agent Éú³É£¬²»ÊôÓÚÔ´Âë£©
+# ï¿½ï¿½ï¿½ï¿½ï¿½Ú²ï¿½ï¿½ï£¨ï¿½Ã»ï¿½ï¿½Ï´ï¿½ / Agent ï¿½ï¿½ï¿½É£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ô´ï¿½ë£©
 backend/chat_images/
 backend/screenshots/
 backend/run_build_called.txt
 *.db.bak
 
-# API ÏìÓ¦×ª´æ£¨µ÷ÊÔÊ± curl > file ÁôÏÂµÄ£¬´úÂëÖĞÁãÒıÓÃ£©
+# API ï¿½ï¿½Ó¦×ªï¿½æ£¨ï¿½ï¿½ï¿½ï¿½Ê± curl > file ï¿½ï¿½ï¿½ÂµÄ£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ã£ï¿½
 /m.json
 /pre.json
 /tax.json
 
-# ±¾µØ IDE / ¹¤¾ßÅäÖÃ
+# ï¿½ï¿½ï¿½ï¿½ IDE / ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 .claude/
+
+# è°ƒè¯•è„šæœ¬çš„è¿è¡Œè¾“å‡ºï¼ˆæ¯è·‘ä¸€æ¬¡å°±é‡å†™ï¼Œä¸æ˜¯æºç ï¼‰
+backend/_*_out.txt
+backend/_lint.txt
+backend/_uetg_generated.cpp
+backend/_uetg_live.txt
+# æ—¶é—´è½´ä¸´æ—¶æŠ“å–ï¼ˆ_tl.json / _tl_stage.json æ˜¯æµ‹è¯• fixtureï¼Œè¦ç•™ï¼‰
+backend/_tl_h.json
+backend/_tl_health.json
