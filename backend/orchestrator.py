@@ -2740,6 +2740,19 @@ class TicketOrchestrator:
                             "command": result.get("command"),
                         },
                     )
+                    # OpenSpec Verify（规范层）——「测试阶段通过」才触发。
+                    # 历史实现只挂在 TestAgent.run_tests 里（test.py:192 的
+                    # `if all_passed`），但 run_tests 来自 smoke_test fragment，
+                    # required_traits 是 category:service / category:app。
+                    # UE 项目（category:game）compose 出来的 SOP 只有 play_test，
+                    # 根本没有 run_tests 阶段 —— 全库 run_tests 日志 0 条，
+                    # 而所有带 openspec_stage 的工单都是 UE 项目。
+                    # 结果：Verify 挂在一个这类项目走不到的阶段上，
+                    # openspec_stage 永远停在 applied，Archive 也就无从谈起。
+                    # 这里补上 play_test 侧的触发点，两条测试路径语义对齐。
+                    await self._maybe_openspec_verify(
+                        project_id, ticket_id, stage_label="play_test",
+                    )
                 else:
                     # TODO G：playtest_failed 时先尝试 uproject 自愈
                     module_errors = result.get("module_load_errors") or []

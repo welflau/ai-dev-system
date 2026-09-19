@@ -10,6 +10,7 @@ UEPlaytestAction — 跑 UE Automation Framework 冒烟测试（v0.19 Phase ②A
     -buildmachine       # 减少启动日志 + disable 崩溃弹窗
     -log=<path>         # 日志写到指定路径（同时也流式推回）
     -AutomationScreenshotsDir=<dir>  # 失败时截图位置（用于排查）
+    -TestExit="Automation Test Queue Empty"  # 队列跑空就退，见下方「空队列」说明
 
 输入 context:
     engine_path         引擎根目录，优先。未给则从 uproject 解析
@@ -41,6 +42,16 @@ UEPlaytestAction — 跑 UE Automation Framework 冒烟测试（v0.19 Phase ②A
   - exit=0 且无失败测试           → success
   - exit!=0 或有任何 failed 测试  → playtest_failed（→ orchestrator reject_goto fix_issues）
   - 引擎/uproject 找不到等环境问题 → error（→ orchestrator BLOCKED）
+  - 超时                          → playtest_failed（可回开发重试），不是 error。
+    超时不等于「环境坏了」，多半是测试自己挂住/项目里根本没测试，
+    判成 error 会让工单直接 BLOCKED 等人工，把一次可自愈的失败升级成死单。
+    TK-E2EREAL-09110951 就是这么死的。
+
+「空队列」问题：
+  项目里没有任何匹配 test_filter 的 Automation 测试时，`Automation RunTests` 不产生
+  完成事件，`;Quit` 永远不执行，headless editor 空转到超时。下面的 no_tests 分支
+  （0 测试视为通过）本意是覆盖这种情况，但它在 proc.wait() 之后 —— 进程不退就走不到。
+  所以必须靠 -TestExit 给出退出条件，让 UE 自己在队列跑空时退出。
 """
 from __future__ import annotations
 
@@ -340,6 +351,9 @@ class UEPlaytestAction(ActionBase):
             "-NoSound",
             "-stdout",           # 强制 UE 把日志写到 stdout（否则只写 .log 文件）
             "-FullStdOutLogOutput",  # 详细 stdout 输出
+            # 队列跑空就退。没有它，项目里没有匹配测试时 `Automation RunTests` 不发
+            # 完成事件，`;Quit` 不执行，editor 空转到 timeout 才被 kill（实测 602s）。
+            '-TestExit=Automation Test Queue Empty',
             f"-AutomationScreenshotsDir={screenshot_dir}",
         ]
         cmd_str = " ".join(f'"{c}"' if " " in c else c for c in cmd)
@@ -432,14 +446,36 @@ class UEPlaytestAction(ActionBase):
             except Exception:
                 pass
             duration_ms = int((time.time() - t0) * 1000)
-            return _err(
-                f"Playtest 超时（{timeout_seconds}s）",
-                detail={
+            # 超时判 playtest_failed（不是 error）：orchestrator 对 error 一律 BLOCKED
+            # 等人工，而超时的常见成因（测试挂住 / 项目没测试 / 关卡加载卡住）都是
+            # reject_goto development 能处理的。判 error 等于把可自愈失败升级成死单。
+            partial = "\n".join(collected)
+            parsed_partial = _parse_automation_output(partial)
+            return ActionResult(
+                success=False,
+                data={
+                    "status": "playtest_failed",
+                    "exit_code": -1,
+                    "timed_out": True,
                     "duration_ms": duration_ms,
                     "command": cmd_str,
+                    "tests": parsed_partial["tests"],
+                    "summary": parsed_partial["summary"],
+                    "screenshots": _find_screenshots(screenshot_dir),
                     "engine_used": engine_info.to_dict(),
-                    "partial_output": "\n".join(collected[-100:]),
+                    "test_filter": test_filter,
+                    "test_names": test_names,
+                    "module_load_errors": [],
+                    "raw_head": partial[:8192],
+                    "raw_tail": partial[-8192:] if len(partial) > 8192 else "",
+                    "message": (
+                        f"Playtest 超时（{timeout_seconds}s）—— 进程未在期限内退出。"
+                        f"已解析到 {parsed_partial['summary'].get('total', 0)} 个测试。"
+                        f"若项目无 Automation 测试，请确认引擎支持 -TestExit；"
+                        f"否则检查是否有测试挂住。"
+                    ),
                 },
+                message=f"Playtest 超时（{timeout_seconds}s）",
             )
 
         proc.wait(timeout=5)

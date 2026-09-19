@@ -189,8 +189,17 @@ class TestAgent(BaseAgent):
                      title, pass_rate, total_passed, total_checks, status)
 
         # OpenSpec Verify（规范层，可选增强，只在测试全绿时触发）
+        # 收口到 orchestrator._maybe_openspec_verify：play_test 阶段（UE 项目唯一的
+        # 测试阶段，没有 run_tests）也要能触发同一件事，两处各写一遍必然走样。
         if all_passed:
-            await self._run_openspec_verify(context)
+            try:
+                from orchestrator import orchestrator as _orch
+                await _orch._maybe_openspec_verify(
+                    context.get("project_id", ""), context.get("ticket_id", ""),
+                    stage_label="run_tests",
+                )
+            except Exception as _e:
+                logger.debug("OpenSpec Verify 触发失败（忽略）: %s", _e)
 
         return {
             "status": status,
@@ -736,12 +745,11 @@ class TestAgent(BaseAgent):
                 temperature=0.3, max_tokens=2000,
             )
             if result and not result.startswith("[LLM_UNAVAILABLE]"):
-                # 清理 markdown 代码块
-                code = result.strip()
-                if code.startswith("```"):
-                    lines = code.split("\n")
-                    lines = [l for l in lines if not l.strip().startswith("```")]
-                    code = "\n".join(lines)
+                # 清理 markdown 代码块（含「散文 + 围栏」的混合回复）
+                from content_sanitizer import strip_code_fences
+                code, note = strip_code_fences(result.strip(), "test_generated.py")
+                if note:
+                    logger.warning("生成测试用例净化: %s", note)
                 if "import" in code and "def test_" in code:
                     return code
         except Exception as e:
