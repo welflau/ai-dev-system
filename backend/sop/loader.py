@@ -440,6 +440,86 @@ def get_sop_stages(config: Dict[str, Any]) -> List[Dict]:
     return result
 
 
+def build_stage_index(config: Dict[str, Any]) -> Dict[str, Any]:
+    """给时间轴分组用的「日志 → SOP 阶段 → UI 大组」索引。
+
+    时间轴上一条日志能落到哪个阶段，可靠的抓手有两个：
+
+      1. `action` —— 大多数关键日志带（complete / code_review / accept / …）。
+      2. `from_status` —— 一条日志是「在 X 状态上干活时」写的，而 SOP 里
+         `trigger_on == X` 的那个 stage 就是干这活的人。
+
+    ①比②准（同一状态可能有 reject 回跳规则也指过来），所以调用方先按 action 查，
+    查不到再按 from_status 兜底。
+
+    **不能用 build_pipeline_stages 的 `in_statuses` 做这件事**：那份数据会被
+    「返工阶段启发式」筛掉一批状态 —— UE SOP 实测 testing 组的 in_statuses 只有
+    `play_test_passed / play_test_failed`，`ue_test_gen_passed`、
+    `engine_compile_passed` 全不在里面。拿它映射，一张 UE 工单最忙的那段日志
+    会集体落到「未归类」。in_statuses 是给「工单现在停在哪个格子」用的，
+    和「这条日志属于哪个阶段」是两个问题。
+
+    返回：
+      {
+        "groups": [{key, name, icon, synthetic}, ...],   # 声明序 = 流程序
+        "by_action":      {action: {stage, group, stage_name}},
+        "by_from_status": {status: {stage, group, stage_name}},
+      }
+
+    `pipeline_view` 没覆盖到的 stage（如 planning / deploy）group 为 None，
+    调用方按「未归类」处理 —— 硬塞进相邻组会把流程图讲错。
+    """
+    stages = config.get("stages", []) or []
+    ui_stages = (config.get("pipeline_view") or {}).get("stages", []) or []
+
+    sop_to_group: Dict[str, str] = {}
+    for ui in ui_stages:
+        key = ui.get("key")
+        if not key:
+            continue
+        for sid in ui.get("sop_stages") or []:
+            sop_to_group[sid] = key
+
+    by_action: Dict[str, Dict[str, Any]] = {}
+    by_from_status: Dict[str, Dict[str, Any]] = {}
+
+    for s in stages:
+        sid = s.get("id")
+        if not sid:
+            continue
+        entry = {
+            "stage": sid,
+            "stage_name": s.get("name") or sid,
+            "group": sop_to_group.get(sid),
+            "agent": s.get("agent") or "",
+        }
+        action = s.get("action")
+        # 同一 action 被多个 fragment 复用时（run_ci_deploy 在 deploy_ue / deploy_web
+        # 都出现），compose 后的单份 SOP 里只会留下适用的那个，所以先到先得即可；
+        # 真撞上了保留先声明的，跟 sop_to_transition_rules 的取舍保持一致。
+        if action and action not in by_action:
+            by_action[action] = entry
+        trigger = s.get("trigger_on")
+        if trigger and trigger not in by_from_status:
+            by_from_status[trigger] = entry
+
+    groups = [
+        {
+            "key": ui.get("key"),
+            "name": ui.get("name") or ui.get("key"),
+            "icon": ui.get("icon") or "",
+            "synthetic": ui.get("synthetic"),
+        }
+        for ui in ui_stages if ui.get("key")
+    ]
+
+    return {
+        "groups": groups,
+        "by_action": by_action,
+        "by_from_status": by_from_status,
+    }
+
+
 def get_sop_metadata(config: Dict[str, Any]) -> Dict:
     """获取 SOP 元信息"""
     return {

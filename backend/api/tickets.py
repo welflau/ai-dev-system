@@ -1400,6 +1400,71 @@ def _classify_tier(item: dict) -> str:
     return "secondary"
 
 
+async def _annotate_timeline_stages(ticket_id: str, items: list) -> tuple:
+    """给时间轴条目标注所属 SOP 阶段 / UI 大组（前端按此做树形分组）。
+
+    返回 (items, groups)：groups 是 UI 大组的声明序，前端拿它定树干顺序。
+    为什么放后端：阶段归属是 SOP 知识（trigger_on、pipeline_view 的分组），
+    前端再抄一份必然和 yaml 漂移 —— 装了 ue_test_gen fragment 就多一个阶段，
+    前端硬编码的表不会自己长出来。
+
+    三段式判定，顺序有讲究：
+      ① action 命中 SOP stage —— 最准（complete/code_review/accept 都带）；
+      ② from_status 命中 trigger_on —— 「在 X 状态上干活」= 干活的是 trigger_on==X 那个 stage；
+      ③ 都不命中 → **继承前一条**。这条最关键：实测 6584 条 thought_start、
+         4093 条 llm_call、197 条 checkpoint 完全没有 action 映射也没有 status，
+         只按 ①② 标的话 90% 的日志会挂在「未归类」下，树就白建了。
+         时间轴是时序的，一条没有身份的日志属于当时正在跑的那个阶段。
+
+    拿不到 traits / compose 失败 → 原样返回不标注，前端退回平铺（现状），不报错。
+    """
+    try:
+        row = await db.fetch_one(
+            "SELECT p.traits AS traits, t.type AS type FROM tickets t "
+            "JOIN projects p ON p.id = t.project_id WHERE t.id = ?",
+            (ticket_id,),
+        )
+        traits = json.loads((row or {}).get("traits") or "[]")
+        if not isinstance(traits, list) or not traits:
+            return items, []
+
+        from sop.loader import build_stage_index, compose_sop
+        idx = build_stage_index(
+            compose_sop(traits=traits, ticket_type=(row or {}).get("type"))
+        )
+    except Exception as e:
+        logger.warning("时间轴阶段标注失败（%s），退回平铺: %s", ticket_id, e)
+        return items, []
+
+    by_action = idx["by_action"]
+    by_status = idx["by_from_status"]
+    last = None
+
+    for item in items:
+        hit = None
+        if item.get("_type") == "comment":
+            # 评论的 phase 存的就是状态名（development_done / architecture_done…），
+            # 'milestone' 之类的非状态值查不到 → 落到继承。
+            hit = by_status.get(item.get("phase") or "")
+        else:
+            hit = by_action.get(item.get("action") or "") \
+                or by_status.get(item.get("from_status") or "")
+
+        if hit:
+            last = hit
+            item["_stage"] = hit["stage"]
+            item["_stage_name"] = hit["stage_name"]
+            item["_stage_group"] = hit["group"]
+            item["_stage_exact"] = True
+        elif last:
+            item["_stage"] = last["stage"]
+            item["_stage_name"] = last["stage_name"]
+            item["_stage_group"] = last["group"]
+            item["_stage_exact"] = False   # 继承来的，前端不该拿它当权威
+
+    return items, idx["groups"]
+
+
 @router.get("/api/tickets/{ticket_id}/timeline")
 async def get_ticket_timeline(ticket_id: str):
     """统一时间轴：ticket_logs + ticket_comments 按时间合并"""
@@ -1471,7 +1536,10 @@ async def get_ticket_timeline(ticket_id: str):
     # 按时间升序合并
     items.sort(key=lambda x: x.get("created_at") or "")
 
-    return {"timeline": items, "total": len(items)}
+    # 排序**之后**才标阶段：继承逻辑依赖时序，先标后排会把继承串错
+    items, stage_groups = await _annotate_timeline_stages(ticket_id, items)
+
+    return {"timeline": items, "total": len(items), "stage_groups": stage_groups}
 
 
 @router.post("/api/tickets/{ticket_id}/comments")

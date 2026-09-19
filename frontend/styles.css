@@ -11066,6 +11066,221 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
 }
 
 /* ============================================================
+   时间轴自动折叠（重复循环分组）
+   卡死的工单会刷出上千条同样的日志，折叠成一行摘要。
+   ============================================================ */
+.timeline-group {
+    position: relative;
+    margin: 6px 0;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.02);
+}
+/* 盖住主时间轴的竖线，避免折叠块被一条线穿过 */
+.timeline-group::before {
+    content: '';
+    position: absolute;
+    left: -24px;
+    top: 14px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--border-light);
+    border: 2px solid var(--bg);
+}
+.timeline-group.tg-error::before { background: var(--error); }
+.timeline-group.tg-error { border-color: rgba(239, 68, 68, 0.35); }
+
+.timeline-group-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    cursor: pointer;
+    user-select: none;
+    font-size: 12.5px;
+    color: var(--text-muted);
+}
+.timeline-group-header:hover { background: rgba(255, 255, 255, 0.04); }
+
+.tg-caret {
+    flex: 0 0 auto;
+    width: 12px;
+    color: var(--text-muted);
+    font-size: 11px;
+}
+.tg-badge {
+    flex: 0 0 auto;
+    padding: 1px 7px;
+    border-radius: 10px;
+    background: var(--border);
+    color: var(--text);
+    font-size: 11px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+.timeline-group.tg-error .tg-badge {
+    background: rgba(239, 68, 68, 0.18);
+    color: #f87171;
+}
+.tg-summary {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.tg-summary strong { color: var(--text); font-weight: 600; }
+.tg-steps {
+    color: var(--text-muted);
+    opacity: 0.75;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.tg-meta {
+    flex: 0 0 auto;
+    font-size: 11px;
+    opacity: 0.7;
+    font-variant-numeric: tabular-nums;
+}
+.timeline-group-body {
+    padding: 0 10px 4px 10px;
+    border-top: 1px solid var(--border);
+}
+/* 展开后内部条目不再重复画圆点，避免和外层圆点撞在一起 */
+.timeline-group-body .log-item::before { display: none; }
+/* 圆点都不画了，热区也别留 —— 否则是个点不出东西的隐形按钮 */
+.timeline-group-body .log-item > .li-dot { display: none; }
+
+/* ============================================================
+   时间轴阶段树（按 SOP 阶段分层）
+   连续同阶段的日志收成一个可折叠节点；阶段名/归属大组由后端按项目 SOP 给出。
+   ============================================================ */
+.timeline-stage {
+    position: relative;
+    margin: 8px 0;
+    border-left: 2px solid var(--border);
+    padding-left: 10px;
+}
+/* 盖住主时间轴的竖线并画阶段节点的圆点 */
+.timeline-stage::before {
+    content: '';
+    position: absolute;
+    left: -29px;
+    top: 11px;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--border-light);
+    border: 2px solid var(--bg);
+}
+.timeline-stage.ts-error { border-left-color: rgba(239, 68, 68, 0.5); }
+.timeline-stage.ts-error::before { background: var(--error); }
+.timeline-stage.ts-warn { border-left-color: rgba(245, 158, 11, 0.5); }
+.timeline-stage.ts-warn::before { background: var(--warning, #f59e0b); }
+.timeline-stage.open { border-left-color: var(--border-light); }
+
+.timeline-stage-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 8px;
+    cursor: pointer;
+    user-select: none;
+    font-size: 12.5px;
+    border-radius: 5px;
+    color: var(--text-muted);
+}
+.timeline-stage-header:hover { background: rgba(255, 255, 255, 0.04); }
+
+.ts-caret {
+    flex: 0 0 auto;
+    width: 12px;
+    color: var(--text-muted);
+    font-size: 11px;
+}
+.ts-group {
+    flex: 0 0 auto;
+    padding: 1px 7px;
+    border-radius: 10px;
+    background: var(--border);
+    color: var(--text-muted);
+    font-size: 11px;
+    white-space: nowrap;
+}
+.ts-group-none { opacity: 0.55; font-style: italic; }
+.ts-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    color: var(--text);
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.ts-meta {
+    flex: 0 0 auto;
+    font-size: 11px;
+    opacity: 0.7;
+    font-variant-numeric: tabular-nums;
+}
+.timeline-stage-body { padding: 2px 0 2px 4px; }
+
+/* ============================================================
+   时间轴圆点热区（可点击折叠）
+   圆点本身仍由 ::before 伪元素画 —— 伪元素接不了事件，点上去没反应。
+   这里在圆点位置盖一个真实 <span>，比圆点大一圈（20px）便于点击，
+   自身透明，只负责接 click 和给 hover 反馈。视觉不变。
+   ============================================================ */
+.ts-dot,
+.li-dot {
+    position: absolute;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    cursor: pointer;
+    z-index: 2;
+    background: transparent;
+}
+/* 热区以圆点**外框**中心对齐。注意圆点的 border 算在 width 之外（content-box）：
+     .log-item::before       left:-24px top:16px  10px + 2px 边框*2 = 14px  → 中心 (-17, 23)
+     .timeline-stage::before left:-29px top:11px   9px + 2px 边框*2 = 13px  → 中心 (-22.5, 17.5)
+   热区 20px，left/top = 中心 - 10。漏算 border 会往左上偏 2px，
+   在 20px 热区里虽然还盖得住圆点，但 hover 高亮会明显不居中。 */
+.li-dot { left: -27px; top: 13px; }
+.ts-dot { left: -32px; top: 7px; }
+
+.ts-dot:hover,
+.li-dot:hover { background: rgba(255, 255, 255, 0.10); }
+
+/* 折叠后的日志条目：留标题行，藏正文与附属块。
+   最后那条兜底只选 div —— 热区是 span，天然不会被藏掉。 */
+.log-item.li-collapsed > .log-message,
+.log-item.li-collapsed > .thought-files,
+.log-item.li-collapsed > .log-item-expand,
+.log-item.li-collapsed > .comment-bubble,
+.log-item.li-collapsed > .log-inline-comment-box,
+.log-item.li-collapsed > div:not(.log-header) {
+    display: none !important;
+}
+/* 折叠态只淡化，**不改 padding** —— 圆点是 ::before 绝对定位（top:16px），
+   不受 padding 影响；缩了 padding 行会变矮，圆点就掉到行外面去了。 */
+.log-item.li-collapsed { opacity: 0.72; }
+
+/* REACT 工具调用 / Agent 步骤打点是**单行**条目：没有正文、没有详情块，
+   折起来跟不折长一样 —— 给它们挂热区等于挂一个按下去没反应的按钮，
+   正是这次要修的毛病。这两类行本来就用 border-left 描边区分层级（见
+   .log-react-tool / .log-skill-step），圆点是继承 .log-item::before 蹭来的，
+   所以这里把圆点一起收掉：**不画不能点的点**。 */
+.log-item.log-react-tool::before,
+.log-item.log-skill-step::before { display: none; }
+
+/* ============================================================
    抽屉宽度拖拽手柄
    ============================================================ */
 .drawer-resize-handle {

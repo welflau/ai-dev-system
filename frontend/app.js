@@ -7251,6 +7251,12 @@ async function openTicketDrawer(ticketId) {
 let _currentTimelineTicketId = null;
 /** 是否显示二级详细日志 */
 let _showSecondaryLogs = false;
+/** 最近一次渲染的时间轴原始数据（折叠组懒展开时要回查） */
+let _lastTimelineItems = null;
+/** 后端给的 UI 大组声明序（stage_groups），用于阶段树的树干顺序 */
+let _lastStageGroups = [];
+/** 手动展开/收起过的阶段（key → bool）；没记录的按"是否收尾"默认 */
+let _stageOpenState = {};
 
 /**
  * 加载并渲染统一时间轴（logs + comments 合并）
@@ -7261,6 +7267,7 @@ async function _loadUnifiedTimeline(ticketId) {
     if (!container) return;
     try {
         const data = await api(`/tickets/${ticketId}/timeline`);
+        _lastStageGroups = data.stage_groups || [];
         _renderUnifiedTimeline(container, data.timeline || []);
     } catch (e) {
         if (container) container.innerHTML = `<div style="color:var(--text-muted);font-size:13px;">加载失败: ${escHtml(e.message)}</div>`;
@@ -7272,6 +7279,10 @@ async function _loadUnifiedTimeline(ticketId) {
  */
 function _renderUnifiedTimeline(container, items) {
     if (!container) return;
+    _lastTimelineItems = items;
+    // 换工单/重新加载时清掉展开状态，否则 id 会错位到别的组
+    _expandedTimelineGroups = new Set();
+    _stageOpenState = {};
     const primary = items.filter(i => i._tier === 'primary' || i._type === 'comment');
     const secondary = items.filter(i => i._tier === 'secondary' && i._type !== 'comment');
 
@@ -7279,13 +7290,13 @@ function _renderUnifiedTimeline(container, items) {
     const btn = document.getElementById('secondaryLogsToggle');
     if (btn) btn.textContent = `详细日志 (${secondary.length})`;
 
-    let html = primary.map(i => renderTimelineItem(i)).join('');
+    let html = _renderTimelineStageTree(primary);
 
     if (secondary.length > 0) {
         html += `
         <div class="secondary-logs-toggle">
             <div id="secondaryLogsContent" style="display:${_showSecondaryLogs ? '' : 'none'}">
-                ${secondary.map(i => renderTimelineItem(i)).join('')}
+                ${_renderTimelineGrouped(secondary, 's')}
             </div>
         </div>`;
     }
@@ -7296,6 +7307,338 @@ function _renderUnifiedTimeline(container, items) {
 
     container.innerHTML = html;
 }
+
+// ==================== 时间轴阶段树（按 SOP 阶段分层） ====================
+// 之前是纯平铺：630 条日志一条挨一条，看不出「哪一段是在编译、哪一段在验收」。
+// 后端 /timeline 现在给每条日志标了 `_stage` / `_stage_group`（来源是项目 SOP 的
+// trigger_on + pipeline_view，不是前端猜的），这里把连续同阶段的日志收成一个节点。
+//
+// 为什么按**阶段**分段、而不是按 UI 大组分：大组会不连续。UE SOP 里
+// code_review / acceptance 归在「开发实现」组，但它们跑在 delivery(打包) **之后** ——
+// 真实推进序是
+//   development → ue_test_gen → engine_compile → play_test → deploy_ue → code_review → acceptance
+// 按大组折就得把「开发实现」拆成两块或者打乱时序，两种都是在骗人。
+// 所以：阶段是节点，大组只作为节点标题上的归属标签。
+
+/**
+ * 把条目切成连续的阶段段落。`_stage` 相同且相邻的归一段。
+ * 同一阶段被返工二次进入 → 自然形成两段，不合并（时序更重要）。
+ */
+function _timelineStageSegments(items) {
+    const groupMeta = {};
+    for (const g of (_lastStageGroups || [])) groupMeta[g.key] = g;
+
+    const segs = [];
+    for (const it of items) {
+        const stage = it._stage || null;
+        const prev = segs[segs.length - 1];
+        if (prev && prev.stage === stage) {
+            prev.items.push(it);
+            continue;
+        }
+        const gk = it._stage_group || null;
+        const gm = groupMeta[gk] || null;
+        segs.push({
+            stage,
+            stageName: it._stage_name || (stage ? stage : '未归类'),
+            group: gk,
+            groupName: gm ? gm.name : '',
+            groupIcon: gm ? gm.icon : '',
+            items: [it],
+        });
+    }
+    return segs;
+}
+
+function _renderTimelineStageTree(items) {
+    if (!items.length) return '';
+    // 后端没标阶段（项目无 traits / compose 失败）→ 退回平铺，保持原样可用
+    if (!items.some(i => i._stage)) return _renderTimelineGrouped(items, 'p');
+
+    const segs = _timelineStageSegments(items);
+    // 只有一段就没有分层的意义，别为了树而树
+    if (segs.length < 2) return _renderTimelineGrouped(items, 'p');
+
+    return segs.map((s, i) => _renderTimelineStage(s, i, i === segs.length - 1)).join('');
+}
+
+/** 阶段节点默认是否展开：最后一段（正在跑的）+ 出过错的展开，其余收起 */
+function _stageDefaultOpen(seg, isLast) {
+    if (isLast) return true;
+    return seg.items.some(i => i.level === 'error' || i.level === 'warn' || i.level === 'warning');
+}
+
+function _renderTimelineStage(seg, idx, isLast) {
+    const id = `tls-${idx}`;
+    const open = (id in _stageOpenState) ? _stageOpenState[id] : _stageDefaultOpen(seg, isLast);
+    const hasError = seg.items.some(i => i.level === 'error');
+    const hasWarn = !hasError && seg.items.some(i => i.level === 'warn' || i.level === 'warning');
+
+    const t0 = _fmtTime(seg.items[0] && seg.items[0].created_at);
+    const t1 = _fmtTime(seg.items[seg.items.length - 1] && seg.items[seg.items.length - 1].created_at);
+    const span = (t0 && t1 && t0 !== t1) ? `${t0} – ${t1}` : (t0 || '');
+
+    const cls = hasError ? ' ts-error' : (hasWarn ? ' ts-warn' : '');
+    const groupTag = seg.groupName
+        ? `<span class="ts-group">${escHtml(seg.groupIcon || '')} ${escHtml(seg.groupName)}</span>`
+        : `<span class="ts-group ts-group-none">未归类</span>`;
+
+    return `
+    <div class="timeline-stage${cls}${open ? ' open' : ''}" id="${id}">
+        <span class="ts-dot" onclick="event.stopPropagation();toggleTimelineStage('${id}')"
+              title="${open ? '收起' : '展开'}该阶段"></span>
+        <div class="timeline-stage-header" onclick="toggleTimelineStage('${id}')">
+            <span class="ts-caret">${open ? '▾' : '▸'}</span>
+            ${groupTag}
+            <span class="ts-name">${escHtml(seg.stageName)}</span>
+            <span class="ts-meta">${seg.items.length} 条${span ? ' · ' + escHtml(span) : ''}</span>
+        </div>
+        <div class="timeline-stage-body" style="display:${open ? '' : 'none'}">
+            ${open ? _renderTimelineGrouped(seg.items, `p${idx}`) : ''}
+        </div>
+    </div>`;
+}
+
+/** 阶段节点展开/收起。首次展开才渲染内部（收起的阶段可能装着上千条）。 */
+function toggleTimelineStage(id) {
+    const wrap = document.getElementById(id);
+    if (!wrap) return;
+    const body = wrap.querySelector('.timeline-stage-body');
+    const caret = wrap.querySelector('.ts-caret');
+    const willOpen = !(wrap.classList.contains('open'));
+    _stageOpenState[id] = willOpen;
+
+    if (willOpen && body && !body.innerHTML.trim()) {
+        const m = /^tls-(\d+)$/.exec(id);
+        const segs = _timelineStagePool();
+        const seg = m && segs[parseInt(m[1], 10)];
+        if (seg) body.innerHTML = _renderTimelineGrouped(seg.items, `p${m[1]}`);
+    }
+    if (body) body.style.display = willOpen ? '' : 'none';
+    if (caret) caret.textContent = willOpen ? '▾' : '▸';
+    wrap.classList.toggle('open', willOpen);
+}
+
+/** 重算阶段段落（懒渲染 / 折叠组回查都要用）。重算比全局缓存好维护。 */
+function _timelineStagePool() {
+    if (!_lastTimelineItems) return [];
+    const primary = _lastTimelineItems.filter(i => i._tier === 'primary' || i._type === 'comment');
+    return _timelineStageSegments(primary);
+}
+
+
+// ==================== 时间轴自动折叠 ====================
+// 卡死的工单会刷出成千上万条同样的日志：TK-20260817-39e0d4 实测 1815 条里
+// 75% 是完全重复的，而且重复单位是个 4 步循环
+// （thought_start → llm_call → ToolError → error）连着转了 321 圈。
+// 所以不能只按「连续相同」折叠（实测最长同类连续段只有 12），
+// 必须识别**周期**才压得下去。
+
+/** 已展开的折叠组 id */
+let _expandedTimelineGroups = new Set();
+
+/** 折叠组最多探测的周期长度。太大容易把不相干的条目凑成"循环"。 */
+const _TL_MAX_PERIOD = 8;
+
+/**
+ * 条目签名：判断两条日志是否"同一类"。
+ * 数字全部归一化，否则 `0ms` / `184698ms`、第 1 次 / 第 2 次会被当成不同条目，
+ * 循环就断了。
+ */
+function _timelineSignature(item) {
+    if (!item) return '';
+    // 人写的评论绝不合并 —— 但**只有人写的**。
+    //
+    // 这里原来是 `if (item._type === 'comment') return 'c:' + item.id`，注释写着
+    // 「评论是人写的」。前提不成立：里程碑评论是 Agent 每轮自动发的，
+    // author_type 为 'agent' / 'system'。带上唯一 id 的后果是整个折叠机制失效 ——
+    // TK-20260918-23a48b 的重复周期是 5 步
+    //   thought_start → thought_done → complete → 【里程碑评论】 → checkpoint
+    // 评论卡在第 4 步，每轮签名都不同 → 周期永远匹配不上 → 613 条一条没折，
+    // 压缩率 0.0%，而肉眼一看就是同一段转了几十圈。
+    //
+    // 判定用白名单（只有 agent / system 参与折叠），不用黑名单。
+    // 人写的那一侧值是 **'human'**（DB 实测 agent 181 / system 47 / human 8，
+    // renderCommentBubble 判的也是 'human'）—— 黑名单写 'user' 就会把 human
+    // 漏进折叠里，把唯一真正不该折的东西折掉。白名单错了顶多少折几条，
+    // 黑名单错了会吞掉人的话，两种错代价不对等。
+    if (item._type === 'comment') {
+        const at = item.author_type || '';
+        if (at !== 'agent' && at !== 'system') return `c:${item.id}`;
+        const cmsg = String(item.content || item._message || '')
+            .replace(/\d+/g, '#')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .slice(0, 120);
+        return `cm:${at}|${item.author || ''}|${item.phase || ''}|${cmsg}`;
+    }
+    const msg = String(item._message || '')
+        .replace(/\d+/g, '#')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 120);
+    return `${item.agent_type || ''}|${item.action || ''}|${item.level || ''}|${msg}`;
+}
+
+/**
+ * 把条目切成「单条」和「重复循环」两种块。
+ *
+ * 贪心：每个位置试周期 1..N，取能覆盖最多条目的那个；至少重复 2 轮才折叠。
+ */
+function _groupTimelineItems(items) {
+    const sigs = items.map(_timelineSignature);
+    const groups = [];
+    let i = 0;
+
+    while (i < items.length) {
+        let best = null;   // { period, repeats }
+
+        for (let p = 1; p <= _TL_MAX_PERIOD; p++) {
+            if (i + p * 2 > items.length) break;   // 连 2 轮都放不下
+            let repeats = 1;
+            while (true) {
+                const next = i + repeats * p;
+                if (next + p > items.length) break;
+                let same = true;
+                for (let k = 0; k < p; k++) {
+                    if (sigs[i + k] !== sigs[next + k]) { same = false; break; }
+                }
+                if (!same) break;
+                repeats++;
+            }
+            if (repeats >= 2) {
+                const covered = repeats * p;
+                // 覆盖更多优先；一样多时取更短的周期（更可能是真循环）
+                if (!best || covered > best.repeats * best.period) {
+                    best = { period: p, repeats };
+                }
+            }
+        }
+
+        if (best) {
+            const len = best.period * best.repeats;
+            groups.push({
+                type: 'cycle',
+                items: items.slice(i, i + len),
+                period: best.period,
+                repeats: best.repeats,
+            });
+            i += len;
+        } else {
+            groups.push({ type: 'single', item: items[i] });
+            i += 1;
+        }
+    }
+    return groups;
+}
+
+/** 循环组的一句话摘要 */
+function _timelineGroupLabel(group) {
+    const cycle = group.items.slice(0, group.period);
+    const agents = [...new Set(cycle.map(c => c.agent_type || c.author).filter(Boolean))];
+    const who = agents.length === 1 ? agents[0] : `${agents.length} 个 Agent`;
+    const steps = cycle
+        // 评论没有 action 字段，落到 '?' 会让摘要读不出那一步是什么
+        // （实测 "thought_start → thought_done → complete → ? → checkpoint"）。
+        .map(c => c.action || (c._type === 'comment' ? '评论' : '?'))
+        .map(a => a.length > 26 ? a.slice(0, 26) + '…' : a)
+        .join(' → ');
+    return { who, steps };
+}
+
+function _renderTimelineGrouped(items, prefix) {
+    return _groupTimelineItems(items)
+        .map((g, gi) => g.type === 'single'
+            ? renderTimelineItem(g.item)
+            : _renderTimelineCycle(g, `tlg-${prefix}-${gi}`))
+        .join('');
+}
+
+function _renderTimelineCycle(group, id) {
+    const { items, period, repeats } = group;
+    const expanded = _expandedTimelineGroups.has(id);
+    const { who, steps } = _timelineGroupLabel(group);
+
+    // 出错的循环单独标色 —— 这类"转圈"基本都是卡死，值得一眼看见
+    const hasError = items.some(i => (i.level === 'error' || i.level === 'warn'));
+
+    const t0 = _fmtTime(items[0] && items[0].created_at);
+    const t1 = _fmtTime(items[items.length - 1] && items[items.length - 1].created_at);
+    const span = (t0 && t1 && t0 !== t1) ? `${t0} – ${t1}` : (t0 || '');
+
+    return `
+    <div class="timeline-group${hasError ? ' tg-error' : ''}" id="${id}">
+        <div class="timeline-group-header" onclick="toggleTimelineGroup('${id}')">
+            <span class="tg-caret">${expanded ? '▾' : '▸'}</span>
+            <span class="tg-badge">↻ ${repeats}×</span>
+            <span class="tg-summary">
+                <strong>${escHtml(who)}</strong>
+                ${period > 1 ? `重复 ${period} 步循环` : '重复同一条'}
+                <span class="tg-steps">${escHtml(steps)}</span>
+            </span>
+            <span class="tg-meta">${items.length} 条${span ? ' · ' + escHtml(span) : ''}</span>
+        </div>
+        <div class="timeline-group-body" style="display:${expanded ? '' : 'none'}">
+            ${expanded ? items.map(i => renderTimelineItem(i)).join('') : ''}
+        </div>
+    </div>`;
+}
+
+/** 折叠组展开/收起。首次展开才渲染内部条目（321 圈 × 4 条一次性铺开会卡）。 */
+function toggleTimelineGroup(id) {
+    const wrap = document.getElementById(id);
+    if (!wrap) return;
+    const body = wrap.querySelector('.timeline-group-body');
+    const caret = wrap.querySelector('.tg-caret');
+    const willExpand = !_expandedTimelineGroups.has(id);
+
+    if (willExpand) {
+        _expandedTimelineGroups.add(id);
+        if (body && !body.innerHTML.trim()) {
+            const g = _findTimelineGroupById(id);
+            if (g) body.innerHTML = g.items.map(i => renderTimelineItem(i)).join('');
+        }
+    } else {
+        _expandedTimelineGroups.delete(id);
+    }
+    if (body) body.style.display = willExpand ? '' : 'none';
+    if (caret) caret.textContent = willExpand ? '▾' : '▸';
+    wrap.classList.toggle('expanded', willExpand);
+}
+
+/** 按 id 找回折叠组（懒渲染时要用）。重算一次比全局缓存好维护。
+ *
+ * id 形如 `tlg-<prefix>-<序号>`，prefix 有两类：
+ *   - `s`      → 二级详细日志池（平铺，没分阶段）
+ *   - `p<N>`   → 主时间轴第 N 个**阶段节点**内部的池
+ * 以前只有 `p`（整条主时间轴一个池），阶段树上线后每个阶段各自成池 ——
+ * 正则要是还写死 `(p|s)`，展开阶段里的循环组会一律回查失败、点开是空的。
+ */
+function _findTimelineGroupById(id) {
+    const m = /^tlg-(p(\d+)|p|s)-(\d+)$/.exec(id);
+    if (!m || !_lastTimelineItems) return null;
+    let pool;
+    if (m[2] !== undefined) {
+        const seg = _timelineStagePool()[parseInt(m[2], 10)];
+        if (!seg) return null;
+        pool = seg.items;
+    } else if (m[1] === 'p') {
+        pool = _lastTimelineItems.filter(i => i._tier === 'primary' || i._type === 'comment');
+    } else {
+        pool = _lastTimelineItems.filter(i => i._tier === 'secondary' && i._type !== 'comment');
+    }
+    const groups = _groupTimelineItems(pool);
+    const g = groups[parseInt(m[3], 10)];
+    return (g && g.type === 'cycle') ? g : null;
+}
+
+function _fmtTime(ts) {
+    if (!ts) return '';
+    const s = String(ts);
+    const m = /(\d{2}):(\d{2})/.exec(s.slice(11));
+    return m ? `${m[1]}:${m[2]}` : '';
+}
+
 
 /**
  * 渲染单个时间轴条目（log 或 comment）
@@ -10873,6 +11216,7 @@ function _renderLayerLogItem(log, meta) {
 
     return `
         <div class="log-item info layer-${meta.layer}" data-action="${escHtml(log.action || '')}" data-to-status="${escHtml(log.to_status || '')}" style="border-left-color:${color}40;padding:5px 10px 5px 14px;"${hasExpand ? ` onclick="toggleBlock('${expandId}')" style="cursor:pointer;border-left-color:${color}40;padding:5px 10px 5px 14px;"` : ''}>
+            ${_logDotHotspot()}
             <div class="log-header" style="gap:5px;">
                 <span style="color:${color};font-size:12px;">${meta.icon}</span>
                 <span class="log-agent" style="color:${color};">${escHtml(meta.label)}${cpTrigger ? ` · ${escHtml(cpTrigger)}` : ''}</span>
@@ -11115,6 +11459,7 @@ function renderLogItem(log) {
 
     return `
         <div class="log-item ${log.level || 'info'}${log._isChatTool ? ' log-chat-tool' : ''}${layerStyle ? ' ' + layerStyle.cls : ''}" data-action="${escHtml(log.action || '')}" data-to-status="${escHtml(log.to_status || '')}"${layerStyle ? ` style="border-left-color:${layerStyle.color}40;"` : ''}${hasExpand ? ` onclick="toggleBlock('${expandId}')" style="cursor:pointer;${layerStyle ? `border-left-color:${layerStyle.color}40;` : ''}" title="点击展开详情"` : ''}>
+            ${_logDotHotspot()}
             <div class="log-header">
                 ${layerStyle ? `<span class="layer-badge" style="color:${layerStyle.color};font-size:11px;opacity:.8;" title="${layerStyle.label}">${layerStyle.icon}</span>` : ''}
                 <span class="log-agent">${log._isChatTool ? '💬 ' : ''}${escHtml(log.agent_type || 'System')}</span>
@@ -11136,6 +11481,26 @@ function renderLogItem(log) {
             ${inlineHtml}
             ${commentBox}
         </div>`;
+}
+
+// ==================== 时间轴圆点：可点击折叠 ====================
+// 时间轴左侧那排圆点原本是纯 CSS 伪元素（`.log-item::before` / `.timeline-stage::before`）。
+// **伪元素接不了事件**，所以点上去没反应 —— 看着像控件、其实是装饰。
+// 这里在同样的位置铺一个真实的 `<span>` 热区（比圆点大一圈，好点），
+// 圆点本身仍由伪元素画，视觉完全不变。
+
+/** 日志条目的圆点热区：点一下把这条折成只剩标题行 */
+function _logDotHotspot() {
+    return `<span class="li-dot" title="折叠/展开这条记录"
+        onclick="event.stopPropagation();toggleLogItemCollapse(this)"></span>`;
+}
+
+/** 折叠/展开单条日志（保留 header，藏掉正文与详情）。 */
+function toggleLogItemCollapse(dot) {
+    const item = dot && dot.closest('.log-item');
+    if (!item) return;
+    const collapsed = item.classList.toggle('li-collapsed');
+    dot.title = collapsed ? '展开这条记录' : '折叠/展开这条记录';
 }
 
 /**
