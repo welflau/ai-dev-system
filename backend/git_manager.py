@@ -308,7 +308,19 @@ Thumbs.db
         return str(target)
 
     async def write_files(self, project_id: str, files: Dict[str, str]) -> List[str]:
-        """批量写入文件到仓库"""
+        """批量写入文件到仓库
+
+        落盘前统一净化：LLM 偶尔把「一段解释 + ```围栏包着的代码」整个当成
+        文件内容返回，原样写盘会产出无法编译的文件，而且下一轮它又被当成
+        「原文件」喂回给 LLM，每次"修复"都在重新污染。见 content_sanitizer。
+        """
+        try:
+            from content_sanitizer import sanitize_delivery_files
+            files, _warnings = sanitize_delivery_files(files, source="git_write")
+        except Exception as e:
+            # 净化不该阻断交付：写原内容也比丢文件好
+            logger.warning("落盘净化跳过: %s", e)
+
         try:
             from checkpoint.service import checkpoint_service
             await checkpoint_service.capture_from_active_context(list(files.keys()))

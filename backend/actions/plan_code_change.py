@@ -164,11 +164,11 @@ class PlanCodeChangeAction(ActionBase):
                 temperature=0.3, max_tokens=8000,
             )
             if content and not content.startswith("[LLM_UNAVAILABLE]"):
-                # 清理 markdown 代码块
-                if content.strip().startswith("```"):
-                    lines = content.strip().split("\n")
-                    lines = [l for l in lines if not l.strip().startswith("```")]
-                    content = "\n".join(lines)
+                # 清理 markdown 代码块（含「散文 + 围栏」的混合回复）
+                from content_sanitizer import strip_code_fences
+                content, note = strip_code_fences(content, path)
+                if note:
+                    logger.warning("生成 %s 净化: %s", path, note)
                 return content
         except Exception as e:
             logger.warning("生成文件 %s 失败: %s", path, e)
@@ -214,10 +214,10 @@ class PlanCodeChangeAction(ActionBase):
                 temperature=0.3, max_tokens=8000,
             )
             if content and not content.startswith("[LLM_UNAVAILABLE]"):
-                if content.strip().startswith("```"):
-                    lines = content.strip().split("\n")
-                    lines = [l for l in lines if not l.strip().startswith("```")]
-                    content = "\n".join(lines)
+                from content_sanitizer import strip_code_fences
+                content, note = strip_code_fences(content, path)
+                if note:
+                    logger.warning("修改 %s 净化: %s", path, note)
                 return content
         except Exception as e:
             logger.warning("修改文件 %s 失败: %s", path, e)

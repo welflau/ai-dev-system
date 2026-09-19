@@ -31,9 +31,23 @@ _REPO_DEFAULT_EXTS = {
 }
 
 
-def _strip_fences(md: str) -> str:
-    """去掉 LLM 偶尔套的 ```lang ... ``` 围栏。"""
+def _strip_fences(md: str, path: str = "") -> str:
+    """去掉 LLM 偶尔套的 ```lang ... ``` 围栏。
+
+    原实现只判断 `s.startswith("```")` —— LLM 最常见的行为是先写一句
+    "已修复。"再贴围栏，前面有一个字的散文这个判断就失效，于是散文和
+    围栏标记一起进了文件。改走 content_sanitizer 的位置判断。
+    """
     s = (md or "").strip()
+    try:
+        from content_sanitizer import strip_code_fences
+        cleaned, note = strip_code_fences(s, path)
+        if note:
+            logger.warning("[write_file] %s 净化: %s", path or "?", note)
+        return cleaned
+    except Exception as e:
+        logger.debug("净化不可用，退回简单去围栏: %s", e)
+
     if s.startswith("```"):
         nl = s.find("\n")
         if nl > 0:
@@ -132,7 +146,7 @@ class WriteFileAction(ActionBase):
 
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
-            cleaned = _strip_fences(str(content))
+            cleaned = _strip_fences(str(content), rel)
             # 写前 Checkpoint（OpenSpec / Apply）
             try:
                 from checkpoint.service import checkpoint_service
