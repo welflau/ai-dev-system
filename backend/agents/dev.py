@@ -105,18 +105,43 @@ class DevAgent(BaseAgent):
         else:
             logger.info("📝 空项目，使用 WriteCode 全新生成")
             code_result = await self.run_action("write_code", context)
-        await self.emit_step("代码生成", context, phase="done", step_index=1, step_total=step_total,
-                             duration_ms=int((time.monotonic() - t0) * 1000))
 
-        # Apply 硬失败：不继续自测，直接返回错误（避免绕过规范层瞎写）
-        if code_result.get("_openspec_apply_failed"):
+        # 「完成」必须有产出作证。原先这里无条件 emit done，于是 LLM 挂掉走降级模板、
+        # 甚至零文件，时间轴照样打勾「✅ [1/2] 代码生成 124041ms」——
+        # 用户看到的成功和系统实际做的事完全脱钩（TK-20260920-ce79a9）。
+        # 现在三类情况一律记 error：Action 自己报错 / 零文件 / 只产出降级模板。
+        code_files = list((code_result.get("files") or {}).keys())
+        dev_notes = str((code_result.get("dev_result") or {}).get("notes", ""))
+        code_dur = int((time.monotonic() - t0) * 1000)
+        fail_reason = ""
+        if code_result.get("status") == "error":
+            fail_reason = code_result.get("message") or code_result.get("error") or "代码生成失败"
+        elif not code_files:
+            fail_reason = "未产出任何代码文件"
+        elif "[降级]" in dev_notes:
+            fail_reason = f"仅产出降级模板，非真实实现（{dev_notes[:80]}）"
+
+        if fail_reason:
+            logger.error("❌ 代码生成判失败: %s | files=%d", fail_reason, len(code_files))
+            await self.emit_step("代码生成", context, phase="error", step_index=1, step_total=step_total,
+                                 duration_ms=code_dur, files=code_files, reason=fail_reason)
+            # OpenSpec Apply 的硬失败（缺 tasks.md / skill 未安装）重试也修不好，
+            # 保持 status=error 让 orchestrator 转 blocked 等人工。
+            # 其余（LLM 超时 / 零产出 / 降级模板）走 development_failed → fix_issues
+            # 带反思重开发，累计超过 MAX_RETRIES 才 blocked 止损。
+            hard_fail = bool(code_result.get("_openspec_apply_failed"))
             return {
-                "status": "error",
-                "message": code_result.get("message") or "OpenSpec Apply 失败",
+                "status": "error" if hard_fail else "development_failed",
+                "message": fail_reason,
                 "files": code_result.get("files") or {},
-                "dev_result": code_result.get("dev_result") or {"files": {}, "notes": ""},
+                "dev_result": code_result.get("dev_result") or {"files": {}, "notes": fail_reason},
                 "openspec_apply": code_result.get("openspec_apply"),
+                "code_gen_failure": {"reason": fail_reason, "file_count": len(code_files),
+                                     "files": code_files[:20], "notes": dev_notes[:300]},
             }
+
+        await self.emit_step("代码生成", context, phase="done", step_index=1, step_total=step_total,
+                             duration_ms=code_dur, files=code_files)
 
         # 注入 files 到 context，供 SelfTest 使用
         files = code_result.get("files", {})
@@ -128,7 +153,8 @@ class DevAgent(BaseAgent):
         await self.emit_step("自测验证", context, phase="start", step_index=2, step_total=step_total)
         test_result = await self.run_action("self_test", context)
         await self.emit_step("自测验证", context, phase="done", step_index=2, step_total=step_total,
-                             duration_ms=int((time.monotonic() - t1) * 1000))
+                             duration_ms=int((time.monotonic() - t1) * 1000),
+                             files=list((test_result.get("files") or {}).keys()))
 
         # 合并结果
         result = {**code_result}
@@ -354,6 +380,9 @@ class DevAgent(BaseAgent):
             elif cur_status == "self_test_failed":
                 # v0.19.x A 方案：UE 静态预检（Layer 1）失败
                 failure_type = "self_test_failed"
+            elif cur_status == "development_failed":
+                # 代码生成本身没产出有效代码（LLM 超时 / 零文件 / 只有降级模板）
+                failure_type = "development_failed"
             elif cur_status == "testing_failed":
                 failure_type = "testing_failed"
             elif cur_status == "acceptance_rejected":
@@ -398,6 +427,27 @@ class DevAgent(BaseAgent):
                         )
                     except Exception as e:
                         logger.warning("解析 self_test result 异常: %s", e)
+
+            # 代码生成失败：从最近一条 reject 日志读失败原因，注入反思
+            if failure_type == "development_failed":
+                log = await db.fetch_one(
+                    """SELECT detail FROM ticket_logs
+                       WHERE ticket_id = ? AND action = 'reject'
+                       ORDER BY created_at DESC LIMIT 1""",
+                    (ticket_id,),
+                )
+                if log and log.get("detail"):
+                    try:
+                        det = json.loads(log["detail"])
+                        context["code_gen_failure"] = {
+                            "reason": det.get("reason") or "",
+                            "file_count": det.get("file_count", 0),
+                            "notes": det.get("notes") or "",
+                        }
+                        logger.info("🔧 fix_issues 接到代码生成失败 context: %s",
+                                    str(det.get("reason"))[:120])
+                    except Exception as e:
+                        logger.warning("解析代码生成失败 detail 异常: %s", e)
 
             # v0.19：playtest 失败，从 reject 日志拿失败测试列表
             if failure_type == "play_test_failed":

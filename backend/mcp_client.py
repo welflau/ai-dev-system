@@ -7,10 +7,15 @@ MCPClient — 让 ChatAssistant 接入外部 MCP (Model Context Protocol) server
 ## 工作原理
 
 启动时（FastAPI lifespan）：
-  1. 读 `mcp_servers.json`，按 enabled=true 的条目 spawn stdio subprocess
+  1. 读 `mcp_servers.json`，按 enabled=true 的条目建连接
   2. 每个 server 一个后台 asyncio.Task，持有 ClientSession
   3. 调 session.initialize() + session.list_tools() 缓存工具元数据
   4. 工具名加 `mcp__<server>__` 前缀避免冲突
+
+支持三种 transport（`_detect_transport` 归一化各 CLI 的字段差异）：
+  - stdio          spawn subprocess，本地 server
+  - http           streamable-http，远端 server（plugin connector 都是这种）
+  - sse            旧式 SSE，已被 http 取代，仅作兼容
 
 ChatAssistant 调工具时：
   - 如果 tool_name 以 `mcp__` 开头 → call_tool() 路由到对应 server
@@ -23,6 +28,7 @@ ChatAssistant 调工具时：
 import asyncio
 import json
 import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -46,6 +52,26 @@ def _normalize_enabled(cfg: Dict[str, Any]) -> bool:
     if "enabled" in cfg:
         return bool(cfg["enabled"])
     return True
+
+
+def _detect_transport(cfg: Dict[str, Any]) -> str:
+    """归一化 transport 类型 → "stdio" | "http" | "sse"。
+
+    各 CLI 字段名和取值都不统一：
+    - WorkBuddy/CodeBuddy plugin：`"type": "streamable-http"`
+    - Claude Code：`"type": "http"` / `"sse"`，或 `"transport": ...`
+    - 都没写：有 command 当 stdio，有 url 当 http（http 是当前主流，sse 已弃用）
+    """
+    raw = str(cfg.get("type") or cfg.get("transport") or "").strip().lower()
+    if raw in ("stdio", "http", "sse"):
+        return raw
+    if raw in ("streamable-http", "streamable_http", "streamablehttp", "http-stream"):
+        return "http"
+    if cfg.get("command"):
+        return "stdio"
+    if cfg.get("url"):
+        return "http"
+    return "stdio"
 
 
 def _read_mcp_servers_file(path: Path, source: str,
@@ -74,19 +100,35 @@ def _read_mcp_servers_file(path: Path, source: str,
 def _load_user_mcp_config() -> Dict[str, Any]:
     """加载用户主目录级 MCP 配置（跨项目共享，优先级最低）。
 
-    覆盖 CodeBuddy / Claude Code 的用户级约定：
+    覆盖 Cursor / CodeBuddy / WorkBuddy / Claude Code 的用户级约定：
+      ~/.cursor/mcp.json           ["mcpServers"]
       ~/.codebuddy/mcp.json        ["mcpServers"]
       ~/.codebuddy/settings.json   ["mcpServers"]
+      ~/.workbuddy/mcp.json        ["mcpServers"]
+      ~/.workbuddy/settings.json   ["mcpServers"]
       ~/.claude/.mcp.json          ["mcpServers"]
       ~/.claude/mcp.json           ["mcpServers"]
       ~/.claude/settings.json      ["mcpServers"]
+    以及各 Client 已启用 Plugin 自带的 mcp.json（见 plugin_scanner）。
     后者覆盖前者的同名 server。
     """
     home = Path.home()
     result: Dict[str, Any] = {}
+
+    # Plugin 提供的 server 放最前 —— 用户在 mcp.json / settings.json 里显式写的
+    # 同名配置应当盖掉插件的默认值
+    try:
+        from plugin_scanner import load_plugin_mcp_servers
+        result.update(load_plugin_mcp_servers(home))
+    except Exception as e:
+        logger.debug("扫描 Plugin MCP 失败: %s", e)
+
     for rel, source in [
+        (".cursor/mcp.json", "user:cursor"),
         (".codebuddy/mcp.json", "user:codebuddy"),
         (".codebuddy/settings.json", "user:codebuddy"),
+        (".workbuddy/mcp.json", "user:workbuddy"),
+        (".workbuddy/settings.json", "user:workbuddy"),
         (".claude/.mcp.json", "user:claude"),
         (".claude/mcp.json", "user:claude"),
         (".claude/settings.json", "user:claude"),
@@ -99,10 +141,12 @@ def _load_user_mcp_config() -> Dict[str, Any]:
 def _load_project_mcp_config(repo_path: str, include_user: bool = True) -> Dict[str, Any]:
     """多路合并加载 MCP 配置，优先级从低到高：
 
-    0. 用户级 ~/.codebuddy、~/.claude（include_user=True 时）
-    1. {repo}/.claude/settings.json  ["mcpServers"]
-    2. {repo}/.codebuddy/settings.json + {repo}/.codebuddy/mcp.json  ["mcpServers"]
-    3. {repo}/.ads/mcp_servers.json  （ADS 格式，顶层即 servers，优先级最高）
+    0. 用户级 ~/.cursor、~/.codebuddy、~/.workbuddy、~/.claude（include_user=True 时）
+    1. {repo}/.cursor/mcp.json       ["mcpServers"]
+    2. {repo}/.claude/settings.json  ["mcpServers"]
+    3. {repo}/.codebuddy/settings.json + {repo}/.codebuddy/mcp.json  ["mcpServers"]
+    4. {repo}/.workbuddy/settings.json + {repo}/.workbuddy/mcp.json  ["mcpServers"]
+    5. {repo}/.ads/mcp_servers.json  （ADS 格式，顶层即 servers，优先级最高）
 
     同名 server：高优先级的字段逐一覆盖低优先级。
     兼容 CodeBuddy 的 `disabled` 与 ADS/内置的 `enabled`。
@@ -119,11 +163,16 @@ def _load_project_mcp_config(repo_path: str, include_user: bool = True) -> Dict[
 
     if repo_path:
         repo = Path(repo_path)
-        # 1. 项目 .claude/settings.json
+        # 1. 项目 .cursor/mcp.json
+        _merge(_read_mcp_servers_file(repo / ".cursor" / "mcp.json", "cursor"))
+        # 2. 项目 .claude/settings.json
         _merge(_read_mcp_servers_file(repo / ".claude" / "settings.json", "claude"))
         # 2. 项目 .codebuddy/settings.json + mcp.json
         _merge(_read_mcp_servers_file(repo / ".codebuddy" / "settings.json", "codebuddy"))
         _merge(_read_mcp_servers_file(repo / ".codebuddy" / "mcp.json", "codebuddy"))
+        # 3. 项目 .workbuddy/settings.json + mcp.json
+        _merge(_read_mcp_servers_file(repo / ".workbuddy" / "settings.json", "workbuddy"))
+        _merge(_read_mcp_servers_file(repo / ".workbuddy" / "mcp.json", "workbuddy"))
         # 3. 项目 .ads/mcp_servers.json（顶层即 servers）
         _merge(_read_mcp_servers_file(repo / _PROJECT_MCP_RELPATH, "ads", top_level=True))
 
@@ -186,6 +235,22 @@ def _parse_tool_name(tool_name: str) -> Optional[Tuple[str, str]]:
     return server, raw
 
 
+def _describe_exc(e: BaseException, _depth: int = 0) -> str:
+    """把异常压成一行可读描述。
+
+    http transport 的失败包在 anyio TaskGroup 的 ExceptionGroup 里，直接
+    str() 只会得到「unhandled errors in a TaskGroup (1 sub-exception)」，
+    真正的 ConnectError/401 被埋在 exceptions 里 —— 递归挖出来。
+    """
+    subs = getattr(e, "exceptions", None)
+    if subs and _depth < 4:
+        inner = "; ".join(_describe_exc(s, _depth + 1) for s in subs[:3])
+        if inner:
+            return inner
+    msg = str(e).strip()
+    return f"{type(e).__name__}: {msg}" if msg else type(e).__name__
+
+
 def _truncate_response(text: str) -> str:
     if not text:
         return ""
@@ -200,6 +265,7 @@ class _ServerConnection:
     def __init__(self, name: str, config: Dict[str, Any]):
         self.name = name
         self.config = config
+        self.transport = _detect_transport(config)
         self.tools: List[Dict[str, Any]] = []  # 缓存的工具列表（Anthropic schema 格式）
         self.status: str = "pending"            # pending | running | error | stopped
         self.error: Optional[str] = None
@@ -239,25 +305,56 @@ class _ServerConnection:
         except asyncio.TimeoutError:
             return json.dumps({"error": f"MCP 调用超时 ({_CALL_TIMEOUT_SEC}s)"}, ensure_ascii=False)
 
+    @asynccontextmanager
+    async def _open_transport(self):
+        """按 transport 类型建立连接，yield (read, write)。
+
+        stdio       → spawn subprocess（command/args/env）
+        http / sse  → 连远端 URL（url/headers），凭证需调用方自备
+        """
+        if self.transport == "stdio":
+            from mcp.client.stdio import stdio_client, StdioServerParameters
+            params = StdioServerParameters(
+                command=self.config["command"],
+                args=self.config.get("args", []),
+                env=self.config.get("env") or None,
+            )
+            async with stdio_client(params) as (read, write):
+                yield read, write
+            return
+
+        url = self.config.get("url")
+        if not url:
+            raise ValueError(f"transport={self.transport} 缺少 url 字段")
+        headers = self.config.get("headers") or None
+        # 配置里的 timeout 是毫秒（沿用 plugin mcp.json 约定），SDK 要秒
+        timeout_ms = self.config.get("timeout")
+        timeout = (timeout_ms / 1000.0) if isinstance(timeout_ms, (int, float)) else 30.0
+
+        if self.transport == "sse":
+            from mcp.client.sse import sse_client
+            async with sse_client(url, headers=headers, timeout=timeout) as (read, write):
+                yield read, write
+        else:
+            from mcp.client.streamable_http import streamablehttp_client
+            # streamablehttp 返回三元组，第三个是 get_session_id，这里用不上
+            async with streamablehttp_client(url, headers=headers, timeout=timeout) as (read, write, _):
+                yield read, write
+
     async def _run_loop(self):
         """持有 session 生命周期，串行消费调用队列"""
-        from mcp.client.stdio import stdio_client, StdioServerParameters
         from mcp import ClientSession
 
-        params = StdioServerParameters(
-            command=self.config["command"],
-            args=self.config.get("args", []),
-            env=self.config.get("env") or None,
-        )
         try:
-            async with stdio_client(params) as (read, write):
+            async with self._open_transport() as (read, write):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
                     tools_resp = await session.list_tools()
                     self.tools = self._format_tools(tools_resp.tools)
                     self.status = "running"
                     self._ready_event.set()
-                    logger.info("✅ MCP server %s 启动: %d 个工具", self.name, len(self.tools))
+                    logger.info("✅ MCP server %s 启动 (%s): %d 个工具",
+                                self.name, self.transport, len(self.tools))
 
                     # 串行消费调用
                     while True:
@@ -277,8 +374,9 @@ class _ServerConnection:
             raise
         except Exception as e:
             self.status = "error"
-            self.error = f"{type(e).__name__}: {e}"
-            logger.warning("MCP server %s 启动失败: %s", self.name, self.error)
+            self.error = _describe_exc(e)
+            logger.warning("MCP server %s 启动失败 (%s): %s",
+                           self.name, self.transport, self.error)
             self._ready_event.set()  # 解除 start() 的等待
 
     def _format_tools(self, mcp_tools: List[Any]) -> List[Dict[str, Any]]:

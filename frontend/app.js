@@ -100,6 +100,8 @@ async function _restoreChatWorkspace() {
     } finally {
         _chatWsPersistReady = true;
         _persistChatWorkspace();
+        // 恢复出来的可能是"面板已打开"，顶栏开关得跟着点亮
+        try { _syncTopbarChatToggle(); } catch {}
     }
 }
 
@@ -297,7 +299,7 @@ const adsShell = (() => {
         activeTicketId: null,
         // C 主舞台工作区
         currentPage: 'board',
-        mainTabs: [],          // { id, type:'file'|'diff'|'knowledge', title, path, ticketId?, docId? }
+        mainTabs: [],          // { id, type:'file'|'diff'|'knowledge'|'tasks', title, path, ticketId?, docId? }
         mainActiveId: null,    // null = 显示页面；否则显示文档 Tab
     };
 
@@ -307,9 +309,10 @@ const adsShell = (() => {
         repo: '仓库', stats: '统计', cicd: '交付', agents: 'Agent',
         logs: '日志', automation: '自动化',
         'settings-general': '基本信息', 'settings-repo': '仓库配置',
-        'settings-sop': 'SOP', 'settings-agents': 'Agent/扩展',
+        'settings-sop': 'SOP', 'settings-agents': 'Agent/扩展', bundles: '套件与插件',
         'settings-knowledge': '知识库', 'settings-assets': '资产库',
         'settings-danger': '高级设置',
+        'external-sessions': '外部会话',
     };
 
     function _lsGet(key, fallback = null) {
@@ -382,6 +385,7 @@ const adsShell = (() => {
         }
         _renderMainWorkspace();
         _applySidebarToLayout();
+        _syncRightToggleBtns();
         // 等标题栏渲染后再挂展开钮
         requestAnimationFrame(() => {
             if (_layout()?.classList.contains('sidebar-collapsed')) {
@@ -534,6 +538,7 @@ const adsShell = (() => {
         }
         _renderRightMode();
         _syncChatOpenFlag(true);
+        _syncRightToggleBtns();
         _lsSet(KEYS.rightOpen, '1');
         _lsSet(KEYS.rightTab, state.rightTab);
         _lsSet(KEYS.rightMode, state.rightMode);
@@ -544,12 +549,13 @@ const adsShell = (() => {
             const modeBtn = document.getElementById('chatModeBtn');
             if (modeBar) modeBar.style.display = '';
             if (modeBtn) modeBtn.style.display = '';
-            if (typeof chatMode !== 'undefined' && chatMode === 'global'
-                && typeof loadChatHistory === 'function'
+            // 这里是切项目后第一次看到聊天内容的地方：面板关着时切的项目，
+            // DOM 里还是上一个项目的气泡，_chatMessagesHasContent 会认出来并返回 false
+            if (typeof _reloadChatForCurrentMode === 'function'
                 && typeof _chatMessagesHasContent === 'function' && !_chatMessagesHasContent()
                 && !(typeof chatSending !== 'undefined' && chatSending)
                 && !(typeof _streamAbortController !== 'undefined' && _streamAbortController)) {
-                loadChatHistory();
+                _reloadChatForCurrentMode();
             }
         }
     }
@@ -579,6 +585,7 @@ const adsShell = (() => {
             splitBtn.classList.remove('active');
             splitBtn.title = '一键分屏：工单 | 对话';
         }
+        _syncRightToggleBtns();
     }
 
     function setRightTab(tab) {
@@ -597,13 +604,45 @@ const adsShell = (() => {
         _lsSet(KEYS.rightTab, tab);
         if (tab === 'chat') {
             _syncChatOpenFlag(true);
-            if (typeof chatMode !== 'undefined' && chatMode === 'global'
-                && typeof loadChatHistory === 'function'
+            if (typeof _reloadChatForCurrentMode === 'function'
                 && typeof _chatMessagesHasContent === 'function' && !_chatMessagesHasContent()
                 && !(typeof chatSending !== 'undefined' && chatSending)
                 && !(typeof _streamAbortController !== 'undefined' && _streamAbortController)) {
-                loadChatHistory();
+                _reloadChatForCurrentMode();
             }
+        }
+    }
+
+    /**
+     * 显示/隐藏右侧面板。标题栏那个常驻按钮和面板工具栏里的那个都走这里。
+     *
+     * 为什么不是直接 closeRight()：closeRight 只管关，关掉之后面板连同它自己的
+     * 关闭按钮一起消失，用户再想开只能去点工单/AI —— 而那两个入口会顺带切 Tab、
+     * 加载历史。这里要的是纯粹的"收起/展开"，恢复上次的 Tab 和分屏状态。
+     */
+    function toggleRight() {
+        if (state.rightOpen) {
+            closeRight({ persist: true });
+        } else {
+            openRight({
+                tab: state.rightTab || 'ticket',
+                split: state.rightMode === 'split',
+            });
+        }
+        _syncRightToggleBtns();
+    }
+
+    /** 两个位置的开关共用一套状态（面板开着时标题栏那个由 CSS 隐藏） */
+    function _syncRightToggleBtns() {
+        const open = !!state.rightOpen;
+        for (const id of ['mainWsRightToggle', 'rwToggleBtn']) {
+            const btn = document.getElementById(id);
+            if (!btn) continue;
+            btn.classList.toggle('active', open);
+            btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+            const label = open ? '隐藏右侧面板' : '显示右侧面板';
+            btn.title = label;
+            btn.setAttribute('aria-label', label);
         }
     }
 
@@ -677,19 +716,14 @@ const adsShell = (() => {
 
     function _syncChatOpenFlag(open) {
         chatPanelOpen = !!open;
-        const toggleBtn = document.getElementById('chatToggleBtn');
         if (open) {
             document.body.classList.add('chat-open');
-            toggleBtn?.classList.add('active');
         } else {
             // 壳层项目页：右栏关则去掉 chat-open（不再靠 margin 腾位）
-            if (document.body.classList.contains('shell-project')) {
-                document.body.classList.remove('chat-open');
-            } else if (!open) {
-                document.body.classList.remove('chat-open');
-            }
-            toggleBtn?.classList.remove('active');
+            document.body.classList.remove('chat-open');
         }
+        // 顶栏那个开关在项目内被 CSS 藏着，但状态要跟上——退回列表页时它会露出来
+        try { _syncTopbarChatToggle(); } catch {}
     }
 
     function _initRightResizer() {
@@ -846,6 +880,50 @@ const adsShell = (() => {
             } else if (tab.title) {
                 existing.title = tab.title;
             }
+        } else if (tab.type === 'tasks') {
+            // 后台任务面板：全局只有一个（#tasksSidePanel 靠 id 被一堆函数直接引用），
+            // 所以 id 写死，不按 ticketId 分身 —— 否则两个 Tab 抢同一个 DOM。
+            id = 'tasks:panel';
+            let existing = state.mainTabs.find(t => t.id === id);
+            if (!existing) {
+                existing = { id, type: 'tasks', title: '后台任务', path: '后台任务' };
+                state.mainTabs.push(existing);
+            }
+            existing.ticketId = tab.ticketId || '';
+        } else if (tab.type === 'external-sessions') {
+            // 外部会话浏览器：也是单例 Tab，列表+详情都在面板内部切换。
+            // 和 'tasks' 不同：这个面板每次挂载都重建 DOM（会话内容本来就是只读 API 快照，无状态可保）。
+            // 标题故意和侧栏页面 pill（mainWsPageTab，文案也是"外部会话"）区分开——否则标题栏里
+            // "页面标记"和"实际 Tab"两个 pill 文案完全一样，用户会以为重复开了两个 Tab。
+            id = 'external-sessions:panel';
+            let existing = state.mainTabs.find(t => t.id === id);
+            if (!existing) {
+                existing = { id, type: 'external-sessions', title: '外部会话 · Cursor', path: '外部会话' };
+                state.mainTabs.push(existing);
+            }
+            // projectId 带过来，切项目后再点侧栏能跟上
+            existing.projectId = tab.projectId || currentProjectId || '';
+        } else if (tab.type === 'image') {
+            // 外部会话图片查看：一张图一个 Tab，应用内看大图（替代开新窗口）。
+            // 标题不进 onclick 参数（escHtml 不转义引号，会话标题拼进 JS 字符串有注入风险），
+            // 用 uuid 前 8 位当名字就够区分了。
+            const uuid = tab.uuid || '';
+            const sessionId = tab.sessionId || '';
+            if (!uuid || !sessionId) return null;
+            id = 'image:' + sessionId + ':' + uuid;
+            let existing = state.mainTabs.find(t => t.id === id);
+            if (!existing) {
+                existing = {
+                    id,
+                    type: 'image',
+                    sessionId,
+                    uuid,
+                    title: '图片 ' + uuid.slice(0, 8),
+                    path: '外部会话图片',
+                };
+                state.mainTabs.push(existing);
+            }
+            existing.projectId = tab.projectId || currentProjectId || '';
         } else if (tab.type === 'page') {
             if (typeof switchTab === 'function') switchTab(tab.pageId);
             return tab.pageId;
@@ -901,7 +979,11 @@ const adsShell = (() => {
 
         tabsEl.innerHTML = state.mainTabs.map(t => {
             const active = t.id === state.mainActiveId ? ' active' : '';
-            const icon = t.type === 'diff' ? '≠' : (t.type === 'knowledge' ? '📚' : '📄');
+            const icon = t.type === 'diff' ? '≠'
+                : t.type === 'knowledge' ? '📚'
+                : t.type === 'tasks' ? '🔄'
+                : t.type === 'external-sessions' ? '📜'
+                : t.type === 'image' ? '🖼' : '📄';
             const safeId = t.id.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
             return `<button type="button" class="main-ws-tab${active}" role="tab"
                         onclick="adsShell.activateMainTab('${safeId}')" title="${_escAttr(t.path || t.title)}">
@@ -912,6 +994,11 @@ const adsShell = (() => {
         }).join('');
 
         const showDoc = !!state.mainActiveId;
+        // 回到页面视图（host 整块隐藏）时，别把任务面板留在里面陪葬 —— 搬回侧栏，
+        // 否则下次 /tasks 开侧栏会发现面板"不在家"，_openTasksPanel 把它显示在藏起来的 host 里。
+        if (!showDoc || state.mainTabs.find(t => t.id === state.mainActiveId)?.type !== 'tasks') {
+            _evictTasksPane();
+        }
         host.style.display = showDoc ? 'flex' : 'none';
         document.querySelectorAll('.content-area > .tab-content').forEach(el => {
             if (showDoc) {
@@ -1055,10 +1142,81 @@ const adsShell = (() => {
             ${treeBtn}`;
     }
 
+    /**
+     * 后台任务 Tab：把现有的 #tasksSidePanel **搬**进主舞台，不是复制。
+     *
+     * 为什么必须搬：_refreshTasksPanel / _setTasksFilter / _tasksSearch / _selectTaskItem
+     * 全靠 getElementById 取 #tasksPanelList / #tasksPanelOutput / .tasks-tab。
+     * 克隆一份就有两套同 id 节点，刷新只会命中文档里靠前的那个（多半是藏着的），
+     * 于是看着像"点了没反应"。壳层挂 #ticketDrawer / #chatPanel 也是这个搬法。
+     */
+    function _mountTasksPane(tab, host) {
+        const panel = document.getElementById('tasksSidePanel');
+        if (!panel) {
+            host.innerHTML = '<div class="main-ws-error">后台任务面板未初始化</div>';
+            return;
+        }
+        // 记住原位，关 Tab 时放回去（侧栏模式还得用）
+        if (!panel.dataset.homeParent) {
+            panel.dataset.homeParent = panel.parentElement?.id || 'chatPanelBody';
+        }
+        host.innerHTML = '';
+        host.appendChild(panel);
+        panel.classList.add('tasks-in-main-ws');
+        panel.style.display = 'flex';
+        panel.style.width = '';            // 侧栏时写死的 400px 在主舞台要撑满
+        // 侧栏挤出来的占位标记跟着撤掉，否则聊天区白留 400px
+        document.getElementById('chatPanelBody')?.classList.remove('has-tasks-panel');
+        _restoreTasksPanelWidth();
+        _syncTasksHostBtn();
+        _refreshTasksPanel();
+    }
+
+    /** 把面板放回侧栏原位（不销毁，保住列表选中态与内存任务表） */
+    function _evictTasksPane() {
+        const panel = document.getElementById('tasksSidePanel');
+        if (!panel || !panel.classList.contains('tasks-in-main-ws')) return;
+        const home = document.getElementById(panel.dataset.homeParent || 'chatPanelBody');
+        panel.classList.remove('tasks-in-main-ws');
+        panel.style.display = 'none';
+        panel.style.width = '400px';
+        if (home && panel.parentElement !== home) home.appendChild(panel);
+    }
+
     async function _loadMainTabContent(id) {
         const tab = state.mainTabs.find(t => t.id === id);
         const host = document.getElementById('mainWsHost');
         if (!tab || !host || state.mainActiveId !== id) return;
+
+        // 切到别的 Tab 前先把面板搬走 —— 下面那句 host.innerHTML = ... 会把它连根删掉
+        if (tab.type !== 'tasks') _evictTasksPane();
+
+        if (tab.type === 'tasks') {
+            _mountTasksPane(tab, host);
+            return;
+        }
+
+        if (tab.type === 'external-sessions') {
+            // 外部会话面板是我们自己画的，每次打开都重建 DOM。
+            // 不需要像 tasks 那样"搬家"（它那套是为了保住侧栏的面板实例 + 选中态）。
+            _mountExternalSessionsPane(tab, host);
+            return;
+        }
+
+        if (tab.type === 'image') {
+            // 外部会话图片 Tab：头部只放标题，主体复用 .main-ws-img 居中展示，大图可滚动。
+            const url = `/api/projects/${encodeURIComponent(tab.projectId || currentProjectId || '')}/external-sessions/cursor/${encodeURIComponent(tab.sessionId)}/images/${encodeURIComponent(tab.uuid)}`;
+            host.innerHTML = `
+                <div class="main-ws-pane-header">
+                    <div class="main-ws-pane-path" title="${_escAttr(tab.title || '')}">${_escHtml(tab.title || '图片')}</div>
+                </div>
+                <div class="main-ws-img" style="flex:1;overflow:auto;min-height:0;">
+                    <img src="${url}" alt="${_escAttr(tab.title || '')}"
+                        style="max-height:none;cursor:zoom-out;"
+                        onclick="this.style.maxHeight=this.style.maxHeight?'':'none'">
+                </div>`;
+            return;
+        }
 
         const crumbs = _pathCrumbsHtml(tab.path || tab.title);
         host.innerHTML = `
@@ -1532,6 +1690,7 @@ const adsShell = (() => {
         toggleSidebar,
         openRight,
         closeRight,
+        toggleRight,
         setRightTab,
         toggleRightSplit,
         setRightMode,
@@ -1543,6 +1702,9 @@ const adsShell = (() => {
         closeMainTab,
         closeAllMainTabs,
         getMainTabContent,
+        evictTasksPane: _evictTasksPane,
+        hasTasksTab: () => state.mainTabs.some(t => t.type === 'tasks'),
+        isTasksTabActive: () => state.mainActiveId === 'tasks:panel',
         toggleFileMenu,
         toggleFileSearch,
         toggleFileTree,
@@ -2331,11 +2493,113 @@ function showProjectDetail(projectId) {
     _persistChatWorkspace();
 }
 
+/**
+ * 当前 #chatMessages 里装的是「谁的」内容。
+ *
+ * 光看 DOM 里有没有气泡是不够的：切项目时右侧面板可能是关着的，
+ * 上一个项目的气泡会原地留着。等用户再打开面板，
+ * `_chatMessagesHasContent()` 看到一堆气泡就判定"已经加载过了"，
+ * 于是标题写着新项目、内容还是旧项目 —— 串台就是这么来的。
+ */
+let _chatRenderedFor = null;
+
+/** 内容归属标识：项目 + 模式 + 工单（工单对话是按工单分的） */
+function _chatContextToken() {
+    const ticketPart = chatMode === 'job' ? (chatCurrentTicketId || 'all') : '';
+    return `${chatMode}|${currentProjectId || 'global'}|${ticketPart}`;
+}
+
+/**
+ * context 代号。每次 project / mode / ticket 变化就 +1。
+ *
+ * 为什么光有 token 字符串不够：所有加载函数都是 async，`_markChatRendered()`
+ * 在它们**结尾**执行，读到的是那一刻的全局变量。于是
+ *
+ *   1. A 项目的 loadChatHistory 起飞，await 在路上
+ *   2. 用户点了 B，currentProjectId 同步变成 B，第二个加载起飞
+ *   3. **A 的响应后返回**：铺完 A 的气泡，调 _markChatRendered()，
+ *      这时算出来的 token 已经是 B 的 —— A 的内容被盖上了 B 的戳
+ *   4. hasContent() 从此返回 true，再也不会重载
+ *
+ * 一个迟到的响应伪造了归属标识。所以标识必须绑在"哪一次加载"上，
+ * 而不是"什么时候盖戳"。
+ *
+ * 用递增的代号而不是比较 token 字符串：A→B→A 转一圈回来 token 又相等了，
+ * 但代号已经从 1 走到 3，那个 gen=1 的在途请求依然作废。
+ */
+let _chatCtxGen = 0;
+let _chatCtxSeen = null;
+
+/**
+ * 惰性探测 context 变化并推进代号。
+ * 不用在每个 currentProjectId / chatMode / chatCurrentTicketId 赋值点埋钩子 ——
+ * 那种做法漏一个就是一个 bug，而这里只要值变了就一定被发现。
+ */
+function _chatCtxTick() {
+    const cur = _chatContextToken();
+    if (cur !== _chatCtxSeen) {
+        _chatCtxSeen = cur;
+        _chatCtxGen++;
+    }
+    return _chatCtxGen;
+}
+
+/** 加载开始时取一张"凭证"，带走当时的代号和归属 */
+function _chatLoadStart() {
+    return { gen: _chatCtxTick(), ctx: _chatContextToken() };
+}
+
+/** 凭证是否已过期（await 期间用户切了项目 / 模式 / 工单） */
+function _chatLoadStale(tok) {
+    return !tok || tok.gen !== _chatCtxTick();
+}
+
+/**
+ * 渲染完一批消息后调一次，声明"现在装的是这个 context 的内容"。
+ * @param {{gen:number, ctx:string}} [tok] 本次加载起飞时的凭证。
+ *   传了就必须验：过期说明这批内容属于上一个 context，不许冒名顶替。
+ */
+function _markChatRendered(tok) {
+    if (tok) {
+        if (_chatLoadStale(tok)) return;
+        _chatRenderedFor = tok.ctx;
+        return;
+    }
+    _chatRenderedFor = _chatContextToken();
+}
+
 /** 消息区是否已有真实内容（气泡/确认卡）；有则禁止无脑 reload */
 function _chatMessagesHasContent() {
     const el = document.getElementById('chatMessages');
     if (!el) return false;
+    _chatCtxTick();   // 顺手把代号推到最新，让在途的旧请求作废
+    // 装的是别的项目/工单的东西时，等同于"空"——必须重新加载
+    if (_chatRenderedFor !== _chatContextToken()) return false;
     return !!(el.querySelector('.chat-msg, .chat-confirm-card, .chat-action-card'));
+}
+
+/**
+ * 按当前模式重新加载消息区。
+ *
+ * 调用方原来都是写死的 `loadChatHistory()`，只覆盖了 global 模式；
+ * 停在「工单」Tab 时切项目，装的还是上一个项目的工单 Feed。
+ */
+function _reloadChatForCurrentMode() {
+    if (chatSending || _streamAbortController) return;
+    if (_chatReloadSuppressed) return;
+    if (chatMode === 'job') { loadAllTicketConversations(); return; }
+    if (chatMode === 'group') { loadGroupChat(); return; }
+    loadChatHistory();
+}
+
+/**
+ * 调用方自己马上就要加载内容时，用它挡住 openRight / setRightTab 顺手补载的那一次。
+ * 两个请求同时在飞，后返回的会盖掉先返回的，顺序不由我们决定。
+ */
+let _chatReloadSuppressed = false;
+function _withChatReloadSuppressed(fn) {
+    _chatReloadSuppressed = true;
+    try { fn(); } finally { _chatReloadSuppressed = false; }
 }
 
 /** 上次聊天 context 对应的 projectId（用于同项目内跳过清空） */
@@ -2372,7 +2636,7 @@ function _updateChatPanelForContext(opts = {}) {
     // 同项目（含退出全屏再进详情）只刷新标题；若消息区仍是空欢迎页则补载历史
     if (sameContext) {
         if (chatPanelOpen && !chatSending && !_streamAbortController && !_chatMessagesHasContent()) {
-            loadChatHistory();
+            _reloadChatForCurrentMode();
         }
         return;
     }
@@ -2389,7 +2653,18 @@ function _updateChatPanelForContext(opts = {}) {
 
     // v0.20：切换 context 时重置当前会话（新 context 会懒加载最近会话）
     _currentChatSessionId = null;
+    // 推进 context 代号：此刻还在飞的那些请求全部作废，回来时不许再往面板里铺内容
+    _chatCtxTick();
+    _chatRenderedFor = null;
     _cliClearMem();  // 切项目时清空内存任务，避免跨项目串台
+    // 工单选择是上一个项目的，不清掉会带着旧 ticketId 去新项目查（查不到 / 查错）
+    chatCurrentTicketId = null;
+    chatCurrentTicketTitle = '';
+    document.querySelectorAll('.chat-job-header').forEach(el => el.remove());
+    // 群聊是另一个容器（#groupChatMessages），loadGroupChat 只看 children.length
+    // 就决定"已经加载过了"。切项目不清它，群聊 Tab 会原样显示上一个项目的讨论。
+    const groupBox = document.getElementById('groupChatMessages');
+    if (groupBox && !chatSending && !_streamAbortController) groupBox.innerHTML = '';
     const histPanel = document.getElementById('chatHistoryPanel');
     if (histPanel) histPanel.style.display = 'none';
 
@@ -2412,7 +2687,14 @@ function _updateChatPanelForContext(opts = {}) {
     // 刷新恢复中由 _restoreChatWorkspace 统一加载，避免和全屏布局抢跑
     if (chatPanelOpen && !chatSending && !_streamAbortController && _chatWsPersistReady) {
         showChatWelcome();
-        loadChatHistory();
+        _reloadChatForCurrentMode();
+    } else if (!chatSending && !_streamAbortController) {
+        // 面板关着（或刷新恢复中）时不能加载，但**必须把上一个项目的气泡清掉**。
+        // 只作废标识是不够的：标识是个软状态，任何一条没走 hasContent 检查的
+        // 显示路径（_renderRightMode 切 pane、退出全屏挂回、CSS 显隐）都会
+        // 把这些还躺在 DOM 里的旧气泡直接展示出来。DOM 是硬状态，清了才算数。
+        _chatRenderedFor = null;
+        if (msgContainer) msgContainer.innerHTML = '';
     }
 }
 
@@ -2440,10 +2722,11 @@ function switchTab(tab) {
     if (tab === 'ticket-list') loadTicketList();
     if (tab === 'ticket-graph') loadTicketGraph();
     if (tab === 'pipeline' && currentPipelineReqId) loadPipeline(currentPipelineReqId);
-    if (tab === 'repo') loadRepoTree();
+    if (tab === 'repo') loadRepoPage();
     if (tab === 'flow') loadFlowPage();
     if (tab === 'roadmap') loadRoadmap();
     if (tab === 'stats') loadStats();
+    if (tab === 'chat-trace') loadChatTrace();
     if (tab === 'agents') startAgentMonitor();
     if (tab === 'cicd') loadDeliveryPage();
     if (tab === 'logs') loadLogs();
@@ -2462,10 +2745,16 @@ function switchTab(tab) {
         loadAgentToolsStatus();
         loadMCPStatus();
         loadProjectSkills();
-        loadProjectPacks();
     }
+    if (tab === 'bundles') switchBundleTab(_bundleTab);
     if (tab === 'settings-knowledge') loadSettingsKnowledge();
     if (tab === 'settings-assets') { loadArtAssetsStats(); searchArtAssets(); }
+    // 外部会话：内容在主舞台 Tab 里渲染，侧栏 nav 继续高亮，用户关 Tab 后能回到这个页
+    if (tab === 'external-sessions') {
+        if (typeof adsShell !== 'undefined') {
+            adsShell.openMain({ type: 'external-sessions', projectId: currentProjectId });
+        }
+    }
 }
 
 // ==================== 资产库 ====================
@@ -2543,22 +2832,228 @@ async function copyArtAssetPath(path, id) {
 // ==================== Agent 配置页内部 Tab 切换 ====================
 
 /** 切换 Agent 配置页内部 Tab（Agent / MCP / Skills） */
-function switchAgentConfigTab(inner) {
-    document.querySelectorAll('.inner-tab').forEach(btn => {
+/** 切换一个页面内的 inner-tab。
+ *
+ *  必须按 root 限定查询范围 —— .inner-tab 这个类现在有两个页面在用
+ *  （「Agent / 扩展」和「套件与插件」），全局 querySelectorAll 会把另一页的
+ *  标签也一起取消激活，回去时panel全是灰的。 */
+function _switchInnerTab(rootId, panelPrefix, inner) {
+    const root = document.getElementById(rootId);
+    if (!root) return;
+    root.querySelectorAll('.inner-tab').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.innerTab === inner);
     });
-    document.querySelectorAll('.inner-tab-panel').forEach(panel => {
-        panel.classList.toggle('active', panel.id === `inner-panel-${inner}`);
+    root.querySelectorAll('.inner-tab-panel').forEach(panel => {
+        panel.classList.toggle('active', panel.id === `${panelPrefix}${inner}`);
     });
+}
+
+function switchAgentConfigTab(inner) {
+    _switchInnerTab('tab-settings-agents', 'inner-panel-', inner);
     // 切换时懒加载一次（数据可能已在 switchTab 里加载过，这里做兜底）
     if (inner === 'mcp') loadMCPStatus();
     if (inner === 'skills') loadProjectSkills();
-    if (inner === 'packs') loadProjectPacks();
     if (inner === 'commands') loadProjectCommands();
     if (inner === 'rules') loadProjectRules();
     if (inner === 'hooks') loadProjectHooks();
     if (inner === 'openspec') { loadOpenSpecStatus(); loadOpenSpecDashboard(); }
+    // packs 已移到「套件与插件」页（switchBundleTab）
     // traits 已移到「系统设置」modal（showSystemSettingsModal('traits')）
+}
+
+// ==================== 套件与插件 ====================
+
+let _bundleTab = 'packs';
+
+function switchBundleTab(inner) {
+    _bundleTab = inner;
+    _switchInnerTab('tab-bundles', 'bundle-panel-', inner);
+    if (inner === 'packs') loadProjectPacks();
+    if (inner === 'plugins') loadPluginList();
+}
+
+// 内容类型 → 图标。和 _SOURCE_META 里的 Plugin 徽章配套
+const _PLUGIN_CONTENT_ICONS = {
+    skills: '🎓', commands: '⚡', agents: '🤖',
+    rules: '📋', hooks: '🪝', mcp: '🔌', fragments: '🧾',
+};
+
+async function loadPluginList() {
+    const container = document.getElementById('pluginList');
+    if (!container) return;
+    const showAll = !!document.getElementById('bundlePluginShowAll')?.checked;
+    container.innerHTML = '<div class="empty-state-sm">扫描中...</div>';
+    try {
+        const resp = await fetch(`${API}/plugins${showAll ? '?all=true' : ''}`);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        container._pluginData = data;
+        _renderPluginList(container, data, showAll);
+    } catch (e) {
+        container.innerHTML = `<div class="empty-state-sm">扫描失败: ${escapeHtml(e.message)}</div>`;
+    }
+}
+
+function _renderPluginList(container, data, showAll) {
+    const c = data.counts || {};
+
+    // 「扫到 344 个」和「装了 23 个」必须分开说。市场目录是整仓克隆，
+    // 把 344 当成"你有 344 个插件"是彻头彻尾的误导
+    const summary = document.getElementById('pluginListSummary');
+    if (summary) {
+        summary.innerHTML = `
+            <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:11px;color:var(--text-muted);
+                        padding:8px 10px;background:var(--bg-elevated);border-radius:6px;">
+                <span title="enabledPlugins 里登记过、且开关是开的">已启用 <strong style="color:#22c55e;">${c.enabled || 0}</strong></span>
+                <span title="enabledPlugins 里登记过（含已禁用的）">已安装 <strong style="color:var(--text-primary);">${c.installed || 0}</strong></span>
+                <span title="市场目录里扫到的全部，绝大多数你并没有安装">市场可见 <strong>${c.scanned || 0}</strong></span>
+                ${showAll ? '' : `<span style="opacity:.8;">（仅显示已安装的 ${c.shown || 0} 个）</span>`}
+            </div>`;
+    }
+    const tabCount = document.getElementById('bundleCountPlugins');
+    if (tabCount) tabCount.textContent = c.installed ? ` ${c.installed}` : '';
+
+    const groups = data.groups || [];
+    if (!groups.length) {
+        container.innerHTML = '<div class="empty-state-sm">未发现任何已安装的 Plugin</div>';
+        return;
+    }
+
+    container.innerHTML = groups.map(g => {
+        const rows = g.plugins.map(p => {
+            // 三态：已启用 / 已装但关着 / 只是市场里有。第三种不是"用户关掉了"
+            const st = !p.installed
+                ? { label: '市场可见', color: 'var(--text-muted)', bg: 'var(--bg-elevated)',
+                    hint: '该 Client 的 enabledPlugins 里没有它 —— 只是市场目录里存在，你并未安装' }
+                : p.enabled
+                ? { label: '✅ 已启用', color: '#22c55e', bg: 'rgba(34,197,94,.12)',
+                    hint: '内容已带 Plugin 徽章出现在「Agent / 扩展」各面板' }
+                : { label: '⚪ 已禁用', color: 'var(--text-muted)', bg: 'var(--bg-elevated)',
+                    hint: '在该 Client 里装过但关掉了；ADS 不采纳它的内容' };
+
+            const chips = Object.entries(p.counts || {})
+                .map(([k, n]) => `<code class="mcp-tool-tag" style="font-size:10px;"
+                        title="${escapeHtml(k)}">${_PLUGIN_CONTENT_ICONS[k] || '📄'} ${escapeHtml(k)} ${n}</code>`)
+                .join('');
+
+            const ver = p.version ? `<span class="skill-row-id" title="${escapeHtml(p.version)}">v${escapeHtml(p.version.split('-')[0])}</span>` : '';
+            const arg = escapeHtml(JSON.stringify({ key: p.key, cli: p.cli }));
+            return `
+            <div class="skill-row pack-row-clickable" style="cursor:pointer;"
+                 onclick='showPluginDetail(${arg})' title="点击查看内容明细">
+                <div class="skill-row-info">
+                    <div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;">
+                        <span class="skill-row-name">🧩 ${escapeHtml(p.display_name || p.name)}</span>
+                        <span style="font-size:10px;padding:1px 6px;border-radius:3px;background:${st.bg};color:${st.color};"
+                              title="${escapeHtml(st.hint)}">${st.label}</span>
+                        ${chips}
+                    </div>
+                    <span class="skill-row-id">${escapeHtml(p.name)} ${ver}</span>
+                    ${p.description ? `<span class="skill-row-desc">${escapeHtml(p.description)}</span>` : ''}
+                </div>
+            </div>`;
+        }).join('');
+
+        return `<div style="margin-bottom:14px;">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;padding:6px 8px;
+                        background:var(--bg-elevated);border-radius:6px;cursor:pointer;user-select:none;"
+                 onclick="_toggleSourceGroup(this)">
+                <span style="font-size:10px;transition:transform .15s;" class="src-grp-chevron">▾</span>
+                <span style="font-size:13px;font-weight:600;">${escapeHtml(g.cli_label)}</span>
+                <code style="font-size:11px;color:var(--text-muted);">${escapeHtml(g.marketplace)}</code>
+                <span style="font-size:11px;padding:1px 6px;border-radius:10px;background:rgba(234,179,8,.12);color:#eab308;"
+                      title="已启用 / 本组总数">${g.enabled_count} / ${g.count}</span>
+            </div>
+            <div class="src-grp-items">${rows}</div>
+        </div>`;
+    }).join('');
+}
+
+async function showPluginDetail({ key, cli }) {
+    // 沿用 showExtensionDetail 的做法：弹窗按需建，不往 index.html 里再堆一份骨架
+    let modal = document.getElementById('pluginDetailModal');
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'pluginDetailModal';
+        modal.className = 'modal-overlay';
+        modal.innerHTML = `
+            <div class="modal" style="max-width:760px;width:90vw;max-height:84vh;display:flex;flex-direction:column;">
+                <div class="modal-header">
+                    <h3 id="pluginDetailTitle" style="margin:0;font-size:15px;">插件详情</h3>
+                    <button class="btn-icon" onclick="closeModal('pluginDetailModal')">&times;</button>
+                </div>
+                <div id="pluginDetailBody" style="flex:1;overflow-y:auto;padding:14px 18px;"></div>
+            </div>`;
+        modal.addEventListener('click', e => { if (e.target === modal) closeModal('pluginDetailModal'); });
+        document.body.appendChild(modal);
+    }
+    const body = document.getElementById('pluginDetailBody');
+    document.getElementById('pluginDetailTitle').textContent = '🧩 ' + key;
+    body.innerHTML = '<div class="empty-state-sm">加载中...</div>';
+    openModal('pluginDetailModal');
+    try {
+        const qs = new URLSearchParams({ key, ...(cli ? { cli } : {}) });
+        const resp = await fetch(`${API}/plugins/detail?${qs}`);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const d = await resp.json();
+        document.getElementById('pluginDetailTitle').textContent = `🧩 ${d.display_name || d.name}`;
+        body.innerHTML = _renderPluginDetailBody(d);
+    } catch (e) {
+        body.innerHTML = `<div class="empty-state-sm">加载失败: ${escapeHtml(e.message)}</div>`;
+    }
+}
+
+function _renderPluginDetailBody(d) {
+    const meta = [
+        ['宿主 Client', d.cli_label || d.cli],
+        ['市场', d.marketplace],
+        ['版本', d.version || '—'],
+        ['状态', !d.installed ? '市场可见（未安装）' : d.enabled ? '已启用' : '已禁用'],
+        ['目录', d.path],
+    ].map(([k, v]) => `
+        <div style="display:flex;gap:8px;font-size:11px;padding:3px 0;">
+            <span style="color:var(--text-muted);min-width:72px;">${escapeHtml(k)}</span>
+            <code style="word-break:break-all;">${escapeHtml(String(v || '—'))}</code>
+        </div>`).join('');
+
+    const sections = Object.entries(d.contents || {}).map(([kind, items]) => `
+        <div style="margin-top:12px;">
+            <div style="font-size:12px;font-weight:600;margin-bottom:4px;">
+                ${_PLUGIN_CONTENT_ICONS[kind] || '📄'} ${escapeHtml(kind)}
+                <span style="font-size:11px;color:var(--text-muted);font-weight:400;">${items.length}</span>
+            </div>
+            ${items.map(it => `<div style="font-size:11px;padding:2px 0 2px 8px;">
+                ${escapeHtml(it.name)} <code style="color:var(--text-muted);">${escapeHtml(it.rel_path)}</code>
+            </div>`).join('')}
+        </div>`).join('');
+
+    // MCP 只列名字和 transport —— url / headers 后端刻意不返回（内网地址 + 可能的 token）
+    const mcpHtml = (d.mcp_servers || []).length ? `
+        <div style="margin-top:12px;">
+            <div style="font-size:12px;font-weight:600;margin-bottom:4px;">🔌 mcp ${d.mcp_servers.length}</div>
+            ${d.mcp_servers.map(m => `<div style="font-size:11px;padding:2px 0 2px 8px;">
+                ${escapeHtml(m.name)}
+                <code style="color:var(--text-muted);">${escapeHtml(m.transport)}</code>
+                ${m.needs_auth ? `<span style="color:#f59e0b;" title="凭证在宿主 Client 的保险库里，ADS 未持有该授权">🔒 需在 Client 侧授权</span>` : ''}
+            </div>`).join('')}
+        </div>` : '';
+
+    const hooksHtml = (d.hook_events || []).length ? `
+        <div style="margin-top:12px;">
+            <div style="font-size:12px;font-weight:600;margin-bottom:4px;">🪝 hooks</div>
+            <div style="font-size:11px;padding:2px 0 2px 8px;">
+                ${d.hook_events.map(e => `<code class="mcp-tool-tag" style="font-size:10px;">${escapeHtml(e)}</code>`).join('')}
+            </div>
+        </div>` : '';
+
+    const readonlyNote = `
+        <div style="font-size:11px;padding:6px 10px;border-radius:6px;margin-top:12px;
+                    background:rgba(234,179,8,.08);color:#eab308;">
+            ℹ️ ADS 只读取插件内容，不改动它。启停请在 ${escapeHtml(d.cli_label || d.cli)} 里操作。
+        </div>`;
+
+    return `<div>${d.description ? `<p class="settings-description" style="margin-bottom:10px;">${escapeHtml(d.description)}</p>` : ''}
+        ${meta}${sections}${mcpHtml}${hooksHtml}${readonlyNote}</div>`;
 }
 
 // ==================== MCP 扩展 ====================
@@ -2597,18 +3092,23 @@ function _renderMcpView(container, data, source) {
     const statusLabel = (s) => ({running:'✅ 运行中',disabled:'⚪ 未启用',not_started:'⚠️ 未启动',error:'❌ 启动失败',stopped:'⏹️ 已停止'}[s]||s||'—');
     const renderItem = (srv) => {
         const sm = _SOURCE_META[srv.source] || _SOURCE_META.builtin;
-        const srcBadge = `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:${sm.bg};color:${sm.color};margin-left:4px;">${sm.label}${srv.pack_name ? ' · '+escapeHtml(srv.pack_name) : ''}</span>`;
+        const srcBadge = `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:${sm.bg};color:${sm.color};margin-left:4px;">${sm.label}${_srcSuffix(srv)}</span>`;
         const tools = srv.tools || [];
         const toolsHtml = tools.length
             ? `<div style="margin-top:4px;">${tools.map(t => `<code class="mcp-tool-tag">${escapeHtml(t)}</code>`).join('')}</div>` : '';
-        const statusHtml = srv.status
+        // 企业 connector 的端点扫到了，但凭证在原 Client 的保险库里，ADS 没有那份
+        // 授权。显示「⚪ 未启用」会让人以为是自己关的，说清真实原因
+        const statusHtml = srv.needs_auth
+            ? `<span class="mcp-server-status mcp-badge-warning" style="font-size:11px;margin-left:4px;"
+                     title="ADS 未持有该服务的授权凭证；请在原 AgentClient 里登录使用">🔒 需在 Client 侧授权</span>`
+            : srv.status
             ? `<span class="mcp-server-status mcp-badge-${statusClass(srv.status)}" style="font-size:11px;margin-left:4px;">${statusLabel(srv.status)}</span>`
             : (typeof srv.enabled === 'boolean'
                 ? `<span class="mcp-server-status mcp-badge-${srv.enabled?'success':'muted'}" style="font-size:11px;margin-left:4px;">${srv.enabled?'✅ 已启用':'⚪ 未启用'}</span>`
                 : '');
         const transportBadge = srv.transport
             ? `<span style="font-size:10px;color:var(--text-muted);margin-left:4px;">${escapeHtml(srv.transport)}</span>` : '';
-        const clickData = escapeHtml(JSON.stringify({name:srv.name, description:srv.description||'', source:srv.source, pack_name:srv.pack_name||null, file:srv.file||'', type:'MCP', emoji:'🔌', content:srv.command?'Command: '+srv.command:''}));
+        const clickData = escapeHtml(JSON.stringify({name:srv.name, description:srv.description||'', source:srv.source, pack_name:srv.pack_name||null, plugin_name:srv.plugin_name||null, marketplace:srv.marketplace||'', needs_auth:!!srv.needs_auth, file:srv.file||'', type:'MCP', emoji:'🔌', content:srv.command?'Command: '+srv.command:''}));
         return `<div class="mcp-server-card" style="margin-bottom:6px;cursor:pointer;" onclick='showExtensionDetail(${clickData})'>
             <div class="mcp-server-header">
                 <span class="mcp-server-name">🔌 ${escapeHtml(srv.name)}</span>${srcBadge}${statusHtml}${transportBadge}
@@ -2622,6 +3122,7 @@ function _renderMcpView(container, data, source) {
         builtin: { icon: '🏠', title: '全局 MCP',  desc: '来自 backend/mcp_servers.json' },
         user:    { icon: '👤', title: '用户 MCP',   desc: '来自 ~/.codebuddy、~/.claude 及项目 .claude/.codebuddy/.ads 配置' },
         pack:    { icon: '📦', title: 'Pack MCP',   desc: '已安装 ConfigPack 声明的 MCP 服务器' },
+        plugin:  { icon: '🧩', title: 'Plugin MCP', desc: '各 Client 已启用插件声明的 MCP；企业 connector 需在原 Client 侧授权' },
     });
 }
 
@@ -2680,7 +3181,8 @@ async function loadProjectPacks() {
 }
 
 function _injectPackSearchBox() {
-    const panel = document.getElementById('inner-panel-packs');
+    // ConfigPack 面板已从「Agent / 扩展」搬到「套件与插件」页
+    const panel = document.getElementById('bundle-panel-packs');
     if (!panel || panel.querySelector('#packSearchRow')) return;
     const row = document.createElement('div');
     row.id = 'packSearchRow';
@@ -2711,6 +3213,9 @@ function _renderPacksView() {
     const allAvailable = _packsCache.available;
     const installed = allInstalled.filter(p => _extItemMatches(p, tokens));
     const available = allAvailable.filter(p => _extItemMatches(p, tokens));
+
+    const tabCount = document.getElementById('bundleCountPacks');
+    if (tabCount) tabCount.textContent = allInstalled.length ? ` ${allInstalled.length}` : '';
 
     const hint = document.getElementById('packSearchHint');
     if (hint) {
@@ -3091,12 +3596,65 @@ function _filterPackDetailList() {
 }
 
 const _SOURCE_META = {
-    builtin:  { label: '内置',     color: '#6366f1', bg: 'rgba(99,102,241,.12)' },
-    project:  { label: '项目',     color: '#22c55e', bg: 'rgba(34,197,94,.12)'  },
-    user:     { label: '用户',     color: '#0ea5e9', bg: 'rgba(14,165,233,.12)'  },
-    pack:     { label: 'Pack',     color: '#f97316', bg: 'rgba(249,115,22,.12)' },
-    openspec: { label: 'OpenSpec', color: '#a855f7', bg: 'rgba(168,85,247,.12)' },
+    builtin:   { label: '内置',     color: '#6366f1', bg: 'rgba(99,102,241,.12)'  },
+    project:   { label: '项目',     color: '#22c55e', bg: 'rgba(34,197,94,.12)'   },
+    user:      { label: '用户',     color: '#0ea5e9', bg: 'rgba(14,165,233,.12)'  },
+    pack:      { label: 'Pack',     color: '#f97316', bg: 'rgba(249,115,22,.12)'  },
+    openspec:  { label: 'OpenSpec', color: '#a855f7', bg: 'rgba(168,85,247,.12)'  },
+    // Plugin 和 Pack 同类（都是内容容器），但作用域不同：Pack 是项目级、可装可卸，
+    // Plugin 是机器级、ADS 只读。颜色刻意挨着 Pack 的橙，提示是同一类东西。
+    plugin:    { label: 'Plugin',   color: '#eab308', bg: 'rgba(234,179,8,.12)'   },
+    claude:    { label: 'claude',    color: '#f59e0b', bg: 'rgba(245,158,11,.12)' },
+    codebuddy: { label: 'codebuddy', color: '#ec4899', bg: 'rgba(236,72,153,.12)' },
+    workbuddy: { label: 'workbuddy', color: '#14b8a6', bg: 'rgba(20,184,166,.12)' },
+    cursor:    { label: 'cursor',    color: '#64748b', bg: 'rgba(100,116,139,.12)' },
 };
+
+/** 来源徽章后缀：标出这条是哪个容器带进来的（Pack 名 / Plugin 名）。
+ *  Pack 和 Plugin 都是容器，光看「Plugin」不知道是哪个插件给的。 */
+function _srcSuffix(item) {
+    const owner = item.pack_name || item.plugin_name;
+    return owner ? ' · ' + escapeHtml(owner) : '';
+}
+
+// ==================== Skill 跨 Client 兼容性标识 ====================
+// 外部 CLI 目录（.cursor/.claude/...）的 Skill 能扫到 ≠ 能照原样跑：格式通用，但
+// 正文常点名宿主自己的工具名。后端 skills/compat.py 静态判断，这里只负责渲染。
+const _COMPAT_META = {
+    native:    { label: '原生可执行', icon: '⚡', color: '#a855f7', bg: 'rgba(168,85,247,.12)',
+                 hint: '声明了 x-runner，SkillRunner 可直接驱动执行' },
+    portable:  { label: '可直接用',   icon: '✅', color: '#22c55e', bg: 'rgba(34,197,94,.12)',
+                 hint: '纯知识型，无外部工具依赖，可直接注入使用' },
+    degraded:  { label: '部分依赖',   icon: '⚠️', color: '#f59e0b', bg: 'rgba(245,158,11,.12)',
+                 hint: '引用了别家 Client 的专有工具，可读但部分步骤会失效' },
+    host_only: { label: '宿主专有',   icon: '⛔', color: '#ef4444', bg: 'rgba(239,68,68,.12)',
+                 hint: '依赖原 Client 的运行时设施，脱离它基本无法使用' },
+};
+
+function _compatBadge(item, size) {
+    const cm = _COMPAT_META[item && item.compat];
+    if (!cm) return '';
+    const n = (item.compat_reasons || []).length;
+    const fs = size === 'sm' ? 10 : 11;
+    const pad = size === 'sm' ? '1px 5px' : '2px 7px';
+    const tip = n ? `${cm.hint}\n\n${item.compat_reasons.map(r => '• ' + r).join('\n')}` : cm.hint;
+    return `<span title="${escapeHtml(tip)}"
+        style="font-size:${fs}px;padding:${pad};border-radius:3px;background:${cm.bg};color:${cm.color};margin-left:4px;white-space:nowrap;">
+        ${cm.icon} ${escapeHtml(cm.label)}</span>`;
+}
+
+// 标了 disable-model-invocation 的 Skill：注入链路会把它单独归组、不让模型自选。
+// 和兼容性档位是两个正交的维度，所以单独一个徽标。
+function _manualOnlyBadge(item, size) {
+    if (!item || !item.manual_only) return '';
+    const fs = size === 'sm' ? 10 : 11;
+    const pad = size === 'sm' ? '1px 5px' : '2px 7px';
+    const tip = '标了 disable-model-invocation：AI 不会主动加载，'
+              + '只有你在消息里明确点名时才会用到它';
+    return `<span title="${escapeHtml(tip)}"
+        style="font-size:${fs}px;padding:${pad};border-radius:3px;background:rgba(100,116,139,.14);
+               color:#94a3b8;margin-left:4px;white-space:nowrap;">👆 仅显式调用</span>`;
+}
 
 // ==================== 扩展面板关键词搜索 ====================
 // 每个 Tab 各有一个搜索框（不是共用一个）：8 个面板的数据结构、来源芯片、条目
@@ -3111,13 +3669,16 @@ const _extSourceState = {};   // containerId -> 当前来源芯片（搜索时�
 const _extRerenderFn = {};    // containerId -> 重渲染函数名
 
 const _EXT_SOURCE_KEYS = ['builtin', 'project', 'user', 'pack', 'openspec'];
+// CLI 目录视图键：这些数组与 source 数组存在重叠，过滤时单独处理、不计入 total
+const _EXT_CLI_KEYS = ['claude', 'codebuddy', 'workbuddy', 'cursor'];
 
 // 参与匹配的字段：只搜元数据，不搜文件正文（content / preview）——
 // 正文命中会让「这条为什么出现在结果里」变得没法解释。
 const _EXT_SEARCH_KEYS = [
     'name', 'display_name', 'id', 'description', 'role',
     'event', 'matcher', 'command', 'globs', 'transport',
-    'cli', 'args_hint', 'pack_name', 'file', 'rel_path',
+    'cli', 'args_hint', 'pack_name', 'plugin_name', 'marketplace', 'file', 'rel_path',
+    'compat', 'compat_label', 'foreign_tools',
     'contains', 'tools', 'actions', 'matched_traits', 'targets',
 ];
 
@@ -3160,6 +3721,12 @@ function _filterExtData(containerId, data) {
         out[key] = data[key].filter(it => _extItemMatches(it, tokens));
         counts[key] = out[key].length;
         total += out[key].length;
+    }
+    // CLI 视图键：过滤但不计入 total（条目已含在 source 数组里）
+    for (const key of _EXT_CLI_KEYS) {
+        if (!Array.isArray(data[key])) continue;
+        out[key] = data[key].filter(it => _extItemMatches(it, tokens));
+        counts[key] = out[key].length;
     }
     counts.total = total;
     out.counts = counts;
@@ -3232,12 +3799,17 @@ function _injectSourceFilter(wrapper, containerId, counts, switchFn) {
         wrapper.insertBefore(bar, container);
     }
     const chips = [
-        { key: 'all',      label: '全部',   n: counts.total },
-        { key: 'builtin',  label: '内置',   n: counts.builtin },
-        { key: 'project',  label: '项目',   n: counts.project,        hide: !counts.project },
-        { key: 'user',     label: '用户',   n: counts.user,           hide: !counts.user },
-        { key: 'pack',     label: 'Pack',   n: counts.pack,           hide: !counts.pack },
-        { key: 'openspec', label: 'OpenSpec', n: counts.openspec || 0, hide: !counts.openspec },
+        { key: 'all',       label: '全部',     n: counts.total },
+        { key: 'builtin',   label: '内置',     n: counts.builtin },
+        { key: 'project',   label: '项目',     n: counts.project,        hide: !counts.project },
+        { key: 'user',      label: '用户',     n: counts.user,           hide: !counts.user },
+        { key: 'pack',      label: 'Pack',     n: counts.pack,           hide: !counts.pack },
+        { key: 'openspec',  label: 'OpenSpec', n: counts.openspec || 0,  hide: !counts.openspec },
+        { key: 'plugin',    label: 'Plugin',   n: counts.plugin || 0,    hide: !counts.plugin },
+        { key: 'claude',    label: 'claude',    n: counts.claude || 0,   hide: !counts.claude },
+        { key: 'codebuddy', label: 'codebuddy', n: counts.codebuddy || 0, hide: !counts.codebuddy },
+        { key: 'workbuddy', label: 'workbuddy', n: counts.workbuddy || 0, hide: !counts.workbuddy },
+        { key: 'cursor',    label: 'cursor',    n: counts.cursor || 0,    hide: !counts.cursor },
     ].filter(c => !c.hide);
     bar.innerHTML = chips.map(c => `
         <button class="src-filter-chip" data-panel="${containerId}" data-source="${c.key}"
@@ -3279,6 +3851,17 @@ function _toggleSourceGroup(headerEl) {
     if (chevron) chevron.style.transform = collapsed ? '' : 'rotate(-90deg)';
 }
 
+// 各面板没给某个来源写标题时的兜底。原先漏写会渲染出 "undefined undefined"，
+// 加一个来源就得改 5 处调用点才不出错 —— 这里兜住。
+const _DEFAULT_GROUP_TITLES = {
+    builtin:  { icon: '🏠', title: '内置',     desc: '' },
+    project:  { icon: '📁', title: '项目',     desc: '' },
+    user:     { icon: '👤', title: '用户',     desc: '' },
+    pack:     { icon: '📦', title: 'Pack',     desc: '已安装 ConfigPack 提供' },
+    openspec: { icon: '📐', title: 'OpenSpec', desc: '' },
+    plugin:   { icon: '🧩', title: 'Plugin',   desc: '各 AgentClient 已启用插件提供（本机级，只读）' },
+};
+
 function _renderSourceGroups(container, data, source, renderItem, groupTitles) {
     // 记住来源选择：搜索框重渲染时要沿用它，不能把用户选的芯片重置成「全部」
     const cid = container.id;
@@ -3306,21 +3889,26 @@ function _renderSourceGroups(container, data, source, renderItem, groupTitles) {
         return;
     }
     let html = '';
-    for (const key of ['builtin', 'project', 'user', 'pack', 'openspec']) {
+    for (const key of ['builtin', 'project', 'user', 'pack', 'openspec', 'plugin']) {
         const list = data[key] || [];
         if (!list.length) continue;
         const sm = _SOURCE_META[key];
-        const gt = groupTitles[key] || key;
+        const gt = groupTitles[key] || _DEFAULT_GROUP_TITLES[key] || key;
         let cardsHtml = '';
-        if (key === 'pack') {
-            const byPack = {};
+        // Pack 和 Plugin 都是容器，一个组里常混着好几个来源 —— 按容器名再分一层，
+        // 否则几十条平铺看不出哪条是谁带进来的
+        const containerField = key === 'pack' ? 'pack_name'
+                             : key === 'plugin' ? 'plugin_name' : null;
+        if (containerField) {
+            const icon = key === 'pack' ? '📦' : '🧩';
+            const byContainer = {};
             for (const item of list) {
-                const pn = item.pack_name || '未知';
-                if (!byPack[pn]) byPack[pn] = [];
-                byPack[pn].push(item);
+                const cn = item[containerField] || '未知';
+                if (!byContainer[cn]) byContainer[cn] = [];
+                byContainer[cn].push(item);
             }
-            for (const [pn, items] of Object.entries(byPack)) {
-                cardsHtml += `<div style="font-size:11px;color:var(--text-muted);padding:4px 0 2px;font-weight:600;opacity:.7;">📦 ${escapeHtml(pn)}</div>`;
+            for (const [cn, items] of Object.entries(byContainer)) {
+                cardsHtml += `<div style="font-size:11px;color:var(--text-muted);padding:4px 0 2px;font-weight:600;opacity:.7;">${icon} ${escapeHtml(cn)}</div>`;
                 cardsHtml += items.map(renderItem).join('');
             }
         } else {
@@ -3400,7 +3988,7 @@ function switchSkillSourceFilter(source) {
 function _renderSkillView(container, data, source) {
     const renderItem = (sk) => {
         const sm = _SOURCE_META[sk.source] || _SOURCE_META.builtin;
-        const srcBadge = `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:${sm.bg};color:${sm.color};margin-left:4px;">${sm.label}${sk.pack_name ? ' · '+escapeHtml(sk.pack_name) : ''}</span>`;
+        const srcBadge = `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:${sm.bg};color:${sm.color};margin-left:4px;">${sm.label}${_srcSuffix(sk)}</span>`;
         const canToggle = sk.source === 'builtin' && !!currentProjectId;
         const toggleHtml = canToggle ? `
             <label class="toggle-switch">
@@ -3408,11 +3996,11 @@ function _renderSkillView(container, data, source) {
                 <span class="toggle-slider"></span>
             </label>` : '';
         const opacity = sk.enabled === false ? ' style="opacity:0.5;cursor:pointer;"' : ' style="cursor:pointer;"';
-        const clickData = escapeHtml(JSON.stringify({name:sk.name, description:sk.description||'', source:sk.source, pack_name:sk.pack_name||null, file:sk.file||sk.id||sk.name, type:'Skill', emoji:'🎓', preview:sk.preview||'', content:sk.content||sk.preview||''}));
+        const clickData = escapeHtml(JSON.stringify({name:sk.name, description:sk.description||'', source:sk.source, cli:sk.cli||'', pack_name:sk.pack_name||null, plugin_name:sk.plugin_name||null, marketplace:sk.marketplace||'', file:sk.file||sk.id||sk.name, type:'Skill', emoji:'🎓', preview:sk.preview||'', content:sk.content||sk.preview||'', compat:sk.compat||'', compat_label:sk.compat_label||'', compat_reasons:sk.compat_reasons||[], foreign_tools:sk.foreign_tools||[], foreign_clients:sk.foreign_clients||[], manual_only:!!sk.manual_only}));
         return `<div class="skill-row"${opacity} onclick='showExtensionDetail(${clickData})'>
             <div class="skill-row-info" style="flex:1;min-width:0;">
                 <div style="display:flex;align-items:center;flex-wrap:wrap;gap:2px;">
-                    <span class="skill-row-name">🎓 ${escapeHtml(sk.name)}</span>${srcBadge}
+                    <span class="skill-row-name">🎓 ${escapeHtml(sk.name)}</span>${srcBadge}${_compatBadge(sk, 'sm')}${_manualOnlyBadge(sk, 'sm')}
                 </div>
                 ${sk.description ? `<span class="skill-row-desc">${escapeHtml(sk.description)}</span>` : ''}
             </div>
@@ -3425,6 +4013,7 @@ function _renderSkillView(container, data, source) {
         user:     { icon: '👤', title: '用户 Skill',    desc: '系统用户主目录 ~/.claude/skills/ 或 ~/.codebuddy/skills/' },
         pack:     { icon: '📦', title: 'Pack Skill',    desc: '已安装 ConfigPack 提供' },
         openspec: { icon: '📐', title: 'OpenSpec Skill', desc: '由 OpenSpec 工具提供（.codebuddy/skills/openspec-*/）' },
+        plugin:   { icon: '🧩', title: 'Plugin Skill',  desc: '各 Client 已启用插件提供（本机级，只读）' },
     });
 }
 
@@ -3478,11 +4067,11 @@ function switchCommandSourceFilter(source) {
 function _renderCommandView(container, data, source) {
     const renderItem = (cmd) => {
         const sm = _SOURCE_META[cmd.source] || _SOURCE_META.builtin;
-        const srcBadge = `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:${sm.bg};color:${sm.color};margin-left:4px;">${sm.label}${cmd.pack_name ? ' · '+escapeHtml(cmd.pack_name) : ''}</span>`;
+        const srcBadge = `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:${sm.bg};color:${sm.color};margin-left:4px;">${sm.label}${_srcSuffix(cmd)}</span>`;
         const overrideBadge = cmd.is_active === false
             ? `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:rgba(239,68,68,.12);color:#ef4444;margin-left:4px;">被覆盖</span>` : '';
         const opacity = cmd.is_active === false ? ' style="opacity:0.4;cursor:pointer;"' : ' style="cursor:pointer;"';
-        const clickData = escapeHtml(JSON.stringify({name:cmd.name, description:cmd.description||'', source:cmd.source, pack_name:cmd.pack_name||null, file:(cmd.file||cmd.name+'.md'), type:'Command', emoji:'⚡', preview:cmd.preview||'', content:cmd.content||cmd.preview||''}));
+        const clickData = escapeHtml(JSON.stringify({name:cmd.name, description:cmd.description||'', source:cmd.source, pack_name:cmd.pack_name||null, plugin_name:cmd.plugin_name||null, marketplace:cmd.marketplace||'', file:(cmd.file||cmd.name+'.md'), type:'Command', emoji:'⚡', preview:cmd.preview||'', content:cmd.content||cmd.preview||''}));
         return `<div class="skill-row"${opacity} onclick='showExtensionDetail(${clickData})'>
             <div class="skill-row-info" style="flex:1;min-width:0;">
                 <div style="display:flex;align-items:center;flex-wrap:wrap;gap:2px;">
@@ -3498,6 +4087,7 @@ function _renderCommandView(container, data, source) {
         user:     { icon: '👤', title: '用户 Command',    desc: '系统用户主目录 ~/.claude/commands/' },
         pack:     { icon: '📦', title: 'Pack Command',    desc: '已安装 ConfigPack 提供（安装后在 .claude/commands/）' },
         openspec: { icon: '📐', title: 'OpenSpec Command', desc: '由 OpenSpec 工具提供（.codebuddy/commands/opsx/）' },
+        plugin:   { icon: '🧩', title: 'Plugin Command',  desc: '各 Client 已启用插件提供（本机级，只读）' },
     });
 }
 
@@ -3529,9 +4119,9 @@ function switchRuleSourceFilter(source) {
 function _renderRulesView(container, data, source) {
     const renderItem = (rule) => {
         const sm = _SOURCE_META[rule.source] || _SOURCE_META.builtin;
-        const srcBadge = `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:${sm.bg};color:${sm.color};margin-left:4px;">${sm.label}${rule.pack_name ? ' · '+escapeHtml(rule.pack_name) : ''}</span>`;
+        const srcBadge = `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:${sm.bg};color:${sm.color};margin-left:4px;">${sm.label}${_srcSuffix(rule)}</span>`;
         const globsBadge = rule.globs ? `<code style="font-size:10px;background:var(--bg);padding:1px 4px;border-radius:3px;color:var(--text-muted);margin-left:4px;">${escapeHtml(rule.globs)}</code>` : '';
-        const clickData = escapeHtml(JSON.stringify({name:rule.name, description:rule.description||'', source:rule.source, pack_name:rule.pack_name||null, file:rule.file||'', type:'Rule', emoji:'📋', preview:rule.preview||'', content:rule.content||rule.preview||''}));
+        const clickData = escapeHtml(JSON.stringify({name:rule.name, description:rule.description||'', source:rule.source, pack_name:rule.pack_name||null, plugin_name:rule.plugin_name||null, marketplace:rule.marketplace||'', file:rule.file||'', type:'Rule', emoji:'📋', preview:rule.preview||'', content:rule.content||rule.preview||''}));
         return `<div class="skill-row" style="cursor:pointer;" onclick='showExtensionDetail(${clickData})'>
             <div class="skill-row-info" style="flex:1;min-width:0;">
                 <div style="display:flex;align-items:center;flex-wrap:wrap;gap:2px;">
@@ -3546,6 +4136,7 @@ function _renderRulesView(container, data, source) {
         project: { icon: '📁', title: '项目 Rule',  desc: '项目仓库 .claude/rules/ 或 CLAUDE.md' },
         user:    { icon: '👤', title: '用户 Rule',  desc: '系统用户主目录 ~/.claude/rules/' },
         pack:    { icon: '📦', title: 'Pack Rule',  desc: '已安装 ConfigPack 提供' },
+        plugin:  { icon: '🧩', title: 'Plugin Rule', desc: '各 Client 已启用插件的 rules/（本机级，只读）' },
     });
 }
 
@@ -3588,7 +4179,7 @@ function _renderHooksView(container, data, source) {
     };
     const renderItem = (h) => {
         const sm = _SOURCE_META[h.source] || _SOURCE_META.builtin;
-        const srcBadge = `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:${sm.bg};color:${sm.color};margin-left:4px;">${sm.label}${h.pack_name ? ' · '+escapeHtml(h.pack_name) : ''}</span>`;
+        const srcBadge = `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:${sm.bg};color:${sm.color};margin-left:4px;">${sm.label}${_srcSuffix(h)}</span>`;
         const evtColor = EVENT_COLOR[h.event] || 'var(--text-muted)';
         const evtBadge = `<span style="font-size:10px;padding:1px 6px;border-radius:3px;background:${evtColor}22;color:${evtColor};font-weight:600;">${escapeHtml(h.event)}</span>`;
         const matcherBadge = h.matcher ? `<code style="font-size:10px;background:var(--bg);padding:1px 4px;border-radius:3px;color:var(--text-muted);margin-left:4px;">${escapeHtml(h.matcher)}</code>` : '';
@@ -3597,7 +4188,9 @@ function _renderHooksView(container, data, source) {
         const fileBadge = displayFile ? _renderFileBadge(h.file || '', displayFile) : '';
         const clickData = escapeHtml(JSON.stringify({
             name: h.name, description: h.command || '', source: h.source,
-            pack_name: h.pack_name || null, file: h.file || '',
+            pack_name: h.pack_name || null, plugin_name: h.plugin_name || null,
+            marketplace: h.marketplace || '', plugin_root: h.plugin_root || '',
+            file: h.file || '',
             rel_path: h.rel_path || '',
             type: 'Hook', emoji: '🪝',
             preview: h.command || '', content: h.content || h.command || '',
@@ -3616,6 +4209,7 @@ function _renderHooksView(container, data, source) {
         builtin: { icon: '🏠', title: '内置 Hook',  desc: '系统用户目录 ~/.claude/settings.json 中的 hooks' },
         project: { icon: '📁', title: '项目 Hook',  desc: '项目 .claude/.codebuddy/settings.json 中的 hooks' },
         pack:    { icon: '📦', title: 'Pack Hook',  desc: '已安装 ConfigPack 提供的 hooks' },
+        plugin:  { icon: '🧩', title: 'Plugin Hook', desc: '各 Client 已启用插件的 hooks/（命令里的 ${..PLUGIN_ROOT} 由宿主 Client 注入）' },
     });
 }
 
@@ -3628,19 +4222,23 @@ let _extDetailActiveIdx = 0;
 
 function _registerExtItems(data, groupTitles) {
     _extDetailRegistry = [];
-    for (const key of ['builtin', 'project', 'user', 'pack', 'openspec']) {
+    // 分组顺序必须和 _renderSourceGroups 一致 —— 详情弹窗左侧列表靠下标定位，
+    // 顺序对不上会点开错的条目
+    for (const key of ['builtin', 'project', 'user', 'pack', 'openspec', 'plugin']) {
         const list = data[key] || [];
         if (!list.length) continue;
-        const gt = groupTitles[key] || { title: key, icon: '' };
-        if (key === 'pack') {
-            const byPack = {};
+        const gt = groupTitles[key] || _DEFAULT_GROUP_TITLES[key] || { title: key, icon: '' };
+        const containerField = key === 'pack' ? 'pack_name'
+                             : key === 'plugin' ? 'plugin_name' : null;
+        if (containerField) {
+            const byContainer = {};
             for (const item of list) {
-                const pn = item.pack_name || '未知';
-                if (!byPack[pn]) byPack[pn] = [];
-                byPack[pn].push(item);
+                const cn = item[containerField] || '未知';
+                if (!byContainer[cn]) byContainer[cn] = [];
+                byContainer[cn].push(item);
             }
-            for (const [pn, items] of Object.entries(byPack)) {
-                const groupLabel = `${gt.icon} ${gt.title} · ${pn}`;
+            for (const [cn, items] of Object.entries(byContainer)) {
+                const groupLabel = `${gt.icon} ${gt.title} · ${cn}`;
                 for (const item of items) _extDetailRegistry.push({ group: groupLabel, item });
             }
         } else {
@@ -3788,7 +4386,7 @@ function _renderExtDetailPane(item, activeIdx) {
     document.getElementById('extDetailTitle').textContent = `${item.emoji || '📄'} ${item.name}`;
 
     const sm = _SOURCE_META[item.source] || _SOURCE_META.builtin;
-    const srcBadge = `<span style="font-size:11px;padding:2px 7px;border-radius:3px;background:${sm.bg};color:${sm.color};">${sm.label}${item.pack_name ? ' · '+escapeHtml(item.pack_name) : ''}</span>`;
+    const srcBadge = `<span style="font-size:11px;padding:2px 7px;border-radius:3px;background:${sm.bg};color:${sm.color};">${sm.label}${_srcSuffix(item)}</span>`;
     const typeBadge = item.type ? `<span style="font-size:11px;padding:2px 7px;border-radius:3px;background:var(--bg-elevated);color:var(--text-muted);">${escapeHtml(item.type)}</span>` : '';
 
     const rawFile = item.file || '';
@@ -3800,12 +4398,50 @@ function _renderExtDetailPane(item, activeIdx) {
     const rawContent = item.content || item.preview || '';
     const bodyText = rawContent.replace(/^---[\s\S]*?---\r?\n?/, '').trim();
 
+    // 兼容性说明：只有判定出结论且有具体理由时才展开，portable 无理由则只留徽章
+    const cm = _COMPAT_META[item.compat];
+    const reasons = item.compat_reasons || [];
+    const cliBadge = item.cli
+        ? `<span style="font-size:11px;padding:2px 7px;border-radius:3px;background:${(_SOURCE_META[item.cli]||{}).bg||'var(--bg-elevated)'};color:${(_SOURCE_META[item.cli]||{}).color||'var(--text-muted)'};">${escapeHtml(item.cli)}</span>`
+        : '';
+    let compatBlock = '';
+    if (cm && reasons.length) {
+        const tools = (item.foreign_tools || []);
+        compatBlock = `
+        <div style="margin:10px 0;padding:9px 11px;border-radius:6px;background:${cm.bg};border-left:3px solid ${cm.color};">
+            <div style="font-size:12px;font-weight:600;color:${cm.color};margin-bottom:5px;">
+                ${cm.icon} ${escapeHtml(cm.label)} — ${escapeHtml(cm.hint)}
+            </div>
+            <ul style="margin:0;padding-left:17px;font-size:11.5px;color:var(--text-secondary);line-height:1.65;">
+                ${reasons.map(r => `<li>${escapeHtml(r)}</li>`).join('')}
+            </ul>
+            ${tools.length ? `<div style="margin-top:6px;font-size:11px;color:var(--text-muted);">
+                外部工具：${tools.map(t => `<code style="font-size:10.5px;">${escapeHtml(t)}</code>`).join('、')}
+            </div>` : ''}
+        </div>`;
+    } else if (cm) {
+        compatBlock = `
+        <div style="margin:10px 0;padding:7px 11px;border-radius:6px;background:${cm.bg};border-left:3px solid ${cm.color};
+                    font-size:12px;color:${cm.color};">
+            ${cm.icon} ${escapeHtml(cm.label)} — ${escapeHtml(cm.hint)}
+        </div>`;
+    }
+    if (item.manual_only) {
+        compatBlock += `
+        <div style="margin:10px 0;padding:7px 11px;border-radius:6px;background:rgba(100,116,139,.1);
+                    border-left:3px solid #94a3b8;font-size:12px;color:var(--text-secondary);">
+            👆 仅显式调用 — 声明了 <code style="font-size:10.5px;">disable-model-invocation</code>，
+            AI 不会主动加载，只有你在消息里明确点名时才会用到
+        </div>`;
+    }
+
     const pane = document.getElementById('extDetailPane');
     pane.innerHTML = `
         <div style="margin-bottom:12px;">
             <div style="font-size:15px;font-weight:600;margin-bottom:4px;">${item.emoji ? escapeHtml(item.emoji)+' ' : ''}${escapeHtml(item.name)}</div>
             ${item.description ? `<div style="font-size:12px;color:var(--text-secondary);margin-bottom:6px;">${escapeHtml(item.description)}</div>` : ''}
-            <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">${srcBadge}${typeBadge}${filePath}</div>
+            <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">${srcBadge}${cliBadge}${typeBadge}${filePath}</div>
+            ${compatBlock}
         </div>
         <hr style="border:none;border-top:1px solid var(--border-color);margin:10px 0;">
         <div id="extDetailContent" class="md-preview md-compact"></div>`;
@@ -4576,7 +5212,7 @@ const NAV_GROUPS = {
     tickets:   { tabs: ['board', 'ticket-list', 'ticket-graph', 'bugs'], defaultTab: 'board' },
     flow:      { tabs: ['flow', 'roadmap', 'cicd'], defaultTab: 'flow' },
     files:     { tabs: ['repo'], defaultTab: 'repo' },
-    agent:     { tabs: ['agents', 'settings-agents'], defaultTab: 'agents' },
+    agent:     { tabs: ['agents', 'settings-agents', 'bundles'], defaultTab: 'agents' },
     knowledge: { tabs: ['settings-knowledge', 'settings-assets'], defaultTab: 'settings-knowledge' },
     settings:  { tabs: ['stats', 'logs', 'settings-general', 'settings-repo', 'settings-sop', 'settings-danger'], defaultTab: 'stats' },
 };
@@ -6473,14 +7109,20 @@ let _pendingPackHighlight = '';
 
 function openCapabilityInstallPage(inner) {
     const tab = inner === 'openspec' ? 'openspec' : 'packs';
-    if (tab === 'packs') _pendingPackHighlight = 'superpowers';
     if (typeof closeDrawer === 'function') closeDrawer();
-    switchTab('settings-agents');
-    switchAgentConfigTab(tab);
+    // OpenSpec 还在「Agent / 扩展」的 inner-tab 里，ConfigPack 搬到了「套件与插件」页
+    if (tab === 'openspec') {
+        switchTab('settings-agents');
+        switchAgentConfigTab('openspec');
+    } else {
+        _pendingPackHighlight = 'superpowers';
+        switchTab('bundles');
+        switchBundleTab('packs');
+    }
     const scrollToInstall = () => {
         const target = tab === 'openspec'
             ? (document.getElementById('openspecActionsCard') || document.getElementById('inner-panel-openspec'))
-            : (document.getElementById('availablePacksList') || document.getElementById('inner-panel-packs'));
+            : (document.getElementById('availablePacksList') || document.getElementById('bundle-panel-packs'));
         target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
         if (tab === 'packs') _applyPendingPackHighlight();
     };
@@ -6727,9 +7369,9 @@ function _buildThreeLayerBar(hasSP, hasOS, ticketData) {
           jumpActions: 'design_architecture', jumpStatuses: 'architecture_done,architecture_in_progress' },
         { keys: ['development', 'development_in_progress', 'development_done',
                  'engine_compile_pending', 'engine_compile_failed', 'engine_compile_passed',
-                 'self_test_failed', 'blocked', 'cancelled'], label: '开发',
+                 'self_test_failed', 'development_failed', 'blocked', 'cancelled'], label: '开发',
           jumpActions: 'develop,rework,fix_issues',
-          jumpStatuses: 'development_done,development_in_progress,engine_compile_failed,self_test_failed' },
+          jumpStatuses: 'development_done,development_in_progress,engine_compile_failed,self_test_failed,development_failed' },
         { keys: ['testing', 'testing_in_progress', 'testing_failed', 'play_test_failed',
                  'play_test_passed'], label: '测试',
           jumpActions: 'run_tests',
@@ -7280,6 +7922,21 @@ async function _loadUnifiedTimeline(ticketId) {
 function _renderUnifiedTimeline(container, items) {
     if (!container) return;
     _lastTimelineItems = items;
+    // 先把 logId → taskId 索引建好，再渲染 —— 条目上的「📟 后台记录」链接查的就是它。
+    // 不能等用户打开后台任务面板才建：那时时间轴早渲染完了，链接一个都不会出现。
+    // 建表函数吃 DESC（内部自己 reverse），时间轴是 ASC，所以倒过来喂。
+    try { _buildTicketTasksFromLogs([...items].reverse()); } catch (e) { console.warn('任务索引构建失败', e); }
+    // 后端标的 _task_ref 收进索引：openTaskFromLog 只拿得到 (ticketId, logId)，
+    // 拿不到 item 本身，所以得先把映射落下来。
+    try {
+        for (const it of items) {
+            if (!it || !it._task_ref || !it.id) continue;
+            const tid = it.ticket_id || _currentTimelineTicketId || '';
+            if (!tid) continue;
+            (_TICKET_CMD_REF[tid] = _TICKET_CMD_REF[tid] || {})[it.id] = it._task_ref;
+        }
+    } catch (e) { console.warn('命令记录索引构建失败', e); }
+
     // 换工单/重新加载时清掉展开状态，否则 id 会错位到别的组
     _expandedTimelineGroups = new Set();
     _stageOpenState = {};
@@ -10894,6 +11551,338 @@ async function loadFlowPage() {
     }
 }
 
+// ==================== 对话追踪（trace） ====================
+// 「一次对话」= 一个 turn_id。这里把某个 session 里所有 turn 展开，
+// 让你能看到「用户发这句话之后，AI 内部跑了哪些 LLM 调用（含 Compaction
+// 那种嵌套调用）、执行了哪些工具」。数据来自 /api/chat/sessions/{id}/trace。
+let _chatTraceSessions = [];
+let _chatTraceCurrentSid = null;
+let _chatTraceLastData = null;
+
+async function loadChatTrace() {
+    // 1. 拉 session 列表（当前项目；全局会话由 project_id=null 表示）
+    const sel = document.getElementById('chatTraceSessionSel');
+    const body = document.getElementById('chatTraceBody');
+    if (!sel || !body) return;
+    if (!currentProjectId) {
+        body.innerHTML = '<div class="chat-trace-empty">请先进入一个项目。</div>';
+        return;
+    }
+    body.innerHTML = '<div class="chat-trace-empty">加载会话列表…</div>';
+    try {
+        // 项目会话在 project-scoped 路由：/api/projects/{pid}/chat/sessions
+        // （全局会话在 /api/chat/sessions，是另一条路由，两者互不含）
+        const r = await fetch(`${API}/projects/${encodeURIComponent(currentProjectId)}/chat/sessions?project_id=${encodeURIComponent(currentProjectId)}&limit=100`);
+        const d = await r.json();
+        _chatTraceSessions = d.sessions || [];
+    } catch (e) {
+        body.innerHTML = `<div class="chat-trace-empty">加载会话失败：${escHtml(e.message)}</div>`;
+        return;
+    }
+    if (!_chatTraceSessions.length) {
+        sel.innerHTML = '<option value="">（暂无会话）</option>';
+        body.innerHTML = '<div class="chat-trace-empty">这个项目还没有聊天会话。到右边的聊天面板发条消息就会有了。</div>';
+        return;
+    }
+    sel.innerHTML = _chatTraceSessions.map(s => {
+        const title = escHtml(s.title || '(无标题)');
+        const cnt = s.message_count || 0;
+        const when = (s.updated_at || '').slice(5, 16).replace('T', ' ');
+        return `<option value="${escHtml(s.id)}">${title} · ${cnt} 条 · ${when}</option>`;
+    }).join('');
+    // 保持之前选中的 session，找不到就用第一个
+    if (!_chatTraceCurrentSid || !_chatTraceSessions.some(s => s.id === _chatTraceCurrentSid)) {
+        _chatTraceCurrentSid = _chatTraceSessions[0].id;
+    }
+    sel.value = _chatTraceCurrentSid;
+    await loadChatTraceDetail();
+}
+
+async function loadChatTraceDetail() {
+    const sel = document.getElementById('chatTraceSessionSel');
+    const body = document.getElementById('chatTraceBody');
+    const meta = document.getElementById('chatTraceMeta');
+    if (!sel || !body) return;
+    const sid = sel.value;
+    if (!sid) return;
+    _chatTraceCurrentSid = sid;
+    body.innerHTML = '<div class="chat-trace-empty">加载对话轨迹…</div>';
+    if (meta) meta.textContent = '';
+    try {
+        const url = `${API}/projects/${encodeURIComponent(currentProjectId)}/chat/sessions/${encodeURIComponent(sid)}/trace`;
+        const r = await fetch(url);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        _chatTraceLastData = await r.json();
+    } catch (e) {
+        body.innerHTML = `<div class="chat-trace-empty">加载失败：${escHtml(e.message)}</div>`;
+        return;
+    }
+    renderChatTrace(_chatTraceLastData);
+}
+
+function renderChatTrace(data) {
+    const body = document.getElementById('chatTraceBody');
+    const meta = document.getElementById('chatTraceMeta');
+    if (!body) return;
+    _renderChatTraceInto(data, body, meta);
+}
+
+function _renderTraceTurn(turn, idx) {
+    const started = (turn.started_at || '').slice(11, 19);
+    const userMsg = (turn.messages || []).find(m => m.role === 'user');
+    const asstMsg = (turn.messages || []).find(m => m.role === 'assistant');
+    const preview = userMsg ? escHtml((userMsg.content || '').trim().slice(0, 80)) : '(无用户消息)';
+    const llms = turn.llm_calls || [];
+    const tools = turn.tool_calls || [];
+    const end = turn.session_end;
+
+    // 事件流：LLM / 工具 / SESSION_END 按 started_at 排序合并
+    const events = [];
+    llms.forEach(l => events.push({ kind: 'llm', ts: l.started_at || l.created_at, data: l }));
+    tools.forEach(t => events.push({ kind: 'tool', ts: t.started_at || t.created_at, data: t }));
+    if (end) events.push({ kind: 'end', ts: end.started_at || end.created_at, data: end });
+    events.sort((a, b) => (a.ts || '').localeCompare(b.ts || ''));
+
+    const stats = `<span>tokens ${turn.total_input_tokens || 0}→${turn.total_output_tokens || 0}</span>` +
+                  ((turn.total_cost_usd || 0) > 0 ? `<span>$${turn.total_cost_usd.toFixed(4)}</span>` : '') +
+                  `<span>${llms.length} 次 LLM · ${tools.length} 次工具</span>`;
+
+    return `
+        <details class="trace-turn" open>
+            <summary class="trace-turn-head">
+                <span class="trace-turn-idx">#${idx}</span>
+                <span class="trace-turn-time">${started || '--:--:--'}</span>
+                <span class="trace-turn-title">${preview || '(空)'}</span>
+                <span class="trace-turn-stats">${stats}</span>
+            </summary>
+            <div class="trace-turn-body">
+                ${userMsg ? _renderTraceMessage(userMsg) : ''}
+                <div class="trace-events">
+                    ${events.map(e => _renderTraceEvent(e)).join('') || '<div class="trace-empty-events">（无 LLM / 工具调用）</div>'}
+                </div>
+                ${asstMsg ? _renderTraceMessage(asstMsg) : ''}
+            </div>
+        </details>
+    `;
+}
+
+function _renderTraceEvent(ev) {
+    const ts = (ev.ts || '').slice(11, 19);
+    if (ev.kind === 'llm') {
+        const l = ev.data;
+        const action = escHtml(l.action || '');
+        const model = escHtml(l.model || '');
+        const dur = l.duration_ms ? `${l.duration_ms}ms` : '';
+        const tokens = `${l.input_tokens || 0}→${l.output_tokens || 0}`;
+        const cost = (l.cost_usd || 0) > 0 ? ` · $${Number(l.cost_usd).toFixed(4)}` : '';
+        const isCompact = action === 'compact_history';
+        const badge = isCompact ? '<span class="trace-badge trace-badge-nested">嵌套 · 压缩</span>' : '';
+        return `<div class="trace-ev trace-ev-llm ${isCompact ? 'trace-ev-nested' : ''}">
+            <span class="trace-ev-time">${ts}</span>
+            <span class="trace-ev-icon">🤖</span>
+            <span class="trace-ev-main">${action || 'llm'} <span class="trace-ev-sub">${model}</span> ${badge}</span>
+            <span class="trace-ev-meta">${tokens} · ${dur}${cost}</span>
+        </div>`;
+    }
+    if (ev.kind === 'tool') {
+        const t = ev.data;
+        const name = escHtml(t.tool_name || '');
+        const inp = escHtml((t.input_summary || '').slice(0, 80));
+        const out = escHtml((t.output_summary || '').slice(0, 80));
+        const dur = t.duration_ms ? `${Math.round(t.duration_ms)}ms` : '';
+        const bad = t.success ? '' : ' trace-ev-fail';
+        const errBlob = t.error_msg ? `<div class="trace-ev-err">${escHtml(t.error_msg.slice(0, 200))}</div>` : '';
+        return `<div class="trace-ev trace-ev-tool${bad}">
+            <span class="trace-ev-time">${ts}</span>
+            <span class="trace-ev-icon">🔧</span>
+            <span class="trace-ev-main">${name} ${inp ? `<span class="trace-ev-sub">${inp}</span>` : ''}</span>
+            <span class="trace-ev-meta">${dur}</span>
+            ${out ? `<div class="trace-ev-out">→ ${out}</div>` : ''}
+            ${errBlob}
+        </div>`;
+    }
+    // session_end
+    const t = ev.data;
+    const reason = escHtml((t.output_summary || '').replace(/^reason:/, ''));
+    const stats = escHtml(t.input_summary || '');
+    return `<div class="trace-ev trace-ev-end">
+        <span class="trace-ev-time">${ts}</span>
+        <span class="trace-ev-icon">🏁</span>
+        <span class="trace-ev-main">query_engine:done <span class="trace-ev-sub">${reason}</span></span>
+        <span class="trace-ev-meta">${stats}</span>
+    </div>`;
+}
+
+function _renderTraceMessage(m) {
+    const role = m.role === 'user' ? '👤 用户' : '🤖 助手';
+    const cls = m.role === 'user' ? 'trace-msg-user' : 'trace-msg-asst';
+    const ts = (m.created_at || '').slice(11, 19);
+    const thinkHtml = _renderTraceThinking(m);
+    return `<div class="trace-msg ${cls}">
+        <span class="trace-msg-head">${role}<span class="trace-msg-time">${ts}</span></span>
+        <div class="trace-msg-body">${escHtml((m.content || '').slice(0, 500))}</div>
+        ${thinkHtml}
+    </div>`;
+}
+
+/** trace 页专用的思考渲染：只抽 reasoning 文本
+ *  聊天面板那份把工具步骤也塞进思考里，但 trace 已经把每一次工具调用作为独立
+ *  event 展示了，这里再画一遍就是重复。旧的平铺格式（纯工具列表、无 reasoning）
+ *  在这里直接为空 —— 那些步骤 event 也覆盖到了。
+ */
+function _renderTraceThinking(m) {
+    if (m.role !== 'assistant') return '';
+    const thinking = m.thinking;
+    if (!Array.isArray(thinking) || !thinking.length) return '';
+
+    const chunks = [];
+    for (const r of thinking) {
+        if (!r || typeof r !== 'object') continue;
+        if (r.reasoning && String(r.reasoning).trim()) {
+            chunks.push({ round: r.round, text: String(r.reasoning) });
+        }
+        // 新格式：events 里 type='thinking' 的 text 段（穿插在工具调用之间）
+        if (Array.isArray(r.events)) {
+            for (const ev of r.events) {
+                if (ev && ev.type === 'thinking' && ev.text && String(ev.text).trim()
+                    && ev.text !== r.reasoning) {  // 避免和 reasoning 重复
+                    chunks.push({ round: r.round, text: String(ev.text) });
+                }
+            }
+        }
+    }
+    if (!chunks.length) return '';
+
+    const first = chunks[0].text.replace(/\s+/g, ' ').slice(0, 80);
+    const preview = escHtml(first) + (chunks[0].text.length > 80 ? '…' : '');
+    const body = chunks.map(c => `
+        <div class="trace-think-round">
+            ${c.round != null ? `<span class="trace-think-badge">R${c.round}</span>` : ''}
+            <div class="trace-think-text">${escHtml(c.text)}</div>
+        </div>
+    `).join('');
+    return `<details class="trace-think">
+        <summary class="trace-think-head">
+            <span class="trace-think-icon">✦</span>
+            <span>思考过程 · ${chunks.length} 段</span>
+            <span class="trace-think-preview">${preview}</span>
+        </summary>
+        <div class="trace-think-body">${body}</div>
+    </details>`;
+}
+
+// ==================== 全局对话追踪 modal（项目列表页入口）====================
+// 项目内 AI 助手的会话在项目详情页看；全局 AI 助手（chat_sessions.project_id
+// IS NULL）的会话只能在这里看。两个 scope 从不混，是用户的明确选择。
+let _globalChatTraceSessions = [];
+let _globalChatTraceCurrentSid = null;
+
+function showGlobalChatTraceModal() {
+    const modal = document.getElementById('globalChatTraceModal');
+    if (!modal) return;
+    modal.style.display = 'flex';
+    loadGlobalChatTrace();
+}
+
+function closeGlobalChatTraceModal() {
+    const modal = document.getElementById('globalChatTraceModal');
+    if (modal) modal.style.display = 'none';
+}
+
+async function loadGlobalChatTrace() {
+    const sel = document.getElementById('globalChatTraceSessionSel');
+    const body = document.getElementById('globalChatTraceBody');
+    if (!sel || !body) return;
+    body.innerHTML = '<div class="chat-trace-empty">加载全局会话列表…</div>';
+    try {
+        // 全局会话在 /api/chat/sessions（`global_chat_router`），
+        // 它的实现是 list_global_sessions，写死 `WHERE project_id IS NULL`，
+        // 不接受 project_id 参数
+        const r = await fetch(`${API}/chat/sessions?limit=100`);
+        const d = await r.json();
+        _globalChatTraceSessions = d.sessions || [];
+    } catch (e) {
+        body.innerHTML = `<div class="chat-trace-empty">加载失败：${escHtml(e.message)}</div>`;
+        return;
+    }
+    if (!_globalChatTraceSessions.length) {
+        sel.innerHTML = '<option value="">（暂无全局会话）</option>';
+        body.innerHTML = '<div class="chat-trace-empty">还没有全局 AI 助手会话。到项目列表页的全局 AI 助手发条消息就会有了。</div>';
+        return;
+    }
+    sel.innerHTML = _globalChatTraceSessions.map(s => {
+        const title = escHtml(s.title || '(无标题)');
+        const cnt = s.message_count || 0;
+        const when = (s.updated_at || '').slice(5, 16).replace('T', ' ');
+        return `<option value="${escHtml(s.id)}">${title} · ${cnt} 条 · ${when}</option>`;
+    }).join('');
+    if (!_globalChatTraceCurrentSid || !_globalChatTraceSessions.some(s => s.id === _globalChatTraceCurrentSid)) {
+        _globalChatTraceCurrentSid = _globalChatTraceSessions[0].id;
+    }
+    sel.value = _globalChatTraceCurrentSid;
+    await loadGlobalChatTraceDetail();
+}
+
+async function loadGlobalChatTraceDetail() {
+    const sel = document.getElementById('globalChatTraceSessionSel');
+    const body = document.getElementById('globalChatTraceBody');
+    const meta = document.getElementById('globalChatTraceMeta');
+    if (!sel || !body) return;
+    const sid = sel.value;
+    if (!sid) return;
+    _globalChatTraceCurrentSid = sid;
+    body.innerHTML = '<div class="chat-trace-empty">加载对话轨迹…</div>';
+    if (meta) meta.textContent = '';
+    let data;
+    try {
+        // 全局 trace 端点：/api/chat/sessions/{sid}/trace（get_global_session_trace）
+        const r = await fetch(`${API}/chat/sessions/${encodeURIComponent(sid)}/trace`);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        data = await r.json();
+    } catch (e) {
+        body.innerHTML = `<div class="chat-trace-empty">加载失败：${escHtml(e.message)}</div>`;
+        return;
+    }
+    _renderChatTraceInto(data, body, meta);
+}
+
+// 把渲染逻辑抽出来，两个入口（项目内 tab / 全局 modal）共用
+function _renderChatTraceInto(data, bodyEl, metaEl) {
+    const turns = data.turns || [];
+    const orphans = data.orphan_messages || [];
+
+    if (metaEl) {
+        const totalIn = turns.reduce((a, t) => a + (t.total_input_tokens || 0), 0);
+        const totalOut = turns.reduce((a, t) => a + (t.total_output_tokens || 0), 0);
+        const totalCost = turns.reduce((a, t) => a + (t.total_cost_usd || 0), 0);
+        metaEl.innerHTML =
+            `<span>共 ${turns.length} 轮</span>` +
+            `<span>tokens ${totalIn}→${totalOut}</span>` +
+            (totalCost > 0 ? `<span>$${totalCost.toFixed(4)}</span>` : '') +
+            (orphans.length ? `<span class="chat-trace-warn">${orphans.length} 条未追踪</span>` : '');
+    }
+
+    if (!turns.length && !orphans.length) {
+        bodyEl.innerHTML = '<div class="chat-trace-empty">这个会话还没有可追踪的对话（可能都是老数据，没有 turn_id）。</div>';
+        return;
+    }
+
+    const parts = [];
+    turns.forEach((t, i) => parts.push(_renderTraceTurn(t, i + 1)));
+    if (orphans.length) {
+        parts.push(`<div class="trace-turn trace-turn-orphan">
+            <div class="trace-turn-head">
+                <span class="trace-turn-badge">未追踪</span>
+                <span class="trace-turn-title">${orphans.length} 条老消息（无 turn_id）</span>
+            </div>
+            <div class="trace-turn-body">
+                ${orphans.map(m => _renderTraceMessage(m)).join('')}
+            </div>
+        </div>`);
+    }
+    bodyEl.innerHTML = parts.join('');
+}
+
 async function loadStats() {
     if (!currentProjectId) return;
     const grid = document.getElementById('statsGrid');
@@ -11222,6 +12211,8 @@ function _renderLayerLogItem(log, meta) {
                 <span class="log-agent" style="color:${color};">${escHtml(meta.label)}${cpTrigger ? ` · ${escHtml(cpTrigger)}` : ''}</span>
                 ${hasExpand ? `<span class="log-expand-link" style="font-size:10px;color:${color};opacity:.6;">展开 ▼</span>` : ''}
                 ${restoreBtn}
+                ${_taskLinkHtml(log)}
+                ${_chatLinkHtml(log)}
                 <span class="log-time">${formatTime(log.created_at)}</span>
             </div>
             ${detail ? `<div style="font-size:11px;color:var(--text-muted);margin-top:2px;">${detail}</div>` : ''}
@@ -11371,16 +12362,10 @@ function renderLogItem(log) {
             }
 
             if (fileNames.length) {
-                const ticketId = log.ticket_id || '';
-                const totalCount = d.file_count || d.files_count || fileNames.length;
-                fileChipsHtml = `<div class="thought-files">${fileNames.map((f, i) => {
-                    const fullPath = filePaths[i] || f;
-                    const hasPath = fullPath !== f || f.includes('/');
-                    const onClick = hasPath
-                        ? `event.stopPropagation();showFileDiff('${escHtml(ticketId)}','${escHtml(fullPath)}','${escHtml(f)}')`
-                        : `event.stopPropagation();showToast('老日志未记录完整路径，请查看产出文件区', 'info')`;
-                    return `<span class="thought-file-chip" title="${escHtml(fullPath)}" onclick="${onClick}">📄 ${escHtml(f)}</span>`;
-                }).join('')}${totalCount > fileNames.length ? `<span class="thought-file-chip more">+${totalCount - fileNames.length} 个</span>` : ''}</div>`;
+                fileChipsHtml = _renderFileChips(
+                    fileNames, filePaths, log.ticket_id || '',
+                    d.file_count || d.files_count || fileNames.length,
+                );
             }
         } catch {}
     }
@@ -11470,6 +12455,8 @@ function renderLogItem(log) {
                     <span class="log-status-change">
                         ${getStatusLabel(log.from_status)} <span class="arrow">→</span> ${getStatusLabel(log.to_status)}
                     </span>` : ''}
+                ${_taskLinkHtml(log)}
+                ${_chatLinkHtml(log)}
                 <span class="log-time">${formatTime(log.created_at)}</span>
                 <button class="log-comment-btn" title="评论此记录"
                     onclick="event.stopPropagation();toggleLogCommentBox('${commentBoxId}')">💬</button>
@@ -11488,6 +12475,136 @@ function renderLogItem(log) {
 // **伪元素接不了事件**，所以点上去没反应 —— 看着像控件、其实是装饰。
 // 这里在同样的位置铺一个真实的 `<span>` 热区（比圆点大一圈，好点），
 // 圆点本身仍由伪元素画，视觉完全不变。
+
+// ==================== 日志 → 后台任务面板 跳转 ====================
+// 时间轴上「UBT 编译通过 (497s)」「完成 run_engine_compile」这类条目，
+// 背后都有一份完整的控制台输出躺在后台任务面板里 —— 但之前没有任何入口，
+// 只能自己开面板、在一串同名任务里靠时间戳猜是哪一条。
+//
+// 链接查的是 _TICKET_TASK_INDEX（建表时顺带产出的 logId → taskId 映射），
+// **不是**另写一份判据去预测建表规则。第一版就是那么写的，结果规则漏收
+// UE 那几类日志时判据跟着漏，截图里 UBT 编译那条反而没链接 —— 两份判据
+// 只要各写各的，早晚对不上。现在只有一份规则，索引是它的副产物。
+
+/** 日志条目上的「📟 后台记录」链接；索引里没有就不渲染（不留死链） */
+function _taskLinkHtml(log) {
+    const taskId = _logTaskId(log);
+    if (!taskId) return '';
+    const tid = log.ticket_id || _currentTimelineTicketId || '';
+    if (!tid) return '';
+    return `<span class="log-task-link" title="在后台任务面板查看这次执行的完整控制台输出"
+        onclick="event.stopPropagation();openTaskFromLog('${escHtml(tid)}','${escHtml(log.id)}')">📟 后台记录</span>`;
+}
+
+/**
+ * 打开后台任务面板并选中这条日志对应的任务。
+ * 面板是按工单过滤的（_tasksTicketFilter），所以先带着 ticketId 开，
+ * 再在列表里把对应任务滚出来点上。
+ */
+async function openTaskFromLog(ticketId, logId) {
+    if (!ticketId || !logId) return;
+    // 走索引而不是拼 'titk-'+logId：tool_start 那类条目指向的是**配对后**
+    // 那条 tool_done 建出的任务，id 里的 logId 不是自己
+    const taskId = (_TICKET_CMD_REF[ticketId] || {})[logId]
+                || (_TICKET_TASK_INDEX[ticketId] || {})[logId]
+                || ('titk-' + logId);
+    await _openTicketTasksPanel(ticketId);   // 内部会 _refreshTasksPanel，填好 _CLI_TASKS_MEM
+
+    // 内存表 vs 列表是两回事：_refreshTasksPanelInner 先把**全部**合成任务写进
+    // _CLI_TASKS_MEM，之后才按状态 tab 过滤渲染列表。所以：
+    //   · mem 里没有 → 这条日志压根没建出任务
+    //   · mem 里有、列表里没有 → 只是被状态 tab 挡住了，把 tab 拨回「全部」即可
+    const task = _CLI_TASKS_MEM[taskId];
+    if (!task) {
+        showToast('这条记录没有对应的后台任务', 'warning');
+        return;
+    }
+
+    const rowSel = `.tasks-panel-item[data-task-id="${CSS.escape(taskId)}"]`;
+    if (!document.querySelector(rowSel)) {
+        // 停在「失败」tab 却点了条成功任务 —— 自动拨回「全部」，
+        // 否则输出区显示了内容、左边列表却选不中，看着像错位。
+        const allTab = document.querySelector('.tasks-tab[data-filter="all"]');
+        if (allTab && !allTab.classList.contains('active')) {
+            document.querySelectorAll('.tasks-tab').forEach(b => b.classList.toggle('active', b === allTab));
+            await _refreshTasksPanel();
+        }
+    }
+
+    await _selectTaskItem(task);
+    // 列表可能很长，把选中项滚进视野
+    document.querySelector(rowSel)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+
+// ==================== 日志 → 工单对话 跳转 ====================
+// 时间轴和「工单对话」讲的是同一件事的两个视角：时间轴是全量流水（27300 条日志），
+// 对话是给人读的叙事（其中 20284 条 + LLM 回复 + 评论）。看时间轴看到一条
+// 「ArchitectAgent / architecture_done」，想知道它当时到底说了什么，得自己去对话里
+// 按时间翻 —— 这个链接把两边接起来。
+//
+// 「在不在对话里」由后端标（timeline 的 _chat_anchor，见 tickets.py::_annotate_chat_anchors），
+// 前端**不**自己判断 action：那份白名单在 chat.py 里，抄过来就是两份判据各改各的
+// （上面「📟 后台记录」踩过一模一样的坑）。后端没标 → 不渲染链接，不留死链。
+
+/** 日志条目上的「↗ 对话」链接；后端没标锚点就不渲染
+ *  （图标不用 💬：日志条目右边已经有个 💬 是"评论此记录"，两个 💬 挨着分不清） */
+function _chatLinkHtml(log) {
+    const anchor = log && log._chat_anchor;
+    if (!anchor) return '';
+    const tid = log.ticket_id || _currentTimelineTicketId || '';
+    if (!tid) return '';
+    return `<span class="log-chat-link" title="在工单对话中查看这条记录"
+        onclick="event.stopPropagation();openChatFromLog('${escHtml(tid)}','${escHtml(anchor)}')">↗ 对话</span>`;
+}
+
+/**
+ * 打开该工单的「工单对话」并高亮锚点条目。
+ *
+ * 面板可能压根没开、或者停在「AI助手」/「群聊」tab 上，也可能开着的是**别的**工单，
+ * 三种情况都得先切过去；切过去意味着重新 loadTicketConversations，DOM 是异步铺的，
+ * 所以要等锚点出现再滚 —— 固定 setTimeout 在 500 条日志的工单上会赌输
+ * （locateInTicketFeed 那个 600ms 就是这么写的，长工单上偶发定位失败）。
+ */
+async function openChatFromLog(ticketId, anchor) {
+    if (!ticketId || !anchor) return;
+
+    const needSwitch = (chatCurrentTicketId !== ticketId) || chatMode !== 'job';
+    if (needSwitch) {
+        // 标题传空：loadTicketConversations 会用接口返回的 ticket.title 覆盖掉，
+        // 传 chatCurrentTicketTitle 反而可能把**上一个**工单的标题带过来闪一下
+        selectTicketForChat(ticketId, '');
+    } else if (typeof adsShell !== 'undefined' && adsShell.isProjectShell()) {
+        adsShell.openRight({ tab: 'chat', ticketId });
+    } else if (!chatPanelOpen) {
+        toggleChatPanel();
+    }
+
+    const el = await _waitForChatAnchor(anchor, needSwitch ? 4000 : 800);
+    if (!el) {
+        showToast('工单对话里没找到这条记录', 'warning');
+        return;
+    }
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.classList.add('tfc-comment-highlight');
+    setTimeout(() => el.classList.remove('tfc-comment-highlight'), 2000);
+}
+
+/** 轮询等锚点元素出现（对话是异步渲染的），超时返回 null */
+function _waitForChatAnchor(anchor, timeoutMs) {
+    const sel = `#chatMessages [data-log-id="${CSS.escape(anchor)}"]`;
+    const found = () => document.querySelector(sel);
+    if (found()) return Promise.resolve(found());
+    return new Promise(resolve => {
+        const t0 = Date.now();
+        const timer = setInterval(() => {
+            const el = found();
+            if (el || Date.now() - t0 > timeoutMs) {
+                clearInterval(timer);
+                resolve(el || null);
+            }
+        }, 80);
+    });
+}
 
 /** 日志条目的圆点热区：点一下把这条折成只剩标题行 */
 function _logDotHotspot() {
@@ -11583,6 +12700,28 @@ function _renderReactToolItem(log, detail) {
         </div>`;
 }
 
+/** 产出文件 chip 行（thought_done / complete / skill_step_done 共用）
+ *  names: 展示用文件名；paths: 对应完整相对路径（缺省回落到 names）；
+ *  total: 实际产出总数（大于展示数时补 "+N 个"）。 */
+function _renderFileChips(names, paths, ticketId, total) {
+    const list = (names || []).map(String);
+    if (!list.length) return '';
+    const fullPaths = paths || [];
+    const totalCount = total || list.length;
+    const chips = list.map((f, i) => {
+        const fullPath = String(fullPaths[i] || f);
+        const shown = f.includes('/') || f.includes('\\') ? f.replace(/\\/g, '/').split('/').pop() : f;
+        const hasPath = fullPath !== shown || fullPath.includes('/');
+        const onClick = hasPath
+            ? `event.stopPropagation();showFileDiff('${escHtml(ticketId)}','${escHtml(fullPath)}','${escHtml(shown)}')`
+            : `event.stopPropagation();showToast('老日志未记录完整路径，请查看产出文件区', 'info')`;
+        return `<span class="thought-file-chip" title="${escHtml(fullPath)}" onclick="${onClick}">📄 ${escHtml(shown)}</span>`;
+    }).join('');
+    const more = totalCount > list.length
+        ? `<span class="thought-file-chip more">+${totalCount - list.length} 个</span>` : '';
+    return `<div class="thought-files">${chips}${more}</div>`;
+}
+
 /** 渲染 Agent 步骤打点条目（方案C） */
 function _renderSkillStepItem(log, detail) {
     const phase    = detail.phase || (log.action.includes('start') ? 'start' : 'done');
@@ -11597,6 +12736,22 @@ function _renderSkillStepItem(log, detail) {
     const durHtml = (phase === 'done' && dur) ? `<span class="skill-step-dur">${dur}</span>` : '';
     const cw = _logCommentWidget(log);
 
+    // 产出文件 chip：让「✅ 完成」这个勾有依据。
+    // 以前这行只有步骤名和耗时，于是「代码生成 124041ms ✅」看着像成功，
+    // 实际零文件产出也长一模一样。现在完成但没产出 → 明确标「无产出」。
+    const files = Array.isArray(detail.files) ? detail.files : [];
+    const fileCount = detail.file_count != null ? detail.file_count : files.length;
+    let extraHtml = '';
+    if (files.length) {
+        extraHtml = _renderFileChips(files, files, log.ticket_id || '', fileCount);
+    } else if (phase === 'done' && detail.file_count === 0) {
+        extraHtml = `<div class="thought-files"><span class="thought-file-chip more">无产出文件</span></div>`;
+    }
+    // 失败原因：直接贴出来，不用点进后台日志翻
+    const reasonHtml = (phase === 'error' && detail.reason)
+        ? `<div class="skill-step-reason">${escHtml(String(detail.reason))}</div>`
+        : '';
+
     return `
         <div class="log-item ${phase === 'error' ? 'error' : 'info'} log-skill-step ${cls}">
             <span class="skill-step-icon">${icon}</span>
@@ -11606,6 +12761,8 @@ function _renderSkillStepItem(log, detail) {
             <span class="skill-step-agent">${escHtml(log.agent_type || 'Agent')}</span>
             <span class="log-time">${formatTime(log.created_at)}</span>
             ${cw.btn}
+            ${reasonHtml}
+            ${extraHtml}
             ${cw.box}
         </div>`;
 }
@@ -13594,8 +14751,223 @@ async function loadJobCommands() {
 // 记录当前激活的文件树节点
 let _activeTreeItem = null;
 
+/* 一个项目可以有多个仓库：主路径 + extra_paths + 项目根下浅扫出来的嵌套仓库，
+ * git 和 P4 各一批（后端 /repos 负责识别，见 backend/api/repos.py）。
+ *
+ * 一条仓库可以**同时**属于两边 —— 项目 OG 的 I:\A_Works\OG2\P4\UE5 既是 git 仓库、
+ * 又在 P4 client root 下。后端用 also_p4 标记，两个子 Tab 下都会出现。
+ *
+ * 前端不自己判断 vcs 类型：判据（.git / .p4config / p4 where 三级）在
+ * backend/vcs_detector.py 里，抄过来就是两份判据各改各的。 */
+let _repoList = { git: [], p4: [], other: [], repos: [] };
+let _repoVcsTab = 'git';      // 当前子 Tab
+let _repoCurrentKey = '';     // 当前仓库的 key（后端给的路径哈希，不是绝对路径）
+let _repoLoadedFor = '';      // 已经加载过 repos 的 projectId，切项目时重置
+// 从聊天/时间轴/日志跳过来时置位：这些入口给的是主仓库相对路径，
+// 不能落到用户上次选的那个仓库上（见 openRepoFileFromChat）
+let _repoForcePrimaryOnce = false;
+
+/** 记住用户在每个项目上选的子 Tab / 仓库 */
+function _repoPrefKey(pid) { return `ads_repo_pref_${pid}`; }
+function _saveRepoPref() {
+    if (!currentProjectId) return;
+    try {
+        localStorage.setItem(_repoPrefKey(currentProjectId),
+            JSON.stringify({ vcs: _repoVcsTab, key: _repoCurrentKey }));
+    } catch {}
+}
+function _loadRepoPref(pid) {
+    try { return JSON.parse(localStorage.getItem(_repoPrefKey(pid)) || '{}'); }
+    catch { return {}; }
+}
+
+/** 当前子 Tab 下可选的仓库 */
+function _reposForCurrentTab() {
+    if (_repoVcsTab === 'p4') return _repoList.p4 || [];
+    // 「其他」（配置里写着但实际不是仓库的路径）挂在 Git 侧：
+    // 一条都不显示会让用户以为「仓库配置」里加的路径没生效
+    return [...(_repoList.git || []), ...(_repoList.other || [])];
+}
+
+function _currentRepo() {
+    return (_repoList.repos || []).find(r => r.key === _repoCurrentKey) || null;
+}
+
+/** 当前仓库是不是项目主仓库 —— 是的话继续走老的 /git/* 接口，
+ *  这样分支切换、提交记录、聊天里的文件跳转全都不用改 */
+function _isPrimaryRepo() {
+    const r = _currentRepo();
+    return !r || r.source === 'primary';
+}
+
+/**
+ * 仓库页入口。先识别仓库 → 渲染子 Tab 和选择器 → 再加载当前仓库的根层。
+ *
+ * 替代原来直接 loadRepoTree() 的入口：那个版本只认 projects.git_repo_path
+ * 一个仓库，而且一次性递归拉整棵树（OG 项目 103 万文件，打开必卡死）。
+ */
+async function loadRepoPage(forceRefresh = false) {
+    if (!currentProjectId) {
+        const c = document.getElementById('repoTree');
+        if (c) c.innerHTML = '<div class="empty-state"><div class="emoji">📂</div><p>请先选择项目</p></div>';
+        return;
+    }
+
+    // 切项目要重新识别；同一项目内切回来用缓存
+    if (forceRefresh || _repoLoadedFor !== currentProjectId) {
+        try {
+            const q = forceRefresh ? '?refresh=1' : '';
+            _repoList = await api(`/projects/${currentProjectId}/repos${q}`);
+            _repoLoadedFor = currentProjectId;
+
+            const pref = _loadRepoPref(currentProjectId);
+            const all = _repoList.repos || [];
+            // 恢复上次选的仓库；没有/失效就回到主仓库
+            const prefRepo = all.find(r => r.key === pref.key);
+            if (prefRepo) {
+                _repoCurrentKey = prefRepo.key;
+                _repoVcsTab = pref.vcs === 'p4' ? 'p4' : 'git';
+            } else {
+                const primary = all.find(r => r.source === 'primary') || all[0];
+                _repoCurrentKey = primary ? primary.key : '';
+                _repoVcsTab = (primary && primary.vcs === 'p4') ? 'p4' : 'git';
+            }
+            // 选中的仓库不在当前子 Tab 里（比如上次在 P4，这次项目没 P4）
+            if (!_reposForCurrentTab().some(r => r.key === _repoCurrentKey)) {
+                _repoVcsTab = _repoVcsTab === 'git' ? 'p4' : 'git';
+                if (!_reposForCurrentTab().some(r => r.key === _repoCurrentKey)) {
+                    _repoVcsTab = 'git';
+                    const first = _reposForCurrentTab()[0];
+                    _repoCurrentKey = first ? first.key : _repoCurrentKey;
+                }
+            }
+        } catch (e) {
+            console.warn('仓库识别失败，退回单仓库模式:', e);
+            _repoList = { git: [], p4: [], other: [], repos: [] };
+            _repoCurrentKey = '';
+        }
+    }
+
+    _applyForcePrimary();
+    _renderRepoVcsBar();
+    await loadRepoTree();
+}
+
+/** 把当前仓库强制回到主仓库（聊天文件跳转等入口用） */
+function _applyForcePrimary() {
+    if (!_repoForcePrimaryOnce) return;
+    _repoForcePrimaryOnce = false;
+    const primary = (_repoList.repos || []).find(r => r.source === 'primary');
+    if (!primary) return;   // 没识别到主仓库时保持原样，viewRepoFile 会退回 /git/file
+    _repoCurrentKey = primary.key;
+    _repoVcsTab = primary.vcs === 'p4' && !(_repoList.git || []).some(r => r.key === primary.key)
+        ? 'p4' : 'git';
+    _saveRepoPref();
+}
+
+/** 渲染子 Tab 计数 + 仓库选择器 */
+function _renderRepoVcsBar() {
+    const counts = _repoList.counts || { git: 0, p4: 0, other: 0 };
+    const gitTotal = (counts.git || 0) + (counts.other || 0);
+
+    const cg = document.getElementById('repoVcsCountGit');
+    const cp = document.getElementById('repoVcsCountP4');
+    if (cg) cg.textContent = gitTotal ? String(gitTotal) : '';
+    if (cp) cp.textContent = counts.p4 ? String(counts.p4) : '';
+
+    document.querySelectorAll('#repoVcsTabs .inner-tab').forEach(btn => {
+        const which = btn.dataset.vcsTab;
+        const n = which === 'p4' ? (counts.p4 || 0) : gitTotal;
+        btn.classList.toggle('active', which === _repoVcsTab);
+        // 为空时置灰但**不隐藏** —— 隐藏了用户会以为这个功能没做
+        btn.classList.toggle('disabled', n === 0);
+        btn.title = n === 0
+            ? (which === 'p4' ? '这个项目没有检测到 P4 workspace' : '这个项目没有检测到 Git 仓库')
+            : `${n} 个仓库`;
+    });
+
+    // P4 子 Tab 下没有分支和提交记录的概念，藏掉对应控件
+    const isGit = _repoVcsTab === 'git';
+    const branchSel = document.getElementById('repoBranchSelect');
+    const logBtn = document.getElementById('gitLogToggleBtn');
+    if (branchSel) branchSel.style.display = isGit ? '' : 'none';
+    if (logBtn) logBtn.style.display = isGit ? '' : 'none';
+    if (!isGit) {
+        const logPanel = document.getElementById('gitLogPanel');
+        if (logPanel && logPanel.style.display !== 'none') toggleGitLogPanel();
+    }
+
+    _renderRepoPicker();
+}
+
+function _renderRepoPicker() {
+    const el = document.getElementById('repoPicker');
+    if (!el) return;
+    const list = _reposForCurrentTab();
+
+    if (!list.length) {
+        el.innerHTML = `<span class="repo-picker-empty">${
+            _repoVcsTab === 'p4' ? '未检测到 P4 workspace' : '未检测到 Git 仓库'}</span>`;
+        return;
+    }
+
+    const cur = list.find(r => r.key === _repoCurrentKey) || list[0];
+
+    // 单仓库不渲染选择器，只显示路径 —— 多一个只有一项的下拉框纯属噪音
+    if (list.length === 1) {
+        el.innerHTML = `<span class="repo-picker-single" title="${escapeHtml(cur.path)}">
+            ${_repoBadgeHtml(cur)}<span class="repo-picker-path">${escapeHtml(cur.path)}</span></span>`;
+        return;
+    }
+
+    el.innerHTML = `<label class="repo-picker-label">仓库</label>
+        <select class="branch-select repo-picker-select" onchange="switchRepo(this.value)">
+            ${list.map(r => `<option value="${escapeHtml(r.key)}" ${r.key === cur.key ? 'selected' : ''}>
+                ${escapeHtml(r.name)} — ${escapeHtml(r.path)}</option>`).join('')}
+        </select>
+        ${_repoBadgeHtml(cur)}`;
+}
+
+/** 仓库的来源/类型徽标 */
+function _repoBadgeHtml(r) {
+    if (!r) return '';
+    const tags = [];
+    if (r.source === 'primary') tags.push(['primary', '主仓库']);
+    else if (r.source === 'detected') tags.push(['detected', '自动发现']);
+    if (r.vcs === 'none') tags.push(['warn', '非仓库']);
+    // 两栖：既是 git 仓库又在 P4 workspace 下，两个子 Tab 都会出现，标一下免得以为看重了
+    if (r.also_p4 && _repoVcsTab === 'git') tags.push(['p4', '同时在 P4']);
+    if (r.also_p4 && _repoVcsTab === 'p4') tags.push(['git', '同时是 Git']);
+    if (r.writable === false) tags.push(['warn', '只读']);
+    if (r.label) tags.push(['', r.label]);
+    return tags.map(([c, t]) =>
+        `<span class="repo-badge ${c}">${escapeHtml(t)}</span>`).join('');
+}
+
+function switchRepoVcsTab(vcs) {
+    if (vcs === _repoVcsTab) return;
+    _repoVcsTab = vcs;
+    const list = _reposForCurrentTab();
+    // 当前仓库在新 Tab 里也存在（两栖仓库）就保持选中，否则取第一个
+    if (!list.some(r => r.key === _repoCurrentKey)) {
+        _repoCurrentKey = list.length ? list[0].key : '';
+    }
+    _saveRepoPref();
+    _renderRepoVcsBar();
+    loadRepoTree();
+}
+
+function switchRepo(key) {
+    if (!key || key === _repoCurrentKey) return;
+    _repoCurrentKey = key;
+    _saveRepoPref();
+    _renderRepoVcsBar();
+    loadRepoTree();
+}
+
 async function loadRepoTree() {
     const container = document.getElementById('repoTree');
+    if (!container) return;
     if (!currentProjectId) {
         container.innerHTML = '<div class="empty-state"><div class="emoji">📂</div><p>请先选择项目</p></div>';
         return;
@@ -13604,26 +14976,137 @@ async function loadRepoTree() {
     container.innerHTML = '<div class="empty-state"><div class="emoji">⏳</div><p>加载中...</p></div>';
     _activeTreeItem = null;
 
+    const repo = _currentRepo();
+    if (!repo && (_repoList.repos || []).length) {
+        container.innerHTML = '<div class="empty-state"><div class="emoji">📂</div><p>请先选择仓库</p></div>';
+        return;
+    }
+
+    // 分支标签/选择器只对 git 仓库有意义
+    const branchTag = document.getElementById('repoBranchTag');
+    if (branchTag) {
+        const b = repo && repo.vcs === 'git' ? (repo.git?.branch || '') : '';
+        branchTag.textContent = b ? '🌿 ' + b : '';
+        branchTag.style.display = b ? '' : 'none';
+    }
+    if (_isPrimaryRepo() && _repoVcsTab === 'git') {
+        loadRepoBranchSelector(repo?.git?.branch || '');
+    }
+
     try {
-        const tree = await api(`/projects/${currentProjectId}/git/tree`);
-
-        // 显示当前分支
-        const branchTag = document.getElementById('repoBranchTag');
-        if (branchTag && tree.current_branch) {
-            branchTag.textContent = '🌿 ' + tree.current_branch;
-        }
-
-        // 更新分支选择器
-        loadRepoBranchSelector(tree.current_branch);
-
-        if (!tree.children || tree.children.length === 0) {
+        const data = await _fetchRepoLevel('');
+        const entries = data.entries || [];
+        if (!entries.length) {
             container.innerHTML = '<div class="empty-state"><div class="emoji">📂</div><p>仓库为空或尚未初始化</p></div>';
             return;
         }
-        container.innerHTML = renderFileTree(tree.children, 0);
+        container.innerHTML = renderFileTree(entries, 0)
+            + _truncHintHtml(data);
     } catch (err) {
-        container.innerHTML = `<div class="empty-state"><div class="emoji">❌</div><p>加载失败: ${err.message}</p></div>`;
+        container.innerHTML = `<div class="empty-state"><div class="emoji">❌</div><p>加载失败: ${escapeHtml(err.message)}</p></div>`;
     }
+}
+
+/** 拉某个目录的**一层**内容。
+ *  没识别到仓库时退回老的 /git/tree（它现在也有深度上限，见 git_manager.get_file_tree） */
+async function _fetchRepoLevel(relPath) {
+    if (_repoCurrentKey) {
+        const q = relPath ? `?path=${encodeURIComponent(relPath)}` : '';
+        return await api(`/projects/${currentProjectId}/repos/${_repoCurrentKey}/tree${q}`);
+    }
+    const tree = await api(`/projects/${currentProjectId}/git/tree`);
+    return { entries: tree.children || [], truncated: false, total: (tree.children || []).length };
+}
+
+function _truncHintHtml(data) {
+    if (!data || !data.truncated) return '';
+    return `<div class="tree-truncated">⋯ 条目过多，仅显示前 ${data.limit || 500} 项（共 ${data.total} 项）</div>`;
+}
+
+/**
+ * 渲染一层树节点。**不递归**渲染子目录 —— 子节点等点开时才拉。
+ *
+ * 老版本是把整棵树的 JSON 一次递归渲染完。对 69 个文件的项目没问题，
+ * 对 OG 那种 103 万文件的仓库连接口都返回不了。
+ */
+function renderFileTree(nodes, depth) {
+    let html = '';
+    // 目录在前、文件在后（后端已经这么排了，这里兜底老接口的数据）
+    const dirs = nodes.filter(n => n.type === 'directory');
+    const files = nodes.filter(n => n.type !== 'directory' && n.type !== 'truncated');
+    const sorted = [...dirs, ...files];
+
+    for (const node of sorted) {
+        const indentStyle = depth > 0 ? `style="--depth:${depth}"` : '';
+        if (node.type === 'directory') {
+            // has_children 是后端给的（scandir 取第一项就返回，不递归数）；
+            // 老接口没有这个字段，就看 children 有没有内容
+            const hasChildren = node.has_children !== undefined
+                ? node.has_children
+                : !!(node.children && node.children.length);
+            // 老接口会把 children 直接带过来，带了就算已加载
+            const preloaded = Array.isArray(node.children) && node.children.length > 0;
+            html += `<div class="tree-item tree-dir" ${indentStyle}
+                onclick="toggleTreeDir(this)"
+                data-depth="${depth}"
+                data-dir-path="${escapeHtml(node.path)}"
+                data-loaded="${preloaded ? '1' : '0'}"
+                data-has-children="${hasChildren ? '1' : '0'}">
+                <span class="tree-arrow">${hasChildren ? '▸' : ' '}</span>
+                <span class="tree-icon">📁</span>
+                <span class="tree-name">${escapeHtml(node.name)}</span>
+                ${node.truncated ? '<span class="tree-count" title="条目过多，展开查看">⋯</span>' : ''}
+            </div>`;
+            // 子容器一律先建好且折叠，展开时往里填
+            html += `<div class="tree-children collapsed">${
+                preloaded ? renderFileTree(node.children, depth + 1) : ''}</div>`;
+        } else {
+            const ext = node.name.split('.').pop().toLowerCase();
+            const icon = getFileIcon(ext);
+            const size = node.size ? formatFileSize(node.size) : '';
+            html += `<div class="tree-item tree-file" ${indentStyle} data-path="${escapeHtml(node.path)}" data-depth="${depth}" onclick="viewRepoFile('${escapeHtml(node.path)}', this)">
+                <span class="tree-arrow"> </span>
+                <span class="tree-icon">${icon}</span>
+                <span class="tree-name">${escapeHtml(node.name)}</span>
+                <span class="tree-size">${size}</span>
+            </div>`;
+        }
+    }
+    return html;
+}
+
+async function toggleTreeDir(el) {
+    const children = el.nextElementSibling;
+    if (!children || !children.classList.contains('tree-children')) return;
+
+    const arrow = el.querySelector('.tree-arrow');
+    const icon = el.querySelector('.tree-icon');
+
+    // 空目录没什么可展开的
+    if (el.dataset.hasChildren === '0' && el.dataset.loaded !== '1') return;
+
+    // 首次展开才拉数据（懒加载的关键：一层一个请求，而不是开页面拉整棵树）
+    if (el.dataset.loaded !== '1') {
+        el.classList.add('loading');
+        if (arrow) arrow.textContent = '◌';
+        try {
+            const depth = parseInt(el.dataset.depth || '0', 10);
+            const data = await _fetchRepoLevel(el.dataset.dirPath || '');
+            children.innerHTML = renderFileTree(data.entries || [], depth + 1)
+                + _truncHintHtml(data);
+            el.dataset.loaded = '1';
+        } catch (e) {
+            children.innerHTML = `<div class="tree-load-error" style="--depth:${
+                parseInt(el.dataset.depth || '0', 10) + 1}">加载失败: ${escapeHtml(e.message)}</div>`;
+            el.dataset.loaded = '1';   // 别卡在转圈上，让用户能收起来重试
+        } finally {
+            el.classList.remove('loading');
+        }
+    }
+
+    const collapsed = children.classList.toggle('collapsed');
+    if (arrow) arrow.textContent = '▸▾'[collapsed ? 0 : 1];
+    if (icon) icon.textContent = collapsed ? '📁' : '📂';
 }
 
 async function loadRepoBranchSelector(currentBranch) {
@@ -13648,53 +15131,6 @@ async function switchRepoBranch(branch) {
         loadRepoTree();
     } catch (e) {
         showToast(`切换分支失败: ${e.message}`, 'error');
-    }
-}
-
-function renderFileTree(nodes, depth) {
-    let html = '';
-    // 目录在前，文件在后
-    const dirs = nodes.filter(n => n.type === 'directory');
-    const files = nodes.filter(n => n.type !== 'directory');
-    const sorted = [...dirs, ...files];
-
-    for (const node of sorted) {
-        const indentStyle = depth > 0 ? `style="--depth:${depth}"` : '';
-        if (node.type === 'directory') {
-            const hasChildren = node.children && node.children.length > 0;
-            const childCount = hasChildren ? node.children.length : 0;
-            html += `<div class="tree-item tree-dir" ${indentStyle} onclick="toggleTreeDir(this)" data-depth="${depth}">
-                <span class="tree-arrow">${hasChildren ? '▾' : '▸'}</span>
-                <span class="tree-icon">📁</span>
-                <span class="tree-name">${escapeHtml(node.name)}</span>
-                ${childCount > 0 ? `<span class="tree-count">${childCount}</span>` : ''}
-            </div>`;
-            if (hasChildren) {
-                html += `<div class="tree-children">${renderFileTree(node.children, depth + 1)}</div>`;
-            }
-        } else {
-            const ext = node.name.split('.').pop().toLowerCase();
-            const icon = getFileIcon(ext);
-            const size = node.size ? formatFileSize(node.size) : '';
-            html += `<div class="tree-item tree-file" ${indentStyle} data-path="${escapeHtml(node.path)}" data-depth="${depth}" onclick="viewRepoFile('${escapeHtml(node.path)}', this)">
-                <span class="tree-arrow"> </span>
-                <span class="tree-icon">${icon}</span>
-                <span class="tree-name">${escapeHtml(node.name)}</span>
-                <span class="tree-size">${size}</span>
-            </div>`;
-        }
-    }
-    return html;
-}
-
-function toggleTreeDir(el) {
-    const children = el.nextElementSibling;
-    if (children && children.classList.contains('tree-children')) {
-        const collapsed = children.classList.toggle('collapsed');
-        const arrow = el.querySelector('.tree-arrow');
-        const icon = el.querySelector('.tree-icon');
-        if (arrow) arrow.textContent = collapsed ? '▸' : '▾';
-        if (icon) icon.textContent = collapsed ? '📁' : '📂';
     }
 }
 
@@ -13735,7 +15171,10 @@ async function viewRepoFile(path, itemEl) {
             <span class="file-info-badge">${escapeHtml(ext)}</span>
             <span class="file-info-item"><span class="file-info-label">类型</span>图像</span>
         `;
-        const rawUrl = `/api/projects/${currentProjectId}/git/file-raw?path=${encodeURIComponent(path)}`;
+        // 非主仓库要带 repo key —— /git/file-raw 只认 projects.git_repo_path 那一个根
+        const rawUrl = _isPrimaryRepo()
+            ? `/api/projects/${currentProjectId}/git/file-raw?path=${encodeURIComponent(path)}`
+            : `/api/projects/${currentProjectId}/repos/${_repoCurrentKey}/file-raw?path=${encodeURIComponent(path)}`;
         codeWrap.innerHTML = `<div class="file-preview-img"><img src="${rawUrl}" alt="${escapeHtml(fileName)}" style="max-width:100%;max-height:500px;border-radius:6px;" onerror="this.parentElement.innerHTML='<div class=&quot;file-error&quot;>图片加载失败：${escapeHtml(path)}</div>'"></div>`;
         return;
     }
@@ -13744,7 +15183,12 @@ async function viewRepoFile(path, itemEl) {
         // 传入当前文件浏览器选中的分支（从分支下拉选择器读取）
         const repoBranch = document.getElementById('repoBranchSelect')?.value || '';
         const branchParam = repoBranch ? `&branch=${encodeURIComponent(repoBranch)}` : '';
-        const data = await api(`/projects/${currentProjectId}/git/file?path=${encodeURIComponent(path)}${branchParam}`);
+        // 主仓库继续走 /git/file（它支持按分支读历史版本）；
+        // 其他仓库走 /repos/{key}/file，只能读工作区当前内容（第一版够用）
+        const url = _isPrimaryRepo()
+            ? `/projects/${currentProjectId}/git/file?path=${encodeURIComponent(path)}${branchParam}`
+            : `/projects/${currentProjectId}/repos/${_repoCurrentKey}/file?path=${encodeURIComponent(path)}`;
+        const data = await api(url);
         const content = (data.content || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
         const size = data.size ? formatFileSize(data.size) : '';
         const lines = content.split('\n');
@@ -13960,6 +15404,8 @@ function copyFileContent() {
 async function openArtifactFile(filePath, branch) {
     // 切换到仓库文件 tab
     switchTab('repo');
+    // 产出文件记的也是主仓库相对路径 + 主仓库的分支名
+    _repoForcePrimaryOnce = true;
 
     // 如果有分支名，同步选中分支选择器（不做实际 switch-branch，由 viewRepoFile 带 branch 参数读取）
     if (branch) {
@@ -14636,11 +16082,10 @@ async function _switchProjectInFullscreen(projectId) {
         const data = await api(`/projects/${projectId}`);
         currentProjectId = projectId;
         currentProject = data.project || data;
+        // _updateChatPanelForContext 自己会按当前模式补载（全屏时面板一定是开的），
+        // 原来紧跟一句 loadChatHistory() 是第二次加载：两个请求抢着写同一个
+        // #chatMessages，谁后返回谁赢。去掉重复那次。
         _updateChatPanelForContext();
-        // 全屏状态不跳转页面，只更新聊天上下文
-        if (chatMode === 'global') {
-            loadChatHistory();
-        }
         _persistChatWorkspace();
     } catch (e) {
         showToast(`切换项目失败: ${e.message}`, 'error');
@@ -14685,7 +16130,6 @@ function toggleChatFullscreen() {
         }
         chatPanelOpen = true;
         document.body.classList.add('chat-open');
-        document.getElementById('chatToggleBtn')?.classList.add('active');
         // 显示面板自身关闭钮（壳层里被藏掉了）
         const closeBtn = document.getElementById('chatPanelCloseBtn');
         if (closeBtn) closeBtn.style.display = '';
@@ -14743,13 +16187,15 @@ function toggleChatFullscreen() {
             }
             // 仅消息区为空时补载，避免冲掉已有 DOM
             setTimeout(() => {
-                if (!_chatMessagesHasContent()) loadChatHistory();
+                if (!_chatMessagesHasContent()) _reloadChatForCurrentMode();
             }, 100);
         } else if (typeof adsShell !== 'undefined' && adsShell.isProjectShell()) {
             try { adsShell.remountChatToWorkbench(); } catch {}
         }
         _persistChatWorkspace();
     }
+    // 全屏时顶栏是被隐藏的，退出全屏顶栏回来，开关状态得跟上
+    _syncTopbarChatToggle();
 }
 
 function _initChatSplitContainer() {
@@ -14984,7 +16430,9 @@ async function _sendChatStreamingToContainer(url, body, msgContainer, thinkingCt
             let data;
             try { data = JSON.parse(line.slice(6)); } catch { curEvent = ''; continue; }
 
-            if (curEvent === 'text_delta') {
+            if (curEvent === 'turn_begin') {
+                _cliSessionAdoptTurnId(data.turn_id);
+            } else if (curEvent === 'text_delta') {
                 if (bubbleWrapper.style.display === 'none') {
                     typingEl?.remove();
                     bubbleWrapper.style.display = '';
@@ -15258,6 +16706,24 @@ function _destroyAllSplitPanes() {
     if (splitBtn && _chatFullscreen) splitBtn.style.display = '';
 }
 
+/**
+ * 顶栏 AI 面板开关的状态同步（列表页那个）。
+ *
+ * chatPanelOpen 会被好几条路径改：toggleChatPanel、进出全屏、刷新后的
+ * _restoreChatWorkspace、壳层里的 _syncChatOpenFlag。只在 toggleChatPanel 里
+ * 更新按钮的话，刷新进来面板是开的、按钮却还写着「显示」。
+ */
+function _syncTopbarChatToggle() {
+    const btn = document.getElementById('topbarChatToggle');
+    if (!btn) return;
+    const open = !!chatPanelOpen;
+    btn.classList.toggle('active', open);
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    const label = open ? '隐藏 AI 助手面板' : '显示 AI 助手面板';
+    btn.title = label;
+    btn.setAttribute('aria-label', label);
+}
+
 function toggleChatPanel() {
     // 项目壳层：AI 在右侧工作台，不再用 fixed + margin-right
     if (typeof adsShell !== 'undefined' && adsShell.isProjectShell()) {
@@ -15275,11 +16741,9 @@ function toggleChatPanel() {
     }
 
     chatPanelOpen = !chatPanelOpen;
-    const toggleBtn = document.getElementById('chatToggleBtn');
 
     if (chatPanelOpen) {
         document.body.classList.add('chat-open');
-        toggleBtn?.classList.add('active');
 
         // 根据是否在项目内，决定显示/隐藏模式切换栏
         const modeBar = document.getElementById('chatModeBar');
@@ -15295,13 +16759,13 @@ function toggleChatPanel() {
         }
 
         // 加载聊天历史（已有内容则保留，避免全屏/开关面板冲掉确认卡）
-        if (chatMode === 'global' && !_chatMessagesHasContent()) {
-            loadChatHistory();
+        if (!_chatMessagesHasContent()) {
+            _reloadChatForCurrentMode();
         }
     } else {
         document.body.classList.remove('chat-open');
-        toggleBtn?.classList.remove('active');
     }
+    _syncTopbarChatToggle();
 }
 
 /**
@@ -15443,6 +16907,7 @@ function _loadGlobalChatFromStorage() {
         const container = document.getElementById('chatMessages');
         if (container) {
             container.innerHTML = data.dom;
+            _markChatRendered();
             // 恢复的卡片按钮已在保存时替换为失效提示，此处无需额外处理
             scrollChatToBottom();
         }
@@ -15673,6 +17138,7 @@ async function switchChatSession(sessionId) {
     }
     const container = document.getElementById('chatMessages');
     if (!container) return;
+    const _tok = _chatLoadStart();
     _currentChatSessionId = sessionId;
     _cliClearMem();  // 切会话时清空内存任务，后台任务面板跟着切
     _persistChatWorkspace();
@@ -15684,7 +17150,10 @@ async function switchChatSession(sessionId) {
         const data = await api(`${_sessionApiBase()}/sessions/${sessionId}/messages`);
         const messages = data.messages || [];
         chatHistory = messages.map(m => ({ role: m.role, content: m.content }));
+        // 迟到的响应不许往新 context 的面板里铺内容
+        if (_chatLoadStale(_tok)) return;
         if (!messages.length) { showChatWelcome(); return; }
+        _markChatRendered(_tok);
         for (const msg of messages) {
             let actionObj = null;
             if (msg.action_data) {
@@ -15715,7 +17184,7 @@ async function switchChatSession(sessionId) {
         scrollChatToBottom({ settle: true });
     } catch (e) {
         console.warn('[session] 切换会话失败', e);
-        showChatWelcome();
+        if (!_chatLoadStale(_tok)) showChatWelcome();
     }
     // 若后台任务面板开着，刷新为当前会话的任务
     const _tp = document.getElementById('tasksSidePanel');
@@ -15884,7 +17353,12 @@ async function _sendChatStreaming(url, body) {
                 let data;
                 try { data = JSON.parse(line.slice(6)); } catch { continue; }
 
-                if (eventName === 'text_delta') {
+                if (eventName === 'turn_begin') {
+                    // 后端已经给了本轮的 turn_id，换掉前端临时生成的 sess_<ts>，
+                    // 任务面板的分组 key 才和库里的 turn_id 是同一个值。
+                    _cliSessionAdoptTurnId(data.turn_id);
+
+                } else if (eventName === 'text_delta') {
                     // 第一个 text_delta：移除 chatTyping，显示流式气泡
                     if (bubbleWrapper.style.display === 'none') {
                         document.getElementById('chatTyping')?.remove();
@@ -16381,6 +17855,8 @@ async function loadChatHistory() {
         console.warn('[chat] skip loadChatHistory while streaming');
         return;
     }
+    // 起飞凭证：await 期间用户可能切了项目，回来得认得出自己已经过期
+    const _tok = _chatLoadStart();
     if (!currentProjectId) {
         // 优先已记住的 session；否则取最近一条
         try {
@@ -16389,6 +17865,7 @@ async function loadChatHistory() {
                 const data = await api('/chat/sessions?limit=1');
                 sessionToLoad = (data.sessions || [])[0]?.id || null;
             }
+            if (_chatLoadStale(_tok)) return;   // await 期间进了某个项目
             if (sessionToLoad) {
                 await switchChatSession(sessionToLoad);
             } else {
@@ -16396,6 +17873,7 @@ async function loadChatHistory() {
             }
         } catch (_) {
             // fallback: localStorage
+            if (_chatLoadStale(_tok)) return;
             if (!_loadGlobalChatFromStorage()) showChatWelcome();
         }
         return;
@@ -16423,6 +17901,10 @@ async function loadChatHistory() {
             messages = resp.messages || [];
         }
         chatHistory = messages.map(m => ({ role: m.role, content: m.content }));
+
+        // 迟到的响应到这里就止步：用户已经切到别的项目 / 模式了，
+        // 再往 #chatMessages 里铺就是把上一个项目的对话塞进新项目的面板。
+        if (_chatLoadStale(_tok)) return;
 
         if (messages.length === 0) {
             showChatWelcome();
@@ -16485,10 +17967,12 @@ async function loadChatHistory() {
             );
             }
         }
+        _markChatRendered(_tok);
         scrollChatToBottom({ settle: true });
     } catch (e) {
-        // 可能是首次使用，表还没创建
-        showChatWelcome();
+        // 可能是首次使用，表还没创建。但过期的请求失败时不能画欢迎页 ——
+        // 那会把新项目刚加载好的内容抹成空白。
+        if (!_chatLoadStale(_tok)) showChatWelcome();
     }
 }
 
@@ -16497,6 +17981,7 @@ async function loadChatHistory() {
  */
 async function loadTicketConversations(ticketId) {
     if (!currentProjectId || !ticketId) return;
+    const _tok = _chatLoadStart();
 
     // 先移除旧的工单 header，防止重复插入
     document.querySelectorAll('.chat-job-header').forEach(el => el.remove());
@@ -16508,6 +17993,9 @@ async function loadTicketConversations(ticketId) {
         const resp = await originalApi(`/projects/${currentProjectId}/chat/ticket/${ticketId}/conversations`);
         const messages = resp.messages || [];
         const ticket = resp.ticket || {};
+
+        // 过期就撤：这批是上一个项目 / 上一个工单的记录
+        if (_chatLoadStale(_tok)) return;
 
         container.innerHTML = '';
 
@@ -16567,6 +18055,9 @@ async function loadTicketConversations(ticketId) {
 
                 const msgEl = document.createElement('div');
                 msgEl.className = `chat-msg ${msg.role}`;
+                // llm_call 类日志的跳转锚点：后端把 _chat_anchor 标成了 '<conv_id>_resp'，
+                // 正好是这里 assistant 气泡的 msg.id（chat.py 给回复消息拼的）
+                msgEl.dataset.logId = msg.id || '';
                 msgEl.innerHTML = `
                     ${msg.role === 'user'
                         ? '<div class="chat-msg-avatar">👤</div>'
@@ -16588,8 +18079,10 @@ async function loadTicketConversations(ticketId) {
                     msg.images || [], [], msg.thinking || [], null, _msgLlmMeta(msg));
             }
         }
+        _markChatRendered(_tok);
         scrollChatToBottom();
     } catch (e) {
+        if (_chatLoadStale(_tok)) return;
         container.innerHTML = `
             <div class="chat-job-hint">
                 <div class="hint-icon">❌</div>
@@ -16604,6 +18097,7 @@ async function loadTicketConversations(ticketId) {
  */
 async function loadAllTicketConversations() {
     if (!currentProjectId) return;
+    const _tok = _chatLoadStart();
 
     const container = document.getElementById('chatMessages');
     // 移除旧的 job header
@@ -16613,6 +18107,8 @@ async function loadAllTicketConversations() {
     try {
         const resp = await originalApi(`/projects/${currentProjectId}/chat/tickets/conversations`);
         const tickets = resp.tickets || [];
+        // 过期就撤：这是上一个项目的工单 Feed
+        if (_chatLoadStale(_tok)) return;
         container.innerHTML = '';
 
         if (tickets.length === 0) {
@@ -16705,6 +18201,7 @@ async function loadAllTicketConversations() {
             container.appendChild(section);
         }
 
+        _markChatRendered(_tok);
         // 如果有选中的工单，滚动定位
         if (chatCurrentTicketId) {
             setTimeout(() => scrollToTicketSection(chatCurrentTicketId), 100);
@@ -16712,6 +18209,7 @@ async function loadAllTicketConversations() {
             scrollChatToBottom();
         }
     } catch (e) {
+        if (_chatLoadStale(_tok)) return;
         container.innerHTML = `
             <div class="chat-job-hint">
                 <div class="hint-icon">❌</div>
@@ -16969,6 +18467,7 @@ function _buildTicketEventEl(msg) {
     if (meta.compact && !msg.summary && !msg.output_summary) {
         const el = document.createElement('div');
         el.className = 'tkt-event-compact';
+        el.dataset.logId = msg.id || '';   // 时间轴的「💬 对话」链接靠它定位（msg.id = ticket_logs.id）
         el.style.cssText = `display:flex;align-items:center;gap:6px;padding:3px 8px;margin:2px 0;font-size:11px;color:var(--text-muted);`;
         const statusArrow = (msg.from_status && msg.to_status)
             ? ` <span style="opacity:.5;">${escapeHtml(msg.from_status)} → ${escapeHtml(msg.to_status)}</span>` : '';
@@ -17006,6 +18505,7 @@ function _buildTicketEventEl(msg) {
 
     const el = document.createElement('div');
     el.className = 'tkt-event-card';
+    el.dataset.logId = msg.id || '';   // 同上：时间轴跳转的锚点
     el.style.cssText = `margin:4px 0;padding:8px 10px;background:var(--bg-elevated);border-radius:6px;border-left:3px solid ${agentColor}40;`;
     el.innerHTML = `
         <div style="display:flex;align-items:center;gap:6px;margin-bottom:${msg.summary ? '4px' : '0'};">
@@ -17212,28 +18712,93 @@ function _formatAicrIssues(issues, suggestions) {
     return rows.join('') || '（无内容）';
 }
 
-/** /tasks — 在聊天面板右侧打开后台任务侧面板（不进入全屏分屏模式）*/
+/**
+ * 后台任务面板要开在哪：主舞台 Tab，还是聊天右侧的窄侧栏。
+ *
+ * 面板本身是**同一个 DOM**（#tasksSidePanel），只是被搬到不同宿主 —— 见
+ * adsShell._mountTasksPane 的注释：那一堆 _refreshTasksPanel / _setTasksFilter
+ * 都靠 id 找节点，克隆一份就会刷错那个。
+ *
+ * 默认走主舞台（用户明确要求「放到中间区域的 Tab 页」）；壳层没起来
+ * （项目列表页、聊天全屏）时没有主舞台可用，自动退回侧栏。
+ */
+const _TASKS_HOST_KEY = 'ads.tasks.host';
+function _tasksHostMode() {
+    const pref = (() => { try { return localStorage.getItem(_TASKS_HOST_KEY); } catch { return null; } })();
+    if (pref === 'side') return 'side';
+    const shellUp = typeof adsShell !== 'undefined' && adsShell.isProjectShell()
+        && !document.body.classList.contains('chat-fullscreen');
+    return shellUp ? 'main' : 'side';
+}
+
+/** 让 ⇄ 钮的 tooltip 说清楚"按下去会去哪"，而不是含糊一个双向箭头 */
+function _syncTasksHostBtn() {
+    const btn = document.getElementById('tasksHostToggleBtn');
+    if (!btn) return;
+    const inMain = document.getElementById('tasksSidePanel')?.classList.contains('tasks-in-main-ws');
+    btn.textContent = inMain ? '⇥' : '⇤';
+    btn.title = inMain ? '移到右侧栏（与聊天并排）' : '移到中间 Tab 页';
+}
+
+/** 在主舞台 / 侧栏之间搬家（保留列表选中态，不重载） */
+function _toggleTasksHost() {
+    const toSide = _tasksHostMode() === 'main';
+    try { localStorage.setItem(_TASKS_HOST_KEY, toSide ? 'side' : 'main'); } catch {}
+    if (toSide) {
+        adsShell.closeMainTab('tasks:panel');   // 内部会 evict 回侧栏原位
+        _openTasksInSidePanel();
+    } else {
+        _closeTasksSidePanel({ keepFilter: true });
+        adsShell.openMain({ type: 'tasks' });
+    }
+}
+
+/** /tasks — 打开后台任务面板（默认主舞台 Tab，壳层不可用时退回侧栏）*/
 async function _openTasksPanel() {
+    _tasksTicketFilter = '';   // 全局 /tasks：清工单过滤，显示所有任务
+    if (_tasksHostMode() === 'main') {
+        adsShell.openMain({ type: 'tasks' });
+        return;
+    }
+    _openTasksInSidePanel();
+}
+
+/** 侧栏形态：挤在聊天面板右边那条 400px */
+function _openTasksInSidePanel() {
     const panel = document.getElementById('tasksSidePanel');
     const body = document.getElementById('chatPanelBody');
     if (!panel || !body) return;
 
-    _tasksTicketFilter = '';   // 全局 /tasks：清工单过滤，显示所有任务
-
     if (!chatPanelOpen) toggleChatPanel();
+
+    // 面板可能还在主舞台里，先搬回来，否则它会显示在被隐藏的 host 里（= 看不见）
+    if (typeof adsShell !== 'undefined') adsShell.evictTasksPane();
 
     panel.style.display = 'flex';
     body.classList.add('has-tasks-panel');
     _restoreTasksPanelWidth();
+    _syncTasksHostBtn();
     _refreshTasksPanel();
 }
 
-function _closeTasksSplitPane() {
+/** 关闭侧栏形态（主舞台形态用 adsShell.closeMainTab）*/
+function _closeTasksSidePanel({ keepFilter = false } = {}) {
     const panel = document.getElementById('tasksSidePanel');
     const body = document.getElementById('chatPanelBody');
-    if (panel) panel.style.display = 'none';
+    if (panel && !panel.classList.contains('tasks-in-main-ws')) panel.style.display = 'none';
     if (body) body.classList.remove('has-tasks-panel');
-    _tasksTicketFilter = '';   // 清工单过滤态，避免串台到全局 /tasks
+    if (!keepFilter) _tasksTicketFilter = '';   // 清工单过滤态，避免串台到全局 /tasks
+}
+
+/** 面板右上角 ✕：两种形态都能关（不用管自己现在挂在哪） */
+function _closeTasksSplitPane() {
+    const panel = document.getElementById('tasksSidePanel');
+    if (panel?.classList.contains('tasks-in-main-ws')) {
+        _tasksTicketFilter = '';
+        adsShell.closeMainTab('tasks:panel');
+        return;
+    }
+    _closeTasksSidePanel();
 }
 
 /** 工单过滤态：非空时后台任务面板只显示该工单的任务（编译/自测/playtest 等） */
@@ -17243,13 +18808,14 @@ let _tasksTicketFilter = '';
 async function _openTicketTasksPanel(ticketId) {
     if (!ticketId) return;
     _tasksTicketFilter = ticketId;
-    const panel = document.getElementById('tasksSidePanel');
-    const body = document.getElementById('chatPanelBody');
-    if (!panel || !body) return;
-    if (!chatPanelOpen) toggleChatPanel();
-    panel.style.display = 'flex';
-    body.classList.add('has-tasks-panel');
-    _restoreTasksPanelWidth();
+    if (_tasksHostMode() === 'main') {
+        adsShell.openMain({ type: 'tasks', ticketId });
+    } else {
+        _openTasksInSidePanel();
+    }
+    // 两条路径里的 _refreshTasksPanel 都是 fire-and-forget（挂载函数不是 async），
+    // 这里补一次 **await**：openTaskFromLog 紧接着要读 _CLI_TASKS_MEM 找任务，
+    // 不等就会读到空表，表现成"点了链接说找不到记录"。
     await _refreshTasksPanel();
 }
 
@@ -17268,7 +18834,10 @@ function _cliClearMem() {
     if (outputEl) outputEl.textContent = '选择任务查看输出';
 }
 
-/** 每次发送新对话时调用，生成新 session 分组 */
+/** 每次发送新对话时调用，生成新 session 分组
+ *  key 先用本地临时值占位：tool_start 可能早于 turn_begin 到达（理论上不会，
+ *  但流式事件顺序不值得赌），有个非空 key 就不会掉进「按时间间隔切组」的分支。
+ *  turn_begin 一到就被 _cliSessionAdoptTurnId 换成后端的 turn_id。 */
 function _cliSessionBegin(labelHint) {
     _cliSessionSeq++;
     _cliCurrentSession = {
@@ -17276,6 +18845,17 @@ function _cliSessionBegin(labelHint) {
         label: labelHint ? labelHint.slice(0, 30) : `对话 ${_cliSessionSeq}`,
         seq: _cliSessionSeq,
     };
+}
+
+/** 用后端下发的 turn_id 替换本轮分组 key（含已登记任务的回填） */
+function _cliSessionAdoptTurnId(turnId) {
+    if (!turnId || !_cliCurrentSession) return;
+    const old = _cliCurrentSession.key;
+    if (old === turnId) return;
+    _cliCurrentSession.key = turnId;
+    for (const t of Object.values(_CLI_TASKS_MEM)) {
+        if (t.session_key === old) t.session_key = turnId;
+    }
 }
 
 function _cliTaskRegister(taskId, title, tool, status, input) {
@@ -17340,41 +18920,63 @@ function _jumpToCliTask(taskId) {
     }, 80);
 }
 
-function _renderCliTaskOutput(taskId, outputEl) {
-    const t = _CLI_TASKS_MEM[taskId];
-    if (!t) { outputEl.innerHTML = '<span style="color:var(--text-muted)">任务不存在</span>'; return; }
+/** 当前屏上那份输出的原文（复制 / 显示全部回查用），单槽 */
+let _taskOutputShown = { taskId: '', text: '', foldJson: true };
 
-    const outputText = t.output || (Array.isArray(t.output_lines) ? t.output_lines.join('\n') : '');
-    const allLines   = outputText ? outputText.split('\n') : [];
+/**
+ * 后台任务输出区的**统一**渲染入口。
+ *
+ * 为什么要统一：_selectTaskItem 有四个分支，只有 cli_task 走了下面这套格式化，
+ * 另外三个（ticket / ci_build / 兜底 JSON）直接 `outputEl.textContent = '…\n…'`。
+ * 而 #tasksPanelOutput 是个普通 div，**没有 white-space:pre-wrap** ——
+ * 于是 \n 全被折成空格，4000 字符的 UBT/package 日志糊成一整段，
+ * 49 行输出看起来像一堵墙（截图见 dev-notes/2026-09-19_02）。
+ *
+ * 注意：**别**给 #tasksPanelOutput 加 pre-wrap 来"一行修好"。
+ * 下面 innerHTML 的模板里 div 之间有换行和缩进，父元素一旦 pre-wrap，
+ * 那些换行会变成可见空行，每条日志中间多出一片空白。
+ * 换行必须由 .cto-line 自己的 pre-wrap 负责 —— 所以四个分支一律走这里，
+ * 顺带都拿到错误着色 / JSON 折叠 / 长输出截断 / 复制按钮。
+ *
+ * @param {object} o
+ *   taskId       复制 / 显示全部要回查原文
+ *   status       running / success / error / failed（其他值按"完成"处理）
+ *   statusLabel  覆盖默认文案（工单状态不是 running/success 那套）
+ *   durationText 括号里那段，'412811ms' / '36 天前' / ''
+ *   cmd          命令行，显示在 header 右侧（单行省略）
+ *   text         输出正文，保留 \n
+ *   maxLines     默认只渲染最后 N 行，其余折起来
+ *   foldJson     整段 JSON 是否折成 <details>（兜底分支要关掉，否则啥也看不见）
+ */
+function _renderTaskOutput(outputEl, o) {
+    if (!outputEl) return;
+    const { taskId = '', status = '', statusLabel = '', durationText = '',
+            cmd = '', text = '', maxLines = 25, foldJson = true } = o || {};
 
-    const statusHtml = t.status === 'running'
-        ? `<span class="cto-status running">🔄 运行中…</span>`
-        : t.status === 'error' || t.status === 'failed'
-            ? `<span class="cto-status error">❌ 失败 (${t.duration_ms || 0}ms)</span>`
-            : `<span class="cto-status done">✓ 完成 (${t.duration_ms || 0}ms)</span>`;
+    // 单槽缓存原文：复制 / 显示全部要用。ticket 与 ci_build 类任务不在
+    // _CLI_TASKS_MEM 里，回查不到；同时只有一份输出在屏上，存一份就够（也不会涨）
+    _taskOutputShown = { taskId, text, foldJson };
 
-    const cmdHtml = t.cmd
-        ? `<div class="cto-cmd">$ ${_escHtmlSafe(t.cmd)}</div>`
+    const cls = status === 'running' ? 'running'
+              : /^(error|failed|blocked)$/.test(status) ? 'error' : 'done';
+    const icon = cls === 'running' ? '🔄' : cls === 'error' ? '❌' : '✓';
+    const label = statusLabel || (cls === 'running' ? '运行中…' : cls === 'error' ? '失败' : '完成');
+    const statusHtml = `<span class="cto-status ${cls}">${icon} ${_escHtmlSafe(label)}`
+        + `${durationText ? ` (${_escHtmlSafe(durationText)})` : ''}</span>`;
+
+    const cmdHtml = cmd ? `<div class="cto-cmd" title="${_escHtmlSafe(cmd)}">$ ${_escHtmlSafe(cmd)}</div>` : '';
+    const copyBtn = taskId
+        ? `<button class="cto-copy-btn" onclick="_cliOutputCopyAll('${taskId}')" title="复制全部输出">⎘</button>`
         : '';
 
-    // 复制按钮
-    const copyBtn = `<button class="cto-copy-btn" onclick="_cliOutputCopyAll('${taskId}')" title="复制全部输出">⎘</button>`;
-
-    // 截断：默认只显示最后 N 行
-    const MAX_LINES = 25;
-    let linesHtml = '';
-    let truncHtml  = '';
-    const hiddenCount = Math.max(0, allLines.length - MAX_LINES);
-
-    if (hiddenCount > 0) {
-        truncHtml = `<div class="cto-trunc" id="cto-trunc-${taskId}">
+    const allLines = text ? text.split('\n') : [];
+    const hiddenCount = Math.max(0, allLines.length - maxLines);
+    const truncHtml = hiddenCount > 0 ? `<div class="cto-trunc" id="cto-trunc-${taskId}">
             <span>⋯ 隐藏了前 ${hiddenCount} 行</span>
             <button onclick="_cliOutputShowAll('${taskId}')">显示全部</button>
-        </div>`;
-        linesHtml = _formatCliLines(allLines.slice(-MAX_LINES), taskId);
-    } else {
-        linesHtml = _formatCliLines(allLines, taskId);
-    }
+        </div>` : '';
+    const linesHtml = _formatCliLines(
+        hiddenCount > 0 ? allLines.slice(-maxLines) : allLines, taskId, foldJson);
 
     outputEl.innerHTML = `
         <div class="cto-header">${statusHtml}${cmdHtml}${copyBtn}</div>
@@ -17382,23 +18984,44 @@ function _renderCliTaskOutput(taskId, outputEl) {
             ${truncHtml}
             ${linesHtml}
         </div>`;
+}
+
+function _renderCliTaskOutput(taskId, outputEl) {
+    const t = _CLI_TASKS_MEM[taskId];
+    if (!t) { outputEl.innerHTML = '<span style="color:var(--text-muted)">任务不存在</span>'; return; }
+
+    _renderTaskOutput(outputEl, {
+        taskId,
+        status: t.status,
+        durationText: t.duration_ms ? `${t.duration_ms}ms` : '',
+        cmd: t.cmd || '',
+        text: t.output || (Array.isArray(t.output_lines) ? t.output_lines.join('\n') : ''),
+    });
 
     // 流式情况下自动滚底
     if (t.status === 'running') outputEl.scrollTop = outputEl.scrollHeight;
 }
 
-/** 格式化一批行：JSON 折叠 + URL 高亮 + 错误着色 */
-function _formatCliLines(lines, taskId) {
+/** 格式化一批行：JSON 折叠 + URL 高亮 + 错误着色
+ *  foldJson=false 时整段当普通行渲染 —— 兜底分支传的本来就是一整块 JSON，
+ *  折起来的话屏幕上只剩一行 summary，等于什么都没显示 */
+function _formatCliLines(lines, taskId, foldJson = true) {
     const parts = [];
     let jsonBuf = [];
     let jsonDepth = 0;
 
+    if (!foldJson) return lines.map(l => _colorLine(l)).join('');
+
     const flushJson = () => {
         if (!jsonBuf.length) return;
-        const raw = jsonBuf.join('\n');
+        // 先把待处理的行拿出来再清空 —— 原来是 `jsonBuf = []` 写在 try 之前，
+        // catch 里 `jsonBuf.map(...)` 就在**空数组**上跑，于是"看起来像 JSON 但
+        // 解析不过"的行被**静默丢掉**。UE 打包日志每行都以 `[package]` 开头，
+        // 一律命中 `[` 开头的 JSON 探测，18 行只渲染出 12 行、70 行只剩 15 行。
+        const pending = jsonBuf;
         jsonBuf = []; jsonDepth = 0;
         try {
-            const parsed = JSON.parse(raw);
+            const parsed = JSON.parse(pending.join('\n'));
             const preview = JSON.stringify(parsed).slice(0, 80);
             const uid = 'j' + Math.random().toString(36).slice(2, 8);
             parts.push(`<details class="cto-json" id="${uid}">
@@ -17407,13 +19030,15 @@ function _formatCliLines(lines, taskId) {
             </details>`);
         } catch {
             // 不是合法 JSON，当普通行处理
-            parts.push(...jsonBuf.map(l => _colorLine(l)));
+            parts.push(...pending.map(l => _colorLine(l)));
         }
     };
 
     for (const line of lines) {
         const trimmed = line.trim();
-        // JSON 检测：以 { 或 [ 开头
+        // JSON 探测：以 { 或 [ 开头。
+        // `[package] 入参 …` 这类日志前缀也会命中，但解析失败会回退成普通行，
+        // 所以探测宽松没关系 —— **前提是** flushJson 的 catch 真能拿到原始行。
         if (jsonDepth === 0 && (trimmed.startsWith('{') || trimmed.startsWith('['))) {
             jsonBuf = [line];
             jsonDepth = (trimmed.match(/[{[]/g) || []).length - (trimmed.match(/[}\]]/g) || []).length;
@@ -17449,19 +19074,27 @@ function _escHtmlSafe(str) {
     return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
-function _cliOutputCopyAll(taskId) {
+/** 取当前输出区那份原文；优先内存任务表，回退单槽缓存
+ *  （ticket / ci_build 类任务不在 _CLI_TASKS_MEM 里，只有单槽缓存有它们的原文） */
+function _taskOutputText(taskId) {
     const t = _CLI_TASKS_MEM[taskId];
-    if (!t) return;
-    const text = t.output || (Array.isArray(t.output_lines) ? t.output_lines.join('\n') : '');
+    if (t) return t.output || (Array.isArray(t.output_lines) ? t.output_lines.join('\n') : '');
+    if (_taskOutputShown.taskId === taskId) return _taskOutputShown.text || '';
+    return '';
+}
+
+function _cliOutputCopyAll(taskId) {
+    const text = _taskOutputText(taskId);
+    if (!text) return;
     navigator.clipboard?.writeText(text).then(() => showToast('已复制', 'success'));
 }
 
 function _cliOutputShowAll(taskId) {
-    const t = _CLI_TASKS_MEM[taskId];
-    if (!t) return;
-    const allLines = (t.output || '').split('\n');
+    const text = _taskOutputText(taskId);
     const bodyEl = document.getElementById(`cto-body-${taskId}`);
-    if (bodyEl) bodyEl.innerHTML = _formatCliLines(allLines, taskId);
+    if (!bodyEl) return;
+    const foldJson = _taskOutputShown.taskId === taskId ? _taskOutputShown.foldJson : true;
+    bodyEl.innerHTML = _formatCliLines(text.split('\n'), taskId, foldJson);
 }
 
 function _injectCliTaskToPanel(taskId) {
@@ -17476,11 +19109,91 @@ function _injectCliTaskToPanel(taskId) {
 }
 
 /**
+ * logId → taskId 的索引，由 _buildTicketTasksFromLogs 每次建表时**顺带**产出。
+ *
+ * 为什么要有它：日志条目上那个「📟 后台记录」链接得知道自己有没有对应任务。
+ * 一开始是手写一份判据去"预测"建表规则，结果判据和规则各写各的，
+ * 规则漏收 UE 那几类日志时判据跟着漏，截图里 UBT 编译那条就没有链接。
+ * 现在改成**查索引**：建表时把 log.id 记下来，链接只认索引里有的 ——
+ * 判据不可能再和规则脱节，因为压根没有第二份判据了。
+ *
+ * key = 工单 id，value = { [logId]: taskId }
+ */
+const _TICKET_TASK_INDEX = {};
+
+/**
+ * 后端标注的 logId → 真命令记录 id（ticket_command_log.id，形如 TCMD-...）。
+ * 由 timeline 接口的 `_task_ref` 字段填充（tickets.py::_annotate_task_refs）。
+ *
+ * 和 _TICKET_TASK_INDEX 的区别：那个是**前端拿日志现编**的伪任务（id `titk-*`），
+ * 点开只有日志自己那句散文；这个指向库里真实跑过的那条命令 —— 真 argv、cwd、
+ * exit_code、完整输出。有真记录就优先用真的。
+ *
+ * key = 工单 id，value = { [logId]: recordId }
+ */
+const _TICKET_CMD_REF = {};
+
+/** 这条日志在后台任务面板里有没有对应记录（查索引，不猜规则） */
+function _logTaskId(log) {
+    if (!log || !log.id) return '';
+    const tid = log.ticket_id || _currentTimelineTicketId || '';
+    // 后端标的真记录优先；拿不到才回落到前端合成的伪任务（旧工单没有真记录，
+    // 40035 条历史日志全靠它，不能删）
+    const ref = log._task_ref || (_TICKET_CMD_REF[tid] || {})[log.id];
+    if (ref) return ref;
+    return (_TICKET_TASK_INDEX[tid] || {})[log.id] || '';
+}
+
+/**
+ * ticket_command_log 的一行 → 后台任务面板的任务项。
+ *
+ * 刻意映射成 **type:'cli_task'** 而不是新开一个 type：这样 _selectTaskItem
+ * 的 cli_task 分支、_renderTaskOutput、_formatCliLines、_colorLine、
+ * 「复制 / 显示全部」按钮、整套 CSS 全部零改动复用。新 type 意味着把这些
+ * 全再写一遍，然后两份渲染各自演化。
+ */
+function _recordToTask(r) {
+    const head = r.status === 'timeout' ? `⏱ 超时（exit=${r.exit_code}）`
+               : r.status === 'error' ? `✗ 失败（exit=${r.exit_code}）`
+               : `✓ exit=${r.exit_code}`;
+    const lines = [`$ ${r.command || ''}`];
+    if (r.cwd) lines.push(`  @ ${r.cwd}`);
+    lines.push(head, '');
+    lines.push(r.output || '(无输出)');
+    if (r.truncated) lines.push('', `… 输出已截断（原文 ${r.output_bytes} 字节）`);
+    return {
+        id: r.id,
+        type: 'cli_task',
+        title: r.tool || 'command',
+        tool: r.tool || 'command',
+        status: r.status === 'success' ? 'success' : 'error',
+        output: lines.join('\n'),
+        cmd: r.command || '',
+        duration_ms: r.duration_ms || 0,
+        created_at: r.created_at,
+        ts: r.created_at ? String(r.created_at).slice(11, 19) : '',
+        session_key: 'ticket_commands',
+        session_label: '工单命令记录',
+    };
+}
+
+/**
  * 把工单日志合成为后台任务面板的任务项（cli_task 风格）。
  *
- * 识别 tool_start / tool_done（run_engine_compile、self_test、playtest 等本地工具执行），
- * 配对成一个任务；再从同一时段的 reject 日志里补充结构化编译输出（command/exit_code/
- * errors/warnings/raw_tail），拼成控制台文本供右侧输出区展示。
+ * 收哪些日志（按真实数据定，不是按 action 名字想当然）：
+ *   · tool_start + tool_done  → 配对成一次工具执行（全库仅 43 条，早期形态）
+ *   · complete 带 command/exit_code → UE 的 UBT 编译 / Playtest。**没有文件产出**，
+ *     所以不能拿"有没有文件"当门槛 —— 之前就是这么漏掉截图里那条
+ *     「UBT 编译通过（497s，target=TestFPSEditor）」的
+ *   · complete 带文件产出 → 开发产出
+ *   · ToolError:*            → 失败也是一次执行，错误详情同样值得留档（全库 401 条）
+ *   · thought_done 带文件产出 → agent 动作的产出清单
+ *
+ * 不收：纯一行 message 的 thought_done（全库 6045 条）。点进去只有一句话，
+ * 等于把面板灌成噪音 —— 和死链一样糟，只是糟在另一头。
+ *
+ * 再从同一时段的 reject 日志里补充结构化编译输出（command/exit_code/errors/
+ * warnings/raw_tail），拼成控制台文本供右侧输出区展示。
  *
  * @param {Array} logs  /tickets/{id}/logs 返回的日志（DESC，需正序处理）
  * @returns {Array} 任务项数组（type:'cli_task'）
@@ -17492,39 +19205,135 @@ function _buildTicketTasksFromLogs(logs) {
         if (typeof d === 'object') return d;
         try { return JSON.parse(d); } catch { return {}; }
     };
+    const filesOf = (d) => (Array.isArray(d.file_paths) && d.file_paths.length ? d.file_paths
+                         : Array.isArray(d.git_files) && d.git_files.length ? d.git_files
+                         : Array.isArray(d.files) ? d.files : []);
+
+    const tasks = [];
+    const pending = {};   // 未配对的 tool_start，按工具名索引
+
+    // 建表的同时记 logId → taskId，供日志条目上的链接查（见 _TICKET_TASK_INDEX）
+    const ticketId = (asc.find(l => l.ticket_id) || {}).ticket_id || _currentTimelineTicketId || '';
+    const index = {};
+    const push = (log, task) => { tasks.push(task); if (log.id) index[log.id] = task.id; };
 
     // 收集 reject 日志（结构化编译详情），按时间用于就近匹配
     const rejects = asc
         .filter(l => l.action === 'reject')
         .map(l => ({ t: new Date(l.created_at || 0).getTime(), d: parse(l.detail) }));
 
-    const tasks = [];
-    const pending = {};   // 未配对的 tool_start，按工具名索引
-
-    for (const log of asc) {
+    for (let i = 0; i < asc.length; i++) {
+        const log = asc[i];
         const act = log.action || '';
-        if (act !== 'tool_start' && act !== 'tool_done' && act !== 'complete') continue;
         const d = parse(log.detail);
 
-        // complete（develop/rework 完成）：合成"开发产出"任务，列出产出文件
-        if (act === 'complete') {
-            const files = (Array.isArray(d.file_paths) && d.file_paths.length ? d.file_paths
-                        : Array.isArray(d.git_files) && d.git_files.length ? d.git_files
-                        : Array.isArray(d.files) ? d.files : []);
-            if (!files.length) continue;   // 无文件产出的 complete 不建任务
-            const lines = [`产出 ${files.length} 个文件：`];
-            files.forEach(f => lines.push(`  📄 ${f}`));
-            if (d.result_summary) lines.push(`\n备注：${d.result_summary}`);
-            if (d.git_commit) lines.push(`\ngit commit: ${d.git_commit}`);
-            tasks.push({
+        // ── ToolError:xxx：一次失败的执行 ──────────────────────────
+        // action 形如 ToolError:agent:DevAgent.develop / ToolError:git:push_failed
+        if (act.startsWith('ToolError')) {
+            const tool = d.tool_name || act.replace(/^ToolError:/, '') || 'tool';
+            push(log, {
                 id: `titk-${log.id || Math.random().toString(36).slice(2)}`,
                 type: 'cli_task',
-                title: '开发产出',
-                tool: 'develop',
-                status: 'success',
+                title: tool,
+                tool,
+                status: 'error',
+                output: [`✗ ${tool} 执行失败`, '', d.error || '(无错误详情)'].join('\n'),
+                cmd: '',
+                duration_ms: d.duration_ms || 0,
+                created_at: log.created_at,
+                ts: log.created_at ? log.created_at.slice(11, 19) : '',
+                session_key: 'ticket_tasks',
+                session_label: '工单后台任务',
+            });
+            continue;
+        }
+
+        // ── thought_done 带文件产出：agent 动作的产出清单 ───────────
+        if (act === 'thought_done') {
+            const files = filesOf(d);
+            if (!files.length) continue;               // 纯一行 message 的不收（噪音）
+            // 紧随其后的 complete 往往把同一批文件再报一遍（36/40 条文件集合完全相同），
+            // 建两条重复任务没意义 —— 让信息更全的 complete 去建
+            const dup = asc.slice(i + 1, i + 4).some(n =>
+                n.action === 'complete' && filesOf(parse(n.detail)).some(f => files.includes(f)));
+            if (dup) continue;
+            const msg = d.message || '';
+            const toolM = msg.match(/完成\s+([a-z_]+)/i);
+            const tool = toolM ? toolM[1] : (d.status || 'agent');
+            const lines = [`产出 ${files.length} 个文件：`];
+            files.forEach(f => lines.push(`  📄 ${f}`));
+            if (msg) lines.unshift(msg, '');
+            push(log, {
+                id: `titk-${log.id || Math.random().toString(36).slice(2)}`,
+                type: 'cli_task',
+                title: tool,
+                tool,
+                status: /fail|error/i.test(d.status || '') ? 'error' : 'success',
                 output: lines.join('\n'),
                 cmd: '',
-                duration_ms: 0,
+                duration_ms: d.elapsed_ms || 0,
+                created_at: log.created_at,
+                ts: log.created_at ? log.created_at.slice(11, 19) : '',
+                session_key: 'ticket_tasks',
+                session_label: '工单后台任务',
+            });
+            continue;
+        }
+
+        if (act !== 'tool_start' && act !== 'tool_done' && act !== 'complete') continue;
+
+        // complete：两副面孔 —— UE 的编译/Playtest（带 command/exit_code，**无文件**）
+        // 和开发产出（带文件列表）。当年只认后者，于是截图里那条
+        // 「UBT 编译通过（497s，target=TestFPSEditor）」一直没有后台记录。
+        if (act === 'complete') {
+            const files = filesOf(d);
+            const hasCmd = d.command !== undefined || d.exit_code !== undefined;
+            if (!files.length && !hasCmd) continue;   // 既无产出也无命令 → 不建任务
+
+            const lines = [];
+            let title = '开发产出';
+            let tool = 'develop';
+
+            if (hasCmd) {
+                // 编译/测试型：标题取 message 的头一段（「UBT 编译通过」「Playtest 通过」）
+                const msg0 = d.message || '';
+                title = msg0.split(/[（(]/)[0].trim() || '执行完成';
+                tool = /playtest/i.test(msg0) || d.screenshots ? 'run_playtest' : 'run_engine_compile';
+                if (msg0) lines.push(msg0, '');
+                if (d.command) lines.push(`$ ${d.command}`);
+                if (d.exit_code !== undefined) lines.push(`exit_code = ${d.exit_code}`);
+                if (d.summary && typeof d.summary === 'object') {
+                    const s = d.summary;
+                    lines.push(`\n用例：总计 ${s.total ?? '?'} · 通过 ${s.passed ?? 0} · 失败 ${s.failed ?? 0} · 跳过 ${s.skipped ?? 0}`);
+                }
+                const prods = Array.isArray(d.products) ? d.products : [];
+                if (prods.length) {
+                    lines.push(`\n── 产物 (${prods.length}) ──`);
+                    prods.forEach(p => lines.push(`  ${typeof p === 'string' ? p : JSON.stringify(p)}`));
+                }
+                const shots = Array.isArray(d.screenshots) ? d.screenshots : [];
+                if (shots.length) {
+                    lines.push(`\n── 截图 (${shots.length}) ──`);
+                    shots.forEach(s => lines.push(`  ${typeof s === 'string' ? s : JSON.stringify(s)}`));
+                }
+            }
+            if (files.length) {
+                if (lines.length) lines.push('');
+                lines.push(`产出 ${files.length} 个文件：`);
+                files.forEach(f => lines.push(`  📄 ${f}`));
+            }
+            if (d.result_summary) lines.push(`\n备注：${d.result_summary}`);
+            if (d.git_commit) lines.push(`\ngit commit: ${d.git_commit}`);
+
+            push(log, {
+                id: `titk-${log.id || Math.random().toString(36).slice(2)}`,
+                type: 'cli_task',
+                title,
+                tool,
+                status: (d.exit_code !== undefined && d.exit_code !== 0) ? 'error' : 'success',
+                output: lines.join('\n'),
+                cmd: d.command || '',
+                duration_ms: d.duration_ms || 0,
                 created_at: log.created_at,
                 ts: log.created_at ? log.created_at.slice(11, 19) : '',
                 session_key: 'ticket_tasks',
@@ -17587,7 +19396,7 @@ function _buildTicketTasksFromLogs(logs) {
         }
         const output = outParts.join('\n') || msg || '(无输出)';
 
-        tasks.push({
+        push(log, {
             id: `titk-${log.id || Math.random().toString(36).slice(2)}`,
             type: 'cli_task',
             title: tool,
@@ -17601,11 +19410,51 @@ function _buildTicketTasksFromLogs(logs) {
             session_key: 'ticket_tasks',
             session_label: '工单后台任务',
         });
+        // tool_start 只是被配对吸收，自己不建任务；但它在时间轴上也是一条
+        // 「开始 xxx」，指向同一次执行 —— 一并记进索引，让它也能点
+        if (startLog && startLog.id) index[startLog.id] = tasks[tasks.length - 1].id;
     }
+    if (ticketId) _TICKET_TASK_INDEX[ticketId] = index;
     return tasks;
 }
 
+/**
+ * 同一轮里重复调用 _refreshTasksPanel 时复用同一个在途请求。
+ *
+ * 为什么需要：挂载面板（_mountTasksPane / _openTasksInSidePanel）自己会刷一次，
+ * 但它们不是 async，刷新是 fire-and-forget；而 openTaskFromLog 必须**等**刷新
+ * 结束才能从 _CLI_TASKS_MEM 里找任务。于是 _openTicketTasksPanel 补了一次 await ——
+ * 不去重的话同一个工单日志会连拉两遍。
+ *
+ * 但**不能只是简单复用**：过滤条件（_tasksTicketFilter / 状态 tab）是模块级可变状态，
+ * 若 _setTasksFilter 在请求在途时切了 tab，直接把旧 Promise 让出去，新过滤就永远不生效了。
+ * 所以在途期间再次请求会置 _tasksRefreshAgain，等当前这轮结束后**补跑一次**，
+ * 拿到的是切换后的条件。
+ */
+let _tasksRefreshInFlight = null;
+let _tasksRefreshAgain = false;
 async function _refreshTasksPanel() {
+    if (_tasksRefreshInFlight) {
+        _tasksRefreshAgain = true;
+        return _tasksRefreshInFlight;
+    }
+    _tasksRefreshInFlight = (async () => {
+        try {
+            await _refreshTasksPanelInner();
+            // 期间有人改了过滤条件 → 用新条件再跑一轮（只补一次，不滚雪球）
+            while (_tasksRefreshAgain) {
+                _tasksRefreshAgain = false;
+                await _refreshTasksPanelInner();
+            }
+        } finally {
+            _tasksRefreshInFlight = null;
+            _tasksRefreshAgain = false;
+        }
+    })();
+    return _tasksRefreshInFlight;
+}
+
+async function _refreshTasksPanelInner() {
     const listEl = document.getElementById('tasksPanelList');
     if (!listEl) return;
     listEl.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);">加载中…</div>';
@@ -17621,6 +19470,24 @@ async function _refreshTasksPanel() {
                 listEl.innerHTML = `<div style="padding:20px;color:var(--danger);">加载工单任务失败: ${escapeHtml(String(e))}</div>`;
                 return;
             }
+            // 真命令记录（ticket_command_log）。合成任务保留是因为 40035 条历史日志
+            // 没有真记录，删了旧工单链接全灭；但同一次执行两边都有时，以真的为准 ——
+            // 按 log_id 把被覆盖的合成项丢掉，避免一次执行显示成两行。
+            let realTasks = [];
+            try {
+                const cd = await api(`/tickets/${_tasksTicketFilter}/command-logs`);
+                realTasks = (cd.records || []).map(_recordToTask);
+                const coveredLogIds = new Set((cd.records || []).map(r => r.log_id).filter(Boolean));
+                if (coveredLogIds.size) {
+                    const idx = _TICKET_TASK_INDEX[_tasksTicketFilter] || {};
+                    const dropIds = new Set();
+                    coveredLogIds.forEach(lid => { if (idx[lid]) dropIds.add(idx[lid]); });
+                    ticketBuilt = ticketBuilt.filter(t => !dropIds.has(t.id));
+                }
+            } catch (e) { console.warn('命令记录加载失败', e); }
+
+            ticketBuilt = ticketBuilt.concat(realTasks)
+                .sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')));
             // 同步到内存表，供 _selectTaskItem / _renderCliTaskOutput 读取
             ticketBuilt.forEach(t => { _CLI_TASKS_MEM[t.id] = t; });
 
@@ -17984,20 +19851,40 @@ async function _selectTaskItem(task) {
             const data = await api(`/tickets/${task.id}/logs?limit=200`);
             const logs = data.logs || [];
             if (!logs.length) { outputEl.textContent = '（暂无日志）'; return; }
-            outputEl.textContent = logs.map(l => {
+            const text = logs.map(l => {
                 const ts = l.created_at ? l.created_at.slice(11,19) : '';
                 const detail = typeof l.detail === 'string' ? l.detail
                     : (l.detail?.message || JSON.stringify(l.detail || ''));
                 return `[${ts}] [${l.agent_type||'?'}] ${l.action||''}: ${detail}`;
             }).join('\n');
+            _renderTaskOutput(outputEl, {
+                taskId: task.id, status: task.status,
+                statusLabel: `工单 ${task.status || ''} · ${logs.length} 条日志`,
+                durationText: task.elapsed && task.elapsed !== '?' ? task.elapsed : '',
+                text,
+                // 每行开头都是 [时间] 前缀，整段不是 JSON，别去折
+                foldJson: false,
+                // 接口已经 limit=200，再截到 25 行等于白拉一趟
+                maxLines: 200,
+            });
         } else if (task.type === 'ci_build') {
-            // 显示 CI 构建日志尾部
-            const tail = task.log_tail || '（无输出）';
-            outputEl.textContent = `# CI 构建: ${task.title}\n状态: ${task.status}\n耗时: ${task.elapsed}\n\n${tail}`;
+            // 显示 CI 构建日志尾部。title 已经是 'CI: package_client'，别再套一层「CI 构建」
+            _renderTaskOutput(outputEl, {
+                taskId: task.id, status: task.status,
+                statusLabel: task.title || 'CI 构建',
+                durationText: task.elapsed && task.elapsed !== '?' ? task.elapsed : '',
+                text: task.log_tail || '（无输出）',
+            });
         } else if (task.type === 'cli_task') {
             // CLI 工具任务：优先用内存，兜底拉 API
             _cliActiveTaskId = task.id;
             if (_CLI_TASKS_MEM[task.id]) {
+                _renderCliTaskOutput(task.id, outputEl);
+            } else if (String(task.id).startsWith('TCMD-')) {
+                // 工单命令记录走自己的表。刷新页面后内存表是空的，这条分支保证
+                // 从时间轴点进来仍能拉到全量输出（cli-tasks 那个接口查不到它）
+                const d = await api(`/ticket-command-logs/${task.id}`);
+                _CLI_TASKS_MEM[task.id] = _recordToTask(d);
                 _renderCliTaskOutput(task.id, outputEl);
             } else {
                 const apiBase = currentProjectId ? `/api/projects/${currentProjectId}/chat` : `/api/chat`;
@@ -18012,7 +19899,14 @@ async function _selectTaskItem(task) {
                 _renderCliTaskOutput(task.id, outputEl);
             }
         } else {
-            outputEl.textContent = JSON.stringify(task, null, 2);
+            // 认不出的任务类型：把原始字段摊平给人看。整段是 JSON，
+            // 交给 JSON 折叠就只剩一行 summary，所以 foldJson=false 走普通行
+            _renderTaskOutput(outputEl, {
+                taskId: task.id || '', status: task.status,
+                statusLabel: `${task.type || '未知类型'} · 原始数据`,
+                text: JSON.stringify(task, null, 2),
+                maxLines: 200, foldJson: false,
+            });
         }
         outputEl.scrollTop = outputEl.scrollHeight;
     } catch(e) {
@@ -18364,13 +20258,7 @@ async function sendChatMessage() {
     const message = input?.value.trim() || '';
 
     // 发送前将内容存入历史（守卫之前执行，所有模式均保存）
-    if (message && message !== _chatInputHistory[0]) {
-        _chatInputHistory.unshift(message);
-        if (_chatInputHistory.length > 50) _chatInputHistory.pop();
-        try { localStorage.setItem('chatInputHistory', JSON.stringify(_chatInputHistory)); } catch {}
-    }
-    _chatHistoryIdx = -1;
-    _chatInputDraft = '';
+    _rememberChatInput(message);
 
     if (chatSending || (chatMode !== 'global' && chatMode !== 'group')) return;
 
@@ -19364,7 +21252,7 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
         // read_file 时尝试从 action.path 或 action.message 中提取路径
         const gitFilePath = action.path || (action.action === 'read_file' ? extractPathFromGitMsg(action.message || '') : '');
         const gitLinkHtml = action.action === 'switch_branch'
-            ? `<span class="action-link" onclick="switchTab('repo'); loadRepoTree();">查看仓库文件 →</span>`
+            ? `<span class="action-link" onclick="switchTab('repo'); loadRepoPage(true);">查看仓库文件 →</span>`
             : action.action === 'read_file' && gitFilePath
                 ? `<span class="action-link" onclick="openRepoFileFromChat('${escapeHtml(gitFilePath)}')">查看文件 →</span>`
                 : '';
@@ -21017,6 +22905,10 @@ function openRepoFileFromChat(filePath) {
             return;
         }
         switchTab('repo');
+        // 聊天/日志里的路径都是**主仓库**的相对路径（后端 artifacts 记的就是它），
+        // 而仓库页会恢复上次选的仓库 —— 不强制切回主仓库，会拿 UE5 的根去解
+        // ThunderStrike 的相对路径，报个莫名其妙的 404
+        _repoForcePrimaryOnce = true;
         setTimeout(() => viewRepoFile(path, null), 450);
     };
 
@@ -21083,6 +22975,8 @@ function _projectTraitsList(p) {
 
 function showChatWelcome() {
     const container = document.getElementById('chatMessages');
+    // 欢迎页也是"这个 context 的内容"，否则下次检查又会判定成脏数据反复重载
+    _markChatRendered();
     if (currentProjectId) {
         const name = currentProject?.name || '本项目';
         const desc = (currentProject?.description || '').trim();
@@ -21160,15 +23054,23 @@ function selectTicketForChat(ticketId, ticketTitle) {
     chatCurrentTicketId = ticketId;
     chatCurrentTicketTitle = ticketTitle || '';
 
-    // 打开右侧对话（壳层）或旧聊天面板
-    if (typeof adsShell !== 'undefined' && adsShell.isProjectShell()) {
-        adsShell.openRight({ tab: 'chat', ticketId });
-    } else if (!chatPanelOpen) {
-        toggleChatPanel();
-    }
+    // 模式必须在 openRight 之前定下来：openRight 会按当前模式补载内容，
+    // 还停在 global 的话它会拉一遍全局历史，而那个请求可能**晚于**
+    // 下面的 loadTicketConversations 返回，把工单对话冲掉。
+    chatMode = 'job';
+
+    // 打开右侧对话（壳层）或旧聊天面板。
+    // suppress：这里马上要 loadTicketConversations(ticketId)（单个工单），
+    // 让 openRight 再拉一遍 loadAllTicketConversations（整个 Feed）纯属打架。
+    _withChatReloadSuppressed(() => {
+        if (typeof adsShell !== 'undefined' && adsShell.isProjectShell()) {
+            adsShell.openRight({ tab: 'chat', ticketId });
+        } else if (!chatPanelOpen) {
+            toggleChatPanel();
+        }
+    });
 
     // 切换到 job 模式（更新 tab 样式、隐藏输入框）
-    chatMode = 'job';
     document.getElementById('chatModeGlobal')?.classList.toggle('active', false);
     document.getElementById('chatModeJob')?.classList.toggle('active', true);
     document.getElementById('chatModeGroup')?.classList.toggle('active', false);
@@ -21225,6 +23127,19 @@ const _chatInputHistory = (() => {
 })();
 let _chatHistoryIdx = -1;
 let _chatInputDraft = '';
+
+/** 把一次输入（普通消息 / 斜杠命令）压进上下键回溯历史 ——
+ *  原来只有 sendChatMessage 里存，斜杠命令走单独分支就被漏掉，上翻找不到。
+ *  连续重复的输入跟最近一条相同时不再推一次，避免历史里一长串重复项。*/
+function _rememberChatInput(message) {
+    if (message && message !== _chatInputHistory[0]) {
+        _chatInputHistory.unshift(message);
+        if (_chatInputHistory.length > 50) _chatInputHistory.pop();
+        try { localStorage.setItem('chatInputHistory', JSON.stringify(_chatInputHistory)); } catch {}
+    }
+    _chatHistoryIdx = -1;
+    _chatInputDraft = '';
+}
 
 /**
  * 处理键盘事件
@@ -21675,6 +23590,7 @@ function handleChatKeydown(e) {
         const input = document.getElementById('chatInput');
         const val = (input?.value || '').trim();
         if (val.startsWith('/test')) {
+            _rememberChatInput(val);
             _handleSlashTest(val);
             if (input) input.value = '';
             return;
@@ -21686,6 +23602,7 @@ function handleChatKeydown(e) {
         // 通用斜杠命令路由：只匹配 /字母开头的命令（如 /help、/ue-run），
         // 排除 UE 资产路径（/Script/...、/Game/... 等含大写或多段路径的情况）
         if (val.startsWith('/') && val.length > 1 && !val.startsWith('/ ') && /^\/[a-zA-Z][a-zA-Z0-9\-]*(\s|$)/.test(val)) {
+            _rememberChatInput(val);
             _handleSlashCommand(val);
             if (input) input.value = '';
             _hideSlashSuggestions();
@@ -25768,4 +27685,639 @@ function appendMcpActionCard(action) {
     }
     container.appendChild(bubble);
     scrollChatToBottom();
+}
+
+// ==================== 外部会话浏览器（Cursor） ====================
+// 入口：侧栏 📜 外部会话 → switchTab('external-sessions') → adsShell.openMain({type:'external-sessions'})
+//      → _loadMainTabContent → _mountExternalSessionsPane
+// DOM 策略：每次挂载重建，不复用（会话是只读 API 快照，没有需要保活的内存状态）。
+// 气泡：直接复用 .chat-msg / .chat-msg-content / .chat-msg-bubble + formatChatContent。
+
+let _esState = {
+    projectId: '',            // 当前面板关联的项目
+    sessions: [],             // 会话列表（API 返回的 summary 数组）
+    filtered: [],             // 搜索过滤后的子集，用于渲染列表
+    activeSessionId: '',      // 当前右栏显示的会话 id
+    searchQuery: '',          // 当前搜索关键字（下次 render 时据此过滤）
+    rootsResolved: null,      // API 返回的 roots（空数组表示项目没设仓库路径）
+    providerAvailable: true,  // API 返回的 provider_available
+    showThinking: false,      // "显示思考"开关；默认关（Cursor 原生就隐藏，气泡列表更清爽）
+};
+
+// —— 右栏滚动位置记忆：首次打开会话滚到底（最新消息），打开过则恢复上次滚动位置 ——
+// scrollTop 按 sessionId 存 localStorage，面板关掉再开也保留。
+let _esSuppressScroll = false;          // 渲染/恢复滚动期间，scroll 事件不算用户滚动，不落盘
+const _ES_SCROLL_PREFIX = 'esScrollPos:';
+let _esScrollSaveQueued = false;        // rAF 节流：滚动事件每帧只写一次 localStorage
+let _esScrollPending = null;            // 待保存的 { sid, top }（滚动停止时落到最后一帧的位置）
+
+function _esSaveScrollPos(sessionId, scrollTop) {
+    if (!sessionId) return;
+    try { localStorage.setItem(_ES_SCROLL_PREFIX + sessionId, String(Math.round(scrollTop))); } catch {}
+}
+function _esGetScrollPos(sessionId) {
+    try {
+        const v = localStorage.getItem(_ES_SCROLL_PREFIX + sessionId);
+        return v === null ? null : parseInt(v, 10);
+    } catch { return null; }
+}
+function _esOnScroll(e) {
+    if (_esSuppressScroll) return;
+    _esScrollPending = { sid: _esState.activeSessionId, top: e.currentTarget.scrollTop };
+    if (_esScrollSaveQueued) return;
+    _esScrollSaveQueued = true;
+    requestAnimationFrame(() => {
+        _esScrollSaveQueued = false;
+        if (_esScrollPending) {
+            _esSaveScrollPos(_esScrollPending.sid, _esScrollPending.top);
+            _esScrollPending = null;
+        }
+    });
+}
+
+/** 入口：由 adsShell._loadMainTabContent 调用，重建整块 DOM 并异步拉数据 */
+async function _mountExternalSessionsPane(tab, host) {
+    const projectId = tab.projectId || currentProjectId || '';
+    const showThinking = _esReadShowThinkingPref();
+    _esState = {
+        projectId,
+        sessions: [],
+        filtered: [],
+        activeSessionId: '',
+        searchQuery: '',
+        rootsResolved: null,
+        providerAvailable: true,
+        showThinking,
+    };
+
+    // 复用 tasksSidePanel 的双栏骨架，id 换 es 前缀；外壳 class 用 external-sessions-pane，便于 CSS 定位
+    // es-hide-thinking 根据开关初始状态挂上；CSS 整条隐藏 thinking 气泡
+    const hideCls = showThinking ? '' : ' es-hide-thinking';
+    host.innerHTML = `
+        <div class="external-sessions-pane${hideCls}" style="display:flex;flex-direction:column;height:100%;overflow:hidden;">
+            <div style="display:flex;align-items:center;justify-content:space-between;
+                        padding:8px 12px;border-bottom:1px solid var(--border);flex-shrink:0;">
+                <span style="font-size:12px;font-weight:600;">📜 外部会话 · Cursor</span>
+                <div style="display:flex;gap:10px;align-items:center;">
+                    <label class="es-toggle-thinking" title="默认隐藏模型思考过程，和 Cursor 原生体验一致">
+                        <input type="checkbox" ${showThinking ? 'checked' : ''}
+                            onchange="_esSetShowThinking(this.checked)">
+                        <span>显示思考</span>
+                    </label>
+                    <button class="btn-icon" onclick="_esRefresh()" title="刷新" style="font-size:12px;">↻</button>
+                </div>
+            </div>
+            <div style="padding:4px 8px;border-bottom:1px solid var(--border);flex-shrink:0;">
+                <input id="esSearchInput" type="text" placeholder="🔍 搜索会话（标题 / 副标题）…"
+                    oninput="_esSearch(this.value)"
+                    style="width:100%;box-sizing:border-box;background:rgba(255,255,255,.05);
+                           border:1px solid var(--border);border-radius:4px;padding:3px 7px;
+                           font-size:11px;color:var(--text);outline:none;">
+            </div>
+            <div style="display:flex;flex:1;overflow:hidden;min-height:0;">
+                <div id="esPanelList" style="width:260px;flex-shrink:0;overflow-y:auto;font-size:11px;">
+                    <div style="padding:12px;color:var(--text-muted);">加载中…</div>
+                </div>
+                <div id="esPanelResizer" style="width:4px;flex-shrink:0;cursor:col-resize;
+                     background:transparent;border-right:1px solid var(--border);transition:background .15s;"
+                     onmousedown="_esPanelResizeStart(event)"
+                     title="拖拽调整宽度"></div>
+                <div id="esPanelOutput" style="flex:1;overflow:auto;padding:12px;" onscroll="_esOnScroll(event)">
+                    <div style="color:var(--text-muted);padding-top:30px;text-align:center;font-size:12px;">
+                        ← 选择左侧会话查看完整气泡
+                    </div>
+                </div>
+            </div>
+        </div>`;
+
+    _esRestoreListWidth();
+    await _esRefresh();
+}
+
+/** 读/写"显示思考"开关的 localStorage 偏好 */
+function _esReadShowThinkingPref() {
+    try { return localStorage.getItem('esShowThinking') === '1'; } catch { return false; }
+}
+function _esSetShowThinking(checked) {
+    _esState.showThinking = !!checked;
+    try { localStorage.setItem('esShowThinking', checked ? '1' : '0'); } catch {}
+    const pane = document.querySelector('.external-sessions-pane');
+    if (pane) pane.classList.toggle('es-hide-thinking', !checked);
+}
+
+/** 拉会话列表。_esState 填入 sessions / rootsResolved / providerAvailable，然后 _esRenderList */
+async function _esRefresh() {
+    const pid = _esState.projectId;
+    const listEl = document.getElementById('esPanelList');
+    if (!pid) {
+        if (listEl) listEl.innerHTML = `<div style="padding:12px;color:var(--text-muted);">未选择项目</div>`;
+        return;
+    }
+    if (listEl) listEl.innerHTML = `<div style="padding:12px;color:var(--text-muted);">加载中…</div>`;
+    try {
+        const data = await api(`/projects/${encodeURIComponent(pid)}/external-sessions?provider=cursor`);
+        _esState.sessions = Array.isArray(data.sessions) ? data.sessions : [];
+        _esState.filtered = _esState.sessions.slice();
+        _esState.rootsResolved = Array.isArray(data.roots) ? data.roots : [];
+        _esState.providerAvailable = data.provider_available !== false;
+        _esRenderList();
+    } catch (e) {
+        console.error('[external-sessions] list failed', e);
+        if (listEl) listEl.innerHTML = `
+            <div style="padding:12px;color:var(--danger);">加载失败：${escHtml(String(e.message || e))}</div>`;
+    }
+}
+
+/** 过滤 + 填 list 栏 */
+function _esRenderList() {
+    const listEl = document.getElementById('esPanelList');
+    if (!listEl) return;
+
+    // 空态分三种，提示信息要能区分
+    if (!_esState.providerAvailable) {
+        listEl.innerHTML = `
+            <div style="padding:16px 12px;color:var(--text-muted);font-size:12px;line-height:1.6;">
+                <div style="font-weight:600;margin-bottom:6px;">没找到 Cursor 用户目录</div>
+                默认位置是 <code>%APPDATA%\\Cursor\\User</code>，可以设环境变量 <code>CURSOR_USER_DIR</code> 覆盖。
+            </div>`;
+        return;
+    }
+    if (!_esState.rootsResolved || _esState.rootsResolved.length === 0) {
+        listEl.innerHTML = `
+            <div style="padding:16px 12px;color:var(--text-muted);font-size:12px;line-height:1.6;">
+                <div style="font-weight:600;margin-bottom:6px;">项目没设仓库路径</div>
+                去「设置 → 仓库配置」填一下 git 仓库路径或 extra_paths，才知道去哪里匹配 Cursor workspace。
+                <div style="margin-top:10px;">
+                    <button class="btn btn-sm" onclick="switchTab('settings-repo')">去设置</button>
+                </div>
+            </div>`;
+        return;
+    }
+
+    const q = (_esState.searchQuery || '').toLowerCase();
+    _esState.filtered = q
+        ? _esState.sessions.filter(s => {
+            const hay = (s.title + ' ' + (s.extra && s.extra.subtitle || '')).toLowerCase();
+            return hay.includes(q);
+        })
+        : _esState.sessions.slice();
+
+    if (_esState.filtered.length === 0) {
+        listEl.innerHTML = `
+            <div style="padding:16px 12px;color:var(--text-muted);font-size:12px;">
+                ${_esState.sessions.length === 0 ? '没有命中任何 Cursor 会话' : '搜索无匹配结果'}
+            </div>`;
+        return;
+    }
+
+    listEl.innerHTML = _esState.filtered.map(s => {
+        const activeCls = s.id === _esState.activeSessionId ? ' active' : '';
+        const updatedShort = (s.updated_at || '').slice(0, 10);
+        const subtitle = (s.extra && s.extra.subtitle) || '';
+        const archivedBadge = s.is_archived
+            ? '<span style="color:var(--text-muted);font-size:10px;">📦</span> '
+            : '';
+        return `
+            <div class="tasks-panel-item${activeCls}" data-session-id="${escHtml(s.id)}"
+                 onclick="_esSelectSession('${escHtml(s.id)}')"
+                 style="padding:8px 10px;cursor:pointer;border-bottom:1px solid var(--border);">
+                <div style="font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+                    ${archivedBadge}${escHtml(s.title || '(未命名)')}
+                </div>
+                ${subtitle ? `<div style="color:var(--text-muted);font-size:10px;margin-top:2px;
+                     white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escHtml(subtitle)}</div>` : ''}
+                <div style="color:var(--text-muted);font-size:10px;margin-top:2px;">${updatedShort}</div>
+            </div>`;
+    }).join('');
+}
+
+/** 搜索框 oninput 触发 */
+function _esSearch(val) {
+    _esState.searchQuery = (val || '').trim();
+    _esRenderList();
+}
+
+/** 点击左侧会话 → 拉详情、填右栏 */
+async function _esSelectSession(sessionId) {
+    _esState.activeSessionId = sessionId;
+    _esRenderList();  // 刷一下让高亮生效
+
+    const outEl = document.getElementById('esPanelOutput');
+    if (!outEl) return;
+    // 渲染会重置 scrollTop（触发 scroll 事件），先把落盘关掉，避免把上一个会话的位置
+    // 错记到新会话头上（"加载气泡…"那行 innerHTML 也会归零滚动）。
+    _esSuppressScroll = true;
+    outEl.innerHTML = `<div style="color:var(--text-muted);padding:16px;">加载气泡…</div>`;
+
+    const pid = _esState.projectId;
+    try {
+        const data = await api(`/projects/${encodeURIComponent(pid)}/external-sessions/cursor/${encodeURIComponent(sessionId)}`);
+        _esRenderSessionDetail(outEl, data);
+    } catch (e) {
+        _esSuppressScroll = false;  // 失败也要恢复记录，否则之后滚动都不落盘
+        console.error('[external-sessions] detail failed', e);
+        outEl.innerHTML = `<div style="color:var(--danger);padding:16px;">加载失败：${escHtml(String(e.message || e))}</div>`;
+    }
+}
+
+/** 把 session 详情（含 messages）渲染到右栏。复用 .chat-msg / .chat-msg-bubble + formatChatContent */
+function _esRenderSessionDetail(outEl, data) {
+    const messages = Array.isArray(data.messages) ? data.messages : [];
+    const title = data.title || '(未命名)';
+    const headerExtra = data.extra || {};
+    const metaParts = [];
+    if (headerExtra.forceMode) metaParts.push('mode=' + headerExtra.forceMode);
+    if (data.message_count) metaParts.push(data.message_count + ' 条');
+    if (data.updated_at) metaParts.push('更新 ' + data.updated_at.slice(0, 19).replace('T', ' '));
+
+    const header = `
+        <div class="es-session-header" style="padding:0 0 12px 0;border-bottom:1px solid var(--border);margin-bottom:12px;">
+            <div style="font-size:14px;font-weight:600;">${escHtml(title)}</div>
+            ${headerExtra.subtitle ? `<div style="color:var(--text-muted);font-size:11px;margin-top:4px;">${escHtml(headerExtra.subtitle)}</div>` : ''}
+            <div style="color:var(--text-muted);font-size:10px;margin-top:4px;">${metaParts.map(escHtml).join(' · ')}</div>
+        </div>`;
+
+    const bubbles = _esRenderMessages(messages);
+    const savedPos = _esGetScrollPos(_esState.activeSessionId);
+
+    outEl.innerHTML = header + `<div class="chat-messages" style="display:flex;flex-direction:column;gap:12px;padding:0;">${bubbles}</div>`;
+
+    // 打开过 → 恢复历史位置；首次 → 滚到底（最新消息在底部）。
+    // rAF 等 innerHTML 落地、布局稳定后再设 scrollTop，否则读到的是旧高度。
+    requestAnimationFrame(() => {
+        if (savedPos !== null) {
+            outEl.scrollTop = savedPos;
+            _esSuppressScroll = false;
+        } else {
+            outEl.scrollTop = outEl.scrollHeight;
+            // 图片是异步加载的（本地 API 也有一丁点延迟），首帧后再校正一次，
+            // 避免底部图片撑高后"到底"变成"差一截"。
+            setTimeout(() => {
+                outEl.scrollTop = outEl.scrollHeight;
+                _esSuppressScroll = false;
+            }, 150);
+        }
+    });
+}
+
+/** 消息列表 → HTML。连续的 thinking/tool_call（Cursor 里同一轮"思考+调用工具"的若干步）
+ *  合并成一个分组折叠条（"✦ 思考了 N 轮 · M 步"），而不是每条单独占一行——
+ *  否则一轮里 4、5 个工具调用会堆成一长条 chip 列表，和参考截图的单行汇总不符。
+ *  text/user/system 消息还是各自独立一行。*/
+function _esRenderMessages(messages) {
+    const out = [];
+    let i = 0;
+    while (i < messages.length) {
+        const kind = messages[i].kind || 'text';
+        if (kind === 'thinking' || kind === 'tool_call') {
+            const cluster = [];
+            while (i < messages.length && ((messages[i].kind || 'text') === 'thinking' || (messages[i].kind || 'text') === 'tool_call')) {
+                cluster.push(messages[i]);
+                i++;
+            }
+            out.push(_esRenderGroup(cluster));
+        } else {
+            out.push(_esRenderBubble(messages[i]));
+            i++;
+        }
+    }
+    return out.join('');
+}
+
+/** 一组连续 thinking/tool_call → 单行汇总折叠条，展开后按原顺序堆叠每一步的 chip。*/
+function _esRenderGroup(cluster) {
+    const first = cluster[0] || {};
+    const role = (first.role === 'user' || first.role === 'assistant') ? first.role : 'assistant';
+    const rounds = cluster.filter(m => (m.kind || 'text') === 'thinking').length;
+    const steps = cluster.filter(m => (m.kind || 'text') === 'tool_call').length;
+    const parts = [];
+    if (rounds > 0) parts.push(`思考了 ${rounds} 轮`);
+    if (steps > 0) parts.push(`${steps} 步`);
+    const label = parts.join(' · ') || '处理中';
+    let stepNo = 0;
+    const body = cluster.map(m => {
+        const kind = m.kind || 'text';
+        if (kind === 'thinking') return _esRenderGroupThinkingItem(m);
+        stepNo++;
+        return _esRenderGroupToolItem(m, stepNo);
+    }).join('');
+
+    return `
+        <div class="chat-msg ${role}" data-kind="group">
+            <div class="chat-msg-content">
+                <div class="es-chip es-chip-group" onclick="_esToggleChip(this, event)">
+                    <div class="es-chip-head"><span class="es-chip-arrow">▸</span><span>✦ ${escHtml(label)}</span></div>
+                    <div class="es-chip-body" style="display:none;">${body}</div>
+                </div>
+                ${_esMsgTime(first)}
+            </div>
+        </div>`;
+}
+
+/** 消息时间戳 → 小字 .chat-msg-time（没有 created_at 就返回空串，不占位）。*/
+function _esMsgTime(m) {
+    if (!m || !m.created_at) return '';
+    return `<div class="chat-msg-time">${formatTime(m.created_at)}</div>`;
+}
+
+/** 单条消息 → 外层 .chat-msg 行（独立消息用，分组内部走 _esRenderBubbleInner 不要这层外壳）。
+ *  foldable 内容（JSON 快照 / 系统通知）即便挂在 user-role 的 bubble 上，实际也是"系统/AI 侧
+ *  状态产出"而不是用户敲的话，所以外壳按 assistant 画（靠左、无紫色高亮），不跟着 m.role 走。*/
+function _esRenderBubble(m) {
+    const content = typeof m.content === 'string' ? m.content : '';
+    const foldable = _esDetectFoldableText(content);
+    const role = foldable ? 'assistant' : ((m.role === 'user' || m.role === 'assistant') ? m.role : 'assistant');
+    const kind = m.kind || 'text';
+    return `
+        <div class="chat-msg ${role}" data-kind="${kind}">
+            <div class="chat-msg-content">${_esRenderBubbleInner(m, foldable)}${_esMsgTime(m)}</div>
+        </div>`;
+}
+
+/** 单条消息 → 气泡本体（不含 .chat-msg 外壳）。只用于 text（thinking/tool_call 走分组渲染，
+ *  见 _esRenderGroupThinkingItem / _esRenderGroupToolItem）。
+ *  foldable 命中时不套 .chat-msg-bubble（那层是给"一段话"用的大圆角实色面板，结构化折叠条
+ *  本来就该跟分组条 .es-chip-group 一样紧凑），chip 自己的 .es-chip-json 已经够用。*/
+function _esRenderBubbleInner(m, foldable) {
+    const content = typeof m.content === 'string' ? m.content : '';
+    const imagesHtml = _esRenderImages(m.images);
+    if (foldable === undefined) foldable = _esDetectFoldableText(content);
+    if (foldable) {
+        const chip = foldable.kind === 'json'
+            ? _esRenderJsonChip(foldable.data)
+            : _esRenderNotificationChip(foldable.raw);
+        return imagesHtml + chip;
+    }
+    const bubbleInner = content
+        ? formatChatContent(content)
+        : (imagesHtml ? '' : '<span style="color:var(--text-muted);font-style:italic;">（空消息）</span>');
+    return `<div class="chat-msg-bubble">${imagesHtml}${bubbleInner}</div>`;
+}
+
+/** 有些气泡整条就是一大块结构化内容（代码审查 JSON 结果、任务完成系统通知包裹文本），
+ *  不是"给人读的对话"，是"状态快照"——不折叠的话会撑成一个巨大的纯色面板。
+ *  命中就折叠成一行摘要，点开才展示全文。*/
+function _esDetectFoldableText(content) {
+    const trimmed = (content || '').trim();
+    if (!trimmed) return null;
+    const looksJson = (trimmed[0] === '{' && trimmed[trimmed.length - 1] === '}')
+        || (trimmed[0] === '[' && trimmed[trimmed.length - 1] === ']');
+    if (looksJson) {
+        try {
+            const data = JSON.parse(trimmed);
+            if (data && typeof data === 'object') return { kind: 'json', data };
+        } catch (e) { /* 不是合法 JSON，走普通气泡渲染 */ }
+    }
+    if (trimmed.includes('<system_notification>')) {
+        return { kind: 'notification', raw: trimmed };
+    }
+    return null;
+}
+
+/** JSON 块 → 折叠条。摘要行尽量从常见字段里挑（target_id/task_id/title/状态/findings 数量），
+ *  挑不出有意义的就退回显示前几个 key。findings 数组再按条折叠（复用工具步骤那套点击展开样式）。*/
+function _esRenderJsonChip(data) {
+    if (Array.isArray(data)) {
+        const label = `JSON 数组 · ${data.length} 项`;
+        const body = `<pre style="margin:0;background:rgba(0,0,0,.2);padding:8px;border-radius:4px;
+            font-size:10px;overflow:auto;max-height:400px;white-space:pre-wrap;">${escHtml(JSON.stringify(data, null, 2))}</pre>`;
+        return _esWrapJsonChip(label, body);
+    }
+    const parts = [];
+    if (data.target_id) parts.push(String(data.target_id));
+    if (data.task_id !== undefined) parts.push('#' + data.task_id);
+    if (data.title) parts.push(String(data.title));
+    if (data.status) parts.push(String(data.status));
+    if (typeof data.findings_count === 'number') parts.push(data.findings_count + ' 条发现');
+    else if (Array.isArray(data.findings)) parts.push(data.findings.length + ' 条发现');
+    const label = parts.length ? parts.join(' · ') : ('JSON · ' + Object.keys(data).slice(0, 4).join(', '));
+
+    let body;
+    if (Array.isArray(data.findings) && data.findings.length > 0) {
+        const metaObj = {};
+        Object.keys(data).forEach(k => { if (k !== 'findings') metaObj[k] = data[k]; });
+        const metaHtml = Object.keys(metaObj).length
+            ? `<pre style="margin:0 0 8px;background:rgba(0,0,0,.2);padding:6px;border-radius:4px;
+                font-size:10px;overflow:auto;white-space:pre-wrap;">${escHtml(JSON.stringify(metaObj, null, 2))}</pre>`
+            : '';
+        body = metaHtml + data.findings.map((f, idx) => _esRenderFindingItem(f, idx + 1)).join('');
+    } else {
+        body = `<pre style="margin:0;background:rgba(0,0,0,.2);padding:8px;border-radius:4px;
+            font-size:10px;overflow:auto;max-height:400px;white-space:pre-wrap;">${escHtml(JSON.stringify(data, null, 2))}</pre>`;
+    }
+    return _esWrapJsonChip(label, body);
+}
+
+/** findings[] 单条 → 编号折叠行：severity + finding_type + file:line_range 做摘要，点开看全文。 */
+function _esRenderFindingItem(f, idx) {
+    if (!f || typeof f !== 'object') {
+        return `<div style="margin:4px 0;font-size:11px;color:var(--text-muted);">${idx}. ${escHtml(JSON.stringify(f))}</div>`;
+    }
+    const sev = f.severity || '';
+    const sevColor = sev === 'P0' ? '#f87171' : sev === 'P1' ? '#fbbf24' : 'var(--text-muted)';
+    const headParts = [f.finding_type, f.file ? (f.file + (f.line_range ? ':' + f.line_range : '')) : ''].filter(Boolean);
+    const body = `<pre style="margin:4px 0 0;background:rgba(0,0,0,.2);padding:6px;border-radius:4px;
+        font-size:10px;overflow:auto;max-height:300px;white-space:pre-wrap;">${escHtml(JSON.stringify(f, null, 2))}</pre>`;
+    return `
+        <div class="es-group-item es-group-item-tool" onclick="_esToggleChip(this, event)">
+            <div class="es-group-item-head">
+                <span class="es-chip-arrow">▸</span>
+                <span class="es-group-step">${idx}</span>
+                ${sev ? `<span style="color:${sevColor};font-size:10px;font-weight:600;">${escHtml(sev)}</span>` : ''}
+                <span class="es-group-preview">${escHtml(headParts.join(' · '))}</span>
+            </div>
+            <div class="es-chip-body" style="display:none;">${body}</div>
+        </div>`;
+}
+
+/** 系统通知包裹文本（<timestamp>/<system_notification>/<task>...）→ 折叠成一行，从里面抠
+ *  title/status/task_id 几个常见字段拼摘要，挑不出来就显示通用标签，点开看原文。 */
+function _esRenderNotificationChip(raw) {
+    const titleM = raw.match(/title:\s*(.+)/);
+    const statusM = raw.match(/status:\s*(.+)/);
+    const idM = raw.match(/task_id:\s*(.+)/);
+    const parts = [];
+    if (statusM) {
+        const st = statusM[1].trim();
+        parts.push(st === 'success' ? '✓ 完成' : st);
+    }
+    if (titleM) parts.push(titleM[1].trim());
+    if (idM) parts.push('#' + idM[1].trim());
+    const label = parts.length ? parts.join(' · ') : '系统通知';
+    const body = `<pre style="margin:0;background:rgba(0,0,0,.2);padding:8px;border-radius:4px;
+        font-size:10px;overflow:auto;max-height:300px;white-space:pre-wrap;">${escHtml(raw)}</pre>`;
+    return _esWrapJsonChip('🔔 ' + label, body);
+}
+
+function _esWrapJsonChip(label, bodyHtml) {
+    return `
+        <div class="es-chip es-chip-json" onclick="_esToggleChip(this, event)">
+            <div class="es-chip-head"><span class="es-chip-arrow">▸</span><span>${escHtml(label)}</span></div>
+            <div class="es-chip-body" style="display:none;">${bodyHtml}</div>
+        </div>`;
+}
+
+/** 消息附带的图（粘贴截图等）→ 一排缩略图，点击在主舞台开一个图片 Tab 看原图（不再弹新窗口）。
+ *  二进制走 images 端点现查现读。uuid 是后端校验过的 uuid 格式，拼进 onclick 单引号串安全。*/
+function _esRenderImages(images) {
+    if (!Array.isArray(images) || images.length === 0) return '';
+    const pid = _esState.projectId;
+    const sessionId = _esState.activeSessionId;
+    const imgs = images.map(img => {
+        if (!img || !img.uuid) return '';
+        const url = `/api/projects/${encodeURIComponent(pid)}/external-sessions/cursor/${encodeURIComponent(sessionId)}/images/${encodeURIComponent(img.uuid)}`;
+        return `<img src="${url}"
+            onclick="adsShell.openMain({type:'image', sessionId:'${escHtml(sessionId)}', uuid:'${escHtml(img.uuid)}', projectId:'${escHtml(pid)}'})"
+            style="max-width:260px;max-height:200px;border-radius:6px;border:1px solid var(--border);
+                   object-fit:contain;cursor:zoom-in;" />`;
+    }).join('');
+    return `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px;">${imgs}</div>`;
+}
+
+/** 分组内一条 thinking → 左边绿色小圆点 + 正文，不折叠（思考内容本来就不长，组本身已经可折叠）。*/
+function _esRenderGroupThinkingItem(m) {
+    const content = typeof m.content === 'string' ? m.content : '';
+    const body = content
+        ? formatChatContent(content)
+        : '<span style="font-style:italic;">（空思考）</span>';
+    return `
+        <div class="es-group-item es-group-item-thinking">
+            <span class="es-group-dot es-group-dot-thinking"></span>
+            <div class="es-group-item-text">${body}</div>
+        </div>`;
+}
+
+/** 分组内一条 tool_call → 序号 + 工具名 + 状态 + 结果单行预览 + 路径提示；整行点开看完整参数/结果。*/
+function _esRenderGroupToolItem(m, stepNo) {
+    const main = (Array.isArray(m.tool_calls) ? m.tool_calls[0] : null) || {};
+    const data = main.data || {};
+    const name = data.name || 'tool';
+    const status = data.status || '';
+    const rawArgs = data.rawArgs || '';
+    const result = data.result || '';
+
+    const argsBlock = rawArgs
+        ? `<div style="margin-top:6px;"><span style="color:var(--text-muted);font-size:10px;">参数：</span>
+            <pre style="margin:4px 0;background:rgba(0,0,0,.2);padding:6px;border-radius:4px;
+                 font-size:10px;overflow:auto;max-height:200px;white-space:pre-wrap;">${escHtml(_esTryPrettyJson(rawArgs))}</pre></div>`
+        : '';
+    const resultBlock = result
+        ? `<div style="margin-top:6px;"><span style="color:var(--text-muted);font-size:10px;">返回：</span>
+            <pre style="margin:4px 0;background:rgba(0,0,0,.2);padding:6px;border-radius:4px;
+                 font-size:10px;overflow:auto;max-height:300px;white-space:pre-wrap;">${escHtml(_esTryPrettyJson(result))}</pre></div>`
+        : '';
+
+    // 其余 tool_calls（toolResults / assistantSuggestedDiffs / interpreterResults 等）用通用折叠块兜底
+    const extras = Array.isArray(m.tool_calls) ? m.tool_calls.filter(tc => tc !== m.tool_calls[0]) : [];
+    let extrasBlock = '';
+    if (extras.length > 0) {
+        const extrasJson = escHtml(JSON.stringify(extras, null, 2));
+        extrasBlock = `
+            <details style="margin-top:8px;">
+                <summary style="cursor:pointer;color:var(--text-muted);font-size:10px;">附加 (${extras.length})</summary>
+                <pre style="margin-top:6px;background:rgba(0,0,0,.2);padding:8px;border-radius:4px;
+                     font-size:10px;overflow:auto;max-height:300px;white-space:pre-wrap;">${extrasJson}</pre>
+            </details>`;
+    }
+    const bodyHtml = argsBlock + resultBlock + extrasBlock
+        || '<span style="color:var(--text-muted);font-style:italic;">（无详情）</span>';
+
+    const statusMark = status === 'completed' ? '<span class="es-group-ok">✓</span>'
+        : (status ? `<span class="es-chip-status">· ${escHtml(status)}</span>` : '');
+    const preview = _esResultPreview(result);
+    const pathHint = _esExtractPathHint(rawArgs);
+
+    return `
+        <div class="es-group-item es-group-item-tool" onclick="_esToggleChip(this, event)">
+            <div class="es-group-item-head">
+                <span class="es-chip-arrow">▸</span>
+                <span class="es-group-step">${stepNo}</span>
+                <span class="es-group-dot es-group-dot-tool"></span>
+                <code>${escHtml(name)}</code>
+                ${statusMark}
+                ${preview ? `<span class="es-group-preview">${escHtml(preview)}</span>` : ''}
+                ${pathHint ? `<span class="es-group-path" title="${escHtml(pathHint)}">${escHtml(pathHint)}</span>` : ''}
+            </div>
+            <div class="es-chip-body" style="display:none;">${bodyHtml}</div>
+        </div>`;
+}
+
+/** result 文本压成单行预览，给工具步骤那一行当"干了啥"的提示（不弹详情就能扫一眼）。*/
+function _esResultPreview(result) {
+    if (!result) return '';
+    const oneLine = String(result).replace(/\s+/g, ' ').trim();
+    if (!oneLine) return '';
+    return oneLine.length > 60 ? oneLine.slice(0, 60) + '…' : oneLine;
+}
+
+/** 从 rawArgs 里扒一个看起来像路径的字段，显示在工具步骤行末尾（Cursor 原版会显示 "path: ..."）。*/
+function _esExtractPathHint(rawArgs) {
+    if (!rawArgs) return '';
+    try {
+        const obj = typeof rawArgs === 'string' ? JSON.parse(rawArgs) : rawArgs;
+        if (obj && typeof obj === 'object') {
+            const key = ['path', 'file', 'target_file', 'relative_workspace_path', 'filePath', 'file_path']
+                .find(k => obj[k]);
+            if (key) return String(obj[key]);
+        }
+    } catch (e) { /* 不是 JSON 就没有路径提示，静默跳过 */ }
+    return '';
+}
+
+/** chip 点击展开/收起。点在"这个 chip 自己"已展开的内容里（代码块、链接、嵌套的子 chip）不应该
+ *  再触发收起——但嵌套 chip（如 group 展开后里头的工具步骤）要能各自独立展开，所以不能像之前那样
+ *  用 closest('.es-chip-body') 一路找到祖先的 body 就拦截（那样点里面任何一个子项都会先被祖先
+ *  判定"点在展开内容里"而拦下）。改成只认 el 自己的 body：点击目标是 el 自己 body 的后代才拦截，
+ *  冒泡到祖先 chip 时，祖先用它自己的（更大的）body 再判一次，自然地把"收起自己"挡掉、
+ *  但不影响子 chip 刚才已经完成的 toggle。*/
+function _esToggleChip(el, event) {
+    const body = el.querySelector('.es-chip-body');
+    if (event && event.target && body && body.contains(event.target)) return;
+    const open = el.classList.toggle('es-chip-open');
+    const arrow = el.querySelector('.es-chip-arrow');
+    if (arrow) arrow.textContent = open ? '▾' : '▸';
+    if (body) body.style.display = open ? 'block' : 'none';
+}
+
+/** 若字符串是合法 JSON，格式化成缩进；否则原样返回。给 rawArgs / result 用 */
+function _esTryPrettyJson(s) {
+    if (typeof s !== 'string') return String(s);
+    const trimmed = s.trim();
+    if (!trimmed || (trimmed[0] !== '{' && trimmed[0] !== '[')) return s;
+    try {
+        return JSON.stringify(JSON.parse(trimmed), null, 2);
+    } catch {
+        return s;
+    }
+}
+
+/** 左右分栏拖拽（照抄 _tasksPanelResizeStart，id 换前缀，localStorage key 换 esPanelListW） */
+function _esPanelResizeStart(e) {
+    e.preventDefault();
+    const listEl    = document.getElementById('esPanelList');
+    const resizerEl = document.getElementById('esPanelResizer');
+    if (!listEl) return;
+
+    const startX = e.clientX;
+    const startW = listEl.offsetWidth;
+    resizerEl.style.background = 'var(--primary, #7c6af7)';
+
+    const onMove = (ev) => {
+        const newW = Math.max(180, Math.min(500, startW + ev.clientX - startX));
+        listEl.style.width = newW + 'px';
+    };
+    const onUp = () => {
+        resizerEl.style.background = '';
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        try { localStorage.setItem('esPanelListW', listEl.offsetWidth); } catch {}
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+}
+
+function _esRestoreListWidth() {
+    const w = parseInt(localStorage.getItem('esPanelListW') || '260', 10);
+    const listEl = document.getElementById('esPanelList');
+    if (listEl && w >= 180 && w <= 500) listEl.style.width = w + 'px';
 }

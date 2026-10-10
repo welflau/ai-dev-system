@@ -1,15 +1,28 @@
 """
 内置 Hook 清单：
   - audit_log_hook     : 每次工具调用写 tool_audit_log 表（POST_TOOL_USE + TOOL_ERROR）
-  - shell_rate_limit_hook : ShellAction 每 Ticket 调用超 50 次时 raise（PRE_TOOL_USE）
+  - shell_rate_limit_hook : shell 每 Ticket 调用超 50 次时 raise（PRE_TOOL_USE）
   - failure_library_hook  : 工具报错写 ticket_logs（TOOL_ERROR，用于工单流程追踪）
+  - command_record_hook   : 真实 CLI/shell 命令写 ticket_command_log + 时间轴（可重放）
 """
 import logging
-from collections import defaultdict
+import time
+from datetime import datetime, timedelta
+from collections import defaultdict, deque
 
 from hooks.types import HookEvent, ToolHookContext
 
 logger = logging.getLogger("hooks.builtin")
+
+
+def _iso_before(ms: float, base_iso: str) -> str:
+    """base_iso 往前推 ms 毫秒，返回 ISO 字符串（用于补 started_at）。"""
+    try:
+        base = datetime.fromisoformat(base_iso)
+        delta = max(float(ms or 0), 0.0)
+        return (base - timedelta(milliseconds=delta)).isoformat()
+    except Exception:
+        return base_iso
 
 # ── 工具 input 的主要参数 key 映射（与 QueryEngine 的 _ARGS_HINT_KEY 保持一致）─
 _INPUT_KEY: dict = {
@@ -55,9 +68,17 @@ def _extract_output_summary(output) -> str:
     text = " ".join(text.split())  # 压缩空白
     return text[:200]
 
-# ── Shell 调用计数器（内存，进程级，ticket 粒度）──────────────────────────
-_shell_call_counts: dict = defaultdict(int)
+# ── Shell 调用计数器（内存，进程级）──────────────────────────────────────
+# 工单粒度用「终身计数」：一张工单跑满 50 次 shell 就是跑飞了，这正是要拦的。
+# 但**没有 ticket_id 的调用**（全局 AI 助手对话）不能用终身计数 —— 后端进程
+# 能活好几天，攒够 50 次之后所有对话里的 shell 就被永久锁死了。那种场景要的是
+# 「短时间内爆发」而不是「累计多少次」，所以走滑动时间窗。
+_shell_call_counts: dict = defaultdict(int)          # ticket_id → 终身次数
+_shell_global_calls: deque = deque()                 # 无工单调用的时间戳（滑动窗）
 _SHELL_LIMIT_PER_TICKET = 50
+_SHELL_GLOBAL_LIMIT = 50                             # 每 _SHELL_GLOBAL_WINDOW 秒
+_SHELL_GLOBAL_WINDOW = 3600.0
+_SHELL_COUNTS_MAX_KEYS = 2000                        # 防 dict 无上限增长
 
 
 async def audit_log_hook(ctx: ToolHookContext) -> None:
@@ -81,16 +102,26 @@ async def audit_log_hook(ctx: ToolHookContext) -> None:
         output_summary = _extract_output_summary(ctx.output) if success else ""
         error_msg      = str(ctx.error)[:300] if ctx.error else ""
 
+        # turn_id 直接从 _llm_ctx 取：工具在触发它的那次 LLM 循环的同一个
+        # 协程里跑，contextvars 看得见。hook context 里不另加字段，免得每个
+        # 调用点都要记着传。
+        try:
+            from llm_client import _llm_ctx
+            turn_id = _llm_ctx.turn_id
+        except Exception:
+            turn_id = None
+
         await db.execute(
             "INSERT INTO tool_audit_log "
             "(tool_name, project_id, ticket_id, agent_type, duration_ms, success, "
-            " input_summary, output_summary, error_msg, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " input_summary, output_summary, error_msg, created_at, turn_id, started_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 ctx.tool_name, ctx.project_id, ctx.ticket_id, ctx.agent_type,
                 duration_ms, success,
                 input_summary, output_summary, error_msg,
-                now,
+                now, turn_id,
+                _iso_before(duration_ms, now),
             ),
         )
 
@@ -138,19 +169,50 @@ async def audit_log_hook(ctx: ToolHookContext) -> None:
 
 
 async def shell_rate_limit_hook(ctx: ToolHookContext) -> None:
-    """PRE_TOOL_USE：ShellAction 每 Ticket 超 50 次时中断"""
+    """PRE_TOOL_USE：shell 调用超限时中断。
+
+    历史上这里判的是 `ctx.tool_name != "ShellAction"`，而注册名是 `shell`
+    （`ShellAction.name` 返回 "shell"，`skills/runner.py` 也是按 `actions["shell"]`
+    注册的）—— 类名和工具名不是一回事，于是**这个限流从来没生效过**。
+    而且它挂在 PRE_TOOL_USE 上，SkillRunner 那条路以前压根不发 hook，
+    等于双重失效：名字对不上 + 事件根本不来。
+
+    `GenericCLIAction` 不在限流范围：它的命令主干写死在 skill 的 command_template
+    里，LLM 只能填白名单槽，跑飞的风险和「LLM 自由拼 shell 字符串」不是一个量级。
+    """
     if ctx.event != HookEvent.PRE_TOOL_USE:
         return
-    if ctx.tool_name != "ShellAction":
+    if ctx.tool_name != "shell":
         return
 
-    key = ctx.ticket_id or "__global__"
-    _shell_call_counts[key] += 1
-    count = _shell_call_counts[key]
+    if ctx.ticket_id:
+        # 工单粒度：终身计数。一张工单跑满 50 次 shell 就是跑飞了。
+        if (len(_shell_call_counts) >= _SHELL_COUNTS_MAX_KEYS
+                and ctx.ticket_id not in _shell_call_counts):
+            _shell_call_counts.clear()      # 长跑进程兜底，别让 dict 无限涨
+        _shell_call_counts[ctx.ticket_id] += 1
+        count = _shell_call_counts[ctx.ticket_id]
+        if count > _SHELL_LIMIT_PER_TICKET:
+            logger.warning("🛑 shell 限流：ticket=%s count=%d", ctx.ticket_id, count)
+            raise RuntimeError(
+                f"Shell 调用次数超限（ticket={ctx.ticket_id}, "
+                f"count={count}, limit={_SHELL_LIMIT_PER_TICKET}）"
+            )
+        return
 
-    if count > _SHELL_LIMIT_PER_TICKET:
+    # 无工单（全局 AI 助手对话）：滑动时间窗，不能用终身计数 ——
+    # 后端能连跑几天，攒够 50 次之后所有对话里的 shell 就被永久锁死了。
+    now = time.monotonic()
+    cutoff = now - _SHELL_GLOBAL_WINDOW
+    while _shell_global_calls and _shell_global_calls[0] < cutoff:
+        _shell_global_calls.popleft()
+    _shell_global_calls.append(now)
+    if len(_shell_global_calls) > _SHELL_GLOBAL_LIMIT:
+        logger.warning("🛑 shell 限流：无工单调用 %d 次/%.0fs",
+                       len(_shell_global_calls), _SHELL_GLOBAL_WINDOW)
         raise RuntimeError(
-            f"Shell 调用次数超限（ticket={key}, count={count}, limit={_SHELL_LIMIT_PER_TICKET}）"
+            f"Shell 调用过于频繁（{len(_shell_global_calls)} 次/"
+            f"{int(_SHELL_GLOBAL_WINDOW / 60)} 分钟，上限 {_SHELL_GLOBAL_LIMIT}）"
         )
 
 
@@ -174,17 +236,24 @@ async def _handle_session_end(ctx: ToolHookContext) -> None:
         input_summary  = f"rounds:{rounds} tokens:{tokens}({token_pct}%) elapsed:{elapsed_s}s"
         output_summary = f"reason:{reason}"
 
+        try:
+            from llm_client import _llm_ctx
+            turn_id = _llm_ctx.turn_id
+        except Exception:
+            turn_id = None
+
         await db.execute(
             "INSERT INTO tool_audit_log "
             "(tool_name, project_id, ticket_id, agent_type, duration_ms, success, "
-            " input_summary, output_summary, error_msg, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " input_summary, output_summary, error_msg, created_at, turn_id, started_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 "query_engine:done",
                 ctx.project_id, ctx.ticket_id, ctx.agent_type,
                 round(elapsed_s * 1000, 1), 1,
                 input_summary, output_summary, "",
-                now,
+                now, turn_id,
+                _iso_before(elapsed_s * 1000, now),
             ),
         )
 
@@ -411,6 +480,120 @@ async def nudge_hook(ctx: ToolHookContext) -> None:
         logger.debug("nudge_hook 失败（非致命）: %s", e)
 
 
+async def command_record_hook(ctx: ToolHookContext) -> None:
+    """POST_TOOL_USE + TOOL_ERROR：把 Action offer 的真实命令记录落库 + 写一条时间轴。
+
+    刻意**不并进 `audit_log_hook`**：那张表是**计数器**（`output_summary` 只留
+    200 字符，5989 行全靠它统计调用次数/耗时），本 hook 要的是**可重放的控制台**
+    （真 argv、cwd、完整输出）。两者写入量、保留策略、读者都不同，混一个函数里
+    迟早互相妥协——一个想留全量，一个想省空间。
+
+    没有 offer 的工具（绝大多数 Action 不跑命令）直接返回，不留骨架行：
+    `tool_audit_log` 已经在记「谁调了什么工具」，这里再记一遍纯属重复。
+    """
+    if ctx.event not in (HookEvent.POST_TOOL_USE, HookEvent.TOOL_ERROR):
+        return
+    try:
+        from command_log import take_command_record, record_command
+        rec = take_command_record()
+        if not rec:
+            return
+
+        from database import db
+        from utils import generate_id, now_iso
+        import json
+        import uuid
+
+        # 先生成 record_id 再写日志：两条记录在同一次调用里配好对，
+        # `ticket_command_log.log_id` ↔ `ticket_logs.detail.task_id` 天然对齐，
+        # 不必像 `_annotate_chat_anchors`（api/tickets.py:1468）那样按 ≤3s 时间差猜。
+        record_id = generate_id("TCMD")
+        log_id = str(uuid.uuid4())
+        now = now_iso()
+
+        command = str(rec.get("command") or "")
+        tool = str(rec.get("tool") or ctx.tool_name or "shell")
+        status = str(rec.get("status") or "success")
+        exit_code = rec.get("exit_code")
+        duration_ms = rec.get("duration_ms")
+        if duration_ms is None and ctx.duration_ms is not None:
+            duration_ms = int(ctx.duration_ms)
+
+        if status == "timeout":
+            head = f"⏱ {tool} 超时"
+        elif status == "error":
+            head = f"❌ {tool} exit={exit_code}"
+        else:
+            head = f"📟 {tool}"
+        message = f"{head} · {command[:100]}"
+
+        detail = json.dumps({
+            "message": message,
+            "tool": tool,
+            "command": command,
+            "exit_code": exit_code,
+            "duration_ms": duration_ms,
+            "cwd": rec.get("cwd") or "",
+            "status": status,
+            "task_id": record_id,      # ← 前端据此点开后台记录
+        }, ensure_ascii=False)
+
+        # ticket_logs 有一堆外键（project_id NOT NULL REFERENCES projects(id)）。
+        # 全局聊天没有 project_id 时这条会失败——但**命令记录本身不能跟着陪葬**，
+        # 所以分开 try：日志写不进就退化成 log_id='' 的孤立记录，至少输出还在。
+        log_ok = False
+        try:
+            await db.execute(
+                "INSERT INTO ticket_logs "
+                "(id, ticket_id, project_id, agent_type, action, detail, level, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    log_id, ctx.ticket_id, ctx.project_id or "__global__",
+                    ctx.agent_type or rec.get("agent_type") or "hook",
+                    "command_run", detail,
+                    "error" if status != "success" else "info",
+                    now,
+                ),
+            )
+            log_ok = True
+        except Exception as log_err:
+            logger.debug("command_run 时间轴写入失败（记录仍会保留）: %s", log_err)
+
+        await record_command(
+            record_id=record_id, log_id=log_id if log_ok else "",
+            source=str(rec.get("source") or "action"),
+            tool=tool, command=command, cwd=rec.get("cwd") or "",
+            exit_code=exit_code, status=status, duration_ms=duration_ms,
+            output=str(rec.get("output") or ""),
+            noise=bool(rec.get("noise")),
+            ticket_id=ctx.ticket_id or "", project_id=ctx.project_id or "",
+            requirement_id=str(rec.get("requirement_id") or ""),
+            agent_type=ctx.agent_type or "",
+        )
+
+        # 实时推时间轴。这些都是**短命令**（git 单条 <1s，CLI 一次性 communicate
+        # 返回），没有流式行可推，为不存在的流建新事件族不划算——复用 log_added，
+        # 前端 appendLogEntry 已订阅。而且这是结束后落的一行，不是流式追加，
+        # 后端崩了也不会丢 buffer（比现有 cli_task 的纯内存路径更耐崩）。
+        if ctx.project_id and log_ok:
+            try:
+                from events import event_manager
+                await event_manager.publish_to_project(ctx.project_id, "log_added", {
+                    "id": log_id,
+                    "agent_type": ctx.agent_type or "System",
+                    "action": "command_run",
+                    "detail": detail,
+                    "level": "error" if status != "success" else "info",
+                    "created_at": now,
+                    "ticket_id": ctx.ticket_id,
+                })
+            except Exception as sse_err:
+                logger.debug("command_record_hook SSE 推送失败（非致命）: %s", sse_err)
+
+    except Exception as e:
+        logger.warning("command_record_hook 失败: %s", e)
+
+
 def register_builtin_hooks(registry=None) -> None:
     """向 hook_registry 注册所有内置 Hook（在应用启动时调用）"""
     from hooks.registry import hook_registry as _default_registry
@@ -420,4 +603,6 @@ def register_builtin_hooks(registry=None) -> None:
     reg.register(failure_library_hook)
     reg.register(chat_alert_hook)
     reg.register(nudge_hook)
-    logger.info("内置 Hooks 已注册（audit_log / shell_rate_limit / failure_library / chat_alert / nudge）")
+    reg.register(command_record_hook)
+    logger.info("内置 Hooks 已注册（audit_log / shell_rate_limit / failure_library / "
+                "chat_alert / nudge / command_record）")

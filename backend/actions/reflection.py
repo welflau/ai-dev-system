@@ -295,6 +295,25 @@ class ReflectionAction(ActionBase):
                 "\n🚫 提醒：这是 UE C++ 项目。修复时只输出 .h/.cpp/.Build.cs，绝对不能写 Python/JS/HTML！"
             )
             failure_signal = "\n".join(lines)
+        elif failure_type == "development_failed":
+            # 代码生成没产出有效代码：LLM 超时 / 返回空 / 只吐了降级模板。
+            # 这类失败不是「代码写错了」，是「压根没写」，反思要盯的是**为什么没产出**。
+            cg = context.get("code_gen_failure") or {}
+            lines = [
+                f"上一轮代码生成未产出有效代码：{cg.get('reason') or '未知原因'}",
+                f"实际产出文件数：{cg.get('file_count', 0)}",
+            ]
+            if cg.get("notes"):
+                lines.append(f"开发备注：{str(cg['notes'])[:200]}")
+            lines.append(
+                "\n⚠️ 注意：这不是「代码写错了」，是**根本没写出来**。常见原因：\n"
+                "  - 需求/架构描述太含糊，模型无从下手 → 本轮先把要改的文件和改法写死\n"
+                "  - 一次要改的面太大超出输出长度 → 本轮只改最关键的 1-2 个文件\n"
+                "  - 输出格式不合规（files 字段为空/不是对象）→ 严格按 schema 输出完整文件内容\n"
+                "\n🚫 严禁再产出 `console.log('xxx loaded')` 这类占位空壳文件冒充完成。"
+                "宁可只改一个文件，也要是真实可运行的改动。"
+            )
+            failure_signal = "\n".join(lines)
         else:
             failure_signal = f"失败类型: {failure_type}"
 

@@ -131,7 +131,7 @@ async def test_shell_rate_limit_blocks_when_over():
     _shell_call_counts["tk-over"] = 51
     ctx = ToolHookContext(
         event=HookEvent.PRE_TOOL_USE,
-        tool_name="ShellAction",
+        tool_name="shell",       # 注册名是 shell，不是类名 ShellAction
         input={},
         ticket_id="tk-over",
     )
@@ -147,11 +147,55 @@ async def test_shell_rate_limit_allows_under_limit():
     _shell_call_counts.pop("tk-fresh", None)
     ctx = ToolHookContext(
         event=HookEvent.PRE_TOOL_USE,
-        tool_name="ShellAction",
+        tool_name="shell",
         input={},
         ticket_id="tk-fresh",
     )
     await shell_rate_limit_hook(ctx)  # 应该不抛
+
+
+@pytest.mark.asyncio
+async def test_shell_rate_limit_uses_registered_tool_name():
+    """钉死名字：判类名 "ShellAction" 的那版限流从来没生效过。"""
+    from hooks.builtin import shell_rate_limit_hook, _shell_call_counts
+    from hooks.types import HookEvent, ToolHookContext
+    from actions.chat.shell_exec import ShellAction
+
+    assert ShellAction().name == "shell", "限流判的名字必须跟 Action 注册名一致"
+
+    _shell_call_counts["tk-classname"] = 999
+    ctx = ToolHookContext(
+        event=HookEvent.PRE_TOOL_USE,
+        tool_name="ShellAction",   # 类名不该被当成工具名
+        input={},
+        ticket_id="tk-classname",
+    )
+    await shell_rate_limit_hook(ctx)  # 不抛：这个名字不存在于任何注册表
+
+
+@pytest.mark.asyncio
+async def test_shell_rate_limit_global_window_is_not_lifetime():
+    """无工单调用走滑动窗，不能是终身计数。
+
+    后端进程能连跑几天；终身计数攒够 50 次之后，全局 AI 助手对话里的 shell
+    就被永久锁死了。这条钉的是「窗口会滑出去」。
+    """
+    import hooks.builtin as B
+    from hooks.types import HookEvent, ToolHookContext
+
+    B._shell_global_calls.clear()
+    ctx = ToolHookContext(event=HookEvent.PRE_TOOL_USE, tool_name="shell", input={})
+
+    for _ in range(B._SHELL_GLOBAL_LIMIT):
+        await B.shell_rate_limit_hook(ctx)          # 窗口内跑满上限
+    with pytest.raises(RuntimeError, match="频繁"):
+        await B.shell_rate_limit_hook(ctx)          # 再一次就该拦
+
+    # 把已有时间戳挪到窗口之外 → 应当重新放行（而非永久锁死）
+    old = [t - B._SHELL_GLOBAL_WINDOW - 1 for t in B._shell_global_calls]
+    B._shell_global_calls.clear()
+    B._shell_global_calls.extend(old)
+    await B.shell_rate_limit_hook(ctx)
 
 
 @pytest.mark.asyncio
@@ -162,7 +206,7 @@ async def test_shell_rate_limit_only_applies_to_shell():
     _shell_call_counts["tk-other"] = 999
     ctx = ToolHookContext(
         event=HookEvent.PRE_TOOL_USE,
-        tool_name="GlobAction",   # 非 ShellAction，不限流
+        tool_name="GlobAction",   # 非 shell，不限流
         input={},
         ticket_id="tk-other",
     )

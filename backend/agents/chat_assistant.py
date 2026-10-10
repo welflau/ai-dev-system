@@ -753,12 +753,16 @@ class ChatAssistantAgent(BaseAgent):
         project_context: Dict[str, Any],
         session_id: Optional[str] = None,
         agent_override: Optional[str] = None,
+        turn_id: Optional[str] = None,
     ):
         """
         流式对话：逐步 yield SSE 事件 dict，由上层端点包装为 text/event-stream。
         事件类型：text_delta / tool_start / tool_done / action / error / message_done
 
         内部使用 QueryEngine 统一循环（Phase 2）。
+
+        turn_id：本轮对话的追踪 ID，由端点生成。落进 llm_conversations /
+        tool_audit_log，让一次对话的所有 LLM 调用和工具调用能 JOIN 起来。
         """
         from llm_client import llm_client, set_llm_context, clear_llm_context
         from query_engine import QueryEngine, Budget
@@ -855,8 +859,9 @@ class ChatAssistantAgent(BaseAgent):
         _tid = (project_context or {}).get("ticket_id") or (project_context or {}).get("active_ticket_id")
         if _tid:
             context["ticket_id"] = _tid
+        ckpt_token = None
         try:
-            from checkpoint import set_checkpoint_context, clear_checkpoint_context
+            from checkpoint import push_checkpoint_context
             from capability_check import _get_repo_path
             _repo = ""
             try:
@@ -864,7 +869,8 @@ class ChatAssistantAgent(BaseAgent):
             except Exception:
                 pass
             if _tid:
-                set_checkpoint_context(
+                # push/pop 配对，别用 clear —— 它会连外层工单级上下文一起清掉
+                ckpt_token = push_checkpoint_context(
                     project_id=project["id"], ticket_id=_tid,
                     agent_type=self.agent_type, action="chat_stream",
                     repo_path=_repo,
@@ -883,7 +889,8 @@ class ChatAssistantAgent(BaseAgent):
             resume_session_id=_cli_resume_id,
         )
 
-        set_llm_context(project_id=project["id"], agent_type=self.agent_type, action="chat_stream")
+        set_llm_context(project_id=project["id"], agent_type=self.agent_type,
+                        action="chat_stream", turn_id=turn_id)
         try:
             async for event in engine.run(messages, system_prompt, tools, context):
                 if isinstance(event, TextDeltaEvent):
@@ -974,6 +981,7 @@ class ChatAssistantAgent(BaseAgent):
                                 "action": event2.final_action,
                                 "actions": event2.all_confirm_results if len(event2.all_confirm_results) > 1 else None,
                                 "stop_reason": event2.stop_reason,
+                                "total_tokens": event2.total_tokens,
                             }
                     return
                 elif isinstance(event, MessageDoneEvent):
@@ -994,6 +1002,7 @@ class ChatAssistantAgent(BaseAgent):
                         "action": event.final_action,
                         "actions": event.all_confirm_results if len(event.all_confirm_results) > 1 else None,
                         "stop_reason": event.stop_reason,
+                        "total_tokens": event.total_tokens,
                     }
                 elif isinstance(event, BudgetExceededEvent):
                     yield {"type": "budget_exceeded", "reason": event.reason}
@@ -1002,8 +1011,8 @@ class ChatAssistantAgent(BaseAgent):
         finally:
             clear_llm_context()
             try:
-                from checkpoint import clear_checkpoint_context
-                clear_checkpoint_context()
+                from checkpoint import pop_checkpoint_context
+                pop_checkpoint_context(ckpt_token)
             except Exception:
                 pass
 
@@ -1074,6 +1083,7 @@ class ChatAssistantAgent(BaseAgent):
         projects_brief: List[Dict[str, Any]],
         session_id: Optional[str] = None,
         agent_override: Optional[str] = None,
+        turn_id: Optional[str] = None,
     ):
         """全局聊天流式版：逐步 yield SSE 事件，与 chat_stream 同格式。内部使用 QueryEngine（Phase 2）。"""
         from llm_client import llm_client, set_llm_context, clear_llm_context
@@ -1141,7 +1151,8 @@ class ChatAssistantAgent(BaseAgent):
             resume_session_id=_cli_resume_id_g,
         )
 
-        set_llm_context(agent_type=self.agent_type, action="global_chat_stream")
+        set_llm_context(agent_type=self.agent_type, action="global_chat_stream",
+                        turn_id=turn_id)
         try:
             async for event in engine.run(messages, system_prompt, tools, context):
                 if isinstance(event, TextDeltaEvent):
@@ -1228,6 +1239,7 @@ class ChatAssistantAgent(BaseAgent):
                                 "action": event2.final_action,
                                 "actions": event2.all_confirm_results if len(event2.all_confirm_results) > 1 else None,
                                 "stop_reason": event2.stop_reason,
+                                "total_tokens": event2.total_tokens,
                             }
                         elif not isinstance(event2, (CliResumeFailedEvent,)):
                             # 转发其他事件（ToolStartEvent 等）
@@ -1241,6 +1253,7 @@ class ChatAssistantAgent(BaseAgent):
                         "action": event.final_action,
                         "actions": event.all_confirm_results if len(event.all_confirm_results) > 1 else None,
                         "stop_reason": event.stop_reason,
+                        "total_tokens": event.total_tokens,
                     }
                 elif isinstance(event, BudgetExceededEvent):
                     yield {"type": "budget_exceeded", "reason": event.reason}
@@ -1623,28 +1636,41 @@ class ChatAssistantAgent(BaseAgent):
                 _skills_index += f"\n| `{_r['skill_id']}` | {_r['custom_name'] or _r['skill_id']} | 项目自定义 Skill |"
         except Exception:
             pass
-        # 追加项目本地 Skill 目录（.ads / .Agent / .codebuddy / .claude）（agent.* 系列）
+        # 追加项目本地 Skill 目录（.ads / .Agent / .codebuddy / .workbuddy / .cursor / .claude）（agent.* 系列）
+        # 标了 disable-model-invocation 的单独归一组：语义是「不许模型自己挑」，
+        # 混在主表里模型会当成随便可加载的一条。
+        _manual_only_rows: list = []
         try:
-            from actions.chat.load_skill import _enum_project_skill_dirs, _load_agent_skill
+            from actions.chat.load_skill import _enum_project_skill_dirs, _agent_skill_meta
             _seen_skill_names = set()
             for _agent_dir in await _enum_project_skill_dirs(project.get("id", "")):
                 for _skill_dir in sorted(_agent_dir.iterdir()):
                     if (_skill_dir.is_dir() and (_skill_dir / "SKILL.md").exists()
                             and _skill_dir.name not in _seen_skill_names):
                         _seen_skill_names.add(_skill_dir.name)
-                        _, _skill_name = await _load_agent_skill(
+                        _meta = await _agent_skill_meta(
                             f"agent.{_skill_dir.name}", project.get("id", "")
                         )
-                        _skills_index += f"\n| `agent.{_skill_dir.name}` | {_skill_name} | 项目本地 Skill |"
+                        _row = (f"\n| `agent.{_skill_dir.name}` | {_meta['name']} | "
+                                f"{_meta['description'][:160]} |")
+                        if _meta["manual_only"]:
+                            _manual_only_rows.append(_row)
+                        else:
+                            _skills_index += _row
         except Exception:
             pass
+        _manual_section = ("\n\n### 仅用户显式点名时才可加载\n\n"
+                           "以下 Skill 标了 `disable-model-invocation`，**不要主动加载**；"
+                           "只有用户在消息里明确提到它时才调用 load_skill。\n\n"
+                           + "| Skill ID | 名称 | 适用场景 |\n|---|---|---|"
+                           + "".join(_manual_only_rows)) if _manual_only_rows else ""
         skills_section = f"""
 ## 可用 Skills（按需加载）
 
-{_skills_index}
+{_skills_index}{_manual_section}
 
 如当前问题需要以上领域的深度规范知识，请先调用 load_skill 加载对应文档，再回答用户。不确定是否需要时可直接回答。
-""" if _skills_index else ""
+""" if (_skills_index or _manual_only_rows) else ""
         is_ue_project = any(t.startswith("engine:ue") for t in project_traits)
         if not is_ue_project:
             try:

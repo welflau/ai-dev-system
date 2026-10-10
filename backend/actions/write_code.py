@@ -1,6 +1,5 @@
 """Action: 代码开发（使用 ActionNode 结构化输出）"""
 import json
-import re
 import logging
 from typing import Any, Dict
 from actions.base import ActionBase, ActionResult
@@ -113,16 +112,30 @@ class WriteCodeAction(ActionBase):
                 error="LLM \u8fd4\u56de\u65e0\u6548\uff08NoneType\uff09",
             )
 
-        safe = re.sub(r'[^a-zA-Z0-9_]', '', re.sub(r'[\u4e00-\u9fff]+', '', title.replace(" ", "_")))[:30].lower()
-        if not safe:
-            safe = f"feature_{abs(hash(title)) % 10000}"
+        # \u5df2\u6709\u4ee3\u7801\u7684\u9879\u76ee\uff1a\u6a21\u677f\u515c\u5e95\u4e00\u5f8b\u6807\u5931\u8d25\u3002
+        # \u8fd9\u91cc\u539f\u672c\u4f1a\u5f80 src/ \u6254\u4e00\u4e2a `// {title}\nconsole.log(...)` \u7a7a\u58f3\u8fd8 success=True\uff0c
+        # \u4e8e\u662f\u300cLLM \u6302\u4e86\u300d\u88ab\u5305\u88c5\u6210\u300c\u5f00\u53d1\u5b8c\u6210\uff0c\u4ea7\u51fa 1 \u4e2a\u6587\u4ef6\u300d\uff0c\u4e00\u8def\u6d41\u5230 deployed\u3002
+        # TK-20260920-ce79a9 \u7684 src/focus__resolve_.js \u5c31\u662f\u8fd9\u4e48\u6765\u7684 \u2014\u2014 \u8be5\u6539\u7684
+        # gallery.js / post.js \u4e00\u884c\u6ca1\u52a8\u3002\u589e\u91cf\u5de5\u5355\u7684\u515c\u5e95\u53ea\u80fd\u662f\u300c\u91cd\u8bd5\u300d\uff0c
+        # \u4e0d\u80fd\u662f\u300c\u5047\u88c5\u5199\u4e86\u70b9\u4ec0\u4e48\u300d\u3002\u811a\u624b\u67b6\u6a21\u677f\u53ea\u5bf9\u7a7a\u9879\u76ee\u6709\u610f\u4e49\u3002
+        if existing_code:
+            logger.warning(
+                "\u26a0\ufe0f WriteCodeAction \u964d\u7ea7\u8df3\u8fc7\uff1a\u9879\u76ee\u5df2\u6709 %d \u4e2a\u6587\u4ef6\uff0c"
+                "\u589e\u91cf\u5de5\u5355\u4e0d\u80fd\u7528\u7a7a\u58f3\u6a21\u677f\uff0c\u6807\u8bb0\u5931\u8d25", len(existing_code)
+            )
+            return ActionResult(
+                success=False,
+                data={"dev_result": {"files": {}, "notes": "[\u964d\u7ea7] LLM \u8fd4\u56de\u65e0\u6548\uff0c\u589e\u91cf\u5de5\u5355\u9700\u91cd\u8bd5"},
+                      "estimated_hours": 0},
+                message="LLM \u8f93\u51fa\u65e0\u6548\u3002\u9879\u76ee\u5df2\u6709\u4ee3\u7801\uff0c\u589e\u91cf\u4fee\u6539\u4e0d\u80fd\u7528\u964d\u7ea7\u6a21\u677f"
+                        "\uff08\u53ea\u4f1a\u4ea7\u51fa\u7a7a\u58f3\u6587\u4ef6\u5192\u5145\u6210\u529f\uff09\uff0c\u8bf7\u91cd\u8bd5\u3002",
+                error="LLM \u8fd4\u56de\u65e0\u6548\uff08\u65e0 files \u4ea7\u51fa\uff09",
+            )
 
+        # \u7a7a\u9879\u76ee\uff1a\u811a\u624b\u67b6\u6a21\u677f\u662f\u6709\u610f\u4e49\u7684\u8d77\u70b9\uff0c\u4e0d\u662f\u5192\u5145\u4fee\u590d\uff0c\u4fdd\u7559\u3002
         files = {}
         if module in ("frontend", "design", "other"):
-            if "index.html" in existing_code:
-                files[f"src/{safe}.js"] = f"// {title}\nconsole.log('{safe} loaded');\n"
-            else:
-                files["index.html"] = f"""<!DOCTYPE html>
+            files["index.html"] = f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><title>{title}</title>
 <style>*{{margin:0;padding:0;box-sizing:border-box}}body{{font-family:sans-serif;background:#f0f2f5;min-height:100vh;display:flex;justify-content:center;align-items:center}}.container{{background:#fff;border-radius:12px;padding:40px;box-shadow:0 4px 20px rgba(0,0,0,.1);max-width:600px;width:90%;text-align:center}}h1{{color:#1a1a2e;margin-bottom:16px}}</style>

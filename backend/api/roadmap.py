@@ -64,6 +64,7 @@ _TICKET_PHASE_MAP = {
     "architecture_done": "architecture",
     "development_in_progress": "development",
     "development_done": "development",
+    "development_failed": "development",
     "acceptance_passed": "development",
     "acceptance_rejected": "development",
     "testing_in_progress": "testing",

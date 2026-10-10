@@ -331,6 +331,7 @@ async def global_exception_handler(request, exc):
 
 # 注册 API 路由
 from api.projects import router as projects_router
+from api.repos import router as repos_router
 from api.requirements import router as requirements_router
 from api.tickets import router as tickets_router
 from api.agents import router as agents_router
@@ -358,8 +359,12 @@ from api.system_settings import router as system_settings_router
 from api.automation import router as automation_router
 from api.chat import internal_router as internal_router
 from api.openspec import router as openspec_router
+from api.plugins import router as plugins_router
+from api.external_sessions import router as external_sessions_router
 
 app.include_router(projects_router)
+# repos 的前缀也是 /api/projects，但路径段（/repos/...）不和 projects 冲突
+app.include_router(repos_router)
 app.include_router(requirements_router)
 app.include_router(tickets_router)
 app.include_router(agents_router)
@@ -388,6 +393,8 @@ app.include_router(system_settings_router)
 app.include_router(automation_router)
 app.include_router(internal_router)
 app.include_router(openspec_router)
+app.include_router(plugins_router)
+app.include_router(external_sessions_router)
 
 
 # ==================== 系统端点 ====================
@@ -675,12 +682,14 @@ async def llm_config(body: dict):
             _synced = []
             for _row in _rows:
                 _repo = _Path(_row["git_repo_path"])
-                # 新格式：.codebuddy/packs/ue5-dev/scripts/env.json
-                # 旧格式：.codebuddy/scripts/env.json（兼容）
+                # 新格式：.codebuddy/.workbuddy/packs/ue5-dev/scripts/env.json
+                # 旧格式：.codebuddy/.workbuddy/scripts/env.json（兼容）
                 for _env_path in [
                     _repo / ".codebuddy" / "packs" / "ue5-dev" / "scripts" / "env.json",
+                    _repo / ".workbuddy" / "packs" / "ue5-dev" / "scripts" / "env.json",
                     _repo / ".claude"    / "packs" / "ue5-dev" / "scripts" / "env.json",
                     _repo / ".codebuddy" / "scripts" / "env.json",
+                    _repo / ".workbuddy" / "scripts" / "env.json",
                     _repo / ".claude"    / "scripts" / "env.json",
                 ]:
                     if _env_path.exists():
@@ -694,9 +703,10 @@ async def llm_config(body: dict):
             if _synced:
                 logger.info("LightAI API key 已同步到 %d 个 skill env.json: %s", len(_synced), _synced)
 
-            # 同步到系统用户 lightai-skill（.codebuddy 和 .claude 两端）
+            # 同步到系统用户 lightai-skill（.codebuddy、.workbuddy 和 .claude 三端）
             for _skill_env in [
                 _Path.home() / ".codebuddy" / "skills" / "lightai-skill" / "scripts" / "env.json",
+                _Path.home() / ".workbuddy" / "skills" / "lightai-skill" / "scripts" / "env.json",
                 _Path.home() / ".claude"    / "skills" / "lightai-skill" / "scripts" / "env.json",
             ]:
                 if _skill_env.exists():

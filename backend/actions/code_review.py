@@ -121,12 +121,24 @@ class CodeReviewAction(ActionBase):
         # 判断是否有严重问题（需要阻断流转）
         has_critical = bool(review.critical_issues) if review else False
 
+        # 降级 ≠ 审查通过。LLM 超时/异常时 TestReviewOutput 全是默认值
+        # （score=6，三级问题都是空列表），读起来像「只有轻微警告的干净代码」。
+        # 实际是**根本没审**，按 0 分 + critical 处理，让下游门禁看得见。
+        if node.degraded:
+            logger.error("🚫 代码审查降级: %s | %s", ticket_title[:20], node.degrade_reason)
+            score = 0
+            has_critical = True
+            all_issues = [f"代码审查未执行（LLM 降级）: {node.degrade_reason}"]
+
         review_md = f"""# 代码审查 — {ticket_title}
 
-## 评分: {score}/10 {'✅ 通过' if score >= 7 and not has_critical else '🚫 需修复' if has_critical else '⚠️ 有警告'}
-
+## 评分: {score}/10 {'🚫 未执行' if node.degraded else '✅ 通过' if score >= 7 and not has_critical else '🚫 需修复' if has_critical else '⚠️ 有警告'}
+{f'''
+> 🚫 **本次审查未真正执行**：{node.degrade_reason}
+> 按 0 分 + critical 处理，不得据此认为代码没问题。
+''' if node.degraded else ''}
 ## 🔴 严重问题（必须修复）
-{chr(10).join(f'- {i}' for i in (review.critical_issues if review else [])) or '无'}
+{chr(10).join(f'- {i}' for i in (all_issues if node.degraded else (review.critical_issues if review else []))) or '无'}
 
 ## 🟡 警告（建议修复）
 {chr(10).join(f'- {i}' for i in (review.warnings if review else [])) or '无'}
@@ -148,10 +160,13 @@ class CodeReviewAction(ActionBase):
             data={
                 "score": score,
                 "has_critical": has_critical,
-                "critical_issues": review.critical_issues if review else [],
+                "critical_issues": (all_issues if node.degraded
+                                    else (review.critical_issues if review else [])),
                 "warnings": review.warnings if review else [],
                 "issues": all_issues,
                 "suggestions": review.suggestions if review else [],
+                "degraded": node.degraded,
+                "degrade_reason": node.degrade_reason,
             },
             files={f"{docs_prefix}code-review.md": review_md},
         )

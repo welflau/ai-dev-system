@@ -35,6 +35,8 @@ class _LLMContext:
     _project_id: contextvars.ContextVar = contextvars.ContextVar('llm_project_id', default=None)
     _agent_type: contextvars.ContextVar = contextvars.ContextVar('llm_agent_type', default=None)
     _action: contextvars.ContextVar = contextvars.ContextVar('llm_action', default=None)
+    # 一次对话的 turn_id：用户发一条消息 → 这一轮里所有 LLM 调用共享同一个值
+    _turn_id: contextvars.ContextVar = contextvars.ContextVar('llm_turn_id', default=None)
 
     @property
     def ticket_id(self): return self._ticket_id.get()
@@ -61,6 +63,11 @@ class _LLMContext:
     @action.setter
     def action(self, v): self._action.set(v)
 
+    @property
+    def turn_id(self): return self._turn_id.get()
+    @turn_id.setter
+    def turn_id(self, v): self._turn_id.set(v)
+
 _llm_ctx = _LLMContext()
 
 
@@ -70,6 +77,7 @@ def set_llm_context(
     project_id: str = None,
     agent_type: str = None,
     action: str = None,
+    turn_id: str = None,
 ):
     """设置 LLM 调用上下文（在 Agent 执行前调用，协程安全）"""
     _llm_ctx.ticket_id = ticket_id
@@ -77,6 +85,7 @@ def set_llm_context(
     _llm_ctx.project_id = project_id
     _llm_ctx.agent_type = agent_type
     _llm_ctx.action = action
+    _llm_ctx.turn_id = turn_id
 
 
 def clear_llm_context():
@@ -86,6 +95,7 @@ def clear_llm_context():
     _llm_ctx.project_id = None
     _llm_ctx.agent_type = None
     _llm_ctx.action = None
+    _llm_ctx.turn_id = None
 
 
 def _truncate(text: str, max_len: int = 200) -> str:
@@ -123,6 +133,40 @@ def _calc_cost_usd(model: str, input_tokens: int, output_tokens: int) -> float:
             break
     cost = (input_tokens * price_in + (output_tokens or 0) * price_out) / 1_000_000
     return round(cost, 6)
+
+
+def _normalize_cli_usage(obj: dict) -> Optional[Dict[str, Any]]:
+    """从 CLI stream-json 的 result 行里抽 token 用量。
+
+    `--output-format stream-json` 的结尾 result 行带 usage 和 total_cost_usd：
+      {"type":"result","usage":{"input_tokens":12,"output_tokens":34,
+                                "cache_read_input_tokens":5678,...},
+       "total_cost_usd":0.0123, "duration_ms":8123}
+    以前这些字段读完就丢，CLI 模式落库的 token 一律是 NULL。
+
+    cache_read/cache_creation 算进 input：计费和上下文占用上它们都是真实输入，
+    只记 input_tokens 会把一次几万 token 的调用记成十几个。
+    """
+    raw = obj.get("usage")
+    if not isinstance(raw, dict):
+        return None
+
+    def _i(key: str) -> int:
+        try:
+            return int(raw.get(key) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    inp = _i("input_tokens") + _i("cache_read_input_tokens") + _i("cache_creation_input_tokens")
+    out = _i("output_tokens")
+    if not inp and not out:
+        return None
+    usage: Dict[str, Any] = {"input_tokens": inp, "output_tokens": out}
+    # CLI 自己报的价按原样带上：它知道真实单价，比 _calc_cost_usd 的粗估准
+    cost = obj.get("total_cost_usd")
+    if isinstance(cost, (int, float)) and cost > 0:
+        usage["cost_usd"] = round(float(cost), 6)
+    return usage
 
 
 def _tools_to_action_protocol(tools: list) -> str:
@@ -1313,6 +1357,12 @@ class LLMClient:
         if timeout_override is not None and timeout_override > 0:
             effective_timeout = min(self.cli_timeout, float(timeout_override))
 
+        # 计时从这里起：拼命令、查 cwd、起子进程都算在这次调用头上。
+        # 以前这里给 _save_conversation 传的是死值 0，于是 CLI 模式（默认模型
+        # 走的就是这条）所有记录耗时全是 0，看不出哪次调用慢。
+        _t_start = time.time()
+        _cli_usage: Dict[str, Any] = {"input_tokens": None, "output_tokens": None}
+
         adapter    = _CLI_ADAPTERS.get(self.cli_type, _CLI_ADAPTERS["custom"])
         prompt     = self._messages_to_prompt(messages)
         use_stdin  = adapter["stdin"]
@@ -1398,7 +1448,7 @@ class LLMClient:
                 queue: _asyncio.Queue = _asyncio.Queue()
 
                 async def _reader():
-                    nonlocal full_text
+                    nonlocal full_text, _cli_usage
                     _raw_lines_seen = 0
                     try:
                         while True:
@@ -1421,8 +1471,15 @@ class LLMClient:
                                 continue
                             _raw_lines_seen += 1
                             logger.debug("🖥️  CLI stdout[%d]: %s", _raw_lines_seen, line[:400])
-                            if _raw_lines_seen <= 3 or _raw_lines_seen % 50 == 0:
+                            # 头 3 行打全内容（确认 CLI 真在输出、格式对不对）；
+                            # 之后只打**进度计数**，不再贴原始 JSON —— 一次流式回答
+                            # 有两万多行 text_delta，每 50 行贴 400 字符会把日志刷爆
+                            # （实测跑一张工单时后台只剩这条和 SSE 无订阅者在滚）。
+                            if _raw_lines_seen <= 3:
                                 logger.info("🖥️  CLI stdout[%d]: %s", _raw_lines_seen, line[:400])
+                            elif _raw_lines_seen % 2000 == 0:
+                                logger.info("🖥️  CLI stdout 已收 %d 行（累计 %d 字符）",
+                                            _raw_lines_seen, len(full_text))
                             try:
                                 obj = _json.loads(line)
                             except _json.JSONDecodeError:
@@ -1505,6 +1562,10 @@ class LLMClient:
                                     full_text = f"[CLI错误] {err_text[:300]}"
                                     await queue.put(("text", full_text))
                             elif t == "result":
+                                # result 行是 CLI 唯一报 token 用量的地方（成功/失败都报）
+                                _u = _normalize_cli_usage(obj)
+                                if _u:
+                                    _cli_usage = _u
                                 if obj.get("is_error"):
                                     err_text = obj.get("result", "") or ""
                                     if not err_text:
@@ -1674,16 +1735,18 @@ class LLMClient:
                     _os.unlink(_prompt_tmp)
                 except Exception:
                     pass
+        _duration_ms = int((time.time() - _t_start) * 1000)
         try:
-            await self._save_conversation(
-                messages, full_text,
-                {"input_tokens": None, "output_tokens": None},
-                0,
-            )
+            await self._save_conversation(messages, full_text, _cli_usage, _duration_ms)
         except Exception as e:
             logger.error("CLI 流式会话记录保存失败: %s", e)
 
-        yield {"type": "stop", "stop_reason": "end_turn", "usage": {}}
+        # usage 要带进 stop 事件：QueryEngine 的 CLI 分支靠它记账，
+        # 否则 budget.consume() 在这条路径上根本没机会被调用，
+        # 预算的 token 维度对默认模型等于不存在，只剩超时兜底。
+        yield {"type": "stop", "stop_reason": "end_turn",
+               "usage": {k: v for k, v in _cli_usage.items() if v is not None},
+               "duration_ms": _duration_ms}
 
     # ---- 统一接口 ----
 
@@ -1773,11 +1836,12 @@ class LLMClient:
     ):
         """保存 LLM 会话记录到数据库"""
         from database import db
-        from utils import generate_id, now_iso
+        from utils import generate_id, now_iso, iso_before
 
         is_fallback = response.startswith("[LLM_UNAVAILABLE]")
 
         conv_id = generate_id("LLM")
+        created = now_iso()
         data = {
             "id": conv_id,
             "ticket_id": _llm_ctx.ticket_id,
@@ -1785,6 +1849,7 @@ class LLMClient:
             "project_id": _llm_ctx.project_id,
             "agent_type": _llm_ctx.agent_type,
             "action": _llm_ctx.action,
+            "turn_id": _llm_ctx.turn_id,
             "messages": json.dumps(messages, ensure_ascii=False),
             "response": response,
             # CLI 模式存实际执行模型（cli_model），而非主模型名（model）
@@ -1792,14 +1857,16 @@ class LLMClient:
             "input_tokens": usage.get("input_tokens") if usage else None,
             "output_tokens": usage.get("output_tokens") if usage else None,
             "duration_ms": duration_ms,
-            "cost_usd": _calc_cost_usd(
+            "cost_usd": usage.get("cost_usd") if (usage and usage.get("cost_usd")) else _calc_cost_usd(
                 self.model,
                 usage.get("input_tokens", 0) if usage else 0,
                 usage.get("output_tokens", 0) if usage else 0,
             ),
             "status": "fallback" if is_fallback else "success",
             "error": None,
-            "created_at": now_iso(),
+            "created_at": created,
+            # started_at：调用开始时间 = 结束时间 - 实际耗时（落库在完成后，只能倒推）
+            "started_at": iso_before(duration_ms, created),
         }
         await db.insert("llm_conversations", data)
 
@@ -1909,7 +1976,7 @@ class LLMClient:
         """保存 chat_with_tools 的汇总调用记录（一次对话多轮合并为一条）"""
         try:
             from database import db
-            from utils import generate_id, now_iso
+            from utils import generate_id, now_iso, iso_before
             import json as _json
             # 只取最后一条 assistant 回复作为 response 摘要
             last_assistant = next(
@@ -1970,6 +2037,7 @@ class LLMClient:
 
             tools_json = _json.dumps(tools_steps, ensure_ascii=False) if tools_steps else None
 
+            created = now_iso()
             await db.insert("llm_conversations", {
                 "id": generate_id("LLM"),
                 "ticket_id": _llm_ctx.ticket_id,
@@ -1977,6 +2045,7 @@ class LLMClient:
                 "project_id": _llm_ctx.project_id,
                 "agent_type": _llm_ctx.agent_type,
                 "action": _llm_ctx.action,
+                "turn_id": _llm_ctx.turn_id,
                 "messages": _json.dumps(messages[-4:], ensure_ascii=False),  # 只存最后4条节省空间
                 "response": response_text[:8000],
                 "model": self.model,
@@ -1986,7 +2055,8 @@ class LLMClient:
                 "cost_usd": _calc_cost_usd(self.model, input_tokens, output_tokens),
                 "status": "success",
                 "error": None,
-                "created_at": now_iso(),
+                "created_at": created,
+                "started_at": iso_before(duration_ms, created),
                 "tools_json": tools_json,
             })
         except Exception as e:

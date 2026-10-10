@@ -453,6 +453,7 @@ STATUS_LABELS = {
     "architecture_done": "架构完成",
     "development_in_progress": "开发中",
     "development_done": "开发完成",
+    "development_failed": "开发未产出代码",
     "review_in_progress": "审查中",
     "review_passed": "审查通过",
     "acceptance_passed": "验收通过",

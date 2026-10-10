@@ -14,7 +14,7 @@ logger = logging.getLogger("capability_check")
 
 
 async def has_superpowers(project_id: str, repo_path: Optional[str] = None) -> bool:
-    """项目是否安装了 Superpowers Pack（.claude/packs/superpowers 或 .codebuddy/packs/superpowers）"""
+    """项目是否安装了 Superpowers Pack（.claude/packs/superpowers 或 .codebuddy/.workbuddy/packs/superpowers）"""
     if not repo_path:
         repo_path = await _get_repo_path(project_id)
     if not repo_path:
@@ -24,6 +24,8 @@ async def has_superpowers(project_id: str, repo_path: Optional[str] = None) -> b
         return (
             (root / ".claude" / "packs" / "superpowers").exists()
             or (root / ".codebuddy" / "packs" / "superpowers").exists()
+            or (root / ".workbuddy" / "packs" / "superpowers").exists()
+            or (root / ".cursor" / "packs" / "superpowers").exists()
         )
     except Exception:
         return False
@@ -123,6 +125,8 @@ def load_superpowers_skills(repo_path: str, skills: list[str]) -> str:
     pack_roots = [
         root / ".claude" / "packs" / "superpowers" / "skills",
         root / ".codebuddy" / "packs" / "superpowers" / "skills",
+        root / ".workbuddy" / "packs" / "superpowers" / "skills",
+        root / ".cursor" / "packs" / "superpowers" / "skills",
     ]
     pack_root = next((p for p in pack_roots if p.exists()), None)
     if not pack_root:

@@ -146,6 +146,20 @@ class Database:
             ("tickets",      "spec_version",    "INTEGER DEFAULT 1"),
             ("tickets",      "change_count",    "INTEGER DEFAULT 0"),
             ("tickets",      "source_ticket_id","TEXT"),           # breaking change 来源工单
+            # 一次对话 = 一个 turn_id。用户发一条消息，后面所有 LLM 调用（含
+            # Compaction 这种嵌套调用）和工具调用都挂同一个 turn_id，三张表能
+            # JOIN 出完整一轮。区分同一轮里的不同调用靠 action，不靠 turn_id。
+            ("llm_conversations", "turn_id",    "TEXT"),
+            ("tool_audit_log",    "turn_id",    "TEXT"),
+            # started_at：调用开始时间，供时间轴计算用。
+            # 落库时机是调用结束后，所以值是 created_at 往前推 duration_ms 倒推出来的。
+            # 没有起点就画不出「这一步耗了多久、和下一步有没有重叠」，时间轴必须有。
+            ("llm_conversations", "started_at", "TEXT"),
+            ("tool_audit_log",    "started_at", "TEXT"),
+            # chat_messages 也挂 turn_id：trace 页面要把「用户这条消息」和「后面产生
+            # 的 LLM/工具调用」JOIN 起来，只能靠这个字段。以前只靠 created_at 的时间
+            # 窗口去猜哪条 LLM 属于哪条消息，同一秒发两条就散架了。
+            ("chat_messages", "turn_id", "TEXT"),
         ]
         async with self._write_lock:
             for table, column, col_def in migrations:
@@ -926,6 +940,46 @@ CREATE TABLE IF NOT EXISTS cli_task_log (
 );
 CREATE INDEX IF NOT EXISTS idx_cli_task_log_project ON cli_task_log(project_id);
 CREATE INDEX IF NOT EXISTS idx_cli_task_log_created ON cli_task_log(created_at DESC);
+
+-- ============================================================
+-- 工单命令执行记录（真 argv / cwd / exit_code / 输出）
+--
+-- 与三张邻表的分工（别再往它们身上堆）：
+--   ticket_commands  — 历史遗产，command 列存的是中文散文（「写入文件: x.js」），
+--                      result 恒 NULL。只读，仅供旧工单回填。
+--   tool_audit_log   — 计数器：谁调了什么工具、多久、成没成。output_summary 只 200 字符。
+--   cli_task_log     — 「一次聊天里的后台任务」，session_key 是 msg_group_key，
+--                      没有 ticket_id。聊天视图继续用它。
+-- 本表只管一件事：**工单执行期真实跑过的一条命令，能重放出当时的控制台**。
+--
+-- ⚠️ 建表和索引必须都在 SCHEMA_SQL 里一次给全，不要把列挪去 _auto_migrate：
+--    init_tables 先 executescript(SCHEMA_SQL) 再迁移，而 executescript
+--    **一条语句失败会整段中止**（索引引用尚不存在的列 → 该语句之后的表全建不出来）。
+-- ============================================================
+CREATE TABLE IF NOT EXISTS ticket_command_log (
+    id             TEXT PRIMARY KEY,          -- TCMD-YYYYMMDD-xxxxxx
+    ticket_id      TEXT,
+    requirement_id TEXT,
+    project_id     TEXT,
+    log_id         TEXT,                      -- ticket_logs.id 反向指针（写入侧配对）
+    source         TEXT NOT NULL,             -- git / cli_tool / shell / action
+    tool           TEXT NOT NULL,             -- openspec_validate / git:push / shell / <action>
+    agent_type     TEXT,
+    command        TEXT NOT NULL,             -- 真 argv
+    cwd            TEXT,
+    exit_code      INTEGER,                   -- NULL = 没有退出码概念（Action）
+    status         TEXT NOT NULL DEFAULT 'success',  -- success / error / timeout
+    duration_ms    INTEGER,
+    output         TEXT,                      -- 截断后内容（ANSI 已剥）
+    output_bytes   INTEGER DEFAULT 0,         -- 截断前原始大小
+    output_file    TEXT,                      -- 超大输出溢出落盘路径（预留）
+    truncated      INTEGER NOT NULL DEFAULT 0,
+    noise          INTEGER NOT NULL DEFAULT 0,  -- 1 = 例行 plumbing，列表默认不显示
+    created_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tcl_ticket  ON ticket_command_log(ticket_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_tcl_log     ON ticket_command_log(log_id);
+CREATE INDEX IF NOT EXISTS idx_tcl_project ON ticket_command_log(project_id, created_at DESC);
 
 
 CREATE TABLE IF NOT EXISTS permission_requests (

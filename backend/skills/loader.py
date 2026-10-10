@@ -234,12 +234,15 @@ class SkillLoader:
         current_file: Optional[str] = None,
         scene: Optional[str] = None,
     ) -> str:
-        """四路合并加载项目级规则，优先级从低到高：
+        """多路合并加载项目级规则，优先级从低到高：
 
-        1. {repo}/.claude/rules/**/*.md  — Claude Code 标准规则
-        2. {repo}/CLAUDE.md             — Claude 项目总指令（alwaysApply，限 3000 字符）
-        3. {repo}/.ads/rules/**/*.md    — ADS 专属规则（同名覆盖 .claude/rules/）
-        4. {repo}/ADS.md                — ADS 项目总指令（alwaysApply，追加最后）
+        1. {repo}/.cursor/rules/**/*.mdc   — Cursor 规则（.mdc 格式）
+        2. {repo}/.claude/rules/**/*.md    — Claude Code 标准规则（同名覆盖 .cursor/）
+        3. {repo}/.codebuddy/rules/**/*.md — CodeBuddy 规则（同名覆盖前两者）
+        4. {repo}/.workbuddy/rules/**/*.md — WorkBuddy 规则（同名覆盖前三者）
+        5. {repo}/CLAUDE.md               — Claude 项目总指令（alwaysApply，限 3000 字符）
+        6. {repo}/.ads/rules/**/*.md      — ADS 专属规则（同名覆盖上面所有 CLI 目录）
+        7. {repo}/ADS.md                  — ADS 项目总指令（alwaysApply，追加最后）
 
         同名 rule_id 后写覆盖前写；CLAUDE.md / ADS.md 各有固定 key，不参与覆盖逻辑。
         """
@@ -247,12 +250,19 @@ class SkillLoader:
         # ordered dict：rule_id → content，后写覆盖前写
         all_rules: "dict[str, str]" = {}
 
-        # ── 1. .claude/rules/ ──────────────────────────────
-        claude_rules_dir = repo / ".claude" / "rules"
-        if claude_rules_dir.exists():
-            self._scan_rules_dir(claude_rules_dir, "claude", all_rules, current_file, scene)
+        # ── 1~4. 各 CLI 约定的 rules 目录（后者同名覆盖前者）────────
+        # Cursor 排最前：它的 .mdc 规则通常是通用编辑器规则，应被更专用的 CLI 规则覆盖
+        cli_rules_dirs = [
+            (repo / ".cursor" / "rules", "cursor"),
+            (repo / ".claude" / "rules", "claude"),
+            (repo / ".codebuddy" / "rules", "codebuddy"),
+            (repo / ".workbuddy" / "rules", "workbuddy"),
+        ]
+        for rules_dir, label in cli_rules_dirs:
+            if rules_dir.exists():
+                self._scan_rules_dir(rules_dir, label, all_rules, current_file, scene)
 
-        # ── 2. CLAUDE.md ───────────────────────────────────
+        # ── 4. CLAUDE.md ───────────────────────────────────
         claude_md = repo / "CLAUDE.md"
         if claude_md.exists():
             try:
@@ -263,12 +273,12 @@ class SkillLoader:
             except Exception as e:
                 logger.warning("读取 CLAUDE.md 失败: %s", e)
 
-        # ── 3. .ads/rules/ ─────────────────────────────────
+        # ── 5. .ads/rules/ ─────────────────────────────────
         ads_rules_dir = repo / ".ads" / "rules"
         if ads_rules_dir.exists():
             self._scan_rules_dir(ads_rules_dir, "project", all_rules, current_file, scene)
 
-        # ── 4. ADS.md ──────────────────────────────────────
+        # ── 6. ADS.md ──────────────────────────────────────
         ads_md = repo / "ADS.md"
         if ads_md.exists():
             try:
@@ -281,9 +291,9 @@ class SkillLoader:
 
         if all_rules:
             logger.info(
-                "📋 项目规则已加载: %d 条（claude_rules=%s ads_rules=%s claude_md=%s ads_md=%s file=%s）",
+                "📋 项目规则已加载: %d 条（cli_rules=[%s] ads_rules=%s claude_md=%s ads_md=%s file=%s）",
                 len(all_rules),
-                claude_rules_dir.exists(),
+                ", ".join(label for d, label in cli_rules_dirs if d.exists()) or "-",
                 ads_rules_dir.exists(),
                 claude_md.exists(),
                 ads_md.exists(),
@@ -299,8 +309,15 @@ class SkillLoader:
         current_file: Optional[str],
         scene: Optional[str],
     ) -> None:
-        """扫描 rules_dir/**/*.md，按 paths/scene/alwaysApply 过滤后写入 out。"""
-        for md_file in sorted(rules_dir.rglob("*.md")):
+        """扫描 rules_dir/**/*.md(.mdc)，按 paths/scene/alwaysApply 过滤后写入 out。
+
+        .mdc 是 Cursor 的规则格式：同样是 frontmatter + markdown 正文，
+        只是扩展名不同，所以两种一起扫。
+        """
+        rule_files = sorted(
+            list(rules_dir.rglob("*.md")) + list(rules_dir.rglob("*.mdc"))
+        )
+        for md_file in rule_files:
             try:
                 text = md_file.read_text(encoding="utf-8", errors="replace")
                 frontmatter, body = _parse_frontmatter(text)

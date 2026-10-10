@@ -12,6 +12,7 @@ import asyncio
 import logging
 import re
 import sys
+import time
 from pathlib import Path
 from typing import Any, Dict
 
@@ -119,6 +120,17 @@ class ShellAction(ActionBase):
 
         logger.info("[shell] %s @ %s", command[:100], work_dir)
 
+        # 结构化记录交给 command_record_hook 落库（见 backend/command_log.py）
+        from command_log import offer_command_record
+        _t0 = time.time()
+
+        def _offer(exit_code, status, output=""):
+            offer_command_record(
+                source="shell", tool=self.name, command=command, cwd=str(work_dir),
+                exit_code=exit_code, status=status, output=output,
+                duration_ms=int((time.time() - _t0) * 1000),
+            )
+
         try:
             proc = await asyncio.create_subprocess_exec(
                 *shell_cmd,
@@ -132,6 +144,7 @@ class ShellAction(ActionBase):
                 )
             except asyncio.TimeoutError:
                 proc.kill()
+                _offer(124, "timeout")
                 return ActionResult(
                     success=False,
                     error=f"命令超时（>{TIMEOUT_SECONDS}s），已终止: {command[:80]}",
@@ -150,6 +163,7 @@ class ShellAction(ActionBase):
                 output = output[:MAX_OUTPUT_CHARS] + f"\n... (已截断，共 {len(output)} 字符)"
 
             success = (exit_code == 0)
+            _offer(exit_code, "success" if success else "error", output)
             return ActionResult(
                 success=success,
                 data={
@@ -164,7 +178,9 @@ class ShellAction(ActionBase):
             )
 
         except FileNotFoundError:
+            _offer(None, "error", "Shell 不可用，请检查系统环境")
             return ActionResult(success=False, error="Shell 不可用，请检查系统环境")
         except Exception as e:
             logger.error("[shell] 执行异常: %s", e)
+            _offer(None, "error", f"执行异常: {e}")
             return ActionResult(success=False, error=f"执行异常: {e}")

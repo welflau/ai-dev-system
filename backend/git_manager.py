@@ -2,9 +2,11 @@
 AI 自动开发系统 - Git 仓库管理器
 封装项目级 Git 操作：初始化、文件写入、提交、推送
 """
+import asyncio
 import logging
 import os
 import json
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from datetime import datetime
@@ -12,6 +14,39 @@ from datetime import datetime
 from config import BASE_DIR
 
 logger = logging.getLogger("git")
+
+# ── git 命令超时 ────────────────────────────────────────────────────────
+# 分两档：本地操作卡两分钟就是病了；网络操作（大仓 push/clone）三五分钟正常。
+_GIT_TIMEOUT = 120
+_GIT_TIMEOUT_NETWORK = 600
+_GIT_NETWORK_VERBS = {"push", "pull", "fetch", "clone", "ls-remote", "submodule"}
+
+# ── 噪音分类：纯读操作照样入库，但列表默认不显示 ─────────────────────────
+_GIT_READ_VERBS = {
+    "status", "rev-parse", "show", "log", "diff", "cat-file", "ls-files",
+    "for-each-ref", "merge-base", "rev-list", "symbolic-ref", "describe",
+    "config", "count-objects", "ls-tree", "blame",
+}
+# 这几个动词读写都有，得看第二个参数
+_GIT_AMBIGUOUS_VERBS = {"add", "branch", "remote", "checkout", "tag", "stash"}
+
+
+def _is_noise_git(cmd: List[str]) -> bool:
+    """这条 git 命令是不是例行 plumbing（读操作）。"""
+    if len(cmd) < 2:
+        return True
+    verb = cmd[1]
+    if verb in _GIT_READ_VERBS:
+        return True
+    if verb in _GIT_AMBIGUOUS_VERBS:
+        rest = [a for a in cmd[2:] if a]
+        if not rest:
+            # `git branch` / `git remote` / `git stash` 裸跑都是列表查询
+            return verb in {"branch", "remote", "tag", "stash"}
+        nxt = rest[0]
+        # -v / --list / --show-current 这类是查询；带实参的是写
+        return nxt.startswith("-") and nxt not in {"-b", "-B", "-d", "-D", "-m", "-A", "-u", "--all"}
+    return False
 
 
 def classify_push_failure(
@@ -122,18 +157,34 @@ async def _emit_git_error_hook(
     action: str,
     err: str,
     extra_input: Optional[Dict[str, Any]] = None,
+    *,
+    duration_ms: float = 0.0,
 ) -> None:
     """git 操作失败时通过 HookRegistry emit TOOL_ERROR，
-    让 audit_log_hook / failure_library_hook / chat_alert_hook 统一处理"""
+    让 audit_log_hook / failure_library_hook / chat_alert_hook 统一处理。
+
+    ticket_id 从 checkpoint 上下文里取（orchestrator.py:1535 已在工单级 set）。
+    以前这里**只传 project_id**，实库后果是 `ToolError:git:commit_failed`
+    2921 行 ticket_id 全为空——git 错误日志全成了工单孤儿，出事时根本回不到
+    是哪张工单干的。
+    """
     try:
         from hooks.registry import hook_registry
         from hooks.types import HookEvent, ToolHookContext
+        ck = {}
+        try:
+            from checkpoint.context import get_checkpoint_context
+            ck = get_checkpoint_context()
+        except Exception:
+            pass
         ctx = ToolHookContext(
             event=HookEvent.TOOL_ERROR,
             tool_name=f"git:{action}",
             input=dict(extra_input or {}),
             error=RuntimeError(err[:300]),
-            project_id=project_id,
+            duration_ms=duration_ms or None,
+            project_id=project_id or ck.get("project_id"),
+            ticket_id=ck.get("ticket_id"),
             agent_type="Git",
         )
         await hook_registry.emit(ctx)
@@ -184,11 +235,26 @@ class GitManager:
         return PROJECTS_DIR / project_id
 
     async def _run_git(self, cwd: str, *args: str) -> tuple:
-        """执行 git 命令，返回 (returncode, stdout, stderr)"""
+        """执行 git 命令，返回 (returncode, stdout, stderr)。
+
+        三件事一起做：超时、不阻塞事件循环、落 ticket_command_log。
+
+        - **超时分两档**：`rev-parse` 卡 120s 已经是病，而大仓 push 三分钟属正常，
+          一个值盖不住两种。
+        - **必须 run_in_executor**：`subprocess.run(timeout=)` 是在调用线程里
+          wait 的，而 `_run_git` 是 `async def`——不换线程的话事件循环照样被卡满
+          整个超时时长，加超时的意义就打了折。
+        - 超时返回 **124**（GNU timeout(1) 的约定）而不是 1：全库 ~65 个调用点
+          遍布 `if rc != 0`，返 1 跟「正常失败」分不开，124 一眼能认。
+        """
         import subprocess
         cmd = ["git"] + list(args)
-        try:
-            result = subprocess.run(
+        verb = args[0] if args else ""
+        timeout = _GIT_TIMEOUT_NETWORK if verb in _GIT_NETWORK_VERBS else _GIT_TIMEOUT
+        t0 = time.time()
+
+        def _blocking():
+            return subprocess.run(
                 cmd,
                 cwd=cwd,
                 capture_output=True,
@@ -196,14 +262,68 @@ class GitManager:
                 encoding="utf-8",
                 errors="replace",
                 check=False,
+                timeout=timeout,
             )
-            return (
-                result.returncode,
-                result.stdout.strip(),
-                result.stderr.strip(),
+
+        status = "success"
+        try:
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(None, _blocking)
+            rc = result.returncode
+            out = (result.stdout or "").strip()
+            err = (result.stderr or "").strip()
+            if rc != 0:
+                status = "error"
+        except subprocess.TimeoutExpired as te:
+            # .output / .stderr 在 text=True 下是 str（非 bytes），且含超时前
+            # 已经收到的部分输出——这是超时现场唯一的线索，别丢。
+            rc, status = 124, "timeout"
+            out = (te.output or "").strip() if isinstance(te.output, str) else ""
+            partial = (te.stderr or "").strip() if isinstance(te.stderr, str) else ""
+            err = f"git 超时（>{timeout}s）: {' '.join(cmd[:4])}"
+            if partial:
+                err += f"\n{partial}"
+        except Exception as e:
+            rc, out, err, status = 1, "", str(e), "error"
+
+        await self._record_git_command(cmd, cwd, rc, out, err, status,
+                                       int((time.time() - t0) * 1000))
+        return (rc, out, err)
+
+    async def _record_git_command(self, cmd, cwd, rc, out, err, status, duration_ms):
+        """把这条 git 命令记进 ticket_command_log。
+
+        按**语义**过滤，不按调用过滤：`_run_git` 的动词分布以廉价读操作为主
+        （remote 9 / rev-parse 8 / checkout 4 / branch 4，而 push 2 / commit 2），
+        且一次逻辑 commit 要发三次 `_run_git`（add / status / commit）。一条一行
+        会把面板淹掉，重演 `ticket_commands` 现在 22224 行低价值记录的老问题。
+
+        所以读操作记成 `noise=1`——**照样入库，只是列表默认不显示**。为什么不
+        干脆不记：诊断难恰恰难在「什么都没跑」和「跑了但没输出」分不开，
+        `?include_noise=1` 正好回答这个问题。
+        """
+        try:
+            from checkpoint.context import get_checkpoint_context
+            from command_log import record_command
+            ck = get_checkpoint_context()
+            verb = cmd[1] if len(cmd) > 1 else ""
+            output = out
+            if err:
+                output += ("\n\n[stderr]\n" if output else "") + err
+            await record_command(
+                source="git", tool=f"git:{verb}" if verb else "git",
+                command=" ".join(cmd), cwd=str(cwd),
+                exit_code=rc, status=status, duration_ms=duration_ms,
+                output=output,
+                # 失败一律不算噪音，哪怕是 rev-parse——失败的 plumbing 往往就是断点
+                noise=(status == "success" and _is_noise_git(cmd)),
+                ticket_id=ck.get("ticket_id") or "",
+                requirement_id=ck.get("requirement_id") or "",
+                project_id=ck.get("project_id") or "",
+                agent_type=ck.get("agent_type") or "Git",
             )
         except Exception as e:
-            return (1, "", str(e))
+            logger.debug("git 命令记录失败（非致命）: %s", e)
 
     # ==================== 仓库初始化 ====================
 
@@ -432,19 +552,41 @@ Thumbs.db
         """git clone 远程仓库到指定路径"""
         import subprocess
         cmd = ["git", "clone", url, dest_path]
-        try:
-            result = subprocess.run(
+        # 和 _run_git 同样的两条：给超时（clone 是网络操作，走长档）+ 换线程，
+        # 否则一次卡死的 clone 会把整个事件循环钉住。
+        def _blocking():
+            return subprocess.run(
                 cmd, capture_output=True, text=True,
                 encoding="utf-8", errors="replace", check=False,
+                timeout=_GIT_TIMEOUT_NETWORK,
             )
-            if result.returncode == 0:
+        t0 = time.time()
+        try:
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(None, _blocking)
+            ok = (result.returncode == 0)
+            if ok:
                 logger.info("git clone 成功: %s -> %s", url, dest_path)
-                return True
             else:
-                logger.error("git clone 失败: %s", result.stderr.strip())
-                return False
+                logger.error("git clone 失败: %s", (result.stderr or "").strip())
+            await self._record_git_command(
+                cmd, "", result.returncode, (result.stdout or "").strip(),
+                (result.stderr or "").strip(), "success" if ok else "error",
+                int((time.time() - t0) * 1000),
+            )
+            return ok
+        except subprocess.TimeoutExpired:
+            logger.error("git clone 超时（>%ss）: %s", _GIT_TIMEOUT_NETWORK, url)
+            await self._record_git_command(
+                cmd, "", 124, "", f"git clone 超时（>{_GIT_TIMEOUT_NETWORK}s）",
+                "timeout", int((time.time() - t0) * 1000),
+            )
+            return False
         except Exception as e:
             logger.error("git clone 异常: %s", e)
+            await self._record_git_command(
+                cmd, "", 1, "", str(e), "error", int((time.time() - t0) * 1000),
+            )
             return False
 
     async def pull(self, project_id: str, remote: str = "origin", branch: str = None) -> bool:
@@ -977,18 +1119,31 @@ Thumbs.db
                 })
         return logs
 
-    async def get_file_tree(self, project_id: str) -> Dict:
-        """获取仓库文件树"""
+    async def get_file_tree(self, project_id: str, max_depth: int = 3,
+                            max_entries: int = 500) -> Dict:
+        """获取仓库文件树（深度和每层条数都有上限）
+
+        为什么要有上限：这里是一次性递归 + 一次性序列化成 JSON。项目 OG 的
+        I:\\A_Works\\OG2\\P4\\UE5 递归下去有 103 万个文件，不设限的话这个调用
+        直接把页面挂死（仓库页和 workbench 的文件树都吃这个接口）。
+
+        超限的目录返回 children: [] + truncated: true，前端据此提示。
+        需要看深层内容请走 /api/projects/{pid}/repos/{key}/tree 的懒加载接口。
+        """
         repo_dir = self._repo_path(project_id)
         if not repo_dir.exists():
             return {"name": project_id, "children": []}
 
-        def _scan_dir(path: Path, relative: str = "") -> List[Dict]:
+        def _scan_dir(path: Path, relative: str = "", depth: int = 0) -> List[Dict]:
             children = []
             try:
                 items = sorted(path.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower()))
             except PermissionError:
                 return children
+
+            truncated = len(items) > max_entries
+            if truncated:
+                items = items[:max_entries]
 
             for item in items:
                 if item.name.startswith("."):
@@ -999,7 +1154,17 @@ Thumbs.db
                 rel_path = f"{relative}/{item.name}" if relative else item.name
 
                 if item.is_dir():
-                    sub_children = _scan_dir(item, rel_path)
+                    if depth + 1 >= max_depth:
+                        # 到深度上限：不再往下扫，但保留节点本身
+                        children.append({
+                            "name": item.name,
+                            "path": rel_path,
+                            "type": "directory",
+                            "children": [],
+                            "truncated": True,
+                        })
+                        continue
+                    sub_children = _scan_dir(item, rel_path, depth + 1)
                     children.append({
                         "name": item.name,
                         "path": rel_path,
@@ -1013,6 +1178,13 @@ Thumbs.db
                         "type": "file",
                         "size": item.stat().st_size,
                     })
+
+            if truncated:
+                children.append({
+                    "name": f"⋯ 条目过多，仅显示前 {max_entries} 项",
+                    "path": relative,
+                    "type": "truncated",
+                })
             return children
 
         return {
@@ -1020,6 +1192,7 @@ Thumbs.db
             "path": "",
             "type": "directory",
             "children": _scan_dir(repo_dir),
+            "max_depth": max_depth,
         }
 
     def _normalize_rel_path(self, file_path: str) -> str:

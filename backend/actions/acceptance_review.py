@@ -145,9 +145,21 @@ class AcceptanceReviewAction(ActionBase):
             logger.info("🖼️ 验收使用 vision 模式（截图已作为 vision content 传给 LLM）")
 
         review = node.instruct_content
-        score = review.score if review else 7
-        passed = score >= pass_score
-        status = "acceptance_passed" if passed else "acceptance_rejected"
+        # 降级 ≠ 通过。LLM 超时/异常时 instruct_content 是 ReviewOutput 的默认值
+        # （passed=True, score=6），而 pass_score 默认也是 6 —— 不拦就等于
+        # 「验收超时自动通过」。TK-20260920-ce79a9 正是这么放行了一个只有
+        # console.log 空壳的工单。降级一律判不通过，让 SOP 走 reject_goto 返工。
+        if node.degraded:
+            logger.error("🚫 验收降级判不通过: %s | %s", ticket_title[:20], node.degrade_reason)
+            score = 0
+            passed = False
+            status = "acceptance_rejected"
+            degrade_note = node.degrade_reason
+        else:
+            score = review.score if review else 7
+            passed = score >= pass_score
+            status = "acceptance_passed" if passed else "acceptance_rejected"
+            degrade_note = ""
 
         # 生成验收报告
         screenshot_md = ""
@@ -157,23 +169,27 @@ class AcceptanceReviewAction(ActionBase):
         review_md = f"""# 产品验收 — {ticket_title}
 
 ## 结果: {'✅ 通过' if passed else '❌ 不通过'}
-
+{f'''
+> 🚫 **本次验收未真正执行**：{degrade_note}
+> LLM 未返回有效结论，按「降级不放行」处理（降级读默认值会把超时当成通过）。
+''' if degrade_note else ''}
 | 项目 | 值 |
 |------|------|
 | 评分 | {score}/10 (通过线: {pass_score}) |
 | 状态 | {status} |
 
 ## 反馈
-{review.feedback if review else '-'}
+{degrade_note or (review.feedback if review else '-')}
 
 ## 检查清单
 {checklist}
 {screenshot_md}
 ## 问题
-{chr(10).join(f'- {i}' for i in (review.issues if review else [])) or '无'}
+{chr(10).join(f'- {i}' for i in (review.issues if review else [])) or ('验收未执行（LLM 降级）' if degrade_note else '无')}
 """
 
-        logger.info("📋 验收: %s → %s (score=%d)", ticket_title[:20], status, score)
+        log_fn = logger.error if degrade_note else logger.info
+        log_fn("📋 验收: %s → %s (score=%d)", ticket_title[:20], status, score)
 
         # 验收通过后异步触发 Skill 提取（不阻塞主流程）
         if passed:
@@ -193,7 +209,13 @@ class AcceptanceReviewAction(ActionBase):
 
         return ActionResult(
             success=True,
-            data={"status": status, "review": review.model_dump() if review else {}},
+            data={
+                "status": status,
+                "review": review.model_dump() if review else {},
+                "degraded": bool(degrade_note),
+                "degrade_reason": degrade_note,
+            },
+            message=f"验收未执行（LLM 降级）: {degrade_note}" if degrade_note else "",
             files={f"{docs_prefix}acceptance-review.md": review_md},
         )
 

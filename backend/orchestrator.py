@@ -629,6 +629,70 @@ class TicketOrchestrator:
                 logger.error("轮询异常: %s", e, exc_info=True)
             await asyncio.sleep(interval)
 
+    async def _zombie_rewind_status(self, ticket_id: str, status: str) -> Optional[str]:
+        """僵尸工单该回退到哪个状态重跑。
+
+        僵尸的语义是「这个阶段半路死了」，不是「这个阶段做完了」。所以要退回
+        **派单前的那个状态**，让 SOP 重新触发同一个 stage，而不是跳到它的成功态。
+        （旧实现直接 fast-forward 到 xxx_done，等于替没跑完的阶段宣布成功，
+        下游拿着空仓库继续跑完整条流水线 —— TK-20260920-ce79a9。）
+
+        来源优先级：
+          1. 本次进入该 in_progress 状态时那条 `assign` 日志的 from_status —— 最准
+          2. SOP 里 success_status == 本状态的那个 stage 的 trigger_on —— 兜底
+          3. 都拿不到 → 返回 None（宁可让它继续挂着等人看，也不谎报完成）
+
+        连续在同一状态僵尸超过 MAX_ZOMBIE_REWIND 次 → 返回 blocked 止损，
+        避免「死 → 回退 → 再死」的无限重跑。
+        """
+        MAX_ZOMBIE_REWIND = 3
+        rewind_cnt = 0
+        try:
+            row = await db.fetch_one(
+                """SELECT COUNT(*) AS c FROM ticket_logs
+                   WHERE ticket_id = ? AND action = 'zombie_reset' AND from_status = ?""",
+                (ticket_id, status),
+            )
+            rewind_cnt = (row or {}).get("c", 0) or 0
+        except Exception as e:
+            logger.debug("zombie_reset 计数失败: %s", e)
+        if rewind_cnt >= MAX_ZOMBIE_REWIND:
+            logger.warning(
+                "🛑 工单 %s 在 %s 已僵尸重跑 %d 次，转 blocked 等人工",
+                ticket_id[:12], status, rewind_cnt,
+            )
+            return TicketStatus.BLOCKED.value
+
+        # 1. 最近一条把工单推进到本状态的 assign 日志
+        try:
+            row = await db.fetch_one(
+                """SELECT from_status FROM ticket_logs
+                   WHERE ticket_id = ? AND action = 'assign' AND to_status = ?
+                   ORDER BY created_at DESC LIMIT 1""",
+                (ticket_id, status),
+            )
+            prev = (row or {}).get("from_status")
+            if prev and prev != status:
+                return prev
+        except Exception as e:
+            logger.debug("僵尸回退读 assign 日志失败: %s", e)
+
+        # 2. 从 SOP 反查：哪个 stage 的 success_status 是本状态 → 退回它的 trigger_on
+        try:
+            ticket = await db.fetch_one(
+                "SELECT project_id, type FROM tickets WHERE id = ?", (ticket_id,)
+            )
+            rules = await self._get_rules_for_project(
+                (ticket or {}).get("project_id") or "", ticket_type=(ticket or {}).get("type"),
+            )
+            for trigger, rule in (rules or {}).items():
+                if rule.get("next_status") == status and trigger != status:
+                    return trigger
+        except Exception as e:
+            logger.debug("僵尸回退查 SOP 失败: %s", e)
+
+        return None
+
     async def _poll_once(self):
         """单次轮询：扫描所有可流转状态的工单并处理"""
         # 1. v0.17: 找出所有状态在**任一项目 SOP** 中的工单（考虑 traits 派生的额外状态）
@@ -703,23 +767,28 @@ class TicketOrchestrator:
                     continue
                 logger.info("🧟 检测到僵尸工单: %s「%s」状态=%s (%.0fs 未更新)",
                             ticket_id[:12], t["title"][:20], status, age)
-                # 僵尸工单：重置到对应的"完成"状态，让轮询器正常拾取
-                reset_map = {
-                    TicketStatus.HTML_PROTOTYPE_IN_PROGRESS.value: TicketStatus.HTML_PROTOTYPE_DONE.value,
-                    TicketStatus.PLANNING_IN_PROGRESS.value: TicketStatus.PLANNING_DONE.value,
-                    TicketStatus.UX_DESIGN_IN_PROGRESS.value: TicketStatus.UX_DESIGN_DONE.value,
-                    TicketStatus.ART_DESIGN_IN_PROGRESS.value: TicketStatus.ART_DESIGN_DONE.value,
-                    TicketStatus.ARCHITECTURE_IN_PROGRESS.value: TicketStatus.ARCHITECTURE_DONE.value,
-                    TicketStatus.DEVELOPMENT_IN_PROGRESS.value: TicketStatus.DEVELOPMENT_DONE.value,
-                    TicketStatus.TESTING_IN_PROGRESS.value: TicketStatus.TESTING_DONE.value,
-                    TicketStatus.DEPLOYING.value: TicketStatus.DEPLOYED.value,
-                }
-                reset_to = reset_map.get(status)
-                if reset_to:
+                # 僵尸 = 这个阶段**半路死了**（进程重启 / Agent 崩溃 / 任务被吞）。
+                # 原先这里 reset 到对应的「完成」状态（development_in_progress →
+                # development_done），等于替一个从没跑完的阶段宣布成功：
+                # TK-20260920-ce79a9 的开发阶段在后端重启时死掉，40 秒后被这张表
+                # 标成 development_done，下游 code_review / acceptance 就在一个
+                # 只有 console.log 空壳的仓库上继续跑，最后 deployed。
+                # 正确语义是**回退重跑**：退回该阶段的触发态，让 SOP 重新派单。
+                reset_to = await self._zombie_rewind_status(ticket_id, status)
+                if reset_to and reset_to != status:
                     await db.update("tickets", {
                         "status": reset_to, "updated_at": now_iso()
                     }, "id = ?", (ticket_id,))
-                    logger.info("🔧 僵尸工单已重置: %s → %s", status, reset_to)
+                    await self._log(
+                        project_id, t.get("requirement_id"), ticket_id, "Orchestrator",
+                        "zombie_reset", status, reset_to,
+                        f"工单在「{status}」卡死 {age:.0f}s（进程重启/Agent 崩溃），"
+                        f"回退到「{reset_to}」重跑该阶段。"
+                        f"注意：不再直接标记为完成——半路死掉的阶段没有产出可言。",
+                        "warning",
+                        detail_data={"stale_seconds": int(age), "from": status, "to": reset_to},
+                    )
+                    logger.info("🔧 僵尸工单已回退重跑: %s → %s", status, reset_to)
                     status = reset_to  # 用新状态继续判断
 
             # 检查依赖（仅对 pending 和有依赖的状态检查）
@@ -1465,6 +1534,7 @@ class TicketOrchestrator:
                 _repo = await _get_repo_path(project_id)
                 set_checkpoint_context(
                     project_id=project_id, ticket_id=ticket_id,
+                    requirement_id=ticket.get("requirement_id") or "",
                     agent_type="Orchestrator", action="process_ticket",
                     repo_path=_repo or "",
                 )
@@ -2536,6 +2606,36 @@ class TicketOrchestrator:
             # 常规 develop / rework / fix_issues → development_done
             # v0.19.x A 方案：若 self_test 失败（UE blocking 静态错）→ self_test_failed
             # → SOP 派生 self_test_failed → DevAgent.fix_issues 自动回跳
+            # 代码生成未产出有效代码（零文件 / 只有降级模板 / Action 失败）。
+            # DevAgent 用独立 status=development_failed 表达，而不是 status=error ——
+            # error 在函数开头就被转成 blocked（硬终态要人工），可 LLM 一次超时
+            # 完全值得自动重试。这里记 reject（进 _reject_count_since_reset 计数），
+            # SOP 的 development_failed → DevAgent.fix_issues 会带反思重开发，
+            # 累计超过 MAX_RETRIES 才 blocked 止损。
+            # 背景：TK-20260920-ce79a9 —— 降级产出 console.log 空壳，一路走到 deployed。
+            if result.get("status") == "development_failed":
+                new_status = "development_failed"
+                cg = result.get("code_gen_failure") or {}
+                fail_msg = str(result.get("message") or "代码生成未产出有效代码")
+                await db.update("tickets", {
+                    "status": new_status,
+                    "result": result_json,
+                    "updated_at": now_iso(),
+                }, "id = ?", (ticket_id,))
+                await self._log(
+                    project_id, requirement_id, ticket_id, agent_name,
+                    "reject", current_status, new_status,
+                    f"代码生成未产出有效代码 · {fail_msg[:200]} · 将触发 fix_issues 反思重开发",
+                    "error",
+                    detail_data={
+                        "reason": fail_msg,
+                        "file_count": cg.get("file_count", 0),
+                        "files": cg.get("files", []),
+                        "notes": cg.get("notes", ""),
+                    },
+                )
+                return   # 不落代码产物：这一轮没有值得留存的产出
+
             self_test = result.get("self_test", {})
             test_summary = self_test.get("summary", "未自测")
             blocking_issues = self_test.get("ue_blocking_issues") or []
@@ -3662,6 +3762,8 @@ class TicketOrchestrator:
             "ticket_type": ticket.get("type", "feature"),
             "module": ticket.get("module", "other"),
             "project_id": project_id,
+            "requirement_id": ticket.get("requirement_id") or "",
+            "agent_type": agent_name or "",
             "repo_path": _repo_path,          # ← 注入 repo_path
             "requirement_description": requirement["description"] if requirement else "",
             "requirement_title": requirement["title"] if requirement else "",

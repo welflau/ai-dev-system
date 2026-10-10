@@ -190,9 +190,11 @@ def _load_disk_commands() -> Dict[str, Dict[str, Any]]:
 def _load_project_commands(repo_path: str) -> Dict[str, Dict[str, Any]]:
     """ClaudeCompat Phase C：扫描项目级命令定义，三路合并（低→高优先级）：
 
-    1. {repo}/.claude/commands/**/*.md   — Claude Code 标准路径
+    1. {repo}/.claude/commands/**/*.md    — Claude Code 标准路径
     2. {repo}/.codebuddy/commands/**/*.md — CodeBuddy 路径
-    3. {repo}/.ads/commands/**/*.md      — ADS 扩展路径（同名覆盖）
+    3. {repo}/.workbuddy/commands/**/*.md — WorkBuddy 路径
+    4. {repo}/.cursor/commands/**/*.md — Cursor 路径
+    4. {repo}/.ads/commands/**/*.md       — ADS 扩展路径（同名覆盖）
 
     子目录中的命令以相对路径作为 name（如 opsx/deploy）。
     """
@@ -204,6 +206,8 @@ def _load_project_commands(repo_path: str) -> Dict[str, Dict[str, Any]]:
     for src_dir, source_label in [
         (repo / ".claude" / "commands", "claude"),
         (repo / ".codebuddy" / "commands", "codebuddy"),
+        (repo / ".workbuddy" / "commands", "workbuddy"),
+        (repo / ".cursor" / "commands", "cursor"),
         (repo / ".ads" / "commands", "ads"),
     ]:
         if not src_dir.exists():
@@ -1988,28 +1992,43 @@ async def _cmd_status(args: str, project_id: Optional[str], context: dict) -> Co
 # ── /tasks ───────────────────────────────────────────────────────────────────
 
 async def _cmd_tasks(args: str, project_id: Optional[str], context: dict) -> CommandResult:
-    """显示正在执行的工单和 Agent 状态"""
+    """显示正在执行的工单和 Agent 状态。
+
+    传了 project_id 就**只看这个项目**。原实现收了 project_id 却一条查询都没用它，
+    于是在 TestFPS 的后台任务面板里会列出 jizhang 的 30 条 pending 工单
+    （Setup Alembic / Setup React Router / …）和别的项目的 CI 构建 ——
+    而末尾还印着一句「仅显示项目 xxx 内工单」，说的和做的正好相反。
+
+    不传 project_id（全局聊天）时保持全局视图，那是它该有的语义。
+    """
     from database import db
     from utils import now_iso
     import datetime
 
     try:
+        # project_id 为空 = 全局视图；非空 = 只看本项目。
+        # 用 `AND project_id = ?` 拼在同一条 SQL 上，避免两套语句走样。
+        pid_cond = " AND project_id = ?" if project_id else ""
+        pid_args = (project_id,) if project_id else ()
+
         # 正在执行的工单（running / in_progress）
         running_tickets = await db.fetch_all(
-            """SELECT id, title, status, assigned_agent, current_action, updated_at, project_id
+            f"""SELECT id, title, status, assigned_agent, current_action, updated_at, project_id
                FROM tickets
-               WHERE status IN ('running','in_progress','executing')
+               WHERE status IN ('running','in_progress','executing'){pid_cond}
                ORDER BY updated_at DESC
-               LIMIT 20"""
+               LIMIT 20""",
+            pid_args,
         )
 
         # 待执行的工单（pending / queued）
         pending_tickets = await db.fetch_all(
-            """SELECT id, title, status, project_id
+            f"""SELECT id, title, status, project_id
                FROM tickets
-               WHERE status IN ('pending','queued','todo')
+               WHERE status IN ('pending','queued','todo'){pid_cond}
                ORDER BY created_at ASC
-               LIMIT 10"""
+               LIMIT 10""",
+            pid_args,
         )
 
         # Agent 状态（从 agent_registry 获取）
@@ -2071,20 +2090,23 @@ async def _cmd_tasks(args: str, project_id: Optional[str], context: dict) -> Com
 
         # CI 构建任务
         ci_builds = await db.fetch_all(
-            """SELECT id, project_id, build_type, status, created_at, raw_output_tail
+            f"""SELECT id, project_id, build_type, status, created_at, raw_output_tail
                FROM ci_builds
-               WHERE status IN ('running','pending')
+               WHERE status IN ('running','pending'){pid_cond}
                ORDER BY created_at DESC
-               LIMIT 10"""
+               LIMIT 10""",
+            pid_args,
         )
 
         if not running_tickets and not pending_tickets and not working_agents and not ci_builds:
             lines.append("✅ 当前无运行中任务\n")
             lines.append("> 进入项目查看工单详情，或提交新需求开始执行。")
 
-        # 当前项目过滤提示
+        # 视图范围提示（现在这句是真的了：查询确实带了 project_id 条件）
         if project_id:
             lines.append(f"\n> 仅显示项目 `{project_id[:8]}` 内工单，全局状态见各项目面板")
+        else:
+            lines.append("\n> 全局视图：显示所有项目的工单与构建")
 
         # 构建结构化任务列表供前端分屏使用
         task_items = []

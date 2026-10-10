@@ -365,14 +365,22 @@ async def _finish_with_ascii(req: dict) -> None:
 
 async def _replace_placeholder(req: dict, content: str, is_ascii: bool = False) -> None:
     """在项目 Git 仓库的文档中替换 [IMG_PENDING:id] 占位符"""
+    tok = None
     try:
         from git_manager import git_manager
+        from checkpoint import push_checkpoint_context, pop_checkpoint_context
         project_id = req["project_id"]
         doc_path   = req["callback_doc"]
         tag        = req["callback_tag"]
 
         if not git_manager.repo_exists(project_id):
             return
+
+        # 和 CI 调度器同理：这里没有工单（图片请求是项目级异步任务），
+        # 但 project_id 知道，不设的话下面 read_file / write_file 发出去的
+        # git 命令记录会连项目都归不上。
+        tok = push_checkpoint_context(project_id=project_id, agent_type="ImageProcessor",
+                                     action="replace_placeholder")
 
         file_content = await git_manager.read_file(project_id, doc_path)
         if not file_content or tag not in file_content:
@@ -389,6 +397,10 @@ async def _replace_placeholder(req: dict, content: str, is_ascii: bool = False) 
         logger.info("占位符替换完成: %s in %s", tag, doc_path)
     except Exception as e:
         logger.warning("替换占位符失败: %s", e)
+    finally:
+        if tok is not None:
+            from checkpoint import pop_checkpoint_context
+            pop_checkpoint_context(tok)
 
 
 # ── 后台轮询调度器 ─────────────────────────────────────────

@@ -6,12 +6,39 @@ Action: 规划代码变更（移植自 MetaGPT WriteCodePlanAndChange 思想）
 import json
 import logging
 from typing import Any, Dict, List
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from actions.base import ActionBase, ActionResult
 from actions.action_node import ActionNode
 from llm_client import llm_client
 
 logger = logging.getLogger("action.plan_code_change")
+
+
+def _coerce_file_entries(v: Any, detail_key: str) -> Any:
+    """把 LLM 常见的几种写法统一成 [{path, <detail_key>}]。
+
+    LLM 经常无视 schema 直接回字符串数组 `["gallery.js", "post.js"]`。
+    Pydantic 一报 ValidationError，ActionNode 就走宽松解析 → 整个 plan 退化，
+    最终零文件 → 回退 WriteCode → 降级模板。一次格式不合规拖垮整条链
+    （TK-20260920-ce79a9）。这里直接兼容，别为了 schema 洁癖丢掉可用信息。
+    """
+    if not isinstance(v, list):
+        return v
+    out = []
+    for item in v:
+        if isinstance(item, str):
+            out.append({"path": item, detail_key: ""})
+        elif isinstance(item, dict):
+            # 有的模型用 file/filename/name 当 key
+            if "path" not in item:
+                for alt in ("file", "filename", "name", "file_path"):
+                    if isinstance(item.get(alt), str):
+                        item = {**item, "path": item[alt]}
+                        break
+            out.append(item)
+        else:
+            out.append({"path": str(item), detail_key: ""})
+    return out
 
 
 class CodeChangePlan(BaseModel):
@@ -23,6 +50,27 @@ class CodeChangePlan(BaseModel):
     files_unchanged: List[str] = Field(default_factory=list,
         description="不需要改动的文件路径")
     summary: str = ""
+
+    @field_validator("files_to_create", mode="before")
+    @classmethod
+    def _fix_create(cls, v):
+        return _coerce_file_entries(v, "purpose")
+
+    @field_validator("files_to_modify", mode="before")
+    @classmethod
+    def _fix_modify(cls, v):
+        return _coerce_file_entries(v, "changes")
+
+    @field_validator("files_unchanged", mode="before")
+    @classmethod
+    def _fix_unchanged(cls, v):
+        """反过来：这里要的是字符串，LLM 却可能给 [{path: ...}]。"""
+        if not isinstance(v, list):
+            return v
+        return [
+            (item.get("path") or item.get("file") or "") if isinstance(item, dict) else str(item)
+            for item in v
+        ]
 
 
 class PlanCodeChangeAction(ActionBase):
@@ -81,16 +129,29 @@ class PlanCodeChangeAction(ActionBase):
                     all_files[path] = content
 
         # 修改已有文件
+        skipped_modify = []
         for f in plan.files_to_modify:
             if isinstance(f, str):
                 path, changes = f, ""
             else:
                 path = f.get("path", "") if isinstance(f, dict) else str(f)
                 changes = f.get("changes", "") if isinstance(f, dict) else ""
-            if path and path in existing_code:
-                modified = await self._modify_file(path, existing_code[path], changes, ticket_title)
-                if modified:
-                    all_files[path] = modified
+            if not path:
+                continue
+            # LLM 给的路径常和仓库里的差一层前缀（gallery.js vs src/gallery.js）。
+            # 原先 `path in existing_code` 不匹配就**静默跳过**，一个文件都改不到
+            # 却照样往下走，最后零产出回退降级模板（TK-20260920-ce79a9）。
+            real_path = self._resolve_path(path, existing_code)
+            if not real_path:
+                skipped_modify.append(path)
+                continue
+            modified = await self._modify_file(real_path, existing_code[real_path], changes, ticket_title)
+            if modified:
+                all_files[real_path] = modified
+
+        if skipped_modify:
+            logger.warning("⚠️ 变更计划里 %d 个待改文件在仓库中找不到，已跳过: %s",
+                           len(skipped_modify), ", ".join(skipped_modify[:5]))
 
         if not all_files:
             logger.warning("规划执行后无文件产出，回退")
@@ -109,6 +170,28 @@ class PlanCodeChangeAction(ActionBase):
             },
             files=all_files,
         )
+
+    @staticmethod
+    def _resolve_path(path: str, existing_code: Dict) -> str:
+        """把 LLM 给的路径对到仓库里真实存在的文件；对不上返回 ""。
+
+        依次尝试：原样 → 归一化斜杠 → 忽略大小写 → 按文件名唯一匹配。
+        最后一条只在**全仓库该文件名唯一**时才认，避免把 a/util.js 改成 b/util.js。
+        """
+        if not path:
+            return ""
+        if path in existing_code:
+            return path
+        norm = path.replace("\\", "/").lstrip("./")
+        table = {p.replace("\\", "/").lstrip("./"): p for p in existing_code}
+        if norm in table:
+            return table[norm]
+        lower = {k.lower(): v for k, v in table.items()}
+        if norm.lower() in lower:
+            return lower[norm.lower()]
+        base = norm.rsplit("/", 1)[-1].lower()
+        hits = [orig for k, orig in table.items() if k.rsplit("/", 1)[-1].lower() == base]
+        return hits[0] if len(hits) == 1 else ""
 
     async def _plan(self, title, description, architecture, existing_files,
                     existing_code, reflection_block: str = "",

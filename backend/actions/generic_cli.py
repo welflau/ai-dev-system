@@ -18,6 +18,7 @@ import asyncio
 import logging
 import shlex
 import sys
+import time
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -104,6 +105,19 @@ class GenericCLIAction(ActionBase):
 
         logger.info("[cli:%s] %s @ %s", self.name, rendered[:120], base)
 
+        # 结构化记录交给 command_record_hook 落库。POST_TOOL_USE 只拿得到
+        # 拼好的 result_text 字符串，data 到不了 hook 手里，所以这里显式 offer。
+        # 见 backend/command_log.py 顶部注释。
+        from command_log import offer_command_record
+        _t0 = time.time()
+
+        def _offer(exit_code, status, output=""):
+            offer_command_record(
+                source="cli_tool", tool=self.name, command=rendered, cwd=str(base),
+                exit_code=exit_code, status=status, output=output,
+                duration_ms=int((time.time() - _t0) * 1000),
+            )
+
         try:
             if sys.platform == "win32":
                 proc = await asyncio.create_subprocess_shell(
@@ -121,6 +135,7 @@ class GenericCLIAction(ActionBase):
                 stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=self._timeout)
             except asyncio.TimeoutError:
                 proc.kill()
+                _offer(124, "timeout")
                 return ActionResult(success=False,
                                     error=f"CLI 超时（>{self._timeout}s）: {self.name}")
 
@@ -129,6 +144,7 @@ class GenericCLIAction(ActionBase):
                 output = output[:MAX_OUTPUT_CHARS] + f"\n... (已截断，共 {len(output)} 字符)"
             exit_code = proc.returncode if proc.returncode is not None else -1
             success = (exit_code == 0)
+            _offer(exit_code, "success" if success else "error", output)
             return ActionResult(
                 success=success,
                 data={"type": "cli_result", "tool": self.name, "command": rendered,
@@ -138,7 +154,9 @@ class GenericCLIAction(ActionBase):
                 error=None if success else f"exit code {exit_code}",
             )
         except FileNotFoundError:
+            _offer(None, "error", f"CLI 不可用: {rendered[:80]}")
             return ActionResult(success=False, error=f"CLI 不可用: {rendered[:80]}")
         except Exception as e:
             logger.error("[cli:%s] 执行异常: %s", self.name, e)
+            _offer(None, "error", f"执行异常: {e}")
             return ActionResult(success=False, error=f"执行异常: {e}")

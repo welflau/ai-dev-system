@@ -119,6 +119,25 @@ base_stages:
       enable_reflection: true
       reflection_max_prev: 3
 
+  # 代码生成本身失败（零文件 / 只产出降级模板 / Action 报错）→ development_failed。
+  # 不能让它走 orchestrator 的「status=error → blocked」：那是硬终态要人工介入，
+  # 而 LLM 一次超时完全值得自动重试。这里和 self_test_failed 同构：
+  # 回 DevAgent.fix_issues 带反思重开发，超过全局 MAX_RETRIES=5 次才 blocked 止损。
+  # 背景：TK-20260920-ce79a9 —— 降级模板产出 console.log 空壳却一路 deployed。
+  - id: development_retry
+    name: 开发重试
+    agent: DevAgent
+    action: fix_issues
+    trigger_on: development_failed
+    success_status: development_done
+    branch_only: true
+    description: 代码生成未产出有效代码，反思后重新开发
+    config:
+      read_existing_code: true
+      max_tokens: 16000
+      enable_reflection: true
+      reflection_max_prev: 3
+
 # Pipeline UI 展示配置（蓝盾风格的 N 阶段视图）。
 # compose_sop 会把 fragments 里的 pipeline_view_contrib 合并到这里（Phase C.3）。
 # 基础布局：需求分析（合成） → 架构设计 → 开发实现 → 合入Develop（合成）。

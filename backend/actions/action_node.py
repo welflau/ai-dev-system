@@ -7,6 +7,14 @@ ActionNode — 结构化输出节点
 2. 调用 LLM（可选携带图片，走 Anthropic vision）
 3. 解析输出为 Pydantic 模型（类型安全）
 4. 解析失败时宽松降级（不崩溃）
+
+⚠️ 降级 ≠ 通过：LLM 超时/异常/返回无效时，instruct_content 是
+`expected_type.model_construct()` —— 一个**全是 schema 默认值**的空模型。
+对评审类 schema 这非常危险：ReviewOutput 默认 `passed=True, score=6`，而
+acceptance 的 pass_score 正好是 6，于是「LLM 超时」被读成「验收 6 分通过」。
+TK-20260920-ce79a9 就是这么在超时 602s 后拿到 acceptance_passed 的。
+所以降级时置 `self.degraded=True` + `degrade_reason`，调用方**必须**先看这个
+标志再读分数（见 acceptance_review.py / code_review.py）。
 """
 import asyncio
 import json
@@ -34,6 +42,17 @@ class ActionNode:
         self.schema = schema
         self.instruct_content: Optional[BaseModel] = None
         self.raw_content: str = ""
+        # 降级标志：instruct_content 是 schema 默认值而非 LLM 真实输出时置 True。
+        # 评审类 Action 必须先查它，否则「超时」会被默认值读成「通过」。
+        self.degraded: bool = False
+        self.degrade_reason: str = ""
+
+    def _degrade(self, reason: str) -> "ActionNode":
+        """降级为空模型并标记原因（唯一入口，防止漏标）"""
+        self.instruct_content = self.expected_type.model_construct()
+        self.degraded = True
+        self.degrade_reason = reason
+        return self
 
     async def fill(
         self,
@@ -87,15 +106,13 @@ class ActionNode:
             )
             logger.error("⏱️ %s", err_msg)
             await _emit_action_node_error(err_msg, _llm_ctx)
-            self.instruct_content = self.expected_type.model_construct()
-            return self
+            return self._degrade(err_msg)
         except Exception as exc:
             elapsed = int((time.monotonic() - _t0))
             err_msg = f"ActionNode[{self.key}] LLM 调用异常（{elapsed}s）: {exc}"
             logger.error("❌ %s", err_msg)
             await _emit_action_node_error(err_msg, _llm_ctx)
-            self.instruct_content = self.expected_type.model_construct()
-            return self
+            return self._degrade(err_msg)
 
         elapsed_ms = (time.monotonic() - _t0) * 1000
         # 成功后 emit SESSION_END Hook，写 tool_audit_log
@@ -116,9 +133,9 @@ class ActionNode:
                 return self
 
         # 4. LLM 返回无效 → 降级为空模型
-        logger.warning("ActionNode[%s] LLM 返回无效 (type=%s)", self.key, type(response).__name__)
-        self.instruct_content = self.expected_type.model_construct()
-        return self
+        msg = f"ActionNode[{self.key}] LLM 返回无效 (type={type(response).__name__})"
+        logger.warning(msg)
+        return self._degrade(msg)
 
     def _compile(self, context: str) -> str:
         """编译 prompt = Skills 段（可选） + 指令 + 上下文 + JSON Schema 约束

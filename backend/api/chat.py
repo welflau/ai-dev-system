@@ -22,6 +22,25 @@ from events import event_manager
 # 全局聊天思考日志：session_id → asyncio.Queue（fire-and-forget SSE 频道）
 _THINKING_QUEUES: Dict[str, asyncio.Queue] = {}
 
+# 「工单对话」Feed 会把哪些 ticket_logs 渲染成事件条目。
+#
+# 为什么放在模块级而不是塞在端点里：时间轴上每条日志要显示一个「💬 对话」跳转链接，
+# 而链接只在对话里**真有**对应条目时才该出现。判断依据就是这份白名单 ——
+# tickets.py 的 /timeline 直接 import 它来标注 _chat_anchor。
+# 前端抄一份的话，这边加了 action、那边不知道，链接就会指向不存在的条目
+# （和之前「📟 后台记录」判据漂移是同一类坑）。
+FEED_LOG_ACTIONS = {
+    "assign", "complete",
+    "thought_start", "thought_done",
+    "tool_start", "tool_done",
+    "react_tool", "skill_step_done",
+    "planning_done", "architecture_done",
+    "openspec_propose", "openspec_apply", "openspec_apply_started",
+    "openspec_apply_partial", "openspec_apply_failed", "openspec_verify",
+    "phase_reset", "change_detected",
+    "milestone_architecture",
+}
+
 # CLI 工具后台任务存储：task_id → {title, tool, status, output_lines, created_at, duration_ms}
 # 仅在内存中，重启后清空，最多保留 200 条
 _CLI_TASKS: Dict[str, Dict] = {}
@@ -133,7 +152,7 @@ class ChatRequest(BaseModel):
     history: Optional[List[ChatMessage]] = Field(default=None, description="历史消息（可选）")
     images: Optional[List[str]] = Field(default=None, description="图片列表，base64 data URL，如 data:image/png;base64,...")
     chat_session_id: Optional[str] = Field(default=None, description="v0.20 会话 ID")
-    msg_group_key: Optional[str] = Field(default=None, description="消息级任务分组 key，每次发送唯一，用于后台任务面板按对话分组")
+    msg_group_key: Optional[str] = Field(default=None, description="（已废弃）分组 key 现由服务端生成并通过 turn_begin 事件下发，此字段仅为兼容旧前端保留")
     agent: Optional[str] = Field(default=None, description="@mention Agent 名称，如 DevAgent / TestAgent，注入 persona 并走流式路径")
     ticket_id: Optional[str] = Field(default=None, description="关联工单 ID（抽屉/看板聚焦时传入，供 Write Checkpoint）")
 
@@ -629,8 +648,14 @@ async def _chat_stream_generator(
     # 本轮工具触及的文件路径（落库时写成完整相对路径，避免对话只剩裸文件名）
     _touched_files: list[str] = []
     _repo_root = (project.get("local_repo_path") or project.get("git_repo_path") or "") if project else ""
-    # 消息级分组 key：每次发消息唯一，用于后台任务面板按对话分组
-    _msg_group_key = req.msg_group_key or _sid
+    # 本轮对话的 turn_id：服务端生成，一次发送唯一。
+    # 不能用 `req.msg_group_key or _sid` —— 前端只有 CLI 任务那几个入口传
+    # msg_group_key，其余路径一律回落成 session_id，于是「一次对话」和
+    # 「整个会话」同一个 key，后台任务面板里几十轮全挤成一组，也没法用它
+    # 去 JOIN LLM/工具记录。key 是每轮唯一才有意义，那就服务端自己发。
+    # 前端传来的值仅作为任务面板的展示标签（label）保留。
+    from utils import generate_id as _gen_id
+    _msg_group_key = _gen_id("TURN")
     # A-4: @file 引用展開（在 LLM 調用前注入文件內容）
     expanded_message, _file_warnings = _expand_file_refs(req.message)
 
@@ -640,6 +665,10 @@ async def _chat_stream_generator(
         yield _sse("action", _path_action_p)
         yield _sse("message_done", {"full_text": "", "final_action": _path_action_p, "rounds": 0})
         return
+
+    # 把 turn_id 告诉前端：任务面板按它分组，得和后端落库的值一致，
+    # 否则前端自己那套 sess_<ts> 和库里的 turn_id 对不上号。
+    yield _sse("turn_begin", {"turn_id": _msg_group_key})
 
     # @mention Agent 路由：提前推送 agent_info 事件供前端样式化气泡
     _agent_override = req.agent if (req.agent and req.agent in _AGENT_CONFIG) else None
@@ -664,7 +693,8 @@ async def _chat_stream_generator(
     # 保存用户消息（同步写入，确保 session 记录先于流式响应创建）
     try:
         await _save_chat_message(project_id, "user", req.message,
-                                 images=req.images, session_id=_sid)
+                                 images=req.images, session_id=_sid,
+                                 turn_id=_msg_group_key)
     except Exception as _ue:
         logger.warning("保存用户消息失败（继续流式）: %s", _ue)
 
@@ -680,6 +710,7 @@ async def _chat_stream_generator(
             project_context=project_context,
             session_id=_sid,
             agent_override=_agent_override,
+            turn_id=_msg_group_key,
         ):
             etype = ev.get("type", "")
 
@@ -812,7 +843,8 @@ async def _chat_stream_generator(
                 try:
                     _saved_msg_id = await _save_chat_message(project_id, "assistant", full_text,
                                              action=final_action, session_id=_sid,
-                                             thinking=save_thinking)
+                                             thinking=save_thinking,
+                                             turn_id=_msg_group_key)
                     # Session Resume：标记 session 为 completed
                     await db.execute(
                         "UPDATE chat_sessions SET last_status='completed', last_active_at=? WHERE id=?",
@@ -822,7 +854,9 @@ async def _chat_stream_generator(
                     logger.warning("流式消息保存失败: %s", _se)
                 yield _sse("message_done", {"rounds": ev.get("rounds", 1),
                                             "stop_reason": ev.get("stop_reason", "end_turn"),
-                                            "msg_id": _saved_msg_id})
+                                            "msg_id": _saved_msg_id,
+                                            "turn_id": _msg_group_key,
+                                            "total_tokens": ev.get("total_tokens", 0)})
                 return  # generator 结束
 
     except Exception as e:
@@ -833,7 +867,8 @@ async def _chat_stream_generator(
             await _save_chat_message(project_id, "assistant",
                                      full_text or "（对话异常中断）",
                                      action=final_action, session_id=_sid,
-                                     thinking=save_thinking_fb)
+                                     thinking=save_thinking_fb,
+                                     turn_id=_msg_group_key)
         except Exception as _sex:
             logger.warning("异常兜底保存失败: %s", _sex)
         try:
@@ -855,7 +890,8 @@ async def _chat_stream_generator(
             try:
                 await _save_chat_message(project_id, "assistant", full_text,
                                          action=final_action, session_id=_sid,
-                                         thinking=save_thinking_fin)
+                                         thinking=save_thinking_fin,
+                                         turn_id=_msg_group_key)
                 await db.execute(
                     "UPDATE chat_sessions SET last_status='completed', last_active_at=? WHERE id=?",
                     (now_iso(), _sid),
@@ -1460,6 +1496,144 @@ async def get_session_messages(project_id: str, session_id: str, limit: int = 20
     return {"messages": messages, "session_id": session_id}
 
 
+@router.get("/sessions/{session_id}/trace")
+async def get_session_trace(session_id: str, project_id: Optional[str] = None):
+    """按 turn 聚合本 session 的对话轨迹。
+
+    每个 turn 包含：
+      - user/assistant 两条消息（或若干条，异常时可能只有 user）
+      - 属于这轮的所有 LLM 调用（含 Compaction 这种嵌套调用）
+      - 属于这轮的所有工具调用（含 SESSION_END 的 query_engine:done）
+    未挂 turn_id 的旧消息落进 turn_id=None 的「未追踪」分组，不丢。
+
+    project_id 可选：不给就按 chat_messages 里的实际 project_id 反查
+    （聊天可能是 __global__，也可能是某个具体项目）。
+    """
+    sess = await db.fetch_one("SELECT id, project_id, title FROM chat_sessions WHERE id = ?", (session_id,))
+    if not sess:
+        raise HTTPException(404, "会话不存在")
+
+    msg_rows = await db.fetch_all(
+        """SELECT id, project_id, role, content, action_type, action_data,
+                  thinking_json, turn_id, api_format, cli_type, llm_model, created_at
+             FROM chat_messages
+            WHERE session_id = ?
+            ORDER BY created_at ASC, id ASC""",
+        (session_id,),
+    )
+    if not msg_rows:
+        return {"session_id": session_id, "title": sess.get("title") or "",
+                "project_id": sess.get("project_id"), "turns": [], "orphan_messages": []}
+
+    # project_id 兜底：session 表里的 project_id 全局会话是 NULL，用消息里的
+    eff_pid = project_id or sess.get("project_id") or next(
+        (m["project_id"] for m in msg_rows if m.get("project_id")), None
+    )
+
+    # 本 session 涉及的 turn_id 集合
+    turn_ids = sorted({m["turn_id"] for m in msg_rows if m.get("turn_id")})
+
+    llm_by_turn: Dict[str, list] = {}
+    tools_by_turn: Dict[str, list] = {}
+    if turn_ids:
+        # SQLite 参数化：拼 ?,?,? 的 IN 子句
+        placeholders = ",".join("?" * len(turn_ids))
+        llm_rows = await db.fetch_all(
+            f"""SELECT id, agent_type, action, model, input_tokens, output_tokens,
+                       duration_ms, cost_usd, status, tools_json,
+                       turn_id, started_at, created_at
+                  FROM llm_conversations
+                 WHERE turn_id IN ({placeholders})
+                 ORDER BY COALESCE(started_at, created_at) ASC, id ASC""",
+            tuple(turn_ids),
+        )
+        for r in llm_rows:
+            d = dict(r)
+            if d.get("tools_json"):
+                try:
+                    d["tools"] = json.loads(d["tools_json"]) or []
+                except (json.JSONDecodeError, TypeError):
+                    d["tools"] = []
+            d.pop("tools_json", None)
+            llm_by_turn.setdefault(d["turn_id"], []).append(d)
+
+        tool_rows = await db.fetch_all(
+            f"""SELECT id, tool_name, agent_type, duration_ms, success,
+                       input_summary, output_summary, error_msg,
+                       turn_id, started_at, created_at
+                  FROM tool_audit_log
+                 WHERE turn_id IN ({placeholders})
+                 ORDER BY COALESCE(started_at, created_at) ASC, id ASC""",
+            tuple(turn_ids),
+        )
+        for r in tool_rows:
+            tools_by_turn.setdefault(r["turn_id"], []).append(dict(r))
+
+    def _decode_msg(row) -> dict:
+        m = dict(row)
+        try:
+            m["thinking"] = json.loads(m.pop("thinking_json", None) or "null") or []
+        except (json.JSONDecodeError, TypeError):
+            m["thinking"] = []
+        raw = m.pop("action_data", None)
+        if raw:
+            try:
+                m["action"] = json.loads(raw)
+            except (json.JSONDecodeError, TypeError):
+                m["action"] = None
+        return m
+
+    # 按 turn_id 分组消息；orphan（无 turn_id）挑出来单独列
+    msgs_by_turn: Dict[str, list] = {}
+    orphans: list = []
+    for row in msg_rows:
+        m = _decode_msg(row)
+        tid = m.get("turn_id")
+        (msgs_by_turn.setdefault(tid, []) if tid else orphans).append(m)
+
+    def _first_ts(items: list) -> str:
+        return min((i.get("started_at") or i.get("created_at") or "" for i in items), default="")
+
+    turns = []
+    for tid in turn_ids:
+        msgs = msgs_by_turn.get(tid, [])
+        llms = llm_by_turn.get(tid, [])
+        tools = tools_by_turn.get(tid, [])
+        # 排序基准：取消息、LLM、工具三者里最早的时间戳作为 turn 起点
+        started_at = min(
+            (t for t in (
+                msgs[0].get("created_at") if msgs else None,
+                _first_ts(llms),
+                _first_ts(tools),
+            ) if t),
+            default="",
+        )
+        # SESSION_END（query_engine:done）单独拎出来当结束标记
+        session_end = next(
+            (t for t in tools if t.get("tool_name") == "query_engine:done"), None
+        )
+        turns.append({
+            "turn_id": tid,
+            "started_at": started_at,
+            "messages": msgs,
+            "llm_calls": llms,
+            "tool_calls": [t for t in tools if t.get("tool_name") != "query_engine:done"],
+            "session_end": session_end,
+            "total_input_tokens":  sum((l.get("input_tokens")  or 0) for l in llms),
+            "total_output_tokens": sum((l.get("output_tokens") or 0) for l in llms),
+            "total_cost_usd":      round(sum((l.get("cost_usd") or 0) for l in llms), 6),
+        })
+    turns.sort(key=lambda t: t["started_at"])
+
+    return {
+        "session_id": session_id,
+        "title": sess.get("title") or "",
+        "project_id": eff_pid,
+        "turns": turns,
+        "orphan_messages": orphans,
+    }
+
+
 @router.get("/history")
 async def get_chat_history(project_id: str, limit: int = 50):
     """获取项目全局聊天历史"""
@@ -1969,17 +2143,9 @@ async def get_ticket_conversations(project_id: str, ticket_id: str):
 
     # ── 合并 ticket_logs 关键事件（assign / complete / thought_done / tool_done / react_tool 等）
     # 这些事件代表"谁做了什么"，与 LLM 回复内容一起形成完整对话流
-    LOG_ACTIONS_SHOW = {
-        "assign", "complete",
-        "thought_start", "thought_done",
-        "tool_start", "tool_done",
-        "react_tool", "skill_step_done",
-        "planning_done", "architecture_done",
-        "openspec_propose", "openspec_apply", "openspec_apply_started",
-        "openspec_apply_partial", "openspec_apply_failed", "openspec_verify",
-        "phase_reset", "change_detected",
-        "milestone_architecture",
-    }
+    # 白名单提到模块级 FEED_LOG_ACTIONS：时间轴要据此判断"这条日志在对话里能不能定位到"，
+    # 抄一份到前端就会各改各的、迟早对不上（见 tickets.py::_annotate_chat_anchors）
+    LOG_ACTIONS_SHOW = FEED_LOG_ACTIONS
     try:
         log_rows = await db.fetch_all(
             """SELECT id, agent_type, action, from_status, to_status, detail,
@@ -2593,6 +2759,7 @@ async def _save_chat_message(
     saved_urls: list = None,   # 已保存的图片 URL 列表（优先使用，避免重复保存）
     session_id: str = "default",  # v0.20 多会话
     thinking: list = None,     # v0.20 思考步骤 [{tool, args_hint, summary}, ...]
+    turn_id: Optional[str] = None,  # 本轮对话 ID：trace 页面靠它把消息和 LLM/工具调用 JOIN 起来
 ):
     """保存聊天消息到数据库，图片保存为文件"""
     msg_id = generate_id("MSG")
@@ -2623,6 +2790,7 @@ async def _save_chat_message(
         "images_json": json.dumps(image_urls, ensure_ascii=False) if image_urls else None,
         "thinking_json": json.dumps(thinking, ensure_ascii=False) if thinking else None,
         "session_id": eff_session,
+        "turn_id": turn_id,
         "api_format": llm_meta["api_format"],
         "cli_type": llm_meta["cli_type"],
         "llm_model": llm_meta["llm_model"],
@@ -2645,7 +2813,7 @@ class GlobalChatRequest(BaseModel):
     images: Optional[List[str]] = Field(default=None, description="图片列表，base64 data URL")
     session_id: Optional[str] = Field(default=None, description="思考日志 SSE session ID（可选）")
     chat_session_id: Optional[str] = Field(default=None, description="v0.20 多会话 session ID")
-    msg_group_key: Optional[str] = Field(default=None, description="消息级任务分组 key，每次发送唯一")
+    msg_group_key: Optional[str] = Field(default=None, description="（已废弃）见 ChatRequest.msg_group_key")
     agent: Optional[str] = Field(default=None, description="@mention Agent 名称，注入 persona 并走流式路径")
 
 
@@ -2812,7 +2980,9 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
     _thinking_rounds_g: list = []
     _cur_round_g: dict | None = None
     _thinking_buf_g: str = ""  # 全局聊天思考缓冲
-    _msg_group_key_g = req.msg_group_key or _sid
+    # 服务端生成，每轮唯一（同 _chat_stream_generator 里的说明）
+    from utils import generate_id as _gen_id_g
+    _msg_group_key_g = _gen_id_g("TURN")
 
     # DB 可能被 Orchestrator 鎖住，讀失敗時用空列表繼續（不阻斷聊天）
     try:
@@ -2845,6 +3015,8 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
         yield _sse("message_done", {"full_text": "", "final_action": _open_action, "rounds": 0})
         return
 
+    yield _sse("turn_begin", {"turn_id": _msg_group_key_g})
+
     # @mention Agent 路由：提前推送 agent_info 事件
     _agent_override_g = req.agent if (req.agent and req.agent in _AGENT_CONFIG) else None
     if _agent_override_g:
@@ -2858,7 +3030,8 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
     # 保存用户消息（同步写入）
     try:
         await _save_chat_message("__global__", "user", req.message,
-                                 images=req.images, session_id=_sid)
+                                 images=req.images, session_id=_sid,
+                                 turn_id=_msg_group_key_g)
     except Exception as _ue2:
         logger.warning("全局保存用户消息失败: %s", _ue2)
 
@@ -2870,6 +3043,7 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
             projects_brief=projects,
             session_id=_sid,
             agent_override=_agent_override_g,
+            turn_id=_msg_group_key_g,
         ):
             etype = ev.get("type", "")
 
@@ -2971,7 +3145,8 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
                 try:
                     _saved_msg_id_g = await _save_chat_message("__global__", "assistant", full_text,
                                              action=final_action, session_id=_sid,
-                                             thinking=save_thinking_g)
+                                             thinking=save_thinking_g,
+                                             turn_id=_msg_group_key_g)
                     await db.execute(
                         "UPDATE chat_sessions SET last_status='completed', last_active_at=? WHERE id=?",
                         (now_iso(), _sid),
@@ -2980,7 +3155,9 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
                     logger.warning("全局流式消息保存失败: %s", _se)
                 yield _sse("message_done", {"rounds": ev.get("rounds", 1),
                                             "stop_reason": ev.get("stop_reason", "end_turn"),
-                                            "msg_id": _saved_msg_id_g})
+                                            "msg_id": _saved_msg_id_g,
+                                            "turn_id": _msg_group_key_g,
+                                            "total_tokens": ev.get("total_tokens", 0)})
                 return
 
     except Exception as e:
@@ -3000,7 +3177,8 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
     try:
         await _save_chat_message("__global__", "assistant", full_text,
                                  action=final_action, session_id=_sid,
-                                 thinking=thinking_steps or None)
+                                 thinking=thinking_steps or None,
+                                 turn_id=_msg_group_key_g)
     except Exception as e:
         logger.warning("全局流式消息保存失败(兜底): %s", e)
 
@@ -3191,6 +3369,17 @@ async def get_global_session_messages(session_id: str, limit: int = 200):
                 pass
         messages.append(msg)
     return {"messages": messages, "session_id": session_id}
+
+
+@global_chat_router.get("/sessions/{session_id}/trace")
+async def get_global_session_trace(session_id: str):
+    """全局会话的 trace。
+
+    routing 隔离：project_id 路由 (/api/projects/{pid}/chat/*) 和全局路由
+    (/api/chat/*) 是两套独立注册，`get_session_trace` 只挂在项目路由上，
+    全局这边不加一份就会 404。这里薄薄一层，实现共用。
+    """
+    return await get_session_trace(session_id, project_id="__global__")
 
 
 # ---- 确认创建项目端点 ----

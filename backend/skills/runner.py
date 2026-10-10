@@ -74,6 +74,19 @@ class SkillRunner:
     def __init__(self, skill: ExecutableSkill, llm_client=None, hooks=None):
         self.skill = skill
         self._llm = llm_client
+        # hooks 默认接全局 registry。历史上这里默认 None，而三个构造点
+        # （agents/dev.py、agents/architect.py、agents/skill_agent.py）全都
+        # 只传 skill —— 于是 engine.py 里 `if self.hooks:` 一路跳过，
+        # PRE/POST_TOOL_USE 一次都不发。全库唯独这条 QueryEngine 漏了 hooks，
+        # 而真正跑 shell 的两个 Action（GenericCLIAction / ShellAction）
+        # **只**在这条路上 —— 唯一跑命令的路径成了唯一没有审计的路径。
+        # 在 __init__ 兜底而不是改三个调用点，防止以后新增构造点再漏一次。
+        if hooks is None:
+            try:
+                from hooks.registry import hook_registry
+                hooks = hook_registry
+            except Exception:
+                hooks = None
         self._hooks = hooks
 
     async def is_available(self, context: dict) -> bool:

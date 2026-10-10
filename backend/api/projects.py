@@ -2348,10 +2348,27 @@ async def get_project_agents_all(project_id: str):
                     item["pack_name"] = None
                     user_agents.append(item)
 
-    # ── 4. 覆盖关系检测（同名时：用户 > Pack > 内置）──────────────────────
-    all_agents = builtin_agents + pack_agents + user_agents
-    # 优先级：builtin=0 pack=1 user=2（数字越大优先级越高）
-    priority = {"builtin": 0, "pack": 1, "user": 2}
+    # ── 3. Plugin Agent（各 Client 已启用插件的 agents/，只读）─────────────
+    plugin_agents = []
+    try:
+        from plugin_scanner import iter_active_plugins
+        for pl in iter_active_plugins():
+            adir = Path(pl["path"]) / "agents"
+            if not adir.is_dir():
+                continue
+            for item in _scan_agents_dir(adir):
+                item.update({"source": "plugin", "pack_name": None,
+                             "plugin_name": pl["name"],
+                             "marketplace": pl["marketplace"], "cli": pl["cli"]})
+                plugin_agents.append(item)
+    except Exception as e:
+        logger.debug("扫描 Plugin agents 失败: %s", e)
+
+    # ── 4. 覆盖关系检测（同名时：用户 > Pack > Plugin > 内置）──────────────
+    all_agents = builtin_agents + pack_agents + plugin_agents + user_agents
+    # 优先级数字越大越优先。plugin 排在 pack 之下 —— 插件是机器级的共享内容，
+    # 项目自己装的 pack 应当盖得住它
+    priority = {"builtin": 0, "plugin": 1, "pack": 2, "user": 3}
     name_map: dict = {}
     for ag in all_agents:
         n = ag["name"]
@@ -2378,11 +2395,13 @@ async def get_project_agents_all(project_id: str):
         "builtin": builtin_agents,
         "user": user_agents,
         "pack": pack_agents,
+        "plugin": plugin_agents,
         "all": all_agents,
         "counts": {
             "builtin": len(builtin_agents),
             "user": len(user_agents),
             "pack": len(pack_agents),
+            "plugin": len(plugin_agents),
             "total": len(all_agents),
         }
     }
@@ -2462,7 +2481,7 @@ async def get_project_skills_all(project_id: str):
         "SELECT pack_name FROM project_packs WHERE project_id = ?", (project_id,)
     )]
 
-    async def _scan_skills_dir(skills_dir: Path, default_source: str, base_path: Path | None = None) -> list:
+    async def _scan_skills_dir(skills_dir: Path, default_source: str, base_path: Path | None = None, cli: str = "") -> list:
         result = []
         if not skills_dir.exists():
             return result
@@ -2493,9 +2512,16 @@ async def get_project_skills_all(project_id: str):
                     else default_source
                 )
                 info["pack_name"] = pack_origin
+                info["cli"] = cli
                 info["id"] = info["name"]
                 info["file"] = str(skill_md)
                 info["path"] = str(skill_md).replace("\\", "/")
+                # 兼容性判断要用完整正文（依赖声明可能在 4000 字符之后）
+                try:
+                    from skills.compat import analyze_skill_compat
+                    info.update(analyze_skill_compat(content, cli))
+                except Exception:
+                    pass
                 info["content"] = content[:4000]   # 截断避免响应过大
                 # 相对路径：优先相对 base_path，否则相对 skills_dir 父目录
                 try:
@@ -2508,28 +2534,32 @@ async def get_project_skills_all(project_id: str):
                 pass
         return result
 
-    # 2. 项目 skills（所有项目路径 .claude/skills/ + .codebuddy/skills/）
+    # 2. 项目 skills（所有项目路径 .claude/skills/ + .codebuddy/skills/ + .workbuddy/skills/）
     project_skills = []
     for rp in all_repo_paths:
         rp_path = Path(rp)
-        for cli in ("claude", "codebuddy"):
+        for cli in ("cursor", "claude", "codebuddy", "workbuddy"):
             project_skills += await _scan_skills_dir(
-                rp_path / f".{cli}" / "skills", "project", base_path=rp_path
+                rp_path / f".{cli}" / "skills", "project", base_path=rp_path, cli=cli
             )
 
-    # 3. 用户 skills（系统用户主目录 ~/.claude/skills/ + ~/.codebuddy/skills/）
+    # 3. 用户 skills（系统用户主目录 ~/.claude/skills/ + ~/.codebuddy/skills/ + ~/.workbuddy/skills/）
     user_skills = []
     home = Path.home()
-    for cli in ("claude", "codebuddy"):
+    for cli in ("cursor", "claude", "codebuddy", "workbuddy"):
         user_skills += await _scan_skills_dir(
-            home / f".{cli}" / "skills", "user", base_path=home
+            home / f".{cli}" / "skills", "user", base_path=home, cli=cli
         )
+    # Cursor 自带技能装在 ~/.cursor/skills-cursor/（与 skills/ 平级），一并归到 cursor 视图
+    user_skills += await _scan_skills_dir(
+        home / ".cursor" / "skills-cursor", "user", base_path=home, cli="cursor"
+    )
 
     # 4. Pack + OpenSpec skills — 先从项目 packs/ 子目录直接扫，再从 project_skills 中分拆旧格式
     pack_skills = []
     for rp in all_repo_paths:
         rp_path = Path(rp)
-        for cli in ("claude", "codebuddy"):
+        for cli in ("cursor", "claude", "codebuddy", "workbuddy"):
             packs_root = rp_path / f".{cli}" / "packs"
             if not packs_root.exists():
                 continue
@@ -2539,10 +2569,35 @@ async def get_project_skills_all(project_id: str):
                 pn = pack_dir.name
                 skills_dir = pack_dir / "skills"
                 if skills_dir.exists():
-                    found = await _scan_skills_dir(skills_dir, "pack", base_path=rp_path)
+                    found = await _scan_skills_dir(skills_dir, "pack", base_path=rp_path, cli=cli)
                     for s in found:
                         s["pack_name"] = pn
                     pack_skills += found
+
+    # 5. Plugin skills —— 各 Client 已启用插件贡献的 skill
+    #    只取 installed 且 enabled 的：marketplace 目录是整仓克隆，
+    #    里面几百个插件用户从没装过（本机 344 扫到 / 23 已装）
+    plugin_skills = []
+    try:
+        from plugin_scanner import iter_active_plugins
+        for pl in iter_active_plugins():
+            pdir = Path(pl["path"])
+            found = await _scan_skills_dir(pdir / "skills", "plugin",
+                                           base_path=pdir, cli=pl["cli"])
+            # agent-browser 那种把 SKILL.md 直挂插件根目录的。只认 SKILL.md
+            # 本身 —— 扫整个根目录会把 README.md / CHANGELOG.md 也当成 skill
+            root_md = pdir / "SKILL.md"
+            if root_md.exists():
+                found += [s for s in await _scan_skills_dir(
+                    pdir, "plugin", base_path=pdir, cli=pl["cli"])
+                    if s.get("file") == str(root_md)]
+            for s in found:
+                s["source"] = "plugin"
+                s["plugin_name"] = pl["name"]
+                s["marketplace"] = pl["marketplace"]
+            plugin_skills += found
+    except Exception as e:
+        logger.debug("扫描 Plugin skills 失败: %s", e)
 
     # 旧格式兼容：从 project_skills / user_skills 里分拆（source == "pack" by stem match）
     pack_skills += (
@@ -2571,22 +2626,41 @@ async def get_project_skills_all(project_id: str):
     user_skills     = _dedup(user_skills)
     pack_skills     = _dedup(pack_skills)
     openspec_skills = _dedup(openspec_skills)
+    plugin_skills   = _dedup(plugin_skills)
 
-    all_skills = builtin_skills + project_skills + user_skills + pack_skills + openspec_skills
+    all_skills = (builtin_skills + project_skills + user_skills
+                  + pack_skills + openspec_skills + plugin_skills)
+
+    # CLI 目录视图：同一条 skill 可能已计入 project/user/pack，此处仅做过滤视图，不计入 total
+    cursor_skills    = [s for s in all_skills if s.get("cli") == "cursor"]
+    claude_skills    = [s for s in all_skills if s.get("cli") == "claude"]
+    codebuddy_skills = [s for s in all_skills if s.get("cli") == "codebuddy"]
+    workbuddy_skills = [s for s in all_skills if s.get("cli") == "workbuddy"]
+
     return {
-        "builtin":  builtin_skills,
-        "project":  project_skills,
-        "user":     user_skills,
-        "pack":     pack_skills,
-        "openspec": openspec_skills,
-        "all":      all_skills,
+        "builtin":   builtin_skills,
+        "project":   project_skills,
+        "user":      user_skills,
+        "pack":      pack_skills,
+        "openspec":  openspec_skills,
+        "plugin":    plugin_skills,
+        "cursor":    cursor_skills,
+        "claude":    claude_skills,
+        "codebuddy": codebuddy_skills,
+        "workbuddy": workbuddy_skills,
+        "all":       all_skills,
         "counts": {
-            "builtin":  len(builtin_skills),
-            "project":  len(project_skills),
-            "user":     len(user_skills),
-            "pack":     len(pack_skills),
-            "openspec": len(openspec_skills),
-            "total":    len(all_skills),
+            "builtin":   len(builtin_skills),
+            "project":   len(project_skills),
+            "user":      len(user_skills),
+            "pack":      len(pack_skills),
+            "openspec":  len(openspec_skills),
+            "plugin":    len(plugin_skills),
+            "cursor":    len(cursor_skills),
+            "claude":    len(claude_skills),
+            "codebuddy": len(codebuddy_skills),
+            "workbuddy": len(workbuddy_skills),
+            "total":     len(all_skills),
         },
     }
 
@@ -2629,7 +2703,7 @@ async def get_project_commands_all(project_id: str):
             for f in _skills_cmds_dir.glob("*.md"):
                 _cmd_file_map[f.stem] = str(f)
         if repo_path:
-            for cli_dir in [".claude/commands", ".codebuddy/commands", ".ads/commands"]:
+            for cli_dir in [".cursor/commands", ".claude/commands", ".codebuddy/commands", ".workbuddy/commands", ".ads/commands"]:
                 d = _Path(repo_path) / cli_dir
                 if d.exists():
                     for f in d.rglob("*.md"):
@@ -2652,11 +2726,12 @@ async def get_project_commands_all(project_id: str):
                 pass
             entry = {"name": name, "description": info.get("description", ""),
                      "pack_name": None, "source": src,
+                     "cli": src if src in ("cursor", "claude", "codebuddy", "workbuddy") else "",
                      "file": fp, "content": content, "preview": content[:150]}
             if src == "openspec":
                 entry["source"] = "openspec"
                 user_cmds.append(entry)
-            elif src in ("claude", "ads", "codebuddy"):
+            elif src in ("cursor", "claude", "ads", "codebuddy", "workbuddy"):
                 entry["source"] = "project"
                 user_cmds.append(entry)
             elif name not in builtin_names:
@@ -2720,17 +2795,56 @@ async def get_project_commands_all(project_id: str):
                 remaining_user.append(entry)
         user_cmds = remaining_user
 
+    # 3. Plugin commands —— 各 Client 已启用插件的 commands/
+    plugin_cmds = []
+    try:
+        from plugin_scanner import iter_active_plugins
+        from api.commands import _parse_command_md
+        for pl in iter_active_plugins():
+            cmd_dir = _Path(pl["path"]) / "commands"
+            if not cmd_dir.is_dir():
+                continue
+            for f in sorted(cmd_dir.rglob("*.md")):
+                rel = f.relative_to(cmd_dir)
+                parts = list(rel.parts); parts[-1] = f.stem
+                name = "/".join(parts)
+                try:
+                    content = f.read_text(encoding="utf-8")
+                except Exception:
+                    continue
+                entry = _parse_command_md(content, name, source="plugin")
+                entry.update({"name": name, "source": "plugin", "pack_name": None,
+                              "plugin_name": pl["name"], "marketplace": pl["marketplace"],
+                              "cli": pl["cli"], "file": str(f),
+                              "content": content, "preview": content[:150]})
+                plugin_cmds.append(entry)
+    except Exception as e:
+        logger.debug("扫描 Plugin commands 失败: %s", e)
+
     project_cmds  = [e for e in user_cmds if e.get("source") == "project"]
     openspec_cmds = [e for e in user_cmds if e.get("source") == "openspec"]
     user_cmds     = [e for e in user_cmds if e.get("source") not in ("project", "openspec")]
 
-    all_cmds_list = builtin_cmds + project_cmds + user_cmds + pack_cmds + openspec_cmds
+    all_cmds_list = (builtin_cmds + project_cmds + user_cmds
+                     + pack_cmds + openspec_cmds + plugin_cmds)
+    cursor_cmds    = [c for c in all_cmds_list if c.get("cli") == "cursor"]
+    claude_cmds    = [c for c in all_cmds_list if c.get("cli") == "claude"]
+    codebuddy_cmds = [c for c in all_cmds_list if c.get("cli") == "codebuddy"]
+    workbuddy_cmds = [c for c in all_cmds_list if c.get("cli") == "workbuddy"]
     return {
         "builtin": builtin_cmds, "project": project_cmds, "user": user_cmds,
-        "pack": pack_cmds, "openspec": openspec_cmds, "all": all_cmds_list,
-        "counts": {"builtin": len(builtin_cmds), "project": len(project_cmds),
-                   "user": len(user_cmds), "pack": len(pack_cmds),
-                   "openspec": len(openspec_cmds), "total": len(all_cmds_list)},
+        "pack": pack_cmds, "openspec": openspec_cmds, "plugin": plugin_cmds,
+        "cursor": cursor_cmds, "claude": claude_cmds,
+        "codebuddy": codebuddy_cmds, "workbuddy": workbuddy_cmds,
+        "all": all_cmds_list,
+        "counts": {
+            "builtin": len(builtin_cmds), "project": len(project_cmds),
+            "user": len(user_cmds), "pack": len(pack_cmds), "openspec": len(openspec_cmds),
+            "plugin": len(plugin_cmds),
+            "cursor": len(cursor_cmds), "claude": len(claude_cmds),
+            "codebuddy": len(codebuddy_cmds), "workbuddy": len(workbuddy_cmds),
+            "total": len(all_cmds_list),
+        },
     }
 
 
@@ -2761,25 +2875,28 @@ async def get_project_mcp_all(project_id: str):
     #    敏感值（headers/env/token）不返回给前端。
     user_mcps = []
     try:
-        from mcp_client import _load_project_mcp_config
+        from mcp_client import _load_project_mcp_config, _detect_transport
         builtin_names = {m["name"] for m in builtin_mcps}
         merged = _load_project_mcp_config(repo_path or "")
         for name, cfg in merged.items():
             if name in builtin_names:
                 continue  # 已在内置中
             src = cfg.get("_source", "user")
-            transport = (cfg.get("type") or cfg.get("transportType")
-                         or ("stdio" if cfg.get("command") else "http"))
+            transport = _detect_transport(cfg)
+            is_plugin = src.startswith("plugin:")
             user_mcps.append({
                 "name": name,
                 "description": cfg.get("description", ""),
                 "command": cfg.get("command", ""),      # 命令本身非敏感
                 "transport": transport,
                 "enabled": bool(cfg.get("enabled", True)),
-                "source": "user",
-                "cli": "codebuddy" if "codebuddy" in src else ("claude" if "claude" in src else src),
-                "config_source": src,                   # user:codebuddy / claude / ads ...
+                "source": "plugin" if is_plugin else "user",
+                "cli": next((c for c in ("codebuddy", "workbuddy", "cursor", "claude") if c in src), ""),
+                "config_source": src,                   # user:codebuddy / claude / ads / plugin:x
                 "pack_name": None,
+                "plugin_name": cfg.get("_plugin"),
+                # 端点扫到了但鉴权在 Client 侧 —— 前端要显示真实原因而非「未启用」
+                "needs_auth": bool(cfg.get("_needs_auth")),
                 # 注意：不返回 headers / env / url token 等敏感字段
             })
     except Exception as e:
@@ -2810,10 +2927,27 @@ async def get_project_mcp_all(project_id: str):
                     pass
 
     all_mcps = builtin_mcps + user_mcps + pack_mcps
+    # Plugin 提供的 server 由 _load_project_mcp_config 混在 user_mcps 里，
+    # 按 source 分拆出来（source 在上面按 _source 前缀已标好）
+    plugin_mcps = [m for m in all_mcps if m.get("source") == "plugin"]
+    user_mcps   = [m for m in user_mcps if m.get("source") != "plugin"]
+    cursor_mcps    = [m for m in all_mcps if m.get("cli") == "cursor"]
+    claude_mcps    = [m for m in all_mcps if m.get("cli") == "claude"]
+    codebuddy_mcps = [m for m in all_mcps if m.get("cli") == "codebuddy"]
+    workbuddy_mcps = [m for m in all_mcps if m.get("cli") == "workbuddy"]
     return {
-        "builtin": builtin_mcps, "user": user_mcps, "pack": pack_mcps, "all": all_mcps,
-        "counts": {"builtin": len(builtin_mcps), "user": len(user_mcps),
-                   "pack": len(pack_mcps), "total": len(all_mcps)},
+        "builtin": builtin_mcps, "user": user_mcps, "pack": pack_mcps,
+        "plugin": plugin_mcps,
+        "cursor": cursor_mcps, "claude": claude_mcps,
+        "codebuddy": codebuddy_mcps, "workbuddy": workbuddy_mcps,
+        "all": all_mcps,
+        "counts": {
+            "builtin": len(builtin_mcps), "user": len(user_mcps), "pack": len(pack_mcps),
+            "plugin": len(plugin_mcps),
+            "cursor": len(cursor_mcps), "claude": len(claude_mcps),
+            "codebuddy": len(codebuddy_mcps), "workbuddy": len(workbuddy_mcps),
+            "total": len(all_mcps),
+        },
     }
 
 
@@ -2866,7 +3000,8 @@ async def get_project_rules_all(project_id: str):
         items = []
         if not rules_dir.exists():
             return items
-        for f in sorted(rules_dir.rglob("*.md")):
+        # .mdc 是 Cursor 的规则格式（frontmatter + markdown，只是扩展名不同）
+        for f in sorted(list(rules_dir.rglob("*.md")) + list(rules_dir.rglob("*.mdc"))):
             try:
                 content = f.read_text(encoding="utf-8")
                 info = _parse_rule_md(content, f.stem)
@@ -2896,16 +3031,16 @@ async def get_project_rules_all(project_id: str):
         except Exception:
             pass
 
-    # 2. 项目 rules（仓库 .claude/rules/ + .codebuddy/rules/）
+    # 2. 项目 rules（仓库 .claude/rules/ + .codebuddy/rules/ + .workbuddy/rules/）
     project_rules = []
     if repo_path:
-        for cli in ("claude", "codebuddy"):
+        for cli in ("cursor", "claude", "codebuddy", "workbuddy"):
             project_rules += _scan_rules_dir(
                 Path(repo_path) / f".{cli}" / "rules",
                 source="project", cli=cli
             )
-        # 也扫 CLAUDE.md / CODEBUDDY.md（主记忆文件）
-        for cli, fname in [("claude", "CLAUDE.md"), ("codebuddy", "CODEBUDDY.md")]:
+        # 也扫 CLAUDE.md / CODEBUDDY.md / WORKBUDDY.md（主记忆文件）
+        for cli, fname in [("claude", "CLAUDE.md"), ("codebuddy", "CODEBUDDY.md"), ("workbuddy", "WORKBUDDY.md")]:
             f = Path(repo_path) / f".{cli}" / fname
             if f.exists():
                 try:
@@ -2926,9 +3061,9 @@ async def get_project_rules_all(project_id: str):
     for row in installed_rows:
         pn = row["pack_name"]
         found_in_project = False
-        # 先查项目 .claude/packs/{pn}/ 和 .codebuddy/packs/{pn}/
+        # 先查项目 .claude/packs/{pn}/ 和 .codebuddy/packs/{pn}/ 和 .workbuddy/packs/{pn}/
         if repo_path:
-            for cli in ("claude", "codebuddy"):
+            for cli in ("cursor", "claude", "codebuddy", "workbuddy"):
                 proj_pack_rules = Path(repo_path) / f".{cli}" / "packs" / pn / "rules"
                 if proj_pack_rules.exists():
                     pack_rules += _scan_rules_dir(proj_pack_rules, source="pack", pack_name=pn, cli=cli)
@@ -2963,11 +3098,45 @@ async def get_project_rules_all(project_id: str):
                     source="pack", pack_name=pn, scope=sub
                 )
 
-    all_rules = builtin_rules + project_rules + pack_rules
+    # Plugin rules —— 各 Client 已启用插件的 rules/
+    #
+    # 只收 rules/，不收 fragments/。fragments 是 interactionmode-* 那类插件的
+    # 提示词分片，由 Client 按交互模式选择性注入，不是"始终生效的规则"——
+    # 混进来会让用户以为它们在 ADS 里也一直生效。它们在「套件与插件」页的
+    # 内容统计里可见。
+    plugin_rules = []
+    try:
+        from plugin_scanner import iter_active_plugins
+        for pl in iter_active_plugins():
+            rdir = Path(pl["path"]) / "rules"
+            if not rdir.is_dir():
+                continue
+            found = _scan_rules_dir(rdir, source="plugin", cli=pl["cli"])
+            for r in found:
+                r.update({"source": "plugin", "pack_name": None,
+                          "plugin_name": pl["name"], "marketplace": pl["marketplace"]})
+            plugin_rules += found
+    except Exception as e:
+        logger.debug("扫描 Plugin rules 失败: %s", e)
+
+    all_rules = builtin_rules + project_rules + pack_rules + plugin_rules
+    cursor_rules    = [r for r in all_rules if r.get("cli") == "cursor"]
+    claude_rules    = [r for r in all_rules if r.get("cli") == "claude"]
+    codebuddy_rules = [r for r in all_rules if r.get("cli") == "codebuddy"]
+    workbuddy_rules = [r for r in all_rules if r.get("cli") == "workbuddy"]
     return {
-        "builtin": builtin_rules, "project": project_rules, "pack": pack_rules, "all": all_rules,
-        "counts": {"builtin": len(builtin_rules), "project": len(project_rules),
-                   "pack": len(pack_rules), "total": len(all_rules)},
+        "builtin": builtin_rules, "project": project_rules, "pack": pack_rules,
+        "plugin": plugin_rules,
+        "cursor": cursor_rules, "claude": claude_rules,
+        "codebuddy": codebuddy_rules, "workbuddy": workbuddy_rules,
+        "all": all_rules,
+        "counts": {
+            "builtin": len(builtin_rules), "project": len(project_rules), "pack": len(pack_rules),
+            "plugin": len(plugin_rules),
+            "cursor": len(cursor_rules), "claude": len(claude_rules),
+            "codebuddy": len(codebuddy_rules), "workbuddy": len(workbuddy_rules),
+            "total": len(all_rules),
+        },
     }
 
 
@@ -3021,7 +3190,7 @@ async def get_project_hooks_all(project_id: str):
                     })
         return items
 
-    def _read_settings_hooks(settings_path: Path, source: str, base_path: Path | None = None, pack_name=None) -> list:
+    def _read_settings_hooks(settings_path: Path, source: str, base_path: Path | None = None, pack_name=None, cli: str = "") -> list:
         if not settings_path.exists():
             return []
         try:
@@ -3029,6 +3198,8 @@ async def get_project_hooks_all(project_id: str):
             hooks_obj = data.get("hooks", {})
             items = _flatten_hooks(hooks_obj, source, str(settings_path), pack_name)
             for item in items:
+                if cli:
+                    item["cli"] = cli
                 try:
                     rel = settings_path.relative_to(base_path or settings_path.parent)
                     item["rel_path"] = str(rel).replace("\\", "/")
@@ -3038,26 +3209,26 @@ async def get_project_hooks_all(project_id: str):
         except Exception:
             return []
 
-    # 1. 内置 hooks：系统用户主目录 ~/.claude/settings.json + ~/.codebuddy/settings.json
+    # 1. 内置 hooks：系统用户主目录 ~/.claude/settings.json + ~/.codebuddy/settings.json + ~/.workbuddy/settings.json
     home = Path.home()
     builtin_hooks: list = []
-    for cli in ("claude", "codebuddy"):
+    for cli in ("cursor", "claude", "codebuddy", "workbuddy"):
         builtin_hooks += _read_settings_hooks(
             home / f".{cli}" / "settings.json",
-            source="builtin", base_path=home,
+            source="builtin", base_path=home, cli=cli,
         )
 
-    # 2. 项目 hooks：项目仓库 .claude/settings.json + .codebuddy/settings.json
+    # 2. 项目 hooks：项目仓库 .claude/settings.json + .codebuddy/settings.json + .workbuddy/settings.json
     project_hooks: list = []
     seen_files: set = set()
     for rp in all_repo_paths:
         rp_path = Path(rp)
-        for cli in ("claude", "codebuddy"):
+        for cli in ("cursor", "claude", "codebuddy", "workbuddy"):
             sf = rp_path / f".{cli}" / "settings.json"
             if str(sf) in seen_files:
                 continue
             seen_files.add(str(sf))
-            project_hooks += _read_settings_hooks(sf, source="project", base_path=rp_path)
+            project_hooks += _read_settings_hooks(sf, source="project", base_path=rp_path, cli=cli)
 
     # 3. Pack hooks：pack shared/hooks/*.json
     pack_hooks: list = []
@@ -3084,16 +3255,55 @@ async def get_project_hooks_all(project_id: str):
                 except Exception:
                     pass
 
-    all_hooks = builtin_hooks + project_hooks + pack_hooks
+    # 4. Plugin hooks：已启用插件的 hooks/hooks.json
+    #
+    # 命令里普遍写 ${CODEBUDDY_PLUGIN_ROOT}/dist/xxx.mjs —— 这个变量由 Client
+    # 注入。`plugin_root` 一并返回，谁要真执行就得自己替换；面板只展示时
+    # 原样显示，不去假装已解析。
+    plugin_hooks: list = []
+    try:
+        from plugin_scanner import iter_active_plugins
+        for pl in iter_active_plugins():
+            proot = Path(pl["path"])
+            hdir = proot / "hooks"
+            if not hdir.is_dir():
+                continue
+            for hf in sorted(hdir.glob("*.json")):
+                try:
+                    data = _json.loads(hf.read_text(encoding="utf-8"))
+                except Exception:
+                    continue
+                items = _flatten_hooks(data.get("hooks", data), "plugin", str(hf))
+                for item in items:
+                    item.update({
+                        "cli": pl["cli"], "pack_name": None,
+                        "plugin_name": pl["name"], "marketplace": pl["marketplace"],
+                        "plugin_root": pl["path"],
+                    })
+                    try:
+                        item["rel_path"] = str(hf.relative_to(proot)).replace("\\", "/")
+                    except ValueError:
+                        pass
+                plugin_hooks += items
+    except Exception as e:
+        logger.debug("扫描 Plugin hooks 失败: %s", e)
+
+    all_hooks = builtin_hooks + project_hooks + pack_hooks + plugin_hooks
+    cursor_hooks    = [h for h in all_hooks if h.get("cli") == "cursor"]
+    claude_hooks    = [h for h in all_hooks if h.get("cli") == "claude"]
+    codebuddy_hooks = [h for h in all_hooks if h.get("cli") == "codebuddy"]
+    workbuddy_hooks = [h for h in all_hooks if h.get("cli") == "workbuddy"]
     return {
-        "builtin": builtin_hooks,
-        "project": project_hooks,
-        "pack": pack_hooks,
+        "builtin": builtin_hooks, "project": project_hooks, "pack": pack_hooks,
+        "plugin": plugin_hooks,
+        "cursor": cursor_hooks, "claude": claude_hooks,
+        "codebuddy": codebuddy_hooks, "workbuddy": workbuddy_hooks,
         "all": all_hooks,
         "counts": {
-            "builtin": len(builtin_hooks),
-            "project": len(project_hooks),
-            "pack": len(pack_hooks),
+            "builtin": len(builtin_hooks), "project": len(project_hooks), "pack": len(pack_hooks),
+            "plugin": len(plugin_hooks),
+            "cursor": len(cursor_hooks), "claude": len(claude_hooks),
+            "codebuddy": len(codebuddy_hooks), "workbuddy": len(workbuddy_hooks),
             "total": len(all_hooks),
         },
     }

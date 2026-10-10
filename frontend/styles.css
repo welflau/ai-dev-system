@@ -80,6 +80,14 @@ body {
     gap: 20px;
 }
 
+/* 原来这里没有规则，里面的按钮和 LLM 状态胶囊是块级元素，会上下摞成两行
+   （旧的「💬 AI 助手」就一直吊在状态胶囊上面）。摆成一行。 */
+.top-bar-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
 .logo {
     font-size: 18px;
     font-weight: 700;
@@ -530,6 +538,48 @@ body.chat-open.shell-project #projectListPage {
     background: rgba(79, 70, 229, 0.15);
 }
 
+/* ---- 右侧面板开关（标题栏常驻 + 面板工具栏各一个）---- */
+.ws-right-toggle {
+    width: 28px;
+    height: 28px;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+.ws-right-toggle:hover {
+    background: var(--bg-hover);
+    color: var(--text);
+}
+/* 面板开着时高亮（图标那半边实心已经表达了"开"，这里只做轻提示） */
+.ws-right-toggle.active {
+    color: var(--primary-light);
+}
+/* 标题栏那个钉在最右侧 */
+#mainWsRightToggle {
+    margin-left: auto;
+}
+/* 面板打开时标题栏那个让位给面板工具栏里的那个 ——
+   两个同时出现会在同一行挨着，看起来像两个不同功能的按钮 */
+.project-layout.right-open #mainWsRightToggle {
+    display: none;
+}
+/* 非项目壳层（列表页）没有右侧工作台，藏掉开关 */
+body:not(.shell-project) #mainWsRightToggle {
+    display: none;
+}
+/* 顶栏那个是列表页的 AI 面板开关；进项目后主舞台标题栏有自己的，
+   同一行两个面板图标会互相解释不清，所以项目内藏掉顶栏这个 */
+body.shell-project #topbarChatToggle {
+    display: none;
+}
+
 .rw-body {
     flex: 1;
     display: flex;
@@ -822,6 +872,21 @@ body.shell-project .board-filters .btn-sm {
 .content-area > .tab-content.active:not(.ws-hidden) {
     flex: 1;
     min-height: 0;
+    /* 让每个 tab 自己成为滚动容器：滚动条画在 tab 内部（内容区右侧），
+       不再延伸到 tab 上方的空白带里。上一版没这条时滚动条属于外层
+       .content-area，视觉上包括了标题栏上方 20px 的 padding —— 用户投诉的
+       就是这个。
+       注意：只解决「滚动条位置」，标题本身仍会随 tab 内滚被卷走 —— 需要
+       某个 tab 的标题真正钉在顶部，就在那个 tab 内自己套 sticky wrapper
+       （参考 chat-trace 的 .chat-trace-sticky）。 */
+    overflow-y: auto;
+    overflow-x: hidden;
+    /* 抵消外层 .content-area padding-right:20px（styles.css:799），
+       滚动条紧贴内容区右边缘，不再多出一条 20px 暗色带；
+       padding-right 补回来让 tab 内容宽度不变 */
+    margin-right: -20px;
+    padding-right: 20px;
+    scrollbar-gutter: stable;
 }
 /* 有工作区文档时隐藏页面并锁滚动；标题栏常驻时同样顶对齐 */
 .content-area.ws-doc-active {
@@ -845,7 +910,9 @@ body.shell-project .board-filters .btn-sm {
     padding: 0 8px;
     border-bottom: 1px solid var(--border);
     background: var(--bg-elevated);
-    overflow-x: auto;
+    /* 横向滚动交给 .main-ws-tabs 自己：右上角的面板开关要常驻，
+       不能跟着文档 Tab 一起被滚出可视区 */
+    overflow: hidden;
     box-sizing: border-box;
 }
 body.shell-project .main-ws-tabbar,
@@ -857,6 +924,12 @@ body.shell-project .main-ws-tabbar,
     align-items: center;
     gap: 2px;
     min-width: 0;
+    flex: 1;
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+.main-ws-tabs::-webkit-scrollbar {
+    height: 0;
 }
 .main-ws-tab {
     display: inline-flex;
@@ -1259,6 +1332,12 @@ body.shell-project .main-ws-tabbar,
 
 /* repo tab 内的 page-header 固定高度，不拉伸 */
 #tab-repo .page-header {
+    flex-shrink: 0;
+}
+
+/* page-header 和 workspace 中间多了一条 VCS 子 Tab 栏，
+   它也不能参与拉伸，否则 workspace 的 flex:1 会被稀释 */
+#tab-repo .repo-vcs-bar {
     flex-shrink: 0;
 }
 
@@ -2171,6 +2250,31 @@ body.shell-project .main-ws-tabbar,
     user-select: none;
 }
 .log-compile-toggle:hover { opacity: 1; }
+
+/* 「📟 后台记录」：跳到后台任务面板里这次执行的完整控制台输出。
+   只在真有对应任务的条目上渲染（见 app.js _logTaskId → _TICKET_TASK_INDEX）——
+   挂一个点了找不到目标的死链，比不挂更糟。
+   **不要**给它 margin-left:auto：紧随其后的 .log-time 已经带了（styles.css 上方），
+   两个 auto 会把剩余空间对半分，链接就飘在 header 中间而不是贴着时间戳。
+   让 .log-time 独占那个 auto，本链接自然被顶到它左边。 */
+.log-task-link,
+.log-chat-link {
+    flex-shrink: 0;
+    font-size: 11px;
+    color: var(--text-muted);
+    opacity: .75;
+    cursor: pointer;
+    user-select: none;
+    padding: 0 4px;
+    border-radius: 3px;
+    transition: color .15s, background .15s, opacity .15s;
+}
+.log-task-link:hover,
+.log-chat-link:hover {
+    opacity: 1;
+    color: var(--primary, #7c6af7);
+    background: rgba(124, 106, 247, 0.12);
+}
 .compile-err-list {
     flex: 1;
     min-width: 0;
@@ -5036,6 +5140,111 @@ pre.hljs, .hljs pre { background: transparent !important; }
     display: none;
 }
 
+/* 懒加载中（首次展开要打一次 /repos/{key}/tree） */
+.tree-item.loading {
+    opacity: .65;
+    pointer-events: none;
+}
+.tree-item.loading .tree-arrow {
+    animation: treeSpin 1s linear infinite;
+    display: inline-block;
+}
+@keyframes treeSpin { to { transform: rotate(360deg); } }
+
+/* 这一层条目超过后端上限（500）时的提示，缩进跟随所在层级 */
+.tree-truncated,
+.tree-load-error {
+    font-size: 11px;
+    padding: 4px 8px 4px calc(10px + var(--depth, 0) * 14px);
+    color: var(--text-muted);
+}
+.tree-load-error {
+    color: var(--danger, #e5534b);
+}
+
+/* ---- VCS 子 Tab 栏（Git / P4）---- */
+.repo-vcs-bar {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-shrink: 0;
+    flex-wrap: wrap;
+    margin-bottom: 10px;
+}
+/* 复用 .inner-tabs，只去掉它为「页面内分栏」准备的下边距 */
+.repo-vcs-bar .inner-tabs {
+    margin-bottom: 0;
+    flex-shrink: 0;
+}
+.repo-vcs-bar .inner-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+/* 为空的一侧置灰但仍可点 —— 点进去要能看到"未检测到 …"的说明，
+   直接 disabled 会让用户以为是 bug */
+.repo-vcs-bar .inner-tab.disabled {
+    opacity: .45;
+}
+.repo-vcs-count {
+    font-size: 11px;
+    background: var(--bg-elevated);
+    border-radius: 8px;
+    padding: 0 6px;
+    min-width: 16px;
+    text-align: center;
+}
+.repo-vcs-count:empty {
+    display: none;
+}
+
+/* ---- 仓库选择器 ---- */
+.repo-picker {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    flex: 1;
+}
+.repo-picker-label {
+    font-size: 12px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+.repo-picker-select {
+    max-width: 420px;
+    flex: 0 1 auto;
+}
+.repo-picker-single,
+.repo-picker-empty {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    font-size: 12px;
+    color: var(--text-muted);
+}
+.repo-picker-path {
+    font-family: var(--font-mono, monospace);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.repo-badge {
+    font-size: 10px;
+    line-height: 16px;
+    padding: 0 6px;
+    border-radius: 8px;
+    background: var(--bg-elevated);
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+.repo-badge.primary { background: rgba(88, 166, 255, .16); color: #58a6ff; }
+.repo-badge.detected { background: rgba(163, 113, 247, .16); color: #a371f7; }
+.repo-badge.git { background: rgba(63, 185, 80, .16); color: #3fb950; }
+.repo-badge.p4 { background: rgba(56, 189, 248, .16); color: #38bdf8; }
+.repo-badge.warn { background: rgba(229, 83, 75, .16); color: #e5534b; }
+
 /* ---- 右侧文件预览 ---- */
 .repo-file-preview {
     display: flex;
@@ -5679,6 +5888,33 @@ pre.hljs, .hljs pre { background: transparent !important; }
 }
 .inner-tab-panel.active {
     display: block;
+}
+
+/* 「套件与插件」页 ───────────────────────────────────────────────────────
+   ConfigPack 和 Plugin 是同类容器，放一页对照。作用域徽章是这页的关键信息：
+   一个能装能卸、一个只能看，不标出来用户会以为插件也能在 ADS 里开关。 */
+.bundle-tab-count {
+    font-size: 11px;
+    opacity: .7;
+    font-weight: 400;
+}
+.bundle-scope-badge {
+    font-size: 10px;
+    font-weight: 400;
+    padding: 1px 7px;
+    border-radius: 10px;
+    margin-left: 6px;
+    vertical-align: middle;
+    white-space: nowrap;
+}
+/* 绿 = 项目级可改，黄 = 本机级只读（和 _SOURCE_META.plugin 的黄一致） */
+.bundle-scope-project {
+    background: rgba(34, 197, 94, .12);
+    color: #22c55e;
+}
+.bundle-scope-machine {
+    background: rgba(234, 179, 8, .12);
+    color: #eab308;
 }
 
 /* MCP 状态卡片 */
@@ -6754,28 +6990,6 @@ pre.hljs, .hljs pre { background: transparent !important; }
     --sidebar-collapsed-width: 44px;
 }
 
-.chat-toggle-btn {
-    background: linear-gradient(135deg, var(--primary), var(--accent));
-    color: white !important;
-    border: none !important;
-    border-radius: 20px !important;
-    padding: 5px 14px !important;
-    font-size: 12px !important;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.2s;
-    gap: 4px;
-}
-.chat-toggle-btn:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(79, 70, 229, 0.3);
-}
-.chat-toggle-btn.active {
-    background: var(--bg-elevated) !important;
-    color: var(--text) !important;
-    border: 1px solid var(--border) !important;
-}
-
 .chat-panel {
     position: fixed;
     right: 0;
@@ -6974,6 +7188,57 @@ body.chat-fullscreen.chat-split .chat-panel > .chat-panel-body,
 body.chat-fullscreen.chat-split .chat-panel > .chat-panel-input {
     padding-left: 0;
     padding-right: 0;
+}
+
+/* ── 全屏 + 后台任务侧栏打开（且聊天未分屏）：
+      默认 chat-panel-body 居中到 860px，再往里塞一个 400px 的 tasksSidePanel
+      就会出现「聊天还卡在中间 460px 里、任务面板悬在右半、两侧一大片空白」
+      —— 看起来像浮窗盖上来，而不是分成两块区域。
+      目标：chat 和 tasks 对半分（各占 50%），一左一右两块对称区域。
+      chat-split 态下 chat-panel-body 本身 display:none，:not(.chat-split)
+      一方面是意图表达，一方面防止将来改了可见规则后错位。*/
+
+/* 居中 padding 完全清零，整条 chat-panel-body 让给 flex 平分 */
+body.chat-fullscreen:not(.chat-split) .chat-panel > #chatPanelBody.has-tasks-panel {
+    padding-left:  0;
+    padding-right: 0;
+}
+/* chat-messages 走 flex:1 1 0（跟 tasks 系数相同），平分空间；不设 max-width 否则无法到 50% */
+body.chat-fullscreen:not(.chat-split) .chat-panel > #chatPanelBody.has-tasks-panel > .chat-messages {
+    flex: 1 1 0;
+    max-width: none;
+}
+/* 容器平分了，但 chat-messages 的直接子节点（.chat-msg 消息行、.chat-thinking-panel 思考面板、
+   .chat-reasoning-panel / .crp-rounds-panel 推理轮次面板等）默认 stretch 到 50% 全宽，
+   气泡/推理面板跟着一起放大 —— 原本居中到 860 时气泡 ~730，现在 50% ≈ 960 被拉到 ~816。
+   统一用 `> *` 把 chat-messages 的所有直接子节点锁回 860 并 align-self:center，
+   横向居中到 chat-messages 半区中心，模拟原本 "chat 居中到 860" 的视觉。
+   注意：user 行 flex-direction:row-reverse，内部内容 pin 在行的右端；
+   行本身居中后 user 气泡右边界 ≈ (chat-messages 中心 + 430)，assistant 气泡 ≈ (中心 - 430 + 头像)，正好对称。
+   枚举具体 class 太脆弱（新加一种面板就漏掉），统一兜底更稳。*/
+body.chat-fullscreen:not(.chat-split) .chat-panel > #chatPanelBody.has-tasks-panel > .chat-messages > * {
+    max-width: 860px;
+    width: 100%;
+    align-self: center;
+}
+/* tasksSidePanel 的 inline style 死写了 width:400px + flex-shrink:0 ——
+   侧栏里是对的，全屏时就把它锁死在右边一条窄面板。
+   覆盖掉：清 width，flex 跟 chat-messages 完全相同（1 1 0），两边自然对半。
+   min-width 保证极小视口下 list+output 两列还看得清。
+   !important 是针对 inline 的，没别的办法。 */
+body.chat-fullscreen:not(.chat-split) .chat-panel > #chatPanelBody.has-tasks-panel > #tasksSidePanel {
+    width: auto !important;
+    flex: 1 1 0 !important;
+    min-width: 320px;
+}
+/* 输入框不是 flex 子项，没法用 align-self。用 padding 把 860 的 content 居中到左半区 ——
+   和 chat-messages 里居中的消息行横向对齐。
+   padding-left  = 左半中心(25%) - 430  → content 左边界
+   padding-right = 右半中心(75%) - 430  → content 右边界距离视口右边 (= tasks 半 + 空隙)
+   视口小时 max() 兜底 16，防止 padding 变负挤爆布局。 */
+body.chat-fullscreen:not(.chat-split) .chat-panel > #chatPanelBody.has-tasks-panel ~ .chat-panel-input {
+    padding-left:  max(16px, calc(25% - 430px));
+    padding-right: max(16px, calc(75% - 430px));
 }
 
 /* ── 全屏分屏（chat-split 类激活后才生效） ── */
@@ -11878,9 +12143,25 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
 .log-skill-step {
     display: flex;
     align-items: center;
+    /* 产出文件 chip 行 / 失败原因要另起一行，不能被挤进这条 flex 里 */
+    flex-wrap: wrap;
     gap: 6px;
     padding: 4px 10px 4px 12px;
     font-size: 12px;
+}
+/* 步骤行里的附加块（文件 chip、失败原因）独占整行 */
+.log-skill-step > .thought-files,
+.log-skill-step > .skill-step-reason {
+    flex: 0 0 100%;
+    width: 100%;
+}
+.log-skill-step > .thought-files { padding: 2px 0 0 18px; }
+.skill-step-reason {
+    font-size: 11px;
+    color: var(--error);
+    padding: 2px 0 0 18px;
+    line-height: 1.5;
+    word-break: break-word;
 }
 .log-skill-step.step-start {
     color: var(--text-muted);
@@ -12098,7 +12379,10 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
 .cto-line {
     padding: 0 10px;
     white-space: pre-wrap;
-    word-break: break-all;
+    /* 不用 break-all：那会把 AutomationTool 这种普通单词从中间劈开，读起来很累。
+       anywhere 只在整个"词"塞不进一行时才断 —— UE 日志里的长路径
+       （F:\ADS_Projects\…\TestFPS.uproject）照样能断，普通单词保持完整。 */
+    overflow-wrap: anywhere;
     line-height: 1.5;
 }
 .cto-line-error { color: #ff7b7b; background: rgba(220,53,69,0.07); }
@@ -12158,6 +12442,24 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
 .cto-trunc button:hover { color: var(--primary); }
 
 /* ==================== 后台任务面板 — 标签页 + 分组 + 任务卡片 ==================== */
+
+/* ── 主舞台形态 ─────────────────────────────────────────────────
+   同一个 #tasksSidePanel 被 adsShell 搬进 #mainWsHost（不是克隆，见 app.js
+   _mountTasksPane 注释）。侧栏形态是写在行内 style 上的 width:400px +
+   flex-shrink:0 + border-left，搬进来要全部让位：
+     · width 交给 flex（行内 width 已由 JS 清空，这里再用 !important 兜住）
+     · flex-shrink:0 会拒绝收缩，在窄窗口把主舞台顶出横向滚动条
+     · border-left 在主舞台是条没来由的竖线（左边已经没有聊天区了）
+   ------------------------------------------------------------ */
+#tasksSidePanel.tasks-in-main-ws {
+    width: auto !important;
+    flex: 1;
+    flex-shrink: 1;
+    min-height: 0;
+    border-left: none;
+}
+/* 主舞台宽得多，列表那栏可以给宽一点的下限 */
+#tasksSidePanel.tasks-in-main-ws #tasksPanelList { min-width: 180px; }
 
 /* 过滤标签页 */
 .tasks-tab {
@@ -12268,4 +12570,506 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
 #tasksSearchInput:focus {
     border-color: var(--primary, #7c6af7);
     box-shadow: 0 0 0 2px rgba(99,102,241,.15);
+}
+
+/* ==========================================
+   对话追踪 (chat-trace) — 按 turn 展开 LLM/工具调用
+   ========================================== */
+
+/* chat-trace 的滚动 + sticky wrapper 逻辑现在挂在通用 .tab-content.active
+   上（styles.css:872 附近），这里只保留标题栏钉住的 sticky 逻辑。 */
+.chat-trace-sticky {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    background: var(--bg);
+    padding: 4px 0 8px;
+    margin-bottom: 4px;
+}
+
+.chat-trace-header { margin-bottom: 12px; }
+.chat-trace-subtitle {
+    color: var(--text-secondary);
+    font-size: 13px;
+    margin-top: 4px;
+}
+.chat-trace-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+}
+.chat-trace-toolbar label {
+    color: var(--text-secondary);
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.chat-trace-toolbar select {
+    background: var(--bg-elevated);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 4px 8px;
+    min-width: 260px;
+    max-width: 480px;
+}
+.chat-trace-meta {
+    margin-left: auto;
+    display: flex;
+    gap: 12px;
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+.chat-trace-meta .chat-trace-warn { color: var(--warning); }
+.chat-trace-body { display: flex; flex-direction: column; gap: 10px; }
+.chat-trace-empty {
+    padding: 24px;
+    text-align: center;
+    color: var(--text-secondary);
+    background: var(--bg-card);
+    border: 1px dashed var(--border);
+    border-radius: var(--radius);
+}
+
+.trace-turn {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+}
+.trace-turn[open] { border-color: var(--border-light); }
+.trace-turn-orphan { border-color: var(--warning); opacity: 0.85; }
+.trace-turn-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    min-height: 44px;   /* <details> 收起时防止 flex+overflow 让 summary 塌成一条细线 */
+    cursor: pointer;
+    background: var(--bg-elevated);
+    list-style: none;
+    user-select: none;
+}
+.trace-turn-head::-webkit-details-marker { display: none; }
+.trace-turn-idx {
+    background: var(--primary);
+    color: #fff;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 12px;
+    font-weight: 600;
+}
+.trace-turn-badge {
+    background: var(--warning);
+    color: #000;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 12px;
+    font-weight: 600;
+}
+.trace-turn-time {
+    font-family: 'SF Mono', Consolas, monospace;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+.trace-turn-title {
+    flex: 1;
+    color: var(--text);
+    font-size: 13px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.trace-turn-stats {
+    display: flex;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+.trace-turn-stats span {
+    padding: 1px 6px;
+    background: var(--bg);
+    border-radius: 4px;
+}
+.trace-turn-body {
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.trace-msg {
+    padding: 8px 12px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--bg);
+}
+.trace-msg-user { border-left: 3px solid var(--accent); }
+.trace-msg-asst { border-left: 3px solid var(--primary); }
+.trace-msg-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 4px;
+}
+.trace-msg-time { font-family: 'SF Mono', Consolas, monospace; }
+.trace-msg-body {
+    font-size: 13px;
+    color: var(--text);
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.trace-events {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding-left: 10px;
+    border-left: 2px dashed var(--border);
+    margin: 4px 0 4px 8px;
+}
+.trace-empty-events {
+    color: var(--text-muted);
+    font-size: 12px;
+    padding: 4px 0;
+}
+.trace-ev {
+    display: grid;
+    grid-template-columns: 60px 22px 1fr auto;
+    gap: 6px;
+    align-items: center;
+    padding: 4px 8px;
+    border-radius: 4px;
+    background: var(--bg);
+    font-size: 12px;
+}
+.trace-ev-time {
+    font-family: 'SF Mono', Consolas, monospace;
+    color: var(--text-muted);
+}
+.trace-ev-icon { text-align: center; }
+.trace-ev-main {
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.trace-ev-sub {
+    color: var(--text-secondary);
+    margin-left: 4px;
+    font-size: 11px;
+}
+.trace-ev-meta {
+    color: var(--text-secondary);
+    font-family: 'SF Mono', Consolas, monospace;
+    font-size: 11px;
+}
+.trace-ev-out, .trace-ev-err {
+    grid-column: 3 / -1;
+    color: var(--text-secondary);
+    font-size: 11px;
+    padding-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.trace-ev-err { color: var(--error); }
+.trace-ev-llm { border-left: 3px solid var(--primary-light); }
+.trace-ev-tool { border-left: 3px solid var(--success); }
+.trace-ev-nested { background: rgba(129, 140, 248, 0.08); }
+.trace-ev-fail { background: rgba(239, 68, 68, 0.08); }
+.trace-ev-end { border-left: 3px solid var(--text-muted); }
+.trace-badge {
+    display: inline-block;
+    padding: 1px 6px;
+    border-radius: 8px;
+    font-size: 10px;
+    font-weight: 600;
+    margin-left: 6px;
+}
+.trace-badge-nested { background: var(--primary-light); color: #000; }
+
+/* 助手消息下的「思考过程」折叠区 */
+.trace-think {
+    margin-top: 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: rgba(129, 140, 248, 0.04);
+    overflow: hidden;
+}
+.trace-think[open] { background: rgba(129, 140, 248, 0.08); }
+.trace-think-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    cursor: pointer;
+    list-style: none;
+    color: var(--text-secondary);
+    font-size: 12px;
+    user-select: none;
+}
+.trace-think-head::-webkit-details-marker { display: none; }
+.trace-think-icon { color: var(--primary-light); }
+.trace-think-preview {
+    flex: 1;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-style: italic;
+}
+.trace-think-body {
+    padding: 8px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    border-top: 1px dashed var(--border);
+}
+.trace-think-round {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+}
+.trace-think-badge {
+    background: var(--primary-light);
+    color: #000;
+    padding: 1px 6px;
+    border-radius: 8px;
+    font-size: 10px;
+    font-weight: 600;
+    flex-shrink: 0;
+    line-height: 1.4;
+}
+.trace-think-text {
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-word;
+    flex: 1;
+}
+
+/* 全局对话追踪 modal 需要一个更大的容器，聊天追踪信息密度高 */
+.global-trace-modal-box {
+    width: min(1100px, 92vw);
+    max-width: 1100px;
+    max-height: 88vh;
+    display: flex;
+    flex-direction: column;
+}
+.global-trace-modal-box .modal-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px 18px;
+}
+
+/* ==================== 外部会话浏览器 ==================== */
+/* 关闭主舞台 Tab 后 .tab-content.active 回到 #tab-external-sessions，
+   露出的占位文案要有可读的居中版式。*/
+#tab-external-sessions .external-sessions-empty {
+    max-width: 560px;
+    margin: 60px auto;
+    padding: 24px;
+    text-align: center;
+    color: var(--text-muted);
+    line-height: 1.7;
+}
+#tab-external-sessions .external-sessions-empty h3 {
+    color: var(--text);
+    margin: 0 0 12px 0;
+    font-size: 18px;
+    font-weight: 600;
+}
+#tab-external-sessions .external-sessions-empty p {
+    margin: 6px 0;
+}
+
+/* 面板本体样式都 inline 了，这里只补一条：聊天气泡区的滚动容器要吃满高度 */
+.external-sessions-pane .chat-messages {
+    min-height: auto;
+}
+
+/* ── 分组折叠条：一轮连续的 thinking + tool_call 合并成一条"✦ 思考了 N 轮 · M 步" ──
+   第一版是每条 thinking/tool_call 各自一个 chip，一轮 4、5 个工具调用堆成一长条列表，
+   和 Cursor 原生"一行汇总、展开后按步骤列"的样式不一致。现在分组渲染见 app.js
+   _esRenderMessages/_esRenderGroup：连续的 thinking/tool_call 消息收进一个 cluster，
+   渲染成一条 .es-chip-group；展开后组内每一步是 .es-group-item，靠左边一条竖线（像 Cursor
+   的"思路串"）串起来，工具调用步骤前标个序号，按钮点开才看参数/结果。*/
+.external-sessions-pane .chat-msg[data-kind="group"] .chat-msg-content {
+    max-width: 100%;
+}
+.es-chip {
+    display: inline-block;
+    width: fit-content;
+    max-width: 100%;
+    box-sizing: border-box;
+    padding: 2px 10px;
+    border-radius: 10px;
+    font-size: 11px;
+    line-height: 1.7;
+    cursor: pointer;
+    user-select: none;
+}
+.es-chip-head {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    white-space: nowrap;
+}
+.es-chip-arrow {
+    color: var(--text-muted);
+    font-size: 9px;
+    flex-shrink: 0;
+}
+.es-chip-body {
+    margin-top: 6px;
+    cursor: text;
+    user-select: text;
+    white-space: normal;
+}
+.es-chip-status {
+    color: var(--text-muted);
+    font-size: 10px;
+}
+
+/* 分组条本体：紫色星标文字，背景透明（不像单条 chip 那样套卡片底色） */
+.es-chip-group {
+    width: 100%;
+    background: transparent;
+    padding: 2px 0;
+}
+.es-chip-group > .es-chip-head {
+    color: var(--primary-light, #a5b4fc);
+}
+.es-chip-group > .es-chip-head .es-chip-arrow {
+    color: var(--primary-light, #a5b4fc);
+}
+/* 展开后左边一条竖线把这一轮的所有步骤串起来 */
+.es-chip-group > .es-chip-body {
+    border-left: 2px solid rgba(124, 106, 247, 0.2);
+    margin-left: 5px;
+    padding-left: 12px;
+}
+
+.es-group-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    padding: 3px 0;
+    font-size: 11px;
+    cursor: text;
+    user-select: text;
+}
+.es-group-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    margin-top: 6px;
+    flex-shrink: 0;
+}
+.es-group-dot-thinking { background: #4ade80; }
+.es-group-dot-tool { background: var(--primary-light, #a5b4fc); }
+
+.es-group-item-thinking .es-group-item-text {
+    color: var(--text-muted);
+    line-height: 1.6;
+    min-width: 0;
+}
+
+/* 工具步骤：整行可点（展开参数/结果），首行是摘要（序号+工具名+状态+结果预览+路径） */
+.es-group-item-tool {
+    flex-direction: column;
+    cursor: pointer;
+    user-select: none;
+}
+.es-group-item-head {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+    width: 100%;
+}
+.es-group-step {
+    color: var(--text-muted);
+    font-size: 10px;
+    flex-shrink: 0;
+}
+.es-group-ok {
+    color: #4ade80;
+    flex-shrink: 0;
+}
+.es-group-preview {
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+    flex: 1;
+}
+.es-group-path {
+    color: var(--text-muted);
+    font-size: 10px;
+    flex-shrink: 0;
+    opacity: 0.7;
+    max-width: 160px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.es-group-item-tool code {
+    background: rgba(255, 255, 255, 0.06);
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-size: 11px;
+    flex-shrink: 0;
+}
+.es-group-item-tool .es-chip-body {
+    margin-left: 16px;
+    cursor: text;
+    user-select: text;
+}
+
+/* 文本气泡整条是结构化内容（代码审查 JSON、任务完成系统通知包裹文本）时折叠成一行，
+   不然这类"状态快照"式内容会把气泡撑成一整块纯色面板。见 app.js _esDetectFoldableText。*/
+.es-chip-json {
+    background: rgba(0, 0, 0, 0.15);
+    border-radius: 10px;
+    padding: 4px 10px;
+}
+.es-chip-json > .es-chip-head {
+    font-weight: 500;
+}
+.es-chip-json > .es-chip-body {
+    margin-top: 8px;
+}
+.es-chip-json .es-group-item-tool {
+    margin-left: 2px;
+}
+
+/* 顶部"显示思考"开关 */
+.es-toggle-thinking {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    color: var(--text-muted);
+    cursor: pointer;
+    user-select: none;
+}
+.es-toggle-thinking input { margin: 0; }
+
+/* 隐藏思考（根 class 由 _esSetShowThinking 挂在 .external-sessions-pane 上）——
+   思考消息现在都在分组里渲染成 .es-group-item-thinking，不再是独立的 .chat-msg[data-kind="thinking"] */
+.external-sessions-pane.es-hide-thinking .es-group-item-thinking {
+    display: none;
 }

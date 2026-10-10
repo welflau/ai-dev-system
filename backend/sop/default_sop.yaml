@@ -107,6 +107,21 @@ stages:
     max_tokens: 16000
     enable_reflection: true
     reflection_max_prev: 3
+# 代码生成本身失败（零文件 / 只产出降级模板 / Action 报错）→ development_failed。
+# 不走 orchestrator 的「status=error → blocked」硬终态：LLM 一次超时值得自动重试。
+# 超过全局 MAX_RETRIES=5 次才 blocked 止损。背景：TK-20260920-ce79a9。
+- id: development_retry
+  name: 开发重试
+  agent: DevAgent
+  action: fix_issues
+  trigger_on: development_failed
+  success_status: development_done
+  description: 代码生成未产出有效代码，反思后重新开发
+  config:
+    read_existing_code: true
+    max_tokens: 16000
+    enable_reflection: true
+    reflection_max_prev: 3
 pipeline_view:
   stages:
   - key: requirement_analysis

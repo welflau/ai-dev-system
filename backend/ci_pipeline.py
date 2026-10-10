@@ -15,6 +15,7 @@ from models import CIBuildStatus, CIBuildType
 from utils import generate_id, now_iso
 from events import event_manager
 from git_manager import git_manager
+from checkpoint import push_checkpoint_context, pop_checkpoint_context
 
 logger = logging.getLogger("ci_pipeline")
 
@@ -55,11 +56,21 @@ class CIPipelineRunner:
         )
         for project in projects:
             project_id = project["id"]
+            # 这是**项目级**后台轮询，压根没有工单 —— 所以 ticket_id 留空是对的，
+            # 硬塞一个会是伪造归属。但 project_id 我们是知道的：不设的话
+            # `_run_git` 的记录（`_get_branch_head` 每 60s 发 2~7 条）会连项目都归不上，
+            # 在「哪个项目在刷 git」这个问题上等于瞎的。agent_type 标成 CI
+            # 以便和 Orchestrator / DevAgent 发起的调用区分开。
+            tok = None
             try:
+                tok = push_checkpoint_context(project_id=project_id, agent_type="CI",
+                                              action="ci_scheduler_tick")
                 await self._check_develop_build(project_id)
                 await self._check_master_build(project_id)
             except Exception as e:
                 logger.warning("项目 %s CI 检查失败: %s", project_id[:8], e)
+            finally:
+                pop_checkpoint_context(tok)         # pop(None) 是 no-op
 
     async def _check_develop_build(self, project_id: str):
         """检查 develop 是否有新提交需要构建"""

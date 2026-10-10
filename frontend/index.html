@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI 自动开发系统</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20260902f">
+    <link rel="stylesheet" href="/static/styles.css?v=20261009i">
     <!-- highlight.js 语法高亮 -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
@@ -28,13 +28,23 @@
                 🔒 审批
                 <span class="perm-badge" id="permBadge">0</span>
             </button>
-            <button class="btn btn-sm chat-toggle-btn" id="chatToggleBtn" onclick="toggleChatPanel()" title="打开 AI 聊天面板">
-                💬 AI 助手
-            </button>
             <div class="llm-status" id="llmStatus" onclick="showLLMConfigModal()" style="cursor:pointer;" title="点击配置 LLM">
                 <span class="dot"></span>
                 <span class="text">检测中...</span>
             </div>
+            <!-- 列表页（非项目壳层）的 AI 面板开关。项目内右侧工作台有自己的
+                 mainWsRightToggle，这个由 CSS 藏掉 —— 同一行不放两个面板图标。
+                 图标和位置都跟项目内那个对齐：窗口右上角就这一个开关。 -->
+            <button type="button" class="btn-icon ws-right-toggle" id="topbarChatToggle"
+                    onclick="toggleChatPanel()" title="显示 AI 助手面板"
+                    aria-label="显示 AI 助手面板" aria-expanded="false">
+                <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+                    <rect x="1.1" y="2.6" width="13.8" height="10.8" rx="1.6"
+                          fill="none" stroke="currentColor" stroke-width="1.2"/>
+                    <path d="M10.3 3.2h3.1a1 1 0 0 1 1 1v7.6a1 1 0 0 1-1 1h-3.1z"
+                          fill="currentColor"/>
+                </svg>
+            </button>
         </div>
     </header>
 
@@ -49,6 +59,30 @@
                 <p class="perm-hint">AI 正在请求执行以下高风险操作，请确认是否允许：</p>
                 <div id="permList" class="perm-list">
                     <div class="perm-empty">暂无待审批请求</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== 全局对话追踪弹窗（项目列表页入口）==================== -->
+    <div id="globalChatTraceModal" class="modal-overlay" style="display:none;"
+         onclick="if(event.target===this)closeGlobalChatTraceModal()">
+        <div class="modal-box global-trace-modal-box">
+            <div class="modal-header">
+                <h3>🗂 全局对话追踪</h3>
+                <button class="modal-close" onclick="closeGlobalChatTraceModal()">✕</button>
+            </div>
+            <div class="modal-body">
+                <p class="chat-trace-subtitle">看全局 AI 助手（项目列表页那一个）的历史会话轨迹。项目内 AI 助手的会话请到对应项目的「设置 → 对话追踪」查看。</p>
+                <div class="chat-trace-toolbar">
+                    <label>会话：
+                        <select id="globalChatTraceSessionSel" onchange="loadGlobalChatTraceDetail()"></select>
+                    </label>
+                    <button class="btn btn-ghost btn-sm" onclick="loadGlobalChatTrace()">🔄 刷新</button>
+                    <span id="globalChatTraceMeta" class="chat-trace-meta"></span>
+                </div>
+                <div id="globalChatTraceBody" class="chat-trace-body">
+                    <div class="chat-trace-empty">加载中…</div>
                 </div>
             </div>
         </div>
@@ -124,6 +158,7 @@
                 <h1>我的项目</h1>
                 <div class="page-header-actions">
                     <button class="btn btn-ghost" onclick="showSystemSettingsModal()">⚙️ 系统设置</button>
+                    <button class="btn btn-ghost" onclick="showGlobalChatTraceModal()">🗂 全局对话追踪</button>
                     <button class="btn btn-secondary" onclick="showImportProjectModal()">📥 导入现有工程</button>
                     <button class="btn btn-primary" onclick="showCreateProjectModal()">+ 新建项目</button>
                 </div>
@@ -236,6 +271,10 @@
                             </div>
                         </div>
 
+                        <a class="nav-item" data-tab="external-sessions" onclick="switchTab('external-sessions')">
+                            📜 外部会话
+                        </a>
+
                         <div class="sidebar-nav-group">
                             <a class="nav-item nav-item-group" data-nav-group="agent" onclick="toggleNavGroup('agent')">
                                 <span class="nav-item-icon">🤖</span>
@@ -248,6 +287,9 @@
                                 </a>
                                 <a class="nav-item nav-sub-item" data-tab="settings-agents" onclick="switchTab('settings-agents')">
                                     <span class="nav-item-icon">🧩</span> Agent / 扩展
+                                </a>
+                                <a class="nav-item nav-sub-item" data-tab="bundles" onclick="switchTab('bundles')">
+                                    <span class="nav-item-icon">📦</span> 套件与插件
                                 </a>
                             </div>
                         </div>
@@ -282,6 +324,9 @@
                             <div class="nav-drawer" id="settingsDrawer">
                                 <a class="nav-item nav-sub-item" data-tab="stats" onclick="switchTab('stats')">
                                     <span class="nav-item-icon">📊</span> 统计面板
+                                </a>
+                                <a class="nav-item nav-sub-item" data-tab="chat-trace" onclick="switchTab('chat-trace')">
+                                    <span class="nav-item-icon">🗂</span> 对话追踪
                                 </a>
                                 <a class="nav-item nav-sub-item" data-tab="logs" onclick="switchTab('logs')">
                                     <span class="nav-item-icon">📝</span> 操作日志
@@ -342,6 +387,20 @@
                         <button type="button" class="main-ws-tab main-ws-tab-page" id="mainWsPageTab"
                                 onclick="adsShell.focusPage()" title="回到当前页面">看板</button>
                         <div class="main-ws-tabs" id="mainWsTabs"></div>
+                        <!-- 右侧面板开关：面板关着时它是唯一的入口，所以必须常驻在标题栏，
+                             不能只放在面板自己的工具栏里（跟着面板一起消失就没法再打开了）。
+                             面板打开时由 CSS 隐藏，换成 rwToggleBtn —— 两者在同一行同一位置，
+                             视觉上就是窗口右上角那一个按钮（Cursor 的做法）。 -->
+                        <button type="button" class="btn-icon ws-right-toggle" id="mainWsRightToggle"
+                                onclick="adsShell.toggleRight()" title="显示右侧面板"
+                                aria-label="显示右侧面板" aria-expanded="false">
+                            <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+                                <rect x="1.1" y="2.6" width="13.8" height="10.8" rx="1.6"
+                                      fill="none" stroke="currentColor" stroke-width="1.2"/>
+                                <path d="M10.3 3.2h3.1a1 1 0 0 1 1 1v7.6a1 1 0 0 1-1 1h-3.1z"
+                                      fill="currentColor"/>
+                            </svg>
+                        </button>
                     </div>
                     <div class="main-ws-host" id="mainWsHost" style="display:none;"></div>
 
@@ -537,9 +596,22 @@
                                 <select id="repoBranchSelect" class="branch-select" onchange="switchRepoBranch(this.value)">
                                     <option value="">加载中...</option>
                                 </select>
-                                <button class="btn btn-sm" onclick="loadRepoTree()">🔄 刷新</button>
+                                <button class="btn btn-sm" onclick="loadRepoPage(true)">🔄 刷新</button>
                                 <button class="btn btn-sm" id="gitLogToggleBtn" onclick="toggleGitLogPanel()">📜 提交记录</button>
                             </div>
+                        </div>
+                        <!-- VCS 子 Tab：一个项目可以同时有 git 仓库和 P4 workspace -->
+                        <div class="repo-vcs-bar">
+                            <div class="inner-tabs" role="tablist" id="repoVcsTabs">
+                                <button class="inner-tab active" data-vcs-tab="git" onclick="switchRepoVcsTab('git')">
+                                    <span>🌿 Git</span><span class="repo-vcs-count" id="repoVcsCountGit"></span>
+                                </button>
+                                <button class="inner-tab" data-vcs-tab="p4" onclick="switchRepoVcsTab('p4')">
+                                    <span>🔷 P4</span><span class="repo-vcs-count" id="repoVcsCountP4"></span>
+                                </button>
+                            </div>
+                            <!-- 多仓库时才渲染的选择器 -->
+                            <div class="repo-picker" id="repoPicker"></div>
                         </div>
                         <div class="repo-workspace">
                             <!-- 左侧：文件树 -->
@@ -570,6 +642,20 @@
                                     <div class="log-panel-empty">加载中...</div>
                                 </div>
                             </div>
+                        </div>
+                    </div>
+
+                    <!-- Tab: 外部会话（内容真正渲染在主舞台 Tab 里；
+                         这里只是占位，用户关掉主舞台 Tab 时就露出来提示。
+                         switchTab 分发时需要能找到 getElementById('tab-external-sessions'），
+                         否则 .tab-content.active 会丢，页面变空。 -->
+                    <div id="tab-external-sessions" class="tab-content">
+                        <div class="external-sessions-empty">
+                            <h3>📜 外部会话</h3>
+                            <p>面板已在主舞台 Tab 中打开，点击顶部 Tab 栏即可查看。</p>
+                            <p style="color: var(--text-muted); font-size: 12px;">
+                                目前支持从 Cursor 读取绑定到此项目仓库路径（含 extra_paths）的会话历史。
+                            </p>
                         </div>
                     </div>
 
@@ -677,6 +763,26 @@
                     <div id="tab-logs" class="tab-content">
                         <h2>操作日志</h2>
                         <div class="log-timeline" id="logTimeline"></div>
+                    </div>
+
+                    <!-- Tab: 对话追踪（按 turn 展开 LLM/工具调用，看某次对话背后做了啥） -->
+                    <div id="tab-chat-trace" class="tab-content">
+                        <div class="chat-trace-sticky">
+                            <div class="chat-trace-header">
+                                <h2 style="margin:0 0 4px;">对话追踪</h2>
+                                <p class="chat-trace-subtitle">选一个会话，展开每一轮对话背后跑了哪些 LLM 调用和工具调用。</p>
+                            </div>
+                            <div class="chat-trace-toolbar">
+                                <label>会话：
+                                    <select id="chatTraceSessionSel" onchange="loadChatTraceDetail()"></select>
+                                </label>
+                                <button class="btn btn-ghost btn-sm" onclick="loadChatTrace()">🔄 刷新</button>
+                                <span id="chatTraceMeta" class="chat-trace-meta"></span>
+                            </div>
+                        </div>
+                        <div id="chatTraceBody" class="chat-trace-body">
+                            <div class="chat-trace-empty">加载中…</div>
+                        </div>
                     </div>
 
                     <!-- Tab: 自动化 -->
@@ -1193,9 +1299,8 @@
                                 <button class="inner-tab" data-inner-tab="hooks" onclick="switchAgentConfigTab('hooks')">
                                     🪝 Hooks
                                 </button>
-                                <button class="inner-tab" data-inner-tab="packs" onclick="switchAgentConfigTab('packs')">
-                                    📦 ConfigPack
-                                </button>
+                                <!-- ConfigPack 已移到「📦 套件与插件」页 —— 它和 Plugin 同属内容容器，
+                                     跟这里的 6 个内容类型（Agent/MCP/Skills/...）不是一个维度 -->
                                 <button class="inner-tab" data-inner-tab="openspec" onclick="switchAgentConfigTab('openspec')">
                                     📐 OpenSpec
                                 </button>
@@ -1276,24 +1381,7 @@
                                 </div>
                             </div>
 
-                            <!-- 面板：ConfigPack -->
-                            <div class="inner-tab-panel" id="inner-panel-packs">
-                                <div class="settings-card">
-                                    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:4px;">
-                                        <h3 class="settings-card-title" style="margin:0;">已安装 ConfigPack</h3>
-                                        <button class="btn btn-sm btn-ghost" onclick="loadProjectPacks()">🔄 刷新</button>
-                                    </div>
-                                    <p class="settings-description" style="margin-bottom:12px;">
-                                        ConfigPack 将 CLI 工具配置（rules、agents、commands 等）安装到项目的 <code>.claude/</code> 或 <code>.codebuddy/</code> 目录。
-                                    </p>
-                                    <div id="installedPacksList"><div class="empty-state-sm">加载中...</div></div>
-                                </div>
-                                <div class="settings-card" style="margin-top:16px;">
-                                    <h3 class="settings-card-title" style="margin-bottom:8px;">安装更多 Pack</h3>
-                                    <p class="settings-description" style="margin-bottom:12px;">从内置 Pack 库中选择并安装到当前项目。</p>
-                                    <div id="availablePacksList"><div class="empty-state-sm">加载中...</div></div>
-                                </div>
-                            </div>
+                            <!-- ConfigPack 面板已移到「📦 套件与插件」页（#tab-bundles） -->
 
                             <!-- 面板：Commands -->
                             <div class="inner-tab-panel" id="inner-panel-commands">
@@ -1441,6 +1529,84 @@
                                         word-break:break-all;
                                         margin:0;
                                     "></pre>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tab: 套件与插件 ────────────────────────────────────────────
+                         ConfigPack 和 Plugin 都是「内容容器」：里面装的是 rules /
+                         agents / commands / skills / mcp / hooks，格式几乎一样。
+                         差别只在作用域和可操作性，所以放同一页对照看，各自标清楚：
+
+                           ConfigPack  项目级 · ADS 可装可卸
+                           Plugin      本机级 · 只读（开关在各 Client 自己的设置里）
+
+                         内容本体不在这里展开 —— 去「Agent / 扩展」页按类型看，
+                         那边每条都带来源徽章。 -->
+                    <div id="tab-bundles" class="tab-content">
+                        <div class="settings-page">
+                            <div class="settings-page-header">
+                                <h2>📦 套件与插件</h2>
+                            </div>
+
+                            <div class="inner-tabs" role="tablist">
+                                <button class="inner-tab active" data-inner-tab="packs" onclick="switchBundleTab('packs')">
+                                    📦 ConfigPack<span class="bundle-tab-count" id="bundleCountPacks"></span>
+                                </button>
+                                <button class="inner-tab" data-inner-tab="plugins" onclick="switchBundleTab('plugins')">
+                                    🧩 Plugin<span class="bundle-tab-count" id="bundleCountPlugins"></span>
+                                </button>
+                            </div>
+
+                            <!-- 面板：ConfigPack（原在「Agent / 扩展」页的 inner-panel-packs） -->
+                            <div class="inner-tab-panel active" id="bundle-panel-packs">
+                                <div class="settings-card">
+                                    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:4px;">
+                                        <h3 class="settings-card-title" style="margin:0;">
+                                            已安装 ConfigPack
+                                            <span class="bundle-scope-badge bundle-scope-project">项目级 · 可装可卸</span>
+                                        </h3>
+                                        <button class="btn btn-sm btn-ghost" onclick="loadProjectPacks()">🔄 刷新</button>
+                                    </div>
+                                    <p class="settings-description" style="margin-bottom:12px;">
+                                        ConfigPack 将 CLI 工具配置（rules、agents、commands 等）安装到项目的 <code>.claude/</code> 或 <code>.codebuddy/</code> 目录。
+                                    </p>
+                                    <div id="installedPacksList"><div class="empty-state-sm">加载中...</div></div>
+                                </div>
+                                <div class="settings-card" style="margin-top:16px;">
+                                    <h3 class="settings-card-title" style="margin-bottom:8px;">安装更多 Pack</h3>
+                                    <p class="settings-description" style="margin-bottom:12px;">从内置 Pack 库中选择并安装到当前项目。</p>
+                                    <div id="availablePacksList"><div class="empty-state-sm">加载中...</div></div>
+                                </div>
+                            </div>
+
+                            <!-- 面板：Plugin（只读） -->
+                            <div class="inner-tab-panel" id="bundle-panel-plugins">
+                                <div class="settings-card">
+                                    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:4px;">
+                                        <h3 class="settings-card-title" style="margin:0;">
+                                            各 AgentClient 的 Plugin
+                                            <span class="bundle-scope-badge bundle-scope-machine">本机级 · 只读</span>
+                                        </h3>
+                                        <div style="display:flex;gap:6px;align-items:center;">
+                                            <label style="font-size:11px;color:var(--text-muted);display:flex;align-items:center;gap:4px;cursor:pointer;"
+                                                   title="市场目录是整仓克隆下来的，里面绝大多数插件你并没有安装">
+                                                <input type="checkbox" id="bundlePluginShowAll" onchange="loadPluginList()">
+                                                含市场里未安装的
+                                            </label>
+                                            <button class="btn btn-sm btn-ghost" onclick="loadPluginList()">🔄 刷新</button>
+                                        </div>
+                                    </div>
+                                    <p class="settings-description" style="margin-bottom:12px;">
+                                        Plugin 是各 Client（WorkBuddy / CodeBuddy / Claude Code）自己的版本化内容容器，
+                                        装在用户主目录下、跟项目无关。ADS <strong>只读取不改动</strong> ——
+                                        装卸和启停请在对应 Client 里操作。
+                                        已启用插件贡献的 Skills / Commands / Agents / Rules / Hooks / MCP
+                                        会带 <span style="color:#eab308;">Plugin</span> 徽章出现在「Agent / 扩展」各面板里。
+                                    </p>
+                                    <div id="pluginListSummary" style="margin-bottom:10px;"></div>
+                                    <div id="pluginList"><div class="empty-state-sm">加载中...</div></div>
                                 </div>
                             </div>
                         </div>
@@ -1670,8 +1836,17 @@
                         <div class="rw-toolbar-actions">
                             <button type="button" class="btn-icon rw-tool-btn" id="rwSplitBtn"
                                     onclick="adsShell.toggleRightSplit()" title="一键分屏：工单 | 对话">⊞</button>
-                            <button type="button" class="btn-icon rw-tool-btn" id="rwCloseBtn"
-                                    onclick="adsShell.closeRight()" title="关闭工作台">✕</button>
+                            <!-- 和 mainWsRightToggle 是同一个开关的两个位置：面板开着时显示这个 -->
+                            <button type="button" class="btn-icon rw-tool-btn ws-right-toggle" id="rwToggleBtn"
+                                    onclick="adsShell.toggleRight()" title="隐藏右侧面板"
+                                    aria-label="隐藏右侧面板" aria-expanded="true">
+                                <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+                                    <rect x="1.1" y="2.6" width="13.8" height="10.8" rx="1.6"
+                                          fill="none" stroke="currentColor" stroke-width="1.2"/>
+                                    <path d="M10.3 3.2h3.1a1 1 0 0 1 1 1v7.6a1 1 0 0 1-1 1h-3.1z"
+                                          fill="currentColor"/>
+                                </svg>
+                            </button>
                         </div>
                     </div>
                     <div class="rw-body" id="rwBody">
@@ -1767,15 +1942,20 @@
             </div>
             <!-- 群聊 Tab 独立容器，不被 loadChatHistory 覆盖 -->
             <div class="chat-messages" id="groupChatMessages" style="display:none;"></div>
-            <!-- 后台任务侧面板（/tasks 命令打开，与聊天并排） -->
+            <!-- 后台任务面板。两个宿主：中间主舞台 Tab（默认）或聊天右侧窄侧栏。
+                 无论挂在哪都是**这一个** DOM，被 adsShell 搬来搬去 —— 里面的
+                 #tasksPanelList / #tasksPanelOutput 被一堆函数按 id 直接引用，
+                 复制一份就会刷到藏着的那个上去。 -->
             <div id="tasksSidePanel" style="display:none;width:400px;flex-shrink:0;
-                 border-left:1px solid var(--border);display:none;flex-direction:column;overflow:hidden;">
+                 border-left:1px solid var(--border);flex-direction:column;overflow:hidden;">
                 <div style="display:flex;align-items:center;justify-content:space-between;
                             padding:8px 12px 0 12px;border-bottom:1px solid var(--border);flex-shrink:0;">
                     <span style="font-size:12px;font-weight:600;">🔄 后台任务</span>
                     <div style="display:flex;gap:4px;align-items:center;">
                         <button class="btn-icon" onclick="_clearOldCliTasks()" title="清除已完成任务" style="font-size:11px;opacity:.6;">🗑</button>
                         <button class="btn-icon" onclick="_refreshTasksPanel()" title="刷新" style="font-size:12px;">↻</button>
+                        <button class="btn-icon" id="tasksHostToggleBtn" onclick="_toggleTasksHost()"
+                                title="在中间 Tab / 右侧栏之间切换" style="font-size:12px;">⇄</button>
                         <button class="btn-icon" onclick="_closeTasksSplitPane()" style="font-size:14px;">✕</button>
                     </div>
                 </div>
@@ -2311,7 +2491,7 @@
     <!-- ==================== Toast 通知 ==================== -->
     <div class="toast-container" id="toastContainer"></div>
 
-    <script src="/static/app.js?v=20260902f"></script>
+    <script src="/static/app.js?v=20261009i"></script>
 </body>
 </html>
 

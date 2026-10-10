@@ -252,13 +252,18 @@ class BaseAgent(ABC):
         from skills import _current_skills
         skills_prompt = await self._resolve_skills_prompt(context)
         token = _current_skills.set(skills_prompt)
+        # push/pop 而不是 set/clear：外层 orchestrator.py:1535 已经设过工单级
+        # 上下文，clear 是无条件全清，会把外层的一并抹掉，后续 git 操作就没
+        # ticket_id 了（见 checkpoint/context.py 的注释）。
+        ckpt_token = None
         try:
             try:
-                from checkpoint import set_checkpoint_context, clear_checkpoint_context
+                from checkpoint import push_checkpoint_context
                 if context.get("project_id") and context.get("ticket_id"):
-                    set_checkpoint_context(
+                    ckpt_token = push_checkpoint_context(
                         project_id=context.get("project_id") or "",
                         ticket_id=context.get("ticket_id") or "",
+                        requirement_id=context.get("requirement_id") or "",
                         agent_type=getattr(self, "name", "") or context.get("agent_type") or "",
                         action=task_name or "",
                         repo_path=context.get("repo_path") or "",
@@ -269,8 +274,8 @@ class BaseAgent(ABC):
         finally:
             _current_skills.reset(token)
             try:
-                from checkpoint import clear_checkpoint_context
-                clear_checkpoint_context()
+                from checkpoint import pop_checkpoint_context
+                pop_checkpoint_context(ckpt_token)
             except Exception:
                 pass
 
@@ -412,8 +417,16 @@ class BaseAgent(ABC):
         step_index: int = 0,
         step_total: int = 0,
         duration_ms: int = 0,
+        files: Optional[List[str]] = None,
+        reason: str = "",
     ) -> None:
-        """Agent action 代码中的手动步骤打点，写 skill_step_start / skill_step_done 到 ticket_logs。"""
+        """Agent action 代码中的手动步骤打点，写 skill_step_start / skill_step_done 到 ticket_logs。
+
+        files/reason：让「完成」这两个字有依据。原先这里只写步骤名和耗时，
+        于是「✅ [1/2] 代码生成 124041ms」在时间轴上看起来很成功，实际一个文件都没产出
+        （TK-20260920-ce79a9）。调用方拿到 Action 结果后必须把产出文件列表传进来；
+        产出为空就传 phase="error" + reason，别让时间轴替失败的步骤打勾。
+        """
         ticket_id = context.get("ticket_id")
         project_id = context.get("project_id")
         if not ticket_id:
@@ -428,16 +441,21 @@ class BaseAgent(ABC):
             log_id = generate_id("LOG")
             created_at = now_iso()
 
+            file_list = [str(f) for f in (files or [])]
             idx_str = f"[{step_index}/{step_total}] " if step_total else ""
             if phase == "start":
                 message = f"{idx_str}{step_name} · 开始"
                 level = "info"
             elif phase == "done":
                 dur_str = f" ({int(duration_ms)}ms)" if duration_ms else ""
-                message = f"{idx_str}{step_name} · 完成{dur_str}"
+                files_str = f" · {len(file_list)} 个文件" if file_list else ""
+                message = f"{idx_str}{step_name} · 完成{dur_str}{files_str}"
                 level = "info"
             else:
-                message = f"{idx_str}{step_name} · 失败"
+                dur_str = f" ({int(duration_ms)}ms)" if duration_ms else ""
+                message = f"{idx_str}{step_name} · 失败{dur_str}"
+                if reason:
+                    message += f" — {reason[:120]}"
                 level = "error"
 
             detail_json = _json.dumps({
@@ -447,6 +465,9 @@ class BaseAgent(ABC):
                 "step_total": step_total,
                 "phase": phase,
                 "duration_ms": duration_ms,
+                "files": file_list,
+                "file_count": len(file_list),
+                "reason": reason,
             }, ensure_ascii=False)
 
             await db.execute(

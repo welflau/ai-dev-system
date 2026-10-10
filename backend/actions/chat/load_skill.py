@@ -145,7 +145,7 @@ async def _get_available_skill_ids(project_id: str = None) -> list:
         except Exception:
             pass
 
-        # Layer 4: 项目本地 Skill 目录（.ads / .Agent / .codebuddy / .claude）
+        # Layer 4: 项目本地 Skill 目录（.ads / .Agent / .codebuddy / .workbuddy / .claude）
         seen_names: set = set()
         for agent_dir in await _enum_project_skill_dirs(project_id):
             for skill_dir in agent_dir.iterdir():
@@ -182,8 +182,9 @@ async def _get_project_agent_skills_dir(project_id: str):
 async def _enum_project_skill_dirs(project_id: str) -> list:
     """枚举项目所有 Skill「读取」目录（存在才返回，按优先级去重）。
 
-    覆盖多套 CLI 约定：.ads/skills、.Agent/skills、.codebuddy/skills、.claude/skills。
-    这样 .codebuddy/skills/ 里的 Skill（如 ue-py-run）也能被 agent.* 索引与加载。
+    覆盖多套 CLI 约定：.ads/skills、.Agent/skills、.codebuddy/skills、.workbuddy/skills、
+    .cursor/skills、.claude/skills。
+    这样 .codebuddy/.workbuddy/.cursor/skills/ 里的 Skill（如 ue-py-run）也能被 agent.* 索引与加载。
     同时并入 extra_paths 里的项目路径。
     """
     from pathlib import Path
@@ -212,7 +213,8 @@ async def _enum_project_skill_dirs(project_id: str) -> list:
 
     for rp in repo_paths:
         base = Path(rp)
-        for sub in (".ads/skills", ".Agent/skills", ".codebuddy/skills", ".claude/skills"):
+        for sub in (".ads/skills", ".Agent/skills", ".codebuddy/skills", ".workbuddy/skills",
+                    ".cursor/skills", ".cursor/skills-cursor", ".claude/skills"):
             d = base / sub
             if d.exists() and d not in dirs:
                 dirs.append(d)
@@ -226,10 +228,12 @@ async def _enum_project_skill_dirs(project_id: str) -> list:
     return dirs
 
 
-async def _load_agent_skill(skill_id: str, project_id: str):
-    """加载项目本地 Skill 的 SKILL.md 内容。返回 (content, name)。
+async def _read_agent_skill(skill_id: str, project_id: str):
+    """读取项目本地 Skill 的正文 + frontmatter。返回 (content, fm dict)。
 
-    在所有项目 Skill 目录（.ads / .Agent / .codebuddy / .claude）中按 dir_name 查找。
+    在所有项目 Skill 目录（.ads / .Agent / .codebuddy / .workbuddy / .cursor / .claude）
+    中按 dir_name 查找，第一个命中即用（目录顺序即优先级）。
+    找不到或读失败时返回 (None, {})。
     """
     dir_name = skill_id.removeprefix("agent.")
     skill_md = None
@@ -239,24 +243,56 @@ async def _load_agent_skill(skill_id: str, project_id: str):
             skill_md = candidate
             break
     if skill_md is None:
-        return None, skill_id
+        return None, {}
     try:
         content = skill_md.read_text(encoding="utf-8").strip()
-        # 从 frontmatter 取 name
-        import re as _re
-        m = _re.match(r"^---\s*\n(.*?)\n---\s*\n", content, _re.DOTALL)
-        name = dir_name
-        if m:
-            try:
-                import yaml as _yaml
-                fm = _yaml.safe_load(m.group(1)) or {}
-                name = fm.get("name", dir_name)
-            except Exception:
-                pass
-        return content, name
     except Exception as e:
-        logger.warning("load agent skill %s failed: %s", skill_id, e)
+        logger.warning("read agent skill %s failed: %s", skill_id, e)
+        return None, {}
+
+    import re as _re
+    m = _re.match(r"^---\s*\n(.*?)\n---\s*\n", content, _re.DOTALL)
+    fm: Dict[str, Any] = {}
+    if m:
+        try:
+            import yaml as _yaml
+            fm = _yaml.safe_load(m.group(1)) or {}
+            if not isinstance(fm, dict):
+                fm = {}
+        except Exception:
+            fm = {}
+    return content, fm
+
+
+def _fm_truthy(fm: Dict[str, Any], key: str) -> bool:
+    """frontmatter 布尔字段 —— YAML 可能解析成 bool，也可能是 "true" 字符串。"""
+    v = fm.get(key)
+    if isinstance(v, bool):
+        return v
+    return str(v).strip().strip("\"'").lower() in ("true", "yes", "1")
+
+
+async def _agent_skill_meta(skill_id: str, project_id: str) -> Dict[str, Any]:
+    """取项目本地 Skill 的索引用元信息。
+
+    disable-model-invocation 的语义是「禁止模型自动触发，只能用户显式点名时用」。
+    索引里必须把它和普通 Skill 区分开，否则模型会当成随便可加载的一条。
+    """
+    _, fm = await _read_agent_skill(skill_id, project_id)
+    dir_name = skill_id.removeprefix("agent.")
+    return {
+        "name": fm.get("name") or dir_name,
+        "description": (str(fm.get("description") or "").strip() or "项目本地 Skill"),
+        "manual_only": _fm_truthy(fm, "disable-model-invocation"),
+    }
+
+
+async def _load_agent_skill(skill_id: str, project_id: str):
+    """加载项目本地 Skill 的 SKILL.md 内容。返回 (content, name)。"""
+    content, fm = await _read_agent_skill(skill_id, project_id)
+    if content is None:
         return None, skill_id
+    return content, fm.get("name") or skill_id.removeprefix("agent.")
 
 
 async def _load_custom_skill(skill_id: str, project_id: str):

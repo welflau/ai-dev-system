@@ -390,6 +390,10 @@ class QueryEngine:
             # ── 1. 预算检查 ────────────────────────────────────────────
             if reason := self.budget.check():
                 logger.warning("QueryEngine 预算超限（轮 %d）: %s", round_no, reason)
+                # 超限也要 emit SESSION_END：否则 tool_audit_log 里这一轮
+                # 干脆没有 query_engine:done 记录，事后看只剩「对话突然断了」，
+                # 恰好把最该留痕的一类结束方式漏掉了。
+                await self._emit_session_end(context, round_count, "budget_exceeded")
                 yield BudgetExceededEvent(reason=reason)
                 return
 
@@ -401,6 +405,8 @@ class QueryEngine:
                 _cli_tool_names: dict = {}   # tool_use_id → tool_name
                 _cli_tool_inputs: dict = {}  # tool_use_id → input（用于补全 args_hint / 完整路径）
                 _cli_tool_started: set = set()  # 已 yield ToolStartEvent 的 tool_use_id，防重复
+                _cli_input: int = 0            # 从 stop 事件取的真实 token 数
+                _cli_output: int = 0
 
                 # 把 system prompt 拼入 messages，_messages_to_prompt 会包裹为 <ads_context> 注入 stdin
                 cli_messages = current_messages
@@ -486,6 +492,12 @@ class QueryEngine:
                             )
                             yield ActionEvent(action_data=_synth)
                     elif etype == "stop":
+                        # CLI result 行里取到的真实 token 数（_normalize_cli_usage 解析）。
+                        # 以前这里直接 break，usage 是空 dict，budget.consume() 从没
+                        # 被调用过，预算的 token 维度对默认模型等于不存在。
+                        _cli_stop_usage = ev.get("usage", {})
+                        _cli_input  = _cli_stop_usage.get("input_tokens",  0) or 0
+                        _cli_output = _cli_stop_usage.get("output_tokens", 0) or 0
                         break
 
                 if full_cli_text:
@@ -576,13 +588,19 @@ class QueryEngine:
                 # action だけ出力で本文が空の場合、空吹き出しを防ぐ
                 _display_text = _clean_text or ('' if (final_action or _cli_action) else full_cli_text)
 
+                # CLI 分支也要 emit SESSION_END。它是默认模型走的路，之前这里
+                # 直接 return，等于最常用的路径反而一条 query_engine:done 都不留。
+                # 只补 SESSION_END，不补 ASSISTANT_STOP —— 后者挂着 nudge_hook
+                # 会往聊天面板推消息，那是另一件事，别顺手改了用户看得见的行为。
+                self.budget.consume(tokens=_cli_input + _cli_output, turns=1)
+                await self._emit_session_end(context, 1, "done")
                 yield MessageDoneEvent(
                     full_text=_display_text,
                     thinking_steps=thinking_steps,
                     final_action=final_action or _cli_action,
                     all_confirm_results=list(all_confirm_results),
                     rounds=1,
-                    total_tokens=0,
+                    total_tokens=self.budget.used_tokens,
                 )
                 return
 
@@ -825,6 +843,7 @@ class QueryEngine:
                 # finish 工具：立即结束循环
                 if tool_name == "finish":
                     current_messages.append({"role": "user", "content": tool_results})
+                    await self._emit_session_end(context, round_count, "finish")
                     yield MessageDoneEvent(
                         full_text=full_text,
                         thinking_steps=thinking_steps,

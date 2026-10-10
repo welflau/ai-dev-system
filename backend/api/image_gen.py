@@ -126,7 +126,7 @@ async def test_lightai_connection(body: TestLightAIRequest = None):
 @router.get("/config/refresh-key/urls")
 async def get_lightai_community_urls():
     """读取 refresh_key.py 已配置的社区 URL 列表"""
-    for base in [".codebuddy", ".claude"]:
+    for base in [".codebuddy", ".workbuddy", ".claude"]:
         env_json = Path.home() / base / "skills" / "lightai-skill" / "scripts" / "env.json"
         if env_json.exists():
             try:
@@ -151,6 +151,10 @@ async def refresh_lightai_key(body: dict = {}):
     skill_refresh = (
         Path.home() / ".codebuddy" / "skills" / "lightai-skill" / "scripts" / "refresh_key.py"
     )
+    if not skill_refresh.exists():
+        skill_refresh = (
+            Path.home() / ".workbuddy" / "skills" / "lightai-skill" / "scripts" / "refresh_key.py"
+        )
     if not skill_refresh.exists():
         skill_refresh = (
             Path.home() / ".claude" / "skills" / "lightai-skill" / "scripts" / "refresh_key.py"

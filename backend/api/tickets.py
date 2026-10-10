@@ -1345,8 +1345,10 @@ async def get_ticket_logs(ticket_id: str):
 # ==================== 统一时间轴 + 评论 ====================
 
 # 次级日志的 action 前缀（默认折叠）
+# command_run 进这里：单条命令是执行细节，不是叙事节点；失败的会因 level='error'
+# 被 _classify_tier 自动提到 primary，正合需要。
 _SECONDARY_ACTIONS = {"chat:", "llm_call", "tool_call", "shell_exec",
-                      "react_tool", "skill_step_start"}
+                      "react_tool", "skill_step_start", "command_run"}
 
 # OpenSpec / 建单等生命周期事件必须进主时间轴（否则 started=info 会被扔进「详细日志」
 # 而 partial=warning 留在主轴，出现「部分完成在前、启动在后」的假乱序）
@@ -1465,6 +1467,139 @@ async def _annotate_timeline_stages(ticket_id: str, items: list) -> tuple:
     return items, idx["groups"]
 
 
+async def _annotate_chat_anchors(ticket_id: str, items: list) -> list:
+    """标注每条日志在「工单对话」面板里的落点（_chat_anchor），没有就不标。
+
+    为什么放后端：工单对话 Feed 只收一部分 action（见 chat.py::FEED_LOG_ACTIONS，
+    全库 27300 条日志里收 20284 条）。前端要给时间轴条目加「💬 对话」跳转链接，
+    就得知道"这条在对话里有没有"。把那份白名单抄到前端 = 两份判据各改各的，
+    后端加一类 action，前端不知道，链接就指向不存在的条目
+    （「📟 后台记录」链接刚踩过这个坑：判据和建表规则脱节，UE 工单全无链接）。
+    所以这里 import 同一个集合，前端只认这个字段。
+
+    两类落点：
+      · action 在 FEED_LOG_ACTIONS 里 → Feed 的事件条目 id **就是** ticket_logs.id
+        （chat.py 里 `"id": lr["id"]`），锚点白送；
+      · action == 'llm_call'（3799 条，Feed 不收）→ 它记的是一次 LLM 调用，
+        Feed 里对应的是 llm_conversations 那条回复气泡。两张表没有外键，
+        只能按时间配对：同工单、时间差 ≤3s 取最近的一条（抽样 18/18 命中）。
+        锚点用 `<conv_id>_resp`，即回复气泡（chat.py 给 assistant 消息拼的 id）。
+    配不上的一律不标 —— 宁可没链接，也不要点了跳不到的死链。
+    """
+    try:
+        from api.chat import FEED_LOG_ACTIONS
+    except Exception as e:      # 理论上不会发生；真出事就退回"没有链接"
+        logger.warning("对话锚点标注跳过（导入失败）: %s", e)
+        return items
+
+    # llm_call → llm_conversations 的时间配对表（没有 llm_call 就别查库）
+    conv_ts: list = []
+    if any(i.get("action") == "llm_call" for i in items):
+        try:
+            convs = await db.fetch_all(
+                "SELECT id, created_at FROM llm_conversations "
+                "WHERE ticket_id = ? ORDER BY created_at ASC",
+                (ticket_id,),
+            )
+            conv_ts = [(c["created_at"], c["id"]) for c in convs if c["created_at"]]
+        except Exception as e:
+            logger.debug("llm_conversations 配对跳过: %s", e)
+
+    import bisect
+    from datetime import datetime
+    ts_keys = [t for t, _ in conv_ts]
+
+    def _pair_llm(created_at: str) -> str:
+        """找时间最近的 conversation，差 >3s 就放弃（返回空串 = 不标锚点）"""
+        if not created_at or not ts_keys:
+            return ""
+        pos = bisect.bisect_left(ts_keys, created_at)
+        best, best_gap = "", None
+        for p in (pos - 1, pos):        # 只看左右两个邻居，已排序
+            if 0 <= p < len(conv_ts):
+                try:
+                    gap = abs((datetime.fromisoformat(created_at)
+                               - datetime.fromisoformat(conv_ts[p][0])).total_seconds())
+                except Exception:
+                    continue
+                if gap <= 3 and (best_gap is None or gap < best_gap):
+                    best, best_gap = conv_ts[p][1], gap
+        return f"{best}_resp" if best else ""
+
+    for item in items:
+        if item.get("_type") != "log":
+            continue
+        action = item.get("action") or ""
+        if action in FEED_LOG_ACTIONS:
+            item["_chat_anchor"] = item.get("id")
+        elif action == "llm_call":
+            anchor = _pair_llm(item.get("created_at") or "")
+            if anchor:
+                item["_chat_anchor"] = anchor
+
+    return items
+
+
+async def _annotate_task_refs(ticket_id: str, items: list) -> list:
+    """给有真实命令记录的日志标 `_task_ref`（= ticket_command_log.id）。
+
+    沿用 `_annotate_chat_anchors` 的先例：**判据只留一份在后端，前端只认字段**。
+    前端原来是拿 ticket_logs 现编伪任务（app.js:18367，id 形如 `titk-<log.id>`），
+    点开只有那条日志本身的散文，没有真 argv / exit_code / 输出。
+
+    配对不靠时间猜：`command_record_hook` 写这两条记录时就把
+    `ticket_command_log.log_id` 指向了 `ticket_logs.id`，一条 SELECT 反查即可。
+    查不到的**不标** —— 宁可没链接，也不要点了跳不到的死链。
+    """
+    try:
+        rows = await db.fetch_all(
+            "SELECT id, log_id FROM ticket_command_log "
+            "WHERE ticket_id = ? AND log_id != ''",
+            (ticket_id,),
+        )
+    except Exception as e:
+        logger.debug("命令记录标注跳过: %s", e)
+        return items
+
+    ref_map = {r["log_id"]: r["id"] for r in rows if r.get("log_id")}
+    if not ref_map:
+        return items
+    for item in items:
+        rid = ref_map.get(item.get("id"))
+        if rid:
+            item["_task_ref"] = rid
+    return items
+
+
+@router.get("/api/tickets/{ticket_id}/command-logs")
+async def get_ticket_command_logs(ticket_id: str, include_noise: int = 0):
+    """工单执行期真实跑过的命令。
+
+    默认过滤 `noise=1`（git status / rev-parse 这类例行 plumbing）。
+    诊断时传 `?include_noise=1` —— 「什么都没跑」和「跑了但没输出」的区别，
+    只有把噪音也拉出来才看得见。
+    """
+    where = "WHERE ticket_id = ?" + ("" if include_noise else " AND noise = 0")
+    rows = await db.fetch_all(
+        f"""SELECT id, log_id, source, tool, agent_type, command, cwd, exit_code,
+                   status, duration_ms, output, output_bytes, truncated, noise, created_at
+            FROM ticket_command_log {where} ORDER BY created_at ASC""",
+        (ticket_id,),
+    )
+    return {"records": rows, "total": len(rows)}
+
+
+@router.get("/api/ticket-command-logs/{record_id}")
+async def get_command_log(record_id: str):
+    """单条命令记录全量（刷新页面后前端按 id 直接拉，不依赖内存）。"""
+    row = await db.fetch_one(
+        "SELECT * FROM ticket_command_log WHERE id = ?", (record_id,)
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="命令记录不存在")
+    return row
+
+
 @router.get("/api/tickets/{ticket_id}/timeline")
 async def get_ticket_timeline(ticket_id: str):
     """统一时间轴：ticket_logs + ticket_comments 按时间合并"""
@@ -1538,6 +1673,12 @@ async def get_ticket_timeline(ticket_id: str):
 
     # 排序**之后**才标阶段：继承逻辑依赖时序，先标后排会把继承串错
     items, stage_groups = await _annotate_timeline_stages(ticket_id, items)
+
+    # 标注「这条在工单对话里的落点」，前端据此决定要不要渲染跳转链接
+    items = await _annotate_chat_anchors(ticket_id, items)
+
+    # 标注「这条背后有真实命令记录」，前端据此渲染「📟 后台记录」链接
+    items = await _annotate_task_refs(ticket_id, items)
 
     return {"timeline": items, "total": len(items), "stage_groups": stage_groups}
 
