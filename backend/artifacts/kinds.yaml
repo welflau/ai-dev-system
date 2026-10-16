@@ -1,0 +1,174 @@
+# Artifact Kind Taxonomy —— 产物类型的固定词表
+#
+# 这是「能力自描述 + 动态组装框架」的数据契约词表。skill 通过 SKILL.md 的
+# x-workflow.consumes / produces 声明 kind，compose_workflow_stages 据此建图
+# 拓扑排序。kind 拼错 = consumes 永远匹配不上 = 静默断链。
+#
+# 方案文档：docs/20261015_01_能力自描述与动态组装框架方案.md §3.2
+#
+# ============================================================
+# ⚠️ 为什么要集中登记（而不是让 produces 隐式注册）
+# ============================================================
+# 隐式注册下，`produces: [content_outlne]`（拼错）会被当成一个全新 kind 默默接受，
+# 下游 `consumes: [content_outline]` 找不到 producer → 该 skill 静默出局。
+# 没有报错、没有日志、流水线少跑一步，排查成本极高。
+#
+# 代价是加一个新 kind 要改两个文件（SKILL.md + 本文件）。这是刻意保留的摩擦。
+#
+# ============================================================
+# ⚠️ 三道闸（缺一不可）
+# ============================================================
+#   1. 扫描期：discover_workflow_skills() 发现未注册 kind → **该 skill 出局 + ERROR**
+#   2. 写入期：ArtifactStore.put() 遇未注册 kind → raise
+#   3. CI 期 ：tests 扫所有 SKILL.md，断言 kind 全在本表内
+#
+# 第 3 道才是真保险。前车之鉴：skills/rules/trait_taxonomy.yaml 只有前两道的
+# 「文档约定」而无代码校验，结果 config_packs/content-creation/pack.json 用了
+# 词表里根本没有的 `category:content`，漂了很久没人发现。
+#
+# ============================================================
+# storage 字段：两套并存的存储形态（诚实记录现状，不是设计洁癖）
+# ============================================================
+#   file   —— 内容落盘到 <repo>/artifacts/...，artifacts 表只存 path 索引。
+#             新框架的产物一律是这种。二进制（图/音/视频）只能是这种。
+#   inline —— 内容直接塞 artifacts.content 列（TEXT）。**老路径专用**。
+#             orchestrator.py 的 13 处 db.insert 都是这样，content 存的是
+#             result_json，被 _build_context 反序列化成 architecture/dev_result 等。
+#
+# 硬约束：**inline kind 不得出现在 skill 的 produces 里**。
+# ArtifactStore 只会写文件，产出的东西老读取方（`WHERE type='prd'` 取 content）
+# 拿不到。lint 会直接拒绝。consumes 引用 inline kind 是允许的 —— injector 会
+# 从 content 列读。
+
+version: 1
+
+# 命名规范（load 时强制校验）：小写蛇形，^[a-z][a-z0-9_]*$
+# 不允许 Content-Outline / contentOutline / content.outline 这类变体
+
+kinds:
+
+  # ────────────────── 框架内置（天然源） ──────────────────
+
+  ticket_brief:
+    description: |
+      工单需求的结构化快照（title / description / type / traits / 验收标准）。
+      由 ArtifactStore 在 skill 链启动前自动产出，是整条链的源头。
+    mime: application/json
+    storage: file
+    builtin: true        # 无需任何 skill produces —— 组装器视为已就绪
+
+  # ────────────────── 内容生成（demo 链验证用） ──────────────────
+
+  content_outline:
+    description: 内容大纲（章节结构 + 每节要点）
+    mime: text/markdown
+    storage: file
+
+  draft_article:
+    description: 成稿正文
+    mime: text/markdown
+    storage: file
+
+  cover_image:
+    description: 封面图。**二进制 kind**，用于验证产物总线不再把文件读成文本
+    mime: image/png
+    storage: file
+    binary: true
+
+  style_guide:
+    description: 风格指引（语气/受众/禁用词）。可选上游产物，缺失时 skill 用默认风格
+    mime: text/markdown
+    storage: file
+
+  # ────────────────── 老产物（inline，禁止 produces） ──────────────────
+  #
+  # 登记它们不是为了让新 skill 产出，而是为了：
+  #   a) 新 skill 可以 consumes 老产物（如内容 skill 读 PRD）
+  #   b) 让「这张表就是 artifact 语义的唯一真相」这句话成立，不留灰色地带
+  #
+  # 取值来自线上库实测（2026-10-15，data/ai_dev_system.db，2246 条）：
+  #   deploy_config 1436 / code 186 / code_review 184 / ux_design 163
+  #   prd 108 / architecture 88 / art_design 71 / report 10
+  # 另有代码里写入但库中暂无数据的：asset_manifest / document / html_prototype
+  #   / screenshot / test / ue_content
+
+  prd:
+    description: PlannerAgent 产出的 PRD（用户故事/验收标准/边界条件）
+    storage: inline
+    legacy: true
+    produced_by: PlannerAgent
+
+  ux_design:
+    description: UXAgent 产出的交互设计（流程/线框/状态定义）
+    storage: inline
+    legacy: true
+    produced_by: UXAgent
+
+  art_design:
+    description: ArtAgent 产出的视觉规范 + 资产清单
+    storage: inline
+    legacy: true
+    produced_by: ArtAgent
+
+  asset_manifest:
+    description: ArtistAgent 的资产落地结果（命中资产库 / 占位图 / 未找到）
+    storage: inline
+    legacy: true
+    produced_by: ArtistAgent
+
+  architecture:
+    description: ArchitectAgent 的增量技术方案。_build_context 反序列化成 context["architecture"]
+    storage: inline
+    legacy: true
+    produced_by: ArchitectAgent
+
+  code:
+    description: DevAgent 的开发结果（文件清单 + 自测结论）。→ context["dev_result"]
+    storage: inline
+    legacy: true
+    produced_by: DevAgent
+
+  code_review:
+    description: ReviewAgent 的审查结论（评分 + 问题列表）
+    storage: inline
+    legacy: true
+    produced_by: ReviewAgent
+
+  test:
+    description: TestAgent 的测试结果。→ context["test_result"]
+    storage: inline
+    legacy: true
+    produced_by: TestAgent
+
+  deploy_config:
+    description: DeployAgent 的部署配置/结果
+    storage: inline
+    legacy: true
+    produced_by: DeployAgent
+
+  html_prototype:
+    description: DevAgent 的 HTML 单文件原型（验证核心循环）
+    storage: inline
+    legacy: true
+    produced_by: DevAgent
+
+  ue_content:
+    description: UEEditorAgent 生成的 UE 内容（Blueprint / 关卡）
+    storage: inline
+    legacy: true
+    produced_by: UEEditorAgent
+
+  document:
+    description: GenerateDocumentAction 产出的通用文档
+    storage: inline
+    legacy: true
+
+  report:
+    description: 需求完成报告。库里 10 条且 path 非空 —— 老 type 里唯一落盘的
+    storage: inline
+    legacy: true
+
+  screenshot:
+    description: 截图产物
+    storage: inline
+    legacy: true

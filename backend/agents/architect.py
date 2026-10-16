@@ -197,7 +197,9 @@ class ArchitectAgent(BaseAgent):
             ok_count = len(result.outputs)
             expected = skill.expected_output_count or 4
             is_partial = (result.status != "success") or (ok_count < expected)
-            got = set(result.outputs.keys())
+            # v0.20：outputs 从 Dict[路径→内容] 变为 List[ArtifactOut]，
+            # 这里只需要文件名集合判四件套齐不齐 → 用 output_paths 即可
+            got = set(result.output_paths)
             def _mark(fn): return "✅" if fn in got else "❌"
             artifact_summary = (
                 f"📐 [规范层] **OpenSpec Propose {'部分完成' if is_partial else '完成'}** — "

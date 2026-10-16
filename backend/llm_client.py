@@ -37,6 +37,13 @@ class _LLMContext:
     _action: contextvars.ContextVar = contextvars.ContextVar('llm_action', default=None)
     # 一次对话的 turn_id：用户发一条消息 → 这一轮里所有 LLM 调用共享同一个值
     _turn_id: contextvars.ContextVar = contextvars.ContextVar('llm_turn_id', default=None)
+    # v0.20 skill 执行上下文 —— CLI 模式下注入 skill_io MCP server 用。
+    # CLI 分支不传 tools（证据见 tests/skills/test_cli_mode_tool_gap.py），
+    # skill 的 builtin 工具只能靠 MCP 被命名调用；而 MCP server 是独立进程，
+    # 拿不到 Python 侧的 context，只能靠环境变量传产出目录等参数。
+    # 形如 {"output_root": "...", "repo": "...", "allowed_exts": [...],
+    #       "image_subdir": "...", "tools": ["write_file", ...]}
+    _skill_io: contextvars.ContextVar = contextvars.ContextVar('llm_skill_io', default=None)
 
     @property
     def ticket_id(self): return self._ticket_id.get()
@@ -68,7 +75,34 @@ class _LLMContext:
     @turn_id.setter
     def turn_id(self, v): self._turn_id.set(v)
 
+    @property
+    def skill_io(self): return self._skill_io.get()
+    @skill_io.setter
+    def skill_io(self, v): self._skill_io.set(v)
+
 _llm_ctx = _LLMContext()
+
+
+def set_skill_io_context(
+    output_root: str = "",
+    repo: str = "",
+    allowed_exts: Optional[List[str]] = None,
+    image_subdir: str = "",
+    tools: Optional[List[str]] = None,
+):
+    """声明本次 LLM 调用处于某个 skill 的执行上下文里（SkillRunner 调用）。
+
+    只在 CLI 模式下有用 —— API 模式的工具走 `tools` 参数，不需要 MCP。
+    传空 output_root 等于清除（SkillRunner 执行完要还原，否则后续的普通
+    聊天调用会带着上一个 skill 的产出目录）。
+    """
+    _llm_ctx.skill_io = {
+        "output_root": output_root,
+        "repo": repo,
+        "allowed_exts": list(allowed_exts or []),
+        "image_subdir": image_subdir,
+        "tools": list(tools or []),
+    } if output_root else None
 
 
 def set_llm_context(
@@ -884,6 +918,31 @@ class LLMClient:
                 },
             }
         }
+
+        # ── skill_io MCP：SkillRunner 正在跑 skill 时注入 ──
+        # CLI 分支不传 tools（证据见 tests/skills/test_cli_mode_tool_gap.py），
+        # skill 声明的 write_file / read_file / gen_image 对 CLI 完全不可见，
+        # 它会改用原生 Write —— 相对路径基于 cwd(=仓库根)，而产出目录在
+        # artifacts/{req}/{ticket}/{kind}/，于是 _collect_outputs 扫不到，
+        # 一律 partial 且无任何报错。包成 MCP 是唯一能让 CLI 命名调用的途径。
+        _skill_io = _llm_ctx.skill_io
+        if _skill_io and _skill_io.get("output_root"):
+            _env = {
+                "SKILL_OUTPUT_ROOT": _skill_io["output_root"],
+                "SKILL_REPO": _skill_io.get("repo") or cwd or "",
+                "SKILL_BACKEND_DIR": str(_backend_dir),
+            }
+            if _skill_io.get("allowed_exts"):
+                _env["SKILL_ALLOWED_EXTS"] = ",".join(_skill_io["allowed_exts"])
+            if _skill_io.get("image_subdir"):
+                _env["SKILL_IMAGE_SUBDIR"] = _skill_io["image_subdir"]
+            mcp_servers["skill_io"] = {
+                "command": _python_exe,
+                "args": [str(_backend_dir / "skills" / "skill_io_mcp_server.py")],
+                "env": _env,
+            }
+            logger.info("🖥️  CLI MCP 注入：skill_io server（out=%s, tools=%s）",
+                        _skill_io["output_root"], _skill_io.get("tools"))
 
         # ── openspec MCP：项目已 init openspec/ 且 CLI 可用时注入 ──
         # 让 CLI 模式的 Agent（codebuddy）以命名工具 mcp__openspec__new_change 调用，

@@ -130,6 +130,18 @@ ticket_type:
     - refactor            # 只调 DevAgent + ReviewAgent
     - polish              # 只调 DevAgent（小调整，skip review）
     - rollback            # 只调 DeployAgent
+    - ue_content          # UE 内容创作（BP/关卡），由 ue_content_gen fragment 使用
+
+pipeline:
+  description: |
+    主流程形态。决定 _core.yaml 的 base_stages 裁剪（哪些基础阶段参与组装）。
+    缺省 = code —— 没有此 trait 的项目行为与历史版本完全一致。
+    - code    : 架构 → 开发 → 审查 → 验收 → 部署（历史默认路径）
+    - content : 内容生成类（文案/分镜/素材编排），跳过代码相关阶段，
+                流程主要由 skill 链（x-workflow）承载
+  values:
+    - code
+    - content
 
 
 # ==================== 约束规则 ====================

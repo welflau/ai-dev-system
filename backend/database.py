@@ -167,6 +167,22 @@ class Database:
             ("chat_messages", "kind", "TEXT DEFAULT 'message'"),
             # 会话来源标记：chat=AI助手 / group=群聊会议（AI助手 历史加载要排除 group）
             ("chat_sessions", "source", "TEXT DEFAULT 'chat'"),
+            # v0.20 产物总线：artifacts 表增列（语义见 SCHEMA_SQL 里 artifacts 的注释）。
+            #
+            # 为什么走 _auto_migrate 而不是只写 SCHEMA_SQL：老库的 artifacts 表已存在，
+            # `CREATE TABLE IF NOT EXISTS` 对它是 no-op，新列不会被补上。两边都写才覆盖
+            # 新库与老库。反过来，**不能给这几列建索引**（哪怕放在 SCHEMA_SQL 里）——
+            # init_tables 是先 executescript 再迁移，老库跑到 `CREATE INDEX ... (kind)`
+            # 时该列尚不存在，而 executescript 一条语句失败会整段中止，其后所有建表全废。
+            # 见本文件 ticket_command_log 上方那段警告。
+            #
+            # 存量 2246 条的 kind/mime/produced_by 全是 NULL、size_bytes 为 0。
+            # 不回填 kind=type：回填等于声称老产物符合 kinds.yaml 的 file 存储契约，
+            # 而它们的内容其实在 content 列里。读取侧统一用 COALESCE(kind, type)。
+            ("artifacts", "kind",        "TEXT"),
+            ("artifacts", "mime",        "TEXT"),
+            ("artifacts", "size_bytes",  "INTEGER DEFAULT 0"),
+            ("artifacts", "produced_by", "TEXT"),
         ]
         async with self._write_lock:
             for table, column, col_def in migrations:
@@ -432,6 +448,18 @@ CREATE INDEX IF NOT EXISTS idx_ticket_comments_ticket
 
 -- ============================================================
 -- 产物表
+--
+-- 两套存储形态并存（词表在 backend/artifacts/kinds.yaml 用 storage 字段标注）：
+--   inline（老路径）— 内容直接进 content 列。orchestrator.py 的 13 处 db.insert
+--                    都是这样，content 存 result_json，被 _build_context 反序列化
+--                    成 context["architecture"] / ["dev_result"] / ["test_result"]。
+--   file（新框架）— 内容落盘到 <repo>/artifacts/...，本表只存 path 索引，
+--                  content 为 NULL。二进制产物（图/音/视频）只能是这种。
+--
+-- type vs kind：type 是历史字段，14 个取值散落在各处硬编码 SQL 里
+-- （如 actions/write_ux_design.py:58 的 `WHERE type='prd'`）。kind 是新框架的
+-- 语义主键，受 kinds.yaml 词表约束。ArtifactStore.put 对新产物**双写两列**，
+-- 让老查询也能命中；读取侧用 COALESCE(kind, type) —— 存量 2246 条的 kind 全是 NULL。
 -- ============================================================
 CREATE TABLE IF NOT EXISTS artifacts (
     id              TEXT PRIMARY KEY,
@@ -443,7 +471,12 @@ CREATE TABLE IF NOT EXISTS artifacts (
     path            TEXT,
     content         TEXT,
     metadata        TEXT,
-    created_at      TEXT NOT NULL
+    created_at      TEXT NOT NULL,
+    -- v0.20 产物总线（新库直接带上；老库由 _auto_migrate 补）
+    kind            TEXT,                      -- kinds.yaml 登记的 kind，新产物必填
+    mime            TEXT,                      -- MIME 类型，二进制产物靠它区分
+    size_bytes      INTEGER DEFAULT 0,         -- 文件字节数（inline 产物恒 0）
+    produced_by     TEXT                       -- skill_id 或 agent_name
 );
 
 -- ============================================================

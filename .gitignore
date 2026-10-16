@@ -73,7 +73,16 @@ backend/data/
 logs/
 
 # Artifacts
-artifacts/
+# 产物输出目录 —— ArtifactStore 落盘到「项目仓库」的 <repo>/artifacts/，
+# 而被托管的项目仓库都在 backend/projects/ 或 backend/A_Works/ 下（已各自忽略）。
+#
+# 这里**必须锚定根目录**（前导 /）。写成不带斜杠的 `artifacts/` 是把它当成
+# 「任意层级下的 artifacts 目录」，会连带吞掉源码树里同名的包和测试目录：
+#   backend/artifacts/        —— kind 词表 + ArtifactStore + injector（Python 包）
+#   backend/tests/artifacts/  —— 上面那个包的测试（81 个用例）
+# 这两处曾被静默排除，git add 不报错、pytest 在仓库里跑是绿的，
+# 只有从 git 树检出干净副本再跑才会暴露（283 passed 而非 364）。
+/artifacts/
 generated-images/
 backend/projects/
 backend/A_Works/

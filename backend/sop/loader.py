@@ -18,6 +18,11 @@ SOP_DIR = Path(__file__).parent
 FRAGMENTS_DIR = SOP_DIR / "fragments"
 CORE_FILE = SOP_DIR / "_core.yaml"
 
+# compose_sop 的结果缓存。key = (traits tuple, ticket_type, repo_path)。
+# 不用 functools.lru_cache：参数含 list（不可哈希），且需要 invalidate_sop_cache
+# 这个带日志的显式清理入口。
+_COMPOSE_CACHE: Dict[tuple, Dict[str, Any]] = {}
+
 
 def load_sop(name: str = "default_sop") -> Dict[str, Any]:
     """加载 SOP 配置文件，返回完整配置"""
@@ -45,18 +50,61 @@ def load_sop(name: str = "default_sop") -> Dict[str, Any]:
 def compose_sop(
     traits: Optional[List[str]] = None,
     ticket_type: Optional[str] = None,
+    repo_path: str = "",
+) -> Dict[str, Any]:
+    """根据 traits + ticket_type 动态组装 SOP（带缓存）。
+
+    缓存理由：实测单次组装 **53ms**（读 1 个 core yaml + 13 个 fragment yaml +
+    扫 SKILL.md 目录），而 `orchestrator._sop_stage_for`（orchestrator.py:309）
+    每次派单都调一次，`_get_rules_for_project` 只缓存了派生出的 rules、不缓存
+    config。deepcopy 一份结果只要 0.10ms —— 500 倍差距。
+
+    **返回的是深拷贝**：调用方会 mutate（如 orchestrator 读 stage 后改 config，
+    `_merge_pipeline_view` 里的 append）。直接返回缓存对象会让第二次调用拿到
+    被污染的结构 —— 基线测试 T10（幂等性）正是为这个场景准备的。
+
+    热更新：改 yaml / 增删 SKILL.md 后调 `invalidate_sop_cache()`。
+    orchestrator.reload_sop 和 invalidate_project_rules 已挂上。
+    """
+    import copy
+    key = (tuple(sorted(set(traits or []))), ticket_type, repo_path)
+    cached = _COMPOSE_CACHE.get(key)
+    if cached is not None:
+        return copy.deepcopy(cached)
+    result = _compose_sop_uncached(traits, ticket_type, repo_path)
+    _COMPOSE_CACHE[key] = result
+    return copy.deepcopy(result)
+
+
+def invalidate_sop_cache() -> int:
+    """清空组装缓存。返回清掉的条目数，供日志展示。"""
+    n = len(_COMPOSE_CACHE)
+    _COMPOSE_CACHE.clear()
+    if n:
+        logger.info("🗑 SOP 组装缓存已清空（%d 条）", n)
+    return n
+
+
+def _compose_sop_uncached(
+    traits: Optional[List[str]] = None,
+    ticket_type: Optional[str] = None,
+    repo_path: str = "",
 ) -> Dict[str, Any]:
     """根据 traits + ticket_type 动态组装 SOP。
 
     流程：
-      1. 读 _core.yaml 的 base_stages
+      1. 读 _core.yaml 的 base_stages，按 required_traits 裁剪
       2. 扫 fragments/*.yaml
       3. 按 required_traits / required_ticket_type 过滤 fragments
       4. 按 insert_after / insert_before 插入 base_stages
       5. 同插入点按 priority 降序（priority 大的靠近锚点）
-      6. 返回跟 load_sop() 兼容的 dict（stages 列表）
+      6. **扫 x-workflow skill，按数据依赖拓扑排序后整块插入**（v0.20）
+      7. 重链状态、合并 pipeline_view，返回跟 load_sop() 兼容的 dict
 
     无 traits 时退化为 base_stages（等价于通用 web SOP）。
+    无 x-workflow skill 时第 6 步是 no-op —— 对所有现存项目行为完全不变。
+
+    repo_path 只影响第 6 步（项目级 pack 里的 skill）。不传则只扫 backend 内置。
     """
     import yaml
 
@@ -67,9 +115,28 @@ def compose_sop(
 
     with open(CORE_FILE, "r", encoding="utf-8") as f:
         core = yaml.safe_load(f) or {}
-    base_stages = list(core.get("base_stages", []))
 
     traits_set = set(traits or [])
+
+    # 1a. base_stages 裁剪 —— stage 也可声明 required_traits，复用 fragment 的同一套匹配器。
+    # 为什么需要：_core.yaml 的 8 个基础阶段是「代码项目」的形状（架构 → 开发 → 审查 → 部署）。
+    # 内容生成类项目（pipeline:content）在这条链上跑不动，但此前一个都跳不过。
+    # 无 required_traits 的 stage 一律保留 —— 老项目（无 traits）行为完全不变。
+    raw_base_stages = list(core.get("base_stages", []))
+    base_stages: List[Dict] = []
+    dropped_base_ids: Set[str] = set()
+    for st in raw_base_stages:
+        if _fragment_matches(st, traits_set, ticket_type):
+            base_stages.append(st)
+        else:
+            sid = st.get("id")
+            if sid:
+                dropped_base_ids.add(sid)
+            logger.info("✂️ SOP 裁剪基础阶段: %s（required_traits 不满足 traits=%s）",
+                        sid, sorted(traits_set) or "(无)")
+
+    # 裁掉了锚点而自己还活着的 fragment —— 必须在下面报 ERROR，不能静默追加末尾
+    sop_diagnostics: List[str] = []
 
     # 2-4. 扫 fragments，过滤 + 分类（按 insert_after/before 分桶）
     frag_entries: List[Dict] = []
@@ -135,12 +202,27 @@ def compose_sop(
             # 剩下的 fragment 都找不到锚点 —— 放到末尾并 warning
             for frag in pending:
                 stage = frag.get("stage", {})
-                logger.warning(
-                    "fragment %s: 锚点 %s / %s 未找到，追加到末尾",
-                    stage.get("id"),
-                    frag.get("insert_after"),
-                    frag.get("insert_before"),
-                )
+                anchor_after = frag.get("insert_after")
+                anchor_before = frag.get("insert_before")
+                # 锚点是被 base_stages 裁剪掉的 → 这是**硬错误**，不是普通失锚。
+                # 静默追加到末尾会让 fragment 落到 branch_only 区之后，位置完全错，
+                # 而且整条 skill/fragment 链的状态语义都跟着错。必须让人看见。
+                lost = {anchor_after, anchor_before} & dropped_base_ids
+                if lost:
+                    msg = (
+                        f"fragment {stage.get('id')}: 锚点 {sorted(lost)} 已被 base_stages 裁剪"
+                        f"（traits={sorted(traits_set) or '无'}），无法定位，已追加到末尾 —— "
+                        f"该 fragment 的 required_traits 与 base_stage 的裁剪条件不一致，请修正"
+                    )
+                    logger.error("❌ %s", msg)
+                    sop_diagnostics.append(msg)
+                else:
+                    logger.warning(
+                        "fragment %s: 锚点 %s / %s 未找到，追加到末尾",
+                        stage.get("id"),
+                        anchor_after,
+                        anchor_before,
+                    )
                 composed.append(stage)
             break
         if not pending:
@@ -159,13 +241,29 @@ def compose_sop(
                 continue
             composed[idx].setdefault("config", {}).update(ov_cfg)
 
+    # 7b. 裁剪引入的悬空 reject_goto（见 _prune_dangling_reject_gotos 的 docstring）。
+    # 必须在 relink 之前：移除 branch_only 阶段会改变 stage 列表。
+    if dropped_base_ids:
+        composed = _prune_dangling_reject_gotos(
+            composed, dropped_base_ids, sop_diagnostics
+        )
+
+    # 8. v0.20：x-workflow skill 链 —— 按数据依赖拓扑排序后**整块**插入。
+    # 必须在 relink 之前（下面会重链状态），也必须插在 branch_only 区块之前。
+    skill_stages = _compose_skill_block(
+        core, composed, traits, ticket_type, repo_path, sop_diagnostics,
+    )
+
     # 重新链 trigger_on → success_status：fragment 插入后要让前后阶段的状态链连通
     composed = _relink_stage_transitions(composed)
 
-    # 合并 fragments 的 pipeline_view_contrib 到 core 的 pipeline_view
+    # 合并 fragments 的 pipeline_view_contrib 到 core 的 pipeline_view。
+    # skill 也能贡献 UI 组（x-workflow.pipeline_view_contrib），形状与 fragment 一致，
+    # 包成 frag 形状复用同一套合并逻辑。
     merged_view = _merge_pipeline_view(
         core.get("pipeline_view") or {},
-        frag_entries,
+        frag_entries + _skill_view_contribs(skill_stages),
+        dropped_stage_ids=dropped_base_ids,
     )
 
     result = dict(core)
@@ -173,16 +271,133 @@ def compose_sop(
     result["base_stages"] = None   # 运行时不需要
     result["pipeline_view"] = merged_view
     result["composed_from_fragments"] = [f.get("id") for f in frag_entries]
+    result["composed_from_skills"] = [s["id"] for s in skill_stages]
     result["traits_used"] = sorted(traits_set)
     result["ticket_type_used"] = ticket_type
+    # 裁剪/失锚/skill 链降级等结构性问题，供前端 SOP 预览与排障读取
+    result["dropped_base_stages"] = sorted(dropped_base_ids)
+    result["sop_diagnostics"] = sop_diagnostics
 
     logger.info(
-        "📋 SOP composed: %d 阶段（base %d + fragments %s）traits=%s ticket=%s",
+        "📋 SOP composed: %d 阶段（base %d%s + fragments %s%s）traits=%s ticket=%s",
         len(composed), len(base_stages),
+        f"/裁剪 {sorted(dropped_base_ids)}" if dropped_base_ids else "",
         [f.get("id") for f in frag_entries],
+        f" + skills {[s['id'] for s in skill_stages]}" if skill_stages else "",
         sorted(traits_set) or "(无)", ticket_type or "(无)",
     )
     return result
+
+
+def _skill_block_insert_idx(core: Dict[str, Any], composed: List[Dict]) -> int:
+    """skill 子链的插入下标。
+
+    锚点来自 `_core.yaml` 的顶层 `skill_block_anchor`：
+        skill_block_anchor: {insert_before: acceptance}
+    缺省（不声明）= 最后一个非 branch_only stage 之后。
+
+    为什么锚点配在 core 而不是每个 skill 里：skill 不该知道自己在流程的哪个
+    位置 —— 那正是本次要消除的耦合（fragment 的 insert_after 就是反例）。
+    一个字段同时服务两种 profile：代码项目缺省追加在 deploy 后（增强形态），
+    内容项目锚在 acceptance 前（生成 → 人工验收）。
+
+    **硬约束：必须插在 branch_only 区块之前。** `_relink_stage_transitions`
+    跳过 branch_only 且不让它们参与 prev_success 传递；插在它们后面，skill 的
+    trigger_on 会被接到最后一个线性 stage 的 success 上 —— 但那个 stage 后面
+    紧跟的是 rework/development_retry，状态链的实际走向与列表顺序不符。
+    """
+    anchor = core.get("skill_block_anchor") or {}
+    if isinstance(anchor, dict):
+        before = anchor.get("insert_before")
+        after = anchor.get("insert_after")
+        if before:
+            idx = _find_stage_idx(composed, before)
+            if idx is not None:
+                return idx
+            logger.warning("skill_block_anchor.insert_before='%s' 未找到，用缺省位置", before)
+        if after:
+            idx = _find_stage_idx(composed, after)
+            if idx is not None:
+                return idx + 1
+            logger.warning("skill_block_anchor.insert_after='%s' 未找到，用缺省位置", after)
+
+    # 缺省：最后一个非 branch_only 之后 = 第一个 branch_only 之前
+    for i, s in enumerate(composed):
+        if s.get("branch_only"):
+            return i
+    return len(composed)
+
+
+def _compose_skill_block(
+    core: Dict[str, Any],
+    composed: List[Dict],
+    traits: Optional[List[str]],
+    ticket_type: Optional[str],
+    repo_path: str,
+    diagnostics: List[str],
+) -> List[Dict]:
+    """扫 x-workflow skill → 拓扑排序 → 原地插入 composed。返回插入的 stage 列表。
+
+    任何异常都降级为「不插入任何 skill stage」+ diagnostic —— skill 链是增量
+    能力，它挂掉不该让整个 SOP 组装失败（现存项目一个 skill 都没有）。
+    """
+    try:
+        from skills.executable_loader import discover_workflow_skills
+        from sop.workflow_composer import compose_workflow_stages
+
+        skills = discover_workflow_skills(repo_path)
+        if not skills:
+            return []
+
+        stages, skill_diags = compose_workflow_stages(
+            skills, traits=traits, ticket_type=ticket_type,
+        )
+        diagnostics.extend(skill_diags)
+        if not stages:
+            return []
+
+        # 防撞 id：skill 的 stage_id 与某个 base_stage / fragment 同名时，
+        # 后面 _find_stage_idx / by_action 的「先到先得」会反查到错误的 stage。
+        existing = {s.get("id") for s in composed}
+        safe: List[Dict] = []
+        for st in stages:
+            if st["id"] in existing:
+                msg = (
+                    f"skill stage '{st['id']}' 与已有阶段重名 → 跳过。"
+                    f"stage_id 必须全局唯一（含 base_stages 与 fragments）"
+                )
+                logger.error("❌ %s", msg)
+                diagnostics.append(msg)
+                continue
+            safe.append(st)
+        if not safe:
+            return []
+
+        idx = _skill_block_insert_idx(core, composed)
+        composed[idx:idx] = safe
+        return safe
+    except Exception as e:
+        msg = f"skill 链组装失败，已跳过（SOP 其余部分不受影响）: {e}"
+        logger.warning("⚠️ %s", msg, exc_info=True)
+        diagnostics.append(msg)
+        return []
+
+
+def _skill_view_contribs(skill_stages: List[Dict]) -> List[Dict]:
+    """把 skill stage 包成 fragment 形状，复用 _merge_pipeline_view。
+
+    contrib 原样存在 stage.config['_pipeline_view_contrib'] 里（由
+    skill_to_stage 透传）。没声明的 skill 走 _merge_pipeline_view 的默认分组。
+    """
+    out: List[Dict] = []
+    for st in skill_stages:
+        contrib = (st.get("config") or {}).get("_pipeline_view_contrib")
+        out.append({
+            "id": st["id"],
+            "stage": st,
+            "pipeline_view_contrib": contrib,
+        })
+    return out
 
 
 def _fragment_matches(
@@ -228,11 +443,13 @@ def _find_stage_idx(stages: List[Dict], stage_id: str) -> Optional[int]:
     return None
 
 
-def _relink_stage_transitions(stages: List[Dict]) -> List[Dict]:
+def _relink_stage_transitions(
+    stages: List[Dict], entry_status: str = "pending",
+) -> List[Dict]:
     """fragment 插入后，重新把 trigger_on 链起来。
 
     规则：
-      - 第一个 stage 的 trigger_on 保持 'pending'（项目起点）
+      - **第一个非 branch_only stage 的 trigger_on 强制为 entry_status（'pending'）**
       - 后续每个 stage 的 trigger_on ← 前一个 stage 的 success_status
       - fragment 自己声明的 trigger_on（如 smoke_test_pending）被**覆盖** ——
         因为孤立的 trigger_on 没人产出，orchestrator 永远不会触发
@@ -242,6 +459,14 @@ def _relink_stage_transitions(stages: List[Dict]) -> List[Dict]:
         同时它们也不参与 prev_success 的链接（不然后面 stage 会被接到
         分支 stage 的 success 上，比如 acceptance 接到 rework.success=development_done）
 
+    为什么首个 stage 要**强制**而非保留原声明：
+      工单创建时 status='pending'，orchestrator 只认 transition_rules['pending']。
+      此前这里是 `if i == 0: pass`（保留原值），能跑通纯靠 _core.yaml 里 planning
+      手写了 `trigger_on: pending` 这个巧合。一旦 planning 被 required_traits 裁掉、
+      或有 fragment 插到它前面，首个 stage 的 trigger_on 就变成一个没人产出的孤立
+      状态 —— 规则表里没有 'pending' 键，**工单永久卡在 pending**，不报错、不超时、
+      没有任何日志，只是永远不动。改成强制赋值让这个不变式由代码保证。
+
     每个阶段的 success_status 不动。reject_status / reject_goto 不动。
     """
     if not stages:
@@ -249,29 +474,93 @@ def _relink_stage_transitions(stages: List[Dict]) -> List[Dict]:
     result = [dict(s) for s in stages]
 
     prev_success = None
-    for i, s in enumerate(result):
+    seen_first = False
+    for s in result:
         if s.get("branch_only"):
             # 分支目标：保留原声明的 trigger_on / success_status，不参与线性链
             continue
-        if i == 0:
-            # 第一个阶段的 trigger_on 保留（通常是 'pending'）
-            pass
-        else:
-            if prev_success:
-                s["trigger_on"] = prev_success
+        if not seen_first:
+            s["trigger_on"] = entry_status
+            seen_first = True
+        elif prev_success:
+            s["trigger_on"] = prev_success
         prev_success = s.get("success_status")
+    return result
+
+
+def _prune_dangling_reject_gotos(
+    stages: List[Dict], dropped_ids: Set[str], diagnostics: List[str],
+) -> List[Dict]:
+    """裁剪掉 reject_goto 目标已失效的阶段，并清理悬空的 reject 声明。
+
+    为什么必须有这一步（v0.20 裁剪引入的第 4 个连带问题，方案文档未预见）：
+
+    `_core.yaml` 的 acceptance 声明了 `reject_goto: rework`，而 rework 是
+    branch_only（只通过 acceptance_rejected 进入）。如果裁剪把 development 拿掉，
+    只留 acceptance + rework：
+      - rework 仍可达（acceptance_rejected 有规则）
+      - 但 rework 的 success_status = development_done **没有任何 stage 消费**
+        → 工单走到 rework 就永久停在那，规则表里没有 development_done 键
+      - development_retry 的 trigger_on = development_failed 也永远不会被产出
+        → 不可达的死阶段
+
+    更隐蔽的是 `sop_to_transition_rules:459` 的 `if goto_stage:` —— reject_goto
+    指向不存在的 stage 时，它会**静默地不派生 reject 规则**。结果是验收一旦拒绝，
+    acceptance_rejected 这个状态在规则表里根本不存在，工单静默卡死。
+
+    两件事分开处理：
+      1. reject_goto 目标被裁 → 该阶段若为 branch_only（只靠这条边可达）→ 整体移除
+         否则（如 acceptance 自身有 trigger_on）→ 剥掉 reject_status/reject_goto，
+         让它退化成「拒绝后无自动重试路径，交人工」。这比静默卡死好得多。
+      2. 上述任一发生 → 写 diagnostic，不静默。
+
+    注意：这不改变「拒绝后该做什么」的业务语义。内容类项目验收被拒究竟应该重跑
+    哪个阶段，是待定的产品决策，本函数只保证不产生死锁。
+    """
+    result: List[Dict] = []
+    for s in stages:
+        goto = s.get("reject_goto")
+        if not goto or goto not in dropped_ids:
+            result.append(s)
+            continue
+
+        sid = s.get("id")
+        if s.get("branch_only"):
+            msg = (
+                f"stage {sid}: reject_goto 目标 '{goto}' 已被裁剪，且它是 branch_only"
+                f"（只靠这条边可达）→ 整体移除，否则永远不可达或走到即死锁"
+            )
+            logger.warning("✂️ %s", msg)
+            diagnostics.append(msg)
+            dropped_ids.add(sid)   # 加入集合，链式影响下游引用它的阶段
+            continue
+
+        # 线性阶段：保留它（还有自己的 trigger_on 要接），只剥掉悬空的 reject 声明
+        msg = (
+            f"stage {sid}: reject_goto 目标 '{goto}' 已被裁剪 → 剥离 reject_status/"
+            f"reject_goto。'{s.get('reject_status')}' 将不再有自动重试规则，"
+            f"拒绝后工单停在原地等人工介入（避免 sop_to_transition_rules 静默不派生规则）"
+        )
+        logger.warning("⚠️ %s", msg)
+        diagnostics.append(msg)
+        s.pop("reject_goto", None)
+        s.pop("reject_status", None)
+        result.append(s)
     return result
 
 
 def _merge_pipeline_view(
     core_view: Dict[str, Any],
     frag_entries: List[Dict],
+    dropped_stage_ids: Optional[Set[str]] = None,
 ) -> Dict[str, Any]:
     """把 fragments 的 pipeline_view_contrib 合并进 core 的 pipeline_view。
 
     - 已存在的 UI 组 → 把 fragment 的 stage.id 追加到该组的 sop_stages，
       running_statuses 也合并（如果 fragment 自己声明了 reject_status 就一并加）
     - 不存在的 UI 组 → 按 create_if_missing 建新组，insert_after/before 指定相对位置
+    - **dropped_stage_ids 里的 sop_stages 引用被清理**；某组清空后整组移除
+      （synthetic 组除外 —— 它们不依赖 sop_stages，靠 requirement_status/merge 判定）
 
     fragments 没声明 pipeline_view_contrib 的 —— 默认归到 "testing" 组（兜底）。
     """
@@ -343,6 +632,23 @@ def _merge_pipeline_view(
             st = stage_def.get(status_key)
             if st and st not in target["running_statuses"]:
                 target["running_statuses"].append(st)
+
+    # 清理指向已裁剪 base_stage 的 sop_stages 引用。
+    # 不清的后果：前端 pipeline 会渲染出一个永远不会点亮的空壳组
+    # （例：裁掉 development/code_review 后「开发实现」组的 4 个 sop_stages 全失效）。
+    if dropped_stage_ids:
+        kept: List[Dict] = []
+        for s in stages:
+            refs = s.get("sop_stages")
+            if refs is None:
+                kept.append(s)                       # 不依赖 sop_stages 的组（synthetic）
+                continue
+            s["sop_stages"] = [x for x in refs if x not in dropped_stage_ids]
+            if s["sop_stages"] or s.get("synthetic"):
+                kept.append(s)
+            else:
+                logger.info("✂️ SOP 裁剪 pipeline 组: %s（sop_stages 已全部失效）", s.get("key"))
+        stages = kept
 
     result = dict(core_view)
     result["stages"] = stages

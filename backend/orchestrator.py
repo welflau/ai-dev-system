@@ -149,6 +149,13 @@ class TicketOrchestrator:
         self.transition_rules = self._load_transition_rules()
         # v0.17 清掉项目级缓存，下次 dispatch 时按最新 default + traits 重算
         self._project_rules_cache.clear()
+        # v0.20 compose_sop 自己也带缓存（单次组装 53ms）。只清 rules 不清它
+        # 等于热重载无效 —— 派生 rules 的输入还是旧 config。
+        try:
+            from sop.loader import invalidate_sop_cache
+            invalidate_sop_cache()
+        except Exception as e:
+            logger.warning("清 SOP 组装缓存失败（忽略）: %s", e)
         return self._sop_config
 
     # ==================== v0.17 Phase C''：项目级 SOP 规则 ====================
@@ -328,6 +335,14 @@ class TicketOrchestrator:
             del self._project_rules_cache[k]
         if to_remove:
             logger.info("清除项目 %s 的 SOP 规则缓存（%d 条）", project_id[:12], len(to_remove))
+        # compose_sop 的缓存 key 不含 project_id（只有 traits/ticket_type/repo_path），
+        # 没法按项目精确清 —— 但 traits 变动恰恰意味着旧 key 不会再被命中，
+        # 全清一次代价只是下次组装 53ms，比留着脏数据安全。
+        try:
+            from sop.loader import invalidate_sop_cache
+            invalidate_sop_cache()
+        except Exception as e:
+            logger.warning("清 SOP 组装缓存失败（忽略）: %s", e)
 
     # 真正的终态，无论 SOP 如何配置都不应再触发新动作
     _TERMINAL_STATUSES = frozenset({
@@ -2229,6 +2244,15 @@ class TicketOrchestrator:
             )
             return
 
+        if agent_name == "SkillAgent":
+            await self._handle_skill_agent_result(
+                project_id=project_id, ticket_id=ticket_id, ticket=ticket,
+                requirement_id=requirement_id, action=action,
+                result=result, result_json=result_json,
+                current_status=current_status,
+            )
+            return
+
         if agent_name == "ArtistAgent":
             # 美术资产落地（asset_gen fragment）。没有这个分支会落到函数末尾的
             # else: new_status = current_status —— 状态不推进，同一条 rule 反复命中。
@@ -3122,6 +3146,196 @@ class TicketOrchestrator:
             project_rules = await self._get_rules_for_project(project_id)
             if updated_ticket["status"] in project_rules:
                 await self.process_ticket(project_id, ticket_id)
+
+    # ==================== SkillAgent 结果处理（v0.20 产物总线） ====================
+
+    async def _handle_skill_agent_result(
+        self,
+        *,
+        project_id: str,
+        ticket_id: str,
+        ticket: Dict,
+        requirement_id: str,
+        action: str,
+        result: Dict,
+        result_json: str,
+        current_status: str,
+    ):
+        """SkillAgent 的结果 → 推进状态 + 登记产物。
+
+        为什么必须有这个分支：缺了它结果会落到 `_handle_agent_result` 末尾的
+        `else: new_status = current_status` —— 状态不推进，同一条 rule 反复命中，
+        skill 被无限重跑烧 token。ArtistAgent（2247 行）和 UEEditorAgent
+        （2383 行）的注释都记着同一个坑，它们都是踩了才补的分支。
+
+        状态来源优先级：
+          1. `result["success_status"]` —— SkillAgent 从 sop_config 回传，最可靠
+             且零 DB 查询（compose_sop 单次 53ms）
+          2. `_sop_stage_for` 反查 —— 兼容手工构造的 context
+          3. `skill_{action}_done` 约定推导 —— 最后兜底
+
+        Agent 返回 status=error 已在函数开头统一转 blocked，这里只处理
+        success / partial / skipped / budget_exceeded。
+        """
+        sop_cfg = result.get("sop_config") or {}
+        skill_id = result.get("skill_id") or sop_cfg.get("skill_id") or "?"
+        skill_status = result.get("skill_status") or result.get("status") or ""
+        outputs = result.get("outputs") or []
+        artifacts = result.get("artifacts") or []
+        rounds = result.get("rounds") or 0
+
+        success_status = await self._resolve_skill_success_status(
+            project_id, action, result, sop_cfg, ticket.get("type"),
+        )
+
+        # budget_exceeded 但 produces 声明的 kind 全部拿到了 → 按成功处理。
+        # 理由：query_engine/engine.py:391 的 Budget.check() 只在**轮与轮之间**
+        # 生效。像 gen_image 这种阻塞几十秒的工具，跑完回来下一轮开头就可能
+        # 触发超时 —— 此时图已经落盘了，判 blocked 等于白烧一次钱。
+        if skill_status == "budget_exceeded" and self._skill_produces_satisfied(
+            sop_cfg, artifacts
+        ):
+            logger.info(
+                "⏱ skill %s 超预算但产出齐全（%d 个），按成功处理",
+                skill_id, len(artifacts),
+            )
+            skill_status = "partial"
+
+        if skill_status in ("success", "partial"):
+            new_status = success_status
+            await db.update("tickets", {
+                "status": new_status, "result": result_json, "updated_at": now_iso(),
+            }, "id = ?", (ticket_id,))
+            kinds = [a.get("kind") for a in artifacts if a.get("kind")]
+            await self._log(
+                project_id, requirement_id, ticket_id, "SkillAgent",
+                "complete", current_status, new_status,
+                f"skill {skill_id} {'部分完成' if skill_status == 'partial' else '完成'}"
+                f"（{rounds} 轮，{len(outputs)} 个产出）",
+                "warning" if skill_status == "partial" else "info",
+                detail_data={
+                    "skill_id": skill_id, "skill_status": skill_status,
+                    "outputs": outputs[:20], "artifact_kinds": kinds,
+                    "rounds": rounds,
+                },
+            )
+            await self._write_phase_comment(
+                project_id, ticket_id, "SkillAgent",
+                f"{'⚠️' if skill_status == 'partial' else '✅'} "
+                f"skill `{skill_id}` 执行完成"
+                + (f"，产出：{', '.join(kinds)}" if kinds else "")
+                + (f"\n{str(result.get('message') or '')[:200]}"
+                   if skill_status == "partial" else ""),
+                phase=new_status,
+            )
+
+        elif skill_status == "skipped":
+            # availability 不满足（如 skill 依赖的 CLI 没装）→ 跳到成功态。
+            # 不能停在原状态：那条 rule 会反复命中同一个不可用的 skill。
+            new_status = success_status
+            await db.update("tickets", {
+                "status": new_status, "result": result_json, "updated_at": now_iso(),
+            }, "id = ?", (ticket_id,))
+            await self._log(
+                project_id, requirement_id, ticket_id, "SkillAgent",
+                "skip", current_status, new_status,
+                f"skill {skill_id} 不可用，已跳过 | "
+                f"{str(result.get('message') or '')[:200]}",
+                "warning",
+                detail_data={"skill_id": skill_id, "reason": result.get("message")},
+            )
+
+        else:
+            # budget_exceeded（产出不全）/ 未知状态 → blocked 等人工。
+            # **刻意不自动重试**：skill 是 LLM 自由发挥的，重跑一次就再烧一轮
+            # token，而失败原因（prompt 不清楚 / 工具不可用 / 预算太紧）
+            # 重跑都解决不了。workflow_composer 也因此不给 skill stage 配
+            # reject_goto（否则 sop_to_transition_rules 会派生无限重试规则）。
+            new_status = TicketStatus.BLOCKED.value
+            fail_msg = str(result.get("message") or f"skill {skill_id} 未成功")
+            await db.update("tickets", {
+                "status": new_status, "result": result_json, "updated_at": now_iso(),
+            }, "id = ?", (ticket_id,))
+            await self._log(
+                project_id, requirement_id, ticket_id, "SkillAgent",
+                "blocked", current_status, new_status,
+                f"skill {skill_id} 执行失败（{skill_status}），已标记 blocked "
+                f"等待人工介入 | {fail_msg[:300]}",
+                "error",
+                detail_data={
+                    "skill_id": skill_id, "skill_status": skill_status,
+                    "error": fail_msg, "outputs": outputs[:20], "rounds": rounds,
+                },
+            )
+            await self._write_phase_comment(
+                project_id, ticket_id, "SkillAgent",
+                f"❌ skill `{skill_id}` 执行失败（{skill_status}），需人工介入。"
+                f"\n{fail_msg[:300]}",
+                phase=new_status,
+            )
+
+        await event_manager.publish_to_project(
+            project_id, "ticket_status_changed",
+            {"ticket_id": ticket_id, "from": current_status,
+             "to": new_status, "agent": "SkillAgent"},
+        )
+
+        # 推进到下一阶段。和函数末尾的通用收尾逻辑一致 —— 这里 early-return
+        # 了所以必须自己做，否则 skill 链会在第一个 stage 之后停住，
+        # 只能等 30s 的 poll_loop 兜底（poll 间隔见 poll_loop 的默认参数）。
+        if new_status != current_status and new_status != TicketStatus.BLOCKED.value:
+            await asyncio.sleep(0.5)
+            updated = await db.fetch_one(
+                "SELECT status FROM tickets WHERE id = ?", (ticket_id,)
+            )
+            if updated:
+                rules = await self._get_rules_for_project(
+                    project_id, ticket_type=ticket.get("type"),
+                )
+                if updated["status"] in rules:
+                    await self.process_ticket(project_id, ticket_id)
+
+    async def _resolve_skill_success_status(
+        self,
+        project_id: str,
+        action: str,
+        result: Dict,
+        sop_cfg: Dict,
+        ticket_type: Optional[str],
+    ) -> str:
+        """skill stage 的成功态。三级回退，优先用零成本的来源。"""
+        direct = result.get("success_status") or sop_cfg.get("_success_status")
+        if direct:
+            return str(direct)
+
+        stage = await self._sop_stage_for(project_id, action, ticket_type)
+        if stage and stage.get("success_status"):
+            return str(stage["success_status"])
+
+        # action 形如 `skill_demo_draft`（见 workflow_composer._stage_action）
+        stage_id = sop_cfg.get("_stage_id") or action.removeprefix("skill_")
+        fallback = f"{stage_id}_done"
+        logger.warning(
+            "SkillAgent 结果缺 success_status，按约定推导为 '%s'（action=%s）",
+            fallback, action,
+        )
+        return fallback
+
+    @staticmethod
+    def _skill_produces_satisfied(sop_cfg: Dict, artifacts: List[Dict]) -> bool:
+        """x-workflow.produces 声明的 kind 是否都已登记。
+
+        用于 budget_exceeded 的豁免判断。没有 produces 声明（老 skill）时
+        返回 False —— 无从判断是否齐全，宁可按失败处理交人工。
+        """
+        declared = {
+            p.get("kind") for p in (sop_cfg.get("_produces") or [])
+            if isinstance(p, dict) and p.get("kind")
+        }
+        if not declared:
+            return False
+        got = {a.get("kind") for a in artifacts if a.get("kind")}
+        return declared.issubset(got)
 
     # ==================== Git 文件处理 ====================
 
