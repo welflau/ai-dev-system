@@ -86,6 +86,9 @@ class Settings:
     LIGHTAI_API_KEY: str = os.getenv("LIGHTAI_API_KEY", "")
     LIGHTAI_IMAGE_ENGINE: str = os.getenv("LIGHTAI_IMAGE_ENGINE", "gemini")   # gemini/gemini2/jimeng/midjourney
     LIGHTAI_IMAGE_TIMEOUT: int = int(os.getenv("LIGHTAI_IMAGE_TIMEOUT", "300"))  # 轮询最大等待秒
+    # 生图最大并发数：LightAI 服务端同一 key 只允许 1 个任务同时在生成，
+    # 超出返回 429。本地用信号量串行化，其余任务在队列里等待而非立即失败。
+    LIGHTAI_MAX_CONCURRENT: int = int(os.getenv("LIGHTAI_MAX_CONCURRENT", "1"))
 
     # ── Phase 1B：预算/配额约束（.env 可覆盖）──────────────────────────
     # 工单 Agent：单次执行预算

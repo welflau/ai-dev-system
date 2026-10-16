@@ -31,6 +31,26 @@ from utils import generate_id, now_iso
 
 logger = logging.getLogger("image_processor")
 
+# ── 生图并发控制 ──────────────────────────────────────────
+# LightAI 服务端同一 key 只允许 1 个任务同时在生成，超出返回 429。
+# 本地信号量把「create + poll 直到出图」整段串行化：超出并发上限的调用
+# 在 `async with` 处排队等待，而不是撞 429 立即失败。
+# Python 3.10+ 的 asyncio.Semaphore 不绑定事件循环，模块级创建安全。
+_LIGHTAI_SEM: Optional[asyncio.Semaphore] = None
+
+
+def _lightai_sem() -> asyncio.Semaphore:
+    """惰性创建，避免 import 时 settings 还没加载完。"""
+    global _LIGHTAI_SEM
+    if _LIGHTAI_SEM is None:
+        _LIGHTAI_SEM = asyncio.Semaphore(max(1, int(settings.LIGHTAI_MAX_CONCURRENT)))
+    return _LIGHTAI_SEM
+
+
+# 429 重试：每 15s 探一次，最多等 _LIGHTAI_429_MAX_WAIT 秒（默认 10 分钟）
+_LIGHTAI_429_INTERVAL = 15.0
+_LIGHTAI_429_MAX_WAIT = 600.0
+
 # ── SSL（禁用证书验证，与 LightAI _common.py 一致）────────
 _SSL_CTX = ssl.create_default_context()
 _SSL_CTX.check_hostname = False
@@ -192,17 +212,58 @@ async def _create_lightai_task(req: dict) -> Optional[str]:
     }
 
     try:
-        result = await asyncio.get_event_loop().run_in_executor(
-            None, lambda: _lightai_post("/api/lightai/create_async_task", payload)
-        )
-        task_id = (result.get("task_id") or result.get("taskId") or
-                   result.get("data", {}).get("task_id") or
-                   result.get("data", {}).get("taskId", ""))
-        logger.info("LightAI 任务已提交: %s (engine=%s)", task_id, engine)
-        return task_id or None
+        # 429（并发限制）单独重试：另一个任务还在生成时，等待而非立即失败。
+        # 本地信号量已挡住本进程的并发，429 主要来自「其它进程/会话的任务」。
+        deadline = time.time() + _LIGHTAI_429_MAX_WAIT
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                result = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: _lightai_post("/api/lightai/create_async_task", payload)
+                )
+                task_id = (result.get("task_id") or result.get("taskId") or
+                           result.get("data", {}).get("task_id") or
+                           result.get("data", {}).get("taskId", ""))
+                logger.info("LightAI 任务已提交: %s (engine=%s)", task_id, engine)
+                return task_id or None
+            except urllib.error.HTTPError as e:
+                if e.code == 429 and time.time() < deadline:
+                    body = ""
+                    try:
+                        body = e.read().decode("utf-8", errors="replace")[:80]
+                    except Exception:
+                        pass
+                    logger.warning(
+                        "LightAI 429 并发限制（第 %d 次），%.0fs 后重试: %s",
+                        attempt, _LIGHTAI_429_INTERVAL, body,
+                    )
+                    await asyncio.sleep(_LIGHTAI_429_INTERVAL)
+                    continue
+                logger.warning("LightAI 创建任务失败: HTTP %s", e.code)
+                return None
+            except Exception as e:
+                logger.warning("LightAI 创建任务失败: %s", e)
+                return None
     except Exception as e:
         logger.warning("LightAI 创建任务失败: %s", e)
         return None
+
+
+async def _create_and_poll(req: dict) -> tuple:
+    """在并发信号量内完成 create + poll，返回 (task_id, url)。
+
+    这是生图的统一入口：GenImageAction（skill 链）和 process_image_request
+    （异步队列）都走这里。信号量把「提交 → 轮询直到出图」整段串行化，
+    超出 LIGHTAI_MAX_CONCURRENT 的调用在此排队等待，而不是撞 429。
+    """
+    async with _lightai_sem():
+        task_id = await _create_lightai_task(req)
+        if not task_id:
+            return None, None
+        engine = req.get("engine") or settings.LIGHTAI_IMAGE_ENGINE
+        url = await _poll_lightai_task(task_id, engine)
+        return task_id, url
 
 
 async def _poll_lightai_task(task_id: str, engine: str) -> Optional[str]:
@@ -289,8 +350,8 @@ async def process_image_request(req_id: str) -> None:
         await _finish_with_ascii(req)
         return
 
-    # 提交任务
-    task_id = await _create_lightai_task(dict(req))
+    # 提交任务 + 轮询（信号量串行化 + 429 等待重试）
+    task_id, image_url = await _create_and_poll(dict(req))
     if not task_id:
         await _finish_with_ascii(req)
         return
@@ -298,9 +359,6 @@ async def process_image_request(req_id: str) -> None:
     # 记录 task_id
     await db.update("image_requests", {"lightai_task_id": task_id, "updated_at": now_iso()}, "id = ?", (req_id,))
 
-    # 轮询结果
-    engine = req.get("engine") or settings.LIGHTAI_IMAGE_ENGINE
-    image_url = await _poll_lightai_task(task_id, engine)
     if not image_url:
         await _finish_with_ascii(req)
         return

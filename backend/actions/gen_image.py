@@ -173,11 +173,7 @@ class GenImageAction(ActionBase):
         if image_size not in _SIZES:
             image_size = "2K"
 
-        from image_processor import (
-            _create_lightai_task,
-            _download_image,
-            _poll_lightai_task,
-        )
+        from image_processor import _create_and_poll, _download_image
 
         req = {
             "prompt": prompt,
@@ -189,21 +185,20 @@ class GenImageAction(ActionBase):
         logger.info("🎨 gen_image 开始 engine=%s file=%s prompt=%.60s",
                     engine, filename, prompt)
 
-        task_id = await _create_lightai_task(req)
+        task_id, url = await _create_and_poll(req)
         if not task_id:
-            # `_create_lightai_task` 把异常吞成 None（image_processor.py:159），
-            # 真实原因只在它的 logger.warning 里。给出可自查的方向 ——
-            # 实测最常见的是 401（key 过期或仍是占位值），但调用方拿不到状态码。
+            # `_create_lightai_task` 把异常吞成 None，真实原因只在它的
+            # logger.warning 里。给出可自查的方向 —— 常见的是 401（key 过期）
+            # 或 429 重试耗尽（并发任务超时）。
             return ActionResult(
                 success=False,
                 error=(
                     f"LightAI 任务创建失败（engine={engine}）。常见原因："
                     f"①LIGHTAI_API_KEY 无效或过期（HTTP 401）②网络不通 "
-                    f"③引擎 {engine} 不可用。精确错误见 image_processor 的 WARNING 日志"
+                    f"③引擎 {engine} 不可用 ④并发任务等待超时（HTTP 429）。"
+                    f"精确错误见 image_processor 的 WARNING 日志"
                 ),
             )
-
-        url = await _poll_lightai_task(task_id, engine)
         if not url:
             # 区分「超时」与「任务失败」对排查很重要，但 _poll_lightai_task
             # 两种情况都返回 None，只能在这里统一描述
