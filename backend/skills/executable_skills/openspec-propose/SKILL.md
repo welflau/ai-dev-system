@@ -51,7 +51,7 @@ x-runner:
 >
 > ⚠️ **严禁**：`Bash("openspec-cn ...")`、`shell("openspec-cn ...")`、`Write("openspec/...")`。
 > 这些操作**必须通过** OpenSpec 命名工具完成（`new_change`/`instructions`/`write_artifact`/`validate`）。
-> 如果你找不到这些工具，说明环境有问题——请在 done 的 summary 里说明，不要用 Bash 凑。
+> 如果你找不到这些工具，说明环境有问题——请在结束回复里说明，不要用 Bash 凑。
 
 1. **创建变更目录**：调用 `new_change`（openspec_new_change / mcp__openspec__new_change）一次，创建 change 目录骨架。
 
@@ -70,7 +70,7 @@ x-runner:
 
 3. **校验**：四件都写完后调用 `validate` 一次。若报缺失/格式错，用写入工具修正对应文件后可再 validate。
 
-4. **结束**：确认四件套都已写入且 validate 通过（或已尽力修正）后，调用 `done` 结束。
+4. **结束**：确认四件套都已写入且 validate 通过（或已尽力修正）后，结束本轮回复（API 模式可调 `done` 工具；CLI 模式无该工具，直接结束回复即视为完成）。
 
 ## 写作要求（写入工具的 content）
 
