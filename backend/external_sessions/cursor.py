@@ -16,6 +16,7 @@ Cursor 会话 provider —— 只读。
 """
 from __future__ import annotations
 
+import difflib
 import json
 import logging
 import os
@@ -249,6 +250,11 @@ class CursorProvider:
                     if msg.kind == "text" and not msg.content and not msg.images and not msg.tool_calls:
                         continue
                     messages.append(msg)
+
+                # 每轮的 edit_file_v2 聚合成「N Files Changed」卡片（Cursor 原生 UI 同款）
+                messages = _attach_files_changed(
+                    lambda content_id: _fetch_content_blob(conn, content_id), messages
+                )
         except Exception as e:
             logger.warning("read session %s failed: %s", composer_id, e)
             return None
@@ -467,3 +473,147 @@ def _bubble_to_msg(bubble_id: str, bubble: dict, order_type: Optional[int]) -> E
         images=images,
         raw=raw or None,
     )
+
+
+# ---------- 「N Files Changed」聚合 ----------
+
+# 会改文件的工具调用（实测见过 edit_file_v2；旧版名字一并兼容）
+_EDIT_TOOL_NAMES = ("edit_file_v2", "edit_file", "create_file_v2", "create_file")
+
+
+def _fetch_content_blob(conn, content_id: Optional[str]) -> Optional[str]:
+    """
+    composer.content.<sha256> → 原始文件全文。
+    Cursor 把每次编辑前后的完整内容按 sha256 内容寻址存进 cursorDiskKV（实测 sha256(内容) == 键后缀），
+    edit_file_v2 的 result 里给 before/after 两个 contentId，diff 一下就是该次编辑的 +/- 行数。
+    """
+    if not content_id:
+        return None
+    try:
+        row = conn.execute(
+            "SELECT value FROM cursorDiskKV WHERE key = ?", (content_id,)
+        ).fetchone()
+    except Exception:
+        return None
+    if not row or row["value"] is None:
+        return None
+    v = row["value"]
+    if isinstance(v, bytes):
+        try:
+            v = v.decode("utf-8", errors="replace")
+        except Exception:
+            return None
+    return v
+
+
+def _diff_line_counts(before: str, after: str) -> tuple:
+    """两版全文 → (新增行数, 删除行数)。unified diff 数 +/- 行（n=0 只出变更行，快）。"""
+    added = removed = 0
+    if before == after:
+        return 0, 0
+    for line in difflib.unified_diff(before.splitlines(), after.splitlines(), lineterm="", n=0):
+        if line.startswith("+") and not line.startswith("+++"):
+            added += 1
+        elif line.startswith("-") and not line.startswith("---"):
+            removed += 1
+    return added, removed
+
+
+def _attach_files_changed(blob_fetch, messages: List[ExternalMessage]) -> List[ExternalMessage]:
+    """
+    按轮（两次用户消息之间）聚合 edit_file_v2 调用，轮尾插入一条 kind=files_changed 的合成消息。
+    同一文件一轮内多次编辑要链起来：取第一次的 before、最后一次的 after，diff 出净变化——
+    逐次 diff 相加会把中间态重复计算。
+    """
+    out: List[ExternalMessage] = []
+    turn_chains: dict = {}       # path -> {before, after}（contentId 链）
+    turn_has_edit = False
+    turn_last_msg: Optional[ExternalMessage] = None
+
+    def flush() -> None:
+        nonlocal turn_chains, turn_has_edit, turn_last_msg
+        if turn_has_edit and turn_chains:
+            files = []
+            for path, ch in turn_chains.items():
+                after = blob_fetch(ch["after"]) if ch["after"] else None
+                if after is None:
+                    continue
+                before = blob_fetch(ch["before"]) if ch["before"] else ""
+                if before is None:
+                    before = ""
+                added, removed = _diff_line_counts(before, after)
+                # 统一 diff 文本（n=3 上下文），前端 files_changed 卡片展开渲染用。
+                # 过长截断，避免一次会话几百次编辑把响应撑爆。
+                diff_text = "\n".join(difflib.unified_diff(
+                    before.splitlines(), after.splitlines(),
+                    fromfile="a/" + path.replace("\\", "/"),
+                    tofile="b/" + path.replace("\\", "/"),
+                    lineterm="", n=3,
+                ))
+                if len(diff_text) > 16384:
+                    diff_text = diff_text[:16384] + "\n…（diff 过长已截断）"
+                files.append({
+                    "path": path,
+                    "file": path.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1],
+                    "added": added,
+                    "removed": removed,
+                    "is_new": before == "",
+                    "after_lines": len(after.splitlines()),
+                    "diff": diff_text,
+                })
+            if files:
+                out.append(ExternalMessage(
+                    id=f"files-changed-{len(out)}",
+                    role="assistant",
+                    kind="files_changed",
+                    content="",
+                    created_at=(turn_last_msg.created_at if turn_last_msg else None),
+                    tool_calls=[{"kind": "files_changed", "data": {"files": files}}],
+                ))
+        turn_chains = {}
+        turn_has_edit = False
+        turn_last_msg = None
+
+    for msg in messages:
+        if msg.role == "user":
+            flush()
+            out.append(msg)
+            continue
+
+        if msg.kind == "tool_call" and msg.tool_calls:
+            for tc in msg.tool_calls:
+                data = tc.get("data") if isinstance(tc, dict) else None
+                if not isinstance(data, dict):
+                    continue
+                if (data.get("name") or "") not in _EDIT_TOOL_NAMES:
+                    continue
+                if data.get("status") != "completed":
+                    continue
+                try:
+                    params = json.loads(data.get("params") or "{}")
+                    result = json.loads(data.get("result") or "{}")
+                except Exception:
+                    continue
+                path = params.get("relativeWorkspacePath") or ""
+                if not path:
+                    try:
+                        path = json.loads(data.get("rawArgs") or "{}").get("path") or ""
+                    except Exception:
+                        path = ""
+                if not path:
+                    continue
+                turn_has_edit = True
+                ch = turn_chains.get(path)
+                if ch is None:
+                    turn_chains[path] = {
+                        "before": result.get("beforeContentId") or "",
+                        "after": result.get("afterContentId") or "",
+                    }
+                elif result.get("afterContentId"):
+                    ch["after"] = result["afterContentId"]
+
+        out.append(msg)
+        turn_last_msg = msg
+
+    flush()
+    return out

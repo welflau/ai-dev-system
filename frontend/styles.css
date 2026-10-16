@@ -1186,6 +1186,14 @@ body.shell-project .main-ws-tabbar,
     background: rgba(234, 179, 8, 0.28);
     outline: 1px solid rgba(234, 179, 8, 0.5);
 }
+/* 代码引用卡/报错链接跳转定位的行范围高亮（openRepoFileFromChat(path, start, end)） */
+.main-ws-line.main-ws-line-hl {
+    background: rgba(124, 106, 247, 0.16);
+    box-shadow: inset 2px 0 0 var(--primary, #7c6af7);
+}
+.main-ws-line.main-ws-line-hl .main-ws-ln {
+    color: var(--primary, #7c6af7);
+}
 .main-ws-ln {
     display: inline-block;
     width: 3.2em;
@@ -1242,6 +1250,19 @@ body.shell-project .main-ws-tabbar,
     max-width: 100%;
     max-height: calc(100vh - 220px);
     border-radius: 6px;
+}
+/* 图片查看器缩放百分比角标（.es-image-viewer 内，absolute 不参与 flex 居中） */
+.es-image-zoom {
+    position: absolute;
+    right: 14px;
+    bottom: 14px;
+    padding: 3px 9px;
+    font-size: 11px;
+    color: var(--text-muted, #9a9aa8);
+    background: rgba(0, 0, 0, 0.45);
+    border-radius: 6px;
+    pointer-events: none;
+    user-select: none;
 }
 
 /* Cursor 风格文件菜单 */
@@ -7351,6 +7372,18 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
     font-weight: 600;
 }
 
+/* 当前会话标题小字（历史记录同款显示文字），弱化展示不抢主标题 */
+#chatPanelSessionTitle {
+    font-size: 11px;
+    font-weight: 400;
+    color: var(--text-muted);
+    max-width: 280px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+}
+
 .chat-panel-icon {
     font-size: 16px;
 }
@@ -7528,6 +7561,205 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
     margin-bottom: 3px;
     margin-left: 2px;
     letter-spacing: 0.02em;
+}
+
+/* ==================== 多 Agent 群聊黑板（Phase 1）==================== */
+.group-board-card {
+    margin: 6px 36px 8px;
+    border: 1px solid var(--border);
+    border-left: 3px solid #d2a8ff60;
+    border-radius: 6px;
+    background: var(--bg);
+    padding: 8px 10px;
+    font-size: 12px;
+}
+.group-board-title {
+    font-weight: 600;
+    font-size: 12px;
+    margin-bottom: 4px;
+    color: var(--text);
+}
+.group-board-body {
+    color: var(--text-muted);
+    line-height: 1.6;
+}
+.group-board-body .board-topic {
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 2px;
+}
+.group-board-body .board-sec {
+    margin-top: 6px;
+    font-weight: 600;
+    color: var(--text);
+    font-size: 11px;
+}
+.group-board-body .board-item {
+    padding-left: 8px;
+    word-break: break-word;
+}
+.group-board-thought {
+    margin: 4px 36px;
+    font-size: 11px;
+    color: var(--text-muted);
+    line-height: 1.5;
+    padding: 3px 10px;
+    border-left: 2px solid var(--border);
+    word-break: break-word;
+}
+.group-board-converge {
+    margin: 6px 36px 8px;
+    border: 1px solid #d2a8ff40;
+    border-left: 3px solid #d2a8ff;
+    border-radius: 6px;
+    background: #d2a8ff10;
+    padding: 8px 10px;
+    font-size: 12px;
+    line-height: 1.6;
+}
+
+/* 群聊阶段过程文字（Round N · 发散/交锋 · 收敛），排版类似思考过程分组头 */
+.group-board-stage {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 8px 36px 2px;
+}
+.gbs-badge {
+    flex-shrink: 0;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--primary);
+    background: var(--primary-op, rgba(99, 102, 241, 0.12));
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 2px 9px;
+    letter-spacing: 0.02em;
+}
+.gbs-line {
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+}
+.gbs-badge-pm {
+    background: #e6a81722;
+    color: #e6a817;
+    border-color: #e6a81755;
+}
+
+/* 会议目标卡 / 会议纪要卡 */
+.group-board-goal {
+    margin: 8px 36px 2px;
+    border: 1px solid #d2a8ff40;
+    border-left: 3px solid #d2a8ff;
+    border-radius: 6px;
+    background: #d2a8ff0d;
+    padding: 8px 10px;
+    font-size: 12px;
+    line-height: 1.6;
+}
+.group-board-goal-text {
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 2px;
+}
+.group-board-summary {
+    margin: 6px 36px 8px;
+    border: 1px solid #e6a81740;
+    border-left: 3px solid #e6a817;
+    border-radius: 6px;
+    background: #e6a8170d;
+    padding: 8px 10px;
+    font-size: 12px;
+    line-height: 1.6;
+}
+
+/* PM 过程思考指示器（目标提炼 / 决策 / 与会者回复期间的空挡反馈） */
+.group-board-pm-thinking {
+    margin: 4px 36px;
+    font-size: 11px;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.pm-thinking-dots span {
+    animation: pmThink 1.4s infinite;
+    opacity: 0;
+    font-weight: 700;
+}
+.pm-thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
+.pm-thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes pmThink {
+    0%, 60%, 100% { opacity: 0; }
+    30% { opacity: 1; }
+}
+
+/* 与会者流式草稿（agent_stream 增量，最终气泡到达后移除） */
+.group-board-draft {
+    margin: 2px 36px;
+    font-size: 11px;
+    color: var(--text-muted);
+    line-height: 1.5;
+    padding: 2px 10px;
+    border-left: 2px dashed var(--border);
+    word-break: break-word;
+    max-height: 110px;
+    overflow: hidden;
+    white-space: pre-wrap;
+}
+
+/* 黑板话题分支：归档话题折叠，点标题展开 */
+.board-node {
+    margin: 2px 0;
+}
+.board-node-title {
+    font-size: 12px;
+    color: var(--text);
+    cursor: pointer;
+    padding: 3px 8px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+}
+.board-node-title:hover { background: var(--hover, rgba(255,255,255,0.05)); }
+.board-node-body {
+    display: none;
+    padding: 4px 8px 6px 16px;
+    border-left: 2px solid var(--border);
+    margin-left: 8px;
+    font-size: 11px;
+}
+.board-node.open .board-node-body { display: block; }
+
+/* 群聊黑板侧栏：全屏时**悬浮**在左侧空白区（绝对定位，不参与 flex，
+   会话列保持原全屏居中位置完全不动）；非全屏不显示，黑板内联进消息流 */
+#groupBoardSidebar {
+    position: absolute;
+    left: 12px;
+    top: 0;
+    bottom: 0;
+    /* 宽度 = 全屏居中 padding 留出的左空白（(100%-860px)/2）再留 24px 余量 */
+    width: clamp(240px, calc((100% - 860px) / 2 - 24px), 620px);
+    overflow-y: auto;
+    padding: 4px 12px 12px;
+    box-sizing: border-box;
+    border-right: 1px solid var(--border);
+    background: var(--bg);
+    z-index: 5;
+    display: none;
+}
+/* 仅侧栏激活时给 chatPanelBody 加定位上下文（常态布局零影响） */
+body.chat-board-left .chat-panel > #chatPanelBody {
+    position: relative;
+}
+body.chat-board-left #groupBoardSidebar {
+    display: block;
+}
+#groupBoardSidebar .group-board-card {
+    margin: 0;
 }
 
 
@@ -7949,6 +8181,229 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
 .code-card-full .code-card-pre {
     /* hljs 高亮后背景透明 */
     background: transparent !important;
+}
+
+/* Cursor 风格代码引用卡（```起:止|路径 fence，聊天气泡内） */
+.chat-code-ref {
+    margin: 8px 0;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-elevated, rgba(255, 255, 255, 0.03));
+    overflow: hidden;
+}
+/* 气泡是 pre-wrap，卡片模板的换行缩进会被渲染成大段空白 —— 卡内一律恢复正常空白策略 */
+.chat-msg-bubble .chat-code-ref {
+    white-space: normal;
+}
+.chat-code-ref-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 12px;
+    border-bottom: 1px solid var(--border);
+    background: rgba(255, 255, 255, 0.02);
+    font-size: 12px;
+}
+.chat-code-ref-lang {
+    flex-shrink: 0;
+    padding: 1px 7px;
+    border-radius: 5px;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--primary, #7c6af7);
+    background: rgba(124, 106, 247, 0.14);
+}
+.chat-code-ref-file {
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+}
+.chat-code-ref-file:hover {
+    color: var(--primary, #7c6af7);
+    text-decoration: underline;
+}
+.chat-code-ref-lines {
+    flex-shrink: 0;
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--text-muted);
+}
+.chat-code-ref-pre {
+    margin: 0;
+    padding: 10px 14px;
+    overflow: auto;
+    max-height: 480px;
+    font-size: 12px;
+    line-height: 1.65;
+    tab-size: 4;
+    background: transparent;
+}
+.chat-code-ref-pre code {
+    background: transparent;
+    padding: 0;
+}
+.chat-code-ref .hljs-comment,
+.chat-code-ref .hljs-quote {
+    font-style: italic;
+}
+
+/* 「N Files Changed」卡片：每轮编辑文件聚合（外部会话浏览器，对齐 Cursor 原生） */
+.es-files-changed {
+    margin: 8px 0;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--bg-elevated, rgba(255, 255, 255, 0.03));
+    overflow: hidden;
+    font-size: 12px;
+}
+.es-fc-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    color: var(--text-muted);
+}
+.es-fc-review {
+    font-size: 11px;
+    opacity: 0.8;
+}
+.es-fc-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    border-top: 1px solid var(--border);
+    cursor: pointer;
+}
+.es-fc-row:hover {
+    background: rgba(255, 255, 255, 0.04);
+}
+.es-fc-row:hover .es-fc-name {
+    color: var(--primary, #7c6af7);
+}
+.es-fc-badge {
+    flex-shrink: 0;
+    min-width: 22px;
+    text-align: center;
+    font-size: 9px;
+    font-weight: 700;
+    color: var(--text-muted);
+    opacity: 0.85;
+}
+.es-fc-badge.es-fc-new {
+    color: var(--primary, #7c6af7);
+    opacity: 1;
+}
+.es-fc-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.es-fc-stats {
+    flex-shrink: 0;
+    font-variant-numeric: tabular-nums;
+}
+.es-fc-add {
+    color: #4ade80;
+    margin-right: 8px;
+}
+.es-fc-del {
+    color: #f87171;
+}
+
+/* files_changed 行内 diff（Cursor Review 风格：行号 + 绿增红删 + 未改动折叠条） */
+.es-fc-row.has-diff .es-fc-name {
+    cursor: pointer;
+}
+.es-fc-arrow {
+    flex-shrink: 0;
+    width: 10px;
+    font-size: 9px;
+    color: var(--text-muted);
+}
+.es-fc-jump {
+    flex-shrink: 0;
+    padding: 0 3px;
+    font-size: 11px;
+    color: var(--text-muted);
+    cursor: pointer;
+}
+.es-fc-jump:hover {
+    color: var(--primary, #7c6af7);
+}
+.es-fc-diff {
+    border-top: 1px solid var(--border);
+    max-height: 460px;
+    overflow: auto;
+    background: rgba(0, 0, 0, 0.15);
+}
+.es-diff-empty {
+    padding: 8px 12px;
+    font-size: 11px;
+    color: var(--text-muted);
+}
+.es-diff-row {
+    display: flex;
+    font-family: var(--mono, ui-monospace, monospace);
+    font-size: 11px;
+    line-height: 1.6;
+}
+.es-diff-ln {
+    flex-shrink: 0;
+    width: 42px;
+    padding-right: 10px;
+    text-align: right;
+    color: var(--text-muted);
+    opacity: 0.65;
+    user-select: none;
+    font-variant-numeric: tabular-nums;
+}
+.es-diff-code {
+    flex: 1;
+    min-width: 0;
+    padding-right: 12px;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+.es-diff-row.add {
+    background: rgba(74, 222, 128, 0.13);
+}
+.es-diff-row.add .es-diff-ln {
+    color: #4ade80;
+    opacity: 0.9;
+}
+.es-diff-row.del {
+    background: rgba(248, 113, 113, 0.13);
+}
+.es-diff-row.del .es-diff-ln {
+    color: #f87171;
+    opacity: 0.9;
+}
+.es-diff-gap {
+    padding: 3px 12px 3px 12px;
+    font-family: var(--mono, ui-monospace, monospace);
+    font-size: 10px;
+    color: var(--text-muted);
+    background: rgba(255, 255, 255, 0.03);
+    border-top: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+}
+
+/* 网页 Tab：内嵌限制提示条 + iframe 容器 */
+.main-ws-web-hint {
+    flex-shrink: 0;
+    padding: 5px 12px;
+    font-size: 11px;
+    color: var(--text-muted);
+    background: rgba(234, 179, 8, 0.08);
+    border-bottom: 1px solid var(--border);
+}
+.main-ws-web {
+    display: flex;
 }
 
 /* 工单选择提示 */
@@ -9243,6 +9698,14 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
 .err-file-link:hover,
 .chat-file-link:hover,
 .chat-kb-link:hover { color: var(--primary, #58a6ff); text-decoration: underline; }
+/* 聊天文本里的裸 URL 链接（点击在主舞台开网页 Tab） */
+.chat-url-link {
+    color: var(--primary-light, #79c0ff);
+    text-decoration: underline dotted;
+    cursor: pointer;
+    word-break: break-all;
+}
+.chat-url-link:hover { color: var(--primary, #58a6ff); text-decoration: underline; }
 .chat-file-link .chat-inline-code,
 .chat-kb-link .chat-inline-code {
     color: inherit;
@@ -13067,6 +13530,24 @@ body.chat-fullscreen.chat-split #chatSplitContainer {
     user-select: none;
 }
 .es-toggle-thinking input { margin: 0; }
+
+/* provider 切换（Cursor / CodeBuddy）分段按钮 */
+.es-prov-btn {
+    padding: 3px 10px;
+    font-size: 11px;
+    color: var(--text-muted);
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+    white-space: nowrap;
+}
+.es-prov-btn:hover { color: var(--text); }
+.es-prov-btn.active {
+    color: var(--primary, #7c6af7);
+    background: rgba(124, 106, 247, 0.12);
+}
+.es-prov-btn + .es-prov-btn { border-left: 1px solid var(--border); }
+
 
 /* 隐藏思考（根 class 由 _esSetShowThinking 挂在 .external-sessions-pane 上）——
    思考消息现在都在分组里渲染成 .es-group-item-thinking，不再是独立的 .chat-msg[data-kind="thinking"] */

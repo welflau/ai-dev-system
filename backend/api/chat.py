@@ -13,7 +13,7 @@ import uuid
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, UploadFile, File, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from typing import Optional, List, Dict, Any, Union
 from database import db
 from utils import generate_id, now_iso
@@ -148,13 +148,19 @@ class ChatMessage(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    message: str = Field(..., min_length=1, description="用户消息")
+    message: str = Field(default="", description="用户消息（纯图片时可为空）")
     history: Optional[List[ChatMessage]] = Field(default=None, description="历史消息（可选）")
     images: Optional[List[str]] = Field(default=None, description="图片列表，base64 data URL，如 data:image/png;base64,...")
     chat_session_id: Optional[str] = Field(default=None, description="v0.20 会话 ID")
     msg_group_key: Optional[str] = Field(default=None, description="（已废弃）分组 key 现由服务端生成并通过 turn_begin 事件下发，此字段仅为兼容旧前端保留")
     agent: Optional[str] = Field(default=None, description="@mention Agent 名称，如 DevAgent / TestAgent，注入 persona 并走流式路径")
     ticket_id: Optional[str] = Field(default=None, description="关联工单 ID（抽屉/看板聚焦时传入，供 Write Checkpoint）")
+
+    @model_validator(mode="after")
+    def _require_message_or_images(self):
+        if not self.message.strip() and not self.images:
+            raise ValueError("message 和 images 不能同时为空")
+        return self
 
 
 class ChatResponse(BaseModel):
@@ -164,11 +170,17 @@ class ChatResponse(BaseModel):
 
 
 class GroupChatRequest(BaseModel):
-    message: str = Field(..., min_length=1, description="用户消息")
+    message: str = Field(default="", description="用户消息（纯图片时可为空）")
     agent: Optional[str] = Field(default=None, description="目标 Agent: DevAgent / TestAgent / OrchestratorAgent / ChatAssistant")
     history: Optional[List[ChatMessage]] = Field(default=None, description="历史消息（可选）")
     images: Optional[List[str]] = Field(default=None, description="图片 base64 列表")
     chat_session_id: Optional[str] = Field(default=None, description="会话 ID，用于消息持久化")
+
+    @model_validator(mode="after")
+    def _require_message_or_images(self):
+        if not self.message.strip() and not self.images:
+            raise ValueError("message 和 images 不能同时为空")
+        return self
 
 
 class GroupChatResponse(BaseModel):
@@ -395,6 +407,934 @@ async def group_chat_all(project_id: str, req: GroupChatRequest):
             replies.append(result)
 
     return GroupChatAllResponse(replies=replies)
+
+
+# ==================== 多 Agent 群聊黑板（Phase 1）====================
+
+# 黑板可写的分区（topic 由用户消息固定，facts/proposals/open_questions/decisions/artifacts 由 Agent 写）
+_BOARD_SECTIONS = ["facts", "proposals", "open_questions", "decisions", "artifacts"]
+_BOARD_DEFAULT_AGENTS = ["OrchestratorAgent", "DevAgent", "TestAgent"]
+
+
+class GroupBoardRequest(BaseModel):
+    message: str = Field(default="", description="用户消息（纯图片时可为空）")
+    images: Optional[List[str]] = Field(default=None, description="图片 base64 列表")
+    chat_session_id: Optional[str] = Field(default=None, description="会话 ID，黑板与消息归属")
+    rounds: int = Field(default=2, ge=1, le=3, description="[legacy] 交锋轮数（1=只发散，2=发散+交锋）")
+    agents: Optional[List[str]] = Field(default=None, description="参与 Agent 列表，默认 Orchestrator/Dev/Test")
+    mode: str = Field(default="pm", description="pm=PM 驱动循环（默认）| legacy=固定回合制")
+    max_pm_decisions: int = Field(default=8, ge=2, le=20, description="[pm] PM 决策次数上限")
+    max_agent_rounds: int = Field(default=4, ge=1, le=10, description="[pm] ask 发散轮数上限")
+    force_ask_agent: Optional[str] = Field(default=None, description="[pm] 用户 @ 点名的 Agent，跳过 PM 决策直接带上下文提问")
+    force_new_topic: bool = Field(default=False, description="[pm] 用户点亮「🆕 新话题」开关，强制把本条消息作为新话题")
+
+    @model_validator(mode="after")
+    def _require_message_or_images(self):
+        if not self.message.strip() and not self.images:
+            raise ValueError("message 和 images 不能同时为空")
+        return self
+
+
+def _empty_board(session_id: str, project_id: str, topic: str) -> dict:
+    return {
+        "session_id": session_id,
+        "project_id": project_id,
+        "version": 0,
+        "topic": topic,          # 当前话题标题
+        "goal": None,            # 当前话题目标 {goal, acceptance_criteria, participants}
+        "topic_nodes": [],       # 归档话题分支（换话题时旧话题快照归档于此）
+        "summary": [],           # 当前话题小结 [{author, content, ts}]
+        "facts": [],
+        "proposals": [],
+        "open_questions": [],
+        "decisions": [],
+        "artifacts": [],
+    }
+
+
+def _archive_current_topic(board: dict) -> None:
+    """把当前话题的分区快照归档进 topic_nodes，并清空当前分区（换话题时调用）。
+    当前话题没有任何实质内容（无 goal、分区全空）时不归档，避免产生空分支。"""
+    has_content = bool(board.get("goal")) or bool(board.get("summary")) \
+        or any(board.get(s) for s in _BOARD_SECTIONS)
+    if not has_content:
+        return
+    node = {
+        "title": board.get("topic", ""),
+        "goal": board.get("goal"),
+        "facts": board.get("facts", []),
+        "proposals": board.get("proposals", []),
+        "open_questions": board.get("open_questions", []),
+        "decisions": board.get("decisions", []),
+        "artifacts": board.get("artifacts", []),
+        "summary": board.get("summary", []),
+        "archived_at": now_iso(),
+    }
+    board.setdefault("topic_nodes", []).append(node)
+    # 归档上限：只保留最近 8 个话题分支，更早的丢弃
+    if len(board["topic_nodes"]) > 8:
+        board["topic_nodes"] = board["topic_nodes"][-8:]
+    # 清空当前分区，准备新话题
+    for _sec in _BOARD_SECTIONS + ["summary"]:
+        board[_sec] = []
+    board["goal"] = None
+
+
+def _bigrams_py(s: str) -> list:
+    """文本 2-gram 切分（中英混合，去标点），供话题标题相似度匹配用。"""
+    import re as _re
+    cleaned = _re.sub(r"[^\u4e00-\u9fa5a-z0-9]", "", (s or "").lower())
+    return [cleaned[i:i + 2] for i in range(len(cleaned) - 1)]
+
+
+def _find_archived_topic(board: dict, title: str):
+    """按标题在归档分支里找话题节点：先精确匹配，再 2-gram Jaccard ≥0.5 的相似匹配。"""
+    nodes = board.get("topic_nodes") or []
+    if not title:
+        return None
+    for n in nodes:
+        if (n.get("title") or "") == title:
+            return n
+    grams = set(_bigrams_py(title))
+    if not grams:
+        return None
+    best, best_score = None, 0.0
+    for n in nodes:
+        t = n.get("title") or ""
+        if not t:
+            continue
+        tg = set(_bigrams_py(t))
+        if not tg:
+            continue
+        score = len(grams & tg) / max(1, len(grams | tg))
+        if score > best_score:
+            best, best_score = n, score
+    return best if best_score >= 0.5 else None
+
+
+def _restore_topic_node(board: dict, node: dict) -> None:
+    """把归档的话题分支恢复为当前话题（从 topic_nodes 移除，分区还原）。"""
+    try:
+        board.get("topic_nodes", []).remove(node)
+    except ValueError:
+        pass
+    board["topic"] = node.get("title") or board.get("topic") or ""
+    board["goal"] = node.get("goal")
+    for _sec in _BOARD_SECTIONS + ["summary"]:
+        board[_sec] = list(node.get(_sec) or [])
+
+
+async def _load_blackboard(session_id: str) -> Optional[dict]:
+    row = await db.fetch_one(
+        "SELECT state_json FROM chat_blackboards WHERE session_id = ?", (session_id,)
+    )
+    if not row:
+        return None
+    try:
+        return json.loads(row["state_json"])
+    except Exception:
+        return None
+
+
+async def _save_blackboard(board: dict) -> None:
+    """黑板快照 upsert（version 自增）"""
+    board["version"] = board.get("version", 0) + 1
+    await db.execute(
+        """INSERT INTO chat_blackboards (session_id, project_id, state_json, version, updated_at)
+           VALUES (?,?,?,?,?)
+           ON CONFLICT(session_id) DO UPDATE SET
+             state_json=excluded.state_json, version=excluded.version, updated_at=excluded.updated_at""",
+        (
+            board["session_id"],
+            board["project_id"],
+            json.dumps(board, ensure_ascii=False),
+            board["version"],
+            now_iso(),
+        ),
+    )
+
+
+def _apply_board_writes(board: dict, agent: str, writes: Any) -> set:
+    """把三态输出里的 blackboard_writes 合并进黑板，返回被改动的分区名集合。"""
+    changed: set = set()
+    if not isinstance(writes, list):
+        return changed
+    for w in writes:
+        if not isinstance(w, dict):
+            continue
+        section = (w.get("section") or "").strip()
+        content = (w.get("content") or "").strip()
+        if section not in _BOARD_SECTIONS or not content:
+            continue
+        # LLM 会模仿快照里的 "[agent] content" 格式，把自己的名字写进 content —— 去掉自我前缀
+        self_prefix = f"[{agent}]"
+        if content.startswith(self_prefix):
+            content = content[len(self_prefix):].lstrip("：: ，, ")
+        if not content:
+            continue
+        board.setdefault(section, [])
+        op = (w.get("op") or "add").strip().lower()
+        if op == "remove":
+            board[section] = [
+                it for it in board[section]
+                if not (isinstance(it, dict) and it.get("content") == content)
+            ]
+        else:
+            exists = any(
+                isinstance(it, dict) and it.get("content") == content and it.get("agent") == agent
+                for it in board[section]
+            )
+            if not exists:
+                board[section].append({"agent": agent, "content": content, "ts": now_iso()})
+        changed.add(section)
+    return changed
+
+
+def _board_snapshot_text(board: dict) -> str:
+    """黑板 → 给 LLM 看的紧凑文本。"""
+    lines = [f"主题：{board.get('topic', '')}"]
+    for sec in _BOARD_SECTIONS:
+        items = board.get(sec, [])
+        if not items:
+            continue
+        rendered = "\n".join(
+            f"  - [{it.get('agent', '?')}] {it.get('content', '')}" for it in items if isinstance(it, dict)
+        )
+        lines.append(f"{sec}:\n{rendered}")
+    return "\n".join(lines)
+
+
+def _board_agent_prompt(
+    agent_name: str, cfg: dict, project: dict, board: dict, round_no: int, transcript: str
+) -> str:
+    """某 Agent 某轮的 system prompt（要求三态输出）。"""
+    return f"""{cfg['persona']}
+
+## 当前项目：{project.get('name', '')}
+- 描述：{project.get('description') or '无'}
+- 技术栈：{project.get('tech_stack') or '未指定'}
+
+## 黑板当前状态（第 {round_no} 轮开始前）
+{_board_snapshot_text(board)}
+
+## 上一轮其他 Agent 的发言
+{transcript or '（第一轮，暂无）'}
+
+## 你的任务（第 {round_no} 轮）
+1. 从**你自己的专业视角**发表一段公开观点 public_message（200 字以内，直接说观点，不要说"我来补充"）。
+2. 写一句内部思考 thought（说明你如何判断、支持/反对哪条提案，简短，不对外）。{'（这是交锋轮，请针对上一轮其他 Agent 的观点批判、补充或修正）' if round_no > 1 else ''}
+3. 若要更新黑板，给出 blackboard_writes（可选，可为空数组）。每个元素 {{"section","op","content"}}，section ∈ {{facts, proposals, open_questions, decisions, artifacts}}，op ∈ {{add, remove}}。
+
+只输出一个 JSON 对象，不要 markdown 代码块：
+{{"public_message":"...", "thought":"...", "blackboard_writes":[{{"section":"proposals","op":"add","content":"..."}}]}}"""
+
+
+def _board_converger_prompt(converger: str, cfg: dict, project: dict, board: dict) -> str:
+    return f"""{cfg['persona']}
+
+## 当前项目：{project.get('name', '')}
+
+## 黑板最终状态（辩论已结束）
+{_board_snapshot_text(board)}
+
+## 你的任务：作为收敛器给出最终结论
+- 提炼已达成共识（写入 decisions），明确保留分歧（open_questions 原样保留，不要抹掉）。
+- 输出 300 字以内的结构化结论，用要点列出「共识 / 分歧 / 下一步」。
+
+直接输出结论文本，不要 JSON。"""
+
+
+# ==================== PM 驱动循环（Phase 1）====================
+
+_PM = "OrchestratorAgent"  # PM 角色固定为 OrchestratorAgent
+
+
+def _parse_agent_three_state(data: Any) -> tuple:
+    """三态输出统一解析：返回 (public, thought, writes)。JSON 失败降级为整段公开发言。"""
+    public = thought = ""
+    writes = []
+    if isinstance(data, dict):
+        public = (data.get("public_message") or "").strip()
+        thought = (data.get("thought") or "").strip()
+        writes = data.get("blackboard_writes") or []
+    elif isinstance(data, str) and data.strip():
+        public = data.strip()
+    return public, thought, writes
+
+
+def _pm_goal_prompt(pm_cfg: dict, project: dict, message: str, current_topic: str = "",
+                    earlier_titles: list = None) -> str:
+    cur = f"## 当前话题\n{current_topic}\n" if current_topic else "## 当前话题\n（无，这是本场讨论的第一条消息）\n"
+    earlier = ""
+    if earlier_titles:
+        lst = "\n".join(f"  - {t}" for t in earlier_titles[-8:])
+        earlier = f"\n## 更早的话题分支（可 resume 回去）\n{lst}\n"
+    return f"""{pm_cfg['persona']}
+
+## 当前项目：{project.get('name', '')}
+- 描述：{project.get('description') or '无'}
+
+{cur}{earlier}
+## 用户刚发来的消息
+{message}
+
+## 你的任务：先判断话题归属，再提炼讨论目标
+1. topic_relation 三选一：
+   - continue：这条消息是**当前话题**的追问/延续（如"那这个方案呢？""明白吗？"）
+   - resume：这条消息在追问**更早的某个话题分支**（topic_title 必须填那个分支的标题原文）
+   - new：全新话题（topic_title 填新话题简短标题）
+2. goal / acceptance_criteria：continue 时可省略；new/resume 时给出该话题的讨论目标与 2~4 条
+   验收点（每条 ≤20 字，简洁）
+3. participants：建议参与讨论的 Agent（从 OrchestratorAgent / DevAgent / TestAgent 中选）
+
+措辞注意：这是一次围绕某个话题的技术讨论，全文不要出现"会议"字样。
+
+只输出 JSON，不要 markdown：
+{{"topic_relation":"continue|resume|new", "topic_title":"...", "goal":"...", "acceptance_criteria":["...","..."], "participants":["OrchestratorAgent","DevAgent","TestAgent"]}}"""
+
+
+def _pm_state_view(board: dict, transcript: list, intervention: str) -> str:
+    """组装 PM 决策前的状态视图（目标 + 黑板 + 纪要 + 最近发言 + 待处理介入）。"""
+    parts = []
+    goal = board.get("goal")
+    if goal and goal.get("goal"):
+        parts.append(f"## 讨论目标\n{goal['goal']}")
+        ac = goal.get("acceptance_criteria") or []
+        if ac:
+            parts.append("验收点：\n" + "\n".join(f"  - {c}" for c in ac))
+    parts.append("## 黑板当前状态\n" + _board_snapshot_text(board))
+    summaries = board.get("summary") or []
+    if summaries:
+        recent = summaries[-5:]
+        parts.append("## 讨论小结（最近）\n" + "\n".join(
+            f"  - [{s.get('author', '?')}] {s.get('content', '')}" for s in recent if isinstance(s, dict)
+        ))
+    if transcript:
+        parts.append("## 最近发言\n" + "\n".join(transcript[-6:]))
+    if intervention:
+        parts.append(
+            f"## 用户介入（最高优先级）\n{intervention}\n"
+            "（这是用户刚刚提出的最新问题/要求，必须围绕它推进讨论："
+            "若黑板现有内容尚未回应此介入，先 ask 相关成员获取针对该问题的观点；"
+            "只有介入的问题已有针对性回应后才可 conclude。"
+            "禁止无视介入、直接复述黑板里的旧结论收尾。）"
+        )
+    return "\n\n".join(parts)
+
+
+def _pm_decision_prompt(pm_cfg: dict, project: dict, state_view: str) -> str:
+    return f"""{pm_cfg['persona']}
+
+## 当前项目：{project.get('name', '')}
+
+## 讨论状态
+{state_view}
+
+## 你的任务：决定下一步动作（三选一）
+1. ask：向 targets（数组，空=全体）发问推进讨论；question 要具体、@ 指定成员征求其专业意见。
+2. summarize：做阶段小结。summary **只写小结正文**（共识 / 分歧 / 未决项，分点列出），
+   不要写"此外…""非本话题…"这类元描述或自我评价。
+3. conclude：讨论已达成目标（验收点全部有结论）或分歧已定位且不影响结论，给出最终结论 conclusion。
+   conclusion 也只写结论正文，不写元描述。
+
+收敛判据：验收点全部有明确结论 **且** 本次用户介入的问题已有针对性回应 / 分歧已定位且不影响结论 / 连续发问无新增有效信息。
+注意：黑板和纪要里的是**此前话题**的沉淀，不能当作对本次介入的回应；介入提出新问题时必须先 ask。
+
+字段约定：reason 是给你的决策理由（简短）；summary / conclusion 是给用户看的正文，直接写内容。
+排版：summary / conclusion 用 **Markdown**——代码/命令用 ```语言 代码块，路径与标识符用反引号，要点用列表。
+措辞注意：这是一次围绕某个话题的技术讨论，全文不要出现"会议""结会"字样。
+
+只输出 JSON，不要 markdown：
+{{"action":"ask|summarize|conclude", "targets":["DevAgent"], "question":"...", "summary":"...", "conclusion":"...", "reason":"..."}}"""
+
+
+def _pm_agent_prompt(agent_name: str, cfg: dict, project: dict, board: dict, question: str, transcript_text: str) -> str:
+    goal = board.get("goal") or {}
+    return f"""{cfg['persona']}
+
+## 当前项目：{project.get('name', '')}
+- 技术栈：{project.get('tech_stack') or '未指定'}
+
+## 讨论目标
+{goal.get('goal', '（未定）')}
+
+## 黑板当前状态
+{_board_snapshot_text(board)}
+
+## 最近发言
+{transcript_text or '（暂无）'}
+
+## PM 正在问你（请聚焦回答，不跑题、不重复他人已说内容）
+{question}
+
+## 你的任务
+1. 公开观点 public_message：用 **Markdown 排版**——代码/命令用 ```语言 代码块（标注语言），
+   文件路径、函数名、标识符用反引号 `code`，要点用列表；长度按内容需要，代码证据该贴就贴。
+2. 内部思考 thought（简短，说明你如何判断）。
+3. **必须**写黑板 blackboard_writes：把你这轮观点的核心一句话写入（通常 section=proposals；
+   发现事实类信息写 facts；提出待解问题写 open_questions）。content 用一句话摘要，不要整段粘贴。
+   section ∈ {{facts, proposals, open_questions, decisions, artifacts}}，op ∈ {{add, remove}}。
+
+注意：public_message 里的 JSON 字符串值需转义换行（\\n）和引号，代码块内容原样保留。
+
+只输出 JSON，不要 markdown 包裹：
+{{"public_message":"...", "thought":"...", "blackboard_writes":[{{"section":"proposals","op":"add","content":"..."}}]}}"""
+
+
+async def _pm_route_topic(llm_client, project: dict, message: str, user_content, _turn_id: str,
+                          current_topic: str = "", earlier_titles: list = None):
+    """话题路由 + 目标提炼（一次 LLM 调用同时完成）。
+    返回 {topic_relation: continue|resume|new, topic_title, goal, acceptance_criteria, participants}；
+    失败返回 None（调用方降级为 continue）。"""
+    from llm_client import set_llm_context, clear_llm_context
+    pm_cfg = _AGENT_CONFIG[_PM]
+    sys_prompt = _pm_goal_prompt(pm_cfg, project, message, current_topic, earlier_titles)
+    messages = [{"role": "system", "content": sys_prompt},
+                {"role": "user", "content": user_content}]
+    set_llm_context(project_id=None, agent_type=_PM, action="group_board_pm_goal", turn_id=_turn_id)
+    try:
+        data = await llm_client.chat_json(messages, temperature=0.3, max_tokens=1500)
+        if isinstance(data, dict) and data.get("topic_relation"):
+            return data
+        return None
+    except Exception as e:
+        logger.warning("PM 话题路由失败: %s", e)
+        return None
+    finally:
+        clear_llm_context()
+
+
+async def _pm_decide(llm_client, project: dict, state_view: str, _turn_id: str):
+    """PM 决策：返回动作 JSON dict；失败返回 None。"""
+    from llm_client import set_llm_context, clear_llm_context
+    pm_cfg = _AGENT_CONFIG[_PM]
+    sys_prompt = _pm_decision_prompt(pm_cfg, project, state_view)
+    messages = [{"role": "system", "content": sys_prompt},
+                {"role": "user", "content": "请决定下一步动作。"}]
+    set_llm_context(project_id=None, agent_type=_PM, action="group_board_pm_decide", turn_id=_turn_id)
+    try:
+        return await llm_client.chat_json(messages, temperature=0.4, max_tokens=1200)
+    except Exception as e:
+        logger.warning("PM 决策失败: %s", e)
+        return None
+    finally:
+        clear_llm_context()
+
+
+def _extract_public_message_delta(buf: str, state: dict) -> str:
+    """从流式累积的 JSON 文本里增量提取 public_message 字段值（容错转义引号）。
+    state 跨调用维护进度：{in_val, start, sent, done}。返回新增的正文增量。"""
+    if state.get("done"):
+        return ""
+    if not state.get("in_val"):
+        idx = buf.find('"public_message"')
+        if idx < 0:
+            return ""
+        colon = buf.find(":", idx + len('"public_message"'))
+        if colon < 0:
+            return ""
+        rest = buf[colon + 1:].lstrip()
+        if not rest.startswith('"'):
+            return ""
+        state["in_val"] = True
+        state["start"] = len(buf) - len(rest) + 1
+    i = state["start"]
+    out = []
+    while i < len(buf):
+        c = buf[i]
+        if c == "\\":
+            i += 2
+            continue
+        if c == '"':
+            state["done"] = True
+            break
+        out.append(c)
+        i += 1
+    new_text = "".join(out)
+    delta = new_text[state.get("sent", 0):]
+    state["sent"] = len(new_text)
+    return delta
+
+
+async def _pm_call_agent_stream(llm_client, project_id: str, agent_name: str, project: dict, board: dict,
+                                question: str, transcript_text: str, queue: asyncio.Queue,
+                                _turn_id: str) -> tuple:
+    """流式版与会者回复：thinking_delta / public_message 增量推入 queue（供 SSE 直播），
+    返回 (agent_name, data)。仅 CLI 格式支持流式，其余降级 chat_json。"""
+    from llm_client import get_effective_llm_client, set_llm_context, clear_llm_context
+    cfg = _AGENT_CONFIG[agent_name]
+    sys_prompt = _pm_agent_prompt(agent_name, cfg, project, board, question, transcript_text)
+    messages = [{"role": "system", "content": sys_prompt},
+                {"role": "user", "content": question}]
+    set_llm_context(project_id=project_id, agent_type=agent_name,
+                    action="group_board_pm", turn_id=_turn_id)
+    try:
+        client = await get_effective_llm_client()
+        if getattr(client, "api_format", "") != "cli":
+            data = await llm_client.chat_json(messages, temperature=0.7, max_tokens=1200)
+            return agent_name, data
+        parts: list = []
+        ext_state: dict = {}
+        try:
+            async for ev in client._call_cli_stream(messages, 0.7, 1200):
+                et = ev.get("type", "")
+                if et == "thinking_delta":
+                    d = ev.get("delta") or ""
+                    if d:
+                        await queue.put({"agent": agent_name, "kind": "thinking", "delta": d})
+                elif et == "text_delta":
+                    d = ev.get("delta") or ""
+                    if d:
+                        parts.append(d)
+                        pd = _extract_public_message_delta("".join(parts), ext_state)
+                        if pd:
+                            await queue.put({"agent": agent_name, "kind": "content", "delta": pd})
+                elif et == "error":
+                    break
+        except Exception as e:
+            logger.warning("PM %s 流式回复异常: %s", agent_name, e)
+        text = "".join(parts).strip()
+        if not text:
+            return agent_name, None
+        cleaned = text
+        if cleaned.startswith("```"):
+            cleaned = "\n".join(l for l in cleaned.split("\n") if not l.strip().startswith("```"))
+        try:
+            return agent_name, json.loads(cleaned)
+        except json.JSONDecodeError:
+            fixed = _try_fix_json(cleaned)
+            if fixed is not None:
+                return agent_name, fixed
+            return agent_name, cleaned
+    finally:
+        clear_llm_context()
+
+
+@router.post("/group/board")
+async def group_board(project_id: str, req: GroupBoardRequest):
+    """多 Agent 群聊黑板 —— 流式 SSE。
+
+    mode=pm（默认）：PM 驱动循环，事件 turn_begin/board_init/pm_goal/pm_action/
+          pm_summary/round_begin/agent_thought/agent_message/board_update/
+          converge/message_done/error
+    mode=legacy：固定回合制辩论（发散+交锋+收敛）
+    """
+    project = await db.fetch_one("SELECT * FROM projects WHERE id = ?", (project_id,))
+    if not project:
+        raise HTTPException(404, "项目不存在")
+
+    generator = _group_board_pm_generator if req.mode == "pm" else _group_board_generator
+    return StreamingResponse(
+        generator(project_id, dict(project), req),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.get("/group/board")
+async def get_group_board(project_id: str, session_id: str):
+    """加载某场群聊的黑板快照（刷新还原用）"""
+    board = await _load_blackboard(session_id)
+    return {"board": board}
+
+
+async def _group_board_generator(project_id: str, project: dict, req: GroupBoardRequest):
+    from llm_client import llm_client, set_llm_context, clear_llm_context
+    from utils import generate_id as _gen_id
+
+    _sid = req.chat_session_id or "default"
+    _turn_id = _gen_id("TURN")
+
+    # 参与 Agent（过滤掉 _AGENT_CONFIG 里不存在的）
+    participating = [a for a in (req.agents or _BOARD_DEFAULT_AGENTS) if a in _AGENT_CONFIG]
+    if not participating:
+        participating = _BOARD_DEFAULT_AGENTS
+
+    # 黑板：优先读既有快照，否则新建（topic = 用户消息）
+    board = await _load_blackboard(_sid) or _empty_board(_sid, project_id, req.message[:80])
+    # 主题跟随本轮消息：黑板跨轮累积，但 topic 停留在首条消息会误导（前端显示"主题: 你好"）
+    board["topic"] = req.message[:80]
+
+    yield _sse("turn_begin", {"turn_id": _turn_id})
+    yield _sse("board_init", {"board": board})
+
+    # 保存用户消息
+    try:
+        await _save_chat_message(project_id, "user", req.message,
+                                 images=req.images, session_id=_sid,
+                                 turn_id=_turn_id, speaker="user", kind="message")
+    except Exception as _ue:
+        logger.warning("board 保存用户消息失败: %s", _ue)
+
+    # 注意：黑板群聊的 prompt 只用 project.name/description/tech_stack，
+    # 不依赖 _build_project_context（其 rglob 会遍历整个仓库树，大仓库会卡死事件循环）。
+    user_content = _build_user_content(req.message, req.images)
+
+    # 轮内并行、轮间串行
+    transcript: list[str] = []
+    for round_no in range(1, req.rounds + 1):
+        transcript_text = "\n".join(transcript) if transcript else ""
+        # 阶段标记：第 1 轮=发散，后续轮=交锋（前端渲染为过程文字，类似思考过程排版）
+        _label = "发散" if round_no == 1 else "交锋"
+        yield _sse("round_begin", {"round": round_no, "label": _label, "total": req.rounds})
+
+        async def _call_agent(agent_name: str) -> tuple:
+            cfg = _AGENT_CONFIG[agent_name]
+            sys_prompt = _board_agent_prompt(
+                agent_name, cfg, project, board, round_no, transcript_text
+            )
+            messages = [{"role": "system", "content": sys_prompt},
+                        {"role": "user", "content": user_content}]
+            set_llm_context(project_id=project_id, agent_type=agent_name,
+                            action="group_board", turn_id=_turn_id)
+            try:
+                data = await llm_client.chat_json(messages, temperature=0.7, max_tokens=1200)
+                return agent_name, data
+            except Exception as e:
+                logger.warning("board %s 第 %d 轮失败: %s", agent_name, round_no, e)
+                return agent_name, None
+            finally:
+                clear_llm_context()
+
+        results = await asyncio.gather(*[_call_agent(a) for a in participating])
+
+        round_changed: set = set()
+        for agent_name, data in results:
+            public = ""
+            thought = ""
+            writes = []
+            if isinstance(data, dict):
+                public = (data.get("public_message") or "").strip()
+                thought = (data.get("thought") or "").strip()
+                writes = data.get("blackboard_writes") or []
+            elif isinstance(data, str) and data.strip():
+                # JSON 解析失败兜底：整段当公开发言
+                public = data.strip()
+
+            if not public:
+                public = "（本轮未给出观点）"
+
+            cfg = _AGENT_CONFIG[agent_name]
+            # 直播思考 + 发言
+            if thought:
+                yield _sse("agent_thought", {
+                    "agent": agent_name, "emoji": cfg["emoji"], "color": cfg["color"],
+                    "round": round_no, "thought": thought,
+                })
+            yield _sse("agent_message", {
+                "agent": agent_name, "emoji": cfg["emoji"], "color": cfg["color"],
+                "round": round_no, "content": public,
+            })
+            transcript.append(f"[{agent_name}] {public}")
+
+            # 持久化发言（刷新后走 group_agent_reply 还原气泡）
+            action = {"type": "group_agent_reply", "agent": agent_name,
+                      "emoji": cfg["emoji"], "color": cfg["color"],
+                      "thought": thought}
+            # thought 接进 thinking_json（分组格式），刷新后走思考面板渲染
+            thinking_payload = None
+            if thought:
+                thinking_payload = [{
+                    "round": round_no,
+                    "reasoning": thought,
+                    "steps": [],
+                    "events": [{"type": "thinking", "text": thought}],
+                }]
+            try:
+                await _save_chat_message(project_id, "assistant", public,
+                                         action=action, session_id=_sid,
+                                         turn_id=_turn_id,
+                                         speaker=agent_name, kind="utterance",
+                                         thinking=thinking_payload)
+            except Exception as _se:
+                logger.warning("board 发言落库失败: %s", _se)
+
+            round_changed |= _apply_board_writes(board, agent_name, writes)
+
+        # 轮末合并写黑板
+        await _save_blackboard(board)
+        yield _sse("board_update", {
+            "board": board, "round": round_no,
+            "changed_sections": sorted(round_changed),
+        })
+
+    # 收敛器
+    converger = "OrchestratorAgent"
+    cfg = _AGENT_CONFIG[converger]
+    yield _sse("converge_begin", {"agent": converger})
+    set_llm_context(project_id=project_id, agent_type=converger,
+                    action="group_board_converge", turn_id=_turn_id)
+    summary = "（收敛失败，请查看黑板）"
+    try:
+        messages = [{"role": "system", "content": _board_converger_prompt(converger, cfg, project, board)},
+                    {"role": "user", "content": f"用户问题：{req.message}"}]
+        summary = (await llm_client.chat(messages, temperature=0.4, max_tokens=1200)).strip()
+    except Exception as e:
+        logger.warning("board 收敛失败: %s", e)
+    finally:
+        clear_llm_context()
+
+    yield _sse("converge", {"agent": converger, "content": summary})
+    try:
+        await _save_chat_message(project_id, "assistant", summary,
+                                 action={"type": "group_board_summary",
+                                         "agents": participating,
+                                         "board": board},
+                                 session_id=_sid, turn_id=_turn_id,
+                                 speaker=converger, kind="system")
+        await db.execute(
+            "UPDATE chat_sessions SET last_status='completed', last_active_at=? WHERE id=?",
+            (now_iso(), _sid),
+        )
+    except Exception as _se:
+        logger.warning("board 收敛落库失败: %s", _se)
+
+    yield _sse("message_done", {"turn_id": _turn_id, "full_text": summary})
+
+
+async def _group_board_pm_generator(project_id: str, project: dict, req: GroupBoardRequest):
+    """PM 驱动循环：OrchestratorAgent 主持，动态决定 ask / summarize / conclude，
+    直到达成目标或预算耗尽。"""
+    from llm_client import llm_client, set_llm_context, clear_llm_context
+    from utils import generate_id as _gen_id
+
+    _sid = req.chat_session_id or "default"
+    _turn_id = _gen_id("TURN")
+
+    participating = [a for a in (req.agents or _BOARD_DEFAULT_AGENTS) if a in _AGENT_CONFIG]
+    if not participating:
+        participating = _BOARD_DEFAULT_AGENTS
+
+    board = await _load_blackboard(_sid) or _empty_board(_sid, project_id, req.message[:80])
+
+    yield _sse("turn_begin", {"turn_id": _turn_id})
+    yield _sse("board_init", {"board": board})
+    # 保存用户消息
+    try:
+        await _save_chat_message(project_id, "user", req.message,
+                                 images=req.images, session_id=_sid,
+                                 turn_id=_turn_id, speaker="user", kind="message")
+    except Exception as _ue:
+        logger.warning("board 保存用户消息失败: %s", _ue)
+
+    user_content = _build_user_content(req.message, req.images)
+
+    # 话题路由 + 目标提炼（一次 LLM 调用）：PM 判断 continue / resume 旧分支 / new 新话题
+    yield _sse("pm_thinking", {"stage": "goal"})
+    earlier_titles = [n.get("title") for n in (board.get("topic_nodes") or []) if n.get("title")]
+    route = await _pm_route_topic(llm_client, project, req.message, user_content, _turn_id,
+                                  current_topic=board.get("topic") or "", earlier_titles=earlier_titles)
+    relation = (route or {}).get("topic_relation") or "continue"
+    # 用户点亮「🆕 新话题」开关：跳过路由判断，强制开新话题
+    if req.force_new_topic:
+        relation = "new"
+    # 首条消息（无话题或无目标）必然是新话题
+    if not board.get("topic") or not board.get("goal"):
+        relation = "new"
+
+    if relation == "resume":
+        node = _find_archived_topic(board, (route or {}).get("topic_title") or "")
+        if node:
+            _archive_current_topic(board)     # 当前话题若有内容先归档
+            _restore_topic_node(board, node)  # 恢复旧分支为当前话题
+            await _save_blackboard(board)
+        else:
+            relation = "new"  # 找不到对应分支，按新话题处理
+
+    if relation == "new":
+        _archive_current_topic(board)         # 当前话题若有内容先归档（无内容则 no-op）
+        board["topic"] = ((route or {}).get("topic_title") or req.message)[:80]
+        goal_data = {
+            "goal": (route or {}).get("goal") or req.message[:80],
+            "acceptance_criteria": (route or {}).get("acceptance_criteria") or [],
+            "participants": (route or {}).get("participants") or participating,
+        }
+        board["goal"] = goal_data
+        await _save_blackboard(board)
+        yield _sse("pm_goal", {"goal": goal_data})
+    # relation == continue：延续当前话题，目标与分区保持不动
+
+    # 路由结果透明化：让用户看到这条消息被判成了延续/恢复/新话题；
+    # board 全量随事件下发——换话题/恢复分支后侧栏黑板立即同步（不等第一轮 board_update）
+    yield _sse("topic_route", {"relation": relation, "title": board.get("topic") or "", "board": board})
+
+    # 本条消息即一次用户介入（若为后续消息），注入首个 PM 决策
+    pending_intervention = req.message
+    transcript: list[str] = []
+    agent_round_no = 0
+
+    # 用户 @ 点名（需求：@ 的 Agent 要能读到会议上下文）——首个动作强制为对该 Agent 的 ask
+    forced_ask = None
+    if req.force_ask_agent and req.force_ask_agent in _AGENT_CONFIG:
+        if req.force_ask_agent not in participating:
+            participating.append(req.force_ask_agent)
+        forced_ask = {"action": "ask", "targets": [req.force_ask_agent],
+                      "question": req.message, "reason": "用户直接点名"}
+
+    # PM 决策循环
+    for step in range(1, req.max_pm_decisions + 1):
+        if forced_ask:
+            decision = forced_ask
+            forced_ask = None  # 只在首轮生效
+        else:
+            yield _sse("pm_thinking", {"stage": "decide"})
+            state_view = _pm_state_view(board, transcript, pending_intervention)
+            decision = await _pm_decide(llm_client, project, state_view, _turn_id)
+            if not isinstance(decision, dict):
+                decision = {"action": "ask", "targets": [], "question": req.message,
+                            "reason": "决策解析失败，降级为全体发问"}
+
+        action = decision.get("action") or "ask"
+        reason = decision.get("reason") or ""
+        yield _sse("pm_action", {
+            "action": action,
+            "targets": decision.get("targets") or [],
+            "question": decision.get("question") or "",
+            "reason": reason,
+            "step": step,
+        })
+        pending_intervention = None  # 本轮决策已消费介入
+
+        if action == "conclude":
+            conclusion = (decision.get("conclusion") or "").strip() or "（未给出结论）"
+            # 终结论写入 summary 分区（跨消息记忆用），但不发 pm_summary 事件——
+            # 避免与下方 converge 渲染出两张内容重复的卡片
+            board.setdefault("summary", []).append(
+                {"author": _PM, "content": conclusion, "ts": now_iso()})
+            # 终结论摘要写入 decisions（黑板「共识」分区，侧栏可见）
+            first_line = next((ln.strip() for ln in conclusion.splitlines() if ln.strip()), conclusion)
+            board.setdefault("decisions", []).append(
+                {"agent": _PM, "content": first_line[:150], "ts": now_iso()})
+            await _save_blackboard(board)
+            yield _sse("converge", {"agent": _PM, "content": conclusion})
+            try:
+                await _save_chat_message(project_id, "assistant", conclusion,
+                                         action={"type": "group_board_summary",
+                                                 "agents": participating, "board": board},
+                                         session_id=_sid, turn_id=_turn_id,
+                                         speaker=_PM, kind="system")
+                await db.execute(
+                    "UPDATE chat_sessions SET last_status='completed', last_active_at=? WHERE id=?",
+                    (now_iso(), _sid),
+                )
+            except Exception as _se:
+                logger.warning("PM 收敛落库失败: %s", _se)
+            yield _sse("message_done", {"turn_id": _turn_id, "full_text": conclusion})
+            return
+
+        if action == "summarize":
+            summary_text = (decision.get("summary") or "").strip()
+            if not summary_text:
+                summary_text = "阶段小结：\n" + _board_snapshot_text(board)
+            board.setdefault("summary", []).append(
+                {"author": _PM, "content": summary_text, "ts": now_iso()})
+            await _save_blackboard(board)
+            yield _sse("pm_summary", {"summary": summary_text, "ts": now_iso()})
+            yield _sse("board_update", {"board": board, "round": agent_round_no,
+                                        "changed_sections": ["summary"]})
+            continue
+
+        # action == ask（默认）
+        targets = [t for t in (decision.get("targets") or []) if t in participating]
+        if not targets:
+            targets = participating
+        question = (decision.get("question") or "").strip() or req.message
+        agent_round_no += 1
+        yield _sse("round_begin", {"round": agent_round_no, "label": "发散", "total": req.max_agent_rounds})
+
+        # 流式回复：与会者的思考/正文增量经 queue 直播到 SSE
+        delta_queue: asyncio.Queue = asyncio.Queue()
+        gather_task = asyncio.gather(
+            *[_pm_call_agent_stream(llm_client, project_id, a, project, board, question,
+                                    "\n".join(transcript), delta_queue, _turn_id)
+              for a in targets])
+        while not gather_task.done():
+            try:
+                ev = await asyncio.wait_for(delta_queue.get(), timeout=0.25)
+                yield _sse("agent_stream", ev)
+            except asyncio.TimeoutError:
+                continue
+        while not delta_queue.empty():
+            yield _sse("agent_stream", delta_queue.get_nowait())
+        try:
+            results = await gather_task
+        except Exception as e:
+            logger.warning("PM ask 并发回复异常: %s", e)
+            results = [(a, None) for a in targets]
+
+        round_changed: set = set()
+        for agent_name, data in results:
+            public, thought, writes = _parse_agent_three_state(data)
+            if not public:
+                public = "（本轮未给出观点）"
+            cfg = _AGENT_CONFIG[agent_name]
+            if thought:
+                yield _sse("agent_thought", {
+                    "agent": agent_name, "emoji": cfg["emoji"], "color": cfg["color"],
+                    "round": agent_round_no, "thought": thought,
+                })
+            yield _sse("agent_message", {
+                "agent": agent_name, "emoji": cfg["emoji"], "color": cfg["color"],
+                "round": agent_round_no, "content": public,
+            })
+            transcript.append(f"[{agent_name}] {public}")
+
+            action_obj = {"type": "group_agent_reply", "agent": agent_name,
+                          "emoji": cfg["emoji"], "color": cfg["color"], "thought": thought}
+            thinking_payload = None
+            if thought:
+                thinking_payload = [{"round": agent_round_no, "reasoning": thought,
+                                     "steps": [], "events": [{"type": "thinking", "text": thought}]}]
+            try:
+                await _save_chat_message(project_id, "assistant", public,
+                                         action=action_obj, session_id=_sid,
+                                         turn_id=_turn_id, speaker=agent_name,
+                                         kind="utterance", thinking=thinking_payload)
+            except Exception as _se:
+                logger.warning("PM 发言落库失败: %s", _se)
+
+            round_changed |= _apply_board_writes(board, agent_name, writes)
+
+        await _save_blackboard(board)
+        yield _sse("board_update", {"board": board, "round": agent_round_no,
+                                    "changed_sections": sorted(round_changed)})
+
+        if agent_round_no >= req.max_agent_rounds:
+            # ask 发散轮数耗尽：跳出循环，落到下方兜底强制收敛
+            break
+
+    # 兜底强制收敛（预算耗尽 / 发散轮数耗尽时走到这里，复用 legacy 收敛器）
+    cfg = _AGENT_CONFIG[_PM]
+    yield _sse("converge_begin", {"agent": _PM})
+    set_llm_context(project_id=project_id, agent_type=_PM,
+                    action="group_board_converge", turn_id=_turn_id)
+    fallback = "（讨论未自然收敛，以下为强制收尾结论）"
+    try:
+        messages = [{"role": "system", "content": _board_converger_prompt(_PM, cfg, project, board)},
+                    {"role": "user", "content": f"用户问题：{req.message}"}]
+        fallback = (await llm_client.chat(messages, temperature=0.4, max_tokens=1200)).strip()
+    except Exception as e:
+        logger.warning("PM 预算耗尽强制收敛失败: %s", e)
+    finally:
+        clear_llm_context()
+
+    yield _sse("converge", {"agent": _PM, "content": fallback})
+    try:
+        await _save_chat_message(project_id, "assistant", fallback,
+                                 action={"type": "group_board_summary",
+                                         "agents": participating, "board": board},
+                                 session_id=_sid, turn_id=_turn_id,
+                                 speaker=_PM, kind="system")
+        await db.execute(
+            "UPDATE chat_sessions SET last_status='completed', last_active_at=? WHERE id=?",
+            (now_iso(), _sid),
+        )
+    except Exception as _se:
+        logger.warning("PM 兜底收敛落库失败: %s", _se)
+    yield _sse("message_done", {"turn_id": _turn_id, "full_text": fallback})
 
 
 @router.post("", response_model=ChatResponse)
@@ -1254,6 +2194,7 @@ async def patch_message_action_state(
 
 class SessionCreateRequest(BaseModel):
     title: Optional[str] = Field(default=None, description="会话标题，不传则后续由首条消息自动设置")
+    source: Optional[str] = Field(default=None, description="会话来源：chat=AI助手（默认）/ group=群聊会议")
 
 
 async def _ensure_session_exists(session_id: str, project_id: Optional[str], title: str = "新对话") -> None:
@@ -1275,6 +2216,47 @@ async def _update_session_title_if_needed(session_id: str, first_message: str) -
         await db.update("chat_sessions", {"title": title, "updated_at": now_iso()}, "id = ?", (session_id,))
 
 
+def _history_images_to_blocks(images_json, max_images: int = 3) -> list:
+    """把 chat_messages.images_json（/chat-images/... URL 列表）读成 Anthropic image blocks。
+
+    历史里重建真实图片（base64），让 LLM 真正看到最近几轮带图的上下文。
+    单条消息最多带 max_images 张，避免一张消息几十张图把 token 打爆。
+    """
+    if isinstance(images_json, str):
+        try:
+            urls = json.loads(images_json) or []
+        except Exception:
+            urls = []
+    else:
+        urls = images_json or []
+    if not urls:
+        return []
+
+    from config import BASE_DIR
+
+    _MEDIA = {"png": "image/png", "jpeg": "image/jpeg", "jpg": "image/jpeg",
+              "gif": "image/gif", "webp": "image/webp"}
+    blocks = []
+    for url in urls[:max_images]:
+        try:
+            rel = str(url).lstrip("/")
+            if rel.startswith("chat-images/"):
+                rel = rel[len("chat-images/"):]
+            fpath = BASE_DIR / "chat_images" / rel
+            if not fpath.is_file():
+                continue
+            data = fpath.read_bytes()
+            ext = rel.rsplit(".", 1)[-1].lower() if "." in rel else "png"
+            media_type = _MEDIA.get(ext, "image/png")
+            blocks.append({
+                "type": "image",
+                "source": {"type": "base64", "media_type": media_type, "data": base64.b64encode(data).decode()},
+            })
+        except Exception as e:
+            logger.warning("历史图片读取失败: %s", e)
+    return blocks
+
+
 async def _load_session_history(
     session_id: str,
     project_id: str,
@@ -1284,7 +2266,7 @@ async def _load_session_history(
 
     - poisoned session 返回空列表，避免坏上下文污染新对话
     - 每条 content 截断至 8000 字，防止历史占用过多 token
-    - 按 created_at 正序返回（最老→最新），符合 Anthropic messages 格式
+    - 取最近 limit 条，按 created_at 正序返回（最老→最新），符合 Anthropic messages 格式
     """
     sess = await db.fetch_one(
         "SELECT last_status FROM chat_sessions WHERE id = ?", (session_id,)
@@ -1294,11 +2276,14 @@ async def _load_session_history(
         return []
 
     rows = await db.fetch_all(
-        """SELECT role, content FROM chat_messages
-           WHERE session_id = ? AND project_id = ?
-             AND role IN ('user', 'assistant')
-           ORDER BY created_at ASC, id ASC
-           LIMIT ?""",
+        """SELECT role, content, images_json FROM (
+               SELECT role, content, images_json, created_at, id FROM chat_messages
+               WHERE session_id = ? AND project_id = ?
+                 AND role IN ('user', 'assistant')
+               ORDER BY created_at DESC, id DESC
+               LIMIT ?
+           )
+           ORDER BY created_at ASC, id ASC""",
         (session_id, project_id, limit),
     )
     result = []
@@ -1306,6 +2291,9 @@ async def _load_session_history(
         content = r["content"] or ""
         if len(content) > 8000:
             content = content[:8000] + "\n…（内容已截断）"
+        blocks = _history_images_to_blocks(r.get("images_json"))
+        if blocks:
+            content = blocks + ([{"type": "text", "text": content}] if content.strip() else [])
         result.append({"role": r["role"], "content": content})
     return result
 
@@ -1385,7 +2373,7 @@ async def get_cli_task(project_id: str, task_id: str):
 async def list_sessions(project_id: str, limit: int = 50):
     """列出项目的会话列表（按最新活跃倒序）"""
     rows = await db.fetch_all(
-        """SELECT s.id, s.title, s.created_at, s.updated_at,
+        """SELECT s.id, s.title, s.source, s.created_at, s.updated_at,
                   COUNT(m.id) as message_count
            FROM chat_sessions s
            LEFT JOIN chat_messages m ON m.session_id = s.id
@@ -1406,7 +2394,8 @@ async def create_session(project_id: str, req: SessionCreateRequest):
     now = now_iso()
     await db.insert("chat_sessions", {
         "id": session_id, "project_id": project_id,
-        "title": title, "created_at": now, "updated_at": now,
+        "title": title, "source": req.source or "chat",
+        "created_at": now, "updated_at": now,
     })
     return {"id": session_id, "title": title, "created_at": now}
 
@@ -2492,14 +3481,17 @@ async def _build_project_context(project_id: str, project: dict) -> dict:
         if repo_dir.exists():
             from pathlib import Path
             # 文件树（最多 100 个文件）
+            # 不能 sorted(rglob("*"))：那会先全量遍历整个仓库树（UE5 大仓库几十万文件），
+            # 同步 I/O 阻塞事件循环。改为惰性取满 100 个匹配文件再排序，边走边停。
             all_files = []
-            for f in sorted(repo_dir.rglob("*")):
+            for f in repo_dir.rglob("*"):
                 if f.is_file() and ".git" not in str(f):
                     rel = f.relative_to(repo_dir)
                     size = f.stat().st_size
                     all_files.append(f"{rel} ({size}B)")
                     if len(all_files) >= 100:
                         break
+            all_files.sort()
             file_tree = "\n".join(all_files) if all_files else "（空仓库）"
 
             # 读取关键文档内容（README, docs/*.md, index.html 等，最多 8000 字符）
@@ -2728,23 +3720,24 @@ async def _save_images(project_id: str, images: list) -> list:
     return image_urls
 
 
-def _snapshot_llm_meta(role: str) -> dict:
-    """assistant 消息快照当时 LLM 配置；user 消息不写。"""
+async def _snapshot_llm_meta(role: str) -> dict:
+    """assistant 消息快照当时 LLM 配置（按 agent 上下文解析）；user 消息不写。"""
     if role != "assistant":
         return {"api_format": None, "cli_type": None, "llm_model": None}
     try:
-        from llm_client import llm_client
-        api_format = getattr(llm_client, "api_format", None) or None
+        from llm_client import get_effective_llm_client
+        client = await get_effective_llm_client()
+        api_format = getattr(client, "api_format", None) or None
         if api_format == "cli":
-            cli_type = getattr(llm_client, "cli_type", None) or None
+            cli_type = getattr(client, "cli_type", None) or None
             model = (
-                getattr(llm_client, "cli_model", None)
-                or getattr(llm_client, "model", None)
+                getattr(client, "cli_model", None)
+                or getattr(client, "model", None)
                 or None
             )
         else:
             cli_type = None
-            model = getattr(llm_client, "model", None) or None
+            model = getattr(client, "model", None) or None
         return {"api_format": api_format, "cli_type": cli_type, "llm_model": model}
     except Exception:
         return {"api_format": None, "cli_type": None, "llm_model": None}
@@ -2760,6 +3753,8 @@ async def _save_chat_message(
     session_id: str = "default",  # v0.20 多会话
     thinking: list = None,     # v0.20 思考步骤 [{tool, args_hint, summary}, ...]
     turn_id: Optional[str] = None,  # 本轮对话 ID：trace 页面靠它把消息和 LLM/工具调用 JOIN 起来
+    speaker: Optional[str] = None,  # 多 Agent 群聊：发言人（user / DevAgent / ...）
+    kind: Optional[str] = None,     # 多 Agent 群聊：消息类型（message / utterance / system）
 ):
     """保存聊天消息到数据库，图片保存为文件"""
     msg_id = generate_id("MSG")
@@ -2778,7 +3773,7 @@ async def _save_chat_message(
     if role == "user":
         await _update_session_title_if_needed(eff_session, content)
 
-    llm_meta = _snapshot_llm_meta(role)
+    llm_meta = await _snapshot_llm_meta(role)
 
     await db.insert("chat_messages", {
         "id": msg_id,
@@ -2791,6 +3786,8 @@ async def _save_chat_message(
         "thinking_json": json.dumps(thinking, ensure_ascii=False) if thinking else None,
         "session_id": eff_session,
         "turn_id": turn_id,
+        "speaker": speaker,
+        "kind": kind,
         "api_format": llm_meta["api_format"],
         "cli_type": llm_meta["cli_type"],
         "llm_model": llm_meta["llm_model"],
@@ -3298,7 +4295,7 @@ async def _global_chat_via_agent(req: GlobalChatRequest) -> GlobalChatResponse:
 async def list_global_sessions(limit: int = 50):
     """列出全局会话（project_id IS NULL）"""
     rows = await db.fetch_all(
-        """SELECT s.id, s.title, s.created_at, s.updated_at,
+        """SELECT s.id, s.title, s.source, s.created_at, s.updated_at,
                   COUNT(m.id) as message_count
            FROM chat_sessions s
            LEFT JOIN chat_messages m ON m.session_id = s.id AND m.project_id = '__global__'
@@ -3318,7 +4315,8 @@ async def create_global_session(req: SessionCreateRequest):
     now = now_iso()
     await db.insert("chat_sessions", {
         "id": session_id, "project_id": None,
-        "title": title, "created_at": now, "updated_at": now,
+        "title": title, "source": req.source or "chat",
+        "created_at": now, "updated_at": now,
     })
     return {"id": session_id, "title": title, "created_at": now}
 
@@ -3654,7 +4652,11 @@ def _build_user_content(text: str, images: Optional[List[str]] = None):
         except Exception as ex:
             logger.warning("图片解析失败，已跳过: %s", ex)
 
-    content.append({"type": "text", "text": text})
+    # 纯图片时 text 为空：空 text block 会被 Anthropic API 拒绝，需占位或跳过
+    if text.strip():
+        content.append({"type": "text", "text": text})
+    elif not content:
+        content.append({"type": "text", "text": "（用户发送了图片，请查看并分析）"})
     return content
 
 

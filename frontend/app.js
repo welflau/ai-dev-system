@@ -422,13 +422,21 @@ const adsShell = (() => {
             drawer.classList.add('active', 'docked');
             drawer.classList.remove('shell-floating');
         }
-        // 全屏中不要把 chat 装回 layout（会被藏掉）
-        if (typeof _chatFullscreen !== 'undefined' && _chatFullscreen) {
+        // 全屏中不要把 chat 装回 layout（会被藏掉）。
+        // 判定必须"旗标 + body 类名"双确认：任何一条路径只清了其中一边，
+        // chat 就会以 fixed 浮层挂在 body 上（body.chat-open .chat-panel 是 display:flex），
+        // 右栏恢复时主工作区上飘着一块聊天气泡、pane 里是空的 —— 看起来像"恢复不了/卡死"。
+        const chatReallyFullscreen = (typeof _chatFullscreen !== 'undefined' && _chatFullscreen)
+            && document.body.classList.contains('chat-fullscreen');
+        if (chatReallyFullscreen) {
             if (chat && chat.parentElement !== document.body) {
                 document.body.appendChild(chat);
             }
-        } else if (chatPane && chat && chat.parentElement !== chatPane) {
-            chatPane.appendChild(chat);
+        } else {
+            if (typeof _chatFullscreen !== 'undefined' && _chatFullscreen) _chatFullscreen = false;
+            if (chatPane && chat && chat.parentElement !== chatPane) {
+                chatPane.appendChild(chat);
+            }
         }
         if (overlay) overlay.classList.remove('active');
         state.mounted = true;
@@ -846,6 +854,10 @@ const adsShell = (() => {
                 };
                 state.mainTabs.push(existing);
             }
+            // 行号锚点：每次 openMain 都刷新 —— 带范围则打开后滚动高亮（代码引用卡跳转），
+            // 不带则清掉旧锚点，普通打开不受上次跳转影响
+            existing.lineStart = tab.lineStart || 0;
+            existing.lineEnd = tab.lineEnd || tab.lineStart || 0;
         } else if (tab.type === 'diff') {
             const path = (tab.path || '').replace(/\\/g, '/');
             const ticketId = tab.ticketId || '';
@@ -898,11 +910,27 @@ const adsShell = (() => {
             id = 'external-sessions:panel';
             let existing = state.mainTabs.find(t => t.id === id);
             if (!existing) {
-                existing = { id, type: 'external-sessions', title: '外部会话 · Cursor', path: '外部会话' };
+                existing = { id, type: 'external-sessions', title: '外部会话', path: '外部会话' };
                 state.mainTabs.push(existing);
             }
             // projectId 带过来，切项目后再点侧栏能跟上
             existing.projectId = tab.projectId || currentProjectId || '';
+        } else if (tab.type === 'web') {
+            // 网页 Tab：iframe 内嵌显示 URL（聊天里点超链接进来）。同 URL 复用同一个 Tab。
+            const url = String(tab.url || '');
+            if (!/^https?:\/\//i.test(url)) return null;
+            id = 'web:' + url;
+            let existing = state.mainTabs.find(t => t.id === id);
+            if (!existing) {
+                existing = {
+                    id,
+                    type: 'web',
+                    url,
+                    title: tab.title || _webTabTitle(url),
+                    path: url,
+                };
+                state.mainTabs.push(existing);
+            }
         } else if (tab.type === 'image') {
             // 外部会话图片查看：一张图一个 Tab，应用内看大图（替代开新窗口）。
             // 标题不进 onclick 参数（escHtml 不转义引号，会话标题拼进 JS 字符串有注入风险），
@@ -924,6 +952,7 @@ const adsShell = (() => {
                 state.mainTabs.push(existing);
             }
             existing.projectId = tab.projectId || currentProjectId || '';
+            existing.provider = tab.provider || 'cursor';
         } else if (tab.type === 'page') {
             if (typeof switchTab === 'function') switchTab(tab.pageId);
             return tab.pageId;
@@ -946,6 +975,13 @@ const adsShell = (() => {
     function closeMainTab(id) {
         const idx = state.mainTabs.findIndex(t => t.id === id);
         if (idx < 0) return;
+        // 外部会话面板关 Tab：把 DOM 和缓存一起清掉，重开走全新挂载重新拉数据
+        if (id === 'external-sessions:panel') {
+            const p = document.querySelector('.external-sessions-pane');
+            if (p) p.remove();
+            _esPaneEl = null;
+            _esPaneProject = '';
+        }
         state.mainTabs.splice(idx, 1);
         if (state.mainActiveId === id) {
             const next = state.mainTabs[idx] || state.mainTabs[idx - 1] || null;
@@ -956,9 +992,20 @@ const adsShell = (() => {
     }
 
     function closeAllMainTabs() {
+        const p = document.querySelector('.external-sessions-pane');
+        if (p) p.remove();
+        _esPaneEl = null;
+        _esPaneProject = '';
         state.mainTabs = [];
         state.mainActiveId = null;
         _renderMainWorkspace();
+    }
+
+    /** 网页 Tab 头部的刷新按钮：重设 iframe src（同 URL 重载） */
+    function reloadWebTab(tabId) {
+        const tab = state.mainTabs.find(t => t.id === tabId);
+        const frame = document.getElementById('mainWsWebFrame');
+        if (tab && frame && tab.url) frame.src = tab.url;
     }
 
     function _renderMainWorkspace() {
@@ -983,7 +1030,8 @@ const adsShell = (() => {
                 : t.type === 'knowledge' ? '📚'
                 : t.type === 'tasks' ? '🔄'
                 : t.type === 'external-sessions' ? '📜'
-                : t.type === 'image' ? '🖼' : '📄';
+                : t.type === 'image' ? '🖼'
+                : t.type === 'web' ? '🌐' : '📄';
             const safeId = t.id.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
             return `<button type="button" class="main-ws-tab${active}" role="tab"
                         onclick="adsShell.activateMainTab('${safeId}')" title="${_escAttr(t.path || t.title)}">
@@ -1190,6 +1238,7 @@ const adsShell = (() => {
 
         // 切到别的 Tab 前先把面板搬走 —— 下面那句 host.innerHTML = ... 会把它连根删掉
         if (tab.type !== 'tasks') _evictTasksPane();
+        if (tab.type !== 'external-sessions') _esEvictPane();
 
         if (tab.type === 'tasks') {
             _mountTasksPane(tab, host);
@@ -1197,24 +1246,68 @@ const adsShell = (() => {
         }
 
         if (tab.type === 'external-sessions') {
-            // 外部会话面板是我们自己画的，每次打开都重建 DOM。
-            // 不需要像 tasks 那样"搬家"（它那套是为了保住侧栏的面板实例 + 选中态）。
+            const pid = tab.projectId || currentProjectId || '';
+            // 切项目后旧面板 DOM 还在台上（_esState.projectId 是旧项目）→ 丢掉，重新挂载
+            if (_esState.projectId && _esState.projectId !== pid) {
+                const old = host.querySelector('.external-sessions-pane');
+                if (old) old.remove();
+                _esPaneEl = null;
+                _esPaneProject = '';
+            }
+            // 面板还在台上（重复激活同一个 Tab）→ 不动，避免重建重读
+            if (host.querySelector('.external-sessions-pane')) return;
+            // 有缓存且是同一个项目 → 原样放回，不重新拉数据；否则走全新挂载（首次/切项目/重开）
+            if (_esPaneEl && _esPaneProject === pid) {
+                host.innerHTML = '';
+                host.appendChild(_esPaneEl);
+                _esPaneEl = null;
+                _esPaneProject = '';
+                // 重新放回后布局重算，恢复左右两栏滚动位置（搬 DOM 后 scrollTop 会被归零）
+                requestAnimationFrame(() => {
+                    const listEl = document.getElementById('esPanelList');
+                    const outEl = document.getElementById('esPanelOutput');
+                    if (listEl) listEl.scrollTop = _esListScrollTop;
+                    if (outEl) outEl.scrollTop = _esOutputScrollTop;
+                });
+                return;
+            }
             _mountExternalSessionsPane(tab, host);
             return;
         }
 
+        if (tab.type === 'web') {
+            // 网页 Tab：iframe 内嵌。目标站带 X-Frame-Options / CSP 时 iframe 必然白屏/拒绝连接
+            // （浏览器安全机制，应用侧无解），所以常驻提示条 + ↗ 走后端调系统浏览器兜底。
+            const u = _escAttr(tab.url || '');
+            const safeId = _escAttr(tab.id);
+            host.innerHTML = `
+                <div class="main-ws-pane-header">
+                    <div class="main-ws-pane-path" title="${_escAttr(tab.url || '')}">${_escHtml(tab.title || tab.url || '网页')}</div>
+                    <div class="main-ws-pane-actions">
+                        <button type="button" class="btn-icon main-ws-action" title="重新加载" onclick="adsShell.reloadWebTab('${safeId}')">↻</button>
+                        <button type="button" class="btn-icon main-ws-action" title="在系统浏览器打开" onclick="_openUrlInSystemBrowser('${u}')">↗</button>
+                    </div>
+                </div>
+                <div class="main-ws-web-hint">部分站点（如工蜂）通过 X-Frame-Options 禁止内嵌，若下方白屏或提示"拒绝连接"，请点右上 ↗ 在系统浏览器打开</div>
+                <div class="main-ws-web" style="flex:1;min-height:0;">
+                    <iframe id="mainWsWebFrame" src="${u}" style="width:100%;height:100%;border:0;background:#fff;"
+                        referrerpolicy="no-referrer"></iframe>
+                </div>`;
+            return;
+        }
+
         if (tab.type === 'image') {
-            // 外部会话图片 Tab：头部只放标题，主体复用 .main-ws-img 居中展示，大图可滚动。
-            const url = `/api/projects/${encodeURIComponent(tab.projectId || currentProjectId || '')}/external-sessions/cursor/${encodeURIComponent(tab.sessionId)}/images/${encodeURIComponent(tab.uuid)}`;
+            // 外部会话图片 Tab：头部只放标题，主体是自绘图片查看器（滚轮缩放 + 左键拖动 + 双击复位）。
+            const provider = tab.provider || 'cursor';
+            const url = `/api/projects/${encodeURIComponent(tab.projectId || currentProjectId || '')}/external-sessions/${encodeURIComponent(provider)}/${encodeURIComponent(tab.sessionId)}/images/${encodeURIComponent(tab.uuid)}`;
             host.innerHTML = `
                 <div class="main-ws-pane-header">
                     <div class="main-ws-pane-path" title="${_escAttr(tab.title || '')}">${_escHtml(tab.title || '图片')}</div>
                 </div>
-                <div class="main-ws-img" style="flex:1;overflow:auto;min-height:0;">
-                    <img src="${url}" alt="${_escAttr(tab.title || '')}"
-                        style="max-height:none;cursor:zoom-out;"
-                        onclick="this.style.maxHeight=this.style.maxHeight?'':'none'">
+                <div class="main-ws-img es-image-viewer" style="flex:1;overflow:hidden;min-height:0;position:relative;">
+                    <img src="${url}" alt="${_escAttr(tab.title || '')}">
                 </div>`;
+            _esInitImageViewer(host.querySelector('.es-image-viewer'));
             return;
         }
 
@@ -1265,7 +1358,10 @@ const adsShell = (() => {
         let ext = (path.split('.').pop() || '').toLowerCase();
         if (imgExts.includes(ext)) {
             const rawUrl = `/api/projects/${currentProjectId}/git/file-raw?path=${encodeURIComponent(path)}`;
-            body.innerHTML = `<div class="main-ws-img"><img src="${rawUrl}" alt="${_escAttr(tabRef.title)}"></div>`;
+            // 复用外部会话的图片查看器：滚轮缩放 + 左键拖动 + 双击复位
+            body.innerHTML = `<div class="main-ws-img es-image-viewer" style="height:100%;overflow:hidden;position:relative;">
+                <img src="${rawUrl}" alt="${_escAttr(tabRef.title)}"></div>`;
+            _esInitImageViewer(body.querySelector('.es-image-viewer'));
             return;
         }
 
@@ -1322,6 +1418,7 @@ const adsShell = (() => {
 
         if (actions) actions.innerHTML = _toolbarIconsHtml(tabRef);
         _renderCodePane(body, content, path);
+        _applyFileLineAnchor(tabRef, body);
     }
 
     function _kbScopeLabel(scope) {
@@ -1393,6 +1490,24 @@ const adsShell = (() => {
         </div>`;
         if (opts.append) body.insertAdjacentHTML('beforeend', block);
         else body.innerHTML = block;
+    }
+
+    /** tab.lineStart/lineEnd 锚点 → 代码行高亮 + 滚动到范围起始行（居中）。
+     *  来源：代码引用卡 / 报错链接 openRepoFileFromChat(path, start, end) → openMain。 */
+    function _applyFileLineAnchor(tab, body) {
+        const s = parseInt(tab && tab.lineStart, 10) || 0;
+        if (!s || !body) return;
+        const e = parseInt(tab.lineEnd, 10) || s;
+        const from = Math.max(1, s);
+        let first = null;
+        body.querySelectorAll('.main-ws-line').forEach(el => {
+            const ln = parseInt(el.dataset.ln, 10) || 0;
+            if (ln >= from && ln <= e) {
+                el.classList.add('main-ws-line-hl');
+                if (!first) first = el;
+            }
+        });
+        if (first) first.scrollIntoView({ block: 'center' });
     }
 
     function _renderDiffPane(body, diff) {
@@ -1701,6 +1816,7 @@ const adsShell = (() => {
         activateMainTab,
         closeMainTab,
         closeAllMainTabs,
+        reloadWebTab,
         getMainTabContent,
         evictTasksPane: _evictTasksPane,
         hasTasksTab: () => state.mainTabs.some(t => t.type === 'tasks'),
@@ -1917,7 +2033,9 @@ function _buildAssistantAvatar(meta = null) {
     const shortModel = modelLabel.length > 10 ? modelLabel.slice(0, 9) + '…' : modelLabel;
     const iconSvg = isCli ? (_CLI_ICONS[cfg.cli_type] || _CLI_ICONS['custom']) : null;
     const iconHtml = iconSvg || '<span style="font-size:14px;">🤖</span>';
-    return `<div class="chat-avatar-wrap">
+    return `<div class="chat-avatar-wrap" title="AI 助手模型配置（点击打开）"
+                onclick="event.stopPropagation();showAgentLlmConfigModal('ChatAssistant')"
+                style="cursor:pointer;">
         <div class="chat-avatar-icon">${iconHtml}</div>
         ${shortModel ? `<div class="chat-avatar-model">${escapeHtml(shortModel)}</div>` : ''}
     </div>`;
@@ -2202,6 +2320,209 @@ async function saveLLMConfig() {
         showToast(`保存失败: ${e.message}`, 'error');
     }
 }
+
+// ==================== Agent 级 LLM 配置 ====================
+
+let _agentLlmModalAgent = '';       // 当前正在配置的 agent_type
+let _agentLlmModalData = null;      // /api/llm/agents 响应缓存
+
+const _AGENT_LLM_CLI_LABELS = {
+    'claude': 'Claude Code（claude）',
+    'claude-internal': 'Claude 内网版（claude-internal）',
+    'tclaude': 'TClaude 内网版（tclaude）',
+    'gemini-internal': 'Gemini 内网版（gemini-internal）',
+    'codebuddy': 'CodeBuddy（codebuddy）',
+    'cursor': 'Cursor Agent（agent）',
+    'custom': '自定义（stdin 传入）',
+};
+
+/** 打开某 Agent 的模型配置弹窗（头像点击 / 列表按钮入口） */
+async function showAgentLlmConfigModal(agentType) {
+    agentType = agentType || 'ChatAssistant';
+    _agentLlmModalAgent = agentType;
+    document.getElementById('agentLlmConfigModal')?.remove();
+
+    let agents = [];
+    try {
+        const data = await api('/llm/agents');
+        agents = data.agents || [];
+        _agentLlmModalData = data;
+    } catch (e) {
+        showToast(`加载 Agent 配置失败: ${e.message}`, 'error');
+        return;
+    }
+    const agent = agents.find(a => a.agent_type === agentType) || {};
+    const eff = agent.effective || {};
+    const hasOverride = !!agent.has_override;
+
+    const cliOptions = Object.keys(_AGENT_LLM_CLI_LABELS).map(t =>
+        `<option value="${t}"${t === (eff.cli_type || '') ? ' selected' : ''}>${_AGENT_LLM_CLI_LABELS[t]}</option>`
+    ).join('');
+
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay active';   // .modal-overlay 默认 opacity:0，必须带 active
+    overlay.id = 'agentLlmConfigModal';
+    overlay.style.display = 'flex';
+    overlay.setAttribute('onclick', "if(event.target===this)closeAgentLlmConfigModal()");
+    overlay.innerHTML = `
+        <div class="modal" style="max-width:560px;width:92vw;">
+            <div class="modal-header">
+                <h3>🤖 模型配置 · ${escHtml(agentType)}</h3>
+                <button class="btn-icon" onclick="closeAgentLlmConfigModal()">&times;</button>
+            </div>
+            <div style="padding:16px 20px;max-height:72vh;overflow-y:auto;">
+                <label style="display:flex;align-items:center;gap:8px;margin-bottom:14px;cursor:pointer;">
+                    <input type="checkbox" id="agentLlmInherit" ${hasOverride ? '' : 'checked'} onchange="_agentLlmToggleInherit()">
+                    <span style="font-size:13px;">继承全局配置（不勾选则用下方自定义配置）</span>
+                </label>
+                <div id="agentLlmFields">
+                    <div class="form-group">
+                        <label>接入方式</label>
+                        <select id="agentLlmApiFormat" onchange="_agentLlmFormatChange(this.value)">
+                            <option value="anthropic">API 模式（Anthropic）</option>
+                            <option value="openai">API 模式（OpenAI 兼容）</option>
+                            <option value="cli">CLI 模式（本地命令行工具）</option>
+                        </select>
+                    </div>
+                    <div id="agentLlmApiFields">
+                        <div class="form-group"><label>API Base URL</label>
+                            <input type="text" id="agentLlmBaseUrl" value="${escHtml(eff.base_url || '')}" placeholder="https://..."></div>
+                        <div class="form-group"><label>API Key</label>
+                            <input type="password" id="agentLlmApiKey" placeholder="${hasOverride ? '已设置，留空保持不变' : '继承全局'}"></div>
+                        <div class="form-group"><label>模型</label>
+                            <input type="text" id="agentLlmModel" value="${escHtml(eff.model || '')}" placeholder="gpt-4 / claude-sonnet-4"></div>
+                    </div>
+                    <div id="agentLlmCliFields" style="display:none;">
+                        <div class="form-group"><label>CLI 工具类型</label>
+                            <select id="agentLlmCliType">${cliOptions}</select></div>
+                        <div class="form-group"><label>CLI 可执行路径</label>
+                            <input type="text" id="agentLlmCliCmd" value="${escHtml(eff.cli_cmd || '')}" placeholder="claude 或完整路径"></div>
+                        <div class="form-group"><label>CLI 模型</label>
+                            <input type="text" id="agentLlmCliModel" value="${escHtml(eff.cli_model || '')}" placeholder="留空继承全局模型"></div>
+                        <div class="form-group"><label>超时（秒）</label>
+                            <input type="number" id="agentLlmCliTimeout" value="${eff.cli_timeout || ''}" placeholder="1800"></div>
+                    </div>
+                </div>
+                <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px;">
+                    ${hasOverride ? `<button class="btn" onclick="resetAgentLlmConfig()" style="color:var(--danger);">恢复继承</button>` : ''}
+                    <button class="btn" onclick="closeAgentLlmConfigModal()">取消</button>
+                    <button class="btn btn-primary" onclick="saveAgentLlmConfig()">保存</button>
+                </div>
+            </div>
+        </div>`;
+    document.body.appendChild(overlay);
+    // 初始化显示状态
+    const fmt = eff.api_format || 'anthropic';
+    const fmtEl = document.getElementById('agentLlmApiFormat');
+    if (fmtEl) fmtEl.value = fmt;
+    _agentLlmFormatChange(fmt);
+    _agentLlmToggleInherit();
+}
+
+function closeAgentLlmConfigModal() {
+    document.getElementById('agentLlmConfigModal')?.remove();
+    _agentLlmModalAgent = '';
+}
+
+/** 继承开关：勾选继承则禁用字段 */
+function _agentLlmToggleInherit() {
+    const inherit = document.getElementById('agentLlmInherit')?.checked;
+    const fields = document.getElementById('agentLlmFields');
+    if (!fields) return;
+    fields.style.opacity = inherit ? '0.45' : '1';
+    fields.style.pointerEvents = inherit ? 'none' : '';
+}
+
+/** 接入方式切换：显示 API 字段 or CLI 字段 */
+function _agentLlmFormatChange(fmt) {
+    const api = document.getElementById('agentLlmApiFields');
+    const cli = document.getElementById('agentLlmCliFields');
+    if (api) api.style.display = fmt === 'cli' ? 'none' : '';
+    if (cli) cli.style.display = fmt === 'cli' ? '' : 'none';
+}
+
+async function saveAgentLlmConfig() {
+    const agent = _agentLlmModalAgent;
+    if (!agent) return;
+    const inherit = document.getElementById('agentLlmInherit')?.checked;
+    if (inherit) {
+        // 继承 = 删除覆盖
+        try {
+            await api(`/llm/agents/${encodeURIComponent(agent)}/config`, { method: 'DELETE' });
+            showToast(`${agent} 已恢复继承全局配置`, 'success');
+            closeAgentLlmConfigModal();
+            await checkLLMStatus();
+        } catch (e) { showToast(`保存失败: ${e.message}`, 'error'); }
+        return;
+    }
+
+    const fmt = document.getElementById('agentLlmApiFormat')?.value || 'anthropic';
+    const payload = { api_format: fmt };
+    if (fmt === 'cli') {
+        payload.cli_type   = document.getElementById('agentLlmCliType')?.value || 'claude';
+        payload.cli_cmd    = document.getElementById('agentLlmCliCmd')?.value.trim() || '';
+        payload.cli_model  = document.getElementById('agentLlmCliModel')?.value.trim() || '';
+        const tout = document.getElementById('agentLlmCliTimeout')?.value.trim();
+        if (tout) payload.cli_timeout = parseInt(tout, 10) || null;
+    } else {
+        payload.base_url = document.getElementById('agentLlmBaseUrl')?.value.trim() || '';
+        payload.api_key  = document.getElementById('agentLlmApiKey')?.value.trim() || '';
+        payload.model    = document.getElementById('agentLlmModel')?.value.trim() || '';
+    }
+
+    try {
+        await api(`/llm/agents/${encodeURIComponent(agent)}/config`, { method: 'POST', body: payload });
+        showToast(`${agent} 模型配置已保存`, 'success');
+        closeAgentLlmConfigModal();
+        await checkLLMStatus();
+    } catch (e) { showToast(`保存失败: ${e.message}`, 'error'); }
+}
+
+async function resetAgentLlmConfig() {
+    const agent = _agentLlmModalAgent;
+    if (!agent) return;
+    try {
+        await api(`/llm/agents/${encodeURIComponent(agent)}/config`, { method: 'DELETE' });
+        showToast(`${agent} 已恢复继承全局配置`, 'success');
+        closeAgentLlmConfigModal();
+    } catch (e) { showToast(`恢复失败: ${e.message}`, 'error'); }
+}
+
+/** 列出所有 Agent，选择要独立配置模型的 Agent（全局 LLM 配置弹窗里的次级入口） */
+async function openAgentLlmPicker() {
+    document.getElementById('agentLlmPickerModal')?.remove();
+    let data;
+    try { data = await api('/llm/agents'); }
+    catch (e) { showToast(`加载失败: ${e.message}`, 'error'); return; }
+    const agents = data.agents || [];
+
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay active';   // 同上：默认 opacity:0，必须带 active
+    overlay.id = 'agentLlmPickerModal';
+    overlay.style.display = 'flex';
+    overlay.setAttribute('onclick', "if(event.target===this)this.remove()");
+    overlay.innerHTML = `
+        <div class="modal" style="max-width:440px;width:92vw;">
+            <div class="modal-header">
+                <h3>🤖 各 Agent 独立模型</h3>
+                <button class="btn-icon" onclick="document.getElementById('agentLlmPickerModal').remove()">&times;</button>
+            </div>
+            <div style="padding:12px 16px;max-height:60vh;overflow-y:auto;">
+                <p style="font-size:12px;color:var(--text-muted);margin-bottom:10px;">
+                    选择要独立配置模型的 Agent；未配置的 Agent 继承全局配置。
+                </p>
+                ${agents.map(a => `
+                    <div style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:6px;cursor:pointer;"
+                         onclick="document.getElementById('agentLlmPickerModal').remove();showAgentLlmConfigModal('${escHtml(a.agent_type)}')"
+                         onmouseover="this.style.background='var(--bg-elevated)'" onmouseout="this.style.background=''">
+                        <span style="flex:1;font-size:13px;">${escHtml(a.agent_type)}</span>
+                        ${a.has_override ? '<span style="font-size:11px;color:var(--primary-light);">已自定义</span>' : '<span style="font-size:11px;color:var(--text-muted);">继承全局</span>'}
+                    </div>`).join('')}
+            </div>
+        </div>`;
+    document.body.appendChild(overlay);
+}
+
 
 
 async function testLightAIConnection() {
@@ -2665,6 +2986,8 @@ function _updateChatPanelForContext(opts = {}) {
     // 就决定"已经加载过了"。切项目不清它，群聊 Tab 会原样显示上一个项目的讨论。
     const groupBox = document.getElementById('groupChatMessages');
     if (groupBox && !chatSending && !_streamAbortController) groupBox.innerHTML = '';
+    // 群聊会话随项目切换重置：新项目 = 新群聊 = 新黑板
+    _currentGroupSessionId = null;
     const histPanel = document.getElementById('chatHistoryPanel');
     if (histPanel) histPanel.style.display = 'none';
 
@@ -6911,8 +7234,16 @@ async function loadProjectDetail() {
             titleEl.textContent = `AI 助手 · ${name}`;
         }
         _updateFullscreenProjectLabel();
-        // 加载默认 tab
-        switchTab('board');
+        // 加载默认 tab。仅当用户还停在默认页（看板、没开文档 Tab）时才切——
+        // 这个 API 往返期间用户多半已经点了别的栏目（比如直奔外部会话），
+        // 项目数据这时候才回来，不该把人从那拽回看板。
+        try {
+            const st = (typeof adsShell !== 'undefined') ? adsShell.getState() : null;
+            const userNavigatedAway = !!st && (st.currentPage !== 'board' || !!st.mainActiveId);
+            if (!userNavigatedAway) switchTab('board');
+        } catch {
+            switchTab('board');
+        }
         loadRequirementFilter();
     } catch (e) {
         console.error('loadProjectDetail failed:', e);
@@ -14035,6 +14366,13 @@ function _renderAgentDetailPane(agent) {
             <span class="param-label">完成/异常</span>
             <span class="param-value">✅${agent.completed_count || 0} / ❌${agent.error_count || 0}</span>
         </div>
+    </div>
+    <div style="margin-bottom:16px;">
+        <h4 style="font-size:13px;color:var(--text-muted);margin-bottom:6px;">🧠 模型配置</h4>
+        <div style="display:flex;align-items:center;gap:10px;background:var(--bg-elevated);border:1px solid var(--border);border-radius:8px;padding:10px 12px;">
+            <span id="agentDetailLlmBadge" style="font-size:12px;color:var(--text-muted);flex:1;">加载中…</span>
+            <button class="btn btn-sm" onclick="showAgentLlmConfigModal('${escHtml(agent.name)}')">⚙️ 配置模型</button>
+        </div>
     </div>`;
 
     // Watch
@@ -14110,6 +14448,27 @@ function _renderAgentDetailPane(agent) {
     }
 
     bodyEl.innerHTML = html;
+    // 异步填模型配置徽标（生效配置摘要 + 继承/自定义状态）
+    _fillAgentDetailLlmBadge(agent.name);
+}
+
+async function _fillAgentDetailLlmBadge(agentName) {
+    const el = document.getElementById('agentDetailLlmBadge');
+    if (!el) return;
+    try {
+        const data = await api('/llm/agents');
+        const a = (data.agents || []).find(x => x.agent_type === agentName);
+        if (!el.isConnected) return;   // 弹窗已切到别的 agent
+        if (!a) { el.textContent = '该 Agent 不在 LLM 路由注册表中'; return; }
+        const eff = a.effective || {};
+        const model = eff.api_format === 'cli' ? (eff.cli_model || eff.model) : eff.model;
+        const state = a.has_override
+            ? '<span style="color:var(--primary-light);">已自定义</span>'
+            : '继承全局';
+        el.innerHTML = `${state} · ${escHtml(eff.api_format || '')} · ${escHtml(model || '未配置')}`;
+    } catch {
+        if (el.isConnected) el.textContent = '配置加载失败';
+    }
 }
 
 function updateProjRepoName(cardId) {
@@ -16118,6 +16477,8 @@ function _updateFullscreenProjectLabel() {
 
 function toggleChatFullscreen() {
     _chatFullscreen = !_chatFullscreen;
+    // 黑板卡在「左侧栏 / 消息流内联」间搬移（全屏进侧栏，退出回内联）
+    _syncGroupBoardPlacement();
     const btn = document.getElementById('chatFullscreenBtn');
     const splitBtn = document.getElementById('chatSplitBtn');
     const chat = document.getElementById('chatPanel');
@@ -16609,8 +16970,10 @@ async function _splitPaneHistory(paneId) {
     // 加载会话列表，复用主面板的分组 + 样式
     try {
         const data = await api(`${_sessionApiBase()}/sessions`);
-        // 过滤掉空会话（0条消息）
-        const sessions = (data.sessions || []).filter(s => (s.message_count || 0) > 0);
+        // 过滤掉空会话（0条消息）和群聊会话（source=group，属于群聊 Tab）
+        const sessions = (data.sessions || []).filter(s => (s.message_count || 0) > 0 && s.source !== 'group');
+        // 顺带刷新标题缓存（聊天面板头部小字用；含 0 条消息的会话也缓存）
+        for (const s of (data.sessions || [])) _chatSessionTitles[s.id] = s;
         const listEl = document.getElementById('splitHistoryPickerList');
         if (!listEl) return;
 
@@ -16823,6 +17186,18 @@ function setChatMode(mode) {
     document.getElementById('chatModeJob')?.classList.toggle('active', mode === 'job');
     document.getElementById('chatModeGroup')?.classList.toggle('active', mode === 'group');
 
+    // 会话标题小字只属于 AI助手（global）Tab —— 工单/群聊不是会话，不跟着显示
+    const sessTitleEl = document.getElementById('chatPanelSessionTitle');
+    if (sessTitleEl) {
+        if (mode === 'global') {
+            _updateChatPanelSessionTitle(_currentChatSessionId);
+        } else {
+            sessTitleEl.textContent = '';
+            sessTitleEl.title = '';
+            sessTitleEl.style.display = 'none';
+        }
+    }
+
     // 切换容器显隐
     const mainContainer = document.getElementById('chatMessages');
     const groupContainer = document.getElementById('groupChatMessages');
@@ -16833,6 +17208,12 @@ function setChatMode(mode) {
         mainContainer.style.display = '';
         groupContainer.style.display = 'none';
     }
+    // 「新建」按钮按模式切换行为：群聊=新建群聊，其余=新建对话
+    const _newBtn = document.getElementById('newChatBtn');
+    if (_newBtn) _newBtn.title = mode === 'group' ? '新建群聊（新话题/新黑板）' : '新建对话';
+    // 「🆕 新话题」开关只在群聊显示
+    const _fntBtn = document.getElementById('forceNewTopicBtn');
+    if (_fntBtn) _fntBtn.style.display = mode === 'group' ? '' : 'none';
 
     // 更新标题
     const titleEl = document.getElementById('chatPanelTitle');
@@ -16860,6 +17241,9 @@ function setChatMode(mode) {
             loadGroupChat();
         }
     }
+
+    // 切走群聊模式时收起黑板侧栏
+    _applyGroupBoardPlacement();
 }
 
 /**
@@ -16929,6 +17313,7 @@ async function newChatSession() {
     try {
         const data = await api(`${_sessionApiBase()}/sessions`, { method: 'POST', body: {} });
         _currentChatSessionId = data.id;
+        _updateChatPanelSessionTitle(data.id);   // 空会话：清掉上一个会话的标题小字
         chatHistory = [];
         const container = document.getElementById('chatMessages');
         if (container) container.innerHTML = '';
@@ -17073,14 +17458,44 @@ function _sessionDisplayTitle(s) {
     return t;
 }
 
+// 会话标题缓存：id → session 对象（loadChatSessions 刷新；聊天面板头部小字展示用）
+const _chatSessionTitles = {};
+
+/** 聊天面板头部：在「AI 助手 · 项目名」旁以小字显示当前会话标题（历史记录同款显示文字） */
+async function _updateChatPanelSessionTitle(sessionId, force) {
+    const el = document.getElementById('chatPanelSessionTitle');
+    if (!el) return;
+    if (!sessionId) { el.textContent = ''; el.style.display = 'none'; return; }
+    let s = force ? null : _chatSessionTitles[sessionId];
+    if (!s) {
+        try {
+            const data = await api(`${_sessionApiBase()}/sessions?limit=50`);
+            for (const it of (data.sessions || [])) _chatSessionTitles[it.id] = it;
+            s = _chatSessionTitles[sessionId];
+        } catch (e) { /* 静默：拿不到标题就不显示 */ }
+    }
+    if (s && (s.message_count || 0) > 0) {
+        el.textContent = _sessionDisplayTitle(s);
+        el.title = el.textContent;
+        el.style.display = '';
+    } else {
+        // 空会话不显示（新建对话时保持干净；首条消息发出后 finally 里会强制刷新）
+        el.textContent = '';
+        el.title = '';
+        el.style.display = 'none';
+    }
+}
+
 async function loadChatSessions() {
     const listEl = document.getElementById('chatHistoryList');
     if (!listEl) return;
     listEl.innerHTML = '<div style="padding:12px;color:var(--text-muted);font-size:12px;">加载中...</div>';
     try {
         const data = await api(`${_sessionApiBase()}/sessions`);
-        // 过滤掉空会话（0条消息）
-        const sessions = (data.sessions || []).filter(s => (s.message_count || 0) > 0);
+        // 过滤掉空会话（0条消息）和群聊会话（source=group，属于群聊 Tab）
+        const sessions = (data.sessions || []).filter(s => (s.message_count || 0) > 0 && s.source !== 'group');
+        // 顺带刷新标题缓存（聊天面板头部小字用；含 0 条消息的会话也缓存）
+        for (const s of (data.sessions || [])) _chatSessionTitles[s.id] = s;
         if (!sessions.length) {
             listEl.innerHTML = '<div style="padding:12px;color:var(--text-muted);font-size:12px;">暂无历史对话</div>';
             return;
@@ -17140,6 +17555,7 @@ async function switchChatSession(sessionId) {
     if (!container) return;
     const _tok = _chatLoadStart();
     _currentChatSessionId = sessionId;
+    _updateChatPanelSessionTitle(sessionId);
     _cliClearMem();  // 切会话时清空内存任务，后台任务面板跟着切
     _persistChatWorkspace();
     // 关闭历史面板，让消息区可见
@@ -17882,11 +18298,11 @@ async function loadChatHistory() {
     const container = document.getElementById('chatMessages');
 
     try {
-        // v0.20：优先从当前 session 加载，无 session 则取最近一条
+        // v0.20：优先从当前 session 加载，无 session 则取最近一条（排除群聊会话）
         let sessionToLoad = _currentChatSessionId;
         if (!sessionToLoad) {
-            const sessData = await api(`/projects/${currentProjectId}/chat/sessions?limit=1`);
-            const latest = (sessData.sessions || [])[0];
+            const sessData = await api(`/projects/${currentProjectId}/chat/sessions?limit=10`);
+            const latest = (sessData.sessions || []).find(s => s.source !== 'group') || null;
             sessionToLoad = latest ? latest.id : null;
             _currentChatSessionId = sessionToLoad;
         }
@@ -17895,6 +18311,7 @@ async function loadChatHistory() {
             const sessResp = await api(`/projects/${currentProjectId}/chat/sessions/${sessionToLoad}/messages`);
             messages = sessResp.messages || [];
         }
+        _updateChatPanelSessionTitle(sessionToLoad);
         // fallback: 如果 session 为空或不存在，用旧的全量历史 API
         if (!messages.length) {
             const resp = await originalApi(`/projects/${currentProjectId}/chat/history?limit=50`);
@@ -17924,11 +18341,18 @@ async function loadChatHistory() {
                 actionObj._state = msg.action_state || 'pending';
                 actionObj._result = msg.action_result || null;
             }
-            // group_agent_reply：还原带颜色 Agent 气泡（含思考面板）
+            // group_agent_reply 或 speaker 列：还原带颜色 Agent 气泡（含思考面板）
+            let _agentStyle = null;
             if (actionObj && actionObj.type === 'group_agent_reply') {
-                const _ag = actionObj.agent || '';
-                const _em = actionObj.emoji || '🤖';
-                const _co = actionObj.color || '#888';
+                _agentStyle = { agent: actionObj.agent || '', emoji: actionObj.emoji || '🤖', color: actionObj.color || '#888' };
+            } else if (msg.speaker && msg.speaker !== 'user') {
+                const _info = _AGENT_MENTIONS.find(a => a.name === msg.speaker);
+                if (_info) _agentStyle = { agent: _info.name, emoji: _info.emoji, color: _info.color };
+            }
+            if (_agentStyle) {
+                const _ag = _agentStyle.agent;
+                const _em = _agentStyle.emoji;
+                const _co = _agentStyle.color;
                 // 用 appendChatBubble 渲染（自动处理 thinking 面板）
                 appendChatBubble(msg.role, msg.content, msg.created_at, null,
                     msg.images || [], [], msg.thinking || [], container, _msgLlmMeta(msg));
@@ -17938,8 +18362,10 @@ async function loadChatHistory() {
                     const _av = _msgEl.querySelector('.chat-avatar-wrap, .chat-msg-avatar');
                     if (_av) {
                         _av.className = 'chat-msg-avatar group-agent-avatar';
-                        _av.style.cssText = `background:${_co}20;border:1.5px solid ${_co}40;color:${_co};font-size:16px;width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:2px;`;
+                        _av.style.cssText = `background:${_co}20;border:1.5px solid ${_co}40;color:${_co};font-size:16px;width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:2px;cursor:pointer;`;
                         _av.textContent = _em;
+                        _av.title = `${_ag} · 点击配置模型`;
+                        _av.onclick = (e) => { e.stopPropagation(); showAgentLlmConfigModal(_ag); };
                     }
                     const _ct = _msgEl.querySelector('.chat-msg-content');
                     if (_ct && !_ct.querySelector('.group-agent-name')) {
@@ -18265,14 +18691,9 @@ async function locateInTicketFeed(ticketId, commentId) {
 /**
  * 初始化群聊界面（首次进入时显示欢迎，不加载工单历史）
  */
-function loadGroupChat() {
+function _renderGroupWelcome() {
     const container = document.getElementById('groupChatMessages');
     if (!container) return;
-    // 已有内容则不重置（保留对话记录）
-    if (container.children.length > 0) {
-        scrollChatToBottom();
-        return;
-    }
     container.innerHTML = `
         <div class="chat-welcome">
             <div class="chat-welcome-icon">👥</div>
@@ -18286,7 +18707,89 @@ function loadGroupChat() {
                 <span class="group-agent-tag" onclick="insertMention('@TestAgent ')" style="background:#3fb95020;color:#3fb950;border:1px solid #3fb95040;">🧪 @TestAgent</span>
                 <span class="group-agent-tag" onclick="insertMention('@OrchestratorAgent ')" style="background:#d2a8ff20;color:#d2a8ff;border:1px solid #d2a8ff40;">🎯 @OrchestratorAgent</span>
             </div>
+            <div style="display:flex;justify-content:center;gap:8px;margin-top:10px;flex-wrap:wrap;">
+                <button class="group-agent-tag" onclick="startNewGroupChat()"
+                        style="background:transparent;color:var(--text-muted);border:1px dashed var(--border);cursor:pointer;padding:4px 12px;border-radius:12px;font-size:12px;">
+                    🆕 新群聊
+                </button>
+            </div>
         </div>`;
+}
+
+/** 渲染一块黑板卡（刷新还原用），按全屏状态决定内联 or 左侧栏 */
+function _renderGroupBoardCard(board) {
+    const groupContainer = document.getElementById('groupChatMessages');
+    if (!groupContainer) return;
+    // 旧黑板卡清掉，避免刷新还原时重复堆叠
+    groupContainer.querySelectorAll(':scope > .group-board-card').forEach(el => el.remove());
+    document.getElementById('groupBoardSidebar')?.replaceChildren();
+    const boardCard = document.createElement('div');
+    boardCard.className = 'group-board-card';
+    boardCard.innerHTML = `<div class="group-board-title">🧠 黑板</div><div class="group-board-body">${_renderBoardSummary(board)}</div>`;
+    groupContainer.appendChild(boardCard);
+    _syncGroupBoardPlacement();
+}
+
+/**
+ * 刷新/进群聊 Tab 时还原上一场群聊（会话消息 + 黑板）。
+ * 无历史则渲染欢迎页。
+ */
+async function _restoreGroupChat() {
+    const container = document.getElementById('groupChatMessages');
+    if (!container || !currentProjectId) { _renderGroupWelcome(); return; }
+    try {
+        const sessData = await api(`/projects/${currentProjectId}/chat/sessions?limit=10`);
+        const groupSession = (sessData.sessions || []).find(s => s.source === 'group');
+        if (!groupSession) { _renderGroupWelcome(); return; }
+        _currentGroupSessionId = groupSession.id;
+
+        const sessResp = await api(`/projects/${currentProjectId}/chat/sessions/${groupSession.id}/messages`);
+        const messages = sessResp.messages || [];
+        if (!messages.length) { _renderGroupWelcome(); return; }
+
+        container.innerHTML = '';
+        for (const msg of messages) {
+            let actionObj = null;
+            if (msg.action_data) { try { actionObj = JSON.parse(msg.action_data); } catch { actionObj = null; } }
+            if (msg.kind === 'system' || (actionObj && actionObj.type === 'group_board_summary')) {
+                // 收敛结论卡
+                const c = document.createElement('div');
+                c.className = 'group-board-converge';
+                c.innerHTML = `<div class="group-board-title" style="color:#d2a8ff;">🎯 收敛结论</div><div>${formatChatContent(msg.content)}</div>`;
+                container.appendChild(c);
+            } else if (msg.kind === 'utterance' || (actionObj && actionObj.type === 'group_agent_reply')) {
+                const _name = msg.speaker || (actionObj && actionObj.agent) || '';
+                const info = _agentDisplayInfo(_name);
+                appendGroupAgentBubble(info.name, info.emoji, info.color, msg.content, msg.created_at);
+            } else {
+                // 用户消息
+                appendChatBubble('user', msg.content, msg.created_at, null,
+                    msg.images || [], [], msg.thinking || [], container);
+            }
+        }
+
+        // 还原黑板
+        try {
+            const boardResp = await api(`/projects/${currentProjectId}/chat/group/board?session_id=${groupSession.id}`);
+            if (boardResp.board) _renderGroupBoardCard(boardResp.board);
+        } catch (_) {}
+
+        scrollChatToBottom();
+    } catch (_) {
+        _renderGroupWelcome();
+    }
+}
+
+function loadGroupChat() {
+    const container = document.getElementById('groupChatMessages');
+    if (!container) return;
+    // 已有内容则不重置（保留对话记录）
+    if (container.children.length > 0) {
+        scrollChatToBottom();
+        return;
+    }
+    // 尝试还原上一场群聊；无历史则显示欢迎页
+    _restoreGroupChat();
 }
 
 /**
@@ -18299,6 +18802,415 @@ function insertMention(text) {
     input.value = cur ? cur + ' ' + text : text;
     input.focus();
     autoResizeChatInput();
+}
+
+// ==================== 多 Agent 群聊黑板（Phase 1）====================
+
+let _groupBoardMode = true;   // 黑板群聊默认开启（无开关）
+let _currentGroupSessionId = null;   // 当前群聊会话 ID：黑板按它隔离（一场群聊共享一块黑板）
+let _forceNewTopicNext = false;      // 🆕 新话题开关：点亮后下一条消息强制开新话题
+
+/** 切换「下一条消息强制开新话题」开关 */
+function toggleForceNewTopic() {
+    _forceNewTopicNext = !_forceNewTopicNext;
+    const btn = document.getElementById('forceNewTopicBtn');
+    if (btn) {
+        btn.style.background = _forceNewTopicNext ? '#d2a8ff30' : 'transparent';
+        btn.style.borderRadius = '50%';
+    }
+    showToast(_forceNewTopicNext ? '下一条消息将强制开新话题' : '已取消强制新话题', 'info');
+}
+
+/** 群聊会话：没开就开一场新的（黑板按 session 隔离，新群聊=新黑板） */
+async function _ensureGroupSession() {
+    if (_currentGroupSessionId) return _currentGroupSessionId;
+    try {
+        // source='group'：AI助手 的历史加载/最近会话回退要排除群聊会话
+        const data = await api(`${_sessionApiBase()}/sessions`, { method: 'POST', body: { source: 'group' } });
+        _currentGroupSessionId = data.id;
+    } catch (e) {
+        _currentGroupSessionId = 'group-' + Date.now();
+    }
+    return _currentGroupSessionId;
+}
+
+/** 「＋」按钮统一入口：群聊 Tab 新建群聊，其余 Tab 新建对话 */
+function onNewChatClick() {
+    if (chatMode === 'group') startNewGroupChat();
+    else newChatSession();
+}
+
+/** 开新群聊：清空群聊消息 + 黑板，下次发送用全新黑板 */
+function startNewGroupChat() {
+    _currentGroupSessionId = null;
+    chatHistory = [];
+    const groupContainer = document.getElementById('groupChatMessages');
+    if (groupContainer) groupContainer.innerHTML = '';
+    const sidebar = document.getElementById('groupBoardSidebar');
+    if (sidebar) sidebar.innerHTML = '';
+    _applyGroupBoardPlacement();
+    _renderGroupWelcome();   // 直接显示欢迎页，不走还原（否则会把旧群聊又加载回来）
+    showToast('已开启新群聊，黑板从空开始', 'info');
+}
+
+/** 文本 2-gram 切分（中英混合，去标点），供验收点覆盖度启发式匹配用 */
+function _bigrams(s) {
+    const cleaned = (s || '').toLowerCase().replace(/[^\u4e00-\u9fa5a-z0-9]/g, '');
+    const grams = [];
+    for (let i = 0; i < cleaned.length - 1; i++) grams.push(cleaned.slice(i, i + 2));
+    return grams;
+}
+
+/** 验收点是否被某组黑板条目覆盖：≥40% 的 2-gram 命中即视为覆盖 */
+function _criterionCovered(criterion, texts) {
+    if (!criterion) return false;
+    const grams = _bigrams(criterion);
+    if (!grams.length) return false;
+    const joined = texts.join(' ').toLowerCase();
+    let hit = 0;
+    for (const g of grams) if (joined.includes(g)) hit++;
+    return hit >= Math.max(1, Math.ceil(grams.length * 0.4));
+}
+
+/** 验收点完成度：已达成条数（对 decisions 内容做覆盖匹配） */
+function _countDone(ac, decisions) {
+    if (!ac || !ac.length) return 0;
+    const texts = (decisions || []).map(d => (d && d.content) || '');
+    return ac.filter(c => _criterionCovered(c, texts)).length;
+}
+
+/** 归档话题节点 → 一行（标题 + 完成度），点开看分区 */
+function _renderTopicNodeHtml(n) {
+    const g = (n && n.goal) || {};
+    const ac = g.acceptance_criteria || [];
+    const decisions = (n && n.decisions) || [];
+    const done = _countDone(ac, decisions);
+    const title = (n && n.title) || g.goal || '（未命名话题）';
+    const progress = ac.length ? ` <span style="opacity:.55;">${done}/${ac.length}</span>` : '';
+    const body = (ac.length || decisions.length)
+        ? `<div class="board-node-body">
+            ${g.goal ? `<div class="board-item" style="font-weight:600;">${escapeHtml(g.goal)}</div>` : ''}
+            ${ac.map(c => {
+                const ok = _criterionCovered(c, decisions.map(d => (d && d.content) || ''));
+                return `<div class="board-item">${ok ? '✅' : '⬜'} ${escapeHtml(c)}</div>`;
+            }).join('')}
+            ${decisions.map(d => `<div class="board-item">· ${escapeHtml(d.content || '')}</div>`).join('')}
+        </div>`
+        : '';
+    return `<div class="board-node">
+        <div class="board-node-title" onclick="this.parentElement.classList.toggle('open')">
+            <span>${ac.length && done === ac.length ? '✅' : '📌'} ${escapeHtml(title)}</span>${progress}
+        </div>${body}</div>`;
+}
+
+/** 黑板快照 → 摘要 HTML（当前话题展开 + 归档话题分支折叠） */
+function _renderBoardSummary(board) {
+    if (!board) return '（黑板为空）';
+    const sections = [
+        ['proposals', '提案'], ['open_questions', '分歧'], ['decisions', '共识'], ['artifacts', '产物'],
+    ];
+    let html = '';
+    // 目标区块：当前讨论目标 + 验收点（带完成度标记）
+    const goal = board.goal;
+    if (goal && goal.goal) {
+        html += `<div class="board-sec" style="color:#d2a8ff;">🎯 当前话题</div>`;
+        html += `<div class="board-item" style="font-weight:600;">${escapeHtml(goal.goal)}</div>`;
+        const ac = goal.acceptance_criteria || [];
+        if (ac.length) {
+            const _decisions = (board.decisions || []).map(d => (d && d.content) || '');
+            const _proposals = [...(board.proposals || []), ...(board.facts || [])].map(d => (d && d.content) || '');
+            html += ac.map(c => {
+                let mark;
+                if (_criterionCovered(c, _decisions)) mark = '<span style="color:#3fb950;">✅</span>';
+                else if (_criterionCovered(c, _proposals)) mark = '<span style="color:#e6a817;">🔶</span>';
+                else mark = '<span style="opacity:.4;">⬜</span>';
+                return `<div class="board-item">${mark} ${escapeHtml(c)}</div>`;
+            }).join('');
+        }
+    }
+    // 归档话题分支（折叠，点开看该话题的目标/验收/共识）
+    const nodes = board.topic_nodes || [];
+    if (nodes.length) {
+        html += `<div class="board-sec">话题分支（${nodes.length}）</div>`;
+        html += nodes.slice(-8).slice().reverse().map(_renderTopicNodeHtml).join('');
+    }
+    let any = !!(nodes.length || (goal && goal.goal) || board.topic);
+    for (const [key, label] of sections) {
+        const items = board[key] || [];
+        if (!items.length) continue;
+        any = true;
+        html += `<div class="board-sec">${label}</div>`;
+        html += items.map(it =>
+            `<div class="board-item">· [${escapeHtml(it.agent || '?')}] ${escapeHtml(it.content || '')}</div>`
+        ).join('');
+    }
+    if (!any) return '（黑板为空，等待 Agent 写入…）';
+    return html;
+}
+
+/** 群聊黑板侧栏显隐：全屏 + 群聊模式 + 侧栏有黑板卡 三者同时满足才显示左侧栏 */
+function _applyGroupBoardPlacement() {
+    const sidebar = document.getElementById('groupBoardSidebar');
+    const show = chatMode === 'group' && _chatFullscreen && sidebar && sidebar.children.length > 0;
+    document.body.classList.toggle('chat-board-left', !!show);
+}
+
+/** Agent 可点击头像（点击打开该 Agent 的模型配置弹窗，与 AI 助手头像行为一致） */
+function _agentAvatarClickable(agentName, emoji, color, size = 14) {
+    return `<span class="agent-avatar-clickable" title="${escapeHtml(agentName)} · 点击配置模型"
+        onclick="event.stopPropagation();showAgentLlmConfigModal('${escapeHtml(agentName)}')"
+        style="cursor:pointer;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;
+               width:${size + 10}px;height:${size + 10}px;border-radius:50%;
+               background:${color}20;border:1px solid ${color}40;color:${color};font-size:${size}px;">${emoji}</span>`;
+}
+
+/** Agent 显示信息（emoji/颜色），取自 @mention 配置，与后端 _AGENT_CONFIG 对齐 */
+function _agentDisplayInfo(agentName) {
+    return _AGENT_MENTIONS.find(a => a.name === agentName)
+        || { name: agentName, emoji: '🤖', color: '#888' };
+}
+
+/** 按全屏状态把黑板卡在「左侧栏」和「消息流内联」之间搬移（进出全屏、发新黑板时调用） */
+function _syncGroupBoardPlacement() {
+    const sidebar = document.getElementById('groupBoardSidebar');
+    const groupContainer = document.getElementById('groupChatMessages');
+    if (!sidebar || !groupContainer) return;
+    if (_chatFullscreen) {
+        // 全屏：消息流里最后一块黑板挪进侧栏（旧黑板清掉，不堆叠）
+        const cards = groupContainer.querySelectorAll(':scope > .group-board-card');
+        if (cards.length) {
+            sidebar.innerHTML = '';
+            sidebar.appendChild(cards[cards.length - 1]);
+        }
+    } else {
+        // 非全屏：侧栏里的黑板挪回消息流
+        const c = sidebar.querySelector('.group-board-card');
+        if (c) groupContainer.appendChild(c);
+    }
+    _applyGroupBoardPlacement();
+}
+
+/**
+ * 黑板群聊流式消费：fetch + ReadableStream。
+ * 事件：board_init / agent_thought / agent_message / board_update / converge / message_done / error
+ */
+async function _sendGroupBoardStreaming(url, body) {
+    const groupContainer = document.getElementById('groupChatMessages') || document.getElementById('chatMessages');
+    document.getElementById('chatTyping')?.remove();
+    chatHistory.push({ role: 'user', content: body.message });
+
+    // 黑板卡片（live 更新）：先内联进消息流，_syncGroupBoardPlacement 会按全屏状态决定是否挪到左侧栏
+    const boardCard = document.createElement('div');
+    boardCard.className = 'group-board-card';
+    boardCard.innerHTML = '<div class="group-board-title">🧠 黑板</div><div class="group-board-body">准备中…</div>';
+    groupContainer.appendChild(boardCard);
+    _syncGroupBoardPlacement();
+    scrollChatToBottom();
+
+    const _ac = new AbortController();
+    let _converged = false;
+
+    // PM 过程思考指示器：目标提炼 / PM 决策 / 与会者回复期间的空挡反馈
+    let _pmThinkingEl = null;
+    const _pmInfo = _agentDisplayInfo('OrchestratorAgent');
+    const _showPmThinking = (text) => {
+        if (!_pmThinkingEl) {
+            _pmThinkingEl = document.createElement('div');
+            _pmThinkingEl.className = 'group-board-pm-thinking';
+            _pmThinkingEl.innerHTML = `${_agentAvatarClickable(_pmInfo.name, _pmInfo.emoji, _pmInfo.color)}
+                <span style="color:${_pmInfo.color};font-weight:600;">${escapeHtml(_pmInfo.name)}</span>
+                <span class="pmt-text"></span>
+                <span class="pm-thinking-dots"><span>·</span><span>·</span><span>·</span></span>`;
+            (document.getElementById('groupChatMessages') || document.getElementById('chatMessages')).appendChild(_pmThinkingEl);
+        }
+        _pmThinkingEl.querySelector('.pmt-text').textContent = text;
+        scrollChatToBottom();
+    };
+    const _hidePmThinking = () => {
+        _pmThinkingEl?.remove();
+        _pmThinkingEl = null;
+    };
+
+    // 与会者流式草稿：agent_stream 增量实时显示，最终气泡到达后移除
+    const _agentDrafts = {};
+    const _showAgentDraft = (agentName, delta) => {
+        let el = _agentDrafts[agentName];
+        if (!el) {
+            el = document.createElement('div');
+            el.className = 'group-board-draft';
+            (document.getElementById('groupChatMessages') || document.getElementById('chatMessages')).appendChild(el);
+            _agentDrafts[agentName] = el;
+        }
+        el.textContent = (el.textContent + delta).slice(-600);
+        scrollChatToBottom();
+    };
+    const _removeAgentDraft = (agentName) => {
+        _agentDrafts[agentName]?.remove();
+        delete _agentDrafts[agentName];
+    };
+    const _clearAgentDrafts = () => {
+        Object.keys(_agentDrafts).forEach(_removeAgentDraft);
+    };
+
+    try {
+        const fetchResp = await fetch(`${API}${url}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+            signal: _ac.signal,
+        });
+        if (!fetchResp.ok || !fetchResp.body) {
+            boardCard.remove();
+            throw new Error(`HTTP ${fetchResp.status}`);
+        }
+
+        const reader = fetchResp.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = ''; let eventName = '';
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buf += decoder.decode(value, { stream: true });
+            const lines = buf.split('\n');
+            buf = lines.pop();
+            for (const line of lines) {
+                if (line.startsWith('event: ')) { eventName = line.slice(7).trim(); continue; }
+                if (!line.startsWith('data: ')) continue;
+                let data; try { data = JSON.parse(line.slice(6)); } catch { continue; }
+
+                if (eventName === 'board_init') {
+                    boardCard.querySelector('.group-board-body').innerHTML = _renderBoardSummary(data.board);
+                } else if (eventName === 'pm_thinking') {
+                    _showPmThinking(data.stage === 'goal' ? '正在提炼讨论目标' : '正在思考下一步');
+                } else if (eventName === 'topic_route') {
+                    _hidePmThinking();
+                    // 话题路由结果：延续 / 回到旧分支 / 新话题；board 全量随事件下发，侧栏立即同步
+                    if (data.board) {
+                        boardCard.querySelector('.group-board-body').innerHTML = _renderBoardSummary(data.board);
+                    }
+                    const rel = data.relation;
+                    const title = data.title || '';
+                    const label = rel === 'new' ? `🆕 新话题：${title}`
+                        : rel === 'resume' ? `📌 回到话题：${title}`
+                        : `📌 话题：延续「${title}」`;
+                    const st = document.createElement('div');
+                    st.className = 'group-board-stage';
+                    st.innerHTML = `<span class="gbs-badge">${escapeHtml(label)}</span><span class="gbs-line"></span>`;
+                    groupContainer.appendChild(st);
+                    scrollChatToBottom();
+                } else if (eventName === 'pm_goal') {
+                    _hidePmThinking();
+                    // 讨论目标卡（置顶）
+                    const g = data.goal || {};
+                    const ac = (g.acceptance_criteria || []).map(c => `<div class="board-item">· ${escapeHtml(c)}</div>`).join('');
+                    const gc = document.createElement('div');
+                    gc.className = 'group-board-goal';
+                    gc.innerHTML = `<div class="group-board-title" style="color:#d2a8ff;">🎯 讨论目标</div>
+                        <div class="group-board-goal-text">${escapeHtml(g.goal || '')}</div>
+                        ${ac ? `<div class="board-sec">验收点</div>${ac}` : ''}`;
+                    groupContainer.appendChild(gc);
+                    scrollChatToBottom();
+                } else if (eventName === 'pm_action') {
+                    _hidePmThinking();
+                    // PM 决策过程行：实际 Agent + action + targets + reason
+                    const actLabel = { ask: '发问', summarize: '小结', conclude: '收敛' }[data.action] || data.action;
+                    const targets = (data.targets || []).length
+                        ? ' @' + data.targets.map(t => t.replace('Agent', '')).join('、')
+                        : '';
+                    const q = data.question ? `：${escapeHtml(data.question)}` : '';
+                    const r = data.reason ? ` <span style="opacity:.6;">（${escapeHtml(data.reason.slice(0, 60))}）</span>` : '';
+                    const st = document.createElement('div');
+                    st.className = 'group-board-stage';
+                    st.innerHTML = `${_agentAvatarClickable(_pmInfo.name, _pmInfo.emoji, _pmInfo.color, 12)}
+                        <span class="gbs-badge gbs-badge-pm">${escapeHtml(_pmInfo.name)} · ${escapeHtml(actLabel)}${targets}</span>
+                        <span class="gbs-line"></span>`;
+                    groupContainer.appendChild(st);
+                    if (q) {
+                        const ql = document.createElement('div');
+                        ql.className = 'group-board-thought';
+                        ql.innerHTML = `${q}${r}`;
+                        groupContainer.appendChild(ql);
+                    }
+                    scrollChatToBottom();
+                } else if (eventName === 'pm_summary') {
+                    _hidePmThinking();
+                    // 讨论小结卡（追加）
+                    const sc = document.createElement('div');
+                    sc.className = 'group-board-summary';
+                    sc.innerHTML = `<div class="group-board-title" style="color:#e6a817;">📝 纪要</div><div>${formatChatContent(data.summary)}</div>`;
+                    groupContainer.appendChild(sc);
+                    scrollChatToBottom();
+                } else if (eventName === 'round_begin') {
+                    _hidePmThinking();
+                    _showPmThinking('与会者正在讨论');
+                    // 阶段过程文字：Round N · 发散/交锋（排版类似思考过程的分组头）
+                    const st = document.createElement('div');
+                    st.className = 'group-board-stage';
+                    st.innerHTML = `<span class="gbs-badge">Round ${data.round} · ${escapeHtml(data.label)}</span><span class="gbs-line"></span>`;
+                    groupContainer.appendChild(st);
+                    scrollChatToBottom();
+                } else if (eventName === 'converge_begin') {
+                    _hidePmThinking();
+                    _showPmThinking('正在收敛');
+                    const st = document.createElement('div');
+                    st.className = 'group-board-stage';
+                    st.innerHTML = `<span class="gbs-badge" style="background:#d2a8ff22;color:#d2a8ff;border-color:#d2a8ff55;">🎯 收敛</span><span class="gbs-line"></span>`;
+                    groupContainer.appendChild(st);
+                    scrollChatToBottom();
+                } else if (eventName === 'agent_stream') {
+                    // 与会者流式草稿：思考/正文增量
+                    _showAgentDraft(data.agent, data.delta || '');
+                } else if (eventName === 'agent_thought') {
+                    _hidePmThinking();
+                    _removeAgentDraft(data.agent);
+                    const t = document.createElement('div');
+                    t.className = 'group-board-thought';
+                    t.innerHTML = `<span style="color:${escapeHtml(data.color)};font-weight:600;">${escapeHtml(data.emoji)} ${escapeHtml(data.agent)}</span> 思考：${escapeHtml(data.thought)}`;
+                    groupContainer.appendChild(t);
+                    scrollChatToBottom();
+                } else if (eventName === 'agent_message') {
+                    _removeAgentDraft(data.agent);
+                    appendGroupAgentBubble(data.agent, data.emoji, data.color, data.content);
+                } else if (eventName === 'board_update') {
+                    boardCard.querySelector('.group-board-body').innerHTML = _renderBoardSummary(data.board);
+                } else if (eventName === 'converge') {
+                    _hidePmThinking();
+                    _converged = true;
+                    const c = document.createElement('div');
+                    c.className = 'group-board-converge';
+                    c.innerHTML = `<div class="group-board-title" style="color:#d2a8ff;">🎯 收敛结论</div><div>${formatChatContent(data.content)}</div>`;
+                    groupContainer.appendChild(c);
+                    chatHistory.push({ role: 'assistant', content: data.content });
+                } else if (eventName === 'message_done') {
+                    if (!_converged && data.full_text) {
+                        const c = document.createElement('div');
+                        c.className = 'group-board-converge';
+                        c.innerHTML = `<div class="group-board-title" style="color:#d2a8ff;">🎯 收敛结论</div><div>${formatChatContent(data.full_text)}</div>`;
+                        groupContainer.appendChild(c);
+                    }
+                } else if (eventName === 'error') {
+                    _hidePmThinking();
+                    const e = document.createElement('div');
+                    e.className = 'group-board-thought';
+                    e.style.color = '#ef4444';
+                    e.textContent = `⚠️ ${data.message || '群聊出错'}`;
+                    groupContainer.appendChild(e);
+                }
+            }
+        }
+    } catch (err) {
+        if (err.name !== 'AbortError') {
+            const e = document.createElement('div');
+            e.className = 'group-board-thought';
+            e.style.color = '#ef4444';
+            e.textContent = `⚠️ ${err.message || err}`;
+            groupContainer.appendChild(e);
+        }
+    }
+    _hidePmThinking();
+    _clearAgentDrafts();
+    scrollChatToBottom();
 }
 
 /**
@@ -18562,7 +19474,9 @@ function _buildTicketAssistantAvatar(model, agentType) {
         iconHtml = '<span style="font-size:14px;">🤖</span>';
     }
 
-    return `<div class="chat-avatar-wrap">
+    return `<div class="chat-avatar-wrap" title="${escapeHtml(agentType || 'AI 助手')} 模型配置（点击打开）"
+                onclick="event.stopPropagation();showAgentLlmConfigModal('${escapeHtml(agentType || 'ChatAssistant')}')"
+                style="cursor:pointer;">
         <div class="chat-avatar-icon">${iconHtml}</div>
         ${shortModel ? `<div class="chat-avatar-model">${escapeHtml(shortModel)}</div>` : ''}
     </div>`;
@@ -20309,16 +21223,31 @@ async function sendChatMessage() {
     const typingEl = document.createElement('div');
     typingEl.className = 'chat-msg assistant';
     typingEl.id = 'chatTyping';
-    typingEl.innerHTML = `
-        ${_buildAssistantAvatar()}
-        <div class="chat-msg-content">
-            <div class="chat-msg-bubble" style="display:inline-block;">
+    // 群聊模式用群聊头像（👥）+ 文字提示（正在干什么），避免只有三个点不知道在等什么
+    const _isGroupTyping = chatMode === 'group';
+    const _typingAvatar = _isGroupTyping
+        ? `<div class="chat-msg-avatar" style="background:#d2a8ff20;border:1.5px solid #d2a8ff40;color:#d2a8ff;font-size:16px;">👥</div>`
+        : _buildAssistantAvatar();
+    const _typingBody = _isGroupTyping
+        ? `<div class="chat-msg-bubble" style="display:inline-flex;align-items:center;gap:8px;">
                 <div class="chat-typing">
                     <div class="chat-typing-dot"></div>
                     <div class="chat-typing-dot"></div>
                     <div class="chat-typing-dot"></div>
                 </div>
-            </div>
+                <span id="chatTypingText" style="font-size:12px;color:var(--text-muted);">正在准备…</span>
+            </div>`
+        : `<div class="chat-msg-bubble" style="display:inline-block;">
+                <div class="chat-typing">
+                    <div class="chat-typing-dot"></div>
+                    <div class="chat-typing-dot"></div>
+                    <div class="chat-typing-dot"></div>
+                </div>
+            </div>`;
+    typingEl.innerHTML = `
+        ${_typingAvatar}
+        <div class="chat-msg-content">
+            ${_typingBody}
             <div id="chatThinkingLog" style="display:none; margin-top:4px; max-height:80px; overflow-y:auto; font-size:10px; line-height:1.5; color:var(--text-muted); background:var(--bg); border:1px solid var(--border); border-radius:4px; padding:4px 8px; font-family:monospace;"></div>
         </div>
     `;
@@ -20327,6 +21256,12 @@ async function sendChatMessage() {
         : document.getElementById('chatMessages');
     typingContainer.appendChild(typingEl);
     scrollChatToBottom();
+
+    // 更新群聊打字气泡的文字提示（告诉用户此刻在等什么）
+    const _setChatTypingText = (t) => {
+        const el = document.getElementById('chatTypingText');
+        if (el) el.textContent = t;
+    };
 
     // 全局聊天已改为流式（/chat/stream），无需单独的 thinking-stream SSE
 
@@ -20353,8 +21288,23 @@ async function sendChatMessage() {
             const agentMap = {'devagent':'DevAgent','testagent':'TestAgent','orchestratoragent':'OrchestratorAgent','chatassistant':'ChatAssistant'};
             const resolvedAgent = targetAgent ? (agentMap[targetAgent.toLowerCase()] || targetAgent) : null;
 
-            if (resolvedAgent) {
-                // 有 @mention — 只叫指定 Agent
+            if (_groupBoardMode) {
+                // 黑板群聊：所有消息（含 @点名）都走 PM 会议流，Agent 能读到黑板/纪要上下文
+                document.getElementById('chatTyping')?.remove();   // 交给 PM 思考指示器，不等会话创建
+                const _gsid = await _ensureGroupSession();
+                const _forceNew = _forceNewTopicNext;
+                if (_forceNew) toggleForceNewTopic();   // 用完即复位
+                await _sendGroupBoardStreaming(`/projects/${currentProjectId}/chat/group/board`, {
+                    message: fullMessage,
+                    images: images.length > 0 ? images : undefined,
+                    chat_session_id: _gsid,
+                    mode: 'pm',
+                    force_ask_agent: resolvedAgent || undefined,
+                    force_new_topic: _forceNew || undefined,
+                });
+            } else if (resolvedAgent) {
+                // 有 @mention — 只叫指定 Agent（非黑板模式，无会议上下文）
+                _setChatTypingText(`正在等待 ${resolvedAgent} 回复…`);
                 resp = await originalApi(`/projects/${currentProjectId}/chat/group`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -20372,28 +21322,29 @@ async function sendChatMessage() {
                 scrollChatToBottom();
             } else {
                 // 无 @mention — 所有 Agent 都参与讨论
+                _setChatTypingText('正在召集所有 Agent 发言…');
                 resp = await originalApi(`/projects/${currentProjectId}/chat/group/all`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        message: fullMessage,
-                        history: historyToSend,
-                        images: images.length > 0 ? images : undefined,
-                    }),
-                });
-                document.getElementById('chatTyping')?.remove();
-                chatHistory.push({ role: 'user', content: _buildUserHistoryContent(fullMessage, images) });
-                // 逐个显示每个 Agent 的回复，带小延迟营造依次发言感
-                if (resp.replies && resp.replies.length > 0) {
-                    const lastReply = resp.replies[resp.replies.length - 1];
-                    chatHistory.push({ role: 'assistant', content: lastReply.reply });
-                    resp.replies.forEach((r, idx) => {
-                        setTimeout(() => {
-                            appendGroupAgentBubble(r.agent, r.emoji, r.color, r.reply);
-                            scrollChatToBottom();
-                        }, idx * 400);
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            message: fullMessage,
+                            history: historyToSend,
+                            images: images.length > 0 ? images : undefined,
+                        }),
                     });
-                }
+                    document.getElementById('chatTyping')?.remove();
+                    chatHistory.push({ role: 'user', content: _buildUserHistoryContent(fullMessage, images) });
+                    // 逐个显示每个 Agent 的回复，带小延迟营造依次发言感
+                    if (resp.replies && resp.replies.length > 0) {
+                        const lastReply = resp.replies[resp.replies.length - 1];
+                        chatHistory.push({ role: 'assistant', content: lastReply.reply });
+                        resp.replies.forEach((r, idx) => {
+                            setTimeout(() => {
+                                appendGroupAgentBubble(r.agent, r.emoji, r.color, r.reply);
+                                scrollChatToBottom();
+                            }, idx * 400);
+                        });
+                    }
             }
         } else if (currentProjectId) {
             // 检测 @mention — 路由到流式路径（注入 Agent persona）
@@ -20584,6 +21535,8 @@ async function sendChatMessage() {
         chatSending = false;
         _streamAbortController = null;
         _refreshHistoryRunningState();  // 更新 Running → 消失
+        // 首条消息后服务端会自动起标题（_update_session_title_if_needed），强制刷一次头部小字
+        _updateChatPanelSessionTitle(_currentChatSessionId, true);
         sendBtn.disabled = false;
         input.focus();
         // 关闭全局聊天思考日志 SSE
@@ -21704,7 +22657,9 @@ function appendGroupAgentBubble(agentName, emoji, color, content, timestamp = nu
     msgEl.className = 'chat-msg assistant group-agent-msg';
     const timeStr = formatTime(timestamp || new Date().toISOString());
     msgEl.innerHTML = `
-        <div class="chat-msg-avatar group-agent-avatar" style="background:${escapeHtml(color)}20;border:1.5px solid ${escapeHtml(color)}40;color:${escapeHtml(color)};font-size:16px;">${escapeHtml(emoji)}</div>
+        <div class="chat-msg-avatar group-agent-avatar" title="${escapeHtml(agentName)} · 点击配置模型"
+             onclick="event.stopPropagation();showAgentLlmConfigModal('${escapeHtml(agentName)}')"
+             style="background:${escapeHtml(color)}20;border:1.5px solid ${escapeHtml(color)}40;color:${escapeHtml(color)};font-size:16px;cursor:pointer;">${escapeHtml(emoji)}</div>
         <div class="chat-msg-content">
             <div class="group-agent-name" style="color:${escapeHtml(color)};font-size:11px;font-weight:600;margin-bottom:3px;margin-left:2px;">${escapeHtml(agentName)}</div>
             <div class="chat-msg-bubble" style="border-left:3px solid ${escapeHtml(color)}40;">${formatChatContent(content)}</div>
@@ -22308,7 +23263,8 @@ function formatChatContent(content) {
     // 先提取代码块占位保护，只对文本段做路径替换，避免破坏代码内容
     const _imgExts = /\.(png|jpg|jpeg|webp|gif|bmp)$/i;
     const _codeBlocks = [];
-    content = content.replace(/(```[\w]*\n[\s\S]*?```)/g, (m) => {
+    // info string 放宽到 [^\n]*：除 ```lang 外还要接住 Cursor 的 ```起:止|路径 文件引用 fence
+    content = content.replace(/(```[^\n]*\n[\s\S]*?```)/g, (m) => {
         _codeBlocks.push(m);
         return `\x02CB${_codeBlocks.length - 1}\x03`;
     });
@@ -22330,15 +23286,23 @@ function formatChatContent(content) {
     content = content.replace(/\x02CB(\d+)\x03/g, (_, idx) => _codeBlocks[+idx] || '');
 
     let result = '';
-    // 按代码块分割，逐段处理
-    const parts = content.split(/(```[\w]*\n[\s\S]*?```)/g);
+    // 按代码块分割，逐段处理（fence info 放宽见上：普通 ```lang 和 Cursor ```起:止|路径 都要接住）
+    const parts = content.split(/(```[^\n]*\n[\s\S]*?```)/g);
 
     for (let pi = 0; pi < parts.length; pi++) {
         const part = parts[pi];
-        const codeBlockMatch = part.match(/^```([\w]*)\n([\s\S]*?)```$/);
+        const codeBlockMatch = part.match(/^```([^\n]*)\n([\s\S]*?)```$/);
         if (codeBlockMatch) {
-            const lang = codeBlockMatch[1] || '';
+            const info = codeBlockMatch[1] || '';
             const code = codeBlockMatch[2];
+            // Cursor 文件引用 fence：```792:848|path/to/file.cpp → Cursor 风格代码卡
+            // 分隔符两种都收：| 和 :（实测 Cursor 导出里有 : 版本，漏了会掉进 buildCodeFileCard
+            // 变成"代码片段"折叠卡——lang 塞整段 info，徽标全大写、无高亮、3 行折叠）
+            const refMatch = info.match(/^(\d+):(\d+)[|:](.+)$/);
+            if (refMatch) {
+                result += buildCodeRefCard(parseInt(refMatch[1], 10), parseInt(refMatch[2], 10), refMatch[3], code);
+            } else {
+                const lang = info;
             // 单行图片路径/URL：含 ✅❌ 前缀或裸路径，直接渲染为图片+文件名
             const trimmed = code.trim().replace(/^[✅❌✓×\s]+/, '').trim();
             const _imgExtsRe = /\.(png|jpg|jpeg|webp|gif|bmp)(\)|$)/i;
@@ -22371,9 +23335,10 @@ function formatChatContent(content) {
                        onclick="event.preventDefault();_openLocalImageFile(this.dataset.filepath)"
                        style="font-size:11px;color:var(--accent);font-family:monospace;">📂 ${escapeHtml(fname)}</a>
                 </div>`;
-            } else {
-                const looksLikeMarkdown = !lang && /^(#{1,3} |[*-] )/m.test(code);
-                result += looksLikeMarkdown ? _renderMarkdownText(code) : buildCodeFileCard(lang, code);
+                } else {
+                    const looksLikeMarkdown = !lang && /^(#{1,3} |[*-] )/m.test(code);
+                    result += looksLikeMarkdown ? _renderMarkdownText(code) : buildCodeFileCard(lang, code);
+                }
             }
         } else {
             // 代码块相邻的文本部分：去掉首尾多余换行，避免代码卡前后大量空白
@@ -22569,8 +23534,33 @@ function _inlineFormat(text) {
         return `\x01T${tags.length - 1}\x02`;
     });
     html = _linkifyBareFilePaths(html);
+    html = _linkifyUrls(html);
     html = html.replace(/\x01T(\d+)\x02/g, (_, i) => tags[+i] || '');
     return html;
+}
+
+/** 裸 URL → 可点击链接，点击在主舞台开「网页 Tab」内嵌显示。
+ *  在标签占位保护区内调用，只会碰到纯文本；源文本已 HTML 转义，
+ *  所以 URL 里的 & 是 &amp; 形态——href/onclick 里正好（属性会被解码回 &），label 直接用不重复转义。 */
+function _linkifyUrls(text) {
+    if (!text || text.indexOf('http') === -1) return text;
+    // CJK 字符/全角标点不进 URL（中文句子和 URL 之间经常没空格，不放行会把后文吞进链接）
+    return text.replace(/https?:\/\/[^\s<>"'\]\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]+/gi, (m) => {
+        // 句尾的实体（&gt; 等）和标点是收尾符号，不属于 URL
+        let url = m.replace(/(?:&(?:lt|gt|quot|#39);)+$/i, '');
+        // 括号配平：URL 内合法含括号，只把"超配平"的尾部 ) 还给正文（markdown [x](url) 的收尾括号）
+        while (url.endsWith(')')) {
+            const inner = url.slice(0, -1);
+            const opens = (inner.match(/\(/g) || []).length;
+            const closes = (inner.match(/\)/g) || []).length;
+            if (closes >= opens) url = inner; else break;
+        }
+        url = url.replace(/[.,;:!?\u3002\uff0c\uff1b\uff1a\uff01\uff1f\uff09]+$/, '');
+        if (!/^https?:\/\/\S+$/i.test(url)) return m;
+        const label = url.length > 130 ? url.slice(0, 127) + '…' : url;
+        const js = url.replace(/\\/g, '\\\\');
+        return `<a class="chat-url-link" href="${url}" onclick="event.preventDefault();event.stopPropagation();openWebTabFromChat('${js}')" title="在网页 Tab 中打开 ${url}">${label}</a>`;
+    });
 }
 
 /** 是否像知识库文档引用（反引号标题可点开） */
@@ -22712,6 +23702,49 @@ function buildCodeFileCard(lang, code) {
     }</div>
     <div class="code-card-full" id="${cardId}_full"><pre class="code-card-pre"><code class="language-${lang}">${fullEscaped}</code></pre></div>
 </div>`;
+}
+
+// Cursor 文件引用 fence 用：扩展名 → [hljs 语言, 显示名]
+const _REF_EXT_LANG = {
+    py: ['python', 'Python'], js: ['javascript', 'JavaScript'], ts: ['typescript', 'TypeScript'],
+    jsx: ['javascript', 'JavaScript'], tsx: ['typescript', 'TypeScript'],
+    html: ['html', 'HTML'], css: ['css', 'CSS'], scss: ['scss', 'SCSS'],
+    json: ['json', 'JSON'], md: ['markdown', 'Markdown'], yml: ['yaml', 'YAML'], yaml: ['yaml', 'YAML'],
+    toml: ['ini', 'TOML'], ini: ['ini', 'INI'], sh: ['bash', 'Shell'], bash: ['bash', 'Shell'],
+    ps1: ['powershell', 'PowerShell'], sql: ['sql', 'SQL'], go: ['go', 'Go'], rs: ['rust', 'Rust'],
+    java: ['java', 'Java'], c: ['c', 'C'], h: ['cpp', 'C++'], cpp: ['cpp', 'C++'],
+    cc: ['cpp', 'C++'], hpp: ['cpp', 'C++'], cs: ['csharp', 'C#'], php: ['php', 'PHP'],
+    rb: ['ruby', 'Ruby'], swift: ['swift', 'Swift'], kt: ['kotlin', 'Kotlin'],
+    xml: ['xml', 'XML'], lua: ['lua', 'Lua'],
+};
+
+/** Cursor 文件引用 fence（```起:止|相对路径）→ Cursor 风格代码卡：
+ *  头部 = 语言徽标 + 文件名 + 行号范围，正文 = hljs 高亮代码，不折叠。 */
+function buildCodeRefCard(startLine, endLine, path, code) {
+    code = (code || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+        .replace(/^\n+/, '').replace(/\n+$/, '');
+    const fname = path.split(/[\\/]/).pop() || path;
+    const ext = (fname.match(/\.([a-zA-Z0-9]+)$/) || [])[1] || '';
+    const meta = _REF_EXT_LANG[ext.toLowerCase()] || null;
+    const lang = meta ? meta[0] : '';
+    const label = meta ? meta[1] : (ext ? ext.toUpperCase() : 'CODE');
+    const lineLabel = startLine === endLine ? 'Ln ' + startLine : `Ln ${startLine}-${endLine}`;
+
+    let codeHtml;
+    try {
+        if (lang && window.hljs) {
+            codeHtml = hljs.highlight(code, { language: lang, ignoreIllegals: true }).value;
+        } else {
+            codeHtml = window.hljs ? hljs.highlightAuto(code).value : escapeHtml(code);
+        }
+    } catch (e) {
+        codeHtml = escapeHtml(code);
+    }
+
+    // onclick 内联 JS 字符串：反斜杠双写 + 单引号 \'（实体转义会被 HTML 属性解码穿透，挡不住 JS 解析）
+    const safePathAttr = escapeHtml(path.replace(/\\/g, '\\\\').replace(/'/g, "\\'"));
+    // 模板必须压成单行：气泡是 white-space:pre-wrap，模板里的换行缩进会原样渲染成大段空白
+    return `<div class="chat-code-ref"><div class="chat-code-ref-head"><span class="chat-code-ref-lang">${escapeHtml(label)}</span><span class="chat-code-ref-file" title="${escapeHtml(path)} ${escapeHtml(lineLabel)}（点击跳转并高亮）" onclick="openRepoFileFromChat('${safePathAttr}', ${startLine}, ${endLine})">${escapeHtml(fname)}</span><span class="chat-code-ref-lines">${escapeHtml(lineLabel)}</span></div><pre class="chat-code-ref-pre"><code>${codeHtml}</code></pre></div>`;
 }
 
 /** 根据代码内容猜测文件名 */
@@ -22890,7 +23923,38 @@ function _exitChatFullscreenSoft() {
 }
 
 /** 从聊天/日志跳转打开文件：退出全屏 → 主舞台工作区 Tab，否则回退仓库页 */
-function openRepoFileFromChat(filePath) {
+/** URL → Tab 标题：主机名 + 路径尾段（截断），开 Tab 列表里好认 */
+function _webTabTitle(url) {
+    try {
+        const u = new URL(url);
+        const segs = (u.pathname || '').split('/').filter(Boolean);
+        const last = segs.length ? decodeURIComponent(segs[segs.length - 1]).slice(0, 24) : '';
+        return u.hostname + (last ? ' · ' + last : '');
+    } catch (e) {
+        return String(url || '').replace(/^https?:\/\//i, '').slice(0, 40);
+    }
+}
+
+/** 聊天里的超链接 → 主舞台「网页 Tab」内嵌打开；不在项目壳层时退回系统浏览器 */
+function openWebTabFromChat(url) {
+    url = String(url || '');
+    if (!/^https?:\/\//i.test(url)) return;
+    if (typeof adsShell !== 'undefined' && adsShell.isProjectShell && adsShell.isProjectShell() && currentProjectId) {
+        try { _exitChatFullscreenSoft(); } catch {}
+        adsShell.openMain({ type: 'web', url, title: _webTabTitle(url) });
+        return;
+    }
+    window.open(url, '_blank');
+}
+
+/** 系统默认浏览器打开 URL：走后端 webbrowser.open，比 window.open 在应用壳里更可靠 */
+function _openUrlInSystemBrowser(url) {
+    if (!/^https?:\/\//i.test(url || '')) return;
+    api(`/open-in-browser?url=${encodeURIComponent(url)}`)
+        .catch(() => { try { window.open(url, '_blank'); } catch {} });
+}
+
+function openRepoFileFromChat(filePath, lineStart, lineEnd) {
     if (!currentProjectId) { showToast('请先选择项目', 'warning'); return; }
     const path = _normalizeChatFilePath(filePath);
     if (!path) return;
@@ -22901,7 +23965,8 @@ function openRepoFileFromChat(filePath) {
         if (typeof adsShell !== 'undefined' && adsShell.isProjectShell()) {
             try { adsShell.openRight({ tab: 'chat' }); } catch {}
             try { adsShell.remountChatToWorkbench(); } catch {}
-            adsShell.openMain({ type: 'file', path });
+            // 带行号范围：文件打开后自动滚动并高亮该范围（代码引用卡/报错链接跳转用）
+            adsShell.openMain({ type: 'file', path, lineStart: lineStart || 0, lineEnd: lineEnd || 0 });
             return;
         }
         switchTab('repo');
@@ -27690,8 +28755,16 @@ function appendMcpActionCard(action) {
 // ==================== 外部会话浏览器（Cursor） ====================
 // 入口：侧栏 📜 外部会话 → switchTab('external-sessions') → adsShell.openMain({type:'external-sessions'})
 //      → _loadMainTabContent → _mountExternalSessionsPane
-// DOM 策略：每次挂载重建，不复用（会话是只读 API 快照，没有需要保活的内存状态）。
+// DOM 策略（2026-10-10 改）：切 Tab 不再销毁重建 —— 搬走缓存在内存里，切回时原样放回，
+// 不重新拉列表/详情；只有点 ↻ 刷新按钮或关掉 Tab 重开才重新读数据。
 // 气泡：直接复用 .chat-msg / .chat-msg-content / .chat-msg-bubble + formatChatContent。
+
+// —— 面板 DOM 缓存：_loadMainTabContent 切到别的 Tab 前 _esEvictPane() 把整棵面板搬进来，
+//    切回外部会话 Tab 时直接放回 host，跳过 _mountExternalSessionsPane 的异步拉取 ——
+let _esPaneEl = null;         // 缓存的 .external-sessions-pane 根节点
+let _esPaneProject = '';      // 缓存对应的 projectId（切项目后缓存失效，重新拉）
+let _esListScrollTop = 0;     // 搬走时左侧列表滚动位置（切回时恢复）
+let _esOutputScrollTop = 0;   // 搬走时右栏滚动位置（切回时恢复）
 
 let _esState = {
     projectId: '',            // 当前面板关联的项目
@@ -27735,16 +28808,38 @@ function _esOnScroll(e) {
     });
 }
 
+/** 把当前外部会话面板整棵 DOM 搬到内存缓存（切到别的 Tab 前调用），
+ *  避免 _loadMainTabContent 的 host.innerHTML 重建把它连根销毁、切回时重读数据。
+ *  顺带记下左右两栏滚动位置 —— 搬 DOM 后浏览器可能把 scrollTop 归零，切回时要显式恢复。 */
+function _esEvictPane() {
+    const pane = document.querySelector('.external-sessions-pane');
+    if (pane) {
+        const listEl = document.getElementById('esPanelList');
+        const outEl = document.getElementById('esPanelOutput');
+        _esListScrollTop = listEl ? listEl.scrollTop : 0;
+        _esOutputScrollTop = outEl ? outEl.scrollTop : 0;
+        _esPaneEl = pane;
+        _esPaneProject = _esState.projectId || '';
+        pane.remove();
+    }
+}
+
 /** 入口：由 adsShell._loadMainTabContent 调用，重建整块 DOM 并异步拉数据 */
 async function _mountExternalSessionsPane(tab, host) {
     const projectId = tab.projectId || currentProjectId || '';
     const showThinking = _esReadShowThinkingPref();
+    // 切 Tab 会销毁重建面板 DOM；选中的会话和搜索框也从 localStorage 恢复，
+    // 用户从别的 Tab 回来时不用重新找会话（滚动位置本来就有记忆）。
+    const savedSid = _esReadActiveSession(projectId);
+    const savedQuery = _esReadSearchQuery(projectId);
+    const provider = _esReadProviderPref(projectId);
     _esState = {
         projectId,
+        provider,
         sessions: [],
         filtered: [],
-        activeSessionId: '',
-        searchQuery: '',
+        activeSessionId: savedSid,
+        searchQuery: savedQuery,
         rootsResolved: null,
         providerAvailable: true,
         showThinking,
@@ -27753,12 +28848,18 @@ async function _mountExternalSessionsPane(tab, host) {
     // 复用 tasksSidePanel 的双栏骨架，id 换 es 前缀；外壳 class 用 external-sessions-pane，便于 CSS 定位
     // es-hide-thinking 根据开关初始状态挂上；CSS 整条隐藏 thinking 气泡
     const hideCls = showThinking ? '' : ' es-hide-thinking';
+    const _provOpt = (v, label) => `<button class="es-prov-btn${provider === v ? ' active' : ''}" data-prov="${v}" onclick="_esSwitchProvider('${v}')">${label}</button>`;
     host.innerHTML = `
         <div class="external-sessions-pane${hideCls}" style="display:flex;flex-direction:column;height:100%;overflow:hidden;">
             <div style="display:flex;align-items:center;justify-content:space-between;
                         padding:8px 12px;border-bottom:1px solid var(--border);flex-shrink:0;">
-                <span style="font-size:12px;font-weight:600;">📜 外部会话 · Cursor</span>
-                <div style="display:flex;gap:10px;align-items:center;">
+                <span style="font-size:12px;font-weight:600;">📜 外部会话</span>
+                <div class="es-prov-switch" style="display:flex;align-items:center;gap:10px;">
+                    <div style="display:flex;border:1px solid var(--border);border-radius:4px;overflow:hidden;">
+                        ${_provOpt('cursor', 'Cursor')}${_provOpt('codebuddy', 'CodeBuddy')}${_provOpt('claude', 'Claude')}
+                    </div>
+                    <button class="btn btn-sm" onclick="_esImportToChat()"
+                        title="把当前选中的外部会话（文字 + 图片）导入为 ADS 聊天会话">⬇ 导入到 AI 助手</button>
                     <label class="es-toggle-thinking" title="默认隐藏模型思考过程，和 Cursor 原生体验一致">
                         <input type="checkbox" ${showThinking ? 'checked' : ''}
                             onchange="_esSetShowThinking(this.checked)">
@@ -27768,7 +28869,8 @@ async function _mountExternalSessionsPane(tab, host) {
                 </div>
             </div>
             <div style="padding:4px 8px;border-bottom:1px solid var(--border);flex-shrink:0;">
-                <input id="esSearchInput" type="text" placeholder="🔍 搜索会话（标题 / 副标题）…"
+                <input id="esSearchInput" type="text" value="${escHtml(savedQuery)}"
+                    placeholder="🔍 搜索会话（标题 / 副标题）…"
                     oninput="_esSearch(this.value)"
                     style="width:100%;box-sizing:border-box;background:rgba(255,255,255,.05);
                            border:1px solid var(--border);border-radius:4px;padding:3px 7px;
@@ -27805,6 +28907,46 @@ function _esSetShowThinking(checked) {
     if (pane) pane.classList.toggle('es-hide-thinking', !checked);
 }
 
+// —— provider 切换（cursor / codebuddy），按项目存 localStorage ——
+function _esReadProviderPref(projectId) {
+    try { return localStorage.getItem('esProvider:' + projectId) || 'cursor'; } catch { return 'cursor'; }
+}
+function _esSwitchProvider(provider) {
+    if (!_esState || _esState.provider === provider) return;
+    _esState.provider = provider;
+    try { localStorage.setItem('esProvider:' + _esState.projectId, provider); } catch {}
+    // 换 provider 后旧选中的会话 id 不通用，清掉重新选
+    _esState.activeSessionId = '';
+    _esSaveActiveSession(_esState.projectId, '');
+    // 高亮切到新 provider
+    const pane = document.querySelector('.external-sessions-pane');
+    if (pane) {
+        pane.querySelectorAll('.es-prov-btn').forEach(b => b.classList.toggle('active', b.dataset.prov === provider));
+    }
+    _esRefresh();
+}
+
+// —— 选中会话 / 搜索关键字持久化：按项目存 localStorage，键值对齐 esScrollPos 的做法 ——
+// 切 Tab 重建面板后据此自动恢复；会话被删（列表里找不到）时清掉记录，避免悬空高亮。
+function _esReadActiveSession(projectId) {
+    try { return localStorage.getItem('esActiveSession:' + projectId) || ''; } catch { return ''; }
+}
+function _esSaveActiveSession(projectId, sessionId) {
+    try {
+        if (sessionId) localStorage.setItem('esActiveSession:' + projectId, sessionId);
+        else localStorage.removeItem('esActiveSession:' + projectId);
+    } catch {}
+}
+function _esReadSearchQuery(projectId) {
+    try { return localStorage.getItem('esSearchQuery:' + projectId) || ''; } catch { return ''; }
+}
+function _esSaveSearchQuery(projectId, q) {
+    try {
+        if (q) localStorage.setItem('esSearchQuery:' + projectId, q);
+        else localStorage.removeItem('esSearchQuery:' + projectId);
+    } catch {}
+}
+
 /** 拉会话列表。_esState 填入 sessions / rootsResolved / providerAvailable，然后 _esRenderList */
 async function _esRefresh() {
     const pid = _esState.projectId;
@@ -27815,12 +28957,21 @@ async function _esRefresh() {
     }
     if (listEl) listEl.innerHTML = `<div style="padding:12px;color:var(--text-muted);">加载中…</div>`;
     try {
-        const data = await api(`/projects/${encodeURIComponent(pid)}/external-sessions?provider=cursor`);
+        const data = await api(`/projects/${encodeURIComponent(pid)}/external-sessions?provider=${encodeURIComponent(_esState.provider)}`);
         _esState.sessions = Array.isArray(data.sessions) ? data.sessions : [];
         _esState.filtered = _esState.sessions.slice();
         _esState.rootsResolved = Array.isArray(data.roots) ? data.roots : [];
         _esState.providerAvailable = data.provider_available !== false;
         _esRenderList();
+        // 恢复上次选中的会话：还在列表里就自动打开右栏；已被删则清记录
+        if (_esState.activeSessionId) {
+            if (_esState.sessions.some(s => s.id === _esState.activeSessionId)) {
+                _esSelectSession(_esState.activeSessionId);
+            } else {
+                _esState.activeSessionId = '';
+                _esSaveActiveSession(pid, '');
+            }
+        }
     } catch (e) {
         console.error('[external-sessions] list failed', e);
         if (listEl) listEl.innerHTML = `
@@ -27894,12 +29045,14 @@ function _esRenderList() {
 /** 搜索框 oninput 触发 */
 function _esSearch(val) {
     _esState.searchQuery = (val || '').trim();
+    _esSaveSearchQuery(_esState.projectId, _esState.searchQuery);
     _esRenderList();
 }
 
 /** 点击左侧会话 → 拉详情、填右栏 */
 async function _esSelectSession(sessionId) {
     _esState.activeSessionId = sessionId;
+    _esSaveActiveSession(_esState.projectId, sessionId);
     _esRenderList();  // 刷一下让高亮生效
 
     const outEl = document.getElementById('esPanelOutput');
@@ -27911,7 +29064,7 @@ async function _esSelectSession(sessionId) {
 
     const pid = _esState.projectId;
     try {
-        const data = await api(`/projects/${encodeURIComponent(pid)}/external-sessions/cursor/${encodeURIComponent(sessionId)}`);
+        const data = await api(`/projects/${encodeURIComponent(pid)}/external-sessions/${encodeURIComponent(_esState.provider)}/${encodeURIComponent(sessionId)}`);
         _esRenderSessionDetail(outEl, data);
     } catch (e) {
         _esSuppressScroll = false;  // 失败也要恢复记录，否则之后滚动都不落盘
@@ -27932,7 +29085,11 @@ function _esRenderSessionDetail(outEl, data) {
 
     const header = `
         <div class="es-session-header" style="padding:0 0 12px 0;border-bottom:1px solid var(--border);margin-bottom:12px;">
-            <div style="font-size:14px;font-weight:600;">${escHtml(title)}</div>
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+                <div style="font-size:14px;font-weight:600;min-width:0;">${escHtml(title)}</div>
+                <button id="esImportBtn" class="btn btn-sm" onclick="_esImportToChat()"
+                    title="把这段外部会话（文字 + 图片）导入为 ADS 聊天会话，导入后可继续对话">⬇ 导入到 AI 助手</button>
+            </div>
             ${headerExtra.subtitle ? `<div style="color:var(--text-muted);font-size:11px;margin-top:4px;">${escHtml(headerExtra.subtitle)}</div>` : ''}
             <div style="color:var(--text-muted);font-size:10px;margin-top:4px;">${metaParts.map(escHtml).join(' · ')}</div>
         </div>`;
@@ -27960,6 +29117,57 @@ function _esRenderSessionDetail(outEl, data) {
     });
 }
 
+/** 把当前查看的外部会话导入为 ADS 聊天会话。弹出范围选择，导入后打开右侧聊天继续对话。 */
+function _esImportToChat() {
+    const sid = _esState && _esState.activeSessionId;
+    if (!sid) { alert('请先在左侧选择一个要导入的会话'); return; }
+    _esCloseImportModal();
+    const overlay = document.createElement('div');
+    overlay.id = 'esImportModal';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;';
+    overlay.innerHTML = `
+        <div style="background:var(--bg, #1e1e2e);border:1px solid var(--border);border-radius:8px;padding:16px 18px;min-width:280px;box-shadow:0 8px 30px rgba(0,0,0,.4);">
+            <div style="font-size:13px;font-weight:600;margin-bottom:4px;">导入外部会话到 AI 助手</div>
+            <div style="font-size:11px;color:var(--text-muted);margin-bottom:12px;">选择导入范围（文字 + 图片都会导入）</div>
+            <div style="display:flex;flex-direction:column;gap:8px;">
+                <button class="btn" onclick="_esDoImport('all')">全部导入</button>
+                <button class="btn" onclick="_esDoImport('last_n', 50)">最近 50 条</button>
+                <button class="btn" onclick="_esDoImport('last_n', 100)">最近 100 条</button>
+                <button class="btn" onclick="_esDoImport('last_days', 7)">最近 7 天</button>
+                <button class="btn" onclick="_esDoImport('last_days', 30)">最近 30 天</button>
+                <button class="btn btn-outline" onclick="_esCloseImportModal()">取消</button>
+            </div>
+        </div>`;
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) _esCloseImportModal(); });
+    document.body.appendChild(overlay);
+}
+
+function _esCloseImportModal() {
+    document.getElementById('esImportModal')?.remove();
+}
+
+async function _esDoImport(scope, n, days) {
+    _esCloseImportModal();
+    const pid = _esState && _esState.projectId;
+    const sid = _esState && _esState.activeSessionId;
+    if (!pid || !sid) return;
+    const btn = document.getElementById('esImportBtn');
+    if (btn) { btn.disabled = true; btn.textContent = '导入中…'; }
+    try {
+        const r = await api(`/projects/${encodeURIComponent(pid)}/external-sessions/${encodeURIComponent(_esState.provider)}/${encodeURIComponent(sid)}/import`, {
+            method: 'POST',
+            body: { scope, n, days },
+        });
+        // 打开右侧聊天并切到新会话
+        _currentChatSessionId = r.session_id;
+        if (typeof adsShell !== 'undefined') adsShell.openRight({ tab: 'chat' });
+        setTimeout(() => switchChatSession(r.session_id), 0);
+    } catch (e) {
+        alert('导入失败：' + (e && e.message ? e.message : e));
+        if (btn) { btn.disabled = false; btn.textContent = '⬇ 导入到 AI 助手'; }
+    }
+}
+
 /** 消息列表 → HTML。连续的 thinking/tool_call（Cursor 里同一轮"思考+调用工具"的若干步）
  *  合并成一个分组折叠条（"✦ 思考了 N 轮 · M 步"），而不是每条单独占一行——
  *  否则一轮里 4、5 个工具调用会堆成一长条 chip 列表，和参考截图的单行汇总不符。
@@ -27969,6 +29177,11 @@ function _esRenderMessages(messages) {
     let i = 0;
     while (i < messages.length) {
         const kind = messages[i].kind || 'text';
+        if (kind === 'files_changed') {
+            out.push(_esRenderFilesChanged(messages[i]));
+            i++;
+            continue;
+        }
         if (kind === 'thinking' || kind === 'tool_call') {
             const cluster = [];
             while (i < messages.length && ((messages[i].kind || 'text') === 'thinking' || (messages[i].kind || 'text') === 'tool_call')) {
@@ -27982,6 +29195,141 @@ function _esRenderMessages(messages) {
         }
     }
     return out.join('');
+}
+
+/** 「N Files Changed」卡片：后端把每轮 edit_file_v2 前后内容 blob diff 出每文件 +/- 行数，
+ *  合成 kind=files_changed 的消息插在轮尾（对齐 Cursor 原生 UI）。
+ *  点文件行展开行内 diff（Cursor Review 同款：行号 + 绿增红删 + 未改动折叠条）。*/
+let _esFcSeq = 0;
+const _esFcCards = {};   // cardId -> files 数组（会话切换重渲染后旧键自然被覆盖/闲置）
+
+function _esHljsLangFor(name) {
+    const ext = (String(name || '').match(/\.([a-zA-Z0-9]+)$/) || [])[1] || '';
+    const map = {
+        cpp: 'cpp', cc: 'cpp', cxx: 'cpp', h: 'cpp', hpp: 'cpp', hh: 'cpp', c: 'c',
+        cs: 'csharp', py: 'python', js: 'javascript', mjs: 'javascript', jsx: 'javascript',
+        ts: 'typescript', tsx: 'typescript', java: 'java', go: 'go', rs: 'rust',
+        rb: 'ruby', php: 'php', swift: 'swift', kt: 'kotlin', sh: 'bash', ps1: 'powershell',
+        html: 'xml', xml: 'xml', json: 'json', yaml: 'yaml', yml: 'yaml', ini: 'ini',
+        md: 'markdown', css: 'css', sql: 'sql', lua: 'lua',
+        uplugin: 'json', uproject: 'json',
+    };
+    return map[ext.toLowerCase()] || '';
+}
+
+function _esHlLine(text, lang) {
+    if (lang && typeof hljs !== 'undefined') {
+        try { return hljs.highlight(text, { language: lang }).value; } catch (e) {}
+    }
+    return escHtml(text);
+}
+
+/** 单文件 unified diff → Cursor Review 风格 HTML。
+ *  hunk 间/前后的未改动行渲染成 "N unmodified lines" 折叠条（n=3 diff 里没有这些行的
+ *  内容，所以只显示条数不可展开）；@@ 头只用于行号定位，不渲染。 */
+function _esRenderFileDiff(f) {
+    const diff = String(f.diff || '');
+    if (!diff.trim()) return '<div class="es-diff-empty">（无 diff 内容）</div>';
+    const lang = _esHljsLangFor(f.file || f.path || '');
+    const lines = diff.replace(/\r\n/g, '\n').split('\n');
+    const afterLines = f.after_lines || 0;
+
+    let oldLn = 0, newLn = 0;
+    let lastOld = null, lastNew = null;
+    let firstHunkSeen = false;
+    const out = [];
+
+    const gapBar = (n) => {
+        if (n > 0) out.push(`<div class="es-diff-gap">⌄ ${n} unmodified lines ⌃</div>`);
+    };
+    const row = (cls, ln, text) => {
+        out.push(`<div class="es-diff-row ${cls}"><span class="es-diff-ln">${ln || ''}</span><span class="es-diff-code">${_esHlLine(text, lang)}</span></div>`);
+    };
+
+    for (let i = 0; i < lines.length; i++) {
+        const raw = lines[i];
+        if (raw.startsWith('@@')) {
+            const m = raw.match(/@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?/);
+            if (!m) continue;
+            const oStart = parseInt(m[1], 10), nStart = parseInt(m[3], 10);
+            gapBar(lastOld !== null ? oStart - lastOld - 1 : oStart - 1);
+            oldLn = oStart - 1;
+            newLn = nStart - 1;
+            firstHunkSeen = true;
+            continue;
+        }
+        if (raw.startsWith('diff --git ') || raw.startsWith('index ') || raw.startsWith('--- ') || raw.startsWith('+++ ')) continue;
+        if (raw.startsWith('\\ No newline')) continue;
+        if (raw.startsWith('+')) {
+            newLn += 1; row('add', newLn, raw.slice(1));
+        } else if (raw.startsWith('-')) {
+            oldLn += 1; row('del', oldLn, raw.slice(1));
+        } else if (raw === '' && i === lines.length - 1) {
+            continue;   // split 尾部的空串，不是内容
+        } else {
+            oldLn += 1; newLn += 1; row('ctx', newLn, raw.startsWith(' ') ? raw.slice(1) : raw);
+        }
+        lastOld = oldLn; lastNew = newLn;
+    }
+    // 末尾空隙：用 after 文件总行数倒推（is_new 文件 before 为空，无前导空隙）
+    if (firstHunkSeen && afterLines > newLn) gapBar(afterLines - newLn);
+
+    return `<div class="es-diff-body">${out.join('')}</div>`;
+}
+
+function _esToggleFcDiff(cardId, fileIdx, rowEl) {
+    const f = (_esFcCards[cardId] || [])[fileIdx];
+    const body = rowEl.nextElementSibling;
+    if (!f || !body) return;
+    const arrow = rowEl.querySelector('.es-fc-arrow');
+    if (body.style.display === 'none') {
+        body.innerHTML = _esRenderFileDiff(f);
+        body.style.display = '';
+        rowEl.classList.add('open');
+        if (arrow) arrow.textContent = '▾';
+    } else {
+        body.style.display = 'none';
+        rowEl.classList.remove('open');
+        if (arrow) arrow.textContent = '▸';
+    }
+}
+
+function _esRenderFilesChanged(m) {
+    const tcs = Array.isArray(m.tool_calls) ? m.tool_calls : [];
+    const data = (tcs.length && tcs[0] && tcs[0].data) ? tcs[0].data : {};
+    const files = Array.isArray(data.files) ? data.files : [];
+    if (!files.length) return '';
+    const cardId = 'esfc' + (++_esFcSeq);
+    _esFcCards[cardId] = files;
+    const rows = files.map((f, i) => {
+        const name = f.file || f.path || '(unknown)';
+        const rawPath = f.path || name;
+        // onclick 是内联 JS 字符串：反斜杠必须双写（\A 会被 JS 当转义序列吃掉变成 A，
+        // Windows 路径的斜杠就全丢了），单引号用 \' 而不是 &#39;（属性值先被 HTML 解码，实体挡不住 JS 解析）
+        const safePath = escHtml(rawPath.replace(/\\/g, '\\\\').replace(/'/g, "\\'"));
+        const ext = (name.match(/\.([a-zA-Z0-9]+)$/) || [])[1] || '';
+        const badge = f.is_new
+            ? '<span class="es-fc-badge es-fc-new">C</span>'
+            : `<span class="es-fc-badge">${escHtml(ext.slice(0, 3).toUpperCase())}</span>`;
+        const stats = `${f.added ? `<span class="es-fc-add">+${f.added}</span>` : ''}${f.removed ? `<span class="es-fc-del">-${f.removed}</span>` : ''}`;
+        const hasDiff = !!(f.diff && f.diff.trim());
+        const rowTitle = hasDiff ? '点击展开/收起 diff' : escHtml(rawPath);
+        return `<div class="es-fc-row${hasDiff ? ' has-diff' : ''}" title="${rowTitle}"${hasDiff ? ` onclick="_esToggleFcDiff('${cardId}', ${i}, this)"` : ''}>` +
+            `${hasDiff ? '<span class="es-fc-arrow">▸</span>' : ''}${badge}` +
+            `<span class="es-fc-name">${escHtml(name)}</span><span class="es-fc-stats">${stats}</span>` +
+            `<span class="es-fc-jump" title="在仓库中打开" onclick="event.stopPropagation();openRepoFileFromChat('${safePath}')">↗</span></div>` +
+            (hasDiff ? '<div class="es-fc-diff" style="display:none;"></div>' : '');
+    }).join('');
+    return `
+        <div class="chat-msg assistant" data-kind="files_changed">
+            <div class="chat-msg-content">
+                <div class="es-files-changed">
+                    <div class="es-fc-head"><span>${files.length} Files Changed</span><span class="es-fc-review">Review</span></div>
+                    ${rows}
+                </div>
+                ${_esMsgTime(m)}
+            </div>
+        </div>`;
 }
 
 /** 一组连续 thinking/tool_call → 单行汇总折叠条，展开后按原顺序堆叠每一步的 chip。*/
@@ -28163,11 +29511,12 @@ function _esRenderImages(images) {
     if (!Array.isArray(images) || images.length === 0) return '';
     const pid = _esState.projectId;
     const sessionId = _esState.activeSessionId;
+    const provider = _esState.provider;
     const imgs = images.map(img => {
         if (!img || !img.uuid) return '';
-        const url = `/api/projects/${encodeURIComponent(pid)}/external-sessions/cursor/${encodeURIComponent(sessionId)}/images/${encodeURIComponent(img.uuid)}`;
+        const url = `/api/projects/${encodeURIComponent(pid)}/external-sessions/${encodeURIComponent(provider)}/${encodeURIComponent(sessionId)}/images/${encodeURIComponent(img.uuid)}`;
         return `<img src="${url}"
-            onclick="adsShell.openMain({type:'image', sessionId:'${escHtml(sessionId)}', uuid:'${escHtml(img.uuid)}', projectId:'${escHtml(pid)}'})"
+            onclick="adsShell.openMain({type:'image', sessionId:'${escHtml(sessionId)}', uuid:'${escHtml(img.uuid)}', projectId:'${escHtml(pid)}', provider:'${escHtml(provider)}'})"
             style="max-width:260px;max-height:200px;border-radius:6px;border:1px solid var(--border);
                    object-fit:contain;cursor:zoom-in;" />`;
     }).join('');
@@ -28320,4 +29669,83 @@ function _esRestoreListWidth() {
     const w = parseInt(localStorage.getItem('esPanelListW') || '260', 10);
     const listEl = document.getElementById('esPanelList');
     if (listEl && w >= 180 && w <= 500) listEl.style.width = w + 'px';
+}
+
+/** 图片查看器：滚轮缩放（以光标为中心）、左键拖动平移、双击复位。
+ *  容器是 .main-ws-img（flex 居中），缩放/平移用 translate+scale 叠加在"适配窗口"的
+ *  原始尺寸上，transform-origin 取图片中心；container 设 overflow:hidden 负责裁剪。
+ *  scale=1 即"适配窗口"，往下不再缩小（MIN=1），往上最多放大 12 倍。*/
+function _esInitImageViewer(container) {
+    if (!container) return;
+    const img = container.querySelector('img');
+    if (!img) return;
+
+    let scale = 1, tx = 0, ty = 0;
+    const MIN = 1, MAX = 12;
+
+    let badge = container.querySelector('.es-image-zoom');
+    if (!badge) {
+        badge = document.createElement('div');
+        badge.className = 'es-image-zoom';
+        container.appendChild(badge);
+    }
+
+    let dragging = false, startX = 0, startY = 0, startTx = 0, startTy = 0;
+
+    function apply() {
+        img.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
+        badge.textContent = Math.round(scale * 100) + '%';
+        badge.style.display = (scale === 1 && tx === 0 && ty === 0) ? 'none' : '';
+        container.style.cursor = dragging ? 'grabbing' : (scale > 1 ? 'grab' : 'zoom-in');
+    }
+
+    img.draggable = false;
+    img.style.userSelect = 'none';
+    container.style.touchAction = 'none';  // 触屏/触控板也走拖动，别触发浏览器手势
+
+    // 滚轮缩放：以光标为锚点，缩放后光标下的像素尽量不动
+    container.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        const rect = container.getBoundingClientRect();
+        const mx = e.clientX - (rect.left + rect.width / 2);
+        const my = e.clientY - (rect.top + rect.height / 2);
+        // deltaY 各浏览器/触控板差异大，用指数归一化：一格鼠标滚轮约 ±100 → 约 1.16 倍
+        const factor = Math.pow(1.0015, -e.deltaY);
+        const next = Math.min(MAX, Math.max(MIN, scale * factor));
+        const k = next / scale;
+        tx = mx - (mx - tx) * k;
+        ty = my - (my - ty) * k;
+        scale = next;
+        apply();
+    }, { passive: false });
+
+    container.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0) return;
+        dragging = true;
+        startX = e.clientX; startY = e.clientY;
+        startTx = tx; startTy = ty;
+        container.setPointerCapture(e.pointerId);
+        apply();
+        e.preventDefault();
+    });
+    container.addEventListener('pointermove', (e) => {
+        if (!dragging) return;
+        tx = startTx + (e.clientX - startX);
+        ty = startTy + (e.clientY - startY);
+        apply();
+    });
+    const endDrag = () => {
+        if (!dragging) return;
+        dragging = false;
+        apply();
+    };
+    container.addEventListener('pointerup', endDrag);
+    container.addEventListener('pointercancel', endDrag);
+
+    container.addEventListener('dblclick', () => {
+        scale = 1; tx = 0; ty = 0;
+        apply();
+    });
+
+    apply();
 }

@@ -594,20 +594,28 @@ _CLI_ADAPTERS: Dict[str, Dict] = {
 class LLMClient:
     """LLM 客户端 — 支持 Anthropic Messages API、OpenAI 兼容 API 和本地 CLI"""
 
-    def __init__(self):
-        self.base_url = settings.LLM_BASE_URL.rstrip("/")
-        self.api_key = settings.LLM_API_KEY
-        self.model = settings.LLM_MODEL
-        self.timeout = settings.LLM_TIMEOUT
-        self.max_retries = settings.LLM_MAX_RETRIES
-        self.api_format = settings.LLM_API_FORMAT  # "anthropic" / "openai" / "cli"
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
+        """config 非空 = 用给定配置覆盖全局 settings（per-agent 客户端用）；
+        空 = 全局默认（llm_client 单例）。空字符串/None 字段回退 settings。"""
+        cfg = config or {}
+
+        def gv(key: str, default):
+            v = cfg.get(key)
+            return default if v in (None, "") else v
+
+        self.base_url = gv("base_url", settings.LLM_BASE_URL).rstrip("/")
+        self.api_key = gv("api_key", settings.LLM_API_KEY)
+        self.model = gv("model", settings.LLM_MODEL)
+        self.timeout = int(cfg.get("timeout") or settings.LLM_TIMEOUT)
+        self.max_retries = int(cfg.get("max_retries") or settings.LLM_MAX_RETRIES)
+        self.api_format = gv("api_format", settings.LLM_API_FORMAT)  # "anthropic" / "openai" / "cli"
         self._pending_requests: int = 0   # 当前在途 LLM 请求数（供 /api/metrics 读取）
 
         # CLI 模式专属
-        self.cli_type    = settings.LLM_CLI_TYPE
-        self.cli_cmd     = settings.LLM_CLI_CMD
-        self.cli_model   = settings.LLM_CLI_MODEL or settings.LLM_MODEL
-        self.cli_timeout = settings.LLM_CLI_TIMEOUT
+        self.cli_type    = gv("cli_type", settings.LLM_CLI_TYPE)
+        self.cli_cmd     = gv("cli_cmd", settings.LLM_CLI_CMD)
+        self.cli_model   = gv("cli_model", settings.LLM_CLI_MODEL) or self.model
+        self.cli_timeout = int(cfg.get("cli_timeout") or settings.LLM_CLI_TIMEOUT)
 
     @property
     def is_configured(self) -> bool:
@@ -1756,6 +1764,16 @@ class LLMClient:
         temperature: float = 0.7,
         max_tokens: int = 4096,
     ) -> str:
+        """异步聊天补全（facade：按 agent 上下文路由到生效客户端）"""
+        client = await get_effective_llm_client()
+        return await client._chat(messages, temperature, max_tokens)
+
+    async def _chat(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+    ) -> str:
         """异步聊天补全（自动根据 api_format 选择后端）+ 自动记录会话"""
         ctx = _ctx_label()
 
@@ -2073,6 +2091,16 @@ class LLMClient:
         temperature: float = 0.3,
         max_tokens: int = 16000,
     ) -> Any:
+        """聊天并解析 JSON 响应（facade）"""
+        client = await get_effective_llm_client()
+        return await client._chat_json(messages, temperature, max_tokens)
+
+    async def _chat_json(
+        self,
+        messages: List[Dict[str, str]],
+        temperature: float = 0.3,
+        max_tokens: int = 16000,
+    ) -> Any:
         """聊天并解析 JSON 响应"""
         ctx = _ctx_label()
 
@@ -2083,7 +2111,7 @@ class LLMClient:
         }
         all_messages = [system_msg] + messages
 
-        response = await self.chat(all_messages, temperature=temperature, max_tokens=max_tokens)
+        response = await self._chat(all_messages, temperature=temperature, max_tokens=max_tokens)
 
         # 清洗并解析 JSON
         cleaned = response.strip()
@@ -2124,6 +2152,22 @@ class LLMClient:
         max_tokens: int = 16000,
         system: str = "",
     ) -> Dict[str, Any]:
+        """带工具的 ReAct 循环（facade）"""
+        client = await get_effective_llm_client()
+        return await client._chat_with_tools(
+            messages, tools, tool_executor, max_rounds, temperature, max_tokens, system
+        )
+
+    async def _chat_with_tools(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: List[Dict[str, Any]],
+        tool_executor,          # SkillExecutor 实例，需实现 async execute(name, input) -> str
+        max_rounds: int = 10,
+        temperature: float = 0.3,
+        max_tokens: int = 16000,
+        system: str = "",
+    ) -> Dict[str, Any]:
         """
         带工具的 ReAct 循环。
         - tools: Anthropic 格式的 tool schema 列表
@@ -2143,7 +2187,7 @@ class LLMClient:
                 all_messages = [{"role": "system", "content": system}] + list(messages)
             else:
                 all_messages = list(messages)
-            response = await self.chat(all_messages, temperature=temperature, max_tokens=max_tokens)
+            response = await self._chat(all_messages, temperature=temperature, max_tokens=max_tokens)
             final_messages = list(messages) + [{"role": "assistant", "content": response}]
             return {"messages": final_messages, "rounds": 1, "finished": True, "cli_fallback": True}
 
@@ -2454,6 +2498,24 @@ class LLMClient:
         system: str = "",
         budget=None,   # Optional[query_engine.Budget]
     ) -> AsyncGenerator[Dict[str, Any], None]:
+        """带工具的 ReAct 流式循环（facade）"""
+        client = await get_effective_llm_client()
+        async for ev in client._chat_with_tools_stream(
+            messages, tools, tool_executor, max_rounds, temperature, max_tokens, system, budget
+        ):
+            yield ev
+
+    async def _chat_with_tools_stream(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: List[Dict[str, Any]],
+        tool_executor,
+        max_rounds: int = 10,
+        temperature: float = 0.3,
+        max_tokens: int = 16000,
+        system: str = "",
+        budget=None,   # Optional[query_engine.Budget]
+    ) -> AsyncGenerator[Dict[str, Any], None]:
         """
         带工具的 ReAct 流式循环。
         yield 事件（前端直接消费）：
@@ -2475,7 +2537,7 @@ class LLMClient:
                 all_messages = [{"role": "system", "content": system}] + list(messages)
             else:
                 all_messages = list(messages)
-            response = await self.chat(all_messages, temperature=temperature, max_tokens=max_tokens)
+            response = await self._chat(all_messages, temperature=temperature, max_tokens=max_tokens)
             yield {"type": "text_delta", "delta": response}
             yield {"type": "message_done", "rounds": 1, "cli_fallback": True}
             return
@@ -2760,3 +2822,69 @@ class LLMClient:
 
 # 全局 LLM 客户端
 llm_client = LLMClient()
+
+
+# ==================== Agent 级 LLM 配置路由 ====================
+# 各 Agent 可覆盖全局配置（表 agent_llm_config）。路由依据：_llm_ctx.agent_type
+# （已由 chat API / orchestrator 的 set_llm_context(agent_type=...) 设置）。
+# 无 agent 上下文或无覆盖 → 回退全局单例 llm_client。
+
+_agent_clients: Dict[str, "LLMClient"] = {}   # agent_type -> 覆盖后的客户端（缓存）
+
+
+def _invalidate_agent_client(agent_type: Optional[str] = None) -> None:
+    """配置写入后失效缓存。agent_type=None 全清。"""
+    if agent_type is None:
+        _agent_clients.clear()
+    else:
+        _agent_clients.pop(agent_type, None)
+
+
+async def get_agent_llm_config(agent_type: str) -> Optional[Dict[str, Any]]:
+    """查 agent_llm_config 表；无覆盖返回 None。字段缺省回填全局 settings，得到完整配置。"""
+    if not agent_type:
+        return None
+    try:
+        from database import db
+        row = await db.fetch_one(
+            "SELECT api_format, base_url, api_key, model, cli_type, cli_cmd, cli_model, cli_timeout "
+            "FROM agent_llm_config WHERE agent_type = ?",
+            (agent_type,),
+        )
+    except Exception as e:
+        logger.debug("查 agent_llm_config 失败（忽略，回退全局）: %s", e)
+        return None
+    if not row:
+        return None
+
+    def _or(row_val, default):
+        v = row.get(row_val)
+        return default if v in (None, "") else v
+
+    return {
+        "api_format": _or("api_format", settings.LLM_API_FORMAT),
+        "base_url": _or("base_url", settings.LLM_BASE_URL),
+        "api_key": _or("api_key", settings.LLM_API_KEY),
+        "model": _or("model", settings.LLM_MODEL),
+        "cli_type": _or("cli_type", settings.LLM_CLI_TYPE),
+        "cli_cmd": _or("cli_cmd", settings.LLM_CLI_CMD),
+        "cli_model": _or("cli_model", settings.LLM_CLI_MODEL) or settings.LLM_MODEL,
+        "cli_timeout": row.get("cli_timeout") or settings.LLM_CLI_TIMEOUT,
+        "timeout": settings.LLM_TIMEOUT,
+        "max_retries": settings.LLM_MAX_RETRIES,
+    }
+
+
+async def get_effective_llm_client() -> "LLMClient":
+    """按当前 agent_type 上下文返回生效的 LLMClient（per-agent 覆盖 or 全局单例）。"""
+    agent = _llm_ctx.agent_type
+    if not agent:
+        return llm_client
+    cfg = await get_agent_llm_config(agent)
+    if not cfg:
+        return llm_client
+    client = _agent_clients.get(agent)
+    if client is None:
+        client = LLMClient(config=cfg)
+        _agent_clients[agent] = client
+    return client

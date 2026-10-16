@@ -1,0 +1,26 @@
+# 行尾规范：仓库内一律 LF（提交 3ff7b13 "统一换行符为 LF" 的延续）
+#
+# 为什么需要这个文件：core.autocrlf=true 对 frontend/app.js **无效**。
+# 该文件在二进制探测函数里有一个字面 NUL 字节（`sample.indexOf('\0')`），
+# git 的 CRLF filter 见到 NUL 就判定文件为二进制、跳过行尾归一，于是编辑器
+# 存成 CRLF 后会被原样入库 —— 表现为 app.js 整文件 58074 行的假 diff
+# （真实改动只有 ~1600 行），review 和 blame 全部失效。
+# `text eol=lf` 强制按文本处理，覆盖二进制探测。
+*.js   text eol=lf
+*.py   text eol=lf
+*.css  text eol=lf
+*.html text eol=lf
+*.md   text eol=lf
+*.json text eol=lf
+*.yaml text eol=lf
+*.yml  text eol=lf
+
+# 显式标注二进制，避免被上面的规则误伤
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.pdf  binary
+*.uasset binary
+*.umap   binary

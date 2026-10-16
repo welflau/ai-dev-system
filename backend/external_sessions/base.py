@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 
 Role = Literal["user", "assistant", "system"]
-Kind = Literal["text", "thinking", "tool_call"]
+Kind = Literal["text", "thinking", "tool_call", "files_changed"]
 
 
 class ExternalMessage(BaseModel):

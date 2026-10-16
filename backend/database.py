@@ -160,6 +160,13 @@ class Database:
             # 的 LLM/工具调用」JOIN 起来，只能靠这个字段。以前只靠 created_at 的时间
             # 窗口去猜哪条 LLM 属于哪条消息，同一秒发两条就散架了。
             ("chat_messages", "turn_id", "TEXT"),
+            # 多 Agent 群聊黑板（Phase 1）：发言人与消息类型
+            # speaker = 谁说的（user / DevAgent / OrchestratorAgent / converger ...）
+            # kind    = message(普通) / utterance(群聊发言) / system(收敛小结)
+            ("chat_messages", "speaker", "TEXT"),
+            ("chat_messages", "kind", "TEXT DEFAULT 'message'"),
+            # 会话来源标记：chat=AI助手 / group=群聊会议（AI助手 历史加载要排除 group）
+            ("chat_sessions", "source", "TEXT DEFAULT 'chat'"),
         ]
         async with self._write_lock:
             for table, column, col_def in migrations:
@@ -171,6 +178,17 @@ class Database:
                     )
                     logger.info("数据库迁移: 已添加列 %s.%s (%s)", table, column, col_def)
             await self._db.commit()
+
+        # 群聊会话标记回填：含群聊发言（kind=utterance）的会话归为 group，
+        # 避免 AI助手 的「最近会话」回退把群聊会话当成自己的加载出来
+        try:
+            await self._db.execute(
+                """UPDATE chat_sessions SET source='group'
+                   WHERE id IN (SELECT DISTINCT session_id FROM chat_messages WHERE kind='utterance')"""
+            )
+            await self._db.commit()
+        except Exception as e:
+            logger.warning("群聊会话标记回填失败（忽略）: %s", e)
 
         # v0.20 多会话：为现有消息补建 default session 记录
         await self._ensure_default_sessions()
@@ -556,6 +574,18 @@ CREATE TABLE IF NOT EXISTS chat_messages (
 );
 
 -- ============================================================
+-- 多 Agent 群聊黑板表（Phase 1）：session 维度的共享分区状态
+-- ============================================================
+CREATE TABLE IF NOT EXISTS chat_blackboards (
+    session_id  TEXT PRIMARY KEY,
+    project_id  TEXT NOT NULL,
+    state_json  TEXT NOT NULL,          -- 六分区状态 {topic, facts, proposals, open_questions, decisions, artifacts}
+    version     INTEGER NOT NULL DEFAULT 0,
+    updated_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_chat_blackboards_project ON chat_blackboards(project_id);
+
+-- ============================================================
 -- BUG 表
 -- ============================================================
 CREATE TABLE IF NOT EXISTS bugs (
@@ -904,6 +934,23 @@ CREATE TABLE IF NOT EXISTS system_settings (
     key         TEXT PRIMARY KEY,
     value       TEXT NOT NULL,
     updated_at  TEXT NOT NULL
+);
+
+-- ============================================================
+-- Agent 级 LLM 配置（per-agent 覆盖，未配置即继承全局 .env）
+-- ============================================================
+CREATE TABLE IF NOT EXISTS agent_llm_config (
+    id           TEXT PRIMARY KEY,
+    agent_type   TEXT NOT NULL UNIQUE,      -- 具体 agent 名（如 ChatAssistant / DevAgent）
+    api_format   TEXT,                      -- anthropic / openai / cli
+    base_url     TEXT,
+    api_key      TEXT,
+    model        TEXT,
+    cli_type     TEXT,
+    cli_cmd      TEXT,
+    cli_model    TEXT,
+    cli_timeout  INTEGER,
+    updated_at   TEXT NOT NULL
 );
 
 -- ============================================================

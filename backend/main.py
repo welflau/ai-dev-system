@@ -737,6 +737,128 @@ async def llm_test():
     return result
 
 
+# ==================== Agent 级 LLM 配置 ====================
+
+def _public_llm_fields(client, has_api_key: bool = False) -> dict:
+    """暴露给前端的 LLM 配置字段（api_key 不外泄，只给 has_api_key 标记）"""
+    return {
+        "api_format": getattr(client, "api_format", None),
+        "base_url": getattr(client, "base_url", None),
+        "model": getattr(client, "model", None),
+        "cli_type": getattr(client, "cli_type", None),
+        "cli_cmd": getattr(client, "cli_cmd", None),
+        "cli_model": getattr(client, "cli_model", None),
+        "cli_timeout": getattr(client, "cli_timeout", None),
+        "has_api_key": has_api_key,
+    }
+
+
+@app.get("/api/llm/agents")
+async def llm_agents():
+    """枚举所有 Agent + 各自 LLM 生效配置（覆盖 or 继承全局）"""
+    from agent_registry import discover_agents, get_registry
+    from llm_client import (
+        LLMClient, llm_client, get_agent_llm_config, get_cli_model_options, _CLI_ADAPTERS,
+    )
+
+    discover_agents()
+    names = sorted(get_registry().keys())
+
+    agents = []
+    for name in names:
+        override = await get_agent_llm_config(name)
+        if override is not None:
+            effective = _public_llm_fields(
+                LLMClient(config=override),
+                has_api_key=bool(override.get("api_key")),
+            )
+            has_override = True
+        else:
+            effective = _public_llm_fields(llm_client, has_api_key=bool(llm_client.api_key))
+            has_override = False
+        agents.append({
+            "agent_type": name,
+            "has_override": has_override,
+            "effective": effective,
+        })
+
+    return {
+        "agents": agents,
+        "global": _public_llm_fields(llm_client, has_api_key=bool(llm_client.api_key)),
+        "cli_model_options": get_cli_model_options(),
+        "cli_default_cmds": {k: v["default_cmd"] for k, v in _CLI_ADAPTERS.items()},
+    }
+
+
+@app.post("/api/llm/agents/{agent_type}/config")
+async def llm_agent_config(agent_type: str, body: dict):
+    """写/更新某 Agent 的 LLM 覆盖（upsert）。空 body 各字段为空串 = 显式继承全局语义不再适用，
+    调用方要"恢复继承"请用 DELETE。"""
+    from llm_client import _invalidate_agent_client
+    from database import db
+    from utils import generate_id, now_iso
+
+    agent_type = (agent_type or "").strip()
+    if not agent_type:
+        raise HTTPException(400, "agent_type 不能为空")
+
+    fields = {
+        "api_format": (body.get("api_format") or "").strip(),
+        "base_url": (body.get("base_url") or "").strip(),
+        "api_key": (body.get("api_key") or "").strip(),
+        "model": (body.get("model") or "").strip(),
+        "cli_type": (body.get("cli_type") or "").strip(),
+        "cli_cmd": (body.get("cli_cmd") or "").strip(),
+        "cli_model": (body.get("cli_model") or "").strip(),
+        "cli_timeout": body.get("cli_timeout"),
+    }
+    # api_key 留空 = 沿用已有的（更新时）；新增且留空 = 继承全局（表里存空串）
+    existing = await db.fetch_one(
+        "SELECT id, api_key FROM agent_llm_config WHERE agent_type = ?", (agent_type,)
+    )
+    if existing:
+        await db.execute(
+            "UPDATE agent_llm_config SET api_format=?, base_url=?, api_key=?, model=?, "
+            "cli_type=?, cli_cmd=?, cli_model=?, cli_timeout=?, updated_at=? WHERE agent_type=?",
+            (fields["api_format"], fields["base_url"],
+             fields["api_key"] if fields["api_key"] else existing.get("api_key"),
+             fields["model"], fields["cli_type"], fields["cli_cmd"], fields["cli_model"],
+             int(fields["cli_timeout"]) if fields["cli_timeout"] else None,
+             now_iso(), agent_type),
+        )
+    else:
+        await db.insert("agent_llm_config", {
+            "id": generate_id("ALC"),
+            "agent_type": agent_type,
+            "api_format": fields["api_format"],
+            "base_url": fields["base_url"],
+            "api_key": fields["api_key"],
+            "model": fields["model"],
+            "cli_type": fields["cli_type"],
+            "cli_cmd": fields["cli_cmd"],
+            "cli_model": fields["cli_model"],
+            "cli_timeout": int(fields["cli_timeout"]) if fields["cli_timeout"] else None,
+            "updated_at": now_iso(),
+        })
+
+    _invalidate_agent_client(agent_type)
+    return {"status": "ok", "agent_type": agent_type}
+
+
+@app.delete("/api/llm/agents/{agent_type}/config")
+async def llm_agent_config_delete(agent_type: str):
+    """删除某 Agent 的覆盖 = 恢复继承全局配置"""
+    from llm_client import _invalidate_agent_client
+    from database import db
+
+    agent_type = (agent_type or "").strip()
+    if not agent_type:
+        raise HTTPException(400, "agent_type 不能为空")
+    await db.execute("DELETE FROM agent_llm_config WHERE agent_type = ?", (agent_type,))
+    _invalidate_agent_client(agent_type)
+    return {"status": "ok", "agent_type": agent_type}
+
+
 @app.get("/api/metrics")
 async def get_system_metrics():
     """系统性能指标：用于顶栏实时监控"""
@@ -961,6 +1083,17 @@ async def serve_local_file(path: str):
         raise HTTPException(400, "不支持的文件类型")
     mt = mimetypes.types_map.get(ext, "image/png")
     return FileResponse(str(fp), media_type=mt)
+
+
+@app.get("/api/open-in-browser")
+async def open_in_browser(url: str):
+    """用系统默认浏览器打开 URL（网页 Tab 被 X-Frame-Options 拒绝内嵌时的兜底出口）"""
+    import webbrowser
+    if not (url.startswith("http://") or url.startswith("https://")):
+        raise HTTPException(400, "仅支持 http/https URL")
+    if not webbrowser.open(url):
+        raise HTTPException(500, "无法调起系统浏览器")
+    return {"ok": True}
 
 
 @app.get("/app")

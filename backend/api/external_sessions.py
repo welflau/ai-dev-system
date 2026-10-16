@@ -8,9 +8,14 @@ from __future__ import annotations
 
 import json as _json
 import logging
+import uuid
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 
 from database import db
 from external_sessions import PROVIDERS
@@ -100,3 +105,150 @@ async def get_external_session_image(project_id: str, provider: str, session_id:
     if not path:
         raise HTTPException(status_code=404, detail=f"image not found: {image_id}")
     return FileResponse(path, media_type=_sniff_image_mime(path))
+
+
+# ==================== 导入外部会话为 ADS 聊天会话 ====================
+
+class ImportExternalSessionRequest(BaseModel):
+    scope: str = Field(default="all", description="all | last_n | last_days")
+    n: Optional[int] = Field(default=None, description="scope=last_n 时取最近 N 条")
+    days: Optional[int] = Field(default=None, description="scope=last_days 时取最近 N 天")
+
+
+def _parse_iso(s: Optional[str]) -> Optional[datetime]:
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _apply_scope(msgs, req: ImportExternalSessionRequest):
+    """按 scope 裁剪文字轮次列表。"""
+    if req.scope == "last_n" and req.n and req.n > 0:
+        return msgs[-req.n:]
+    if req.scope == "last_days" and req.days and req.days > 0:
+        cutoff = datetime.now(timezone.utc) - timedelta(days=req.days)
+        return [m for m in msgs if (dt := _parse_iso(m.created_at)) is None or dt >= cutoff]
+    return msgs
+
+
+def _coalesce_turns(msgs) -> list:
+    """合并连续同 role 的文字消息，保证 user/assistant 交替；图片并到对应消息上。"""
+    turns = []
+    for m in msgs:
+        images = [img for img in (m.images or []) if isinstance(img, dict) and img.get("uuid")]
+        text = (m.content or "").strip()
+        if not text and not images:
+            continue
+        if turns and turns[-1]["role"] == m.role:
+            last = turns[-1]
+            if text:
+                last["text"] = (last["text"] + "\n" + text).strip()
+            last["images"].extend(images)
+            if not last.get("created_at") and m.created_at:
+                last["created_at"] = m.created_at
+        else:
+            turns.append({"role": m.role, "text": text, "images": images, "created_at": m.created_at})
+    return turns
+
+
+def _ext_for_mime(media_type: str) -> str:
+    return {
+        "image/png": "png",
+        "image/jpeg": "jpeg",
+        "image/gif": "gif",
+        "image/webp": "webp",
+    }.get(media_type, "png")
+
+
+def _save_external_images(project_id: str, provider, session_id: str, images: list) -> list:
+    """把外部会话消息里的图片字节落盘到 chat_images，返回可访问 URL 列表。"""
+    from config import BASE_DIR
+
+    get_image = getattr(provider, "get_image", None)
+    if not get_image or not images:
+        return []
+    chat_images_dir = BASE_DIR / "chat_images" / project_id
+    chat_images_dir.mkdir(parents=True, exist_ok=True)
+    urls = []
+    for img in images:
+        uid = img.get("uuid")
+        if not uid:
+            continue
+        try:
+            src = get_image(session_id, uid)
+            if not src:
+                continue
+            data = Path(src).read_bytes()
+        except Exception as e:
+            logger.warning("读外部图片失败 %s: %s", uid, e)
+            continue
+        filename = f"{uuid.uuid4().hex}.{_ext_for_mime(_sniff_image_mime(Path(src)))}"
+        try:
+            (chat_images_dir / filename).write_bytes(data)
+        except Exception as e:
+            logger.warning("写图片失败 %s: %s", filename, e)
+            continue
+        urls.append(f"/chat-images/{project_id}/{filename}")
+    return urls
+
+
+@router.post("/{project_id}/external-sessions/{provider}/{session_id}/import")
+async def import_external_session(
+    project_id: str,
+    provider: str,
+    session_id: str,
+    req: ImportExternalSessionRequest,
+):
+    """把一段外部会话整体导入为新的 ADS 聊天会话（文字 + 图片作为历史注入）。"""
+    p = PROVIDERS.get(provider)
+    if not p:
+        raise HTTPException(status_code=400, detail=f"unknown provider: {provider}")
+    row = await db.fetch_one("SELECT id FROM projects WHERE id=?", (project_id,))
+    if not row:
+        raise HTTPException(status_code=404, detail=f"project not found: {project_id}")
+    detail = p.get_session(session_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail=f"session not found: {session_id}")
+
+    # 只导真实对话轮（文字），跳过 thinking/tool_call/files_changed
+    text_msgs = [m for m in detail.messages if m.role in ("user", "assistant") and m.kind == "text"]
+    text_msgs = _apply_scope(text_msgs, req)
+    turns = _coalesce_turns(text_msgs)
+    if not turns:
+        raise HTTPException(status_code=400, detail="该会话没有可导入的文字消息")
+
+    from utils import generate_id, now_iso
+
+    sid = generate_id("sess-")
+    title = ((detail.title or "").strip() or "外部会话") + " · Cursor 导入"
+    now = now_iso()
+    await db.insert("chat_sessions", {
+        "id": sid,
+        "project_id": project_id,
+        "title": title,
+        "created_at": now,
+        "updated_at": now,
+    })
+
+    imported = 0
+    for t in turns:
+        urls = _save_external_images(project_id, p, session_id, t["images"])
+        await db.insert("chat_messages", {
+            "id": generate_id("MSG"),
+            "project_id": project_id,
+            "role": t["role"],
+            "content": t["text"],
+            "images_json": _json.dumps(urls, ensure_ascii=False) if urls else None,
+            "session_id": sid,
+            "created_at": t.get("created_at") or now_iso(),
+        })
+        imported += 1
+
+    await db.execute(
+        "UPDATE chat_sessions SET message_count = ?, updated_at = ? WHERE id = ?",
+        (imported, now_iso(), sid),
+    )
+    return {"session_id": sid, "title": title, "message_count": imported}

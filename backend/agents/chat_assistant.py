@@ -1430,14 +1430,22 @@ class ChatAssistantAgent(BaseAgent):
             return content[:max_chars - 3].rstrip() + "..."
 
         if isinstance(content, list):
-            # Anthropic 多段 content：text / tool_use / tool_result blocks
+            # Anthropic 多段 content：text / image / tool_use / tool_result blocks
+            # image block：近期(compress=False)保留真实 block（AI 能看到图片像素），
+            # 更早(compress=True)降级为 [图片] 占位，省 token。
+            image_blocks: List[Dict] = []
             parts: List[str] = []
             for b in content:
                 if not isinstance(b, dict):
                     parts.append(str(b)[:200])
                     continue
                 btype = b.get("type")
-                if btype == "text":
+                if btype == "image":
+                    if compress:
+                        parts.append("[图片]")
+                    else:
+                        image_blocks.append(b)
+                elif btype == "text":
                     parts.append(b.get("text", "")[:max_chars // 2])
                 elif btype == "tool_use":
                     parts.append(f"[tool: {b.get('name', '?')}(...)]")
@@ -1447,10 +1455,15 @@ class ChatAssistantAgent(BaseAgent):
                     parts.append(f"[tool_result] {inner_s[:300]}")
                 else:
                     parts.append(f"[{btype}]")
-            joined = "\n".join(p for p in parts if p)
-            if len(joined) <= max_chars:
-                return joined
-            return joined[:max_chars - 3].rstrip() + "..."
+            text = "\n".join(p for p in parts if p)
+            if len(text) > max_chars:
+                text = text[:max_chars - 3].rstrip() + "..."
+            if image_blocks:
+                blocks = list(image_blocks)
+                if text:
+                    blocks.append({"type": "text", "text": text})
+                return blocks
+            return text
 
         # 未知类型 → repr
         s = str(content)
@@ -1461,6 +1474,14 @@ class ChatAssistantAgent(BaseAgent):
         """总量超预算时从最老的开始删，保证至少留 1 条。"""
         def _len(m):
             c = m.get("content", "")
+            if isinstance(c, list):
+                # image block 是 base64 大块，不计入文字预算（否则会挤掉整段文字历史）
+                total = 0
+                for b in c:
+                    if isinstance(b, dict) and b.get("type") == "image":
+                        continue
+                    total += len(str(b))
+                return total
             return len(c) if isinstance(c, str) else len(str(c))
 
         total = sum(_len(m) for m in messages)

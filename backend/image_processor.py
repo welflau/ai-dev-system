@@ -23,7 +23,7 @@ import time
 import urllib.request
 import urllib.error
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from config import settings
 from database import db
@@ -92,9 +92,41 @@ def _lightai_get(path: str, timeout: int = 30) -> dict:
         return json.loads(resp.read().decode("utf-8"))
 
 
+def _collect_http_strings(node: Any, out: list, depth: int = 0) -> None:
+    """递归收集任意嵌套结构里的 http(s) 字符串，保持遍历顺序。
+
+    为什么要递归而不是枚举 key：LightAI 的 `data.result` 用**引擎特定的 key**
+    装 URL —— 实测 gemini 返回的是 `banana2img_0`，不同引擎/批量张数还会变成
+    `banana2img_1`、`text2img_0` 之类。原实现只认固定的
+    url / image_url / output_url，于是 `status=2` 拿到了 URL 却提取不出来，
+    `_poll_lightai_task` 返回 None，上层报「超时或被内容策略拒绝」——
+    一个纯解析 bug 伪装成了 API 问题，排查时完全误导。
+
+    depth 上限防御畸形响应里的深层嵌套（LightAI 实际只有 2-3 层）。
+    """
+    if depth > 6:
+        return
+    if isinstance(node, str):
+        if node.startswith("http://") or node.startswith("https://"):
+            out.append(node)
+        return
+    if isinstance(node, dict):
+        for v in node.values():
+            _collect_http_strings(v, out, depth + 1)
+        return
+    if isinstance(node, (list, tuple)):
+        for v in node:
+            _collect_http_strings(v, out, depth + 1)
+
+
 def _extract_image_urls(result: dict) -> list:
-    """从 LightAI 任务结果中提取图片 URL（兼容多种响应格式）"""
-    urls = []
+    """从 LightAI 任务结果中提取图片 URL（兼容多种响应格式）。
+
+    两段式：先按已知结构精确提取（顺序可控），再递归兜底捞漏的。
+    精确路径在前是为了让「第一张图」的语义稳定 —— 批量生图时
+    `_poll_lightai_task` 只取 urls[0]，不该依赖 dict 的遍历顺序。
+    """
+    urls: list = []
     data = result.get("data", result)
     if isinstance(data, dict):
         for list_key in ("images", "results"):
@@ -117,6 +149,18 @@ def _extract_image_urls(result: dict) -> list:
                 val = inner.get(key, "")
                 if isinstance(val, str) and val.startswith("http"):
                     urls.append(val)
+            # 引擎特定 key（banana2img_0 等）—— 按 key 名排序保证批量顺序稳定
+            for key in sorted(inner):
+                val = inner[key]
+                if isinstance(val, str) and val.startswith("http"):
+                    urls.append(val)
+
+    # 兜底：上面的结构都没命中时全局递归捞。放最后，不打乱精确路径的顺序。
+    if not urls:
+        _collect_http_strings(result, urls)
+        if urls:
+            logger.info("LightAI 响应结构未知，递归兜底提取到 %d 个 URL", len(urls))
+
     return list(dict.fromkeys(urls))  # 去重保序
 
 

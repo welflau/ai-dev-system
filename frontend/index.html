@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI 自动开发系统</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20261009i">
+    <link rel="stylesheet" href="/static/styles.css?v=20261013w">
     <!-- highlight.js 语法高亮 -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
@@ -1865,15 +1865,18 @@
         <div class="chat-panel-resize" id="chatPanelResize"></div>
         <div class="chat-panel-header">
             <div class="chat-panel-title" id="chatPanelTitleArea" onclick="toggleProjectSwitcher()" style="cursor:default;">
-                <span class="chat-panel-icon" id="chatPanelIcon">💬</span>
+                <span class="chat-panel-icon" id="chatPanelIcon" title="AI 助手模型配置"
+                      onclick="event.stopPropagation();showAgentLlmConfigModal('ChatAssistant')"
+                      style="cursor:pointer;">💬</span>
                 <span id="chatPanelTitle">AI 助手</span>
+                <span id="chatPanelSessionTitle" style="display:none;" title=""></span>
                 <span id="chatPanelSwitchArrow" style="display:none;font-size:10px;margin-left:4px;opacity:.6;">▾</span>
             </div>
             <div class="chat-panel-actions">
                 <button class="btn-icon chat-panel-btn" id="chatModeBtn" onclick="toggleChatMode()" title="切换模式">
                     🔄
                 </button>
-                <button class="btn-icon chat-panel-btn" onclick="newChatSession()" title="新建对话" id="newChatBtn">＋</button>
+                <button class="btn-icon chat-panel-btn" onclick="onNewChatClick()" title="新建" id="newChatBtn">＋</button>
                 <button class="btn-icon chat-panel-btn" onclick="toggleMemoryPanel()" title="记忆管理" id="chatMemoryBtn">🧠</button>
                 <button class="btn-icon chat-panel-btn" onclick="toggleChatHistory()" title="历史对话" id="chatHistoryBtn">🕐</button>
                 <button class="btn-icon chat-panel-btn" id="chatSplitBtn" onclick="addChatSplitPane()" title="新增分屏" style="display:none;">⊞</button>
@@ -1929,6 +1932,8 @@
             </button>
         </div>
         <div class="chat-panel-body" id="chatPanelBody">
+            <!-- 群聊黑板侧栏：全屏时黑板卡片放这里（左侧），非全屏时黑板内联进消息流 -->
+            <div id="groupBoardSidebar"></div>
             <!-- AI助手 / 工单 Tab 共用容器 -->
             <div class="chat-messages" id="chatMessages">
                 <div class="chat-welcome">
@@ -2002,6 +2007,9 @@
                 <button class="chat-attach-btn" id="chatAttachBtn" onclick="openFileAttachment()" title="上传附件（图片、PDF、Word、代码）">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
                 </button>
+                <!-- 新话题开关（仅群聊显示）：点亮后下一条消息强制开新话题 -->
+                <button class="chat-attach-btn" id="forceNewTopicBtn" onclick="toggleForceNewTopic()"
+                        title="下一条消息强制开新话题" style="display:none;font-size:13px;">🆕</button>
                 <!-- 隐藏文件输入 -->
                 <input type="file" id="chatFileInput" multiple
                     accept="image/*,.pdf,.docx,.txt,.md,.py,.js,.ts,.jsx,.tsx,.html,.css,.json,.yaml,.yml,.toml,.sh,.sql,.rs,.go,.java,.cpp,.c,.rb,.php"
@@ -2309,6 +2317,9 @@
                         <p style="font-size:12px; color:var(--text-muted); margin-bottom:14px;">
                             配置大模型接入方式，用于智能需求拆分、代码生成等 AI 功能。不配置则使用规则引擎降级。
                         </p>
+                        <button class="btn" onclick="openAgentLlmPicker()" style="margin-bottom:12px;width:100%;">
+                            🤖 各 Agent 独立模型配置 →
+                        </button>
                         <div class="form-group">
                             <label>接入方式</label>
                             <select id="llmApiFormat" onchange="onLLMFormatChange(this.value)"
@@ -2491,7 +2502,7 @@
     <!-- ==================== Toast 通知 ==================== -->
     <div class="toast-container" id="toastContainer"></div>
 
-    <script src="/static/app.js?v=20261009i"></script>
+    <script src="/static/app.js?v=20261013w"></script>
 </body>
 </html>
 
