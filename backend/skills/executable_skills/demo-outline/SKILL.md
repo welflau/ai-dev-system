@@ -34,7 +34,9 @@ x-runner:
       - "outline.md"
   budget:
     max_rounds: 6
-    max_seconds: 240
+    # 真实 CLI 实测：240s 贴边（模型写完大纲没来得及回调 done 就被掐断，
+    # 见 dev-notes/2026-10-16_01）。放宽到 300s，与 demo-draft 对齐。
+    max_seconds: 300
     max_tokens: 40000
 ---
 
