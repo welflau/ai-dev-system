@@ -1688,6 +1688,10 @@ class LLMClient:
                             if not full_text:
                                 yield {"type": "text_delta",
                                        "delta": f"[CLI错误] 调用超时（{effective_timeout:.0f}s）"}
+                            # 独立事件：让 QueryEngine 知道这是超时而非正常结束。
+                            # 否则产物恰好写完时会误判 success（dev-notes/2026-10-16_01）
+                            yield {"type": "cli_timeout", "timeout": effective_timeout,
+                                   "partial_text": full_text}
                             break
                         try:
                             item = await _asyncio.wait_for(queue.get(), timeout=min(remaining, 5.0))
@@ -1786,6 +1790,8 @@ class LLMClient:
                     proc.kill()
                     yield {"type": "text_delta",
                            "delta": f"[CLI错误] 调用超时（{effective_timeout:.0f}s）"}
+                    yield {"type": "cli_timeout", "timeout": effective_timeout,
+                           "partial_text": ""}
 
         except FileNotFoundError:
             yield {"type": "text_delta", "delta": f"[CLI错误] 找不到可执行文件: {self.cli_cmd}"}

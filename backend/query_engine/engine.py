@@ -407,6 +407,8 @@ class QueryEngine:
                 _cli_tool_started: set = set()  # 已 yield ToolStartEvent 的 tool_use_id，防重复
                 _cli_input: int = 0            # 从 stop 事件取的真实 token 数
                 _cli_output: int = 0
+                _cli_timed_out: bool = False   # 本轮是否被 CLI 超时掐断（区别于正常结束）
+                _cli_timeout_val: float = 0.0
 
                 # 把 system prompt 拼入 messages，_messages_to_prompt 会包裹为 <ads_context> 注入 stdin
                 cli_messages = current_messages
@@ -439,6 +441,11 @@ class QueryEngine:
                         from query_engine.events import CliResumeFailedEvent
                         yield CliResumeFailedEvent(old_session_id=ev.get("old_session_id", ""))
                         return  # 终止本次流，由上层重跑
+                    elif etype == "cli_timeout":
+                        # CLI 超时 ≠ 正常结束。产物可能已写完（MCP 工具调用成功），
+                        # 但这一轮没走完，不能当 success —— 上抛预算超限。
+                        _cli_timed_out = True
+                        _cli_timeout_val = float(ev.get("timeout") or 0)
                     elif etype == "cli_tool_start":
                         tid = ev["tool_use_id"]
                         if tid not in _cli_tool_started:
@@ -499,6 +506,16 @@ class QueryEngine:
                         _cli_input  = _cli_stop_usage.get("input_tokens",  0) or 0
                         _cli_output = _cli_stop_usage.get("output_tokens", 0) or 0
                         break
+
+                # 超时：不能走下面的 MessageDoneEvent 收尾。产物可能已落盘
+                # （MCP 工具调用在超时前成功），但这一轮没走完 —— 上抛预算超限，
+                # 让 SkillRunner 落到 budget_exceeded，而不是误判 success。
+                if _cli_timed_out:
+                    await self._emit_session_end(context, 1, "budget_exceeded")
+                    yield BudgetExceededEvent(
+                        reason=f"CLI 调用超时（{_cli_timeout_val:.0f}s）"
+                    )
+                    return
 
                 if full_cli_text:
                     yield ThinkingDoneEvent(text="")  # 折叠思考面板
