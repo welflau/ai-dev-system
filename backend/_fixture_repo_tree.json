@@ -1,0 +1,4100 @@
+{
+ "repos": {
+  "git": [
+   {
+    "key": "8be0e40f127b",
+    "path": "I:\\A_Works\\OG2\\P4\\UE5",
+    "name": "UE5",
+    "vcs": "git",
+    "also_p4": true,
+    "source": "primary",
+    "label": "",
+    "writable": true,
+    "git": {
+     "branch": "wilfredliu/spring-ground-velocity-drive",
+     "remote": "https://git.tencent.com/IMMO/UnrealEngine_Code_Inner.git"
+    },
+    "p4": {
+     "client": "WILFREDLIU-PC3_DevSrc_I",
+     "stream": "//OG2IMMO/Develop_Source",
+     "client_root": "I:\\A_Works\\OG2\\P4",
+     "server": "og2commit.ces.qq.com:8666",
+     "user": "wilfredliu"
+    }
+   }
+  ],
+  "p4": [
+   {
+    "key": "8be0e40f127b",
+    "path": "I:\\A_Works\\OG2\\P4\\UE5",
+    "name": "UE5",
+    "vcs": "git",
+    "also_p4": true,
+    "source": "primary",
+    "label": "",
+    "writable": true,
+    "git": {
+     "branch": "wilfredliu/spring-ground-velocity-drive",
+     "remote": "https://git.tencent.com/IMMO/UnrealEngine_Code_Inner.git"
+    },
+    "p4": {
+     "client": "WILFREDLIU-PC3_DevSrc_I",
+     "stream": "//OG2IMMO/Develop_Source",
+     "client_root": "I:\\A_Works\\OG2\\P4",
+     "server": "og2commit.ces.qq.com:8666",
+     "user": "wilfredliu"
+    }
+   }
+  ],
+  "other": [
+   {
+    "key": "a83d051a1662",
+    "path": "I:\\A_Works\\OG2\\UnrealEngine_Code_Inner",
+    "name": "UnrealEngine_Code_Inner",
+    "vcs": "none",
+    "also_p4": false,
+    "source": "configured",
+    "label": "",
+    "writable": true
+   }
+  ],
+  "counts": {
+   "git": 1,
+   "p4": 1,
+   "other": 1,
+   "total": 2
+  }
+ },
+ "levels": {
+  "": {
+   "path": "",
+   "repo": {
+    "key": "8be0e40f127b",
+    "name": "UE5",
+    "vcs": "git"
+   },
+   "entries": [
+    {
+     "name": "_tmp_async_pt_backup_20260803",
+     "path": "_tmp_async_pt_backup_20260803",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "_tmp_async_pt_pre_edit",
+     "path": "_tmp_async_pt_pre_edit",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "_tmp_normset_backup_20260806",
+     "path": "_tmp_normset_backup_20260806",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "Docs",
+     "path": "Docs",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "Engine",
+     "path": "Engine",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "FeaturePacks",
+     "path": "FeaturePacks",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "IMMO_Client",
+     "path": "IMMO_Client",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "openspec",
+     "path": "openspec",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "Samples",
+     "path": "Samples",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "Templates",
+     "path": "Templates",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "$null",
+     "path": "$null",
+     "type": "file",
+     "size": 87
+    },
+    {
+     "name": "_tmp_abp_analysis.json",
+     "path": "_tmp_abp_analysis.json",
+     "type": "file",
+     "size": 45086
+    },
+    {
+     "name": "_tmp_abp_anim_deps.json",
+     "path": "_tmp_abp_anim_deps.json",
+     "type": "file",
+     "size": 77748
+    },
+    {
+     "name": "_tmp_abp_da_anim_deps.json",
+     "path": "_tmp_abp_da_anim_deps.json",
+     "type": "file",
+     "size": 5647
+    },
+    {
+     "name": "_tmp_analyze_0811_evening.txt",
+     "path": "_tmp_analyze_0811_evening.txt",
+     "type": "file",
+     "size": 71198
+    },
+    {
+     "name": "_tmp_analyze_0811_gap.txt",
+     "path": "_tmp_analyze_0811_gap.txt",
+     "type": "file",
+     "size": 2852
+    },
+    {
+     "name": "_tmp_analyze_0811_log.txt",
+     "path": "_tmp_analyze_0811_log.txt",
+     "type": "file",
+     "size": 11590
+    },
+    {
+     "name": "_tmp_analyze_0811_log2.txt",
+     "path": "_tmp_analyze_0811_log2.txt",
+     "type": "file",
+     "size": 368518
+    },
+    {
+     "name": "_tmp_analyze_0811_log3.txt",
+     "path": "_tmp_analyze_0811_log3.txt",
+     "type": "file",
+     "size": 873968
+    },
+    {
+     "name": "_tmp_analyze_0812_cover.txt",
+     "path": "_tmp_analyze_0812_cover.txt",
+     "type": "file",
+     "size": 19816
+    },
+    {
+     "name": "_tmp_analyze_0812_gap2.txt",
+     "path": "_tmp_analyze_0812_gap2.txt",
+     "type": "file",
+     "size": 12838
+    },
+    {
+     "name": "_tmp_analyze_0812_morning.py",
+     "path": "_tmp_analyze_0812_morning.py",
+     "type": "file",
+     "size": 7511
+    },
+    {
+     "name": "_tmp_analyze_0812_morning.txt",
+     "path": "_tmp_analyze_0812_morning.txt",
+     "type": "file",
+     "size": 59798
+    },
+    {
+     "name": "_tmp_analyze_0813_cover.txt",
+     "path": "_tmp_analyze_0813_cover.txt",
+     "type": "file",
+     "size": 8663
+    },
+    {
+     "name": "_tmp_analyze_0813_plus68.txt",
+     "path": "_tmp_analyze_0813_plus68.txt",
+     "type": "file",
+     "size": 92158
+    },
+    {
+     "name": "_tmp_analyze_123214.py",
+     "path": "_tmp_analyze_123214.py",
+     "type": "file",
+     "size": 6382
+    },
+    {
+     "name": "_tmp_analyze_123214b.py",
+     "path": "_tmp_analyze_123214b.py",
+     "type": "file",
+     "size": 3694
+    },
+    {
+     "name": "_tmp_analyze_5min_loading.py",
+     "path": "_tmp_analyze_5min_loading.py",
+     "type": "file",
+     "size": 7007
+    },
+    {
+     "name": "_tmp_analyze_5min_loading_out.txt",
+     "path": "_tmp_analyze_5min_loading_out.txt",
+     "type": "file",
+     "size": 10237
+    },
+    {
+     "name": "_tmp_analyze_97_source.py",
+     "path": "_tmp_analyze_97_source.py",
+     "type": "file",
+     "size": 19152
+    },
+    {
+     "name": "_tmp_analyze_97_source.txt",
+     "path": "_tmp_analyze_97_source.txt",
+     "type": "file",
+     "size": 20226
+    },
+    {
+     "name": "_tmp_analyze_async_csv.py",
+     "path": "_tmp_analyze_async_csv.py",
+     "type": "file",
+     "size": 6131
+    },
+    {
+     "name": "_tmp_analyze_async_csv2.py",
+     "path": "_tmp_analyze_async_csv2.py",
+     "type": "file",
+     "size": 3334
+    },
+    {
+     "name": "_tmp_analyze_async_csv3.py",
+     "path": "_tmp_analyze_async_csv3.py",
+     "type": "file",
+     "size": 3641
+    },
+    {
+     "name": "_tmp_analyze_async_csv4.py",
+     "path": "_tmp_analyze_async_csv4.py",
+     "type": "file",
+     "size": 3488
+    },
+    {
+     "name": "_tmp_analyze_asyncpkgs_spike.py",
+     "path": "_tmp_analyze_asyncpkgs_spike.py",
+     "type": "file",
+     "size": 2283
+    },
+    {
+     "name": "_tmp_analyze_head_sep_1528.txt.full",
+     "path": "_tmp_analyze_head_sep_1528.txt.full",
+     "type": "file",
+     "size": 1096033
+    },
+    {
+     "name": "_tmp_analyze_latest_stall.py",
+     "path": "_tmp_analyze_latest_stall.py",
+     "type": "file",
+     "size": 7806
+    },
+    {
+     "name": "_tmp_analyze_latest_stall_out.txt",
+     "path": "_tmp_analyze_latest_stall_out.txt",
+     "type": "file",
+     "size": 9490
+    },
+    {
+     "name": "_tmp_analyze_loading_psd.py",
+     "path": "_tmp_analyze_loading_psd.py",
+     "type": "file",
+     "size": 4309
+    },
+    {
+     "name": "_tmp_analyze_plus68.py",
+     "path": "_tmp_analyze_plus68.py",
+     "type": "file",
+     "size": 2635
+    },
+    {
+     "name": "_tmp_analyze_plus68_gap.py",
+     "path": "_tmp_analyze_plus68_gap.py",
+     "type": "file",
+     "size": 2048
+    },
+    {
+     "name": "_tmp_analyze_plus68_out.txt",
+     "path": "_tmp_analyze_plus68_out.txt",
+     "type": "file",
+     "size": 29206
+    },
+    {
+     "name": "_tmp_analyze_postcover_freeze.py",
+     "path": "_tmp_analyze_postcover_freeze.py",
+     "type": "file",
+     "size": 4900
+    },
+    {
+     "name": "_tmp_analyze_postcover_softpsd.py",
+     "path": "_tmp_analyze_postcover_softpsd.py",
+     "type": "file",
+     "size": 3245
+    },
+    {
+     "name": "_tmp_analyze_resident_38_125.txt",
+     "path": "_tmp_analyze_resident_38_125.txt",
+     "type": "file",
+     "size": 11902
+    },
+    {
+     "name": "_tmp_analyze_soft_pt_log.py",
+     "path": "_tmp_analyze_soft_pt_log.py",
+     "type": "file",
+     "size": 3669
+    },
+    {
+     "name": "_tmp_analyze_softpsd_log.py",
+     "path": "_tmp_analyze_softpsd_log.py",
+     "type": "file",
+     "size": 2397
+    },
+    {
+     "name": "_tmp_analyze_softpsd_log2.py",
+     "path": "_tmp_analyze_softpsd_log2.py",
+     "type": "file",
+     "size": 3540
+    },
+    {
+     "name": "_tmp_analyze_softpsd_log3.py",
+     "path": "_tmp_analyze_softpsd_log3.py",
+     "type": "file",
+     "size": 1710
+    },
+    {
+     "name": "_tmp_analyze_softpsd_log4.py",
+     "path": "_tmp_analyze_softpsd_log4.py",
+     "type": "file",
+     "size": 3511
+    },
+    {
+     "name": "_tmp_analyze_softpsd_log5.py",
+     "path": "_tmp_analyze_softpsd_log5.py",
+     "type": "file",
+     "size": 2655
+    },
+    {
+     "name": "_tmp_analyze_spike1.py",
+     "path": "_tmp_analyze_spike1.py",
+     "type": "file",
+     "size": 3740
+    },
+    {
+     "name": "_tmp_analyze_spike2.py",
+     "path": "_tmp_analyze_spike2.py",
+     "type": "file",
+     "size": 2188
+    },
+    {
+     "name": "_tmp_analyze_track1.py",
+     "path": "_tmp_analyze_track1.py",
+     "type": "file",
+     "size": 1604
+    },
+    {
+     "name": "_tmp_analyze_track2.py",
+     "path": "_tmp_analyze_track2.py",
+     "type": "file",
+     "size": 2371
+    },
+    {
+     "name": "_tmp_async_tune.py",
+     "path": "_tmp_async_tune.py",
+     "type": "file",
+     "size": 622
+    },
+    {
+     "name": "_tmp_backup_normset.py",
+     "path": "_tmp_backup_normset.py",
+     "type": "file",
+     "size": 1326
+    },
+    {
+     "name": "_tmp_check_normset_prop.py",
+     "path": "_tmp_check_normset_prop.py",
+     "type": "file",
+     "size": 940
+    },
+    {
+     "name": "_tmp_check_whitelist_0811.txt",
+     "path": "_tmp_check_whitelist_0811.txt",
+     "type": "file",
+     "size": 11608
+    },
+    {
+     "name": "_tmp_cleanup_softrebuild_4.py",
+     "path": "_tmp_cleanup_softrebuild_4.py",
+     "type": "file",
+     "size": 1039
+    },
+    {
+     "name": "_tmp_compare_async_vs_sync.py",
+     "path": "_tmp_compare_async_vs_sync.py",
+     "type": "file",
+     "size": 9587
+    },
+    {
+     "name": "_tmp_compare_async_vs_sync2.py",
+     "path": "_tmp_compare_async_vs_sync2.py",
+     "type": "file",
+     "size": 8225
+    },
+    {
+     "name": "_tmp_compare_async_vs_sync2_out.txt",
+     "path": "_tmp_compare_async_vs_sync2_out.txt",
+     "type": "file",
+     "size": 12432
+    },
+    {
+     "name": "_tmp_compare_async_vs_sync_out.txt",
+     "path": "_tmp_compare_async_vs_sync_out.txt",
+     "type": "file",
+     "size": 27814
+    },
+    {
+     "name": "_tmp_copy_runtimevalues_garagebasic.py",
+     "path": "_tmp_copy_runtimevalues_garagebasic.py",
+     "type": "file",
+     "size": 2995
+    },
+    {
+     "name": "_tmp_count_abp_anim_deps.py",
+     "path": "_tmp_count_abp_anim_deps.py",
+     "type": "file",
+     "size": 15935
+    },
+    {
+     "name": "_tmp_count_abp_da_anims.py",
+     "path": "_tmp_count_abp_da_anims.py",
+     "type": "file",
+     "size": 5770
+    },
+    {
+     "name": "_tmp_count_proxy_bindings.py",
+     "path": "_tmp_count_proxy_bindings.py",
+     "type": "file",
+     "size": 3144
+    },
+    {
+     "name": "_tmp_count_psd_in_pt.py",
+     "path": "_tmp_count_psd_in_pt.py",
+     "type": "file",
+     "size": 3063
+    },
+    {
+     "name": "_tmp_cpp_diff.txt",
+     "path": "_tmp_cpp_diff.txt",
+     "type": "file",
+     "size": 28006
+    },
+    {
+     "name": "_tmp_crop_async.png",
+     "path": "_tmp_crop_async.png",
+     "type": "file",
+     "size": 883531
+    },
+    {
+     "name": "_tmp_crop_resident.png",
+     "path": "_tmp_crop_resident.png",
+     "type": "file",
+     "size": 394204
+    },
+    {
+     "name": "_tmp_da_pt_map.py",
+     "path": "_tmp_da_pt_map.py",
+     "type": "file",
+     "size": 6396
+    },
+    {
+     "name": "_tmp_dump_abp_links.py",
+     "path": "_tmp_dump_abp_links.py",
+     "type": "file",
+     "size": 8082
+    },
+    {
+     "name": "_tmp_dump_abp_player_main.py",
+     "path": "_tmp_dump_abp_player_main.py",
+     "type": "file",
+     "size": 14521
+    },
+    {
+     "name": "_tmp_dump_abp_to_json.py",
+     "path": "_tmp_dump_abp_to_json.py",
+     "type": "file",
+     "size": 9408
+    },
+    {
+     "name": "_tmp_dump_pt_psd_deps.py",
+     "path": "_tmp_dump_pt_psd_deps.py",
+     "type": "file",
+     "size": 11579
+    },
+    {
+     "name": "_tmp_fix_4_hard_import.py",
+     "path": "_tmp_fix_4_hard_import.py",
+     "type": "file",
+     "size": 3375
+    },
+    {
+     "name": "_tmp_fix_garagebasic_import.py",
+     "path": "_tmp_fix_garagebasic_import.py",
+     "type": "file",
+     "size": 3044
+    },
+    {
+     "name": "_tmp_frame824_phases.py",
+     "path": "_tmp_frame824_phases.py",
+     "type": "file",
+     "size": 6522
+    },
+    {
+     "name": "_tmp_iwiki_8000493871.txt",
+     "path": "_tmp_iwiki_8000493871.txt",
+     "type": "file",
+     "size": 6469
+    },
+    {
+     "name": "_tmp_list_pt.py",
+     "path": "_tmp_list_pt.py",
+     "type": "file",
+     "size": 680
+    },
+    {
+     "name": "_tmp_measure_normset_cluster.py",
+     "path": "_tmp_measure_normset_cluster.py",
+     "type": "file",
+     "size": 11053
+    },
+    {
+     "name": "_tmp_measure_normset_exact.py",
+     "path": "_tmp_measure_normset_exact.py",
+     "type": "file",
+     "size": 2337
+    },
+    {
+     "name": "_tmp_p4client.txt",
+     "path": "_tmp_p4client.txt",
+     "type": "file",
+     "size": 3240
+    },
+    {
+     "name": "_tmp_probe_async_stall.py",
+     "path": "_tmp_probe_async_stall.py",
+     "type": "file",
+     "size": 1857
+    },
+    {
+     "name": "_tmp_probe_psn_softptr.py",
+     "path": "_tmp_probe_psn_softptr.py",
+     "type": "file",
+     "size": 1801
+    },
+    {
+     "name": "_tmp_probe_sc_api.py",
+     "path": "_tmp_probe_sc_api.py",
+     "type": "file",
+     "size": 584
+    },
+    {
+     "name": "_tmp_probe_sc_state.py",
+     "path": "_tmp_probe_sc_state.py",
+     "type": "file",
+     "size": 880
+    },
+    {
+     "name": "_tmp_proc_info.py",
+     "path": "_tmp_proc_info.py",
+     "type": "file",
+     "size": 512
+    },
+    {
+     "name": "_tmp_psd_first_0811.txt",
+     "path": "_tmp_psd_first_0811.txt",
+     "type": "file",
+     "size": 5755
+    },
+    {
+     "name": "_tmp_psd_list_0811.txt",
+     "path": "_tmp_psd_list_0811.txt",
+     "type": "file",
+     "size": 30102
+    },
+    {
+     "name": "_tmp_psd_list_0811_names_only.txt",
+     "path": "_tmp_psd_list_0811_names_only.txt",
+     "type": "file",
+     "size": 6128
+    },
+    {
+     "name": "_tmp_pt_3ctest.py",
+     "path": "_tmp_pt_3ctest.py",
+     "type": "file",
+     "size": 1550
+    },
+    {
+     "name": "_tmp_pt_da_psd_deps.txt",
+     "path": "_tmp_pt_da_psd_deps.txt",
+     "type": "file",
+     "size": 28219
+    },
+    {
+     "name": "_tmp_pt_harden_paths.txt",
+     "path": "_tmp_pt_harden_paths.txt",
+     "type": "file",
+     "size": 422
+    },
+    {
+     "name": "_tmp_rebuild_garagebasic_pt.py",
+     "path": "_tmp_rebuild_garagebasic_pt.py",
+     "type": "file",
+     "size": 3490
+    },
+    {
+     "name": "_tmp_resave_normset.py",
+     "path": "_tmp_resave_normset.py",
+     "type": "file",
+     "size": 2755
+    },
+    {
+     "name": "_tmp_resave_psn_10.py",
+     "path": "_tmp_resave_psn_10.py",
+     "type": "file",
+     "size": 3885
+    },
+    {
+     "name": "_tmp_resave_psn_soft_0813.py",
+     "path": "_tmp_resave_psn_soft_0813.py",
+     "type": "file",
+     "size": 7808
+    },
+    {
+     "name": "_tmp_resolve_pt.py",
+     "path": "_tmp_resolve_pt.py",
+     "type": "file",
+     "size": 1350
+    },
+    {
+     "name": "_tmp_retest_normset.py",
+     "path": "_tmp_retest_normset.py",
+     "type": "file",
+     "size": 3136
+    },
+    {
+     "name": "_tmp_retest_normset_offline.py",
+     "path": "_tmp_retest_normset_offline.py",
+     "type": "file",
+     "size": 2807
+    },
+    {
+     "name": "_tmp_scan_all_pt_hard.py",
+     "path": "_tmp_scan_all_pt_hard.py",
+     "type": "file",
+     "size": 5390
+    },
+    {
+     "name": "_tmp_soften_3_hard_pts.py",
+     "path": "_tmp_soften_3_hard_pts.py",
+     "type": "file",
+     "size": 5615
+    },
+    {
+     "name": "_tmp_soften_6_pts.py",
+     "path": "_tmp_soften_6_pts.py",
+     "type": "file",
+     "size": 5890
+    },
+    {
+     "name": "_tmp_soften_garagebasic.py",
+     "path": "_tmp_soften_garagebasic.py",
+     "type": "file",
+     "size": 6871
+    },
+    {
+     "name": "_tmp_softrebuild_4_pts.py",
+     "path": "_tmp_softrebuild_4_pts.py",
+     "type": "file",
+     "size": 4525
+    },
+    {
+     "name": "_tmp_softrebuild_garagebasic.py",
+     "path": "_tmp_softrebuild_garagebasic.py",
+     "type": "file",
+     "size": 6366
+    },
+    {
+     "name": "_tmp_uepy.py",
+     "path": "_tmp_uepy.py",
+     "type": "file",
+     "size": 943
+    },
+    {
+     "name": "_tmp_unload_resave_3_pts.py",
+     "path": "_tmp_unload_resave_3_pts.py",
+     "type": "file",
+     "size": 3536
+    },
+    {
+     "name": "_tmp_unload_resave_6_pts.py",
+     "path": "_tmp_unload_resave_6_pts.py",
+     "type": "file",
+     "size": 3759
+    },
+    {
+     "name": "_tmp_verify_3_pts_and_cleanup.py",
+     "path": "_tmp_verify_3_pts_and_cleanup.py",
+     "type": "file",
+     "size": 3319
+    },
+    {
+     "name": "_tmp_verify_6_pts_disk.py",
+     "path": "_tmp_verify_6_pts_disk.py",
+     "type": "file",
+     "size": 2485
+    },
+    {
+     "name": "_tmp_verify_normset_deps.py",
+     "path": "_tmp_verify_normset_deps.py",
+     "type": "file",
+     "size": 1159
+    },
+    {
+     "name": "_tmp_verify_psn_disk_0813.py",
+     "path": "_tmp_verify_psn_disk_0813.py",
+     "type": "file",
+     "size": 3250
+    },
+    {
+     "name": "_tmp_verify_pt_load.py",
+     "path": "_tmp_verify_pt_load.py",
+     "type": "file",
+     "size": 11827
+    },
+    {
+     "name": "_tmp_verify_pt_load2.py",
+     "path": "_tmp_verify_pt_load2.py",
+     "type": "file",
+     "size": 8045
+    },
+    {
+     "name": "_tmp_verify_pt_load3.py",
+     "path": "_tmp_verify_pt_load3.py",
+     "type": "file",
+     "size": 5407
+    },
+    {
+     "name": "_tmp_why_hard.py",
+     "path": "_tmp_why_hard.py",
+     "type": "file",
+     "size": 3229
+    },
+    {
+     "name": "_tmp_why_hard2.py",
+     "path": "_tmp_why_hard2.py",
+     "type": "file",
+     "size": 2596
+    },
+    {
+     "name": "_tmp_why_hard3.py",
+     "path": "_tmp_why_hard3.py",
+     "type": "file",
+     "size": 2131
+    },
+    {
+     "name": "_tmp_why_hard4.py",
+     "path": "_tmp_why_hard4.py",
+     "type": "file",
+     "size": 2562
+    },
+    {
+     "name": "ADS.md",
+     "path": "ADS.md",
+     "type": "file",
+     "size": 152
+    },
+    {
+     "name": "cpp.hint",
+     "path": "cpp.hint",
+     "type": "file",
+     "size": 1794
+    },
+    {
+     "name": "Default.uprojectdirs",
+     "path": "Default.uprojectdirs",
+     "type": "file",
+     "size": 294
+    },
+    {
+     "name": "GenerateProjectFiles.bat",
+     "path": "GenerateProjectFiles.bat",
+     "type": "file",
+     "size": 417
+    },
+    {
+     "name": "GenerateProjectFiles.command",
+     "path": "GenerateProjectFiles.command",
+     "type": "file",
+     "size": 241
+    },
+    {
+     "name": "GenerateProjectFiles.sh",
+     "path": "GenerateProjectFiles.sh",
+     "type": "file",
+     "size": 799
+    },
+    {
+     "name": "LICENSE.md",
+     "path": "LICENSE.md",
+     "type": "file",
+     "size": 196
+    },
+    {
+     "name": "p4ignore.txt",
+     "path": "p4ignore.txt",
+     "type": "file",
+     "size": 3557
+    },
+    {
+     "name": "README.md",
+     "path": "README.md",
+     "type": "file",
+     "size": 13207
+    },
+    {
+     "name": "SECURITY.md",
+     "path": "SECURITY.md",
+     "type": "file",
+     "size": 1030
+    },
+    {
+     "name": "SetP4Ignore.bat",
+     "path": "SetP4Ignore.bat",
+     "type": "file",
+     "size": 45
+    },
+    {
+     "name": "Setup.bat",
+     "path": "Setup.bat",
+     "type": "file",
+     "size": 1406
+    },
+    {
+     "name": "Setup.command",
+     "path": "Setup.command",
+     "type": "file",
+     "size": 205
+    },
+    {
+     "name": "Setup.sh",
+     "path": "Setup.sh",
+     "type": "file",
+     "size": 2572
+    },
+    {
+     "name": "UE5.sln",
+     "path": "UE5.sln",
+     "type": "file",
+     "size": 1555898
+    }
+   ],
+   "truncated": false,
+   "total": 139,
+   "limit": 500
+  },
+  "Engine": {
+   "path": "Engine",
+   "repo": {
+    "key": "8be0e40f127b",
+    "name": "UE5",
+    "vcs": "git"
+   },
+   "entries": [
+    {
+     "name": "Binaries",
+     "path": "Engine/Binaries",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "Build",
+     "path": "Engine/Build",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "Config",
+     "path": "Engine/Config",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "Content",
+     "path": "Engine/Content",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "DerivedDataCache",
+     "path": "Engine/DerivedDataCache",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "Documentation",
+     "path": "Engine/Documentation",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "Extras",
+     "path": "Engine/Extras",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "Intermediate",
+     "path": "Engine/Intermediate",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "Platforms",
+     "path": "Engine/Platforms",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "Plugins",
+     "path": "Engine/Plugins",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "Programs",
+     "path": "Engine/Programs",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "Saved",
+     "path": "Engine/Saved",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "Shaders",
+     "path": "Engine/Shaders",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "Source",
+     "path": "Engine/Source",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "_commit_diff.txt",
+     "path": "Engine/_commit_diff.txt",
+     "type": "file",
+     "size": 4661
+    }
+   ],
+   "truncated": false,
+   "total": 15,
+   "limit": 500
+  },
+  "Engine/Source": {
+   "path": "Engine/Source",
+   "repo": {
+    "key": "8be0e40f127b",
+    "name": "UE5",
+    "vcs": "git"
+   },
+   "entries": [
+    {
+     "name": "Developer",
+     "path": "Engine/Source/Developer",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "Editor",
+     "path": "Engine/Source/Editor",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "Programs",
+     "path": "Engine/Source/Programs",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "Runtime",
+     "path": "Engine/Source/Runtime",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "ThirdParty",
+     "path": "Engine/Source/ThirdParty",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "UnrealClient.Target.cs",
+     "path": "Engine/Source/UnrealClient.Target.cs",
+     "type": "file",
+     "size": 567
+    },
+    {
+     "name": "UnrealEditor.Target.cs",
+     "path": "Engine/Source/UnrealEditor.Target.cs",
+     "type": "file",
+     "size": 512
+    },
+    {
+     "name": "UnrealGame.Target.cs",
+     "path": "Engine/Source/UnrealGame.Target.cs",
+     "type": "file",
+     "size": 608
+    },
+    {
+     "name": "UnrealServer.Target.cs",
+     "path": "Engine/Source/UnrealServer.Target.cs",
+     "type": "file",
+     "size": 617
+    }
+   ],
+   "truncated": false,
+   "total": 9,
+   "limit": 500
+  },
+  "Engine/Content/Editor/Slate/Icons": {
+   "path": "Engine/Content/Editor/Slate/Icons",
+   "repo": {
+    "key": "8be0e40f127b",
+    "name": "UE5",
+    "vcs": "git"
+   },
+   "entries": [
+    {
+     "name": "ActorIcons",
+     "path": "Engine/Content/Editor/Slate/Icons/ActorIcons",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "AssetIcons",
+     "path": "Engine/Content/Editor/Slate/Icons/AssetIcons",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "CascadeIcons",
+     "path": "Engine/Content/Editor/Slate/Icons/CascadeIcons",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "Edit",
+     "path": "Engine/Content/Editor/Slate/Icons/Edit",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "FBX",
+     "path": "Engine/Content/Editor/Slate/Icons/FBX",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "FbxAutomationBuilder",
+     "path": "Engine/Content/Editor/Slate/Icons/FbxAutomationBuilder",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "Folders",
+     "path": "Engine/Content/Editor/Slate/Icons/Folders",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "FoliageEditMode",
+     "path": "Engine/Content/Editor/Slate/Icons/FoliageEditMode",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "GeneralTools",
+     "path": "Engine/Content/Editor/Slate/Icons/GeneralTools",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "GraphEditor",
+     "path": "Engine/Content/Editor/Slate/Icons/GraphEditor",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "HardwareTargeting",
+     "path": "Engine/Content/Editor/Slate/Icons/HardwareTargeting",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "Help",
+     "path": "Engine/Content/Editor/Slate/Icons/Help",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "Landscape",
+     "path": "Engine/Content/Editor/Slate/Icons/Landscape",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "MessageLog",
+     "path": "Engine/Content/Editor/Slate/Icons/MessageLog",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "Mobility",
+     "path": "Engine/Content/Editor/Slate/Icons/Mobility",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "Paint",
+     "path": "Engine/Content/Editor/Slate/Icons/Paint",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "PixelInspector",
+     "path": "Engine/Content/Editor/Slate/Icons/PixelInspector",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "SequencerIcons",
+     "path": "Engine/Content/Editor/Slate/Icons/SequencerIcons",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "SlateReflector",
+     "path": "Engine/Content/Editor/Slate/Icons/SlateReflector",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "UMG",
+     "path": "Engine/Content/Editor/Slate/Icons/UMG",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "VREditor",
+     "path": "Engine/Content/Editor/Slate/Icons/VREditor",
+     "type": "directory",
+     "has_children": true
+    },
+    {
+     "name": "AcceptMergeSource_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/AcceptMergeSource_40x.png",
+     "type": "file",
+     "size": 33767
+    },
+    {
+     "name": "AcceptMergeTarget_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/AcceptMergeTarget_40x.png",
+     "type": "file",
+     "size": 6460
+    },
+    {
+     "name": "ActorLockedViewport.png",
+     "path": "Engine/Content/Editor/Slate/Icons/ActorLockedViewport.png",
+     "type": "file",
+     "size": 2267
+    },
+    {
+     "name": "alert.png",
+     "path": "Engine/Content/Editor/Slate/Icons/alert.png",
+     "type": "file",
+     "size": 3776
+    },
+    {
+     "name": "anim_24x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/anim_24x.png",
+     "type": "file",
+     "size": 2995
+    },
+    {
+     "name": "ArrowDown_12x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/ArrowDown_12x.png",
+     "type": "file",
+     "size": 3020
+    },
+    {
+     "name": "ArrowUp_12x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/ArrowUp_12x.png",
+     "type": "file",
+     "size": 3021
+    },
+    {
+     "name": "assign_12x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/assign_12x.png",
+     "type": "file",
+     "size": 2935
+    },
+    {
+     "name": "assign_left_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/assign_left_16x.png",
+     "type": "file",
+     "size": 2951
+    },
+    {
+     "name": "assign_right_12x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/assign_right_12x.png",
+     "type": "file",
+     "size": 2958
+    },
+    {
+     "name": "assign_right_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/assign_right_16x.png",
+     "type": "file",
+     "size": 2950
+    },
+    {
+     "name": "BlankIcon.png",
+     "path": "Engine/Content/Editor/Slate/Icons/BlankIcon.png",
+     "type": "file",
+     "size": 2809
+    },
+    {
+     "name": "blueprint_Dif_has_graph_8x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/blueprint_Dif_has_graph_8x.png",
+     "type": "file",
+     "size": 244
+    },
+    {
+     "name": "blueprint_Dif_missing_graph_8x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/blueprint_Dif_missing_graph_8x.png",
+     "type": "file",
+     "size": 279
+    },
+    {
+     "name": "BlueprintDefaultsEditor.png",
+     "path": "Engine/Content/Editor/Slate/Icons/BlueprintDefaultsEditor.png",
+     "type": "file",
+     "size": 4406
+    },
+    {
+     "name": "BlueprintEditorDiff.png",
+     "path": "Engine/Content/Editor/Slate/Icons/BlueprintEditorDiff.png",
+     "type": "file",
+     "size": 5698
+    },
+    {
+     "name": "BPProfiler_ExecPin_Connected.png",
+     "path": "Engine/Content/Editor/Slate/Icons/BPProfiler_ExecPin_Connected.png",
+     "type": "file",
+     "size": 17420
+    },
+    {
+     "name": "BPProfiler_ExecPin_Disconnected.png",
+     "path": "Engine/Content/Editor/Slate/Icons/BPProfiler_ExecPin_Disconnected.png",
+     "type": "file",
+     "size": 17468
+    },
+    {
+     "name": "buildsubmit_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/buildsubmit_16x.png",
+     "type": "file",
+     "size": 3298
+    },
+    {
+     "name": "CA_Group.png",
+     "path": "Engine/Content/Editor/Slate/Icons/CA_Group.png",
+     "type": "file",
+     "size": 353
+    },
+    {
+     "name": "CA_GroupBackground.png",
+     "path": "Engine/Content/Editor/Slate/Icons/CA_GroupBackground.png",
+     "type": "file",
+     "size": 2941
+    },
+    {
+     "name": "CA_Record.png",
+     "path": "Engine/Content/Editor/Slate/Icons/CA_Record.png",
+     "type": "file",
+     "size": 666
+    },
+    {
+     "name": "CA_ShowRecent.png",
+     "path": "Engine/Content/Editor/Slate/Icons/CA_ShowRecent.png",
+     "type": "file",
+     "size": 599
+    },
+    {
+     "name": "CA_Stop.png",
+     "path": "Engine/Content/Editor/Slate/Icons/CA_Stop.png",
+     "type": "file",
+     "size": 346
+    },
+    {
+     "name": "clock_24x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/clock_24x.png",
+     "type": "file",
+     "size": 3003
+    },
+    {
+     "name": "CollectionStatus_8x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/CollectionStatus_8x.png",
+     "type": "file",
+     "size": 244
+    },
+    {
+     "name": "contentbrowser_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/contentbrowser_16x.png",
+     "type": "file",
+     "size": 2819
+    },
+    {
+     "name": "controller_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/controller_16x.png",
+     "type": "file",
+     "size": 2960
+    },
+    {
+     "name": "CreateBlueprint.png",
+     "path": "Engine/Content/Editor/Slate/Icons/CreateBlueprint.png",
+     "type": "file",
+     "size": 3541
+    },
+    {
+     "name": "CreateBlueprint_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/CreateBlueprint_40x.png",
+     "type": "file",
+     "size": 34021
+    },
+    {
+     "name": "Cross_12x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/Cross_12x.png",
+     "type": "file",
+     "size": 2895
+    },
+    {
+     "name": "cursor_cardinal_cross.png",
+     "path": "Engine/Content/Editor/Slate/Icons/cursor_cardinal_cross.png",
+     "type": "file",
+     "size": 400
+    },
+    {
+     "name": "cursor_grab.png",
+     "path": "Engine/Content/Editor/Slate/Icons/cursor_grab.png",
+     "type": "file",
+     "size": 2888
+    },
+    {
+     "name": "cursor_updown.png",
+     "path": "Engine/Content/Editor/Slate/Icons/cursor_updown.png",
+     "type": "file",
+     "size": 2975
+    },
+    {
+     "name": "CurveKey_8x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/CurveKey_8x.png",
+     "type": "file",
+     "size": 244
+    },
+    {
+     "name": "DataLayerAddSelected.svg",
+     "path": "Engine/Content/Editor/Slate/Icons/DataLayerAddSelected.svg",
+     "type": "file",
+     "size": 1524
+    },
+    {
+     "name": "DataLayerEditor.svg",
+     "path": "Engine/Content/Editor/Slate/Icons/DataLayerEditor.svg",
+     "type": "file",
+     "size": 360
+    },
+    {
+     "name": "DataLayerLoadedInEditor.svg",
+     "path": "Engine/Content/Editor/Slate/Icons/DataLayerLoadedInEditor.svg",
+     "type": "file",
+     "size": 445
+    },
+    {
+     "name": "DataLayerRemoveSelected.svg",
+     "path": "Engine/Content/Editor/Slate/Icons/DataLayerRemoveSelected.svg",
+     "type": "file",
+     "size": 1512
+    },
+    {
+     "name": "DataLayerRuntime.svg",
+     "path": "Engine/Content/Editor/Slate/Icons/DataLayerRuntime.svg",
+     "type": "file",
+     "size": 605
+    },
+    {
+     "name": "def_24x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/def_24x.png",
+     "type": "file",
+     "size": 3022
+    },
+    {
+     "name": "denied_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/denied_16x.png",
+     "type": "file",
+     "size": 3024
+    },
+    {
+     "name": "diff_next_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/diff_next_40x.png",
+     "type": "file",
+     "size": 3880
+    },
+    {
+     "name": "diff_prev_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/diff_prev_40x.png",
+     "type": "file",
+     "size": 3839
+    },
+    {
+     "name": "doc_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/doc_16x.png",
+     "type": "file",
+     "size": 2881
+    },
+    {
+     "name": "EditorAppIcon.png",
+     "path": "Engine/Content/Editor/Slate/Icons/EditorAppIcon.png",
+     "type": "file",
+     "size": 373
+    },
+    {
+     "name": "ellipsis_12x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/ellipsis_12x.png",
+     "type": "file",
+     "size": 2835
+    },
+    {
+     "name": "Empty_14x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/Empty_14x.png",
+     "type": "file",
+     "size": 2823
+    },
+    {
+     "name": "Empty_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/Empty_16x.png",
+     "type": "file",
+     "size": 3325
+    },
+    {
+     "name": "empty_set_12x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/empty_set_12x.png",
+     "type": "file",
+     "size": 2994
+    },
+    {
+     "name": "EmptyStar_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/EmptyStar_16x.png",
+     "type": "file",
+     "size": 3437
+    },
+    {
+     "name": "EventMessage_Default.png",
+     "path": "Engine/Content/Editor/Slate/Icons/EventMessage_Default.png",
+     "type": "file",
+     "size": 9229
+    },
+    {
+     "name": "EventMessage_Default_Error.png",
+     "path": "Engine/Content/Editor/Slate/Icons/EventMessage_Default_Error.png",
+     "type": "file",
+     "size": 9229
+    },
+    {
+     "name": "EventMessage_Default_Success.png",
+     "path": "Engine/Content/Editor/Slate/Icons/EventMessage_Default_Success.png",
+     "type": "file",
+     "size": 9229
+    },
+    {
+     "name": "EventMessage_Lighting.png",
+     "path": "Engine/Content/Editor/Slate/Icons/EventMessage_Lighting.png",
+     "type": "file",
+     "size": 9229
+    },
+    {
+     "name": "EventMessage_Lighting_Error.png",
+     "path": "Engine/Content/Editor/Slate/Icons/EventMessage_Lighting_Error.png",
+     "type": "file",
+     "size": 9229
+    },
+    {
+     "name": "EventMessage_Lighting_Success.png",
+     "path": "Engine/Content/Editor/Slate/Icons/EventMessage_Lighting_Success.png",
+     "type": "file",
+     "size": 9229
+    },
+    {
+     "name": "ExploreLayerContents.PNG",
+     "path": "Engine/Content/Editor/Slate/Icons/ExploreLayerContents.PNG",
+     "type": "file",
+     "size": 3087
+    },
+    {
+     "name": "ExternalDataLayer.svg",
+     "path": "Engine/Content/Editor/Slate/Icons/ExternalDataLayer.svg",
+     "type": "file",
+     "size": 1105
+    },
+    {
+     "name": "eyedropper.cur",
+     "path": "Engine/Content/Editor/Slate/Icons/eyedropper.cur",
+     "type": "file",
+     "size": 3262
+    },
+    {
+     "name": "eyedropper_16px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/eyedropper_16px.png",
+     "type": "file",
+     "size": 2870
+    },
+    {
+     "name": "FitHorz_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/FitHorz_16x.png",
+     "type": "file",
+     "size": 257
+    },
+    {
+     "name": "FitVert_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/FitVert_16x.png",
+     "type": "file",
+     "size": 256
+    },
+    {
+     "name": "FolderClosed.png",
+     "path": "Engine/Content/Editor/Slate/Icons/FolderClosed.png",
+     "type": "file",
+     "size": 15443
+    },
+    {
+     "name": "FolderClosed_Code.png",
+     "path": "Engine/Content/Editor/Slate/Icons/FolderClosed_Code.png",
+     "type": "file",
+     "size": 15982
+    },
+    {
+     "name": "FolderDeveloper.png",
+     "path": "Engine/Content/Editor/Slate/Icons/FolderDeveloper.png",
+     "type": "file",
+     "size": 17576
+    },
+    {
+     "name": "FolderOpen.png",
+     "path": "Engine/Content/Editor/Slate/Icons/FolderOpen.png",
+     "type": "file",
+     "size": 15517
+    },
+    {
+     "name": "FolderOpen_Code.png",
+     "path": "Engine/Content/Editor/Slate/Icons/FolderOpen_Code.png",
+     "type": "file",
+     "size": 16092
+    },
+    {
+     "name": "FullBlueprintEditor.png",
+     "path": "Engine/Content/Editor/Slate/Icons/FullBlueprintEditor.png",
+     "type": "file",
+     "size": 5848
+    },
+    {
+     "name": "generic_pause_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/generic_pause_16x.png",
+     "type": "file",
+     "size": 2829
+    },
+    {
+     "name": "generic_play_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/generic_play_16x.png",
+     "type": "file",
+     "size": 2877
+    },
+    {
+     "name": "generic_stop_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/generic_stop_16x.png",
+     "type": "file",
+     "size": 2821
+    },
+    {
+     "name": "GenericDelete_Black.png",
+     "path": "Engine/Content/Editor/Slate/Icons/GenericDelete_Black.png",
+     "type": "file",
+     "size": 2880
+    },
+    {
+     "name": "GenericDelete_Hovered.png",
+     "path": "Engine/Content/Editor/Slate/Icons/GenericDelete_Hovered.png",
+     "type": "file",
+     "size": 3106
+    },
+    {
+     "name": "GenericDelete_Normal.png",
+     "path": "Engine/Content/Editor/Slate/Icons/GenericDelete_Normal.png",
+     "type": "file",
+     "size": 2906
+    },
+    {
+     "name": "GenericDelete_Pressed.png",
+     "path": "Engine/Content/Editor/Slate/Icons/GenericDelete_Pressed.png",
+     "type": "file",
+     "size": 3027
+    },
+    {
+     "name": "hammer_24x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/hammer_24x.png",
+     "type": "file",
+     "size": 37649
+    },
+    {
+     "name": "HarvestBlueprintFromActors.png",
+     "path": "Engine/Content/Editor/Slate/Icons/HarvestBlueprintFromActors.png",
+     "type": "file",
+     "size": 3524
+    },
+    {
+     "name": "HarvestBlueprintFromActors_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/HarvestBlueprintFromActors_40x.png",
+     "type": "file",
+     "size": 33767
+    },
+    {
+     "name": "hide_unusedpins.png",
+     "path": "Engine/Content/Editor/Slate/Icons/hide_unusedpins.png",
+     "type": "file",
+     "size": 6302
+    },
+    {
+     "name": "hiererchy_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/hiererchy_16x.png",
+     "type": "file",
+     "size": 2839
+    },
+    {
+     "name": "Home16x16.png",
+     "path": "Engine/Content/Editor/Slate/Icons/Home16x16.png",
+     "type": "file",
+     "size": 227
+    },
+    {
+     "name": "icon_add_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_add_40x.png",
+     "type": "file",
+     "size": 849
+    },
+    {
+     "name": "icon_AddContent_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_AddContent_40x.png",
+     "type": "file",
+     "size": 9229
+    },
+    {
+     "name": "icon_AddEventGraph.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_AddEventGraph.png",
+     "type": "file",
+     "size": 3341
+    },
+    {
+     "name": "icon_AddFolder_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_AddFolder_16x.png",
+     "type": "file",
+     "size": 3829
+    },
+    {
+     "name": "icon_AddFunction.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_AddFunction.png",
+     "type": "file",
+     "size": 3278
+    },
+    {
+     "name": "icon_AddMacro.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_AddMacro.png",
+     "type": "file",
+     "size": 3280
+    },
+    {
+     "name": "icon_AddVariable.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_AddVariable.png",
+     "type": "file",
+     "size": 3233
+    },
+    {
+     "name": "icon_adjust_parameters_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_adjust_parameters_40x.png",
+     "type": "file",
+     "size": 328
+    },
+    {
+     "name": "icon_advance_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_advance_40x.png",
+     "type": "file",
+     "size": 4442
+    },
+    {
+     "name": "icon_advance_512x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_advance_512x.png",
+     "type": "file",
+     "size": 87835
+    },
+    {
+     "name": "icon_angle0_16px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_angle0_16px.png",
+     "type": "file",
+     "size": 2926
+    },
+    {
+     "name": "icon_angle1_16px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_angle1_16px.png",
+     "type": "file",
+     "size": 2985
+    },
+    {
+     "name": "icon_angle2_16px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_angle2_16px.png",
+     "type": "file",
+     "size": 2971
+    },
+    {
+     "name": "icon_angle3_16px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_angle3_16px.png",
+     "type": "file",
+     "size": 2952
+    },
+    {
+     "name": "icon_angle4_16px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_angle4_16px.png",
+     "type": "file",
+     "size": 2948
+    },
+    {
+     "name": "icon_angle5_16px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_angle5_16px.png",
+     "type": "file",
+     "size": 2936
+    },
+    {
+     "name": "icon_Animation_Assign_Skeleton_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Animation_Assign_Skeleton_16x.png",
+     "type": "file",
+     "size": 39544
+    },
+    {
+     "name": "icon_Animation_Duplicate_Retarget_Skeleton_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Animation_Duplicate_Retarget_Skeleton_16x.png",
+     "type": "file",
+     "size": 39981
+    },
+    {
+     "name": "icon_Animation_Find_Skeleton_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Animation_Find_Skeleton_16x.png",
+     "type": "file",
+     "size": 39544
+    },
+    {
+     "name": "icon_Animation_Retarget_Skeleton_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Animation_Retarget_Skeleton_16x.png",
+     "type": "file",
+     "size": 39544
+    },
+    {
+     "name": "icon_AntiClockwiseRotation_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_AntiClockwiseRotation_16x.png",
+     "type": "file",
+     "size": 3183
+    },
+    {
+     "name": "icon_Asset_Create_Thumbnail_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Asset_Create_Thumbnail_16x.png",
+     "type": "file",
+     "size": 38172
+    },
+    {
+     "name": "icon_Asset_Delete_Thumbnail_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Asset_Delete_Thumbnail_16x.png",
+     "type": "file",
+     "size": 38172
+    },
+    {
+     "name": "icon_Asset_Duplicate_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Asset_Duplicate_16x.png",
+     "type": "file",
+     "size": 39544
+    },
+    {
+     "name": "icon_asset_open_16px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_asset_open_16px.png",
+     "type": "file",
+     "size": 31911
+    },
+    {
+     "name": "icon_Asset_Open_In_External_Editor_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Asset_Open_In_External_Editor_16x.png",
+     "type": "file",
+     "size": 39544
+    },
+    {
+     "name": "icon_Asset_Open_Source_Location_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Asset_Open_Source_Location_16x.png",
+     "type": "file",
+     "size": 39544
+    },
+    {
+     "name": "Icon_Asset_Rename_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/Icon_Asset_Rename_16x.png",
+     "type": "file",
+     "size": 39544
+    },
+    {
+     "name": "icon_Autosave.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Autosave.png",
+     "type": "file",
+     "size": 4940
+    },
+    {
+     "name": "icon_axis_16px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_axis_16px.png",
+     "type": "file",
+     "size": 3069
+    },
+    {
+     "name": "icon_axis_local_16px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_axis_local_16px.png",
+     "type": "file",
+     "size": 2991
+    },
+    {
+     "name": "icon_axis_world_16px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_axis_world_16px.png",
+     "type": "file",
+     "size": 3165
+    },
+    {
+     "name": "icon_Blueprint_AddDelegate_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_AddDelegate_16x.png",
+     "type": "file",
+     "size": 29627
+    },
+    {
+     "name": "icon_Blueprint_AddDelegate_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_AddDelegate_40x.png",
+     "type": "file",
+     "size": 31911
+    },
+    {
+     "name": "icon_Blueprint_AddFunction_16px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_AddFunction_16px.png",
+     "type": "file",
+     "size": 3578
+    },
+    {
+     "name": "icon_Blueprint_AddFunction_40px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_AddFunction_40px.png",
+     "type": "file",
+     "size": 6032
+    },
+    {
+     "name": "icon_Blueprint_AddFunction_512px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_AddFunction_512px.png",
+     "type": "file",
+     "size": 115266
+    },
+    {
+     "name": "icon_Blueprint_AddGraph_16px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_AddGraph_16px.png",
+     "type": "file",
+     "size": 3468
+    },
+    {
+     "name": "icon_Blueprint_AddGraph_40px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_AddGraph_40px.png",
+     "type": "file",
+     "size": 5988
+    },
+    {
+     "name": "icon_Blueprint_AddGraph_512px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_AddGraph_512px.png",
+     "type": "file",
+     "size": 131005
+    },
+    {
+     "name": "icon_Blueprint_AddMacro_16px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_AddMacro_16px.png",
+     "type": "file",
+     "size": 3547
+    },
+    {
+     "name": "icon_Blueprint_AddMacro_40px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_AddMacro_40px.png",
+     "type": "file",
+     "size": 6271
+    },
+    {
+     "name": "icon_Blueprint_AddMacro_512px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_AddMacro_512px.png",
+     "type": "file",
+     "size": 137940
+    },
+    {
+     "name": "icon_Blueprint_AddVariable_16px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_AddVariable_16px.png",
+     "type": "file",
+     "size": 3469
+    },
+    {
+     "name": "icon_Blueprint_AddVariable_40px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_AddVariable_40px.png",
+     "type": "file",
+     "size": 5718
+    },
+    {
+     "name": "icon_Blueprint_AddVariable_512px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_AddVariable_512px.png",
+     "type": "file",
+     "size": 110569
+    },
+    {
+     "name": "icon_Blueprint_Anim_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_Anim_16x.png",
+     "type": "file",
+     "size": 3332
+    },
+    {
+     "name": "icon_Blueprint_Anim_24x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_Anim_24x.png",
+     "type": "file",
+     "size": 3373
+    },
+    {
+     "name": "icon_Blueprint_Blueprint_Defaults_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_Blueprint_Defaults_16x.png",
+     "type": "file",
+     "size": 37953
+    },
+    {
+     "name": "icon_Blueprint_Branch_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_Branch_16x.png",
+     "type": "file",
+     "size": 3829
+    },
+    {
+     "name": "icon_Blueprint_BreakStruct_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_BreakStruct_16x.png",
+     "type": "file",
+     "size": 3503
+    },
+    {
+     "name": "icon_Blueprint_CallInEditor_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_CallInEditor_16x.png",
+     "type": "file",
+     "size": 27827
+    },
+    {
+     "name": "icon_Blueprint_Cast_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_Cast_16x.png",
+     "type": "file",
+     "size": 2937
+    },
+    {
+     "name": "icon_Blueprint_Comment_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_Comment_16x.png",
+     "type": "file",
+     "size": 3051
+    },
+    {
+     "name": "icon_Blueprint_CommentBubbleOff_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_CommentBubbleOff_16x.png",
+     "type": "file",
+     "size": 3829
+    },
+    {
+     "name": "icon_Blueprint_CommentBubbleOn_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_CommentBubbleOn_16x.png",
+     "type": "file",
+     "size": 3829
+    },
+    {
+     "name": "icon_Blueprint_CommentBubblePin_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_CommentBubblePin_16x.png",
+     "type": "file",
+     "size": 2977
+    },
+    {
+     "name": "icon_Blueprint_CommentBubbleUnPin_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_CommentBubbleUnPin_16x.png",
+     "type": "file",
+     "size": 2967
+    },
+    {
+     "name": "icon_Blueprint_Conduit_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_Conduit_16x.png",
+     "type": "file",
+     "size": 3073
+    },
+    {
+     "name": "icon_Blueprint_Conduit_24x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_Conduit_24x.png",
+     "type": "file",
+     "size": 3074
+    },
+    {
+     "name": "icon_Blueprint_CustomEvent_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_CustomEvent_16x.png",
+     "type": "file",
+     "size": 3215
+    },
+    {
+     "name": "icon_Blueprint_Delegate_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_Delegate_16x.png",
+     "type": "file",
+     "size": 18097
+    },
+    {
+     "name": "icon_Blueprint_Delegate_24x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_Delegate_24x.png",
+     "type": "file",
+     "size": 18171
+    },
+    {
+     "name": "icon_Blueprint_Diff_40px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_Diff_40px.png",
+     "type": "file",
+     "size": 6066
+    },
+    {
+     "name": "icon_Blueprint_Diff_512px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_Diff_512px.png",
+     "type": "file",
+     "size": 133219
+    },
+    {
+     "name": "icon_Blueprint_Documentation_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_Documentation_16x.png",
+     "type": "file",
+     "size": 3829
+    },
+    {
+     "name": "icon_Blueprint_DoN_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_DoN_16x.png",
+     "type": "file",
+     "size": 2958
+    },
+    {
+     "name": "icon_Blueprint_DoOnce_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_DoOnce_16x.png",
+     "type": "file",
+     "size": 2960
+    },
+    {
+     "name": "icon_Blueprint_Enum_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_Enum_16x.png",
+     "type": "file",
+     "size": 3495
+    },
+    {
+     "name": "icon_Blueprint_Event_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_Event_16x.png",
+     "type": "file",
+     "size": 3127
+    },
+    {
+     "name": "icon_Blueprint_EventGraph_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_EventGraph_16x.png",
+     "type": "file",
+     "size": 3829
+    },
+    {
+     "name": "icon_Blueprint_EventGraph_24x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_EventGraph_24x.png",
+     "type": "file",
+     "size": 4163
+    },
+    {
+     "name": "icon_Blueprint_Find_40px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_Find_40px.png",
+     "type": "file",
+     "size": 9229
+    },
+    {
+     "name": "icon_Blueprint_Find_512px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_Find_512px.png",
+     "type": "file",
+     "size": 1052037
+    },
+    {
+     "name": "icon_Blueprint_FlipFlop_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_FlipFlop_16x.png",
+     "type": "file",
+     "size": 3061
+    },
+    {
+     "name": "icon_Blueprint_ForEach_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_ForEach_16x.png",
+     "type": "file",
+     "size": 3160
+    },
+    {
+     "name": "icon_Blueprint_Gate_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_Gate_16x.png",
+     "type": "file",
+     "size": 3423
+    },
+    {
+     "name": "icon_Blueprint_GetSequenceBinding_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_GetSequenceBinding_16x.png",
+     "type": "file",
+     "size": 3039
+    },
+    {
+     "name": "icon_Blueprint_Interfacefunction_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_Interfacefunction_16x.png",
+     "type": "file",
+     "size": 3829
+    },
+    {
+     "name": "icon_Blueprint_InterfaceFunction_24x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_InterfaceFunction_24x.png",
+     "type": "file",
+     "size": 3677
+    },
+    {
+     "name": "icon_Blueprint_IsValid_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_IsValid_16x.png",
+     "type": "file",
+     "size": 2951
+    },
+    {
+     "name": "icon_Blueprint_KeyboardEvent_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_KeyboardEvent_16x.png",
+     "type": "file",
+     "size": 3737
+    },
+    {
+     "name": "icon_Blueprint_Loop_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_Loop_16x.png",
+     "type": "file",
+     "size": 3134
+    },
+    {
+     "name": "icon_Blueprint_Macro_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_Macro_16x.png",
+     "type": "file",
+     "size": 3829
+    },
+    {
+     "name": "icon_Blueprint_Macro_24x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_Macro_24x.png",
+     "type": "file",
+     "size": 3818
+    },
+    {
+     "name": "icon_Blueprint_MakeArray_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_MakeArray_16x.png",
+     "type": "file",
+     "size": 3227
+    },
+    {
+     "name": "icon_Blueprint_MakeMap_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_MakeMap_16x.png",
+     "type": "file",
+     "size": 3225
+    },
+    {
+     "name": "icon_Blueprint_MakeSet_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_MakeSet_16x.png",
+     "type": "file",
+     "size": 3468
+    },
+    {
+     "name": "icon_Blueprint_MakeStruct_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_MakeStruct_16x.png",
+     "type": "file",
+     "size": 3497
+    },
+    {
+     "name": "icon_Blueprint_MouseEvent_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_MouseEvent_16x.png",
+     "type": "file",
+     "size": 3516
+    },
+    {
+     "name": "icon_Blueprint_MouseEventAxis_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_MouseEventAxis_16x.png",
+     "type": "file",
+     "size": 3829
+    },
+    {
+     "name": "icon_Blueprint_NewFunction_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_NewFunction_16x.png",
+     "type": "file",
+     "size": 3181
+    },
+    {
+     "name": "icon_Blueprint_NewFunction_24x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_NewFunction_24x.png",
+     "type": "file",
+     "size": 5117
+    },
+    {
+     "name": "icon_Blueprint_NewPureFunction_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_NewPureFunction_16x.png",
+     "type": "file",
+     "size": 3153
+    },
+    {
+     "name": "icon_Blueprint_Node_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_Node_16x.png",
+     "type": "file",
+     "size": 3829
+    },
+    {
+     "name": "icon_Blueprint_Options_40px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_Options_40px.png",
+     "type": "file",
+     "size": 5987
+    },
+    {
+     "name": "icon_Blueprint_Options_512px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_Options_512px.png",
+     "type": "file",
+     "size": 128884
+    },
+    {
+     "name": "icon_Blueprint_OverrideableFunction_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_OverrideableFunction_16x.png",
+     "type": "file",
+     "size": 3829
+    },
+    {
+     "name": "icon_Blueprint_OverrideableFunction_24x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_OverrideableFunction_24x.png",
+     "type": "file",
+     "size": 3455
+    },
+    {
+     "name": "icon_Blueprint_OverrideFunction_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_OverrideFunction_16x.png",
+     "type": "file",
+     "size": 3829
+    },
+    {
+     "name": "icon_Blueprint_OverrideFunction_24x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_OverrideFunction_24x.png",
+     "type": "file",
+     "size": 3367
+    },
+    {
+     "name": "icon_Blueprint_OverridePureFunction_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_OverridePureFunction_16x.png",
+     "type": "file",
+     "size": 3105
+    },
+    {
+     "name": "icon_Blueprint_PadEvent_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_PadEvent_16x.png",
+     "type": "file",
+     "size": 3394
+    },
+    {
+     "name": "icon_Blueprint_PadEventAxis_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_PadEventAxis_16x.png",
+     "type": "file",
+     "size": 3829
+    },
+    {
+     "name": "icon_Blueprint_Rule_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_Rule_16x.png",
+     "type": "file",
+     "size": 3379
+    },
+    {
+     "name": "icon_Blueprint_Rule_24x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_Rule_24x.png",
+     "type": "file",
+     "size": 3726
+    },
+    {
+     "name": "icon_Blueprint_Select_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_Select_16x.png",
+     "type": "file",
+     "size": 3189
+    },
+    {
+     "name": "icon_Blueprint_Sequence_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_Sequence_16x.png",
+     "type": "file",
+     "size": 3157
+    },
+    {
+     "name": "icon_Blueprint_SpawnActor_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_SpawnActor_16x.png",
+     "type": "file",
+     "size": 3587
+    },
+    {
+     "name": "icon_Blueprint_State_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_State_16x.png",
+     "type": "file",
+     "size": 3557
+    },
+    {
+     "name": "icon_Blueprint_State_24x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_State_24x.png",
+     "type": "file",
+     "size": 3867
+    },
+    {
+     "name": "icon_Blueprint_StateMachine_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_StateMachine_16x.png",
+     "type": "file",
+     "size": 3232
+    },
+    {
+     "name": "icon_Blueprint_StateMachine_24x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_StateMachine_24x.png",
+     "type": "file",
+     "size": 3412
+    },
+    {
+     "name": "icon_Blueprint_SubgraphComposite_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_SubgraphComposite_16x.png",
+     "type": "file",
+     "size": 3829
+    },
+    {
+     "name": "icon_Blueprint_SubgraphComposite_24x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_SubgraphComposite_24x.png",
+     "type": "file",
+     "size": 3439
+    },
+    {
+     "name": "icon_Blueprint_Switch_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_Switch_16x.png",
+     "type": "file",
+     "size": 3169
+    },
+    {
+     "name": "icon_Blueprint_Timeline_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_Timeline_16x.png",
+     "type": "file",
+     "size": 3100
+    },
+    {
+     "name": "icon_Blueprint_TouchEvent_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Blueprint_TouchEvent_16x.png",
+     "type": "file",
+     "size": 3606
+    },
+    {
+     "name": "icon_BlueprintBrowserL_24x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_BlueprintBrowserL_24x.png",
+     "type": "file",
+     "size": 32105
+    },
+    {
+     "name": "icon_BlueprintBrowserR_24x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_BlueprintBrowserR_24x.png",
+     "type": "file",
+     "size": 32099
+    },
+    {
+     "name": "icon_BlueprintEditor_AddDocument_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_BlueprintEditor_AddDocument_40x.png",
+     "type": "file",
+     "size": 5361
+    },
+    {
+     "name": "icon_BlueprintEditor_Bookmarks_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_BlueprintEditor_Bookmarks_16x.png",
+     "type": "file",
+     "size": 503
+    },
+    {
+     "name": "icon_BlueprintEditor_Components_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_BlueprintEditor_Components_16x.png",
+     "type": "file",
+     "size": 18692
+    },
+    {
+     "name": "icon_BlueprintEditor_Components_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_BlueprintEditor_Components_40x.png",
+     "type": "file",
+     "size": 6070
+    },
+    {
+     "name": "icon_BlueprintEditor_Defaults_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_BlueprintEditor_Defaults_40x.png",
+     "type": "file",
+     "size": 5971
+    },
+    {
+     "name": "icon_BlueprintEditor_EventGraph_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_BlueprintEditor_EventGraph_40x.png",
+     "type": "file",
+     "size": 5296
+    },
+    {
+     "name": "icon_BluePrintEditor_Function_16px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_BluePrintEditor_Function_16px.png",
+     "type": "file",
+     "size": 3008
+    },
+    {
+     "name": "icon_BlueprintEditor_Interfaces_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_BlueprintEditor_Interfaces_40x.png",
+     "type": "file",
+     "size": 6242
+    },
+    {
+     "name": "icon_BlueprintEditor_Settings_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_BlueprintEditor_Settings_40x.png",
+     "type": "file",
+     "size": 5971
+    },
+    {
+     "name": "icon_box_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_box_40x.png",
+     "type": "file",
+     "size": 5334
+    },
+    {
+     "name": "icon_bspmode_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_bspmode_40x.png",
+     "type": "file",
+     "size": 6917
+    },
+    {
+     "name": "icon_build_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_build_40x.png",
+     "type": "file",
+     "size": 5603
+    },
+    {
+     "name": "icon_build_512px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_build_512px.png",
+     "type": "file",
+     "size": 122509
+    },
+    {
+     "name": "icon_Camera_Reset_40px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Camera_Reset_40px.png",
+     "type": "file",
+     "size": 6351
+    },
+    {
+     "name": "icon_CameraSpeed_24x16px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_CameraSpeed_24x16px.png",
+     "type": "file",
+     "size": 3133
+    },
+    {
+     "name": "icon_CaptureRegion_24x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_CaptureRegion_24x.png",
+     "type": "file",
+     "size": 4102
+    },
+    {
+     "name": "icon_CaptureRegion_Camera_Safe_24x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_CaptureRegion_Camera_Safe_24x.png",
+     "type": "file",
+     "size": 5117
+    },
+    {
+     "name": "icon_CaptureRegion_FullViewport_24x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_CaptureRegion_FullViewport_24x.png",
+     "type": "file",
+     "size": 3778
+    },
+    {
+     "name": "icon_CaptureRegionAccept_24x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_CaptureRegionAccept_24x.png",
+     "type": "file",
+     "size": 5117
+    },
+    {
+     "name": "icon_CaptureRegionDiscard_24x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_CaptureRegionDiscard_24x.png",
+     "type": "file",
+     "size": 5117
+    },
+    {
+     "name": "icon_Cascade_AddLOD1_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Cascade_AddLOD1_40x.png",
+     "type": "file",
+     "size": 5340
+    },
+    {
+     "name": "icon_Cascade_AddLOD1_512x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Cascade_AddLOD1_512x.png",
+     "type": "file",
+     "size": 102298
+    },
+    {
+     "name": "icon_Cascade_AddLOD2_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Cascade_AddLOD2_40x.png",
+     "type": "file",
+     "size": 5394
+    },
+    {
+     "name": "icon_Cascade_AddLOD2_512x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Cascade_AddLOD2_512x.png",
+     "type": "file",
+     "size": 106630
+    },
+    {
+     "name": "icon_Cascade_Axis_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Cascade_Axis_40x.png",
+     "type": "file",
+     "size": 2738
+    },
+    {
+     "name": "icon_Cascade_Bounds_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Cascade_Bounds_40x.png",
+     "type": "file",
+     "size": 9229
+    },
+    {
+     "name": "icon_Cascade_Color_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Cascade_Color_40x.png",
+     "type": "file",
+     "size": 5537
+    },
+    {
+     "name": "icon_Cascade_DeleteLOD_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Cascade_DeleteLOD_40x.png",
+     "type": "file",
+     "size": 5394
+    },
+    {
+     "name": "icon_Cascade_DeleteLOD_512x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Cascade_DeleteLOD_512x.png",
+     "type": "file",
+     "size": 106104
+    },
+    {
+     "name": "icon_Cascade_GenericLOD_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Cascade_GenericLOD_40x.png",
+     "type": "file",
+     "size": 9229
+    },
+    {
+     "name": "icon_Cascade_HigherLOD_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Cascade_HigherLOD_40x.png",
+     "type": "file",
+     "size": 4359
+    },
+    {
+     "name": "icon_Cascade_HigherLOD_512x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Cascade_HigherLOD_512x.png",
+     "type": "file",
+     "size": 69197
+    },
+    {
+     "name": "icon_Cascade_HighestLOD_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Cascade_HighestLOD_40x.png",
+     "type": "file",
+     "size": 5623
+    },
+    {
+     "name": "icon_Cascade_HighestLOD_512x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Cascade_HighestLOD_512x.png",
+     "type": "file",
+     "size": 129873
+    },
+    {
+     "name": "icon_Cascade_LowerLOD_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Cascade_LowerLOD_40x.png",
+     "type": "file",
+     "size": 4407
+    },
+    {
+     "name": "icon_Cascade_LowerLOD_512x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Cascade_LowerLOD_512x.png",
+     "type": "file",
+     "size": 69441
+    },
+    {
+     "name": "icon_Cascade_LowestLOD_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Cascade_LowestLOD_40x.png",
+     "type": "file",
+     "size": 5721
+    },
+    {
+     "name": "icon_Cascade_LowestLOD_512x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Cascade_LowestLOD_512x.png",
+     "type": "file",
+     "size": 132352
+    },
+    {
+     "name": "icon_Cascade_RegenLOD1_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Cascade_RegenLOD1_40x.png",
+     "type": "file",
+     "size": 5443
+    },
+    {
+     "name": "icon_Cascade_RegenLOD1_512x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Cascade_RegenLOD1_512x.png",
+     "type": "file",
+     "size": 114494
+    },
+    {
+     "name": "icon_Cascade_RegenLOD2_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Cascade_RegenLOD2_40x.png",
+     "type": "file",
+     "size": 5657
+    },
+    {
+     "name": "icon_Cascade_RegenLOD2_512x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Cascade_RegenLOD2_512x.png",
+     "type": "file",
+     "size": 127138
+    },
+    {
+     "name": "icon_Cascade_RestartInLevel_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Cascade_RestartInLevel_40x.png",
+     "type": "file",
+     "size": 5830
+    },
+    {
+     "name": "icon_Cascade_RestartSim_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Cascade_RestartSim_40x.png",
+     "type": "file",
+     "size": 6172
+    },
+    {
+     "name": "icon_Cascade_Thumbnail_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Cascade_Thumbnail_40x.png",
+     "type": "file",
+     "size": 5847
+    },
+    {
+     "name": "icon_class_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_class_16x.png",
+     "type": "file",
+     "size": 2982
+    },
+    {
+     "name": "icon_class_Blueprint_FunctionLibrary_256x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_class_Blueprint_FunctionLibrary_256x.png",
+     "type": "file",
+     "size": 76061
+    },
+    {
+     "name": "icon_class_Blueprint_FunctionLibrary_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_class_Blueprint_FunctionLibrary_40x.png",
+     "type": "file",
+     "size": 37742
+    },
+    {
+     "name": "icon_class_Blueprint_New_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_class_Blueprint_New_16x.png",
+     "type": "file",
+     "size": 3580
+    },
+    {
+     "name": "icon_class_Blueprint_Open_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_class_Blueprint_Open_16x.png",
+     "type": "file",
+     "size": 3474
+    },
+    {
+     "name": "icon_ClockwiseRotation_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_ClockwiseRotation_16x.png",
+     "type": "file",
+     "size": 3182
+    },
+    {
+     "name": "icon_codeview_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_codeview_16x.png",
+     "type": "file",
+     "size": 2973
+    },
+    {
+     "name": "icon_compile_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_compile_40x.png",
+     "type": "file",
+     "size": 6680
+    },
+    {
+     "name": "icon_compile_512px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_compile_512px.png",
+     "type": "file",
+     "size": 181926
+    },
+    {
+     "name": "icon_compilegreen_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_compilegreen_40x.png",
+     "type": "file",
+     "size": 6068
+    },
+    {
+     "name": "icon_compilered_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_compilered_40x.png",
+     "type": "file",
+     "size": 6290
+    },
+    {
+     "name": "icon_compileyellow_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_compileyellow_40x.png",
+     "type": "file",
+     "size": 6102
+    },
+    {
+     "name": "icon_cone_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_cone_40x.png",
+     "type": "file",
+     "size": 5045
+    },
+    {
+     "name": "icon_ContentBrowser_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_ContentBrowser_40x.png",
+     "type": "file",
+     "size": 6088
+    },
+    {
+     "name": "icon_ContentBrowser_512x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_ContentBrowser_512x.png",
+     "type": "file",
+     "size": 169436
+    },
+    {
+     "name": "icon_csgadd_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_csgadd_40x.png",
+     "type": "file",
+     "size": 5463
+    },
+    {
+     "name": "icon_csgdeIntersect_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_csgdeIntersect_40x.png",
+     "type": "file",
+     "size": 5519
+    },
+    {
+     "name": "icon_csgintersect_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_csgintersect_40x.png",
+     "type": "file",
+     "size": 5661
+    },
+    {
+     "name": "icon_csgsubtract_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_csgsubtract_40x.png",
+     "type": "file",
+     "size": 5715
+    },
+    {
+     "name": "Icon_Curve_Editor_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/Icon_Curve_Editor_16x.png",
+     "type": "file",
+     "size": 18708
+    },
+    {
+     "name": "icon_curvedstair_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_curvedstair_40x.png",
+     "type": "file",
+     "size": 5942
+    },
+    {
+     "name": "icon_CurveEditor_Auto_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_CurveEditor_Auto_40x.png",
+     "type": "file",
+     "size": 6054
+    },
+    {
+     "name": "icon_CurveEditor_AutoClamped_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_CurveEditor_AutoClamped_40x.png",
+     "type": "file",
+     "size": 5953
+    },
+    {
+     "name": "icon_CurveEditor_Break_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_CurveEditor_Break_40x.png",
+     "type": "file",
+     "size": 5309
+    },
+    {
+     "name": "icon_CurveEditor_Constant_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_CurveEditor_Constant_40x.png",
+     "type": "file",
+     "size": 4583
+    },
+    {
+     "name": "icon_CurveEditor_Create_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_CurveEditor_Create_40x.png",
+     "type": "file",
+     "size": 5229
+    },
+    {
+     "name": "icon_CurveEditor_DeleteTab_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_CurveEditor_DeleteTab_40x.png",
+     "type": "file",
+     "size": 5920
+    },
+    {
+     "name": "icon_CurveEditor_Flatten_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_CurveEditor_Flatten_40x.png",
+     "type": "file",
+     "size": 5424
+    },
+    {
+     "name": "icon_CurveEditor_Horizontal_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_CurveEditor_Horizontal_40x.png",
+     "type": "file",
+     "size": 6048
+    },
+    {
+     "name": "icon_CurveEditor_Linear_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_CurveEditor_Linear_40x.png",
+     "type": "file",
+     "size": 4769
+    },
+    {
+     "name": "icon_CurveEditor_Pan_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_CurveEditor_Pan_40x.png",
+     "type": "file",
+     "size": 6314
+    },
+    {
+     "name": "icon_CurveEditor_ShowAll_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_CurveEditor_ShowAll_40x.png",
+     "type": "file",
+     "size": 5653
+    },
+    {
+     "name": "icon_CurveEditor_Straighten_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_CurveEditor_Straighten_40x.png",
+     "type": "file",
+     "size": 5386
+    },
+    {
+     "name": "icon_CurveEditor_ToggleInputSnap_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_CurveEditor_ToggleInputSnap_40x.png",
+     "type": "file",
+     "size": 6088
+    },
+    {
+     "name": "icon_CurveEditor_ToggleOutputSnap_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_CurveEditor_ToggleOutputSnap_40x.png",
+     "type": "file",
+     "size": 6110
+    },
+    {
+     "name": "icon_CurveEditor_ToggleSnap_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_CurveEditor_ToggleSnap_40x.png",
+     "type": "file",
+     "size": 6051
+    },
+    {
+     "name": "icon_CurveEditor_User_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_CurveEditor_User_40x.png",
+     "type": "file",
+     "size": 5950
+    },
+    {
+     "name": "icon_CurveEditor_Vertical_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_CurveEditor_Vertical_40x.png",
+     "type": "file",
+     "size": 5953
+    },
+    {
+     "name": "icon_CurveEditor_WeightedTangents_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_CurveEditor_WeightedTangents_40x.png",
+     "type": "file",
+     "size": 3335
+    },
+    {
+     "name": "icon_CurveEditor_Zoom_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_CurveEditor_Zoom_40x.png",
+     "type": "file",
+     "size": 6394
+    },
+    {
+     "name": "icon_CurveEditor_ZoomToFit_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_CurveEditor_ZoomToFit_40x.png",
+     "type": "file",
+     "size": 5760
+    },
+    {
+     "name": "icon_cylinder_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_cylinder_40x.png",
+     "type": "file",
+     "size": 5062
+    },
+    {
+     "name": "icon_DebugStepIn_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_DebugStepIn_40x.png",
+     "type": "file",
+     "size": 1690
+    },
+    {
+     "name": "icon_DebugStepOut_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_DebugStepOut_40x.png",
+     "type": "file",
+     "size": 1681
+    },
+    {
+     "name": "icon_DebugStepOver_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_DebugStepOver_40x.png",
+     "type": "file",
+     "size": 1692
+    },
+    {
+     "name": "icon_DefaultEdMode_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_DefaultEdMode_40x.png",
+     "type": "file",
+     "size": 19722
+    },
+    {
+     "name": "icon_delete_16px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_delete_16px.png",
+     "type": "file",
+     "size": 3045
+    },
+    {
+     "name": "icon_Delete_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Delete_40x.png",
+     "type": "file",
+     "size": 37875
+    },
+    {
+     "name": "icon_DeviceClaim_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_DeviceClaim_40x.png",
+     "type": "file",
+     "size": 6192
+    },
+    {
+     "name": "icon_DeviceConnect_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_DeviceConnect_40x.png",
+     "type": "file",
+     "size": 6507
+    },
+    {
+     "name": "icon_DeviceDisconnect_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_DeviceDisconnect_40x.png",
+     "type": "file",
+     "size": 9229
+    },
+    {
+     "name": "icon_DevicePowerOff_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_DevicePowerOff_40x.png",
+     "type": "file",
+     "size": 9229
+    },
+    {
+     "name": "icon_DevicePowerOn_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_DevicePowerOn_40x.png",
+     "type": "file",
+     "size": 9229
+    },
+    {
+     "name": "icon_DeviceReboot_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_DeviceReboot_40x.png",
+     "type": "file",
+     "size": 9229
+    },
+    {
+     "name": "icon_DeviceRelease_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_DeviceRelease_40x.png",
+     "type": "file",
+     "size": 6433
+    },
+    {
+     "name": "icon_DeviceRemove_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_DeviceRemove_40x.png",
+     "type": "file",
+     "size": 5495
+    },
+    {
+     "name": "icon_DeviceShare_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_DeviceShare_40x.png",
+     "type": "file",
+     "size": 6570
+    },
+    {
+     "name": "icon_Docs_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Docs_16x.png",
+     "type": "file",
+     "size": 322
+    },
+    {
+     "name": "icon_Downloads_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Downloads_16x.png",
+     "type": "file",
+     "size": 3012
+    },
+    {
+     "name": "icon_edit_blueprint_defaults_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_edit_blueprint_defaults_16x.png",
+     "type": "file",
+     "size": 15979
+    },
+    {
+     "name": "icon_edit_blueprint_defaults_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_edit_blueprint_defaults_40x.png",
+     "type": "file",
+     "size": 845
+    },
+    {
+     "name": "icon_editgeometry_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_editgeometry_40x.png",
+     "type": "file",
+     "size": 5295
+    },
+    {
+     "name": "icon_Editor_Modes_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Editor_Modes_16x.png",
+     "type": "file",
+     "size": 35263
+    },
+    {
+     "name": "icon_Editor_Modes_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Editor_Modes_40x.png",
+     "type": "file",
+     "size": 38173
+    },
+    {
+     "name": "icon_Editor_Preferences_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Editor_Preferences_16x.png",
+     "type": "file",
+     "size": 18986
+    },
+    {
+     "name": "icon_Editor_Preferences_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Editor_Preferences_40x.png",
+     "type": "file",
+     "size": 24386
+    },
+    {
+     "name": "icon_Editor_Preferences_ContentEditors_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Editor_Preferences_ContentEditors_40x.png",
+     "type": "file",
+     "size": 6336
+    },
+    {
+     "name": "icon_Editor_Preferences_General_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Editor_Preferences_General_40x.png",
+     "type": "file",
+     "size": 9229
+    },
+    {
+     "name": "icon_Editor_Preferences_LevelEditor_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Editor_Preferences_LevelEditor_40x.png",
+     "type": "file",
+     "size": 9229
+    },
+    {
+     "name": "icon_eject_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_eject_40x.png",
+     "type": "file",
+     "size": 5827
+    },
+    {
+     "name": "icon_eject_512px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_eject_512px.png",
+     "type": "file",
+     "size": 138770
+    },
+    {
+     "name": "icon_Enable_Profiling_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Enable_Profiling_40x.png",
+     "type": "file",
+     "size": 5320
+    },
+    {
+     "name": "icon_Enable_Simulation_40px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Enable_Simulation_40px.png",
+     "type": "file",
+     "size": 6296
+    },
+    {
+     "name": "icon_error_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_error_16x.png",
+     "type": "file",
+     "size": 2555
+    },
+    {
+     "name": "icon_exposevarforinstance_off_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_exposevarforinstance_off_16x.png",
+     "type": "file",
+     "size": 431
+    },
+    {
+     "name": "icon_exposevarforinstance_on_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_exposevarforinstance_on_16x.png",
+     "type": "file",
+     "size": 500
+    },
+    {
+     "name": "icon_file_choosepackages_16px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_file_choosepackages_16px.png",
+     "type": "file",
+     "size": 3070
+    },
+    {
+     "name": "icon_file_exit_16px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_file_exit_16px.png",
+     "type": "file",
+     "size": 3032
+    },
+    {
+     "name": "icon_file_LevelsRecent_16px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_file_LevelsRecent_16px.png",
+     "type": "file",
+     "size": 3571
+    },
+    {
+     "name": "icon_file_LevelsRecent_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_file_LevelsRecent_40x.png",
+     "type": "file",
+     "size": 5241
+    },
+    {
+     "name": "icon_file_new_16px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_file_new_16px.png",
+     "type": "file",
+     "size": 3499
+    },
+    {
+     "name": "icon_file_new_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_file_new_40x.png",
+     "type": "file",
+     "size": 5190
+    },
+    {
+     "name": "icon_file_open_16px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_file_open_16px.png",
+     "type": "file",
+     "size": 3469
+    },
+    {
+     "name": "icon_file_open_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_file_open_40x.png",
+     "type": "file",
+     "size": 4855
+    },
+    {
+     "name": "icon_file_ProjectAddCode_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_file_ProjectAddCode_16x.png",
+     "type": "file",
+     "size": 3585
+    },
+    {
+     "name": "icon_file_ProjectAddCode_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_file_ProjectAddCode_40x.png",
+     "type": "file",
+     "size": 5545
+    },
+    {
+     "name": "icon_file_ProjectNew_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_file_ProjectNew_16x.png",
+     "type": "file",
+     "size": 3605
+    },
+    {
+     "name": "icon_file_ProjectNew_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_file_ProjectNew_40x.png",
+     "type": "file",
+     "size": 5622
+    },
+    {
+     "name": "icon_file_ProjectOpen_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_file_ProjectOpen_16x.png",
+     "type": "file",
+     "size": 3551
+    },
+    {
+     "name": "icon_file_ProjectOpen_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_file_ProjectOpen_40x.png",
+     "type": "file",
+     "size": 5358
+    },
+    {
+     "name": "icon_file_ProjectsRecent_16px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_file_ProjectsRecent_16px.png",
+     "type": "file",
+     "size": 3659
+    },
+    {
+     "name": "icon_file_ProjectsRecent_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_file_ProjectsRecent_40x.png",
+     "type": "file",
+     "size": 5854
+    },
+    {
+     "name": "icon_file_save_16px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_file_save_16px.png",
+     "type": "file",
+     "size": 3528
+    },
+    {
+     "name": "icon_file_save_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_file_save_40x.png",
+     "type": "file",
+     "size": 5767
+    },
+    {
+     "name": "icon_file_saveall_16px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_file_saveall_16px.png",
+     "type": "file",
+     "size": 3587
+    },
+    {
+     "name": "icon_file_saveall_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_file_saveall_40x.png",
+     "type": "file",
+     "size": 5694
+    },
+    {
+     "name": "icon_file_saveas_16px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_file_saveas_16px.png",
+     "type": "file",
+     "size": 3648
+    },
+    {
+     "name": "icon_file_saveas_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_file_saveas_40x.png",
+     "type": "file",
+     "size": 6334
+    },
+    {
+     "name": "icon_file_savelevels_16px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_file_savelevels_16px.png",
+     "type": "file",
+     "size": 3530
+    },
+    {
+     "name": "icon_file_savelevels_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_file_savelevels_40x.png",
+     "type": "file",
+     "size": 5971
+    },
+    {
+     "name": "icon_file_switch_16px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_file_switch_16px.png",
+     "type": "file",
+     "size": 3563
+    },
+    {
+     "name": "icon_file_switch_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_file_switch_40x.png",
+     "type": "file",
+     "size": 5335
+    },
+    {
+     "name": "icon_FindInAnyBlueprint_40px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_FindInAnyBlueprint_40px.png",
+     "type": "file",
+     "size": 6938
+    },
+    {
+     "name": "icon_findnode_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_findnode_40x.png",
+     "type": "file",
+     "size": 4255
+    },
+    {
+     "name": "icon_folder_up_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_folder_up_16x.png",
+     "type": "file",
+     "size": 2929
+    },
+    {
+     "name": "icon_foliage_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_foliage_40x.png",
+     "type": "file",
+     "size": 5139
+    },
+    {
+     "name": "icon_FontEd_Background_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_FontEd_Background_40x.png",
+     "type": "file",
+     "size": 6014
+    },
+    {
+     "name": "icon_FontEd_Background_512x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_FontEd_Background_512x.png",
+     "type": "file",
+     "size": 140103
+    },
+    {
+     "name": "icon_FontEd_Export_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_FontEd_Export_40x.png",
+     "type": "file",
+     "size": 5846
+    },
+    {
+     "name": "icon_FontEd_Export_512x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_FontEd_Export_512x.png",
+     "type": "file",
+     "size": 114675
+    },
+    {
+     "name": "icon_FontEd_ExportAll_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_FontEd_ExportAll_40x.png",
+     "type": "file",
+     "size": 6492
+    },
+    {
+     "name": "icon_FontEd_ExportAll_512x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_FontEd_ExportAll_512x.png",
+     "type": "file",
+     "size": 131343
+    },
+    {
+     "name": "icon_FontEd_Foreground_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_FontEd_Foreground_40x.png",
+     "type": "file",
+     "size": 6172
+    },
+    {
+     "name": "icon_FontEd_Foreground_512x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_FontEd_Foreground_512x.png",
+     "type": "file",
+     "size": 131523
+    },
+    {
+     "name": "icon_FontEd_Update_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_FontEd_Update_40x.png",
+     "type": "file",
+     "size": 6983
+    },
+    {
+     "name": "icon_FontEd_Update_512x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_FontEd_Update_512x.png",
+     "type": "file",
+     "size": 159130
+    },
+    {
+     "name": "icon_FontEd_UpdateAll_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_FontEd_UpdateAll_40x.png",
+     "type": "file",
+     "size": 7038
+    },
+    {
+     "name": "icon_FontEd_UpdateAll_512x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_FontEd_UpdateAll_512x.png",
+     "type": "file",
+     "size": 163226
+    },
+    {
+     "name": "icon_FunctionArgDown.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_FunctionArgDown.png",
+     "type": "file",
+     "size": 2901
+    },
+    {
+     "name": "icon_FunctionArgUp.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_FunctionArgUp.png",
+     "type": "file",
+     "size": 2886
+    },
+    {
+     "name": "icon_game_settings_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_game_settings_40x.png",
+     "type": "file",
+     "size": 9229
+    },
+    {
+     "name": "icon_Generic_Redo_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Generic_Redo_40x.png",
+     "type": "file",
+     "size": 5094
+    },
+    {
+     "name": "icon_Generic_Undo_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Generic_Undo_40x.png",
+     "type": "file",
+     "size": 5208
+    },
+    {
+     "name": "icon_GenericCommand_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_GenericCommand_40x.png",
+     "type": "file",
+     "size": 5717
+    },
+    {
+     "name": "icon_GenericCommand_512x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_GenericCommand_512x.png",
+     "type": "file",
+     "size": 127688
+    },
+    {
+     "name": "icon_Genericfinder_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Genericfinder_16x.png",
+     "type": "file",
+     "size": 38172
+    },
+    {
+     "name": "icon_help_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_help_16x.png",
+     "type": "file",
+     "size": 2217
+    },
+    {
+     "name": "icon_HideUnrelatedNodes_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_HideUnrelatedNodes_40x.png",
+     "type": "file",
+     "size": 4779
+    },
+    {
+     "name": "icon_HighResScreenshotCapture_24px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_HighResScreenshotCapture_24px.png",
+     "type": "file",
+     "size": 5117
+    },
+    {
+     "name": "icon_horizontal_diff_view_16px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_horizontal_diff_view_16px.png",
+     "type": "file",
+     "size": 1417
+    },
+    {
+     "name": "icon_Import_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Import_16x.png",
+     "type": "file",
+     "size": 3441
+    },
+    {
+     "name": "icon_Import_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Import_40x.png",
+     "type": "file",
+     "size": 33482
+    },
+    {
+     "name": "icon_info_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_info_16x.png",
+     "type": "file",
+     "size": 2139
+    },
+    {
+     "name": "icon_invisible_16px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_invisible_16px.png",
+     "type": "file",
+     "size": 3256
+    },
+    {
+     "name": "icon_invisible_hi_16px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_invisible_hi_16px.png",
+     "type": "file",
+     "size": 3119
+    },
+    {
+     "name": "icon_keyb_AssetEditor_16px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_keyb_AssetEditor_16px.png",
+     "type": "file",
+     "size": 3110
+    },
+    {
+     "name": "icon_keyb_CommonCommands_16px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_keyb_CommonCommands_16px.png",
+     "type": "file",
+     "size": 3032
+    },
+    {
+     "name": "icon_keyb_FoliageEditMode_16px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_keyb_FoliageEditMode_16px.png",
+     "type": "file",
+     "size": 3090
+    },
+    {
+     "name": "icon_keyb_LandscapeEditor_16px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_keyb_LandscapeEditor_16px.png",
+     "type": "file",
+     "size": 3051
+    },
+    {
+     "name": "icon_keyb_Layers_16px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_keyb_Layers_16px.png",
+     "type": "file",
+     "size": 3075
+    },
+    {
+     "name": "icon_keyb_LevelEditor_16px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_keyb_LevelEditor_16px.png",
+     "type": "file",
+     "size": 3057
+    },
+    {
+     "name": "icon_keyb_LevelViewports_16px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_keyb_LevelViewports_16px.png",
+     "type": "file",
+     "size": 2912
+    },
+    {
+     "name": "icon_keyb_MainFrame_16px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_keyb_MainFrame_16px.png",
+     "type": "file",
+     "size": 2922
+    },
+    {
+     "name": "icon_keyb_OutputLog_16px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_keyb_OutputLog_16px.png",
+     "type": "file",
+     "size": 3016
+    },
+    {
+     "name": "icon_keyb_PlayWorld_16px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_keyb_PlayWorld_16px.png",
+     "type": "file",
+     "size": 3028
+    },
+    {
+     "name": "icon_keyb_StaticMeshEditor_16px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_keyb_StaticMeshEditor_16px.png",
+     "type": "file",
+     "size": 3071
+    },
+    {
+     "name": "icon_kismet2_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_kismet2_40x.png",
+     "type": "file",
+     "size": 5943
+    },
+    {
+     "name": "icon_kismet2_512px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_kismet2_512px.png",
+     "type": "file",
+     "size": 152377
+    },
+    {
+     "name": "icon_kismet_compile_16px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_kismet_compile_16px.png",
+     "type": "file",
+     "size": 3059
+    },
+    {
+     "name": "icon_kismet_findunused_16px.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_kismet_findunused_16px.png",
+     "type": "file",
+     "size": 3167
+    },
+    {
+     "name": "icon_landscape_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_landscape_40x.png",
+     "type": "file",
+     "size": 4665
+    },
+    {
+     "name": "icon_Landscape_Affects_Height_Disabled_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Affects_Height_Disabled_16x.png",
+     "type": "file",
+     "size": 3190
+    },
+    {
+     "name": "icon_Landscape_Affects_Height_Enabled_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Affects_Height_Enabled_16x.png",
+     "type": "file",
+     "size": 3414
+    },
+    {
+     "name": "icon_Landscape_Affects_Heightmap_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Affects_Heightmap_16x.png",
+     "type": "file",
+     "size": 365
+    },
+    {
+     "name": "icon_Landscape_Affects_Heightmap_16x.svg",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Affects_Heightmap_16x.svg",
+     "type": "file",
+     "size": 878
+    },
+    {
+     "name": "icon_Landscape_Affects_Heightmap_Disabled_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Affects_Heightmap_Disabled_16x.png",
+     "type": "file",
+     "size": 360
+    },
+    {
+     "name": "icon_Landscape_Affects_Heightmap_Disabled_16x.svg",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Affects_Heightmap_Disabled_16x.svg",
+     "type": "file",
+     "size": 1217
+    },
+    {
+     "name": "icon_Landscape_Affects_VisibilityLayer_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Affects_VisibilityLayer_16x.png",
+     "type": "file",
+     "size": 381
+    },
+    {
+     "name": "icon_Landscape_Affects_VisibilityLayer_16x.svg",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Affects_VisibilityLayer_16x.svg",
+     "type": "file",
+     "size": 994
+    },
+    {
+     "name": "icon_Landscape_Affects_VisibilityLayer_Disabled_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Affects_VisibilityLayer_Disabled_16x.png",
+     "type": "file",
+     "size": 379
+    },
+    {
+     "name": "icon_Landscape_Affects_VisibilityLayer_Disabled_16x.svg",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Affects_VisibilityLayer_Disabled_16x.svg",
+     "type": "file",
+     "size": 1333
+    },
+    {
+     "name": "icon_Landscape_Affects_VisibilityLayer_Enabled_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Affects_VisibilityLayer_Enabled_16x.png",
+     "type": "file",
+     "size": 4869
+    },
+    {
+     "name": "icon_Landscape_Affects_Weight_Disabled_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Affects_Weight_Disabled_16x.png",
+     "type": "file",
+     "size": 3311
+    },
+    {
+     "name": "icon_Landscape_Affects_Weight_Enabled_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Affects_Weight_Enabled_16x.png",
+     "type": "file",
+     "size": 3626
+    },
+    {
+     "name": "icon_Landscape_Affects_Weightmap_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Affects_Weightmap_16x.png",
+     "type": "file",
+     "size": 340
+    },
+    {
+     "name": "icon_Landscape_Affects_Weightmap_16x.svg",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Affects_Weightmap_16x.svg",
+     "type": "file",
+     "size": 1410
+    },
+    {
+     "name": "icon_Landscape_Affects_Weightmap_Disabled_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Affects_Weightmap_Disabled_16x.png",
+     "type": "file",
+     "size": 338
+    },
+    {
+     "name": "icon_Landscape_Affects_Weightmap_Disabled_16x.svg",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Affects_Weightmap_Disabled_16x.svg",
+     "type": "file",
+     "size": 1749
+    },
+    {
+     "name": "icon_Landscape_Brush_Alpha_20x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Brush_Alpha_20x.png",
+     "type": "file",
+     "size": 3794
+    },
+    {
+     "name": "icon_Landscape_Brush_Alpha_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Brush_Alpha_40x.png",
+     "type": "file",
+     "size": 9229
+    },
+    {
+     "name": "icon_Landscape_Brush_Alpha_UseAChannel_20x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Brush_Alpha_UseAChannel_20x.png",
+     "type": "file",
+     "size": 3701
+    },
+    {
+     "name": "icon_Landscape_Brush_Alpha_UseBChannel_20x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Brush_Alpha_UseBChannel_20x.png",
+     "type": "file",
+     "size": 3717
+    },
+    {
+     "name": "icon_Landscape_Brush_Alpha_UseGChannel_20x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Brush_Alpha_UseGChannel_20x.png",
+     "type": "file",
+     "size": 3718
+    },
+    {
+     "name": "icon_Landscape_Brush_Alpha_UseRChannel_20x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Brush_Alpha_UseRChannel_20x.png",
+     "type": "file",
+     "size": 3700
+    },
+    {
+     "name": "icon_Landscape_Brush_Circle_linear_20x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Brush_Circle_linear_20x.png",
+     "type": "file",
+     "size": 3689
+    },
+    {
+     "name": "icon_Landscape_Brush_Circle_linear_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Brush_Circle_linear_40x.png",
+     "type": "file",
+     "size": 9229
+    },
+    {
+     "name": "icon_Landscape_Brush_Circle_smooth_20x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Brush_Circle_smooth_20x.png",
+     "type": "file",
+     "size": 3689
+    },
+    {
+     "name": "icon_Landscape_Brush_Circle_smooth_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Brush_Circle_smooth_40x.png",
+     "type": "file",
+     "size": 9229
+    },
+    {
+     "name": "icon_Landscape_Brush_Circle_spherical_20x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Brush_Circle_spherical_20x.png",
+     "type": "file",
+     "size": 3632
+    },
+    {
+     "name": "icon_Landscape_Brush_Circle_spherical_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Brush_Circle_spherical_40x.png",
+     "type": "file",
+     "size": 9229
+    },
+    {
+     "name": "icon_Landscape_Brush_Circle_tip_20x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Brush_Circle_tip_20x.png",
+     "type": "file",
+     "size": 3612
+    },
+    {
+     "name": "icon_Landscape_Brush_Circle_tip_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Brush_Circle_tip_40x.png",
+     "type": "file",
+     "size": 9229
+    },
+    {
+     "name": "icon_Landscape_Brush_Component_20x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Brush_Component_20x.png",
+     "type": "file",
+     "size": 3775
+    },
+    {
+     "name": "icon_Landscape_Brush_Component_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Brush_Component_40x.png",
+     "type": "file",
+     "size": 9229
+    },
+    {
+     "name": "icon_Landscape_Brush_Gizmo_20x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Brush_Gizmo_20x.png",
+     "type": "file",
+     "size": 3905
+    },
+    {
+     "name": "icon_Landscape_Brush_Gizmo_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Brush_Gizmo_40x.png",
+     "type": "file",
+     "size": 9229
+    },
+    {
+     "name": "icon_Landscape_Brush_Pattern_20x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Brush_Pattern_20x.png",
+     "type": "file",
+     "size": 3762
+    },
+    {
+     "name": "icon_Landscape_Brush_Pattern_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Brush_Pattern_40x.png",
+     "type": "file",
+     "size": 9229
+    },
+    {
+     "name": "icon_Landscape_Layers_From_Material_16x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Layers_From_Material_16x.png",
+     "type": "file",
+     "size": 340
+    },
+    {
+     "name": "icon_Landscape_Layers_From_Material_16x.svg",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Layers_From_Material_16x.svg",
+     "type": "file",
+     "size": 1859
+    },
+    {
+     "name": "icon_Landscape_Mode_Manage_20x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Mode_Manage_20x.png",
+     "type": "file",
+     "size": 4106
+    },
+    {
+     "name": "icon_Landscape_Mode_Manage_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Mode_Manage_40x.png",
+     "type": "file",
+     "size": 9229
+    },
+    {
+     "name": "icon_Landscape_Mode_Paint_20x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Mode_Paint_20x.png",
+     "type": "file",
+     "size": 4065
+    },
+    {
+     "name": "icon_Landscape_Mode_Paint_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Mode_Paint_40x.png",
+     "type": "file",
+     "size": 9229
+    },
+    {
+     "name": "icon_Landscape_Mode_Sculpt_20x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Mode_Sculpt_20x.png",
+     "type": "file",
+     "size": 4115
+    },
+    {
+     "name": "icon_Landscape_Mode_Sculpt_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Mode_Sculpt_40x.png",
+     "type": "file",
+     "size": 9229
+    },
+    {
+     "name": "icon_Landscape_New_Landscape_20x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_New_Landscape_20x.png",
+     "type": "file",
+     "size": 3945
+    },
+    {
+     "name": "icon_Landscape_New_Landscape_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_New_Landscape_40x.png",
+     "type": "file",
+     "size": 9229
+    },
+    {
+     "name": "icon_landscape_sort_alphabetical.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_landscape_sort_alphabetical.png",
+     "type": "file",
+     "size": 342
+    },
+    {
+     "name": "icon_landscape_sort_base.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_landscape_sort_base.png",
+     "type": "file",
+     "size": 360
+    },
+    {
+     "name": "icon_landscape_sort_custom.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_landscape_sort_custom.png",
+     "type": "file",
+     "size": 438
+    },
+    {
+     "name": "icon_Landscape_Target_Create_12x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Target_Create_12x.png",
+     "type": "file",
+     "size": 2880
+    },
+    {
+     "name": "icon_Landscape_Target_Heightmap_32x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Target_Heightmap_32x.png",
+     "type": "file",
+     "size": 6917
+    },
+    {
+     "name": "icon_Landscape_Target_Heightmap_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Target_Heightmap_40x.png",
+     "type": "file",
+     "size": 9229
+    },
+    {
+     "name": "icon_Landscape_Target_Heightmap_48x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Target_Heightmap_48x.png",
+     "type": "file",
+     "size": 12053
+    },
+    {
+     "name": "icon_Landscape_Target_Invalid_32x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Target_Invalid_32x.png",
+     "type": "file",
+     "size": 6917
+    },
+    {
+     "name": "icon_Landscape_Target_Invalid_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Target_Invalid_40x.png",
+     "type": "file",
+     "size": 9229
+    },
+    {
+     "name": "icon_Landscape_Target_Invalid_48x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Target_Invalid_48x.png",
+     "type": "file",
+     "size": 12053
+    },
+    {
+     "name": "icon_Landscape_Target_Visibility_48x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Target_Visibility_48x.png",
+     "type": "file",
+     "size": 6599
+    },
+    {
+     "name": "icon_Landscape_Tool_AddComponent_20x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Tool_AddComponent_20x.png",
+     "type": "file",
+     "size": 3960
+    },
+    {
+     "name": "icon_Landscape_Tool_AddComponent_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Tool_AddComponent_40x.png",
+     "type": "file",
+     "size": 9229
+    },
+    {
+     "name": "icon_Landscape_Tool_BlueprintBrush_20x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Tool_BlueprintBrush_20x.png",
+     "type": "file",
+     "size": 4055
+    },
+    {
+     "name": "icon_Landscape_Tool_BlueprintBrush_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Tool_BlueprintBrush_40x.png",
+     "type": "file",
+     "size": 6827
+    },
+    {
+     "name": "icon_Landscape_Tool_Copy_20x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Tool_Copy_20x.png",
+     "type": "file",
+     "size": 3975
+    },
+    {
+     "name": "icon_Landscape_Tool_Copy_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Tool_Copy_40x.png",
+     "type": "file",
+     "size": 9229
+    },
+    {
+     "name": "icon_Landscape_Tool_DeleteComponent_20x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Tool_DeleteComponent_20x.png",
+     "type": "file",
+     "size": 4006
+    },
+    {
+     "name": "icon_Landscape_Tool_DeleteComponent_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Tool_DeleteComponent_40x.png",
+     "type": "file",
+     "size": 9229
+    },
+    {
+     "name": "icon_Landscape_Tool_Erase_20x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Tool_Erase_20x.png",
+     "type": "file",
+     "size": 4409
+    },
+    {
+     "name": "icon_Landscape_Tool_Erase_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Tool_Erase_40x.png",
+     "type": "file",
+     "size": 9229
+    },
+    {
+     "name": "icon_Landscape_Tool_Erosion_20x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Tool_Erosion_20x.png",
+     "type": "file",
+     "size": 3880
+    },
+    {
+     "name": "icon_Landscape_Tool_Erosion_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Tool_Erosion_40x.png",
+     "type": "file",
+     "size": 9229
+    },
+    {
+     "name": "icon_Landscape_Tool_Flatten_20x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Tool_Flatten_20x.png",
+     "type": "file",
+     "size": 3699
+    },
+    {
+     "name": "icon_Landscape_Tool_Flatten_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Tool_Flatten_40x.png",
+     "type": "file",
+     "size": 9229
+    },
+    {
+     "name": "icon_Landscape_Tool_HydraulicErosion_20x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Tool_HydraulicErosion_20x.png",
+     "type": "file",
+     "size": 3877
+    },
+    {
+     "name": "icon_Landscape_Tool_HydraulicErosion_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Tool_HydraulicErosion_40x.png",
+     "type": "file",
+     "size": 9229
+    },
+    {
+     "name": "icon_Landscape_Tool_Mask_20x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Tool_Mask_20x.png",
+     "type": "file",
+     "size": 3901
+    },
+    {
+     "name": "icon_Landscape_Tool_Mask_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Tool_Mask_40x.png",
+     "type": "file",
+     "size": 9229
+    },
+    {
+     "name": "icon_Landscape_Tool_Mirror_20x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Tool_Mirror_20x.png",
+     "type": "file",
+     "size": 1216
+    },
+    {
+     "name": "icon_Landscape_Tool_Mirror_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Tool_Mirror_40x.png",
+     "type": "file",
+     "size": 3173
+    },
+    {
+     "name": "icon_Landscape_Tool_MoveToLevel_20x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Tool_MoveToLevel_20x.png",
+     "type": "file",
+     "size": 3773
+    },
+    {
+     "name": "icon_Landscape_Tool_MoveToLevel_40x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Tool_MoveToLevel_40x.png",
+     "type": "file",
+     "size": 9229
+    },
+    {
+     "name": "icon_Landscape_Tool_Noise_20x.png",
+     "path": "Engine/Content/Editor/Slate/Icons/icon_Landscape_Tool_Noise_20x.png",
+     "type": "file",
+     "size": 3571
+    }
+   ],
+   "truncated": true,
+   "total": 1098,
+   "limit": 500
+  }
+ }
+}

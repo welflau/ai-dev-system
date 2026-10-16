@@ -115,6 +115,8 @@ backend/_*_out.txt
 backend/_lint.txt
 backend/_uetg_generated.cpp
 backend/_uetg_live.txt
+# gen_image 工具的临时验证产物（一次性跑通出图的落点，不入库）
+.tmp-verify/
 # 时间轴临时抓取（_tl.json / _tl_stage.json 是测试 fixture，要留）
 backend/_tl_h.json
 backend/_tl_health.json
