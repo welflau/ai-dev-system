@@ -30,7 +30,11 @@ x-runner:
       - "tasks.md"
   budget:
     max_rounds: 14
-    max_seconds: 300
+    # 真实 CLI 实测单轮 938s（见 query_engine/engine.py:421 的注释）。
+    # 300s 是历史 API 模式的多轮预算，CLI 模式下整条链（new_change +
+    # 4×instructions + 4×write + validate）在**单轮**里跑完，300s 会被
+    # timeout_override 掐在半路。放宽到 1500s（≈25min）留足余量。
+    max_seconds: 1500
     max_tokens: 120000
 ---
 
