@@ -19772,13 +19772,42 @@ function _cliSessionAdoptTurnId(turnId) {
     }
 }
 
+/**
+ * 从工具 input 里提取一条可读的字符串摘要（跳过嵌套对象，钻 params/input/args）。
+ * 背景：DeferExecuteTool 等转发工具的 input 是 { toolName, params: {...} } 嵌套结构，
+ * 旧逻辑 Object.values()[0] 取到对象后 String() 变成 "[object Object]"（后台任务面板 + 聊天时间轴都中招）。
+ */
+function _firstInputString(input, depth) {
+    if (typeof input === 'string') return input.trim();
+    if (!input || typeof input !== 'object' || (depth || 0) > 3) return '';
+    // 1) 优先取有语义的字段，且值必须是 string/number
+    const keys = ['command', 'cmd', 'path', 'pattern', 'prompt', 'query', 'url', 'file_path', 'description', 'title', 'toolName'];
+    for (const k of keys) {
+        const v = input[k];
+        if (typeof v === 'string' && v.trim()) return v.trim();
+        if (typeof v === 'number') return String(v);
+    }
+    // 2) 钻进常见嵌套容器（DeferExecuteTool.params 等）
+    for (const k of ['params', 'input', 'args', 'tool_input']) {
+        const v = input[k];
+        if (v && typeof v === 'object') {
+            const s = _firstInputString(v, (depth || 0) + 1);
+            if (s) return s;
+        }
+    }
+    // 3) 兜底：第一个原始字符串/数字值，跳过对象数组
+    for (const v of Object.values(input)) {
+        if ((typeof v === 'string' && v.trim()) || typeof v === 'number') return String(v).trim();
+    }
+    return '';
+}
+
 function _cliTaskRegister(taskId, title, tool, status, input) {
     const now = new Date();
     const ts = now.toTimeString().slice(0, 8); // HH:MM:SS
     const created_at = now.toISOString();
-    // 从 input 提取有意义的指令摘要
-    const cmd = input?.command || input?.cmd || input?.path || input?.pattern
-        || (typeof input === 'object' ? Object.values(input||{})[0] : '') || '';
+    // 从 input 提取有意义的指令摘要（跳过嵌套对象，避免 "[object Object]"）
+    const cmd = _firstInputString(input);
     _CLI_TASKS_MEM[taskId] = {
         id: taskId, type: 'cli_task', title, tool, status, output: '', duration_ms: 0,
         ts, created_at, cmd: String(cmd),
@@ -20967,9 +20996,9 @@ function _extractArgsHint(toolName, input) {
         const quoteTools = new Set(['web_search', 'search_knowledge', 'grep', 'glob', 'fetch_url']);
         return quoteTools.has(toolName) ? `"${val.slice(0, 58)}"` : val.slice(0, 60);
     }
-    // fallback：取第一个非空字段值
-    const firstVal = Object.values(input).find(v => v !== null && v !== undefined && String(v).trim());
-    return firstVal ? String(firstVal).slice(0, 60) : '';
+    // fallback：提取第一条可读字符串（跳过嵌套对象，避免 "[object Object]"）
+    const firstVal = _firstInputString(input);
+    return firstVal ? firstVal.slice(0, 60) : '';
 }
 
 const _TOOL_LABELS = {
