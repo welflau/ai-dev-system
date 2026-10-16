@@ -4,7 +4,7 @@ AI 自动开发系统 - 配置管理
 import os
 import sys
 from pathlib import Path
-from dotenv import load_dotenv
+from dotenv import load_dotenv, dotenv_values
 
 # PyInstaller 打包后：资源在 sys._MEIPASS，可写数据放 exe 旁
 _FROZEN = getattr(sys, "frozen", False)
@@ -21,6 +21,19 @@ else:
     load_dotenv()
     BASE_DIR = Path(__file__).resolve().parent
     _FRONTEND_DEFAULT = str(BASE_DIR.parent / "frontend")
+
+# .env 是 LightAI key 的权威来源（image_gen 的 refresh 端点写的就是 .env）。
+# load_dotenv 默认 override=False，进程环境里残留的旧 key（如宿主进程启动时
+# 注入的过期 LIGHTAI_API_KEY）会盖过 .env → 401。这里强制用 .env 覆盖，
+# 杜绝「.env 已更新但服务仍读旧 key」。
+_ENV_PATH = (_APP_DIR if _FROZEN else BASE_DIR) / ".env"
+try:
+    _dotenv = dotenv_values(str(_ENV_PATH))
+    for _k in ("LIGHTAI_API_KEY", "LIGHTAI_API_BASE"):
+        if _dotenv.get(_k):
+            os.environ[_k] = _dotenv[_k]
+except Exception:
+    pass
 
 DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
