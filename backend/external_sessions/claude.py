@@ -25,7 +25,13 @@ import uuid
 from pathlib import Path
 from typing import ClassVar, List, Optional
 
-from .base import ExternalMessage, ExternalSessionDetail, ExternalSessionSummary
+from .base import (
+    ExternalMessage,
+    ExternalSessionDetail,
+    ExternalSessionSummary,
+    contains_query,
+    match_snippet,
+)
 from .cursor import _ms_to_iso, _norm, _path_matches_any
 
 logger = logging.getLogger("external_sessions.claude")
@@ -92,7 +98,34 @@ def _load_titles(user_dir: Path) -> dict:
     return titles
 
 
-def _scan_session(path: Path, norm_roots: List[str]) -> Optional[dict]:
+def _assistant_search_text(e: dict) -> str:
+    parts: List[str] = []
+    for b in (e.get("message") or {}).get("content") or []:
+        if not isinstance(b, dict):
+            continue
+        bt = b.get("type")
+        if bt == "text":
+            parts.append(b.get("text") or "")
+        elif bt == "thinking":
+            parts.append(b.get("thinking") or b.get("text") or "")
+        elif bt == "tool_use":
+            parts.append(b.get("name") or "")
+            inp = b.get("input")
+            if isinstance(inp, str):
+                parts.append(inp)
+            elif inp is not None:
+                try:
+                    parts.append(json.dumps(inp, ensure_ascii=False))
+                except Exception:
+                    pass
+        elif bt == "tool_result":
+            content = b.get("content")
+            if isinstance(content, str):
+                parts.append(content)
+    return "\n".join(p for p in parts if p)
+
+
+def _scan_session(path: Path, norm_roots: List[str], query: str = "") -> Optional[dict]:
     """扫一个 jsonl，返回会话元数据；cwd 不命中任一项目根则返回 None。"""
     cwd = None
     matched = False
@@ -100,6 +133,8 @@ def _scan_session(path: Path, norm_roots: List[str]) -> Optional[dict]:
     ts_first = None
     ts_last = None
     msg_count = 0
+    snippet = ""
+    q = (query or "").strip()
     try:
         with path.open("r", encoding="utf-8") as f:
             for line in f:
@@ -122,8 +157,12 @@ def _scan_session(path: Path, norm_roots: List[str]) -> Optional[dict]:
                     msg_count += 1
                     if not first_user_text:
                         first_user_text = _user_text(e)
+                    if q and not snippet:
+                        snippet = match_snippet(_user_text(e), q)
                 elif t == "assistant":
                     msg_count += 1
+                    if q and not snippet:
+                        snippet = match_snippet(_assistant_search_text(e), q)
                 ts = e.get("timestamp")
                 # timestamp 是 ISO 字符串，直接按字符串比大小（同格式可比）
                 if ts:
@@ -141,6 +180,7 @@ def _scan_session(path: Path, norm_roots: List[str]) -> Optional[dict]:
         "ts_first": ts_first,
         "ts_last": ts_last,
         "msg_count": msg_count,
+        "match_snippet": snippet,
     }
 
 
@@ -181,22 +221,35 @@ class ClaudeProvider:
         hits = list(projects.glob(f"*/{name}.jsonl"))
         return hits[0] if hits else None
 
-    def list_sessions(self, candidate_roots: List[str]) -> List[ExternalSessionSummary]:
+    def list_sessions(self, candidate_roots: List[str], query: str = "") -> List[ExternalSessionSummary]:
         if not self.available:
             return []
         norm_roots = [_norm(r) for r in candidate_roots if r]
         if not norm_roots:
             return []
+        q = (query or "").strip()
 
         titles = _load_titles(self.user_dir)
         sessions: List[ExternalSessionSummary] = []
         for path in _iter_session_files(self.user_dir):
-            meta = _scan_session(path, norm_roots)
+            meta = _scan_session(path, norm_roots, query=q)
             if not meta:
                 continue
             sid = path.stem
             title = _trim_title(titles.get(sid, "") or meta["first_user_text"], 40) or "(未命名)"
-            extra = {"subtitle": meta["cwd"] or None}
+            subtitle = meta["cwd"] or ""
+            snippet = meta.get("match_snippet") or ""
+            raw_title = titles.get(sid, "") or ""
+            if q and not (
+                contains_query(title, q)
+                or contains_query(raw_title, q)
+                or contains_query(subtitle, q)
+                or snippet
+            ):
+                continue
+            extra = {"subtitle": subtitle or None}
+            if snippet and q:
+                extra["match_snippet"] = snippet
             extra = {k: v for k, v in extra.items() if v is not None}
             sessions.append(ExternalSessionSummary(
                 id=sid,

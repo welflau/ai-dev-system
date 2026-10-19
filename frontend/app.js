@@ -15341,12 +15341,20 @@ async function loadRepoTree() {
         return;
     }
 
-    // 分支标签/选择器只对 git 仓库有意义
+    // Git 子 Tab 显示分支；P4 没有分支，显示 Stream（//depot/...）
     const branchTag = document.getElementById('repoBranchTag');
     if (branchTag) {
-        const b = repo && repo.vcs === 'git' ? (repo.git?.branch || '') : '';
-        branchTag.textContent = b ? '🌿 ' + b : '';
-        branchTag.style.display = b ? '' : 'none';
+        if (_repoVcsTab === 'p4') {
+            const stream = (repo && repo.p4 && repo.p4.stream) || '';
+            branchTag.textContent = stream ? stream : '';
+            branchTag.title = stream ? `当前 Stream：${stream}` : '未关联 Stream';
+            branchTag.style.display = stream ? '' : 'none';
+        } else {
+            const b = repo && repo.vcs === 'git' ? (repo.git?.branch || '') : '';
+            branchTag.textContent = b ? '🌿 ' + b : '';
+            branchTag.title = b ? `当前分支：${b}` : '';
+            branchTag.style.display = b ? '' : 'none';
+        }
     }
     if (_isPrimaryRepo() && _repoVcsTab === 'git') {
         loadRepoBranchSelector(repo?.git?.branch || '');
@@ -28797,14 +28805,20 @@ let _esOutputScrollTop = 0;   // 搬走时右栏滚动位置（切回时恢复�
 
 let _esState = {
     projectId: '',            // 当前面板关联的项目
-    sessions: [],             // 会话列表（API 返回的 summary 数组）
+    sessions: [],             // 会话列表（API 返回的 summary 数组；内容搜索进行中时是命中子集）
+    allSessions: [],          // 最近一次不带关键字拉到的完整列表，清空搜索时还原
     filtered: [],             // 搜索过滤后的子集，用于渲染列表
     activeSessionId: '',      // 当前右栏显示的会话 id
     searchQuery: '',          // 当前搜索关键字（下次 render 时据此过滤）
+    serverSearched: false,    // 当前 sessions 已是服务端按正文过滤的结果
+    searching: false,         // 正文搜索请求在飞
     rootsResolved: null,      // API 返回的 roots（空数组表示项目没设仓库路径）
     providerAvailable: true,  // API 返回的 provider_available
     showThinking: false,      // "显示思考"开关；默认关（Cursor 原生就隐藏，气泡列表更清爽）
 };
+let _esSearchTimer = null;
+let _esSearchSeq = 0;
+let _esHitIndex = -1;   // 当前会话里高亮命中的下标，-1 表示还没有
 
 // —— 右栏滚动位置记忆：首次打开会话滚到底（最新消息），打开过则恢复上次滚动位置 ——
 // scrollTop 按 sessionId 存 localStorage，面板关掉再开也保留。
@@ -28866,9 +28880,12 @@ async function _mountExternalSessionsPane(tab, host) {
         projectId,
         provider,
         sessions: [],
+        allSessions: [],
         filtered: [],
         activeSessionId: savedSid,
         searchQuery: savedQuery,
+        serverSearched: false,
+        searching: false,
         rootsResolved: null,
         providerAvailable: true,
         showThinking,
@@ -28897,13 +28914,16 @@ async function _mountExternalSessionsPane(tab, host) {
                     <button class="btn-icon" onclick="_esRefresh()" title="刷新" style="font-size:12px;">↻</button>
                 </div>
             </div>
-            <div style="padding:4px 8px;border-bottom:1px solid var(--border);flex-shrink:0;">
+            <div class="es-search-bar">
                 <input id="esSearchInput" type="text" value="${escHtml(savedQuery)}"
-                    placeholder="🔍 搜索会话（标题 / 副标题）…"
+                    placeholder="🔍 搜索标题或对话内容…"
                     oninput="_esSearch(this.value)"
-                    style="width:100%;box-sizing:border-box;background:rgba(255,255,255,.05);
-                           border:1px solid var(--border);border-radius:4px;padding:3px 7px;
-                           font-size:11px;color:var(--text);outline:none;">
+                    onkeydown="_esSearchKeydown(event)">
+                <div id="esSearchNav" class="es-search-nav" hidden>
+                    <span id="esSearchCount"></span>
+                    <button type="button" class="es-search-nav-btn" onclick="_esSearchNav(-1)" title="上一处（Shift+Enter）">↑</button>
+                    <button type="button" class="es-search-nav-btn" onclick="_esSearchNav(1)" title="下一处（Enter）">↓</button>
+                </div>
             </div>
             <div style="display:flex;flex:1;overflow:hidden;min-height:0;">
                 <div id="esPanelList" style="width:260px;flex-shrink:0;overflow-y:auto;font-size:11px;">
@@ -28934,6 +28954,8 @@ function _esSetShowThinking(checked) {
     try { localStorage.setItem('esShowThinking', checked ? '1' : '0'); } catch {}
     const pane = document.querySelector('.external-sessions-pane');
     if (pane) pane.classList.toggle('es-hide-thinking', !checked);
+    // 思考块显隐会改变可见命中，重标一次，计数和上一个/下一个才跟得上
+    _esHighlightOpenSession();
 }
 
 // —— provider 切换（cursor / codebuddy），按项目存 localStorage ——
@@ -28988,10 +29010,20 @@ async function _esRefresh() {
     try {
         const data = await api(`/projects/${encodeURIComponent(pid)}/external-sessions?provider=${encodeURIComponent(_esState.provider)}`);
         _esState.sessions = Array.isArray(data.sessions) ? data.sessions : [];
+        _esState.allSessions = _esState.sessions.slice();
         _esState.filtered = _esState.sessions.slice();
+        _esState.serverSearched = false;
+        _esState.searching = false;
         _esState.rootsResolved = Array.isArray(data.roots) ? data.roots : [];
         _esState.providerAvailable = data.provider_available !== false;
         _esRenderList();
+        const pendingQ = (_esState.searchQuery || '').trim();
+        if (pendingQ.length >= 2) {
+            const seq = ++_esSearchSeq;
+            _esState.searching = true;
+            _esRenderList();
+            _esContentSearch(pendingQ, seq);
+        }
         // 恢复上次选中的会话：还在列表里就自动打开右栏；已被删则清记录
         if (_esState.activeSessionId) {
             if (_esState.sessions.some(s => s.id === _esState.activeSessionId)) {
@@ -29012,6 +29044,11 @@ async function _esRefresh() {
 function _esRenderList() {
     const listEl = document.getElementById('esPanelList');
     if (!listEl) return;
+    try { _esRenderListBody(listEl); }
+    finally { _esUpdateSearchChrome(); }
+}
+
+function _esRenderListBody(listEl) {
 
     // 空态分三种，提示信息要能区分
     if (!_esState.providerAvailable) {
@@ -29034,26 +29071,38 @@ function _esRenderList() {
         return;
     }
 
-    const q = (_esState.searchQuery || '').toLowerCase();
-    _esState.filtered = q
-        ? _esState.sessions.filter(s => {
-            const hay = (s.title + ' ' + (s.extra && s.extra.subtitle || '')).toLowerCase();
-            return hay.includes(q);
-        })
-        : _esState.sessions.slice();
+    const q = (_esState.searchQuery || '').trim();
+    const ql = q.toLowerCase();
+    if (_esState.serverSearched && q.length >= 2) {
+        _esState.filtered = _esState.sessions.slice();
+    } else {
+        const source = (_esState.allSessions && _esState.allSessions.length)
+            ? _esState.allSessions
+            : _esState.sessions;
+        _esState.filtered = ql
+            ? source.filter(s => {
+                const hay = ((s.title || '') + ' ' + ((s.extra && s.extra.subtitle) || '')).toLowerCase();
+                return hay.includes(ql);
+            })
+            : source.slice();
+    }
 
     if (_esState.filtered.length === 0) {
+        const msg = _esState.searching
+            ? '正在搜索对话内容…'
+            : (q ? '没有会话的标题或内容包含这段文字' : '没有命中任何会话');
         listEl.innerHTML = `
-            <div style="padding:16px 12px;color:var(--text-muted);font-size:12px;">
-                ${_esState.sessions.length === 0 ? '没有命中任何 Cursor 会话' : '搜索无匹配结果'}
-            </div>`;
+            <div style="padding:16px 12px;color:var(--text-muted);font-size:12px;">${msg}</div>`;
         return;
     }
 
-    listEl.innerHTML = _esState.filtered.map(s => {
+    const statusHtml = _esState.searching
+        ? `<div class="es-search-status">正在搜索对话内容…</div>` : '';
+    listEl.innerHTML = statusHtml + _esState.filtered.map(s => {
         const activeCls = s.id === _esState.activeSessionId ? ' active' : '';
         const updatedShort = (s.updated_at || '').slice(0, 10);
         const subtitle = (s.extra && s.extra.subtitle) || '';
+        const snippet = (s.extra && s.extra.match_snippet) || '';
         const archivedBadge = s.is_archived
             ? '<span style="color:var(--text-muted);font-size:10px;">📦</span> '
             : '';
@@ -29062,20 +29111,230 @@ function _esRenderList() {
                  onclick="_esSelectSession('${escHtml(s.id)}')"
                  style="padding:8px 10px;cursor:pointer;border-bottom:1px solid var(--border);">
                 <div style="font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-                    ${archivedBadge}${escHtml(s.title || '(未命名)')}
+                    ${archivedBadge}${_esHighlightHtml(s.title || '(未命名)', q)}
                 </div>
                 ${subtitle ? `<div style="color:var(--text-muted);font-size:10px;margin-top:2px;
                      white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escHtml(subtitle)}</div>` : ''}
+                ${snippet ? `<div class="es-match-snippet">${_esHighlightHtml(snippet, q)}</div>` : ''}
                 <div style="color:var(--text-muted);font-size:10px;margin-top:2px;">${updatedShort}</div>
             </div>`;
     }).join('');
 }
 
-/** 搜索框 oninput 触发 */
+/** 搜索框 oninput。先按标题过滤，满 2 个字再向服务端查对话正文。 */
 function _esSearch(val) {
     _esState.searchQuery = (val || '').trim();
     _esSaveSearchQuery(_esState.projectId, _esState.searchQuery);
+    _esState.serverSearched = false;
+    clearTimeout(_esSearchTimer);
+    const q = _esState.searchQuery;
+    if (!q) {
+        _esSearchSeq++;
+        _esState.searching = false;
+        if (_esState.allSessions && _esState.allSessions.length) {
+            _esState.sessions = _esState.allSessions.slice();
+        }
+        _esRenderList();
+        _esHighlightOpenSession();
+        return;
+    }
+    _esState.searching = q.length >= 2;
     _esRenderList();
+    _esHighlightOpenSession();
+    if (q.length < 2) return;
+    const seq = ++_esSearchSeq;
+    _esSearchTimer = setTimeout(() => _esContentSearch(q, seq), 280);
+}
+
+async function _esContentSearch(q, seq) {
+    const pid = _esState.projectId;
+    if (!pid) return;
+    try {
+        const data = await api(
+            `/projects/${encodeURIComponent(pid)}/external-sessions?provider=${encodeURIComponent(_esState.provider)}&q=${encodeURIComponent(q)}`
+        );
+        if (seq !== _esSearchSeq || (_esState.searchQuery || '') !== q) return;
+        _esState.sessions = Array.isArray(data.sessions) ? data.sessions : [];
+        _esState.serverSearched = true;
+    } catch (e) {
+        if (seq !== _esSearchSeq) return;
+        console.error('[external-sessions] content search failed', e);
+    } finally {
+        if (seq === _esSearchSeq) {
+            _esState.searching = false;
+            _esRenderList();
+            _esHighlightOpenSession({ scroll: true });
+        }
+    }
+}
+
+/** 把关键字包成 <mark>。text 先转义，避免把会话正文当 HTML。 */
+function _esHighlightHtml(text, q) {
+    const raw = String(text || '');
+    const query = (q || '').trim();
+    if (!query) return escHtml(raw);
+    const lower = raw.toLowerCase();
+    const ql = query.toLowerCase();
+    let html = '';
+    let i = 0;
+    while (i < raw.length) {
+        const at = lower.indexOf(ql, i);
+        if (at < 0) {
+            html += escHtml(raw.slice(i));
+            break;
+        }
+        html += escHtml(raw.slice(i, at));
+        html += `<mark class="es-search-hit">${escHtml(raw.slice(at, at + query.length))}</mark>`;
+        i = at + query.length;
+    }
+    return html;
+}
+
+/** 右栏正文里的命中（不含左侧列表标题上的 mark）。 */
+function _esSearchHits() {
+    const out = document.getElementById('esPanelOutput');
+    if (!out) return [];
+    const root = out.querySelector('.chat-messages');
+    if (!root) return [];
+    return [...root.querySelectorAll('mark.es-search-hit')];
+}
+
+/** 搜索框右侧：会话个数 + 当前会话第几处/共几处。没有关键字时整块隐藏。 */
+function _esUpdateSearchChrome() {
+    const nav = document.getElementById('esSearchNav');
+    const countEl = document.getElementById('esSearchCount');
+    if (!nav || !countEl) return;
+    const q = (_esState.searchQuery || '').trim();
+    nav.hidden = !q;
+    if (!q) return;
+    const sessions = (_esState.filtered || []).length;
+    const hits = _esSearchHits();
+    const n = hits.length;
+    const sessionText = `${sessions} 个会话`;
+    let hitText;
+    if (_esState.searching && !n) hitText = '搜索中…';
+    else if (!n) hitText = '本页 0 处';
+    else hitText = `${(_esHitIndex >= 0 ? _esHitIndex + 1 : 1)}/${n}`;
+    countEl.textContent = `${sessionText} · ${hitText}`;
+    nav.querySelectorAll('.es-search-nav-btn').forEach(btn => {
+        btn.disabled = n === 0;
+    });
+}
+
+function _esSearchKeydown(event) {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    _esSearchNav(event.shiftKey ? -1 : 1);
+}
+
+/** 在当前会话的命中之间跳。delta 为 1 下一处，-1 上一处，到头后绕回。 */
+function _esSearchNav(delta) {
+    const hits = _esSearchHits();
+    if (!hits.length) return;
+    const base = _esHitIndex < 0 ? -1 : _esHitIndex;
+    _esActivateHit(base + delta, true);
+}
+
+function _esActivateHit(index, scroll) {
+    const hits = _esSearchHits();
+    if (!hits.length) {
+        _esHitIndex = -1;
+        _esUpdateSearchChrome();
+        return;
+    }
+    const len = hits.length;
+    _esHitIndex = ((index % len) + len) % len;
+    hits.forEach((m, i) => m.classList.toggle('es-search-hit-current', i === _esHitIndex));
+    if (scroll) {
+        const mark = hits[_esHitIndex];
+        _esRevealHit(mark);
+        _esSuppressScroll = true;
+        mark.scrollIntoView({ block: 'center', inline: 'nearest' });
+        _esSuppressScroll = false;
+    }
+    _esUpdateSearchChrome();
+}
+
+/** 右栏已打开的会话里标出关键字。scroll 为真时滚到第一处，并展开包住它的折叠条。 */
+function _esHighlightOpenSession(opts) {
+    const out = document.getElementById('esPanelOutput');
+    if (!out) {
+        _esUpdateSearchChrome();
+        return;
+    }
+    out.querySelectorAll('mark.es-search-hit').forEach(m => {
+        m.replaceWith(document.createTextNode(m.textContent || ''));
+    });
+    if (out.normalize) out.normalize();
+    const q = (_esState.searchQuery || '').trim();
+    if (!q) {
+        _esHitIndex = -1;
+        _esUpdateSearchChrome();
+        return;
+    }
+    const root = out.querySelector('.chat-messages') || out;
+    _esWrapHits(root, q);
+    const hits = _esSearchHits();
+    if (!hits.length) {
+        _esHitIndex = -1;
+        _esUpdateSearchChrome();
+        return;
+    }
+    if (opts && opts.scroll) _esHitIndex = 0;
+    else if (_esHitIndex < 0 || _esHitIndex >= hits.length) _esHitIndex = 0;
+    _esActivateHit(_esHitIndex, !!(opts && opts.scroll));
+}
+
+function _esWrapHits(root, q) {
+    const ql = q.toLowerCase();
+    const hideThinking = !!(root.closest && root.closest('.external-sessions-pane.es-hide-thinking'));
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+        acceptNode(node) {
+            if (!node.nodeValue || !node.nodeValue.toLowerCase().includes(ql)) return NodeFilter.FILTER_REJECT;
+            const p = node.parentElement;
+            if (!p || p.closest('mark, script, style')) return NodeFilter.FILTER_REJECT;
+            if (hideThinking && p.closest('.es-group-item-thinking')) return NodeFilter.FILTER_REJECT;
+            return NodeFilter.FILTER_ACCEPT;
+        },
+    });
+    const nodes = [];
+    while (walker.nextNode()) nodes.push(walker.currentNode);
+    nodes.forEach(node => {
+        const text = node.nodeValue || '';
+        const lower = text.toLowerCase();
+        const frag = document.createDocumentFragment();
+        let i = 0;
+        while (i < text.length) {
+            const at = lower.indexOf(ql, i);
+            if (at < 0) {
+                frag.appendChild(document.createTextNode(text.slice(i)));
+                break;
+            }
+            if (at > i) frag.appendChild(document.createTextNode(text.slice(i, at)));
+            const mark = document.createElement('mark');
+            mark.className = 'es-search-hit';
+            mark.textContent = text.slice(at, at + q.length);
+            frag.appendChild(mark);
+            i = at + q.length;
+        }
+        if (node.parentNode) node.parentNode.replaceChild(frag, node);
+    });
+}
+
+function _esRevealHit(mark) {
+    let el = mark.parentElement;
+    while (el && el.id !== 'esPanelOutput') {
+        if (el.classList && (el.classList.contains('es-chip') || el.classList.contains('es-chip-group') || el.classList.contains('es-group-item'))) {
+            if (!el.classList.contains('es-chip-open')) {
+                el.classList.add('es-chip-open');
+                const body = el.querySelector(':scope > .es-chip-body');
+                if (body) body.style.display = 'block';
+                const arrow = el.querySelector(':scope > .es-chip-head .es-chip-arrow, :scope > .es-group-item-head .es-chip-arrow');
+                if (arrow) arrow.textContent = '▾';
+            }
+        }
+        el = el.parentElement;
+    }
 }
 
 /** 点击左侧会话 → 拉详情、填右栏 */
@@ -29125,12 +29384,19 @@ function _esRenderSessionDetail(outEl, data) {
 
     const bubbles = _esRenderMessages(messages);
     const savedPos = _esGetScrollPos(_esState.activeSessionId);
+    const activeQuery = (_esState.searchQuery || '').trim();
 
     outEl.innerHTML = header + `<div class="chat-messages" style="display:flex;flex-direction:column;gap:12px;padding:0;">${bubbles}</div>`;
 
     // 打开过 → 恢复历史位置；首次 → 滚到底（最新消息在底部）。
+    // 搜索关键字还在时，优先滚到第一处正文命中，而不是上次离开的位置。
     // rAF 等 innerHTML 落地、布局稳定后再设 scrollTop，否则读到的是旧高度。
     requestAnimationFrame(() => {
+        if (activeQuery) {
+            _esHighlightOpenSession({ scroll: true });
+            _esSuppressScroll = false;
+            return;
+        }
         if (savedPos !== null) {
             outEl.scrollTop = savedPos;
             _esSuppressScroll = false;

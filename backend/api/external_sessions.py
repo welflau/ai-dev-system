@@ -53,17 +53,18 @@ async def _collect_candidate_roots(project_id: str) -> list[str]:
 
 
 @router.get("/{project_id}/external-sessions")
-async def list_external_sessions(project_id: str, provider: str = "cursor"):
+async def list_external_sessions(project_id: str, provider: str = "cursor", q: str = ""):
     """
     列出该项目下指定 provider 的所有会话（按 updated_at 倒序）。
     - 项目没设 git_repo_path 且 extra_paths 为空：返回 roots:[]，sessions:[]（前端据此显示空态）
     - provider 没装（Cursor User 目录不存在）：provider_available=False，sessions:[]
+    - q 非空：标题 / 副标题 / 消息正文任一命中才留下；正文命中带 extra.match_snippet
     """
     p = PROVIDERS.get(provider)
     if not p:
         raise HTTPException(status_code=400, detail=f"unknown provider: {provider}")
     roots = await _collect_candidate_roots(project_id)
-    sessions = p.list_sessions(roots) if roots else []
+    sessions = p.list_sessions(roots, query=(q or "").strip()) if roots else []
     return {
         "provider": provider,
         "provider_available": getattr(p, "available", True),

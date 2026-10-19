@@ -27,7 +27,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import ClassVar, List, Optional
 
-from .base import ExternalMessage, ExternalSessionDetail, ExternalSessionSummary
+from .base import (
+    ExternalMessage,
+    ExternalSessionDetail,
+    ExternalSessionSummary,
+    contains_query,
+    match_snippet,
+)
 
 logger = logging.getLogger("external_sessions.cursor")
 
@@ -169,7 +175,7 @@ class CursorProvider:
                 hashes.append(sub.name)
         return hashes
 
-    def list_sessions(self, candidate_roots: List[str]) -> List[ExternalSessionSummary]:
+    def list_sessions(self, candidate_roots: List[str], query: str = "") -> List[ExternalSessionSummary]:
         if not self.available:
             return []
         assert self.user_dir is not None
@@ -178,6 +184,7 @@ class CursorProvider:
             return []
         db_path = self.user_dir / "globalStorage" / "state.vscdb"
         placeholders = ",".join("?" * len(hashes))
+        q = (query or "").strip()
         try:
             with _ro_connect(db_path) as conn:
                 conn.row_factory = sqlite3.Row
@@ -187,16 +194,35 @@ class CursorProvider:
                     f"ORDER BY lastUpdatedAt DESC",
                     hashes,
                 ).fetchall()
+                sessions: List[ExternalSessionSummary] = []
+                need_body: List[str] = []
+                for row in rows:
+                    summary = _row_to_summary(row)
+                    if not summary:
+                        continue
+                    sessions.append(summary)
+                    if q and not _summary_title_hit(summary, q):
+                        need_body.append(summary.id)
+                snippets = _content_snippets(conn, need_body, q) if need_body else {}
         except Exception as e:
             logger.warning("read composerHeaders failed: %s", e)
             return []
 
-        sessions: List[ExternalSessionSummary] = []
-        for row in rows:
-            summary = _row_to_summary(row)
-            if summary:
-                sessions.append(summary)
-        return sessions
+        if not q:
+            return sessions
+        kept: List[ExternalSessionSummary] = []
+        for summary in sessions:
+            if _summary_title_hit(summary, q):
+                kept.append(summary)
+                continue
+            snip = snippets.get(summary.id)
+            if not snip:
+                continue
+            extra = dict(summary.extra or {})
+            extra["match_snippet"] = snip
+            summary.extra = extra
+            kept.append(summary)
+        return kept
 
     def get_session(self, composer_id: str) -> Optional[ExternalSessionDetail]:
         if not self.available:
@@ -346,6 +372,81 @@ class CursorProvider:
             logger.warning("scan selectedImages for %s failed: %s", composer_id, e)
             return None
         return None
+
+
+def _like_contains(query: str) -> str:
+    """把用户输入收成 LIKE 的包含模式，% 和 _ 按字面量匹配。"""
+    escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+def _summary_title_hit(summary: ExternalSessionSummary, query: str) -> bool:
+    subtitle = ((summary.extra or {}).get("subtitle")) or ""
+    return contains_query(summary.title, query) or contains_query(subtitle, query)
+
+
+def _bubble_search_blob(bubble: dict) -> str:
+    """从一条 bubble 里抽出可搜索的正文（用户文本 / 回复 / 思考 / 工具参数）。"""
+    parts: List[str] = []
+    text = bubble.get("text")
+    if isinstance(text, str) and text.strip():
+        parts.append(text)
+    thinking_raw = bubble.get("thinking")
+    if thinking_raw:
+        try:
+            th = json.loads(thinking_raw) if isinstance(thinking_raw, str) else thinking_raw
+        except Exception:
+            th = thinking_raw
+        if isinstance(th, dict) and th.get("text"):
+            parts.append(str(th["text"]))
+        elif isinstance(thinking_raw, str):
+            parts.append(thinking_raw)
+    tfd = bubble.get("toolFormerData")
+    if isinstance(tfd, dict):
+        for key in ("name", "status", "rawArgs", "result", "description"):
+            val = tfd.get(key)
+            if isinstance(val, str) and val:
+                parts.append(val)
+            elif val is not None:
+                try:
+                    parts.append(json.dumps(val, ensure_ascii=False))
+                except Exception:
+                    pass
+    return "\n".join(parts)
+
+
+def _content_snippets(conn: sqlite3.Connection, composer_ids: List[str], query: str) -> dict:
+    """composerId → 正文命中片段。标题已经命中的 id 不要传进来。"""
+    if not composer_ids or not query:
+        return {}
+    pattern = _like_contains(query)
+    found: dict = {}
+    for cid in composer_ids:
+        try:
+            rows = conn.execute(
+                "SELECT value FROM cursorDiskKV "
+                "WHERE key >= ? AND key < ? AND value LIKE ? ESCAPE '\\' LIMIT 8",
+                (f"bubbleId:{cid}:", f"bubbleId:{cid};", pattern),
+            ).fetchall()
+        except Exception as e:
+            logger.debug("search bubbles %s failed: %s", cid, e)
+            continue
+        snippet = ""
+        for row in rows:
+            raw = row["value"] if isinstance(row, sqlite3.Row) else row[0]
+            if not isinstance(raw, str):
+                raw = raw.decode("utf-8", "replace") if isinstance(raw, bytes) else str(raw)
+            try:
+                bubble = json.loads(raw)
+            except Exception:
+                bubble = {}
+            blob = _bubble_search_blob(bubble) if isinstance(bubble, dict) else ""
+            snippet = match_snippet(blob, query) or match_snippet(raw, query)
+            if snippet:
+                break
+        if snippet:
+            found[cid] = snippet
+    return found
 
 
 # ---------- 行解析（剥离到模块级，方便单测，不依赖 Provider 实例） ----------

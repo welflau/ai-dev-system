@@ -28,7 +28,7 @@
     --text-muted: #6b7280;
 
     /* 尺寸 */
-    --sidebar-width: 220px;
+    --sidebar-width: 168px;
     --topbar-height: 52px;
     --metrics-bar-height: 26px;
     /* 顶栏 + 指标条总占位（全屏时仅指标条，见 body.chat-fullscreen） */
@@ -4436,8 +4436,8 @@ input[readonly]:focus {
 /* ==================== 响应式 ==================== */
 
 @media (max-width: 768px) {
-    .sidebar { width: 180px; min-width: 180px; }
-    .project-layout { grid-template-columns: 180px 1fr; }
+    .sidebar { width: 156px; min-width: 156px; }
+    .project-layout { grid-template-columns: 156px 1fr; }
     .project-layout.sidebar-collapsed {
         grid-template-columns: 0px 1fr var(--right-workbench-width, 0px);
     }
@@ -5070,6 +5070,10 @@ pre.hljs, .hljs pre { background: transparent !important; }
     border-radius: 10px;
     letter-spacing: 0;
     text-transform: none;
+    max-width: 55%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .repo-tree {
@@ -13547,6 +13551,79 @@ body.chat-board-left #groupBoardSidebar {
     background: rgba(124, 106, 247, 0.12);
 }
 .es-prov-btn + .es-prov-btn { border-left: 1px solid var(--border); }
+
+.es-search-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+.es-search-bar input {
+    flex: 1;
+    min-width: 0;
+    box-sizing: border-box;
+    background: rgba(255,255,255,.05);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 3px 7px;
+    font-size: 11px;
+    color: var(--text);
+    outline: none;
+}
+.es-search-nav {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+}
+.es-search-nav[hidden] { display: none; }
+#esSearchCount {
+    font-size: 11px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+.es-search-nav-btn {
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: rgba(255,255,255,.04);
+    color: var(--text);
+    cursor: pointer;
+    font-size: 12px;
+    line-height: 1;
+}
+.es-search-nav-btn:hover:not(:disabled) { background: rgba(255,255,255,.1); }
+.es-search-nav-btn:disabled { opacity: .35; cursor: default; }
+.es-search-status {
+    padding: 6px 10px;
+    color: var(--text-muted);
+    font-size: 10px;
+    border-bottom: 1px solid var(--border);
+}
+.es-match-snippet {
+    color: var(--text);
+    font-size: 10px;
+    margin-top: 3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.external-sessions-pane mark.es-search-hit {
+    background: rgba(250, 204, 21, 0.35);
+    color: inherit;
+    padding: 0 1px;
+    border-radius: 2px;
+}
+.external-sessions-pane mark.es-search-hit.es-search-hit-current {
+    background: #f59e0b;
+    color: #1a1a1a;
+    outline: 1px solid #fbbf24;
+}
 
 
 /* 隐藏思考（根 class 由 _esSetShowThinking 挂在 .external-sessions-pane 上）——

@@ -27,7 +27,13 @@ import uuid
 from pathlib import Path
 from typing import ClassVar, List, Optional
 
-from .base import ExternalMessage, ExternalSessionDetail, ExternalSessionSummary
+from .base import (
+    ExternalMessage,
+    ExternalSessionDetail,
+    ExternalSessionSummary,
+    contains_query,
+    match_snippet,
+)
 from .cursor import _ms_to_iso, _norm, _path_matches_any
 
 logger = logging.getLogger("external_sessions.codebuddy")
@@ -61,7 +67,41 @@ def _trim_title(s: str, max_chars: int = 60) -> str:
     return s[:max_chars] + "…" if len(s) > max_chars else s
 
 
-def _scan_session(path: Path, norm_roots: List[str]) -> Optional[dict]:
+def _block_text(blocks, types) -> str:
+    if not isinstance(blocks, list):
+        return ""
+    return " ".join(
+        b.get("text", "")
+        for b in blocks
+        if isinstance(b, dict) and b.get("type") in types
+    ).strip()
+
+
+def _event_search_text(e: dict) -> str:
+    """一条 jsonl 事件里能被搜到的文字。"""
+    t = e.get("type")
+    if t == "ai-title":
+        return e.get("aiTitle") or ""
+    if t == "message":
+        return _block_text(e.get("content"), _TEXT_BLOCK_TYPES)
+    if t == "reasoning":
+        return _block_text(e.get("rawContent"), {"reasoning_text"})
+    if t in ("function_call", "function_call_result"):
+        parts = [e.get("name") or "", e.get("status") or ""]
+        for key in ("arguments", "output"):
+            val = e.get(key)
+            if isinstance(val, str):
+                parts.append(val)
+            elif val is not None:
+                try:
+                    parts.append(json.dumps(val, ensure_ascii=False))
+                except Exception:
+                    pass
+        return "\n".join(p for p in parts if p)
+    return ""
+
+
+def _scan_session(path: Path, norm_roots: List[str], query: str = "") -> Optional[dict]:
     """扫一个 jsonl，返回会话元数据；cwd 不命中任一项目根则返回 None。"""
     cwd = None
     matched = False
@@ -70,6 +110,8 @@ def _scan_session(path: Path, norm_roots: List[str]) -> Optional[dict]:
     ts_first = None
     ts_last = None
     msg_count = 0
+    snippet = ""
+    q = (query or "").strip()
     try:
         with path.open("r", encoding="utf-8") as f:
             for line in f:
@@ -94,11 +136,9 @@ def _scan_session(path: Path, norm_roots: List[str]) -> Optional[dict]:
                     if e.get("role") in ("user", "assistant"):
                         msg_count += 1
                         if e.get("role") == "user" and not first_user_text:
-                            first_user_text = " ".join(
-                                b.get("text", "")
-                                for b in (e.get("content") or [])
-                                if isinstance(b, dict) and b.get("type") in _TEXT_BLOCK_TYPES
-                            ).strip()
+                            first_user_text = _block_text(e.get("content"), _TEXT_BLOCK_TYPES)
+                if q and not snippet:
+                    snippet = match_snippet(_event_search_text(e), q)
                 ts = e.get("timestamp")
                 if ts:
                     ts_first = ts if ts_first is None or ts < ts_first else ts_first
@@ -116,6 +156,7 @@ def _scan_session(path: Path, norm_roots: List[str]) -> Optional[dict]:
         "ts_first": ts_first,
         "ts_last": ts_last,
         "msg_count": msg_count,
+        "match_snippet": snippet,
     }
 
 
@@ -142,16 +183,17 @@ class CodeBuddyProvider:
         hits = list(projects.glob(f"*/{name}.jsonl"))
         return hits[0] if hits else None
 
-    def list_sessions(self, candidate_roots: List[str]) -> List[ExternalSessionSummary]:
+    def list_sessions(self, candidate_roots: List[str], query: str = "") -> List[ExternalSessionSummary]:
         if not self.available:
             return []
         norm_roots = [_norm(r) for r in candidate_roots if r]
         if not norm_roots:
             return []
+        q = (query or "").strip()
 
         sessions: List[ExternalSessionSummary] = []
         for path in _iter_session_files(self.user_dir):
-            meta = _scan_session(path, norm_roots)
+            meta = _scan_session(path, norm_roots, query=q)
             if not meta:
                 continue
             title = (meta["title"] or "").strip()
@@ -159,7 +201,17 @@ class CodeBuddyProvider:
                 title = _trim_title(meta["first_user_text"], 40) or "(未命名)"
             else:
                 title = _trim_title(title)
-            extra = {"subtitle": meta["cwd"] or None}
+            subtitle = meta["cwd"] or ""
+            snippet = meta.get("match_snippet") or ""
+            if q and not (
+                contains_query(title, q)
+                or contains_query(subtitle, q)
+                or snippet
+            ):
+                continue
+            extra = {"subtitle": subtitle or None}
+            if snippet and q:
+                extra["match_snippet"] = snippet
             extra = {k: v for k, v in extra.items() if v is not None}
             sessions.append(ExternalSessionSummary(
                 id=path.stem,

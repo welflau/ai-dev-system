@@ -42,13 +42,42 @@ class ExternalSessionDetail(ExternalSessionSummary):
     messages: List[ExternalMessage] = Field(default_factory=list)
 
 
+def contains_query(hay: Optional[str], query: str) -> bool:
+    """大小写不敏感的子串匹配。query 为空视为不限制。"""
+    if not query:
+        return True
+    return query.casefold() in (hay or "").casefold()
+
+
+def match_snippet(hay: Optional[str], query: str, radius: int = 42) -> str:
+    """命中处前后各留一段，压成一行。没命中返回空串。"""
+    text = hay or ""
+    if not query or not text:
+        return ""
+    idx = text.casefold().find(query.casefold())
+    if idx < 0:
+        return ""
+    start = max(0, idx - radius)
+    end = min(len(text), idx + len(query) + radius)
+    snip = " ".join(text[start:end].split())
+    if start > 0:
+        snip = "…" + snip
+    if end < len(text):
+        snip = snip + "…"
+    return snip
+
+
 class SessionProvider(Protocol):
     """所有 provider 的鸭子型接口。candidate_roots 都是绝对本地路径字符串。"""
 
     name: ClassVar[str]
 
-    def list_sessions(self, candidate_roots: List[str]) -> List[ExternalSessionSummary]:
-        """按候选根路径（主路径 + extra_paths）前缀匹配，返回命中的所有会话摘要。"""
+    def list_sessions(self, candidate_roots: List[str], query: str = "") -> List[ExternalSessionSummary]:
+        """按候选根路径（主路径 + extra_paths）前缀匹配，返回命中的所有会话摘要。
+
+        query 非空时，标题 / 副标题没命中的会话还要再查消息正文；
+        正文命中的摘要把片段放在 extra.match_snippet。
+        """
         ...
 
     def get_session(self, session_id: str) -> Optional[ExternalSessionDetail]:
