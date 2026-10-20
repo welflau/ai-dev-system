@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI 自动开发系统</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20261019d">
+    <link rel="stylesheet" href="/static/styles.css?v=20261020a">
     <!-- highlight.js 语法高亮 -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
@@ -592,6 +592,10 @@
                     <div id="tab-repo" class="tab-content">
                         <div class="page-header">
                             <h2>📂 仓库文件</h2>
+                            <input id="repoFileSearch" class="repo-file-search" type="text"
+                                placeholder="过滤文件名或路径…"
+                                oninput="_repoSearchInput(this.value)"
+                                autocomplete="off">
                             <div class="repo-actions">
                                 <select id="repoBranchSelect" class="branch-select" onchange="switchRepoBranch(this.value)">
                                     <option value="">加载中...</option>
@@ -2502,7 +2506,7 @@
     <!-- ==================== Toast 通知 ==================== -->
     <div class="toast-container" id="toastContainer"></div>
 
-    <script src="/static/app.js?v=20261019d"></script>
+    <script src="/static/app.js?v=20261020a"></script>
 </body>
 </html>
 

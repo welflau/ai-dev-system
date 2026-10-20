@@ -4,19 +4,22 @@
 而且这里的"仓库"是比 projects.git_repo_path 更大的概念 ——
 一个项目可以有多个仓库（主路径 + extra_paths + 嵌套仓库），git 和 P4 各一批。
 
-三个端点：
+四个端点：
   GET /api/projects/{pid}/repos                  识别项目名下的所有仓库
   GET /api/projects/{pid}/repos/{key}/tree       按仓库根**懒加载**一层目录
+  GET /api/projects/{pid}/repos/{key}/search     按文件名/路径过滤，只返回有限条
   GET /api/projects/{pid}/repos/{key}/file       按仓库根读文件
 
 懒加载不是优化而是必需：项目 OG 的 I:\\A_Works\\OG2\\P4\\UE5 递归下去有
 103 万个文件，projects.py 的 /git/tree 一次性返回整棵树，打开就卡死。
 单层 os.scandir 只要 0ms —— 慢的是"一次要全部"。
 """
+import asyncio
 import hashlib
 import json as _json
 import logging
 import os
+import subprocess
 from pathlib import Path
 from typing import Optional
 
@@ -360,6 +363,120 @@ async def get_repo_tree(project_id: str, key: str, path: str = "", depth: int = 
     }
 
 
+_SEARCH_LIMIT = 200
+_SEARCH_SCAN_BUDGET = 80000
+
+
+def _search_git_index(root: Path, query: str, limit: int) -> Optional[tuple]:
+    """用 git ls-files 过滤。UE 工程上 os.walk 会先钻进 Content，预算耗尽时目标文件还没扫到。"""
+    if not (root / ".git").exists():
+        return None
+    q = query.strip().casefold()
+    if not q:
+        return [], False, 0
+    try:
+        proc = subprocess.run(
+            ["git", "-c", "core.quotepath=false", "ls-files", "-z"],
+            cwd=str(root),
+            capture_output=True,
+            timeout=45,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        logger.debug("git ls-files 失败 %s: %s", root, e)
+        return None
+    if proc.returncode != 0:
+        return None
+    name_hits: list[str] = []
+    path_hits: list[str] = []
+    stopped = False
+    for rel in proc.stdout.decode("utf-8", "replace").split("\0"):
+        if not rel:
+            continue
+        rel = rel.replace("\\", "/")
+        name = rel.rsplit("/", 1)[-1]
+        if q in name.casefold():
+            name_hits.append(rel)
+            if len(name_hits) >= limit:
+                stopped = True
+                break
+        elif len(path_hits) < limit and q in rel.casefold():
+            path_hits.append(rel)
+    chosen = name_hits[:limit]
+    if len(chosen) < limit:
+        chosen.extend(path_hits[:limit - len(chosen)])
+    entries = [{
+        "name": rel.rsplit("/", 1)[-1],
+        "path": rel,
+        "type": "file",
+        "size": 0,
+    } for rel in chosen]
+    truncated = stopped or (len(name_hits) + len(path_hits) > len(entries))
+    return entries, truncated, len(entries)
+
+
+def _search_files(root: Path, query: str, limit: int = _SEARCH_LIMIT,
+                  scan_budget: int = _SEARCH_SCAN_BUDGET) -> tuple[list, bool, int]:
+    """在仓库根下按文件名或相对路径做子串匹配。
+
+    有 .git 时走索引，一次就能覆盖全部已跟踪文件。
+    否则 os.walk，凑满 limit 或扫过 scan_budget 个条目就停，
+    并且不进入 Intermediate / Binaries 等生成目录。
+    """
+    git_hits = _search_git_index(root, query, limit)
+    if git_hits is not None:
+        return git_hits
+    q = (query or "").strip().casefold()
+    if not q:
+        return [], False, 0
+    hits: list = []
+    scanned = 0
+    stopped_early = False
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(
+            (d for d in dirnames if d not in _SCAN_SKIP and not d.startswith(".")),
+            key=str.lower,
+        )
+        filenames = sorted(
+            (f for f in filenames if not f.startswith(".")),
+            key=str.lower,
+        )
+        rel_dir = os.path.relpath(dirpath, root)
+        if rel_dir == ".":
+            rel_dir = ""
+        entries = [(name, True) for name in dirnames] + [(name, False) for name in filenames]
+        for name, is_dir in entries:
+            scanned += 1
+            rel = f"{rel_dir}/{name}" if rel_dir else name
+            rel = rel.replace("\\", "/")
+            name_hit = q in name.casefold()
+            path_hit = q in rel.casefold()
+            if name_hit or path_hit:
+                size = 0
+                if not is_dir:
+                    try:
+                        size = (Path(dirpath) / name).stat().st_size
+                    except OSError:
+                        size = 0
+                hits.append({
+                    "name": name,
+                    "path": rel,
+                    "type": "directory" if is_dir else "file",
+                    "size": size,
+                    "name_hit": name_hit,
+                })
+            if len(hits) >= limit or scanned >= scan_budget:
+                stopped_early = True
+                break
+        if stopped_early:
+            break
+    hits.sort(key=lambda h: (not h["name_hit"], h["path"].lower()))
+    trimmed = hits[:limit]
+    for h in trimmed:
+        h.pop("name_hit", None)
+    partial = stopped_early or len(hits) > limit
+    return trimmed, partial, scanned
+
+
 def _has_children(path: str) -> bool:
     """目录里有没有东西（决定要不要渲染展开箭头）。
     用 scandir 取第一个就返回，不递归 —— UE 的 Content 目录不能数全。"""
@@ -371,6 +488,27 @@ def _has_children(path: str) -> bool:
     except (PermissionError, OSError):
         return False
     return False
+
+
+@router.get("/{project_id}/repos/{key}/search")
+async def search_repo_files(project_id: str, key: str, q: str = "", limit: int = _SEARCH_LIMIT):
+    """按文件名或相对路径过滤。树是懒加载的，过滤不能靠前端已展开的那几层。"""
+    query = (q or "").strip()
+    if not query:
+        return {"query": "", "entries": [], "truncated": False, "scanned": 0}
+    repo = await _resolve_repo(project_id, key)
+    root = Path(repo["path"])
+    if not root.is_dir():
+        raise HTTPException(404, "仓库目录不存在")
+    cap = max(1, min(int(limit or _SEARCH_LIMIT), _SEARCH_LIMIT))
+    entries, truncated, scanned = await asyncio.to_thread(_search_files, root, query, cap)
+    return {
+        "query": query,
+        "entries": entries,
+        "truncated": truncated,
+        "scanned": scanned,
+        "limit": cap,
+    }
 
 
 @router.get("/{project_id}/repos/{key}/file")

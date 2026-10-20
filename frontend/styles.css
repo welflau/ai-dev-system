@@ -1136,6 +1136,17 @@ body.shell-project .main-ws-tabbar,
 .main-ws-tree-item.dir {
     color: var(--text-muted);
     font-weight: 500;
+    cursor: pointer;
+}
+.main-ws-tree-item.dir:hover {
+    background: var(--bg-hover);
+    color: var(--text);
+}
+.main-ws-tree-arrow {
+    display: inline-block;
+    width: 12px;
+    margin-right: 2px;
+    color: var(--text-muted);
 }
 .main-ws-loading, .main-ws-error {
     padding: 24px;
@@ -1251,6 +1262,34 @@ body.shell-project .main-ws-tabbar,
     max-height: calc(100vh - 220px);
     border-radius: 6px;
 }
+.model-preview {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    min-height: 420px;
+    background: #14141c;
+}
+.model-preview model-viewer {
+    width: 100%;
+    height: 100%;
+    min-height: 420px;
+    background: #14141c;
+}
+.main-ws-pane-body > .model-preview,
+.main-ws-pane-body > .model-preview model-viewer {
+    min-height: calc(100vh - 220px);
+}
+.model-preview-loading {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+    font-size: 13px;
+    z-index: 1;
+    pointer-events: none;
+}
 /* 图片查看器缩放百分比角标（.es-image-viewer 内，absolute 不参与 flex 居中） */
 .es-image-zoom {
     position: absolute;
@@ -1351,9 +1390,22 @@ body.shell-project .main-ws-tabbar,
     min-height: 0;
 }
 
-/* repo tab 内的 page-header 固定高度，不拉伸 */
+/* repo tab 内的 page-header 固定高度，不拉伸。
+   标题和右侧按钮之间的空位留给文件过滤框。 */
 #tab-repo .page-header {
     flex-shrink: 0;
+}
+#tab-repo .page-header h2 {
+    margin-right: 0;
+    flex-shrink: 0;
+}
+#tab-repo input.repo-file-search {
+    flex: 1;
+    min-width: 160px;
+    width: auto;
+    margin: 0 8px;
+    padding: 6px 10px;
+    font-size: 13px;
 }
 
 /* page-header 和 workspace 中间多了一条 VCS 子 Tab 栏，
@@ -5175,6 +5227,26 @@ pre.hljs, .hljs pre { background: transparent !important; }
     display: inline-block;
 }
 @keyframes treeSpin { to { transform: rotate(360deg); } }
+
+.repo-search-count {
+    padding: 6px 12px;
+    font-size: 11px;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border);
+}
+.repo-search-hit {
+    flex-wrap: wrap;
+    align-items: flex-start;
+}
+.repo-search-path {
+    flex: 1 0 100%;
+    margin-left: 28px;
+    font-size: 10px;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
 
 /* 这一层条目超过后端上限（500）时的提示，缩进跟随所在层级 */
 .tree-truncated,

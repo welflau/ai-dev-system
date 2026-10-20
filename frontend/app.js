@@ -842,7 +842,10 @@ const adsShell = (() => {
         if (tab.type === 'file') {
             const path = (tab.path || '').replace(/\\/g, '/');
             if (!path) return null;
-            id = 'file:' + path;
+            // 非主仓库带 repoKey，避免和主仓库里同名相对路径抢同一个 Tab，
+            // 也让加载时走 /repos/{key}/file 而不是只认 git_repo_path 的 /git/file
+            const repoKey = tab.repoKey || '';
+            id = repoKey ? ('file:' + repoKey + ':' + path) : ('file:' + path);
             let existing = state.mainTabs.find(t => t.id === id);
             if (!existing) {
                 existing = {
@@ -851,9 +854,12 @@ const adsShell = (() => {
                     path,
                     title: path.split('/').pop() || path,
                     preview: tab.preview !== false,
+                    repoKey,
                 };
                 state.mainTabs.push(existing);
             }
+            existing.repoKey = repoKey;
+            existing.branch = tab.branch || '';
             // 行号锚点：每次 openMain 都刷新 —— 带范围则打开后滚动高亮（代码引用卡跳转），
             // 不带则清掉旧锚点，普通打开不受上次跳转影响
             existing.lineStart = tab.lineStart || 0;
@@ -1355,9 +1361,14 @@ const adsShell = (() => {
         let path = tab.path;
         let tabRef = tab;
         const imgExts = ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'ico', 'bmp'];
+        const modelExts = ['glb', 'gltf'];
         let ext = (path.split('.').pop() || '').toLowerCase();
+        if (modelExts.includes(ext)) {
+            mountModelPreview(body, _fileRawUrl(tabRef, path), tabRef.title || path.split('/').pop());
+            return;
+        }
         if (imgExts.includes(ext)) {
-            const rawUrl = `/api/projects/${currentProjectId}/git/file-raw?path=${encodeURIComponent(path)}`;
+            const rawUrl = _fileRawUrl(tabRef, path);
             // 复用外部会话的图片查看器：滚轮缩放 + 左键拖动 + 双击复位
             body.innerHTML = `<div class="main-ws-img es-image-viewer" style="height:100%;overflow:hidden;position:relative;">
                 <img src="${rawUrl}" alt="${_escAttr(tabRef.title)}"></div>`;
@@ -1371,10 +1382,13 @@ const adsShell = (() => {
             return;
         }
 
-        const data = await api(`/projects/${currentProjectId}/git/file?path=${encodeURIComponent(path)}`);
+        const branchParam = (!tabRef.repoKey && tabRef.branch) ? `&branch=${encodeURIComponent(tabRef.branch)}` : '';
+        const data = await api(tabRef.repoKey
+            ? `/projects/${currentProjectId}/repos/${encodeURIComponent(tabRef.repoKey)}/file?path=${encodeURIComponent(path)}`
+            : `/projects/${currentProjectId}/git/file?path=${encodeURIComponent(path)}${branchParam}`);
         if (data.path && data.path !== path) {
             path = String(data.path).replace(/\\/g, '/');
-            const newId = 'file:' + path;
+            const newId = (tabRef.repoKey ? 'file:' + tabRef.repoKey + ':' : 'file:') + path;
             const existing = state.mainTabs.find(t => t.id === newId && t !== tabRef);
             if (existing) {
                 state.mainTabs = state.mainTabs.filter(t => t !== tabRef);
@@ -1403,14 +1417,14 @@ const adsShell = (() => {
                     <button type="button" class="btn-icon main-ws-action" id="mainWsMdToggle" title="切换源码/预览">源码</button>
                     ${_toolbarIconsHtml(tabRef)}`;
             }
-            _renderMdOrSource(body, content, path, true);
+            _renderMdOrSource(body, content, path, true, _fileRawPrefix(tabRef));
             const btn = document.getElementById('mainWsMdToggle');
             if (btn) {
                 let preview = true;
                 btn.onclick = () => {
                     preview = !preview;
                     btn.textContent = preview ? '源码' : '预览';
-                    _renderMdOrSource(body, content, path, preview);
+                    _renderMdOrSource(body, content, path, preview, _fileRawPrefix(tabRef));
                 };
             }
             return;
@@ -1518,14 +1532,26 @@ const adsShell = (() => {
         </div>`;
     }
 
-    function _renderMdOrSource(body, content, path, preview) {
+    function _fileRawPrefix(tab) {
+        if (tab && tab.repoKey) {
+            return `/api/projects/${currentProjectId}/repos/${encodeURIComponent(tab.repoKey)}/file-raw?path=`;
+        }
+        return `/api/projects/${currentProjectId}/git/file-raw?path=`;
+    }
+
+    function _fileRawUrl(tab, path) {
+        return _fileRawPrefix(tab) + encodeURIComponent(path || '');
+    }
+
+    function _renderMdOrSource(body, content, path, preview, rawPrefix) {
         if (preview && window.marked) {
             body.innerHTML = `<div class="main-ws-md markdown-body">${marked.parse(content)}</div>`;
             body.querySelectorAll('img').forEach(img => {
                 const src = img.getAttribute('src') || '';
                 if (src && !src.startsWith('http') && !src.startsWith('/') && !src.startsWith('data:')) {
                     const dir = path.includes('/') ? path.slice(0, path.lastIndexOf('/') + 1) : '';
-                    img.src = `/api/projects/${currentProjectId}/git/file-raw?path=${encodeURIComponent(dir + src)}`;
+                    const prefix = rawPrefix || `/api/projects/${currentProjectId}/git/file-raw?path=`;
+                    img.src = prefix + encodeURIComponent(dir + src);
                 }
             });
         } else {
@@ -1746,40 +1772,149 @@ const adsShell = (() => {
         }
     }
 
+    let _wsTreeSeq = 0;
+
+    /** 侧栏树跟当前文件走同一个仓库。主仓库的 Tab 没有 repoKey，就用识别结果里的主仓库。 */
+    async function _wsTreeRepoKey(tab) {
+        if (tab && tab.repoKey) return tab.repoKey;
+        let repos = _repoList.repos || [];
+        if (!repos.length && currentProjectId) {
+            try {
+                const data = await api(`/projects/${currentProjectId}/repos`);
+                _repoList = data;
+                repos = data.repos || [];
+            } catch {
+                return '';
+            }
+        }
+        const primary = repos.find(r => r.source === 'primary') || repos[0];
+        return primary ? primary.key : '';
+    }
+
+    async function _fetchWsLevel(repoKey, relPath) {
+        if (repoKey) {
+            const q = relPath ? `?path=${encodeURIComponent(relPath)}` : '';
+            return await api(`/projects/${currentProjectId}/repos/${encodeURIComponent(repoKey)}/tree${q}`);
+        }
+        const tree = await api(`/projects/${currentProjectId}/git/tree`);
+        return { entries: tree.children || [] };
+    }
+
+    function _wsPathEq(a, b) {
+        return String(a || '').replace(/\\/g, '/') === String(b || '').replace(/\\/g, '/');
+    }
+
+    function _renderWsLevel(nodes, depth) {
+        const dirs = (nodes || []).filter(n => n.type === 'directory');
+        const files = (nodes || []).filter(n => n.type !== 'directory' && n.type !== 'truncated');
+        return [...dirs, ...files].map(n => {
+            const path = (n.path || n.name || '').replace(/\\/g, '/');
+            const name = n.name || path.split('/').pop();
+            if (n.type === 'directory') {
+                return `<div class="main-ws-tree-item dir" style="--d:${depth}" data-dir-path="${_escAttr(path)}" data-depth="${depth}" data-loaded="0">
+                    <span class="main-ws-tree-arrow">▸</span>${_escHtml(name)}</div>
+                    <div class="main-ws-tree-children" style="display:none"></div>`;
+            }
+            return `<div class="main-ws-tree-item file" style="--d:${depth}" data-path="${_escAttr(path)}" title="${_escAttr(path)}">${_escHtml(name)}</div>`;
+        }).join('');
+    }
+
+    function _wsFindItem(list, kind, value) {
+        const attr = kind === 'dir' ? 'data-dir-path' : 'data-path';
+        const sel = kind === 'dir' ? '.main-ws-tree-item.dir' : '.main-ws-tree-item.file';
+        const nodes = [...list.querySelectorAll(sel)];
+        return nodes.find(el => _wsPathEq(el.getAttribute(attr), value))
+            || nodes.find(el => String(el.getAttribute(attr) || '').toLowerCase() === String(value || '').toLowerCase());
+    }
+
+    async function _expandWsDir(el, repoKey) {
+        const children = el && el.nextElementSibling;
+        if (!children || !children.classList.contains('main-ws-tree-children')) return;
+        if (el.dataset.loaded !== '1') {
+            const depth = parseInt(el.dataset.depth || '0', 10);
+            const data = await _fetchWsLevel(repoKey, el.getAttribute('data-dir-path') || '');
+            children.innerHTML = _renderWsLevel(data.entries || [], depth + 1);
+            el.dataset.loaded = '1';
+        }
+        children.style.display = '';
+        const arrow = el.querySelector('.main-ws-tree-arrow');
+        if (arrow) arrow.textContent = '▾';
+        el.classList.add('open');
+    }
+
+    function toggleWsDir(el) {
+        const list = document.getElementById('mainWsTreeList');
+        const children = el && el.nextElementSibling;
+        if (!list || !children) return;
+        if (children.style.display !== 'none' && el.dataset.loaded === '1') {
+            children.style.display = 'none';
+            const arrow = el.querySelector('.main-ws-tree-arrow');
+            if (arrow) arrow.textContent = '▸';
+            el.classList.remove('open');
+            return;
+        }
+        _expandWsDir(el, list.dataset.repoKey || '').catch(() => {});
+    }
+
+    /** 沿文件路径把祖先目录展开，再把文件滚到树的中间。 */
+    async function _revealWsPath(list, filePath, repoKey, seq) {
+        const parts = String(filePath || '').replace(/\\/g, '/').split('/').filter(Boolean);
+        if (!parts.length) return;
+        let acc = '';
+        for (const seg of parts.slice(0, -1)) {
+            if (seq !== _wsTreeSeq) return;
+            acc = acc ? acc + '/' + seg : seg;
+            const dirEl = _wsFindItem(list, 'dir', acc);
+            if (!dirEl) return;
+            await _expandWsDir(dirEl, repoKey);
+        }
+        if (seq !== _wsTreeSeq) return;
+        const fileEl = _wsFindItem(list, 'file', parts.join('/'));
+        if (!fileEl) return;
+        list.querySelectorAll('.main-ws-tree-item.file.active').forEach(el => el.classList.remove('active'));
+        fileEl.classList.add('active');
+        const listRect = list.getBoundingClientRect();
+        const elRect = fileEl.getBoundingClientRect();
+        list.scrollTop += (elRect.top + elRect.height / 2) - (listRect.top + listRect.height / 2);
+    }
+
     async function _loadMainWsTree(activePath) {
         const list = document.getElementById('mainWsTreeList');
         if (!list || !currentProjectId) return;
+        const seq = ++_wsTreeSeq;
+        const tab = state.mainTabs.find(t => t.id === state.mainActiveId);
+        const path = String(activePath || tab?.path || '').replace(/\\/g, '/');
+        list.innerHTML = `<div class="main-ws-loading">加载中…</div>`;
         try {
-            const tree = await api(`/projects/${currentProjectId}/git/tree`);
-            const nodes = tree.children || tree.tree || [];
-            if (!nodes.length) {
+            const repoKey = await _wsTreeRepoKey(tab);
+            if (seq !== _wsTreeSeq) return;
+            list.dataset.repoKey = repoKey || '';
+            const data = await _fetchWsLevel(repoKey, '');
+            if (seq !== _wsTreeSeq) return;
+            const entries = data.entries || [];
+            if (!entries.length) {
                 list.innerHTML = `<div style="padding:12px;color:var(--text-muted);font-size:12px;">仓库为空</div>`;
                 return;
             }
-            list.innerHTML = _renderWsTreeNodes(nodes, activePath, 0);
+            list.innerHTML = _renderWsLevel(entries, 0);
+            list.onclick = (e) => {
+                const file = e.target.closest('.main-ws-tree-item.file');
+                if (file && list.contains(file)) {
+                    openMain({
+                        type: 'file',
+                        path: file.getAttribute('data-path') || '',
+                        repoKey: list.dataset.repoKey || '',
+                    });
+                    return;
+                }
+                const dir = e.target.closest('.main-ws-tree-item.dir');
+                if (dir && list.contains(dir)) toggleWsDir(dir);
+            };
+            if (path) await _revealWsPath(list, path, repoKey, seq);
         } catch (e) {
+            if (seq !== _wsTreeSeq) return;
             list.innerHTML = `<div class="main-ws-error" style="padding:8px;">树加载失败</div>`;
         }
-    }
-
-    function _renderWsTreeNodes(nodes, activePath, depth) {
-        if (!Array.isArray(nodes)) return '';
-        return nodes.map(n => {
-            const path = (n.path || n.name || '').replace(/\\/g, '/');
-            const name = n.name || path.split('/').pop();
-            const isDir = n.type === 'directory' || n.type === 'dir' || n.type === 'tree' || Array.isArray(n.children);
-            const active = path === activePath ? ' active' : '';
-            if (isDir) {
-                const kids = n.children || n.entries || [];
-                return `<div class="main-ws-tree-dir" style="--d:${depth}">
-                    <div class="main-ws-tree-item dir">${_escHtml(name)}</div>
-                    ${_renderWsTreeNodes(kids, activePath, depth + 1)}
-                </div>`;
-            }
-            return `<div class="main-ws-tree-item file${active}" style="--d:${depth}"
-                onclick="adsShell.openMain({type:'file',path:'${path.replace(/'/g, "\\'")}'})"
-                title="${_escAttr(path)}">${_escHtml(name)}</div>`;
-        }).join('');
     }
 
     // Ctrl+F in file pane
@@ -1824,6 +1959,7 @@ const adsShell = (() => {
         toggleFileMenu,
         toggleFileSearch,
         toggleFileTree,
+        toggleWsDir,
         onFindKeydown,
         findNext,
         remountChatToWorkbench,
@@ -15324,9 +15460,99 @@ function switchRepo(key) {
     loadRepoTree();
 }
 
+let _repoSearchTimer = null;
+let _repoSearchSeq = 0;
+
+/** 标题栏过滤框。空串回到目录树；有字则按文件名/路径在当前仓库里搜。 */
+function _repoSearchInput(val) {
+    const q = (val || '').trim();
+    clearTimeout(_repoSearchTimer);
+    if (!q) {
+        _repoSearchSeq++;
+        loadRepoTree();
+        return;
+    }
+    const seq = ++_repoSearchSeq;
+    _repoSearchTimer = setTimeout(() => _repoRunSearch(q, seq), 280);
+}
+
+async function _repoRunSearch(q, seq) {
+    const container = document.getElementById('repoTree');
+    if (!container) return;
+    if (!_repoCurrentKey) {
+        container.innerHTML = '<div class="empty-state"><div class="emoji">🔍</div><p>还没识别到仓库，无法过滤</p></div>';
+        return;
+    }
+    container.innerHTML = '<div class="empty-state"><div class="emoji">🔍</div><p>正在过滤…</p></div>';
+    try {
+        const data = await api(
+            `/projects/${currentProjectId}/repos/${encodeURIComponent(_repoCurrentKey)}/search?q=${encodeURIComponent(q)}`
+        );
+        if (seq !== _repoSearchSeq) return;
+        const input = document.getElementById('repoFileSearch');
+        if (input && input.value.trim() !== q) return;
+        _renderRepoSearchHits(container, data);
+    } catch (e) {
+        if (seq !== _repoSearchSeq) return;
+        container.innerHTML = `<div class="empty-state"><div class="emoji">❌</div><p>过滤失败: ${escapeHtml(e.message || e)}</p></div>`;
+    }
+}
+
+function _renderRepoSearchHits(container, data) {
+    const entries = data.entries || [];
+    if (!entries.length) {
+        container.innerHTML = '<div class="empty-state"><div class="emoji">🔍</div><p>没有匹配的文件</p></div>';
+        return;
+    }
+    const rows = entries.map(node => {
+        const isDir = node.type === 'directory';
+        const ext = isDir ? '' : (node.name.split('.').pop() || '').toLowerCase();
+        const icon = isDir ? '📁' : getFileIcon(ext);
+        const size = !isDir && node.size ? formatFileSize(node.size) : '';
+        const click = isDir
+            ? `_repoBrowseDir('${escapeHtml(node.path)}')`
+            : `viewRepoFile('${escapeHtml(node.path)}', this)`;
+        return `<div class="tree-item ${isDir ? 'tree-dir' : 'tree-file'} repo-search-hit" data-path="${escapeHtml(node.path)}" title="${isDir ? '' : '双击在新标签页打开'}" onclick="${click}">
+            <span class="tree-arrow"> </span>
+            <span class="tree-icon">${icon}</span>
+            <span class="tree-name">${escapeHtml(node.name)}</span>
+            <span class="tree-size">${size}</span>
+            <span class="repo-search-path" title="${escapeHtml(node.path)}">${escapeHtml(node.path)}</span>
+        </div>`;
+    }).join('');
+    const more = data.truncated
+        ? `<div class="tree-truncated">⋯ 只显示前 ${data.limit || entries.length} 条，缩小关键字可以更准</div>`
+        : '';
+    container.innerHTML = `<div class="repo-search-count">${entries.length} 个匹配${data.truncated ? '+' : ''}</div>`
+        + rows + more;
+}
+
+/** 从过滤结果点进一个目录：清空过滤框，只展开这一层。 */
+async function _repoBrowseDir(relPath) {
+    const input = document.getElementById('repoFileSearch');
+    if (input) input.value = '';
+    _repoSearchSeq++;
+    const container = document.getElementById('repoTree');
+    if (!container) return;
+    container.innerHTML = '<div class="empty-state"><div class="emoji">⏳</div><p>加载中...</p></div>';
+    try {
+        const data = await _fetchRepoLevel(relPath);
+        const back = `<div class="tree-item tree-dir" onclick="loadRepoTree()">
+            <span class="tree-arrow"> </span><span class="tree-icon">↩</span>
+            <span class="tree-name">返回根目录</span></div>`;
+        container.innerHTML = back + renderFileTree(data.entries || [], 0) + _truncHintHtml(data);
+    } catch (e) {
+        container.innerHTML = `<div class="empty-state"><div class="emoji">❌</div><p>加载失败: ${escapeHtml(e.message)}</p></div>`;
+    }
+}
+
 async function loadRepoTree() {
     const container = document.getElementById('repoTree');
     if (!container) return;
+    const pendingQ = (document.getElementById('repoFileSearch')?.value || '').trim();
+    if (pendingQ) {
+        return _repoRunSearch(pendingQ, ++_repoSearchSeq);
+    }
     if (!currentProjectId) {
         container.innerHTML = '<div class="empty-state"><div class="emoji">📂</div><p>请先选择项目</p></div>';
         return;
@@ -15431,7 +15657,7 @@ function renderFileTree(nodes, depth) {
             const ext = node.name.split('.').pop().toLowerCase();
             const icon = getFileIcon(ext);
             const size = node.size ? formatFileSize(node.size) : '';
-            html += `<div class="tree-item tree-file" ${indentStyle} data-path="${escapeHtml(node.path)}" data-depth="${depth}" onclick="viewRepoFile('${escapeHtml(node.path)}', this)">
+            html += `<div class="tree-item tree-file" ${indentStyle} data-path="${escapeHtml(node.path)}" data-depth="${depth}" title="双击在新标签页打开" onclick="viewRepoFile('${escapeHtml(node.path)}', this)">
                 <span class="tree-arrow"> </span>
                 <span class="tree-icon">${icon}</span>
                 <span class="tree-name">${escapeHtml(node.name)}</span>
@@ -15501,6 +15727,75 @@ async function switchRepoBranch(branch) {
     }
 }
 
+let _modelViewerLoading = null;
+function ensureModelViewer() {
+    if (window.customElements && customElements.get('model-viewer')) return Promise.resolve();
+    if (_modelViewerLoading) return _modelViewerLoading;
+    _modelViewerLoading = new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.type = 'module';
+        s.src = '/static/vendor/model-viewer.min.js';
+        s.onload = () => resolve();
+        s.onerror = () => {
+            _modelViewerLoading = null;
+            reject(new Error('3D 预览组件加载失败'));
+        };
+        document.head.appendChild(s);
+    });
+    return _modelViewerLoading;
+}
+
+/** glb/gltf 预览。拖拽旋转，滚轮缩放。 */
+function mountModelPreview(container, rawUrl, fileName) {
+    if (!container) return;
+    const safeName = escapeHtml(fileName || 'model');
+    const safeUrl = String(rawUrl || '').replace(/"/g, '&quot;');
+    container.innerHTML = `<div class="model-preview">
+        <div class="model-preview-loading">正在加载 3D 模型…</div>
+        <model-viewer src="${safeUrl}" alt="${safeName}" camera-controls touch-action="pan-y" auto-rotate shadow-intensity="0.6" exposure="1"></model-viewer>
+    </div>`;
+    const viewer = container.querySelector('model-viewer');
+    const loading = container.querySelector('.model-preview-loading');
+    const fail = (msg) => { if (loading) loading.textContent = msg; };
+    if (viewer) {
+        viewer.addEventListener('load', () => { if (loading) loading.remove(); });
+        viewer.addEventListener('error', () => fail('3D 模型加载失败'));
+    }
+    ensureModelViewer().catch(() => fail('3D 预览组件加载失败'));
+}
+
+/** 双击仓库树里的文件：开到主舞台新标签。单击仍走右侧预览。 */
+function openRepoFileInTab(path) {
+    if (!path || !currentProjectId) return;
+    if (typeof adsShell === 'undefined' || !adsShell.openMain || !(adsShell.isProjectShell && adsShell.isProjectShell())) {
+        viewRepoFile(path, null);
+        return;
+    }
+    const primary = _isPrimaryRepo();
+    const branch = document.getElementById('repoBranchSelect')?.value || '';
+    adsShell.openMain({
+        type: 'file',
+        path,
+        repoKey: primary ? '' : (_repoCurrentKey || ''),
+        branch: primary ? branch : '',
+    });
+}
+
+function _bindRepoFileDblClick() {
+    const tree = document.getElementById('repoTree');
+    if (!tree || tree.dataset.dblBound === '1') return;
+    tree.dataset.dblBound = '1';
+    tree.addEventListener('dblclick', (e) => {
+        const item = e.target.closest('.tree-item.tree-file');
+        if (!item) return;
+        const path = item.dataset.path;
+        if (!path) return;
+        e.preventDefault();
+        openRepoFileInTab(path);
+    });
+}
+_bindRepoFileDblClick();
+
 async function viewRepoFile(path, itemEl) {
     // 激活选中态
     if (_activeTreeItem) _activeTreeItem.classList.remove('active');
@@ -15531,17 +15826,26 @@ async function viewRepoFile(path, itemEl) {
     const codeWrap = document.getElementById('fileCodeWrap');
     const infoBar = document.getElementById('fileInfoBar');
 
-    // 先判断扩展名：图片/二进制类文件走 file-raw 直接 <img>，不碰文本 API（后端对二进制返回 404）
+    // 先判断扩展名：图片和 3D 模型走 file-raw，不碰文本 API（后端对二进制返回 404）
     const imgExts = ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'ico', 'bmp'];
+    const modelExts = ['glb', 'gltf'];
+    const rawUrl = _isPrimaryRepo()
+        ? `/api/projects/${currentProjectId}/git/file-raw?path=${encodeURIComponent(path)}`
+        : `/api/projects/${currentProjectId}/repos/${_repoCurrentKey}/file-raw?path=${encodeURIComponent(path)}`;
+    if (modelExts.includes(ext)) {
+        infoBar.innerHTML = `
+            <span class="file-info-badge">${escapeHtml(ext)}</span>
+            <span class="file-info-item"><span class="file-info-label">类型</span>3D 模型</span>
+            <span class="file-info-item">拖拽旋转，滚轮缩放</span>
+        `;
+        mountModelPreview(codeWrap, rawUrl, fileName);
+        return;
+    }
     if (imgExts.includes(ext)) {
         infoBar.innerHTML = `
             <span class="file-info-badge">${escapeHtml(ext)}</span>
             <span class="file-info-item"><span class="file-info-label">类型</span>图像</span>
         `;
-        // 非主仓库要带 repo key —— /git/file-raw 只认 projects.git_repo_path 那一个根
-        const rawUrl = _isPrimaryRepo()
-            ? `/api/projects/${currentProjectId}/git/file-raw?path=${encodeURIComponent(path)}`
-            : `/api/projects/${currentProjectId}/repos/${_repoCurrentKey}/file-raw?path=${encodeURIComponent(path)}`;
         codeWrap.innerHTML = `<div class="file-preview-img"><img src="${rawUrl}" alt="${escapeHtml(fileName)}" style="max-width:100%;max-height:500px;border-radius:6px;" onerror="this.parentElement.innerHTML='<div class=&quot;file-error&quot;>图片加载失败：${escapeHtml(path)}</div>'"></div>`;
         return;
     }
@@ -23492,7 +23796,8 @@ const _CHAT_FILE_EXT =
     'ini|cfg|conf|json|ya?ml|md|markdown|txt|xml|html?|css|scss|less|vue|svelte|toml|' +
     'cmake|gd|tscn|tres|shader|hlsl|glsl|usf|ush|bat|cmd|ps1|sh|bash|zsh|sql|proto|' +
     'uproject|uplugin|uasset|umap|Build\\.cs|Target\\.cs|csproj|sln|plist|' +
-    'gitignore|editorconfig|env|rc';
+    'gitignore|editorconfig|env|rc|' +
+    'glb|gltf|webp|png|jpe?g|gif|bmp|svg|ico';
 
 function _stripPathNoise(s) {
     return String(s || '').trim()

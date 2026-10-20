@@ -1069,6 +1069,12 @@ _generated_images_dir.mkdir(exist_ok=True)
 app.mount("/generated-images", StaticFiles(directory=str(_generated_images_dir)), name="generated-images")
 
 
+import mimetypes as _mimetypes
+_mimetypes.add_type("model/gltf-binary", ".glb")
+_mimetypes.add_type("model/gltf+json", ".gltf")
+_mimetypes.add_type("image/webp", ".webp")
+
+
 @app.get("/api/local-file")
 async def serve_local_file(path: str):
     """按需读取本地文件并以图片形式返回（仅限图片格式，供前端预览 AI 生成图片）"""
