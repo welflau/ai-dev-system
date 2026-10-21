@@ -1,0 +1,9 @@
+{
+  "id": "ue5",
+  "name": "Unreal Engine",
+  "version": "0.1.0",
+  "description": "UE 编译、编辑器控制、模板与自测规则套件。SOP 回退与预编译开关仍由 fragment 负责。",
+  "required_traits": {
+    "any_of": ["engine:ue5", "engine:ue4"]
+  }
+}

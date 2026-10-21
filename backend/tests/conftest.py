@@ -14,6 +14,11 @@
 所以提供一个 autouse fixture 把 `_BUILTIN_ROOT` 指到空目录。需要真实内置
 skill 的测试（如「openspec-propose 仍能加载」）显式用 `real_builtin_skills`
 覆盖回去。
+
+插件 skill（``backend/plugins/*/skills/``）同理：默认把
+``iter_plugin_skill_dirs`` 打成空列表。Action 扫描不受影响——``create_action``
+仍能从 ``plugins/*/actions/`` 取到实现。需要真实插件 skill 的测试用
+``real_plugin_skills``。
 """
 from pathlib import Path
 
@@ -36,9 +41,26 @@ def isolate_builtin_skills(request, tmp_path_factory, monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True)
+def isolate_plugin_skills(request, monkeypatch):
+    """默认不扫 ``backend/plugins/*/skills/``，除非测试显式声明要真实的。"""
+    if request.node.get_closest_marker("real_plugin_skills"):
+        yield
+        return
+
+    import plugins.registry as preg
+    monkeypatch.setattr(preg, "iter_plugin_skill_dirs", lambda: [])
+    yield
+
+
 def pytest_configure(config):
     config.addinivalue_line(
         "markers",
         "real_builtin_skills: 不隔离 backend/skills/executable_skills/，"
         "用于验证真实内置 skill（openspec-* / demo-*）",
+    )
+    config.addinivalue_line(
+        "markers",
+        "real_plugin_skills: 不隔离 backend/plugins/*/skills/，"
+        "用于验证真实插件 skill（engine-compile）",
     )

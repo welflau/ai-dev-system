@@ -34,14 +34,11 @@ from actions.chat.git_merge import GitMergeAction
 from actions.chat.get_requirement_pipeline import GetRequirementPipelineAction
 from actions.chat.get_ticket_status import GetTicketStatusAction
 from actions.chat.get_requirement_logs import GetRequirementLogsAction
-from actions.chat.propose_ue_framework import ProposeUEFrameworkAction
 from actions.chat.get_build_logs import GetBuildLogsAction
 from actions.chat.get_bugs import GetBugsAction                            # K P1
 from actions.chat.get_ci_builds import GetCIBuildsAction                   # K P1
 from actions.chat.get_failure_cases import GetFailureCasesAction           # K P1
 from actions.chat.get_milestones import GetMilestonesAction                # K P2
-from actions.chat.search_design_knowledge import SearchDesignKnowledgeAction  # K P2
-from actions.chat.search_art_assets import SearchArtAssetsAction           # K P2     # v0.19.x 构建日志查询
 from actions.chat.search_knowledge import SearchKnowledgeAction        # 知识库全文搜索
 from actions.chat.search_ticket_history import SearchTicketHistoryAction  # 历史工单检索
 from actions.chat.fetch_url import FetchUrlAction                         # 访问外部 URL
@@ -50,13 +47,7 @@ from actions.chat.load_skill import LoadSkillAction                        # v0.
 from actions.chat.get_memory import GetMemoryAction                       # 查询 Agent Memory
 from actions.chat.competitor_analysis import CompetitorAnalysisAction     # 竞品反拆
 from actions.chat.read_local_file import ReadLocalFileAction               # 读本地文件（Skill 文档等）
-from actions.chat.ue_call import UECallAction                              # UE Editor UCP 控制
-from actions.chat.launch_ue_editor import LaunchUEEditorAction             # 启动 UE Editor
-from actions.ue_run_python import UERunPythonAction                        # B-0 UE Python 橋接
-from actions.ue_blueprint_gen import BlueprintGenAction                    # B-1 Blueprint 生成
-from actions.ue_level_gen import LevelGenAction                            # B-2 關卡生成
 from actions.chat.install_project_skill import InstallProjectSkillAction   # 项目 Skill 安装/卸载
-from actions.chat.install_ucp import InstallUCPAction                         # UE UCP 插件部署
 from actions.chat.browse_marketplace import BrowseMarketplaceAction        # 浏览/安装/卸载市场 Skill
 from actions.chat.glob_search import GlobAction, GrepAction, ListDirectoryAction  # 文件系统搜索
 from actions.chat.web_search import WebSearchAction                        # 联网搜索
@@ -68,6 +59,7 @@ from actions.chat.manage_skill import ManageSkillAction                    # Ski
 from actions.chat.set_session_flag import SetSessionFlagAction, get_session_flag  # L9 Feature Flags
 from actions.chat.create_github_repo import CreateGithubRepoAction         # GitHub 建仓库
 from actions.chat.confirm_skill import ConfirmSkillAction                  # TODO H：Skill 草案确认
+from plugins.registry import require_action_class
 
 logger = logging.getLogger("agent.chat_assistant")
 
@@ -557,14 +549,14 @@ class ChatAssistantAgent(BaseAgent):
         GetRequirementPipelineAction,
         GetTicketStatusAction,
         GetRequirementLogsAction,
-        ProposeUEFrameworkAction,      # v0.18 Phase A.6 — UE 框架方案卡片
+        require_action_class("propose_ue_framework"),  # v0.18 Phase A.6 — UE 框架方案卡片
         GetBuildLogsAction,            # v0.19.x — 查构建/编译日志让 AI 自动诊断
         GetBugsAction,                 # K — Bug 列表
         GetCIBuildsAction,             # K — CI 构建记录
         GetFailureCasesAction,         # K — 失败案例库
         GetMilestonesAction,           # K — 里程碑
-        SearchDesignKnowledgeAction,   # K — 设计知识库
-        SearchArtAssetsAction,         # K — 美术资产库
+        require_action_class("search_design_knowledge"),
+        require_action_class("search_art_assets"),
         SearchKnowledgeAction,         # 知识库全文搜索（FTS5）
         SearchTicketHistoryAction,     # 历史工单解决方案检索（FTS5）
         FetchUrlAction,                # 访问外部 URL
@@ -572,13 +564,13 @@ class ChatAssistantAgent(BaseAgent):
         GetMemoryAction,               # 查询 Agent Memory
         CompetitorAnalysisAction,      # 竞品反拆分析
         ReadLocalFileAction,           # 读本地文件（动态加载 Skill 文档）
-        UECallAction,                  # UE Editor UCP 控制（仅 engine:ue5/ue4）
-        LaunchUEEditorAction,          # 启动 UE Editor（仅 engine:ue5/ue4）
-        UERunPythonAction,             # B-0 UE Python 橋接
-        BlueprintGenAction,            # B-1 Blueprint 生成
-        LevelGenAction,                # B-2 關卡生成
+        require_action_class("ue_call"),
+        require_action_class("launch_ue_editor"),
+        require_action_class("ue_run_python"),
+        require_action_class("ue_blueprint_gen"),
+        require_action_class("ue_level_gen"),
         InstallProjectSkillAction,     # 对话中为项目安装/卸载 Marketplace Skill
-        InstallUCPAction,                # 对话中部署 UCP 插件到 Plugins/
+        require_action_class("install_ucp"),
         BrowseMarketplaceAction,       # 浏览/安装/卸载市场 Skill（系统级+项目级）
         LoadSkillAction,               # v0.20 主动触发：按需加载 Skill 全文
         # ── 新增工具（对标 Gemini CLI）──

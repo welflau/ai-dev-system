@@ -23,9 +23,7 @@ import logging
 from typing import Any, Dict
 
 from agents.base import BaseAgent, ReactMode
-from actions.ue_blueprint_gen import BlueprintGenAction
-from actions.ue_level_gen import LevelGenAction
-from actions.ue_run_python import UERunPythonAction
+from plugins.registry import require_action_class
 
 logger = logging.getLogger("ue_editor_agent")
 
@@ -38,7 +36,11 @@ UE_CONTENT_FAILED = "ue_content_failed"
 class UEEditorAgent(BaseAgent):
     """UE 內容創作 Agent — 通過 Python 橋接向 UE Editor 生成內容"""
 
-    action_classes = [BlueprintGenAction, LevelGenAction, UERunPythonAction]
+    action_classes = [
+        require_action_class("ue_blueprint_gen"),
+        require_action_class("ue_level_gen"),
+        require_action_class("ue_run_python"),
+    ]
     react_mode = ReactMode.SINGLE
     watch_actions = set()  # 不依賴其他 Agent 的輸出
 

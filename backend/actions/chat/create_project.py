@@ -310,10 +310,10 @@ class CreateProjectAction(ActionBase):
             is_ue_project = is_ue_project_path(repo_path, traits)
             if is_ue_project:
                 try:
-                    from actions.chat.propose_ue_framework import ProposeUEFrameworkAction
+                    from plugins.registry import require_action
                     from api.chat import _save_chat_message
 
-                    propose_result = await ProposeUEFrameworkAction().run({
+                    propose_result = await require_action("propose_ue_framework").run({
                         "project_id": project_id,
                     })
                     if propose_result.success:

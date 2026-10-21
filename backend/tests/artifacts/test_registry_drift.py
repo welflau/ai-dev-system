@@ -38,12 +38,15 @@ pytestmark = pytest.mark.real_builtin_skills      # 要扫真实的内置 skill
 # ════════════════════ 采集 ════════════════════
 
 def _all_skill_md() -> list:
-    """所有内置 skill 的 SKILL.md。
+    """所有内置 + 插件 skill 的 SKILL.md。
 
-    扫 `_BUILTIN_ROOT` 而非硬编码列表 —— 新增 skill 自动纳入检查，
-    这正是「防漂」的意思。
+    扫目录而非硬编码列表 —— 新增 skill 自动纳入检查，这正是「防漂」的意思。
+    插件路径走 ``BACKEND/plugins`` 而不是 loader 的 ``iter_plugin_skill_dirs``，
+    这样即使测试隔离了插件发现，词表闸仍能看见真实文件。
     """
-    return sorted(_BUILTIN_ROOT.glob("*/SKILL.md"))
+    md = list(_BUILTIN_ROOT.glob("*/SKILL.md"))
+    md.extend((BACKEND / "plugins").glob("*/skills/*/SKILL.md"))
+    return sorted(md)
 
 
 def _workflow_skills() -> list:
@@ -173,10 +176,17 @@ def test_stage_ids_globally_unique():
         if sid:
             sop_ids.add(sid)
 
+    # 插件 SKILL 与 fragment 同 stage_id 是第一版过渡：compose_sop 因重名跳过
+    # skill 插入，fragment 继续负责 reject_goto / ue_precompile。
+    # 删掉 engine_compile.yaml 时必须同时删掉本豁免，否则防撞测试失效。
+    _transitional_stage_shadows = {("engine-compile", "engine_compile")}
+
     seen = {}
     problems = []
     for skill_id, wf in _workflow_skills():
         if wf.stage_id in sop_ids:
+            if (skill_id, wf.stage_id) in _transitional_stage_shadows:
+                continue
             problems.append(f"{skill_id}: stage_id '{wf.stage_id}' 与 SOP 阶段同名")
         if wf.stage_id in seen:
             problems.append(

@@ -67,7 +67,16 @@ check('ConfigPack 标「项目级 · 可装可卸」',
     /bundle-scope-project">项目级 · 可装可卸/.test(tabBundles));
 check('Plugin 标「本机级 · 只读」',
     /bundle-scope-machine">本机级 · 只读/.test(tabBundles));
-check('作用域徽章有样式', /\.bundle-scope-project \{/.test(css) && /\.bundle-scope-machine \{/.test(css));
+check('ADS 套件标「进程级 · trait 启用」',
+    /bundle-scope-process">进程级 · trait 启用/.test(tabBundles));
+check('作用域徽章有样式',
+    /\.bundle-scope-project \{/.test(css)
+    && /\.bundle-scope-machine \{/.test(css)
+    && /\.bundle-scope-process \{/.test(css));
+check('有 ADS 套件 inner-tab', /data-inner-tab="ads" onclick="switchBundleTab\('ads'\)"/.test(tabBundles));
+check('switchBundleTab 会加载 ADS 套件',
+    /if \(inner === 'ads'\) loadAdsPluginList/.test(app));
+check('ADS 列表走 /api/plugins/ads', /\/plugins\/ads/.test(app));
 check('Plugin 面板说明写明 ADS 只读不改动', /只读取不改动/.test(tabBundles));
 check('页面没有「市场」字样（ADS 装不了插件，不能这么承诺）',
     !/>\s*[^<]*市场<\/h2>/.test(tabBundles) && !/📦 插件市场/.test(tabBundles));

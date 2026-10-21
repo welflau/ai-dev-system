@@ -1,0 +1,16 @@
+{
+  "id": "content",
+  "name": "内容与设计",
+  "version": "0.1.0",
+  "description": "UX / 美术规范 / HTML 原型 / 资产落地与检索。流水线位置仍由 fragment 决定。",
+  "required_traits": {
+    "any_of": [
+      "pipeline:content",
+      "category:game",
+      "platform:web",
+      "platform:wechat",
+      "platform:mobile",
+      "platform:desktop"
+    ]
+  }
+}

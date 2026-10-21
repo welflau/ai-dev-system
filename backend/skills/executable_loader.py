@@ -21,8 +21,8 @@ SKILL.md frontmatter 复用普通格式（name/description 等），额外挂一
         globs: ["proposal.md", "specs.md", "design.md", "tasks.md"]
       budget: {max_rounds: 12, max_seconds: 300, max_tokens: 120000}
 
-来源优先级：项目级 `.claude/packs/*/skills/<id>/SKILL.md` > backend 内置
-`backend/skills/executable_skills/<id>/SKILL.md`。MVP 只用 backend 内置。
+来源优先级：项目级 pack > ``backend/plugins/*/skills/<id>/`` > backend 内置
+``backend/skills/executable_skills/<id>/SKILL.md``。
 """
 from __future__ import annotations
 
@@ -111,11 +111,24 @@ def _project_pack_skill_roots(repo_path: str) -> List[Path]:
     return roots
 
 
+def _plugin_skill_dirs() -> List[Path]:
+    """插件 skill 目录。失败时降级为空列表，不让发现机制整体挂掉。"""
+    try:
+        from plugins.registry import iter_plugin_skill_dirs
+        return list(iter_plugin_skill_dirs())
+    except Exception as e:
+        logger.warning("扫描插件 skill 失败: %s", e)
+        return []
+
+
 def _find_skill_dir(skill_id: str, repo_path: str = "") -> Optional[Path]:
-    """按来源优先级定位 <id>/SKILL.md 所在目录。项目级 > backend 内置。"""
+    """按来源优先级定位 <id>/SKILL.md 所在目录。项目级 > 插件 > backend 内置。"""
     for skills_dir in _project_pack_skill_roots(repo_path):
         d = skills_dir / skill_id
         if (d / "SKILL.md").is_file():
+            return d
+    for d in _plugin_skill_dirs():
+        if d.name == skill_id and (d / "SKILL.md").is_file():
             return d
     builtin = _BUILTIN_ROOT / skill_id
     if (builtin / "SKILL.md").is_file():
@@ -353,13 +366,14 @@ def parse_workflow_skill(
 
 
 def _iter_skill_dirs(repo_path: str = "") -> List[Path]:
-    """所有候选 skill 目录，**项目级在前**（同 stage_id 时覆盖内置）。"""
+    """所有候选 skill 目录，**项目级在前**（同 stage_id 时覆盖插件 / 内置）。"""
     dirs: List[Path] = []
     for skills_dir in _project_pack_skill_roots(repo_path):
         try:
             dirs.extend(d for d in sorted(skills_dir.iterdir()) if d.is_dir())
         except OSError as e:
             logger.warning("扫描 skill 目录失败 %s: %s", skills_dir, e)
+    dirs.extend(_plugin_skill_dirs())
     if _BUILTIN_ROOT.is_dir():
         try:
             dirs.extend(d for d in sorted(_BUILTIN_ROOT.iterdir()) if d.is_dir())
@@ -373,6 +387,7 @@ def discover_workflow_skills(repo_path: str = "") -> List[WorkflowSkill]:
 
     扫描范围（与 _find_skill_dir 同一套优先级）：
       <repo>/.{cursor,claude,codebuddy,workbuddy}/packs/*/skills/*/SKILL.md
+      backend/plugins/*/skills/*/SKILL.md
       backend/skills/executable_skills/*/SKILL.md
 
     **kind lint 在这里执行**（三道闸的第 1 道）：consumes/produces 引用未注册

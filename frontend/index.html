@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI 自动开发系统</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20261020a">
+    <link rel="stylesheet" href="/static/styles.css?v=20261021a">
     <!-- highlight.js 语法高亮 -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
@@ -1544,6 +1544,7 @@
                          差别只在作用域和可操作性，所以放同一页对照看，各自标清楚：
 
                            ConfigPack  项目级 · ADS 可装可卸
+                           ADS 套件    进程级 · trait 启用（backend/plugins/）
                            Plugin      本机级 · 只读（开关在各 Client 自己的设置里）
 
                          内容本体不在这里展开 —— 去「Agent / 扩展」页按类型看，
@@ -1557,6 +1558,9 @@
                             <div class="inner-tabs" role="tablist">
                                 <button class="inner-tab active" data-inner-tab="packs" onclick="switchBundleTab('packs')">
                                     📦 ConfigPack<span class="bundle-tab-count" id="bundleCountPacks"></span>
+                                </button>
+                                <button class="inner-tab" data-inner-tab="ads" onclick="switchBundleTab('ads')">
+                                    ⚙️ ADS 套件<span class="bundle-tab-count" id="bundleCountAds"></span>
                                 </button>
                                 <button class="inner-tab" data-inner-tab="plugins" onclick="switchBundleTab('plugins')">
                                     🧩 Plugin<span class="bundle-tab-count" id="bundleCountPlugins"></span>
@@ -1582,6 +1586,26 @@
                                     <h3 class="settings-card-title" style="margin-bottom:8px;">安装更多 Pack</h3>
                                     <p class="settings-description" style="margin-bottom:12px;">从内置 Pack 库中选择并安装到当前项目。</p>
                                     <div id="availablePacksList"><div class="empty-state-sm">加载中...</div></div>
+                                </div>
+                            </div>
+
+                            <!-- 面板：ADS 成套插件（进程级，trait 启用） -->
+                            <div class="inner-tab-panel" id="bundle-panel-ads">
+                                <div class="settings-card">
+                                    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:4px;">
+                                        <h3 class="settings-card-title" style="margin:0;">
+                                            ADS 成套插件
+                                            <span class="bundle-scope-badge bundle-scope-process">进程级 · trait 启用</span>
+                                        </h3>
+                                        <button class="btn btn-sm btn-ghost" onclick="loadAdsPluginList()">🔄 刷新</button>
+                                    </div>
+                                    <p class="settings-description" style="margin-bottom:12px;">
+                                        领域 Action 套件放在 <code>backend/plugins/</code>，由注册表加载。
+                                        没有勾选清单：当前项目的 traits 命中套件声明就会用到里面的 Action。
+                                        流水线位置仍由 SOP fragment 决定，这里只展示套件内容。
+                                    </p>
+                                    <div id="adsPluginListSummary" style="margin-bottom:10px;"></div>
+                                    <div id="adsPluginList"><div class="empty-state-sm">加载中...</div></div>
                                 </div>
                             </div>
 
@@ -2506,7 +2530,7 @@
     <!-- ==================== Toast 通知 ==================== -->
     <div class="toast-container" id="toastContainer"></div>
 
-    <script src="/static/app.js?v=20261020a"></script>
+    <script src="/static/app.js?v=20261021a"></script>
 </body>
 </html>
 

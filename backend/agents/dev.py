@@ -19,8 +19,7 @@ from actions.write_code import WriteCodeAction
 from actions.plan_code_change import PlanCodeChangeAction
 from actions.self_test import SelfTestAction
 from actions.reflection import ReflectionAction
-from actions.write_html_prototype import WriteHtmlPrototypeAction
-from actions.ue_test_gen import UETestGenAction
+from plugins.registry import require_action, require_action_class
 
 logger = logging.getLogger("dev_agent")
 
@@ -28,7 +27,8 @@ logger = logging.getLogger("dev_agent")
 class DevAgent(BaseAgent):
 
     action_classes = [WriteCodeAction, PlanCodeChangeAction, SelfTestAction, ReflectionAction,
-                      WriteHtmlPrototypeAction, UETestGenAction]
+                      require_action_class("write_html_prototype"),
+                      require_action_class("ue_test_gen")]
     react_mode = ReactMode.SINGLE  # 自己控制流程，不用 BY_ORDER
     watch_actions = {"design_architecture"}
 
@@ -53,8 +53,7 @@ class DevAgent(BaseAgent):
 
     async def _do_write_html_prototype(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """HTML 原型验证阶段：生成单文件 HTML 原型验证核心玩法循环。"""
-        from actions.write_html_prototype import WriteHtmlPrototypeAction
-        action = WriteHtmlPrototypeAction()
+        action = require_action("write_html_prototype")
         result = await action.run(context)
         if result.success:
             return result.data or {"status": "success"}
@@ -67,7 +66,7 @@ class DevAgent(BaseAgent):
         （Action 内部已把所有失败路径收敛成 success + warnings）。
         编不过的生成结果会在 Action 里就地回滚，不会留到下游 engine_compile。
         """
-        result = await UETestGenAction().run(context)
+        result = await require_action("ue_test_gen").run(context)
         return result.to_dict()
 
     async def _do_run_engine_compile(self, context: Dict[str, Any]) -> Dict[str, Any]:
@@ -76,8 +75,10 @@ class DevAgent(BaseAgent):
         入参通过 context 透传：engine_path / uproject_path / target_name / platform / config。
         若 context 缺项，Action 会自动解析（resolve_project_engine + _infer_target_name）。
         """
-        from actions.ue_compile_check import UECompileCheckAction
-        action = UECompileCheckAction()
+        from plugins.registry import create_action
+        action = create_action("ue_compile_check")
+        if action is None:
+            return {"status": "error", "error": "ue_compile_check 未注册（UE 插件未加载）"}
         result = await action.run(context)
         # ActionResult.to_dict() 已经把 status / errors / warnings / products 都平铺好
         return result.to_dict()
@@ -473,8 +474,8 @@ class DevAgent(BaseAgent):
                 # v0.20 UCP：若 Editor 可用，查当前关卡 Actor 列表辅助 Reflexion
                 if context.get("ucp_available"):
                     try:
-                        from actions.ue_editor_control import UEEditorControlAction
-                        ucp_result = await UEEditorControlAction().run({
+                        from plugins.registry import require_action
+                        ucp_result = await require_action("ue_editor_control").run({
                             "op": "get_actors",
                             "project_id": context.get("project_id"),
                         })

@@ -188,7 +188,7 @@ class SkillRunner:
 
     def _build_actions(self) -> Dict[str, Any]:
         from actions.generic_cli import GenericCLIAction
-        from actions.write_file import WriteFileAction
+        from plugins.registry import create_action
         actions: Dict[str, Any] = {}
         for spec in self.skill.cli_tools:
             actions[spec.name] = GenericCLIAction(spec)
@@ -197,24 +197,20 @@ class SkillRunner:
         allowed_exts = outs.get("allowed_exts")
         if allowed_exts is not None and not isinstance(allowed_exts, list):
             allowed_exts = None
+        skill_dir = self.skill.source_path.parent if self.skill.source_path else None
         for bt in self.skill.builtin_tools:
-            if bt == "write_file":
-                actions["write_file"] = WriteFileAction(
-                    allowed_exts=allowed_exts, write_mode=write_mode,
-                )
-            elif bt == "read_file":
-                from actions.read_repo_file import ReadRepoFileAction
-                actions["read_file"] = ReadRepoFileAction()
-            elif bt == "shell":
-                from actions.chat.shell_exec import ShellAction
-                actions["shell"] = ShellAction()
-            elif bt == "gen_image" or bt.startswith("gen_image:"):
-                # `gen_image:images` 把图归到 outputs.root/images/ 子目录，
-                # 配合 `globs: ["images/*.png"]` 一次产出多张归同一 kind
-                from actions.gen_image import GenImageAction
-                subdir = bt.split(":", 1)[1] if ":" in bt else ""
-                actions["gen_image"] = GenImageAction(subdir=subdir)
             # mcp__ 声明在 executor 层处理，不建 Action
+            if str(bt).startswith("mcp__"):
+                continue
+            action = create_action(
+                bt,
+                skill_dir=skill_dir,
+                allowed_exts=allowed_exts,
+                write_mode=write_mode,
+            )
+            if action is None:
+                continue
+            actions[action.name] = action
         return actions
 
     def _build_system(self, context: dict) -> str:

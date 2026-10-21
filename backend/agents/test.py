@@ -60,7 +60,7 @@ class TestAgent(BaseAgent):
 
     async def run_playtest(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """跑 UE Automation Framework 测试（headless UnrealEditor-Cmd）"""
-        from actions.ue_playtest import UEPlaytestAction
+        from plugins.registry import require_action
 
         # 打通 SSE log 回调
         from events import event_manager
@@ -79,7 +79,7 @@ class TestAgent(BaseAgent):
         ctx = dict(context)
         ctx["log_callback"] = _push_log
 
-        action = UEPlaytestAction()
+        action = require_action("ue_playtest")
         result = await action.run(ctx)
         d = result.to_dict() if hasattr(result, "to_dict") else (result.data or {})
         # orchestrator 按 status 分流：success → play_test_passed；其他 → play_test_failed / BLOCKED

@@ -5635,8 +5635,8 @@ class TicketOrchestrator:
     ) -> Dict:
         """尝试 uproject 自愈，返回 heal_result dict。"""
         try:
-            from actions.ue_uproject_heal import UEUprojectHealAction
-            action = UEUprojectHealAction()
+            from plugins.registry import require_action
+            action = require_action("ue_uproject_heal")
             log_text = (playtest_result.get("raw_head") or "") + (playtest_result.get("raw_tail") or "")
             result = await action.run({
                 "project_id": project_id,

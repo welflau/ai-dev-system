@@ -8,6 +8,8 @@ router 不挂在 /api/projects/{id} 下 —— 插件跟看哪个项目无关。
 端点：
 - GET /api/plugins              列表（默认只给已安装的，?all=true 带上市场里可浏览的）
 - GET /api/plugins/detail       单个插件的内容明细（skills/commands/agents/rules/hooks/mcp）
+- GET /api/plugins/ads          ADS 自己的成套插件（backend/plugins/）
+- GET /api/plugins/ads/detail   单个 ADS 套件的 Action / skill 明细
 
 **只读**：没有 install / enable 端点，也永远不会有。插件的开关记在各 Client
 自己的 settings.json 里，ADS 去改它等于替用户操作别人的客户端配置。
@@ -20,6 +22,7 @@ from typing import Any, Dict, List
 from fastapi import APIRouter, HTTPException
 
 from plugin_scanner import scan_plugins, iter_skill_files, _CONTENT_DIRS
+from plugins.registry import get_ads_plugin, list_ads_plugins
 
 router = APIRouter(prefix="/api/plugins", tags=["plugins"])
 logger = logging.getLogger("api.plugins")
@@ -87,6 +90,53 @@ async def list_plugins(all: bool = False, cli: str = ""):
             "shown": len(plugins),
         },
     }
+
+
+async def _project_traits(project_id: str):
+    if not project_id:
+        return None
+    from database import db
+    row = await db.fetch_one("SELECT traits FROM projects WHERE id = ?", (project_id,))
+    if not row:
+        return []
+    raw = row["traits"] if isinstance(row, dict) else row[0]
+    if isinstance(raw, list):
+        return [str(x) for x in raw]
+    if isinstance(raw, str) and raw.strip():
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+        if isinstance(data, list):
+            return [str(x) for x in data]
+    return []
+
+
+@router.get("/ads")
+async def list_ads_suite_plugins(project_id: str = ""):
+    """ADS 进程内的成套插件。可选 project_id 用来标当前项目会不会启用。"""
+    traits = await _project_traits(project_id)
+    plugins = list_ads_plugins(traits=traits)
+    return {
+        "plugins": plugins,
+        "counts": {
+            "shown": len(plugins),
+            "active": sum(1 for p in plugins if p.get("active")),
+        },
+        "project_id": project_id or None,
+        "traits": traits,
+    }
+
+
+@router.get("/ads/detail")
+async def ads_suite_plugin_detail(id: str, project_id: str = ""):
+    traits = await _project_traits(project_id)
+    info = get_ads_plugin(id, traits=traits)
+    if not info:
+        raise HTTPException(404, f"ADS 套件不存在: {id}")
+    info["project_id"] = project_id or None
+    info["traits"] = traits
+    return info
 
 
 def _list_md(d: Path, kind: str, limit: int = 200) -> List[Dict[str, str]]:

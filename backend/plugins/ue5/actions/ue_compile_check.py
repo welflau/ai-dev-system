@@ -1,0 +1,580 @@
+"""
+UECompileCheckAction — 调 UnrealBuildTool 编译项目 + 结构化错误解析（v0.18 Phase A）
+
+输入 context:
+    engine_path        : 引擎根目录（优先）。未给则从 uproject 自动解析（UEEngineResolver）
+    uproject_path      : .uproject 绝对路径
+    target_name        : 编译 Target（默认 <ProjectName>Editor）
+    target_platform    : Win64 | Linux | Mac
+    target_config      : Development | Debug | Shipping | Test
+    timeout_seconds    : 超时秒（默认 600，首次可能要 2-5 分钟）
+    sop_config         : 来自 SOP fragment 的 config dict，内含 timeout_seconds / max_retries
+
+输出 data:
+    {
+      "status": "success" | "error",
+      "exit_code": int,
+      "duration_ms": int,
+      "command": "...",           # 实际执行的命令
+      "errors": [
+        {
+          "file": "path\\to\\file.h",
+          "line": 42,
+          "column": 10 | null,
+          "code": "C2065" | "LNK2019" | "UHT" | null,
+          "category": "compile" | "link" | "uht" | "ubt" | "unknown",
+          "severity": "error",
+          "msg": "..."
+        }
+      ],
+      "warnings": [...同结构..],
+      "raw_head": "stdout 开头 ~8KB",
+      "raw_tail": "stdout 末尾 ~8KB",
+      "products": [...],          # 编译产物（.dll/.exe）
+      "engine_used": {path, version, type}
+    }
+
+降级：Agent 返回 status=error → orchestrator 已有的 BLOCKED + 自动诊断链接管。
+
+本文件位于 UE 插件目录。公共入口见 ``actions/ue_compile_check.py`` 转调；
+运行时请用 ``plugins.registry.create_action("ue_compile_check")``。
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import re
+import time
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+from actions.base import ActionBase, ActionResult
+from engines.ue_resolver import (
+    UEEngineInfo,
+    get_ubt_path,
+    resolve_project_engine,
+    verify_engine,
+)
+
+logger = logging.getLogger("actions.ue_compile_check")
+
+
+# ==================== 错误解析 ====================
+
+# MSVC C++ 编译错误：file(line): error CXXXX: msg
+_RE_MSVC_COMPILE = re.compile(
+    r"^(?P<file>[A-Za-z]:[\\/][^(]+?)\((?P<line>\d+)(?:,\s*(?P<col>\d+))?\)\s*:\s*"
+    r"(?P<sev>error|warning|fatal error)\s+(?P<code>[A-Za-z]+\d+)\s*:\s*(?P<msg>.+)$"
+)
+
+# UHT / 通用 UE 构建错误：file(line): Error: msg  (无 code)
+_RE_UHT_UBT = re.compile(
+    r"^(?P<file>[A-Za-z]:[\\/][^(]+?)\((?P<line>\d+)\)\s*:\s*"
+    r"(?P<sev>Error|Warning|FATAL)\s*:\s*(?P<msg>.+)$"
+)
+
+# C# 编译器消息（.Target.cs/.Build.cs）：file(line,col): warning CS0618: msg
+_RE_CSHARP = re.compile(
+    r"^(?P<file>[A-Za-z]:[\\/][^(]+?\.cs)\((?P<line>\d+),(?P<col>\d+)\)\s*:\s*"
+    r"(?P<sev>error|warning)\s+(?P<code>CS\d+)\s*:\s*(?P<msg>.+)$"
+)
+
+# 链接器错误：无 file:line，形如 "foo.obj : error LNK2019: unresolved ..."
+# 或 "error LNK1120: N unresolved externals"
+_RE_LINKER = re.compile(
+    r"(?P<file>\S+\.(?:obj|lib|exe|dll))?\s*:\s*"
+    r"(?P<sev>error|fatal error)\s+(?P<code>LNK\d+)\s*:\s*(?P<msg>.+)$",
+    re.IGNORECASE,
+)
+
+# UBT 自身错误（无文件位置）：ERROR: msg 或 UnrealBuildTool: ERROR: msg
+_RE_UBT_GENERIC = re.compile(
+    r"^(?:UnrealBuildTool:\s*)?(?P<sev>ERROR|Error)\s*:\s*(?P<msg>.+)$"
+)
+
+
+def _parse_ubt_output(text: str) -> Tuple[List[Dict], List[Dict]]:
+    """扫 UBT 全部输出（stdout 合并 stderr），返回 (errors, warnings)。
+
+    同一行可能被多条规则匹配，只接受第一条（规则顺序决定优先级）。
+    """
+    errors: List[Dict] = []
+    warnings: List[Dict] = []
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        # C# 优先（.cs 扩展名明确，避免被 MSVC 通用正则抢走）
+        m = _RE_CSHARP.match(line)
+        if m:
+            sev = m.group("sev").lower()
+            entry = {
+                "file": m.group("file"),
+                "line": int(m.group("line")),
+                "column": int(m.group("col")),
+                "code": m.group("code"),
+                "category": "csharp",
+                "severity": sev,
+                "msg": m.group("msg"),
+            }
+            (errors if entry["severity"] == "error" else warnings).append(entry)
+            continue
+
+        # MSVC C++ 编译
+        m = _RE_MSVC_COMPILE.match(line)
+        if m:
+            sev = m.group("sev").lower()
+            entry = {
+                "file": m.group("file"),
+                "line": int(m.group("line")),
+                "column": int(m.group("col")) if m.group("col") else None,
+                "code": m.group("code"),
+                "category": "compile",
+                "severity": "error" if "error" in sev else "warning",
+                "msg": m.group("msg"),
+            }
+            (errors if entry["severity"] == "error" else warnings).append(entry)
+            continue
+
+        # UHT / 通用 UE 错误
+        m = _RE_UHT_UBT.match(line)
+        if m:
+            sev = m.group("sev").lower()
+            entry = {
+                "file": m.group("file"),
+                "line": int(m.group("line")),
+                "column": None,
+                "code": "UHT",
+                "category": "uht",
+                "severity": "error" if "error" in sev or "fatal" in sev else "warning",
+                "msg": m.group("msg"),
+            }
+            (errors if entry["severity"] == "error" else warnings).append(entry)
+            continue
+
+        # 链接器
+        m = _RE_LINKER.match(line)
+        if m:
+            entry = {
+                "file": m.group("file") or None,
+                "line": None,
+                "column": None,
+                "code": m.group("code"),
+                "category": "link",
+                "severity": "error",
+                "msg": m.group("msg"),
+            }
+            errors.append(entry)
+            continue
+
+        # UBT 自身错误（放最后，兜底）
+        m = _RE_UBT_GENERIC.match(line)
+        if m:
+            msg = m.group("msg")
+            # 过滤掉 UE 自家日志的 "Error: some word is fine"（只收明显的错误语气）
+            if len(msg) < 10:
+                continue
+            entry = {
+                "file": None,
+                "line": None,
+                "column": None,
+                "code": None,
+                "category": "ubt",
+                "severity": "error",
+                "msg": msg,
+            }
+            errors.append(entry)
+            continue
+
+    return errors, warnings
+
+
+# ==================== Action ====================
+
+
+class UECompileCheckAction(ActionBase):
+    """调 UBT 编译 UE 项目 + 解析错误"""
+
+    available_for_traits = {"any_of": ["engine:ue5", "engine:ue4"]}
+
+    @property
+    def name(self) -> str:
+        return "ue_compile_check"
+
+    @property
+    def description(self) -> str:
+        return "调 UnrealBuildTool 编译 UE 项目，产出结构化编译错误列表"
+
+    async def run(self, context: Dict[str, Any]) -> ActionResult:
+        sop_cfg = context.get("sop_config") or {}
+        timeout_seconds = int(
+            context.get("timeout_seconds")
+            or sop_cfg.get("timeout_seconds")
+            or 600
+        )
+
+        log_cb = context.get("log_callback")
+
+        async def _log(msg: str):
+            logger.info(msg)
+            if log_cb:
+                try:
+                    await log_cb(msg)
+                except Exception:
+                    pass
+
+        async def _err_log(msg: str, detail: Optional[Dict] = None):
+            await _log(f"[error] {msg}")
+            return _err(msg, detail)
+
+        uproject_path = context.get("uproject_path") or context.get("uproject")
+        engine_path = context.get("engine_path") or context.get("ue_engine_path")
+        await _log(f"[ubt] 入参 engine_path={engine_path or '(无)'}  uproject={uproject_path or '(无)'}")
+
+        # 未显式指定 uproject → 从项目 Git 仓库根扫 *.uproject 自动探测
+        if not uproject_path:
+            project_id = context.get("project_id")
+            if project_id:
+                try:
+                    from git_manager import git_manager
+                    repo_path = git_manager._repo_path(project_id)
+                    await _log(f"[ubt] 自动探测 .uproject @ {repo_path}")
+                    if repo_path and Path(repo_path).is_dir():
+                        found = sorted(Path(repo_path).glob("*.uproject"))
+                        if found:
+                            uproject_path = str(found[0])
+                            await _log(f"[ubt] 已定位 .uproject: {uproject_path}")
+                        else:
+                            await _log(f"[ubt] 仓库内无 .uproject 文件")
+                    else:
+                        await _log(f"[ubt] 仓库目录不存在或不是目录: {repo_path}")
+                except Exception as e:
+                    await _log(f"[ubt] 自动探测 .uproject 异常: {e}")
+        target_name = context.get("target_name") or context.get("ue_target_name")
+        platform = (context.get("target_platform")
+                    or context.get("ue_target_platform")
+                    or "Win64")
+        config_name = (context.get("target_config")
+                       or context.get("ue_target_config")
+                       or "Development")
+
+        # 1. 解析引擎
+        engine_info: Optional[UEEngineInfo] = None
+        if engine_path:
+            await _log(f"[ubt] verify_engine({engine_path})")
+            engine_info = verify_engine(engine_path)
+        elif uproject_path:
+            await _log(f"[ubt] resolve_project_engine({uproject_path})")
+            engine_info = resolve_project_engine(uproject_path)
+        else:
+            return await _err_log("缺少 engine_path 和 uproject_path，无法定位 UE 引擎")
+
+        if not engine_info or not engine_info.path:
+            return await _err_log(
+                "无法定位 UE 引擎。请在项目设置里配置 ue_engine_path，或确保 "
+                ".uproject 的 EngineAssociation 对应的版本已安装",
+                detail={"uproject_path": uproject_path, "engine_path_tried": engine_path},
+            )
+
+        await _log(
+            f"[ubt] 引擎 OK: {engine_info.path} (UE {engine_info.version} "
+            f"[{engine_info.type}] has_ubt={engine_info.has_ubt})"
+        )
+
+        if not engine_info.has_ubt:
+            return await _err_log(
+                f"引擎 {engine_info.path} 缺 UnrealBuildTool.exe。"
+                f"若是自编译 build，需先运行 GenerateProjectFiles.bat + 编引擎",
+                detail={"engine": engine_info.to_dict()},
+            )
+
+        ubt = get_ubt_path(engine_info.path)
+        if not ubt:
+            return await _err_log(f"UBT 路径计算失败: {engine_info.path}")
+
+        # 2. uproject 验证
+        if not uproject_path:
+            return await _err_log("缺 uproject_path")
+        up = Path(uproject_path)
+        if not up.is_file():
+            return await _err_log(f".uproject 不存在: {up}")
+
+        # 3. 推断 target_name
+        if not target_name:
+            target_name = _infer_target_name(up, prefer_editor=True)
+            if not target_name:
+                return await _err_log(
+                    "无法推断 target_name。请在项目设置里配置，或确保 "
+                    f"Source/ 下有 <ProjectName>(Editor).Target.cs"
+                )
+            await _log(f"[ubt] 自动推断 target={target_name}")
+        else:
+            await _log(f"[ubt] 指定 target={target_name}")
+
+        # 4. 组装命令
+        cmd = [
+            str(ubt),
+            target_name,
+            platform,
+            config_name,
+            str(up),
+            "-waitmutex",
+            "-NoHotReload",
+        ]
+        # v0.19.x A 方案 Layer 2：-SingleFile 支持快速增量预编（30-90s vs 3-5min）
+        single_files = context.get("single_files") or []
+        if single_files:
+            # UBT 支持多次 -SingleFile，但实测取第一个就够（主错会暴露）
+            for sf in single_files[:1]:
+                cmd.append(f"-SingleFile={sf}")
+            await _log(f"[ubt] SingleFile 模式: {single_files[0]}")
+        cmd_str = " ".join(f'"{c}"' if " " in c else c for c in cmd)
+        # 启动前先把命令推出来，即便 subprocess 启动失败也能看到"准备执行什么"
+        await _log(f"[ubt] cmd: {cmd_str}")
+
+        # 5. 执行
+        # v0.19.x: 用 subprocess.Popen + 线程队列替代 asyncio.create_subprocess_exec
+        # 原因：Python 3.14 asyncio ProactorEventLoop 在 Windows 上与 UE5.7 UBA 子进程
+        # 管理存在兼容性问题（create_subprocess_exec 抛空异常）。
+        # 线程方案完全绕开 asyncio 子进程，同时通过 asyncio.Queue 保留流式输出。
+        import subprocess as _subprocess
+        import threading as _threading
+
+        log_callback = log_cb
+        progress_cb = context.get("_ticket_progress_cb")
+        t0 = time.time()
+        collected_lines: List[str] = []
+        _sentinel = object()
+
+        try:
+            proc = _subprocess.Popen(
+                cmd,
+                stdin=_subprocess.DEVNULL,
+                stdout=_subprocess.PIPE,
+                stderr=_subprocess.STDOUT,
+                encoding="utf-8",
+                errors="replace",
+            )
+        except FileNotFoundError as fe:
+            logger.error("UBT FileNotFoundError: ubt=%s err=%r", ubt, fe, exc_info=True)
+            return await _err_log(f"启动 UBT 失败: {ubt} 不存在或权限不足")
+        except Exception as e:
+            logger.error("UBT Popen Exception type=%s repr=%r", type(e).__name__, e, exc_info=True)
+            err_detail = f"{type(e).__name__}: {e!r}"
+            return await _err_log(f"启动 UBT 异常: {err_detail}")
+
+        await _log(f"[ubt] subprocess pid={proc.pid}, 开始读 stdout (thread mode)...")
+
+        # 线程读 stdout → asyncio Queue
+        loop = asyncio.get_event_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+
+        def _reader_thread():
+            try:
+                assert proc.stdout is not None
+                for raw_line in proc.stdout:
+                    line = raw_line.rstrip("\r\n")
+                    loop.call_soon_threadsafe(queue.put_nowait, line)
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, _sentinel)
+
+        reader = _threading.Thread(target=_reader_thread, daemon=True)
+        reader.start()
+
+        timed_out = False
+        try:
+            deadline = t0 + timeout_seconds
+            while True:
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    timed_out = True
+                    break
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=min(remaining, 5.0))
+                except asyncio.TimeoutError:
+                    # 5s 没输出就继续等（可能在编译 shader）
+                    continue
+                if item is _sentinel:
+                    break
+                line = item
+                collected_lines.append(line)
+                if log_callback is not None:
+                    try:
+                        await log_callback(line)
+                    except Exception:
+                        pass
+                if progress_cb is not None:
+                    try:
+                        await progress_cb(line)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+        if timed_out:
+            try:
+                proc.kill()
+                proc.wait(timeout=5)
+            except Exception:
+                pass
+            reader.join(timeout=2)
+            duration_ms = int((time.time() - t0) * 1000)
+            return _err(
+                f"UBT 超时（{timeout_seconds}s）",
+                detail={
+                    "duration_ms": duration_ms,
+                    "command": cmd_str,
+                    "engine_used": engine_info.to_dict(),
+                    "partial_output": "\n".join(collected_lines[-100:]),
+                },
+            )
+
+        proc.wait(timeout=10)
+        reader.join(timeout=5)
+
+        duration_ms = int((time.time() - t0) * 1000)
+        text = "\n".join(collected_lines)
+        exit_code = proc.returncode if proc.returncode is not None else -1
+
+        # 6. 解析
+        errors, warnings = _parse_ubt_output(text)
+
+        # 7. 找产物
+        products = _find_build_products(up.parent, target_name, platform, config_name)
+
+        # 8. 打包结果
+        head = text[:8192]
+        tail = text[-8192:] if len(text) > 8192 else ""
+        # 状态语义（关键）：
+        # - success        UBT exit=0 且无 errors
+        # - compile_failed UBT 真跑了但编译失败（有 errors，或 exit!=0 且有输出可诊断）
+        #   → orchestrator 会走 reject_goto: development 链路触发 fix_issues 修复
+        # - error          环境级失败：UBT 没启动 / uproject 找不到 / exit!=0 但零输出
+        #   → orchestrator 走 BLOCKED 人工介入（不触发无意义的 fix_issues 循环）
+        #
+        # 零输出 exit!=0 单独判 error 的原因（实测踩坑）：
+        #   UBA 子进程 / mutex / 环境问题会让 UBT 以非 0 退出却一行 stdout 都没有，
+        #   errors 解析出来是空。若仍判 compile_failed，fix_issues 拿不到任何错误信息，
+        #   LLM 反思只能空转，工单在 develop↔compile_failed 间无限循环烧 token 后才 blocked。
+        #   直接判环境级 error，第一时间 blocked 人工介入，止血。
+        no_output = not text.strip()
+        if exit_code == 0 and not errors:
+            status = "success"
+        elif exit_code != 0 and not errors and no_output:
+            status = "error"
+        else:
+            status = "compile_failed"
+
+        logger.info(
+            "🔧 UBT done: exit=%d errors=%d warnings=%d duration=%.1fs status=%s",
+            exit_code, len(errors), len(warnings), duration_ms / 1000.0, status,
+        )
+
+        env_err_msg = (
+            f"UBT 异常退出（exit={exit_code}）但无任何 stdout 输出，"
+            f"疑似 UBA 子进程 / mutex / 引擎环境问题，非代码编译错误。"
+            f"命令: {cmd_str}"
+        )
+
+        data: Dict[str, Any] = {
+            "status": status,
+            "exit_code": exit_code,
+            "duration_ms": duration_ms,
+            "command": cmd_str,
+            "errors": errors,
+            "warnings": warnings,
+            "raw_head": head,
+            "raw_tail": tail,
+            "products": products,
+            "engine_used": {
+                "path": engine_info.path,
+                "version": engine_info.version,
+                "type": engine_info.type,
+            },
+            "target_name": target_name,
+            "target_platform": platform,
+            "target_config": config_name,
+        }
+        # 环境级 error 时把诊断信息透传给 orchestrator 的 BLOCKED 分支（读 message/error）
+        if status == "error":
+            data["message"] = env_err_msg
+            data["error"] = env_err_msg
+
+        if status == "success":
+            msg = f"编译通过（耗时 {duration_ms // 1000}s）"
+        elif status == "error":
+            msg = env_err_msg
+        else:
+            msg = f"编译失败（{len(errors)} 个 error, {len(warnings)} 个 warning）"
+        return ActionResult(
+            success=(status == "success"),
+            data=data,
+            message=msg,
+            error=(env_err_msg if status == "error" else None),
+        )
+
+
+# ==================== 辅助 ====================
+
+
+def _err(msg: str, detail: Optional[Dict] = None) -> ActionResult:
+    data = {"status": "error", "errors": [], "warnings": [], "message": msg}
+    if detail:
+        data.update(detail)
+    return ActionResult(success=False, data=data, message=msg, error=msg)
+
+
+def _infer_target_name(uproject: Path, prefer_editor: bool = True) -> Optional[str]:
+    """从 Source/ 里找 <Name>(Editor).Target.cs 推断默认 target。
+
+    注意：.Target.cs 是双点后缀，Path.stem 只剥一层只能剩 '<Name>.Target'，
+    必须手动剥 '.Target.cs' 才能拿到纯名字。
+    递归搜索 Source/ 及其子目录，兼容 Target.cs 放在子目录的情况。
+    同时用 .uproject 文件名作为 fallback（<ProjectName>Editor）。
+    """
+    src = uproject.parent / "Source"
+    candidates: List[str] = []
+    if src.is_dir():
+        # 递归搜索（rglob），兼容 Source/ProjectName/Foo.Target.cs
+        for f in src.rglob("*.Target.cs"):
+            name = f.name
+            if name.endswith(".Target.cs"):
+                candidates.append(name[: -len(".Target.cs")])
+
+    if not candidates:
+        # Fallback：用 .uproject 文件名推断（如 TestFPS.uproject → TestFPSEditor）
+        project_name = uproject.stem
+        if project_name:
+            return f"{project_name}Editor" if prefer_editor else project_name
+        return None
+    # 优先 Editor target（开发态编译，支持热重载）
+    if prefer_editor:
+        for c in candidates:
+            if c.endswith("Editor"):
+                return c
+    # 回退到第一个非 Editor target（Game/Client/Server）
+    for c in candidates:
+        if not c.endswith("Editor"):
+            return c
+    return candidates[0]
+
+
+def _find_build_products(
+    project_dir: Path,
+    target_name: str,
+    platform: str,
+    config: str,
+) -> List[str]:
+    """扫常见产物位置，仅列出文件名供日志展示"""
+    binaries = project_dir / "Binaries" / platform
+    if not binaries.is_dir():
+        return []
+    # Editor build 的 .dll；Game build 的 .exe
+    prods = []
+    for p in binaries.glob(f"*{target_name}*"):
+        if p.suffix.lower() in (".exe", ".dll", ".pdb"):
+            prods.append(str(p.relative_to(project_dir)).replace("\\", "/"))
+    return sorted(prods)[:10]

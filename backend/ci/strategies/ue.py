@@ -202,8 +202,8 @@ class UECIStrategy(CIStrategy):
         logs = []
         try:
             if build_type == "ubt_compile":
-                from actions.ue_compile_check import UECompileCheckAction
-                result = await UECompileCheckAction().run({
+                from plugins.registry import require_action
+                result = await require_action("ue_compile_check").run({
                     "project_id": project_id,
                     "log_callback": _log_cb,
                     **kwargs,
@@ -212,8 +212,8 @@ class UECIStrategy(CIStrategy):
                 logs.append({"step": "ubt_compile", "passed": data.get("status") == "success"})
 
             elif build_type == "playtest":
-                from actions.ue_playtest import UEPlaytestAction
-                result = await UEPlaytestAction().run({
+                from plugins.registry import require_action
+                result = await require_action("ue_playtest").run({
                     "project_id": project_id,
                     "log_callback": _log_cb,
                     **kwargs,
@@ -222,8 +222,8 @@ class UECIStrategy(CIStrategy):
                 logs.append({"step": "playtest", "passed": data.get("status") == "success", "v": "v2"})
 
             elif build_type == "take_screenshot":
-                from actions.ue_screenshot import UEScreenshotAction
-                result = await UEScreenshotAction().run({
+                from plugins.registry import require_action
+                result = await require_action("ue_screenshot").run({
                     "project_id": project_id,
                     "log_callback": _log_cb,
                     **kwargs,
@@ -240,8 +240,8 @@ class UECIStrategy(CIStrategy):
                     await self._save_screenshot_to_chat(project_id, shots, build_id)
 
             elif build_type == "package_client":
-                from actions.ue_package import UEPackageAction
-                result = await UEPackageAction().run({
+                from plugins.registry import require_action
+                result = await require_action("ue_package").run({
                     "project_id": project_id,
                     "log_callback": _log_cb,
                     "platform": kwargs.get("platform", "Win64"),

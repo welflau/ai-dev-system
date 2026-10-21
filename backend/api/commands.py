@@ -936,8 +936,8 @@ async def _cmd_ue_bp_gen(args: str, project_id: Optional[str], context: dict) ->
             success=False,
             output="用法：/ue-bp-gen <描述>\n例：/ue-bp-gen 创建一个波次生成器，每隔5秒在随机位置生成一个敌人",
         )
-    from actions.ue_blueprint_gen import BlueprintGenAction
-    action = BlueprintGenAction()
+    from plugins.registry import require_action
+    action = require_action("ue_blueprint_gen")
     result = await action.run({"description": args.strip(), "project_id": project_id})
     output = result.message or result.error or ""
     # 附加生成的代碼供用戶查看
@@ -956,8 +956,8 @@ async def _cmd_ue_level(args: str, project_id: Optional[str], context: dict) -> 
             success=False,
             output="用法：/ue-level <描述>\n例：/ue-level 8×8地面，四角放燈光，中央出生點，全NavMesh",
         )
-    from actions.ue_level_gen import LevelGenAction
-    action = LevelGenAction()
+    from plugins.registry import require_action
+    action = require_action("ue_level_gen")
     result = await action.run({"description": args.strip(), "project_id": project_id})
     output = result.message or result.error or ""
     if result.data and result.data.get("generated_code"):

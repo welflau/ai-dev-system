@@ -1545,7 +1545,8 @@ const adsShell = (() => {
 
     function _renderMdOrSource(body, content, path, preview, rawPrefix) {
         if (preview && window.marked) {
-            body.innerHTML = `<div class="main-ws-md markdown-body">${marked.parse(content)}</div>`;
+            body.innerHTML = `<div class="main-ws-md">${_renderMdDocument(content)}</div>`;
+            _highlightMdCode(body);
             body.querySelectorAll('img').forEach(img => {
                 const src = img.getAttribute('src') || '';
                 if (src && !src.startsWith('http') && !src.startsWith('/') && !src.startsWith('data:')) {
@@ -3328,6 +3329,7 @@ function switchBundleTab(inner) {
     _bundleTab = inner;
     _switchInnerTab('tab-bundles', 'bundle-panel-', inner);
     if (inner === 'packs') loadProjectPacks();
+    if (inner === 'ads') loadAdsPluginList();
     if (inner === 'plugins') loadPluginList();
 }
 
@@ -3335,7 +3337,177 @@ function switchBundleTab(inner) {
 const _PLUGIN_CONTENT_ICONS = {
     skills: '🎓', commands: '⚡', agents: '🤖',
     rules: '📋', hooks: '🪝', mcp: '🔌', fragments: '🧾',
+    actions: '⚙️',
 };
+
+async function loadAdsPluginList() {
+    const container = document.getElementById('adsPluginList');
+    if (!container) return;
+    container.innerHTML = '<div class="empty-state-sm">加载中...</div>';
+    try {
+        const qs = currentProjectId ? `?project_id=${encodeURIComponent(currentProjectId)}` : '';
+        const resp = await fetch(`${API}/plugins/ads${qs}`);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const data = await resp.json();
+        container._adsPluginData = data;
+        _renderAdsPluginList(container, data);
+    } catch (e) {
+        container.innerHTML = `<div class="empty-state-sm">加载失败: ${escapeHtml(e.message)}</div>`;
+    }
+}
+
+function _renderAdsPluginList(container, data) {
+    const c = data.counts || {};
+    const summary = document.getElementById('adsPluginListSummary');
+    if (summary) {
+        const projectHint = data.project_id
+            ? `当前项目会启用 <strong style="color:#22c55e;">${c.active || 0}</strong> / ${c.shown || 0}`
+            : `已加载 <strong style="color:var(--text-primary);">${c.shown || 0}</strong> 个（打开项目后按 traits 标启用）`;
+        summary.innerHTML = `
+            <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:11px;color:var(--text-muted);
+                        padding:8px 10px;background:var(--bg-elevated);border-radius:6px;">
+                <span>${projectHint}</span>
+            </div>`;
+    }
+    const tabCount = document.getElementById('bundleCountAds');
+    if (tabCount) tabCount.textContent = c.shown ? ` ${c.shown}` : '';
+
+    const plugins = data.plugins || [];
+    if (!plugins.length) {
+        container.innerHTML = '<div class="empty-state-sm">未发现 ADS 套件（backend/plugins/*/plugin.json）</div>';
+        return;
+    }
+
+    container.innerHTML = plugins.map(p => {
+        const st = p.active === true
+            ? { label: '✅ 当前项目会启用', color: '#22c55e', bg: 'rgba(34,197,94,.12)',
+                hint: '项目 traits 命中了 required_traits' }
+            : p.active === false
+            ? { label: '○ 当前项目不会启用', color: 'var(--text-muted)', bg: 'var(--bg-elevated)',
+                hint: '换带对应 trait 的项目才会用到这套 Action' }
+            : { label: '已加载', color: '#38bdf8', bg: 'rgba(56,189,248,.12)',
+                hint: '进程内已注册；打开项目后按 traits 判断是否启用' };
+
+        const chips = Object.entries(p.counts || {})
+            .filter(([, n]) => n)
+            .map(([k, n]) => `<code class="mcp-tool-tag" style="font-size:10px;">${_PLUGIN_CONTENT_ICONS[k] || '📄'} ${escapeHtml(k)} ${n}</code>`)
+            .join('');
+        const traits = p.required_traits || {};
+        const traitBits = ['any_of', 'all_of', 'none_of']
+            .flatMap(k => (traits[k] || []).map(t => `${k === 'none_of' ? '!' : ''}${t}`));
+        const traitHtml = traitBits.length
+            ? `<span class="skill-row-desc">${traitBits.map(t => `<code class="mcp-tool-tag" style="font-size:10px;">${escapeHtml(t)}</code>`).join(' ')}</span>`
+            : '';
+        const ver = p.version ? `<span class="skill-row-id">v${escapeHtml(p.version)}</span>` : '';
+        const arg = escapeHtml(JSON.stringify({ id: p.id }));
+        return `
+        <div class="skill-row pack-row-clickable" style="cursor:pointer;"
+             onclick='showAdsPluginDetail(${arg})' title="点击查看 Action / skill">
+            <div class="skill-row-info">
+                <div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;">
+                    <span class="skill-row-name">⚙️ ${escapeHtml(p.name || p.id)}</span>
+                    <span style="font-size:10px;padding:1px 6px;border-radius:3px;background:${st.bg};color:${st.color};"
+                          title="${escapeHtml(st.hint)}">${st.label}</span>
+                    ${chips}
+                </div>
+                <span class="skill-row-id">${escapeHtml(p.id)} ${ver}</span>
+                ${p.description ? `<span class="skill-row-desc">${escapeHtml(p.description)}</span>` : ''}
+                ${traitHtml}
+            </div>
+        </div>`;
+    }).join('');
+}
+
+async function showAdsPluginDetail({ id }) {
+    let modal = document.getElementById('adsPluginDetailModal');
+    if (!modal) {
+        modal = document.createElement('div');
+        modal.id = 'adsPluginDetailModal';
+        modal.className = 'modal-overlay';
+        modal.innerHTML = `
+            <div class="modal" style="max-width:760px;width:90vw;max-height:84vh;display:flex;flex-direction:column;">
+                <div class="modal-header">
+                    <h3 id="adsPluginDetailTitle" style="margin:0;font-size:15px;">ADS 套件</h3>
+                    <button class="btn-icon" onclick="closeModal('adsPluginDetailModal')">&times;</button>
+                </div>
+                <div id="adsPluginDetailBody" style="flex:1;overflow-y:auto;padding:14px 18px;"></div>
+            </div>`;
+        modal.addEventListener('click', e => { if (e.target === modal) closeModal('adsPluginDetailModal'); });
+        document.body.appendChild(modal);
+    }
+    const body = document.getElementById('adsPluginDetailBody');
+    document.getElementById('adsPluginDetailTitle').textContent = '⚙️ ' + id;
+    body.innerHTML = '<div class="empty-state-sm">加载中...</div>';
+    openModal('adsPluginDetailModal');
+    try {
+        const qs = new URLSearchParams({ id, ...(currentProjectId ? { project_id: currentProjectId } : {}) });
+        const resp = await fetch(`${API}/plugins/ads/detail?${qs}`);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const d = await resp.json();
+        document.getElementById('adsPluginDetailTitle').textContent = `⚙️ ${d.name || d.id}`;
+        body.innerHTML = _renderAdsPluginDetailBody(d);
+    } catch (e) {
+        body.innerHTML = `<div class="empty-state-sm">加载失败: ${escapeHtml(e.message)}</div>`;
+    }
+}
+
+function _renderAdsPluginDetailBody(d) {
+    const status = d.active === true ? '当前项目会启用'
+        : d.active === false ? '当前项目不会启用' : '已加载（未选项目）';
+    const meta = [
+        ['标识', d.id],
+        ['版本', d.version || '—'],
+        ['状态', status],
+        ['目录', d.path],
+    ].map(([k, v]) => `
+        <div style="display:flex;gap:8px;font-size:11px;padding:3px 0;">
+            <span style="color:var(--text-muted);min-width:72px;">${escapeHtml(k)}</span>
+            <code style="word-break:break-all;">${escapeHtml(String(v || '—'))}</code>
+        </div>`).join('');
+
+    const traits = d.required_traits || {};
+    const traitRows = ['any_of', 'all_of', 'none_of']
+        .filter(k => (traits[k] || []).length)
+        .map(k => `<div style="font-size:11px;padding:2px 0 2px 8px;">
+            ${escapeHtml(k)} ${(traits[k] || []).map(t => `<code class="mcp-tool-tag" style="font-size:10px;">${escapeHtml(t)}</code>`).join(' ')}
+        </div>`).join('');
+
+    const actions = d.actions || [];
+    const actionHtml = actions.length ? `
+        <div style="margin-top:12px;">
+            <div style="font-size:12px;font-weight:600;margin-bottom:4px;">
+                ⚙️ actions <span style="font-size:11px;color:var(--text-muted);font-weight:400;">${actions.length}</span>
+            </div>
+            ${actions.map(a => `<div style="font-size:11px;padding:2px 0 2px 8px;">
+                <code>${escapeHtml(a.name)}</code>
+                ${a.description ? `<span style="color:var(--text-muted);"> ${escapeHtml(a.description)}</span>` : ''}
+            </div>`).join('')}
+        </div>` : '';
+
+    const skills = d.skills || [];
+    const skillHtml = skills.length ? `
+        <div style="margin-top:12px;">
+            <div style="font-size:12px;font-weight:600;margin-bottom:4px;">
+                🎓 skills <span style="font-size:11px;color:var(--text-muted);font-weight:400;">${skills.length}</span>
+            </div>
+            ${skills.map(s => `<div style="font-size:11px;padding:2px 0 2px 8px;">
+                ${escapeHtml(s.id)}
+                ${s.stage_id ? `<code style="color:var(--text-muted);">${escapeHtml(s.stage_id)}</code>` : ''}
+                <code style="color:var(--text-muted);">${escapeHtml(s.rel_path)}</code>
+            </div>`).join('')}
+        </div>` : '';
+
+    const note = `
+        <div style="font-size:11px;padding:6px 10px;border-radius:6px;margin-top:12px;
+                    background:rgba(56,189,248,.08);color:#38bdf8;">
+            ℹ️ 这是 ADS 进程内的套件，不是 IDE Client 插件。启停看项目 traits，没有单独开关。
+        </div>`;
+
+    return `<div>${d.description ? `<p class="settings-description" style="margin-bottom:10px;">${escapeHtml(d.description)}</p>` : ''}
+        ${meta}
+        ${traitRows ? `<div style="margin-top:12px;"><div style="font-size:12px;font-weight:600;margin-bottom:4px;">required_traits</div>${traitRows}</div>` : ''}
+        ${actionHtml}${skillHtml}${note}</div>`;
+}
 
 async function loadPluginList() {
     const container = document.getElementById('pluginList');
@@ -15904,6 +16076,37 @@ async function viewRepoFile(path, itemEl) {
     }
 }
 
+function _splitMdFrontmatter(content) {
+    const text = String(content || '').replace(/^\uFEFF/, '');
+    const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
+    if (!m) return { front: '', body: text };
+    return { front: m[1].replace(/\s+$/, ''), body: text.slice(m[0].length) };
+}
+
+/** 文档预览：YAML 头单独成块，正文按 CommonMark 分段，不把单个换行当成 &lt;br&gt;。 */
+function _renderMdDocument(content) {
+    const { front, body } = _splitMdFrontmatter(content);
+    let html = '';
+    if (front) {
+        html += `<pre class="md-frontmatter"><code class="language-yaml">${escapeHtml(front)}</code></pre>`;
+    }
+    if (!window.marked) return html + escapeHtml(body);
+    try {
+        marked.setOptions({ gfm: true, breaks: false, highlight: null });
+        html += marked.parse(body);
+    } catch (e) {
+        html += `<p style="color:#f87171">Markdown 渲染失败: ${escapeHtml(e.message)}</p>`;
+    }
+    return html;
+}
+
+function _highlightMdCode(root) {
+    if (!root || !window.hljs) return;
+    root.querySelectorAll('pre code').forEach(block => {
+        if (!block.classList.contains('hljs')) hljs.highlightElement(block);
+    });
+}
+
 function renderMarkdown(container, content, infoBar) {
     if (!window.marked) {
         // fallback: 当 CDN 未加载时退化为代码展示
@@ -15911,26 +16114,7 @@ function renderMarkdown(container, content, infoBar) {
         return;
     }
 
-    // 配置 marked：代码块自动用 hljs 高亮
-    marked.setOptions({
-        highlight: function(code, lang) {
-            if (lang && window.hljs) {
-                try {
-                    return hljs.highlight(code, { language: lang, ignoreIllegals: true }).value;
-                } catch {}
-            }
-            return window.hljs ? hljs.highlightAuto(code).value : code;
-        },
-        breaks: true,
-        gfm: true,
-    });
-
-    let html = '';
-    try {
-        html = marked.parse(content);
-    } catch (e) {
-        html = `<p style="color:#f87171">Markdown 渲染失败: ${escapeHtml(e.message)}</p>`;
-    }
+    let html = _renderMdDocument(content);
 
     // 修复 md 中的相对图片路径 → 仓库文件 API
     if (currentProjectId && container._mdFilePath) {
@@ -15943,11 +16127,7 @@ function renderMarkdown(container, content, infoBar) {
 
     container.innerHTML = `<div class="md-preview">${html}</div>`;
     container.dataset.mode = 'preview';
-
-    // 给渲染后的代码块补上 hljs 样式类
-    container.querySelectorAll('pre code').forEach(block => {
-        if (window.hljs) hljs.highlightElement(block);
-    });
+    _highlightMdCode(container);
 }
 
 function toggleMarkdownView(container, content, ext, btn) {

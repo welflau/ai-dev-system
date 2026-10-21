@@ -80,6 +80,16 @@ kinds:
     mime: text/markdown
     storage: file
 
+  # ────────────────── 引擎编译（UE 插件 skill 声明；执行仍走 fragment） ──────────────────
+
+  compile_log:
+    description: |
+      引擎编译结构化日志（错误/警告列表 + 命令 + 耗时）。
+      由 UE 插件 skill engine-compile 声明 produces；第一版实际执行仍走
+      fragment engine_compile + DevAgent.run_engine_compile。
+    mime: application/json
+    storage: file
+
   # ────────────────── 老产物（inline，禁止 produces） ──────────────────
   #
   # 登记它们不是为了让新 skill 产出，而是为了：

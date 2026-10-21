@@ -9,12 +9,12 @@ Position in SOP: planning_done → ux_design (fragment) → ux_design_done → A
 """
 from typing import Any, Dict
 from agents.base import BaseAgent, ReactMode
-from actions.write_ux_design import WriteUXDesignAction
+from plugins.registry import require_action_class
 
 
 class UXAgent(BaseAgent):
 
-    action_classes = [WriteUXDesignAction]
+    action_classes = [require_action_class("write_ux_design")]
     react_mode = ReactMode.SINGLE
 
     @property

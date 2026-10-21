@@ -13,12 +13,12 @@ Position in SOP: art_design_done → asset_gen (fragment) → assets_ready → d
 from typing import Any, Dict
 
 from agents.base import BaseAgent, ReactMode
-from actions.generate_assets import GenerateAssetsAction
+from plugins.registry import require_action_class
 
 
 class ArtistAgent(BaseAgent):
 
-    action_classes = [GenerateAssetsAction]
+    action_classes = [require_action_class("generate_assets")]
     react_mode = ReactMode.SINGLE
     # 关心 ArtAgent 的输出（asset_manifest 由它产出）
     watch_actions = {"write_art_design"}

@@ -12,12 +12,12 @@ Position in SOP: ux_design_done → art_design (fragment) → art_design_done �
 """
 from typing import Any, Dict
 from agents.base import BaseAgent, ReactMode
-from actions.write_art_design import WriteArtDesignAction
+from plugins.registry import require_action_class
 
 
 class ArtAgent(BaseAgent):
 
-    action_classes = [WriteArtDesignAction]
+    action_classes = [require_action_class("write_art_design")]
     react_mode = ReactMode.SINGLE
 
     @property

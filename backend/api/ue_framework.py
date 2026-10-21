@@ -65,8 +65,8 @@ class PlaytestRequest(BaseModel):
 @router.post("/propose")
 async def propose(project_id: str, req: ProposeRequest):
     """只算方案，不落地。前端卡片确认前调一次拿到推荐引擎/模板 + 文件变化预览。"""
-    from actions.chat.propose_ue_framework import ProposeUEFrameworkAction
-    action = ProposeUEFrameworkAction()
+    from plugins.registry import require_action
+    action = require_action("propose_ue_framework")
     context = {
         "project_id": project_id,
         "project_name_override": req.project_name_override or "",
@@ -124,8 +124,8 @@ async def instantiate(project_id: str, req: InstantiateRequest):
     await _push_log(f"[api] POST /instantiate template={req.template_name} project={req.project_name}")
 
     # 执行 Action（带 log_callback）
-    from actions.instantiate_ue_template import InstantiateUETemplateAction
-    action = InstantiateUETemplateAction()
+    from plugins.registry import require_action
+    action = require_action("instantiate_ue_template")
     context = {
         "engine_path": req.engine_path,
         "template_name": req.template_name,
@@ -250,8 +250,8 @@ async def run_playtest(project_id: str, req: PlaytestRequest):
             pass
 
     async def _run_bg():
-        from actions.ue_playtest import UEPlaytestAction
-        action = UEPlaytestAction()
+        from plugins.registry import require_action
+        action = require_action("ue_playtest")
         context: Dict[str, Any] = {
             "project_id": project_id,
             "timeout_seconds": req.timeout_seconds,
@@ -336,12 +336,12 @@ async def get_editor_status(project_id: str):
 @router.post("/editor-control")
 async def editor_control(project_id: str, body: Dict[str, Any]):
     """直接调用 UCP 操作（调试 / ChatAssistant 工具调用入口）"""
-    from actions.ue_editor_control import UEEditorControlAction
+    from plugins.registry import require_action
     project = await db.fetch_one("SELECT id FROM projects WHERE id = ?", (project_id,))
     if not project:
         raise HTTPException(404, "项目不存在")
     ctx = {"project_id": project_id, **body}
-    result = await UEEditorControlAction().run(ctx)
+    result = await require_action("ue_editor_control").run(ctx)
     return {"success": result.success, "data": result.data, "message": result.message}
 
 

@@ -441,13 +441,14 @@ class SelfTestAction(ActionBase):
         if sop_cfg.get("ue_precompile", False):
             # 默认不开（首版先用 Layer 1 + 下游 engine_compile stage，避免双重编译）
             # 真要开时由 SOP development.config.ue_precompile=true 显式开
-            from actions.ue_compile_check import UECompileCheckAction
+            from plugins.registry import create_action
             changed_cpp = [f for f in files_written if f.endswith((".cpp", ".h"))]
             if changed_cpp:
                 # UE 的 SingleFile 只支持 .cpp，挑第一个
                 single = [f for f in changed_cpp if f.endswith(".cpp")][:1]
-                if single:
-                    result = await UECompileCheckAction().run({
+                compile_action = create_action("ue_compile_check")
+                if single and compile_action is not None:
+                    result = await compile_action.run({
                         **context,
                         "single_files": [str(repo_path / single[0])],
                         "timeout_seconds": sop_cfg.get("ue_precompile_timeout", 120),
@@ -470,8 +471,8 @@ class SelfTestAction(ActionBase):
         screenshots: List[str] = []
         if sop_cfg.get("ue_screenshot", False):
             try:
-                from actions.ue_screenshot import UEScreenshotAction
-                shot_result = await UEScreenshotAction().run({
+                from plugins.registry import require_action
+                shot_result = await require_action("ue_screenshot").run({
                     **context,
                     "timeout_seconds": sop_cfg.get("ue_screenshot_timeout", 180),
                     "log_callback": context.get("log_callback"),
