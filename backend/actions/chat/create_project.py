@@ -344,7 +344,7 @@ class CreateProjectAction(ActionBase):
                 try:
                     from actions.chat.propose_project_icebreak import persist_project_icebreak
                     auto_next = await persist_project_icebreak(
-                        project_id, name, description, traits, tech_stack,
+                        project_id, name, description, traits, tech_stack, repo_path=repo_path,
                     )
                 except Exception as e:
                     logger.warning("项目破冰写入失败: %s", e)

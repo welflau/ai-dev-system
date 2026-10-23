@@ -614,19 +614,54 @@ async def run_command(
     cwd: str = "",
     timeout_s: int = 600,
     project_id: str = "",
+    background: bool = False,
 ) -> str:
     """
     执行 shell 命令并将输出实时推送到前端后台任务面板。
-    适合耗时超过 5 秒的命令：UBT 编译、打包、批处理脚本等。
-    短命令（ls、git status 等）直接用 Bash 工具即可，无需调用此工具。
-    返回结构化结果：{ exit_code, success, duration_s, stdout_tail(最后200行) }
-    AI 可根据 exit_code 和 stdout_tail 判断成功/失败并继续下一步。
+    - 适合耗时超过 5 秒的命令：UBT 编译、打包、批处理脚本，以及启动前后端常驻服务（uvicorn、vite、npm run dev 等）。
+    - 启动持续运行的常驻服务时，请传 `background=True`（严禁使用 `Start-Process -WindowStyle Hidden` 脱离标准输出，否则后台任务面板将看不到持续实时日志；也不要传 `--log-level warning` 屏蔽启动与访问日志）。
+    - 返回结构化结果：{ exit_code, success, status, task_id, stdout_tail }
     """
     import asyncio
+    import re
     import time
     import httpx as _httpx
 
     pid = project_id or ADS_PROJECT_ID
+    base = ADS_BASE_URL
+    headers = {"Content-Type": "application/json"}
+
+    is_bg_server = background or bool(
+        re.search(r"\b(uvicorn|gunicorn|vite|next\s+dev|npm\s+run\s+(?:dev|start|serve)|pnpm\s+(?:dev|start))\b", command, re.I)
+        and "Start-Process" not in command
+    )
+    if is_bg_server:
+        try:
+            async with _httpx.AsyncClient(timeout=20) as c:
+                resp = await c.post(
+                    f"{base}/api/internal/run-bg-command",
+                    json={
+                        "command": command,
+                        "cwd": cwd or "",
+                        "project_id": pid or "",
+                        "title": command[:80],
+                        "startup_wait_s": 4.0,
+                    },
+                    headers=headers,
+                )
+                if resp.status_code == 200:
+                    d = resp.json()
+                    return json.dumps({
+                        "exit_code": d.get("exit_code") if d.get("exit_code") is not None else 0,
+                        "success": bool(d.get("ok", True)),
+                        "status": d.get("status", "running"),
+                        "pid": d.get("pid"),
+                        "task_id": d.get("task_id"),
+                        "stdout_tail": d.get("stdout_tail", ""),
+                    }, ensure_ascii=False)
+        except Exception:
+            pass
+
     task_id = f"rc_{int(time.time() * 1000)}"
     base = ADS_BASE_URL
     headers = {"Content-Type": "application/json"}

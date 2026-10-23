@@ -2318,14 +2318,15 @@ async def list_cli_tasks(project_id: str, session_id: str = ""):
         tasks = []
         for r in rows:
             lines = (r["output"] or "").splitlines()
-            mem = _CLI_TASKS.get(r["id"], {})
+            mem = _CLI_TASKS.get(r["id"])
+            status = mem.get("status") if mem else ("success" if r["status"] == "running" else r["status"])
             tasks.append({
                 "id": r["id"], "type": "cli_task",
                 "title": r["title"], "tool": r["tool"],
-                "status": mem.get("status") or r["status"],
-                "output_lines": mem.get("output_lines") or lines,
+                "status": status,
+                "output_lines": (mem.get("output_lines") if mem and mem.get("output_lines") else lines),
                 "created_at": r["created_at"],
-                "duration_ms": mem.get("duration_ms") or r["duration_ms"],
+                "duration_ms": (mem.get("duration_ms") if mem else None) or r["duration_ms"],
                 "session_key": r["session_key"] or "",
                 "session_label": r["session_label"] or "",
             })
@@ -3837,14 +3838,15 @@ async def global_list_cli_tasks(session_id: str = ""):
             )
         tasks = []
         for r in rows:
-            mem = _CLI_TASKS.get(r["id"], {})
+            mem = _CLI_TASKS.get(r["id"])
+            status = mem.get("status") if mem else ("success" if r["status"] == "running" else r["status"])
             tasks.append({
                 "id": r["id"], "type": "cli_task",
                 "title": r["title"], "tool": r["tool"],
-                "status": mem.get("status") or r["status"],
-                "output_lines": mem.get("output_lines") or (r["output"] or "").splitlines(),
+                "status": status,
+                "output_lines": (mem.get("output_lines") if mem and mem.get("output_lines") else (r["output"] or "").splitlines()),
                 "created_at": r["created_at"],
-                "duration_ms": mem.get("duration_ms") or r["duration_ms"],
+                "duration_ms": (mem.get("duration_ms") if mem else None) or r["duration_ms"],
                 "session_key": r["session_key"] or "",
                 "session_label": r["session_label"] or "",
             })
@@ -3937,6 +3939,51 @@ async def global_group_chat(req: GroupChatRequest):
         emoji=agent_cfg["emoji"],
         color=agent_cfg["color"],
     )
+
+
+class LocalPreviewRequest(BaseModel):
+    path: str = Field(..., min_length=1)
+    hints: List[str] = Field(default_factory=list, description="对话里出现过的绝对路径，用来给相对路径找根")
+
+
+@global_chat_router.post("/local-preview")
+async def global_local_preview(req: LocalPreviewRequest):
+    """全局助手气泡里的文件：对上磁盘路径后返回正文或图片标记。"""
+    from api.local_preview import read_local_preview, resolve_local_file
+
+    found = resolve_local_file(req.path, req.hints)
+    if found is None:
+        try:
+            rows = await db.fetch_all("SELECT git_repo_path, extra_paths FROM projects")
+            proj_roots: List[str] = []
+            for r in rows or []:
+                gp = (r.get("git_repo_path") or "").strip()
+                if gp:
+                    proj_roots.append(gp)
+                ep = r.get("extra_paths")
+                if ep:
+                    try:
+                        items = json.loads(ep) if isinstance(ep, str) else ep
+                        for it in items or []:
+                            p = (it.get("path") if isinstance(it, dict) else str(it or "")).strip()
+                            if p:
+                                proj_roots.append(p)
+                    except Exception:
+                        pass
+            if proj_roots:
+                found = resolve_local_file(req.path, [*req.hints, *proj_roots])
+        except Exception:
+            pass
+    if found is None:
+        raise HTTPException(404, f"找不到文件: {req.path}")
+    try:
+        return read_local_preview(found)
+    except PermissionError as e:
+        raise HTTPException(403, str(e))
+    except FileNotFoundError:
+        raise HTTPException(404, f"找不到文件: {req.path}")
+    except OSError as e:
+        raise HTTPException(400, f"读取失败: {e}")
 
 
 @global_chat_router.post("/stream")
@@ -4814,15 +4861,145 @@ async def cli_task_event(req: _CliTaskEventRequest):
             t["output_lines"].append(data.get("line", ""))
             if len(t["output_lines"]) > 2000:
                 t["output_lines"] = t["output_lines"][-2000:]
+            out_text = "\n".join(t["output_lines"][-500:])
+            asyncio.create_task(_cli_task_db_upsert(
+                task_id, t["title"], t["tool"], t["status"],
+                out_text, int(t.get("duration_ms") or 0), t["created_at"],
+                t.get("project_id", ""), t.get("session_key", ""), t.get("session_label", ""),
+            ))
 
     elif etype == "cli_task_done":
+        dur_ms = int(data.get("duration_s", 0) * 1000)
+        ok = data.get("status", "success") == "success"
         t = _CLI_TASKS.get(task_id)
         if t:
-            t["status"] = data.get("status", "success")
-            t["duration_ms"] = int(data.get("duration_s", 0) * 1000)
+            out_text = "\n".join(t.get("output_lines") or [])
+            _cli_task_finish(task_id, out_text, dur_ms, ok)
+        else:
+            try:
+                from utils import now_iso as _now_iso
+                await db.execute(
+                    "UPDATE cli_task_log SET status=?, duration_ms=?, updated_at=? WHERE id=?",
+                    ("success" if ok else "error", dur_ms, _now_iso(), task_id),
+                )
+            except Exception:
+                pass
 
     # 推 SSE 到前端
     channel = f"project:{pid}" if pid else "global"
     await event_manager.publish(channel, etype, data)
 
     return {"ok": True}
+
+
+class _RunBgCommandRequest(BaseModel):
+    command: str
+    cwd: str = ""
+    project_id: str = ""
+    title: str = ""
+    startup_wait_s: float = 4.0
+
+
+_BG_COMMAND_PROCS: Dict[str, Any] = {}
+
+
+@internal_router.post("/run-bg-command")
+async def run_bg_command(req: _RunBgCommandRequest):
+    """在 ADS 服务端常驻进程内托管启动后台服务/长命令，持续采集 stdout/stderr 并实时推送到后台任务面板。"""
+    import os as _os
+    import time as _time
+
+    pid = req.project_id or ""
+    task_id = f"rc_{int(_time.time() * 1000)}"
+    title = (req.title or req.command)[:80]
+    channel = f"project:{pid}" if pid else "global"
+
+    _cli_task_add(task_id, title, "run_command", project_id=pid, session_key="bg_services", session_label="常驻后台服务")
+    await event_manager.publish(channel, "cli_task_start", {
+        "task_id": task_id,
+        "title": title,
+        "tool": "run_command",
+        "status": "running",
+    })
+
+    env = _os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
+
+    start_ts = _time.time()
+    try:
+        proc = await asyncio.create_subprocess_shell(
+            req.command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd=req.cwd or None,
+            env=env,
+        )
+    except Exception as e:
+        err_line = f"[启动失败] {e}"
+        _cli_task_finish(task_id, err_line, 0, False)
+        await event_manager.publish(channel, "cli_task_line", {"task_id": task_id, "line": err_line})
+        await event_manager.publish(channel, "cli_task_done", {
+            "task_id": task_id, "status": "error", "exit_code": -1, "duration_s": 0,
+        })
+        return {"ok": False, "task_id": task_id, "status": "error", "error": str(e)}
+
+    _BG_COMMAND_PROCS[task_id] = proc
+
+    async def _pump():
+        t = _CLI_TASKS.get(task_id)
+        try:
+            assert proc.stdout is not None
+            async for raw in proc.stdout:
+                line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+                if t is not None:
+                    t["output_lines"].append(line)
+                    if len(t["output_lines"]) > 2000:
+                        t["output_lines"] = t["output_lines"][-2000:]
+                    out_text = "\n".join(t["output_lines"][-500:])
+                    await _cli_task_db_upsert(
+                        task_id, t["title"], t["tool"], "running",
+                        out_text, int((_time.time() - start_ts) * 1000), t["created_at"],
+                        pid, t.get("session_key", ""), t.get("session_label", ""),
+                    )
+                await event_manager.publish(channel, "cli_task_line", {"task_id": task_id, "line": line})
+        except Exception as exc:
+            logger.debug("bg command pump err (%s): %s", task_id, exc)
+        finally:
+            try:
+                rc = await proc.wait()
+            except Exception:
+                rc = -1
+            _BG_COMMAND_PROCS.pop(task_id, None)
+            dur_s = round(_time.time() - start_ts, 1)
+            ok = rc == 0
+            out_text = "\n".join((t or {}).get("output_lines") or [])
+            _cli_task_finish(task_id, out_text, dur_s * 1000, ok)
+            await event_manager.publish(channel, "cli_task_done", {
+                "task_id": task_id,
+                "status": "success" if ok else "error",
+                "exit_code": rc,
+                "duration_s": dur_s,
+            })
+
+    asyncio.create_task(_pump())
+
+    wait_s = max(0.5, min(float(req.startup_wait_s or 4.0), 15.0))
+    elapsed = 0.0
+    while elapsed < wait_s:
+        if proc.returncode is not None:
+            break
+        await asyncio.sleep(0.25)
+        elapsed += 0.25
+
+    t = _CLI_TASKS.get(task_id) or {}
+    tail = "\n".join((t.get("output_lines") or [])[-100:])
+    running = proc.returncode is None
+    return {
+        "ok": running or proc.returncode == 0,
+        "task_id": task_id,
+        "pid": proc.pid,
+        "status": "running" if running else ("success" if proc.returncode == 0 else "error"),
+        "exit_code": proc.returncode,
+        "stdout_tail": tail,
+    }

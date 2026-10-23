@@ -7,7 +7,8 @@ Cursor 会话 provider —— 只读。
   └── globalStorage\\state.vscdb                 — composerHeaders + cursorDiskKV
           composerHeaders(composerId, workspaceId, createdAt, lastUpdatedAt, value JSON)
           cursorDiskKV(key, value)
-              composerData:<cid>   → 元数据 + fullConversationHeadersOnly 消息顺序
+              composerData:<cid>   → 元数据。消息顺序以前在 fullConversationHeadersOnly；
+                                    新版本改存 headerLog + composerConvHeaders:<cid>:<六位序号>
               bubbleId:<cid>:<bid> → 单条消息；type=1 user，type=2 assistant
               agentKv:blob:<hash>  → 二进制 blob，这次忽略
 
@@ -128,6 +129,47 @@ def _ms_to_iso(ms: Optional[int]) -> str:
 # ---------- Provider ----------
 
 
+def _workspace_json_paths(data: dict) -> List[str]:
+    """从 workspace.json 提取目录列表。支持单根 folder 与多根 workspace (.code-workspace)。"""
+    folder = data.get("folder")
+    if isinstance(folder, str) and folder:
+        path = _uri_to_path(folder)
+        return [path] if path else []
+
+    ws_uri = data.get("workspace")
+    if not isinstance(ws_uri, str) or not ws_uri:
+        return []
+    ws_path_str = _uri_to_path(ws_uri)
+    if not ws_path_str:
+        return []
+    ws_file = Path(ws_path_str)
+    if not ws_file.is_file():
+        return []
+    try:
+        ws_doc = json.loads(ws_file.read_text(encoding="utf-8", errors="replace"))
+    except Exception:
+        return []
+    folders = ws_doc.get("folders") if isinstance(ws_doc, dict) else None
+    if not isinstance(folders, list):
+        return []
+    out: List[str] = []
+    for item in folders:
+        if not isinstance(item, dict):
+            continue
+        if isinstance(item.get("uri"), str):
+            p = _uri_to_path(item["uri"])
+            if p:
+                out.append(p)
+                continue
+        raw_p = item.get("path")
+        if isinstance(raw_p, str) and raw_p:
+            p_obj = Path(raw_p)
+            if not p_obj.is_absolute():
+                p_obj = (ws_file.parent / p_obj).resolve()
+            out.append(str(p_obj))
+    return out
+
+
 class CursorProvider:
     name: ClassVar[str] = "cursor"
 
@@ -142,7 +184,7 @@ class CursorProvider:
         return (self.user_dir / "globalStorage" / "state.vscdb").is_file()
 
     def _match_workspaces(self, candidate_roots: List[str]) -> List[str]:
-        """遍历 workspaceStorage/*/workspace.json，返回 folder 命中任一候选根的 hash 列表。"""
+        """遍历 workspaceStorage/*/workspace.json，返回 folder 或 .code-workspace 命中任一候选根的 hash 列表。"""
         if not self.available:
             return []
         assert self.user_dir is not None
@@ -165,13 +207,10 @@ class CursorProvider:
             except Exception as e:
                 logger.debug("skip %s: %s", ws_json, e)
                 continue
-            folder = data.get("folder")
-            if not folder:
+            if not isinstance(data, dict):
                 continue
-            path = _uri_to_path(folder)
-            if not path:
-                continue
-            if _path_matches_any(path, norm_roots):
+            paths = _workspace_json_paths(data)
+            if any(_path_matches_any(p, norm_roots) for p in paths):
                 hashes.append(sub.name)
         return hashes
 
@@ -246,13 +285,13 @@ class CursorProvider:
                     "SELECT value FROM cursorDiskKV WHERE key = ?",
                     (f"composerData:{composer_id}",),
                 ).fetchone()
-                order: List[dict] = []
+                data_json = None
                 if data_row:
                     try:
                         data_json = json.loads(data_row["value"])
-                        order = data_json.get("fullConversationHeadersOnly") or []
                     except Exception as e:
                         logger.debug("parse composerData failed: %s", e)
+                order = _conversation_order(conn, composer_id, data_json)
 
                 messages: List[ExternalMessage] = []
                 for entry in order:
@@ -338,12 +377,13 @@ class CursorProvider:
                     "SELECT value FROM cursorDiskKV WHERE key = ?",
                     (f"composerData:{composer_id}",),
                 ).fetchone()
-                order: List[dict] = []
+                data_json = None
                 if data_row:
                     try:
-                        order = json.loads(data_row["value"]).get("fullConversationHeadersOnly") or []
+                        data_json = json.loads(data_row["value"])
                     except Exception:
-                        order = []
+                        data_json = None
+                order = _conversation_order(conn, composer_id, data_json)
                 for entry in order:
                     bubble_id = entry.get("bubbleId")
                     if not bubble_id:
@@ -372,6 +412,103 @@ class CursorProvider:
             logger.warning("scan selectedImages for %s failed: %s", composer_id, e)
             return None
         return None
+
+
+_HEADER_CHUNK_LIMIT = 65536
+
+
+def _conversation_order(conn: sqlite3.Connection, composer_id: str, data_json: Optional[dict]) -> List[dict]:
+    """消息顺序。
+
+    旧库写在 composerData.fullConversationHeadersOnly。
+    新版 Cursor 把顺序列拆成 composerConvHeaders:<cid>:<六位序号>，
+    composerData 里只留 headerLog（chunkCount / count）。只读旧字段会得到空会话。
+    两处都没有时，按 bubble 的 createdAt 排，至少把正文读出来。
+    """
+    inline = []
+    if isinstance(data_json, dict):
+        raw_inline = data_json.get("fullConversationHeadersOnly") or []
+        if isinstance(raw_inline, list):
+            inline = raw_inline
+    chunked = _load_header_chunks(
+        conn, composer_id, data_json.get("headerLog") if isinstance(data_json, dict) else None
+    )
+    if len(chunked) > len(inline):
+        return chunked
+    if inline:
+        return inline
+    return _order_from_bubbles(conn, composer_id)
+
+
+def _load_header_chunks(conn: sqlite3.Connection, composer_id: str, header_log) -> List[dict]:
+    if not isinstance(header_log, dict):
+        return []
+    chunk_count = header_log.get("chunkCount")
+    if not isinstance(chunk_count, int) or chunk_count <= 0:
+        return []
+    chunk_count = min(chunk_count, _HEADER_CHUNK_LIMIT)
+    prefix = f"composerConvHeaders:{composer_id}:"
+    wanted = [f"{prefix}{i:06d}" for i in range(chunk_count)]
+    try:
+        rows = conn.execute(
+            "SELECT key, value FROM cursorDiskKV WHERE key >= ? AND key < ? ORDER BY key",
+            (prefix, prefix + "\uffff"),
+        ).fetchall()
+    except Exception as e:
+        logger.debug("read header chunks %s failed: %s", composer_id, e)
+        return []
+    by_key = {}
+    for row in rows:
+        key = row["key"] if isinstance(row, sqlite3.Row) else row[0]
+        raw = row["value"] if isinstance(row, sqlite3.Row) else row[1]
+        by_key[key] = raw
+    merged: List[dict] = []
+    for key in wanted:
+        raw = by_key.get(key)
+        if not raw:
+            continue
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", "replace")
+        try:
+            chunk = json.loads(raw)
+        except Exception:
+            continue
+        if isinstance(chunk, list):
+            merged.extend(item for item in chunk if isinstance(item, dict))
+    count = header_log.get("count")
+    if isinstance(count, int) and 0 <= count < len(merged):
+        merged = merged[:count]
+    return merged
+
+
+def _order_from_bubbles(conn: sqlite3.Connection, composer_id: str) -> List[dict]:
+    prefix = f"bubbleId:{composer_id}:"
+    try:
+        rows = conn.execute(
+            "SELECT key, value FROM cursorDiskKV WHERE key >= ? AND key < ?",
+            (prefix, prefix[:-1] + ";"),
+        ).fetchall()
+    except Exception as e:
+        logger.debug("scan bubbles %s failed: %s", composer_id, e)
+        return []
+    items = []
+    for row in rows:
+        key = row["key"] if isinstance(row, sqlite3.Row) else row[0]
+        raw = row["value"] if isinstance(row, sqlite3.Row) else row[1]
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8", "replace")
+        try:
+            bubble = json.loads(raw)
+        except Exception:
+            continue
+        if not isinstance(bubble, dict):
+            continue
+        bubble_id = bubble.get("bubbleId") or key[len(prefix):]
+        if not bubble_id:
+            continue
+        items.append((str(bubble.get("createdAt") or ""), str(bubble_id), bubble.get("type")))
+    items.sort()
+    return [{"bubbleId": bubble_id, "type": bubble_type} for _, bubble_id, bubble_type in items]
 
 
 def _like_contains(query: str) -> str:

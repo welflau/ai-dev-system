@@ -923,10 +923,10 @@ const adsShell = (() => {
             existing.projectId = tab.projectId || currentProjectId || '';
         } else if (tab.type === 'web') {
             // 网页 Tab：iframe 内嵌显示 URL（聊天里点超链接进来）。同 URL 复用同一个 Tab。
-            const url = String(tab.url || '');
-            if (!/^https?:\/\//i.test(url)) return null;
+            const url = _normalizeWebUrl(tab.url || '');
+            if (!url) return null;
             id = 'web:' + url;
-            let existing = state.mainTabs.find(t => t.id === id);
+            let existing = state.mainTabs.find(t => t.id === id || (t.type === 'web' && t.url === url));
             if (!existing) {
                 existing = {
                     id,
@@ -934,8 +934,12 @@ const adsShell = (() => {
                     url,
                     title: tab.title || _webTabTitle(url),
                     path: url,
+                    history: [url],
+                    historyIdx: 0,
                 };
                 state.mainTabs.push(existing);
+            } else {
+                id = existing.id;
             }
         } else if (tab.type === 'image') {
             // 外部会话图片查看：一张图一个 Tab，应用内看大图（替代开新窗口）。
@@ -1007,11 +1011,110 @@ const adsShell = (() => {
         _renderMainWorkspace();
     }
 
-    /** 网页 Tab 头部的刷新按钮：重设 iframe src（同 URL 重载） */
+    function _normalizeWebUrl(raw) {
+        let s = String(raw || '').trim();
+        if (!s) return '';
+        if (/^https?:\/\//i.test(s)) return s;
+        if (/^(localhost|127\.\d+\.\d+\.\d+|0\.0\.0\.0|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|\[::1\])(?::\d+)?(?:\/|$)/i.test(s)
+            || /^[a-zA-Z0-9.-]+:\d+(?:\/|$)/.test(s)) {
+            return 'http://' + s;
+        }
+        return 'https://' + s;
+    }
+
+    function _syncWebNavButtons(tab) {
+        const backBtn = document.getElementById('mainWsWebBack');
+        const fwdBtn = document.getElementById('mainWsWebFwd');
+        const hist = Array.isArray(tab?.history) ? tab.history : [];
+        const idx = typeof tab?.historyIdx === 'number' ? tab.historyIdx : 0;
+        if (backBtn) backBtn.disabled = idx <= 0;
+        if (fwdBtn) fwdBtn.disabled = idx >= hist.length - 1;
+    }
+
+    function navigateWebTab(tabId, rawUrl, opts = {}) {
+        const tab = state.mainTabs.find(t => t.id === tabId);
+        if (!tab) return;
+        const nextUrl = _normalizeWebUrl(rawUrl);
+        if (!nextUrl) return;
+        if (!Array.isArray(tab.history) || !tab.history.length) {
+            tab.history = [tab.url || nextUrl];
+            tab.historyIdx = 0;
+        }
+        if (opts.pushHistory !== false) {
+            if (tab.history[tab.historyIdx] !== nextUrl) {
+                tab.history = tab.history.slice(0, tab.historyIdx + 1);
+                tab.history.push(nextUrl);
+                tab.historyIdx = tab.history.length - 1;
+            }
+        }
+        tab.url = nextUrl;
+        tab.path = nextUrl;
+        tab.title = _webTabTitle(nextUrl);
+
+        const input = document.getElementById('mainWsWebUrlInput');
+        if (input) {
+            input.value = nextUrl;
+            input.blur();
+        }
+        const frame = document.getElementById('mainWsWebFrame');
+        if (frame) frame.src = nextUrl;
+        _syncWebNavButtons(tab);
+
+        // 同步更新顶部 Tab 栏上的文字和 tooltip，不触发整块 host 重建
+        const tabsEl = document.getElementById('mainWsTabs');
+        if (tabsEl) {
+            const idx = state.mainTabs.indexOf(tab);
+            const btn = tabsEl.querySelectorAll('.main-ws-tab')[idx];
+            if (btn) {
+                btn.title = nextUrl;
+                const lbl = btn.querySelector('.main-ws-tab-label');
+                if (lbl) lbl.textContent = tab.title;
+            }
+        }
+    }
+
+    function stepWebTab(tabId, delta) {
+        const tab = state.mainTabs.find(t => t.id === tabId);
+        if (!tab || !Array.isArray(tab.history) || !tab.history.length) return;
+        const nextIdx = (typeof tab.historyIdx === 'number' ? tab.historyIdx : 0) + delta;
+        if (nextIdx < 0 || nextIdx >= tab.history.length) return;
+        tab.historyIdx = nextIdx;
+        navigateWebTab(tabId, tab.history[nextIdx], { pushHistory: false });
+    }
+
+    function onWebUrlKeydown(event, tabId) {
+        const tab = state.mainTabs.find(t => t.id === tabId);
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            navigateWebTab(tabId, event.currentTarget.value);
+        } else if (event.key === 'Escape') {
+            event.preventDefault();
+            if (tab) event.currentTarget.value = tab.url || '';
+            event.currentTarget.blur();
+        }
+    }
+
+    function openWebTabExternal(tabId) {
+        const tab = state.mainTabs.find(t => t.id === tabId);
+        const input = document.getElementById('mainWsWebUrlInput');
+        const url = _normalizeWebUrl((input && input.value) || tab?.url || '');
+        if (url && typeof _openUrlInSystemBrowser === 'function') {
+            _openUrlInSystemBrowser(url);
+        }
+    }
+
+    /** 网页 Tab 头部的刷新按钮：若地址栏改过则跳转到新网址，否则同 URL 重载 */
     function reloadWebTab(tabId) {
         const tab = state.mainTabs.find(t => t.id === tabId);
+        if (!tab) return;
+        const input = document.getElementById('mainWsWebUrlInput');
+        const typed = input ? _normalizeWebUrl(input.value) : '';
+        if (typed && typed !== tab.url) {
+            navigateWebTab(tabId, typed);
+            return;
+        }
         const frame = document.getElementById('mainWsWebFrame');
-        if (tab && frame && tab.url) frame.src = tab.url;
+        if (frame && tab.url) frame.src = tab.url;
     }
 
     function _renderMainWorkspace() {
@@ -1039,7 +1142,14 @@ const adsShell = (() => {
                 : t.type === 'image' ? '🖼'
                 : t.type === 'web' ? '🌐' : '📄';
             const safeId = t.id.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-            return `<button type="button" class="main-ws-tab${active}" role="tab"
+            const dragAttr = t.type === 'knowledge' && t.docId
+                ? ` draggable="true" data-kb-id="${_escAttr(t.docId)}" data-kb-title="${_escAttr(t.title)}"`
+                : t.type === 'image' && t.sessionId && t.uuid
+                    ? ` draggable="true" data-img-src="/api/projects/${encodeURIComponent(t.projectId || currentProjectId || '')}/external-sessions/${encodeURIComponent(t.provider || 'cursor')}/${encodeURIComponent(t.sessionId)}/images/${encodeURIComponent(t.uuid)}"`
+                    : t.path
+                        ? ` draggable="true" data-file-path="${_escAttr(t.path)}" data-repo-key="${_escAttr(t.repoKey || '')}" data-branch="${_escAttr(t.branch || '')}"`
+                        : '';
+            return `<button type="button" class="main-ws-tab${active}" role="tab"${dragAttr}
                         onclick="adsShell.activateMainTab('${safeId}')" title="${_escAttr(t.path || t.title)}">
                         <span class="main-ws-tab-icon">${icon}</span>
                         <span class="main-ws-tab-label">${_escHtml(t.title)}</span>
@@ -1282,16 +1392,32 @@ const adsShell = (() => {
         }
 
         if (tab.type === 'web') {
-            // 网页 Tab：iframe 内嵌。目标站带 X-Frame-Options / CSP 时 iframe 必然白屏/拒绝连接
-            // （浏览器安全机制，应用侧无解），所以常驻提示条 + ↗ 走后端调系统浏览器兜底。
+            // 网页 Tab：iframe 内嵌 + 可编辑浏览器地址栏（点击输入网址回车直接跳转）。
+            if (!Array.isArray(tab.history) || !tab.history.length) {
+                tab.history = [tab.url || ''];
+                tab.historyIdx = 0;
+            }
             const u = _escAttr(tab.url || '');
-            const safeId = _escAttr(tab.id);
+            const safeId = tab.id.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+            const backDisabled = (tab.historyIdx || 0) <= 0 ? ' disabled' : '';
+            const fwdDisabled = (tab.historyIdx || 0) >= tab.history.length - 1 ? ' disabled' : '';
             host.innerHTML = `
-                <div class="main-ws-pane-header">
-                    <div class="main-ws-pane-path" title="${_escAttr(tab.url || '')}">${_escHtml(tab.title || tab.url || '网页')}</div>
+                <div class="main-ws-pane-header main-ws-web-header">
+                    <div class="main-ws-web-nav">
+                        <button type="button" class="btn-icon main-ws-action" id="mainWsWebBack" title="后退" onclick="adsShell.stepWebTab('${safeId}', -1)"${backDisabled}>←</button>
+                        <button type="button" class="btn-icon main-ws-action" id="mainWsWebFwd" title="前进" onclick="adsShell.stepWebTab('${safeId}', 1)"${fwdDisabled}>→</button>
+                        <button type="button" class="btn-icon main-ws-action" title="重新加载 / 跳转" onclick="adsShell.reloadWebTab('${safeId}')">↻</button>
+                    </div>
+                    <div class="main-ws-web-url-wrap" onclick="document.getElementById('mainWsWebUrlInput')?.focus()">
+                        <span class="main-ws-web-url-icon">🌐</span>
+                        <input id="mainWsWebUrlInput" class="main-ws-web-url-input" type="text"
+                            value="${u}" placeholder="输入网址，按 Enter 跳转…"
+                            spellcheck="false" autocomplete="off"
+                            onfocus="this.select()"
+                            onkeydown="adsShell.onWebUrlKeydown(event, '${safeId}')">
+                    </div>
                     <div class="main-ws-pane-actions">
-                        <button type="button" class="btn-icon main-ws-action" title="重新加载" onclick="adsShell.reloadWebTab('${safeId}')">↻</button>
-                        <button type="button" class="btn-icon main-ws-action" title="在系统浏览器打开" onclick="_openUrlInSystemBrowser('${u}')">↗</button>
+                        <button type="button" class="btn-icon main-ws-action" title="在系统浏览器打开" onclick="adsShell.openWebTabExternal('${safeId}')">↗</button>
                     </div>
                 </div>
                 <div class="main-ws-web-hint">部分站点（如工蜂）通过 X-Frame-Options 禁止内嵌，若下方白屏或提示"拒绝连接"，请点右上 ↗ 在系统浏览器打开</div>
@@ -1816,7 +1942,7 @@ const adsShell = (() => {
                     <span class="main-ws-tree-arrow">▸</span>${_escHtml(name)}</div>
                     <div class="main-ws-tree-children" style="display:none"></div>`;
             }
-            return `<div class="main-ws-tree-item file" style="--d:${depth}" data-path="${_escAttr(path)}" title="${_escAttr(path)}">${_escHtml(name)}</div>`;
+            return `<div class="main-ws-tree-item file" draggable="true" style="--d:${depth}" data-path="${_escAttr(path)}" title="${_escAttr(path)}">${_escHtml(name)}</div>`;
         }).join('');
     }
 
@@ -1953,6 +2079,10 @@ const adsShell = (() => {
         closeMainTab,
         closeAllMainTabs,
         reloadWebTab,
+        navigateWebTab,
+        stepWebTab,
+        onWebUrlKeydown,
+        openWebTabExternal,
         getMainTabContent,
         evictTasksPane: _evictTasksPane,
         hasTasksTab: () => state.mainTabs.some(t => t.type === 'tasks'),
@@ -2531,11 +2661,13 @@ async function showAgentLlmConfigModal(agentType) {
                     </div>
                     <div id="agentLlmCliFields" style="display:none;">
                         <div class="form-group"><label>CLI 工具类型</label>
-                            <select id="agentLlmCliType">${cliOptions}</select></div>
+                            <select id="agentLlmCliType" onchange="_agentLlmFillCliModelDatalist(this.value)">${cliOptions}</select></div>
                         <div class="form-group"><label>CLI 可执行路径</label>
                             <input type="text" id="agentLlmCliCmd" value="${escHtml(eff.cli_cmd || '')}" placeholder="claude 或完整路径"></div>
                         <div class="form-group"><label>CLI 模型</label>
-                            <input type="text" id="agentLlmCliModel" value="${escHtml(eff.cli_model || '')}" placeholder="留空继承全局模型"></div>
+                            <input type="text" id="agentLlmCliModel" list="agentLlmCliModelDatalist" value="${escHtml(eff.cli_model || '')}" placeholder="留空继承全局模型">
+                            <datalist id="agentLlmCliModelDatalist"></datalist>
+                        </div>
                         <div class="form-group"><label>超时（秒）</label>
                             <input type="number" id="agentLlmCliTimeout" value="${eff.cli_timeout || ''}" placeholder="1800"></div>
                     </div>
@@ -2552,8 +2684,17 @@ async function showAgentLlmConfigModal(agentType) {
     const fmt = eff.api_format || 'anthropic';
     const fmtEl = document.getElementById('agentLlmApiFormat');
     if (fmtEl) fmtEl.value = fmt;
+    _agentLlmFillCliModelDatalist(eff.cli_type || 'claude');
     _agentLlmFormatChange(fmt);
     _agentLlmToggleInherit();
+}
+
+function _agentLlmFillCliModelDatalist(cliType) {
+    const dl = document.getElementById('agentLlmCliModelDatalist');
+    if (!dl) return;
+    const opts = (_agentLlmModalData && _agentLlmModalData.cli_model_options && _agentLlmModalData.cli_model_options[cliType])
+        || _cliModelOptions[cliType] || [];
+    dl.innerHTML = opts.map(m => `<option value="${escHtml(m)}"></option>`).join('');
 }
 
 function closeAgentLlmConfigModal() {
@@ -9274,11 +9415,11 @@ function renderDiagnosisPanel(ticket) {
             </li>
         `).join('');
     const files = (d.related_files || []).slice(0, 5)
-        .map(f => `<code class="diagnosis-file">${escHtml(f)}</code>`).join(' ');
+        .map(f => `<code class="diagnosis-file" draggable="true" data-file-path="${escHtml(f)}" onclick="openRepoFileFromChat('${escHtml(String(f).replace(/\\/g, '\\\\').replace(/'/g, "\\'"))}')" style="cursor:pointer;">${escHtml(f)}</code>`).join(' ');
     const kbHits = (d.knowledge_hits || []).slice(0, 3).map(h => {
         const id = escHtml(String(h.id || ''));
         const name = escHtml(h.display_name || h.filename || '文档');
-        return `<a class="chat-kb-link" href="#" onclick="event.preventDefault();openKnowledgeDocFromChat('${id}')">${name}</a>`;
+        return `<a class="chat-kb-link" href="#" draggable="true" data-kb-id="${id}" data-kb-title="${name}" onclick="event.preventDefault();openKnowledgeDocFromChat('${id}')">${name}</a>`;
     }).join(' · ');
 
     return `
@@ -9670,9 +9811,10 @@ function renderIcebreakCard(action) {
             ${hint}
         </button>`;
     }).join('');
+    const title = action.title || (action.is_existing ? '🧭 建议的切入方向（现有工程）' : '🧭 建议的开发方向');
     return `
     <div class="chat-action-card chat-icebreak-card" style="border-left-color:var(--primary);">
-        <div class="action-title">🧭 建议的开发方向</div>
+        <div class="action-title">${escapeHtml(title)}</div>
         <div class="action-detail" style="margin-bottom:8px;">${escapeHtml(action.analysis || '')}</div>
         <div class="icebreak-options">${chips}</div>
         <div class="icebreak-foot">点一项即作为你的决策发给助手；也可以自己输入。</div>
@@ -14260,7 +14402,6 @@ function connectSSE(projectId) {
         eventSource.addEventListener('cli_task_start', (e) => {
             const d = JSON.parse(e.data);
             _cliTaskRegister(d.task_id, d.title, d.tool || 'run_command', 'running');
-            _openTasksPanel();
             // 同步到聊天思考面板（AI 回复进行中时）
             if (chatSending) {
                 _chatThinkingAppend({
@@ -15684,7 +15825,7 @@ function _renderRepoSearchHits(container, data) {
         const click = isDir
             ? `_repoBrowseDir('${escapeHtml(node.path)}')`
             : `viewRepoFile('${escapeHtml(node.path)}', this)`;
-        return `<div class="tree-item ${isDir ? 'tree-dir' : 'tree-file'} repo-search-hit" data-path="${escapeHtml(node.path)}" title="${isDir ? '' : '双击在新标签页打开'}" onclick="${click}">
+        return `<div class="tree-item ${isDir ? 'tree-dir' : 'tree-file'} repo-search-hit"${isDir ? '' : ' draggable="true"'} data-path="${escapeHtml(node.path)}" title="${isDir ? '' : '双击在新标签页打开'}" onclick="${click}">
             <span class="tree-arrow"> </span>
             <span class="tree-icon">${icon}</span>
             <span class="tree-name">${escapeHtml(node.name)}</span>
@@ -15829,7 +15970,7 @@ function renderFileTree(nodes, depth) {
             const ext = node.name.split('.').pop().toLowerCase();
             const icon = getFileIcon(ext);
             const size = node.size ? formatFileSize(node.size) : '';
-            html += `<div class="tree-item tree-file" ${indentStyle} data-path="${escapeHtml(node.path)}" data-depth="${depth}" title="双击在新标签页打开" onclick="viewRepoFile('${escapeHtml(node.path)}', this)">
+            html += `<div class="tree-item tree-file" draggable="true" ${indentStyle} data-path="${escapeHtml(node.path)}" data-depth="${depth}" title="双击在新标签页打开" onclick="viewRepoFile('${escapeHtml(node.path)}', this)">
                 <span class="tree-arrow"> </span>
                 <span class="tree-icon">${icon}</span>
                 <span class="tree-name">${escapeHtml(node.name)}</span>
@@ -16083,28 +16224,169 @@ function _splitMdFrontmatter(content) {
     return { front: m[1].replace(/\s+$/, ''), body: text.slice(m[0].length) };
 }
 
+/** 先把公式和普通代码块摘出来，避免 marked 把公式里的下划线当成斜体。 */
+function _stashMdMath(body) {
+    const items = [];
+    const fences = [];
+    const put = (tex, display) => {
+        const token = `MATHTOKEN${items.length}END`;
+        items.push({ tex: String(tex || '').trim(), display: !!display });
+        return token;
+    };
+    let s = String(body || '').replace(/```[\s\S]*?```/g, (block) => {
+        const math = block.match(/^```(?:math|latex|katex)\s*\n([\s\S]*?)```$/i);
+        if (math) return put(math[1], true);
+        const token = `FENCETOKEN${fences.length}END`;
+        fences.push(block);
+        return token;
+    });
+    s = s.replace(/\$\$([\s\S]+?)\$\$/g, (_, tex) => put(tex, true));
+    s = s.replace(/\\\[([\s\S]+?)\\\]/g, (_, tex) => put(tex, true));
+    s = s.replace(/\\\(([\s\S]+?)\\\)/g, (_, tex) => put(tex, false));
+    s = s.replace(/(?<!\\)\$(?!\$)(\S(?:[^\n$]*?\S)?)\$(?!\$)/g, (_, tex) => put(tex, false));
+    s = s.replace(/FENCETOKEN(\d+)END/g, (_, i) => fences[+i] || '');
+    return { text: s, items };
+}
+
 /** 文档预览：YAML 头单独成块，正文按 CommonMark 分段，不把单个换行当成 &lt;br&gt;。 */
 function _renderMdDocument(content) {
     const { front, body } = _splitMdFrontmatter(content);
+    const stashed = _stashMdMath(body);
     let html = '';
     if (front) {
         html += `<pre class="md-frontmatter"><code class="language-yaml">${escapeHtml(front)}</code></pre>`;
     }
-    if (!window.marked) return html + escapeHtml(body);
-    try {
-        marked.setOptions({ gfm: true, breaks: false, highlight: null });
-        html += marked.parse(body);
-    } catch (e) {
-        html += `<p style="color:#f87171">Markdown 渲染失败: ${escapeHtml(e.message)}</p>`;
+    if (!window.marked) {
+        html += escapeHtml(stashed.text);
+    } else {
+        try {
+            marked.setOptions({ gfm: true, breaks: false, highlight: null });
+            html += marked.parse(stashed.text);
+        } catch (e) {
+            html += `<p style="color:#f87171">Markdown 渲染失败: ${escapeHtml(e.message)}</p>`;
+        }
     }
+    html = html.replace(/MATHTOKEN(\d+)END/g, (_, i) => {
+        const item = stashed.items[+i];
+        if (!item) return '';
+        const cls = item.display ? 'md-math md-math-display' : 'md-math';
+        return `<span class="${cls}" data-tex="${escapeHtml(item.tex)}"></span>`;
+    });
     return html;
 }
 
-function _highlightMdCode(root) {
-    if (!root || !window.hljs) return;
-    root.querySelectorAll('pre code').forEach(block => {
-        if (!block.classList.contains('hljs')) hljs.highlightElement(block);
+function _loadStyleOnce(href) {
+    if (document.querySelector(`link[href="${href}"]`)) return;
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = href;
+    document.head.appendChild(link);
+}
+
+function _loadScriptOnce(src) {
+    const found = document.querySelector(`script[src="${src}"]`);
+    const wait = (script) => new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(src)), 15000);
+        const ok = () => { clearTimeout(timer); script.dataset.loaded = '1'; resolve(); };
+        const fail = () => { clearTimeout(timer); reject(new Error(src)); };
+        if (script.dataset.loaded === '1') { clearTimeout(timer); resolve(); return; }
+        script.addEventListener('load', ok, { once: true });
+        script.addEventListener('error', fail, { once: true });
     });
+    if (found) return wait(found);
+    const script = document.createElement('script');
+    script.src = src;
+    document.head.appendChild(script);
+    return wait(script);
+}
+
+let _katexReady = null;
+function _ensureKatex() {
+    if (window.katex) return Promise.resolve();
+    if (_katexReady) return _katexReady;
+    _loadStyleOnce('https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.18.11/katex.min.css');
+    _katexReady = _loadScriptOnce('https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.18.11/katex.min.js')
+        .catch((e) => { _katexReady = null; throw e; });
+    return _katexReady;
+}
+
+let _mermaidReady = null;
+function _ensureMermaid() {
+    if (window.mermaid) return Promise.resolve();
+    if (_mermaidReady) return _mermaidReady;
+    _mermaidReady = _loadScriptOnce('https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.3/mermaid.min.js')
+        .then(() => {
+            if (!window.mermaid) throw new Error('mermaid');
+            window.mermaid.initialize({
+                startOnLoad: false,
+                theme: 'dark',
+                securityLevel: 'strict',
+                fontFamily: 'Segoe UI, PingFang SC, Microsoft YaHei, sans-serif',
+            });
+        })
+        .catch((e) => { _mermaidReady = null; throw e; });
+    return _mermaidReady;
+}
+
+function _renderMdMath(root) {
+    const nodes = [...root.querySelectorAll('.md-math')];
+    if (!nodes.length) return;
+    _ensureKatex().then(() => {
+        if (!root.isConnected) return;
+        nodes.forEach(el => {
+            const tex = el.dataset.tex || '';
+            try {
+                window.katex.render(tex, el, {
+                    displayMode: el.classList.contains('md-math-display'),
+                    throwOnError: false,
+                    strict: 'ignore',
+                });
+            } catch (e) {
+                el.textContent = tex;
+                el.classList.add('md-math-error');
+            }
+        });
+    }).catch(() => {
+        nodes.forEach(el => {
+            el.textContent = el.dataset.tex || '';
+            el.classList.add('md-math-error');
+        });
+    });
+}
+
+function _renderMdMermaid(root) {
+    const blocks = [...root.querySelectorAll('pre code.language-mermaid, pre code.lang-mermaid')];
+    if (!blocks.length) return;
+    const hosts = blocks.map(code => {
+        const pre = code.parentElement;
+        const host = document.createElement('div');
+        host.className = 'mermaid';
+        host.textContent = code.textContent || '';
+        if (pre && pre.tagName === 'PRE') pre.replaceWith(host);
+        return host;
+    });
+    _ensureMermaid().then(() => {
+        const live = hosts.filter(el => el.isConnected);
+        if (!live.length) return;
+        return window.mermaid.run({ nodes: live });
+    }).catch(() => {
+        hosts.forEach(el => {
+            if (!el.isConnected) return;
+            el.classList.add('md-diagram-error');
+            el.textContent = '图表渲染失败';
+        });
+    });
+}
+
+function _highlightMdCode(root) {
+    if (!root) return;
+    root.querySelectorAll('pre code').forEach(block => {
+        const lang = (block.className || '').toLowerCase();
+        if (lang.includes('mermaid')) return;
+        if (window.hljs && !block.classList.contains('hljs')) hljs.highlightElement(block);
+    });
+    _renderMdMath(root);
+    _renderMdMermaid(root);
 }
 
 function renderMarkdown(container, content, infoBar) {
@@ -16704,8 +16986,28 @@ function handleChatImagePaste(e) {
     }
 }
 
+function _updateChatAttachBadge() {
+    const badge = document.getElementById('chatAttachBadge');
+    const btn = document.getElementById('chatAttachBtn');
+    const total = (chatPendingImages ? chatPendingImages.length : 0)
+        + (chatPendingDocs ? chatPendingDocs.length : 0);
+    if (badge) {
+        if (total > 0) {
+            badge.textContent = String(total);
+            badge.style.display = 'inline-flex';
+        } else {
+            badge.textContent = '0';
+            badge.style.display = 'none';
+        }
+    }
+    if (btn) {
+        btn.classList.toggle('has-attachments', total > 0);
+    }
+}
+
 function renderChatImagePreviews() {
     const container = document.getElementById('chatImagePreviews');
+    _updateChatAttachBadge();
     if (!container) return;
     if (chatPendingImages.length === 0) {
         container.innerHTML = '';
@@ -16714,9 +17016,9 @@ function renderChatImagePreviews() {
     }
     container.style.display = 'flex';
     container.innerHTML = chatPendingImages.map((src, i) => `
-        <div class="chat-img-thumb" title="点击移除">
-            <img src="${src}" alt="图片${i+1}">
-            <button class="chat-img-remove" onclick="removeChatImage(${i})">✕</button>
+        <div class="chat-img-thumb" title="点击预览图片">
+            <img src="${src}" alt="图片${i+1}" onclick="openChatImageViewer(this.src)">
+            <button type="button" class="chat-img-remove" onclick="event.stopPropagation();removeChatImage(${i})" title="移除图片">✕</button>
         </div>
     `).join('');
 }
@@ -16742,25 +17044,336 @@ function handleFileInputChange(e) {
     e.target.value = '';
 }
 
+const _ADS_ASSET_MIME = 'application/x-ads-asset';
+
+function _extractDragPayload(target) {
+    if (!target || !target.closest) return null;
+    const img = target.closest('img');
+    if (img && img.src && !img.closest('#chatImagePreviews, .chat-msg-avatar')) {
+        return { kind: 'image', src: img.getAttribute('src') || img.src };
+    }
+    const imgHolder = target.closest('[data-img-src]');
+    if (imgHolder && imgHolder.dataset.imgSrc) {
+        return { kind: 'image', src: imgHolder.dataset.imgSrc };
+    }
+    const kbEl = target.closest('[data-kb-id], [data-kb-ref], .chat-kb-link');
+    if (kbEl) {
+        let id = kbEl.dataset.kbId || '';
+        let ref = kbEl.dataset.kbRef || '';
+        if (!id && !ref) {
+            const m = (kbEl.getAttribute('onclick') || '').match(/openKnowledgeDocFromChat\(['"]((?:\\.|[^'"])*)['"]\)/);
+            if (m) {
+                const v = m[1].replace(/\\'/g, "'").replace(/\\\\/g, '\\');
+                if (/^\d+$/.test(v)) id = v; else ref = v;
+            }
+        }
+        if (id || ref) {
+            return { kind: 'kb', id, ref, title: (kbEl.dataset.kbTitle || kbEl.textContent || '').trim() };
+        }
+    }
+    const fileEl = target.closest('[data-file-path], .tree-item.tree-file, .main-ws-tree-item.file, .chat-file-link, .err-file-link, .chat-code-ref-file, .code-card-repo-btn, .artifact-badge, .es-fc-row, .es-fc-jump, .chat-file-tab, .main-ws-tab, .action-link');
+    if (fileEl) {
+        let path = fileEl.dataset.filePath || fileEl.dataset.path || '';
+        if (!path) {
+            const m = (fileEl.getAttribute('onclick') || '').match(/openRepoFileFromChat\(['"]((?:\\.|[^'"])*)['"]/);
+            if (m) path = m[1].replace(/\\'/g, "'").replace(/\\\\/g, '\\');
+        }
+        if (path) {
+            let repoKey = fileEl.dataset.repoKey || '';
+            let branch = fileEl.dataset.branch || '';
+            if (!repoKey) {
+                const wsList = fileEl.closest('#mainWsTreeList');
+                if (wsList && wsList.dataset.repoKey) repoKey = wsList.dataset.repoKey;
+                else if (fileEl.closest('#repoTree') && typeof _isPrimaryRepo === 'function' && !_isPrimaryRepo()) {
+                    repoKey = (typeof _repoCurrentKey !== 'undefined' ? _repoCurrentKey : '') || '';
+                }
+            }
+            if (!branch && fileEl.closest('#repoTree')) {
+                branch = document.getElementById('repoBranchSelect')?.value || '';
+            }
+            return { kind: 'file', path, repoKey, branch };
+        }
+    }
+    return null;
+}
+
+document.addEventListener('dragstart', (e) => {
+    const dt = e.dataTransfer;
+    if (!dt) return;
+    const payload = _extractDragPayload(e.target);
+    if (!payload) return;
+    dt.effectAllowed = 'copy';
+    try { dt.setData(_ADS_ASSET_MIME, JSON.stringify(payload)); } catch {}
+    if (payload.kind === 'file' && payload.path) {
+        try { dt.setData('text/plain', payload.path); } catch {}
+    } else if (payload.kind === 'kb') {
+        try { dt.setData('text/plain', payload.title || payload.ref || `ads-kb:${payload.id}`); } catch {}
+    } else if (payload.kind === 'image' && payload.src) {
+        try { dt.setData('text/uri-list', payload.src); } catch {}
+        try { dt.setData('text/plain', payload.src); } catch {}
+    }
+});
+
+function _addPendingChatImage(dataUrl) {
+    if (!dataUrl) return;
+    if (!chatPendingImages.includes(dataUrl)) {
+        chatPendingImages.push(dataUrl);
+    }
+    renderChatImagePreviews();
+}
+
+function _addPendingChatDoc(filename, text, opts = {}) {
+    const raw = String(filename || 'file').replace(/\\/g, '/');
+    const name = raw.split('/').pop() || 'file';
+    const content = String(text || '');
+    const path = opts.path || (raw.includes('/') ? raw : '');
+    const kbId = opts.kbId || '';
+    const existing = chatPendingDocs.findIndex(d =>
+        (path && d.path === path) || (kbId && d.kbId === kbId) || (d.filename === name && d.text === content)
+    );
+    if (existing === -1) {
+        chatPendingDocs.push({ filename: name, text: content, chars: content.length, path, kbId });
+    } else {
+        chatPendingDocs[existing] = { filename: name, text: content, chars: content.length, path, kbId };
+    }
+    renderChatDocPreviews();
+    const input = document.getElementById('chatInput');
+    if (input) input.focus();
+}
+
+function _insertChatFileRef(label) {
+    const clean = String(label || '').trim();
+    if (!clean) return;
+    const input = document.getElementById('chatInput');
+    if (!input) return;
+    const token = clean.includes('`') ? clean : `\`${clean}\``;
+    const cur = input.value || '';
+    if (!cur.includes(token)) {
+        input.value = cur ? `${cur.replace(/\s+$/, '')} ${token} ` : `${token} `;
+    }
+    input.focus();
+    if (typeof autoResizeChatInput === 'function') autoResizeChatInput();
+}
+
+async function _attachDraggedImage(src, opts = {}) {
+    const url = String(src || '').trim();
+    if (!url) return false;
+    if (url.startsWith('data:image/')) {
+        _addPendingChatImage(url);
+        return true;
+    }
+    try {
+        const resp = await fetch(url);
+        if (!resp.ok) throw new Error(resp.statusText || 'HTTP ' + resp.status);
+        const blob = await resp.blob();
+        const dataUrl = await new Promise((resolve, reject) => {
+            const r = new FileReader();
+            r.onload = () => resolve(r.result);
+            r.onerror = () => reject(new Error('读取图片失败'));
+            r.readAsDataURL(blob);
+        });
+        _addPendingChatImage(dataUrl);
+        return true;
+    } catch (e) {
+        if (!opts.silent) {
+            showToast(`引用图片失败: ${e.message || e}`, 'error');
+        }
+        return false;
+    }
+}
+
+async function _attachDraggedKb(payload) {
+    try {
+        let doc = null;
+        let hitId = payload.id || '';
+        if (payload.id) {
+            doc = await api(`/knowledge/index/${encodeURIComponent(payload.id)}`);
+        } else if (payload.ref) {
+            const q = currentProjectId ? `?project_id=${encodeURIComponent(currentProjectId)}` : '';
+            const list = await api(`/knowledge/index${q}`);
+            const docs = (list && list.documents) || [];
+            const want = payload.ref.toLowerCase();
+            const hit = docs.find(d => String(d.filename || '').toLowerCase() === want
+                || String(d.display_name || '').toLowerCase() === want);
+            if (hit && hit.id != null) {
+                hitId = String(hit.id);
+                doc = await api(`/knowledge/index/${hit.id}`);
+            }
+        }
+        if (doc && doc.content) {
+            const name = doc.filename || doc.display_name || payload.title || `kb-${hitId || 'doc'}.md`;
+            _addPendingChatDoc(name, doc.content, { kbId: hitId || String(doc.id || '') });
+            return true;
+        }
+    } catch (e) {
+        showToast(`引用知识库失败: ${e.message || e}`, 'error');
+        return false;
+    }
+    _addPendingChatDoc(payload.title || payload.ref || `ads-kb:${payload.id}.md`, '', { kbId: payload.id || payload.ref || '' });
+    return true;
+}
+
+async function _attachDraggedFile(payload) {
+    const rawPath = String(payload.path || '').trim();
+    if (!rawPath) return false;
+    const ext = (rawPath.split('.').pop() || '').toLowerCase();
+    const isImg = /^(png|jpg|jpeg|gif|webp|bmp|svg|ico)$/.test(ext);
+
+    // 已经打开的全局右侧文件标签：直接复用内存里的内容
+    const openTab = (typeof _chatFileTabs !== 'undefined' ? _chatFileTabs : []).find(t =>
+        t.loaded && (t.path === rawPath || t.loaded.path === rawPath || t.id === _chatFileTabId(rawPath))
+    );
+    if (openTab && openTab.loaded) {
+        if (openTab.loaded.kind === 'image' && openTab.loaded.path) {
+            return await _attachDraggedImage('/api/local-file?path=' + encodeURIComponent(openTab.loaded.path));
+        }
+        if (openTab.loaded.kind === 'text') {
+            _addPendingChatDoc(openTab.loaded.filename || rawPath, openTab.loaded.content || '', { path: openTab.loaded.path || rawPath });
+            return true;
+        }
+    }
+
+    // 绝对路径图片：直接走 /api/local-file
+    if (isImg && /^[a-zA-Z]:[\\/]/.test(rawPath)) {
+        if (await _attachDraggedImage('/api/local-file?path=' + encodeURIComponent(rawPath), { silent: true })) {
+            return true;
+        }
+    }
+
+    // 项目内优先走仓库文件接口，拿不到再退回本地文件预览接口
+    if (currentProjectId) {
+        const norm = (typeof _normalizeChatFilePath === 'function')
+            ? _normalizeChatFilePath(rawPath)
+            : rawPath.replace(/\\/g, '/');
+        if (isImg && norm && !/^[a-zA-Z]:/.test(norm)) {
+            const rawUrl = payload.repoKey
+                ? `/api/projects/${encodeURIComponent(currentProjectId)}/repos/${encodeURIComponent(payload.repoKey)}/file-raw?path=${encodeURIComponent(norm)}`
+                : `/api/projects/${encodeURIComponent(currentProjectId)}/git/file-raw?path=${encodeURIComponent(norm)}`;
+            if (await _attachDraggedImage(rawUrl, { silent: true })) return true;
+        }
+        if (!isImg && norm && !/^[a-zA-Z]:/.test(norm)) {
+            try {
+                const branchParam = (!payload.repoKey && payload.branch) ? `&branch=${encodeURIComponent(payload.branch)}` : '';
+                const data = await api(payload.repoKey
+                    ? `/projects/${currentProjectId}/repos/${encodeURIComponent(payload.repoKey)}/file?path=${encodeURIComponent(norm)}`
+                    : `/projects/${currentProjectId}/git/file?path=${encodeURIComponent(norm)}${branchParam}`);
+                if (data && typeof data.content === 'string') {
+                    const realPath = data.path || norm;
+                    _addPendingChatDoc(realPath, data.content, { path: realPath });
+                    return true;
+                }
+            } catch {}
+        }
+    }
+
+    try {
+        const data = await api('/chat/local-preview', {
+            method: 'POST',
+            body: { path: rawPath, hints: _collectChatPathHints() },
+        });
+        if (data.kind === 'image' && data.path) {
+            return await _attachDraggedImage('/api/local-file?path=' + encodeURIComponent(data.path));
+        }
+        if (data.kind === 'text') {
+            _addPendingChatDoc(data.filename || rawPath, data.content || '', { path: data.path || rawPath });
+            return true;
+        }
+    } catch {}
+
+    if (isImg) {
+        showToast(`找不到图片: ${rawPath}`, 'error');
+        return false;
+    }
+
+    // 磁盘上暂时读不到时，也作为链接芯片挂进聊天框，支持回删键删除
+    _addPendingChatDoc(rawPath, '', { path: rawPath });
+    return true;
+}
+
 function handleChatDragOver(e) {
     e.preventDefault();
     e.stopPropagation();
-    e.currentTarget.classList.add('drag-over');
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+    (e.currentTarget?.querySelector?.('.chat-input-wrap') || e.currentTarget)?.classList?.add('drag-over');
 }
 
 function handleChatDragLeave(e) {
     e.preventDefault();
     e.stopPropagation();
-    e.currentTarget.classList.remove('drag-over');
+    const wrap = e.currentTarget?.querySelector?.('.chat-input-wrap') || e.currentTarget;
+    if (wrap && (!e.relatedTarget || !wrap.contains(e.relatedTarget))) {
+        wrap.classList.remove('drag-over');
+    }
 }
 
-function handleChatDrop(e) {
+async function handleChatDrop(e) {
     e.preventDefault();
     e.stopPropagation();
-    e.currentTarget.classList.remove('drag-over');
-    const files = e.dataTransfer?.files;
-    if (files && files.length > 0) handleFileAttachment(files);
+    document.querySelectorAll('.chat-input-wrap.drag-over, #chatPanel.drag-over').forEach(el => el.classList.remove('drag-over'));
+    const dt = e.dataTransfer;
+    if (!dt) return;
+
+    const rawAsset = dt.getData(_ADS_ASSET_MIME);
+    if (rawAsset) {
+        try {
+            const payload = JSON.parse(rawAsset);
+            if (payload.kind === 'image') { await _attachDraggedImage(payload.src); return; }
+            if (payload.kind === 'kb') { await _attachDraggedKb(payload); return; }
+            if (payload.kind === 'file') { await _attachDraggedFile(payload); return; }
+        } catch {}
+    }
+
+    const files = dt.files;
+    if (files && files.length > 0) {
+        handleFileAttachment(files);
+        return;
+    }
+
+    const html = dt.getData('text/html') || '';
+    if (html) {
+        const imgM = html.match(/<img[^>]+src=["']([^"']+)["']/i);
+        if (imgM && imgM[1]) {
+            await _attachDraggedImage(imgM[1]);
+            return;
+        }
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        const payload = _extractDragPayload(doc.body.firstElementChild || doc.body);
+        if (payload) {
+            if (payload.kind === 'image') { await _attachDraggedImage(payload.src); return; }
+            if (payload.kind === 'kb') { await _attachDraggedKb(payload); return; }
+            if (payload.kind === 'file') { await _attachDraggedFile(payload); return; }
+        }
+    }
+
+    const uri = (dt.getData('text/uri-list') || '').split(/\r?\n/).find(l => l && !l.startsWith('#')) || '';
+    if (uri && (/^data:image\//i.test(uri) || /\/api\/local-file\?path=|\/external-sessions\/.*\/images\/|\/generated-images\/|\/(?:git|repos)\/.*\/(?:file-)?raw\?path=|\.(?:png|jpg|jpeg|gif|webp|bmp)(?:$|\?)/i.test(uri))) {
+        await _attachDraggedImage(uri);
+        return;
+    }
+
+    const text = (dt.getData('text/plain') || '').trim();
+    if (text && _isClickableFilePath(text)) {
+        await _attachDraggedFile({ kind: 'file', path: _stripPathNoise(text) });
+    }
 }
+
+document.addEventListener('DOMContentLoaded', () => {
+    const panel = document.getElementById('chatPanel');
+    if (!panel || panel.dataset.assetDropBound === '1') return;
+    panel.dataset.assetDropBound = '1';
+    panel.addEventListener('dragover', (e) => {
+        if (e.target.closest('#chatFilePane')) return;
+        handleChatDragOver(e);
+    });
+    panel.addEventListener('dragleave', (e) => {
+        if (e.target.closest('#chatFilePane')) return;
+        handleChatDragLeave(e);
+    });
+    panel.addEventListener('drop', (e) => {
+        if (e.target.closest('#chatFilePane')) return;
+        handleChatDrop(e);
+    });
+});
 
 async function handleFileAttachment(files) {
     for (const file of files) {
@@ -16826,36 +17439,63 @@ async function handleFileAttachment(files) {
     }
 }
 
+function _docChipIconText(filename) {
+    const ext = (String(filename || '').split('.').pop() || '').toLowerCase();
+    if (ext === 'md' || ext === 'markdown') return 'M↓';
+    if (ext === 'json') return '{}';
+    if (ext === 'yaml' || ext === 'yml' || ext === 'toml' || ext === 'ini') return '≡';
+    if (ext === 'py') return 'PY';
+    if (ext === 'js' || ext === 'jsx') return 'JS';
+    if (ext === 'ts' || ext === 'tsx') return 'TS';
+    if (ext === 'cpp' || ext === 'c' || ext === 'h' || ext === 'hpp') return 'C++';
+    if (ext === 'cs') return 'C#';
+    if (ext === 'pdf') return 'PDF';
+    if (ext === 'docx' || ext === 'doc') return 'DOC';
+    return '📄';
+}
+
+function _onChatDocChipClick(index) {
+    const doc = chatPendingDocs[index];
+    if (!doc) return;
+    if (doc.kbId && typeof openKnowledgeDocFromChat === 'function') {
+        openKnowledgeDocFromChat(doc.kbId);
+        return;
+    }
+    if (doc.path && typeof openRepoFileFromChat === 'function') {
+        openRepoFileFromChat(doc.path);
+        return;
+    }
+    document.getElementById('chatInput')?.focus();
+}
+
 function renderChatDocPreviews() {
     const container = document.getElementById('chatDocPreviews');
+    _updateChatAttachBadge();
     if (!container) return;
     if (chatPendingDocs.length === 0) {
         container.innerHTML = '';
         container.style.display = 'none';
         return;
     }
-    container.style.display = 'flex';
+    container.style.display = 'contents';
     container.innerHTML = chatPendingDocs.map((doc, i) => {
-        const ext = doc.filename.split('.').pop().toLowerCase();
-        const icon = ext === 'pdf' ? '📄' : ext === 'docx' ? '📝' : '📃';
-        const charsText = doc.chars >= 1000
-            ? `${(doc.chars / 1000).toFixed(1)}k 字符`
-            : `${doc.chars} 字符`;
-        return `
-        <div class="chat-doc-card">
-            <span class="chat-doc-icon">${icon}</span>
-            <div class="chat-doc-info">
-                <div class="chat-doc-name" title="${escapeHtml(doc.filename)}">${escapeHtml(doc.filename)}</div>
-                <div class="chat-doc-meta">${charsText}</div>
-            </div>
-            <button class="chat-doc-remove" onclick="removeChatDoc(${i})" title="移除">✕</button>
-        </div>`;
+        const iconText = _docChipIconText(doc.filename);
+        const charsText = doc.chars > 0
+            ? (doc.chars >= 1000 ? `${(doc.chars / 1000).toFixed(1)}k 字符` : `${doc.chars} 字符`)
+            : '';
+        const titleParts = [doc.path || doc.filename, charsText, '按 Backspace 或点击 × 移除'].filter(Boolean);
+        return `<span class="chat-doc-chip" onclick="_onChatDocChipClick(${i})" title="${escapeHtml(titleParts.join(' · '))}">`
+            + `<span class="chat-doc-chip-icon">${escapeHtml(iconText)}</span>`
+            + `<span class="chat-doc-chip-name">${escapeHtml(doc.filename)}</span>`
+            + `<button type="button" class="chat-doc-chip-remove" onclick="event.stopPropagation();removeChatDoc(${i})" title="移除附件">×</button>`
+            + `</span>`;
     }).join('');
 }
 
 function removeChatDoc(index) {
     chatPendingDocs.splice(index, 1);
     renderChatDocPreviews();
+    document.getElementById('chatInput')?.focus();
 }
 
 /**
@@ -17359,11 +17999,9 @@ async function _sendChatStreamingToContainer(url, body, msgContainer, thinkingCt
     typingEl?.remove();
 
     // 添加工具栏
-    const toolbarHtml = `<div class="chat-bubble-toolbar">
-        <button class="chat-bubble-tool-btn" onclick="copyChatBubble(this)" title="复制内容">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg> 复制
-        </button></div>`;
-    bubbleWrapper.querySelector('.chat-msg-content')?.insertAdjacentHTML('beforeend', toolbarHtml);
+    if (fullText && fullText.trim()) {
+        bubbleWrapper.querySelector('.chat-msg-content')?.insertAdjacentHTML('beforeend', _buildChatBubbleToolbarHtml(currentProjectId));
+    }
 
     return { reply: fullText, action: finalAction };
 }
@@ -18501,19 +19139,19 @@ async function _sendChatStreaming(url, body) {
                         _curRoundStepsEl.appendChild(stepEl);
                         _curRoundEl?.classList.add('crp-round-expanded');
                     }
-                    // CLI 工具：自动打开 /tasks 面板并注册任务
+                    // CLI 工具：注册后台任务并显示聊天框上方 Task 图标
                     if (data.task_id) {
                         _cliTaskRegister(data.task_id, toolLabel, data.tool, 'running', data.input || {});
-                        _openTasksPanel();
                     }
 
                 } else if (eventName === 'tool_done') {
                     // J-3b: 工具完成 — 更新步骤状态
                     const _dur = data.duration_ms || 0;
                     _stepCount++;
+                    const _doneTaskId = data.task_id || (_curRoundToolTaskIds || {})[data.tool] || '';
                     _roundSteps.push({ tool: data.tool, summary: data.summary || '',
                                        duration_ms: _dur, args_hint: data.args_hint || '',
-                                       task_id: (_curRoundToolTaskIds || {})[data.tool] || '' });
+                                       task_id: _doneTaskId });
                     if (_curRoundStepsEl) {
                         const stepEl = [..._curRoundStepsEl.querySelectorAll('.ctp-step-running')]
                             .reverse().find(el => el.dataset.tool === data.tool);
@@ -18555,9 +19193,9 @@ async function _sendChatStreaming(url, body) {
                     if (_roundsHeader) _roundsHeader.textContent = `思考了 ${_roundCount} 轮 · ${_stepCount} 步`;
                     if (_typingBubble) _typingBubble.innerHTML = `<span class="chat-typing-text">正在生成答案…</span>`;
                     // CLI 工具：更新 /tasks 面板任务状态
-                    if (data.task_id) {
+                    if (_doneTaskId) {
                         const _isErr = (data.result || '').startsWith('[CLI错误]');
-                        _cliTaskUpdate(data.task_id, _isErr ? 'error' : 'success', data.result || '', data.duration_ms || 0);
+                        _cliTaskUpdate(_doneTaskId, _isErr ? 'error' : 'success', data.result || '', data.duration_ms || 0);
                     }
 
                 } else if (eventName === 'aicr_feedback') {
@@ -18749,6 +19387,10 @@ async function _sendChatStreaming(url, body) {
     } else if (bubbleWrapper.isConnected) {
         const timeEl = bubbleWrapper.querySelector('.chat-msg-time');
         if (timeEl) timeEl.textContent = formatTime(new Date().toISOString());
+    }
+    if (bubbleWrapper.isConnected && fullText && fullText.trim() && !bubbleWrapper.querySelector('.chat-bubble-toolbar')) {
+        const timeEl = bubbleWrapper.querySelector('.chat-msg-time');
+        if (timeEl) timeEl.insertAdjacentHTML('beforebegin', _buildChatBubbleToolbarHtml(currentProjectId));
     }
 
     scrollChatToBottom();
@@ -19904,7 +20546,7 @@ function _buildTicketEventEl(msg) {
     const filesHtml = (msg.files || []).length > 0
         ? `<div style="margin-top:4px;">${(msg.files).map(f => {
             const base = String(f).replace(/\\/g, '/').split('/').pop();
-            return `<span class="artifact-badge" title="${escapeHtml(f)}" onclick="openRepoFileFromChat('${escapeHtml(f)}')" style="cursor:pointer;">📄 ${escapeHtml(base)}</span>`;
+            return `<span class="artifact-badge" draggable="true" data-file-path="${escapeHtml(f)}" title="${escapeHtml(f)}" onclick="openRepoFileFromChat('${escapeHtml(f)}')" style="cursor:pointer;">📄 ${escapeHtml(base)}</span>`;
           }).join(' ')}</div>` : '';
 
     const el = document.createElement('div');
@@ -20231,13 +20873,83 @@ let _cliActiveTaskId = '';  // 当前选中的任务 ID，独立存储避免 DOM
 let _cliCurrentSession = null;  // 当前对话的 session key { key, label, seq }
 let _cliSessionSeq = 0;         // 全局对话序号（每次发消息递增）
 
+let _runningTicketTasksCount = 0;
+let _runningMetricsProcessing = 0;
+
+function _getRunningTasksCount() {
+    const cliRunning = Object.values(_CLI_TASKS_MEM).filter(
+        t => t && (t.status === 'running' || t.status === 'in_progress' || t.status === 'executing')
+    ).length;
+    const bgTickets = Math.max(_runningTicketTasksCount, _runningMetricsProcessing);
+    return cliRunning + bgTickets;
+}
+
+function _updateRunningTasksPill() {
+    const bar = document.getElementById('chatRunningTasksBar');
+    const label = document.getElementById('chatRunningTasksLabel');
+    const pill = document.getElementById('chatRunningTasksPill');
+    if (!bar || !label) return;
+    const count = _getRunningTasksCount();
+    if (count <= 0) {
+        bar.style.display = 'none';
+        return;
+    }
+    bar.style.display = 'flex';
+    label.textContent = `${count} Task${count > 1 ? 's' : ''}`;
+    if (pill) {
+        const runningTitles = Object.values(_CLI_TASKS_MEM)
+            .filter(t => t && (t.status === 'running' || t.status === 'in_progress' || t.status === 'executing'))
+            .map(t => t.title || t.tool || 'Task');
+        pill.title = runningTitles.length
+            ? `后台运行中：${runningTitles.join('、')}（点击打开 /tasks 面板）`
+            : `有 ${count} 个后台任务正在执行（点击打开 /tasks 面板）`;
+    }
+}
+
+function _settleRunningSessionCliTasks() {
+    const curKey = _cliCurrentSession?.key || '';
+    let changed = false;
+    for (const t of Object.values(_CLI_TASKS_MEM)) {
+        if (t && t.status === 'running' && t.tool !== 'run_command' && !String(t.id || '').startsWith('rc_') && (!curKey || t.session_key === curKey)) {
+            t.status = 'success';
+            changed = true;
+        }
+    }
+    _updateRunningTasksPill();
+    if (changed) _refreshTasksPanel();
+}
+
+async function _syncRunningCliTasksForProject(pid) {
+    try {
+        const cliUrl = pid ? `/projects/${encodeURIComponent(pid)}/chat/cli-tasks` : `/chat/cli-tasks`;
+        const cliResp = await api(cliUrl);
+        if ((pid || null) !== (currentProjectId || null)) return;
+        const list = (cliResp?.tasks || []).map(t => ({ ...t, type: 'cli_task' }));
+        for (const t of list) {
+            const outputText = Array.isArray(t.output_lines) ? t.output_lines.join('\n') : (t.output || '');
+            if (!_CLI_TASKS_MEM[t.id]) {
+                _CLI_TASKS_MEM[t.id] = { ...t, output: outputText };
+            } else {
+                if (outputText.length >= (_CLI_TASKS_MEM[t.id].output || '').length) {
+                    _CLI_TASKS_MEM[t.id].output = outputText;
+                }
+                if (t.status) _CLI_TASKS_MEM[t.id].status = t.status;
+            }
+        }
+        _updateRunningTasksPill();
+    } catch (_) {}
+}
+
 /** 切换项目 / 切换历史会话时调用：清空内存任务表，避免上一个 context 的任务串台 */
 function _cliClearMem() {
     for (const k in _CLI_TASKS_MEM) delete _CLI_TASKS_MEM[k];
     _cliActiveTaskId = '';
     _cliCurrentSession = null;
+    _runningTicketTasksCount = 0;
+    _updateRunningTasksPill();
     const outputEl = document.getElementById('tasksPanelOutput');
     if (outputEl) outputEl.textContent = '选择任务查看输出';
+    setTimeout(() => { _syncRunningCliTasksForProject(currentProjectId); }, 50);
 }
 
 /** 每次发送新对话时调用，生成新 session 分组
@@ -20307,12 +21019,14 @@ function _cliTaskRegister(taskId, title, tool, status, input) {
         session_label: _cliCurrentSession?.label || '',
         session_seq:   _cliCurrentSession?.seq   || 0,
     };
+    _updateRunningTasksPill();
     _injectCliTaskToPanel(taskId);
 }
 
 function _cliTaskUpdate(taskId, status, output, duration_ms) {
     const t = _CLI_TASKS_MEM[taskId];
     if (t) { t.status = status; t.output = output; t.duration_ms = duration_ms; }
+    _updateRunningTasksPill();
     // 更新列表项状态图标
     // 列表里直接更新图标（不重渲染，避免闪烁）
     const listEl = document.getElementById('tasksPanelList');
@@ -20492,14 +21206,17 @@ function _formatCliLines(lines, taskId, foldJson = true) {
 
 const _URL_RE = /https?:\/\/[^\s"'<>)]+/g;
 
+const _ANSI_RE = /\x1b\[[0-9;]*[a-zA-Z]/g;
+
 function _colorLine(line) {
-    const lower = line.toLowerCase();
+    const clean = String(line || '').replace(_ANSI_RE, '');
+    const lower = clean.toLowerCase();
     let cls = '';
     if (/\b(error|exception|fatal|failed|traceback)\b/.test(lower)) cls = 'cto-line-error';
     else if (/\b(warning|warn)\b/.test(lower)) cls = 'cto-line-warn';
     else if (/\b(success|completed|done|passed|ok)\b/.test(lower)) cls = 'cto-line-ok';
 
-    const escaped = _escHtmlSafe(line).replace(_URL_RE, m =>
+    const escaped = _escHtmlSafe(clean).replace(_URL_RE, m =>
         `<a href="${m}" target="_blank" class="cto-url">${m}</a>`
     );
     return `<div class="cto-line ${cls}">${escaped || ' '}</div>`;
@@ -20979,10 +21696,17 @@ async function _refreshTasksPanelInner() {
             cliTasksFromApi = (cliResp?.tasks || []).map(t => ({...t, type: 'cli_task'}));
             // 同步到内存（避免和 SSE 实时更新冲突：内存中 running 的优先）
             for (const t of cliTasksFromApi) {
+                const outputText = Array.isArray(t.output_lines) ? t.output_lines.join('\n') : (t.output || '');
                 if (!_CLI_TASKS_MEM[t.id]) {
                     // output_lines → output 字符串，方便 _renderCliTaskOutput 统一读取
-                    const outputText = Array.isArray(t.output_lines) ? t.output_lines.join('\n') : (t.output || '');
                     _CLI_TASKS_MEM[t.id] = { ...t, output: outputText };
+                } else {
+                    if (outputText.length >= (_CLI_TASKS_MEM[t.id].output || '').length) {
+                        _CLI_TASKS_MEM[t.id].output = outputText;
+                    }
+                    if (_CLI_TASKS_MEM[t.id].status === 'running' && t.status && t.status !== 'running') {
+                        _CLI_TASKS_MEM[t.id].status = t.status;
+                    }
                 }
             }
         } catch(_) {}
@@ -20990,6 +21714,10 @@ async function _refreshTasksPanelInner() {
         const url = currentProjectId ? `/projects/${currentProjectId}/commands/tasks` : `/commands/tasks`;
         const resp = await originalApi(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
         const ticketTasks = resp?.data?.tasks || [];
+        _runningTicketTasksCount = ticketTasks.filter(
+            t => t && (t.status === 'running' || t.status === 'in_progress' || t.status === 'executing')
+        ).length;
+        _updateRunningTasksPill();
 
         // 合并内存 CLI 任务（按时间正序，#1 = 最早执行）
         let cliTasks = Object.values(_CLI_TASKS_MEM).sort((a,b) => (a.created_at||a.ts||'').localeCompare(b.created_at||b.ts||''));
@@ -21153,6 +21881,20 @@ async function _refreshTasksPanelInner() {
                 if (el.dataset.taskId !== _cliActiveTaskId) el.style.background = '';
             });
         });
+
+        const outputEl = document.getElementById('tasksPanelOutput');
+        if (outputEl) {
+            const runningCli = cliTasks.filter(t => t.status === 'running');
+            if (!_cliActiveTaskId && runningCli.length > 0) {
+                _cliActiveTaskId = runningCli[runningCli.length - 1].id;
+            }
+            if (_cliActiveTaskId && _CLI_TASKS_MEM[_cliActiveTaskId]) {
+                _renderCliTaskOutput(_cliActiveTaskId, outputEl);
+                listEl.querySelectorAll('.tasks-panel-item').forEach(el => {
+                    el.classList.toggle('active', el.dataset.taskId === _cliActiveTaskId);
+                });
+            }
+        }
     } catch(e) {
         listEl.innerHTML = `<div style="padding:20px;color:var(--danger);">加载失败: ${escapeHtml(String(e))}</div>`;
     }
@@ -21707,7 +22449,12 @@ async function sendChatMessage() {
 
     let fullMessage = message;
     for (const doc of docs) {
-        fullMessage += `\n\n【附件：${doc.filename}】\n${doc.text}`;
+        const docLabel = doc.path || doc.filename;
+        if (doc.text) {
+            fullMessage += `\n\n【附件：${docLabel}】\n${doc.text}`;
+        } else if (docLabel) {
+            fullMessage += `\n\n【附件路径：${docLabel}】`;
+        }
     }
 
     if (!fullMessage.trim() && images.length === 0) return;
@@ -22055,6 +22802,7 @@ async function sendChatMessage() {
     } finally {
         chatSending = false;
         _streamAbortController = null;
+        _settleRunningSessionCliTasks();
         _refreshHistoryRunningState();  // 更新 Running → 消失
         // 首条消息后服务端会自动起标题（_update_session_title_if_needed），强制刷一次头部小字
         _updateChatPanelSessionTitle(_currentChatSessionId, true);
@@ -22718,7 +23466,7 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
                     路径: <code>${escapeHtml(action.path || '')}</code>
                     ${action.commit ? '<br>Commit: ' + escapeHtml(action.commit) : ''}
                 </div>
-                ${action.path ? `<span class="action-link" onclick="openRepoFileFromChat('${escapeHtml(action.path)}')">查看仓库文件 →</span>` : `<span class="action-link" onclick="switchTab('repo')">查看仓库文件 →</span>`}
+                ${action.path ? `<span class="action-link" draggable="true" data-file-path="${escapeHtml(action.path)}" onclick="openRepoFileFromChat('${escapeHtml(action.path)}')">查看仓库文件 →</span>` : `<span class="action-link" onclick="switchTab('repo')">查看仓库文件 →</span>`}
             </div>
         `;
     } else if (action && action.type === 'git_result') {
@@ -22728,7 +23476,7 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
         const gitLinkHtml = action.action === 'switch_branch'
             ? `<span class="action-link" onclick="switchTab('repo'); loadRepoPage(true);">查看仓库文件 →</span>`
             : action.action === 'read_file' && gitFilePath
-                ? `<span class="action-link" onclick="openRepoFileFromChat('${escapeHtml(gitFilePath)}')">查看文件 →</span>`
+                ? `<span class="action-link" draggable="true" data-file-path="${escapeHtml(gitFilePath)}" onclick="openRepoFileFromChat('${escapeHtml(gitFilePath)}')">查看文件 →</span>`
                 : '';
         actionHtml = `
             <div class="chat-action-card" style="border-left-color: var(--info, #58a6ff);">
@@ -22999,20 +23747,7 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
 
     // assistant 消息底部工具栏（复制 + 保存为文件 + 保存到仓库）；用户气泡不显示工具栏，直接拖选复制
     const toolbarHtml = (role === 'assistant' && content && content.trim())
-        ? `<div class="chat-bubble-toolbar">
-            <button class="chat-bubble-tool-btn" onclick="copyChatBubble(this)" title="复制内容">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
-                复制
-            </button>
-            <button class="chat-bubble-tool-btn" onclick="saveChatBubbleToFile(this)" title="下载为本地 Markdown 文件">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                保存为文件
-            </button>
-            ${currentProjectId ? `<button class="chat-bubble-tool-btn" onclick="saveChatBubbleToRepo(this)" title="保存为 Markdown 文件到项目仓库">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
-                保存到仓库
-            </button>` : ''}
-           </div>`
+        ? _buildChatBubbleToolbarHtml(currentProjectId)
         : '';
 
     // 思考面板（assistant 且有历史思考步骤时，在气泡前插入）
@@ -23184,12 +23919,7 @@ function appendGroupAgentBubble(agentName, emoji, color, content, timestamp = nu
         <div class="chat-msg-content">
             <div class="group-agent-name" style="color:${escapeHtml(color)};font-size:11px;font-weight:600;margin-bottom:3px;margin-left:2px;">${escapeHtml(agentName)}</div>
             <div class="chat-msg-bubble" style="border-left:3px solid ${escapeHtml(color)}40;">${formatChatContent(content)}</div>
-            <div class="chat-bubble-toolbar">
-                <button class="chat-bubble-tool-btn" onclick="copyChatBubble(this)" title="复制内容">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
-                    复制
-                </button>
-            </div>
+            ${_buildChatBubbleToolbarHtml(currentProjectId)}
             <div class="chat-msg-time">${timeStr}</div>
         </div>
     `;
@@ -23518,6 +24248,23 @@ function doCancelProject(cardId) {
     if (btns) btns.remove();
 }
 
+function _buildChatBubbleToolbarHtml(projectId = currentProjectId) {
+    return `<div class="chat-bubble-toolbar">
+            <button class="chat-bubble-tool-btn" onclick="copyChatBubble(this)" title="复制内容">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+                复制
+            </button>
+            <button class="chat-bubble-tool-btn" onclick="saveChatBubbleToFile(this)" title="下载为本地 Markdown 文件">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                保存为文件
+            </button>
+            ${projectId ? `<button class="chat-bubble-tool-btn" onclick="saveChatBubbleToRepo(this)" title="保存为 Markdown 文件到项目仓库">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 21H5a2 2 0 01-2-2V5a2 2 0 012-2h11l5 5v11a2 2 0 01-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                保存到仓库
+            </button>` : ''}
+           </div>`;
+}
+
 /** 复制气泡内容到剪贴板 */
 function copyChatBubble(btn) {
     const bubble = btn.closest('.chat-msg-content').querySelector('.chat-msg-bubble');
@@ -23662,7 +24409,8 @@ function saveChatBubbleToFile(btn) {
 }
 
 async function saveChatBubbleToRepo(btn) {
-    if (!currentProjectId) return;
+    const pid = currentProjectId || (typeof _esState !== 'undefined' && _esState.projectId) || '';
+    if (!pid) return;
     const bubble = btn.closest('.chat-msg-content').querySelector('.chat-msg-bubble');
     const text = bubble ? (bubble.innerText || bubble.textContent) : '';
     if (!text.trim()) return;
@@ -23677,7 +24425,7 @@ async function saveChatBubbleToRepo(btn) {
     btn.innerHTML = '⏳ 保存中...';
 
     try {
-        const resp = await fetch(`${API}/projects/${currentProjectId}/chat/save-to-repo`, {
+        const resp = await fetch(`${API}/projects/${pid}/chat/save-to-repo`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ filename: `docs/${filename}`, content }),
@@ -24002,7 +24750,7 @@ function _chatFileAnchor(rawPath, innerHtml) {
     const pathOnly = _stripPathNoise(rawPath).replace(/\\/g, '/');
     if (!pathOnly) return innerHtml;
     const safe = pathOnly.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-    return `<a class="chat-file-link" href="#" onclick="event.preventDefault();event.stopPropagation();openRepoFileFromChat('${safe}')" title="打开文件 ${escapeHtml(pathOnly)}">${innerHtml}</a>`;
+    return `<a class="chat-file-link" href="#" draggable="true" data-file-path="${escapeHtml(pathOnly)}" onclick="event.preventDefault();event.stopPropagation();openRepoFileFromChat('${safe}')" title="打开文件 ${escapeHtml(pathOnly)}">${innerHtml}</a>`;
 }
 
 /** 在纯文本（无 HTML 标签）中把路径变成链接 */
@@ -24028,15 +24776,16 @@ function _inlineFormat(text) {
     let html = text
         // 知识库可点击链接：[标题](ads-kb:123) / [标题](ads-kb:/123) / [标题](ads-kb://123)
         .replace(/\[([^\]]+)\]\(ads-kb:(?:\/\/?)?(\d+)\)/gi, (_, label, id) => {
-            return `<a class="chat-kb-link" href="#" onclick="event.preventDefault();event.stopPropagation();openKnowledgeDocFromChat('${id}')" title="打开知识库文档 #${id}">${label}</a>`;
+            return `<a class="chat-kb-link" href="#" draggable="true" data-kb-id="${id}" data-kb-title="${escapeHtml(label)}" onclick="event.preventDefault();event.stopPropagation();openKnowledgeDocFromChat('${id}')" title="打开知识库文档 #${id}">${label}</a>`;
         })
         .replace(/`([^`\n]+)`/g, (_, code) => {
             if (_isClickableFilePath(code)) {
                 return _chatFileAnchor(code, `<code class="chat-inline-code">${code}</code>`);
             }
             if (_isKnowledgeDocRef(code)) {
-                const safe = _stripPathNoise(code).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-                return `<a class="chat-kb-link" href="#" onclick="event.preventDefault();event.stopPropagation();openKnowledgeDocFromChat('${safe}')" title="打开知识库文档"><code class="chat-inline-code">${code}</code></a>`;
+                const clean = _stripPathNoise(code);
+                const safe = clean.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+                return `<a class="chat-kb-link" href="#" draggable="true" data-kb-ref="${escapeHtml(clean)}" onclick="event.preventDefault();event.stopPropagation();openKnowledgeDocFromChat('${safe}')" title="打开知识库文档"><code class="chat-inline-code">${code}</code></a>`;
             }
             return `<code class="chat-inline-code">${code}</code>`;
         })
@@ -24066,8 +24815,8 @@ function _inlineFormat(text) {
  *  所以 URL 里的 & 是 &amp; 形态——href/onclick 里正好（属性会被解码回 &），label 直接用不重复转义。 */
 function _linkifyUrls(text) {
     if (!text || text.indexOf('http') === -1) return text;
-    // CJK 字符/全角标点不进 URL（中文句子和 URL 之间经常没空格，不放行会把后文吞进链接）
-    return text.replace(/https?:\/\/[^\s<>"'\]\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]+/gi, (m) => {
+    // CJK 字符/全角标点与标签占位符(\x01/\x02)不进 URL（否则 `http://...` 反引号后的 </code> 占位符会被吞进 URL）
+    return text.replace(/https?:\/\/[^\s<>"'\]\x01\x02\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]+/gi, (m) => {
         // 句尾的实体（&gt; 等）和标点是收尾符号，不属于 URL
         let url = m.replace(/(?:&(?:lt|gt|quot|#39);)+$/i, '');
         // 括号配平：URL 内合法含括号，只把"超配平"的尾部 ) 还给正文（markdown [x](url) 的收尾括号）
@@ -24194,7 +24943,7 @@ function buildCodeFileCard(lang, code) {
 
     // 仓库按钮：只在检测到真实文件路径时显示
     const repoLinkHtml = detectedFile
-        ? `<button class="code-card-repo-btn" onclick="openRepoFileFromChat('${escapeHtml(detectedFile)}')" title="在仓库中打开">📂 仓库</button>`
+        ? `<button class="code-card-repo-btn" draggable="true" data-file-path="${escapeHtml(detectedFile)}" onclick="openRepoFileFromChat('${escapeHtml(detectedFile)}')" title="在仓库中打开">📂 仓库</button>`
         : '';
 
     // 預計算 preview 高度，style 寫死避免 flex 父容器撐高
@@ -24266,7 +25015,7 @@ function buildCodeRefCard(startLine, endLine, path, code) {
     // onclick 内联 JS 字符串：反斜杠双写 + 单引号 \'（实体转义会被 HTML 属性解码穿透，挡不住 JS 解析）
     const safePathAttr = escapeHtml(path.replace(/\\/g, '\\\\').replace(/'/g, "\\'"));
     // 模板必须压成单行：气泡是 white-space:pre-wrap，模板里的换行缩进会原样渲染成大段空白
-    return `<div class="chat-code-ref"><div class="chat-code-ref-head"><span class="chat-code-ref-lang">${escapeHtml(label)}</span><span class="chat-code-ref-file" title="${escapeHtml(path)} ${escapeHtml(lineLabel)}（点击跳转并高亮）" onclick="openRepoFileFromChat('${safePathAttr}', ${startLine}, ${endLine})">${escapeHtml(fname)}</span><span class="chat-code-ref-lines">${escapeHtml(lineLabel)}</span></div><pre class="chat-code-ref-pre"><code>${codeHtml}</code></pre></div>`;
+    return `<div class="chat-code-ref"><div class="chat-code-ref-head"><span class="chat-code-ref-lang">${escapeHtml(label)}</span><span class="chat-code-ref-file" draggable="true" data-file-path="${escapeHtml(path)}" title="${escapeHtml(path)} ${escapeHtml(lineLabel)}（点击跳转并高亮）" onclick="openRepoFileFromChat('${safePathAttr}', ${startLine}, ${endLine})">${escapeHtml(fname)}</span><span class="chat-code-ref-lines">${escapeHtml(lineLabel)}</span></div><pre class="chat-code-ref-pre"><code>${codeHtml}</code></pre></div>`;
 }
 
 /** 根据代码内容猜测文件名 */
@@ -24444,14 +25193,188 @@ function _exitChatFullscreenSoft() {
     return true;
 }
 
+/** 全局助手没有当前项目。全屏时在聊天右侧用标签页打开本地文件。 */
+let _chatFileTabs = [];
+let _chatFileActive = '';
+
+function _collectChatPathHints() {
+    const parts = [];
+    (typeof chatHistory !== 'undefined' ? chatHistory : []).forEach(m => {
+        if (m && m.content) parts.push(String(m.content));
+    });
+    const box = document.getElementById('chatMessages');
+    if (box) parts.push(box.textContent || '');
+    const blob = parts.join('\n');
+    const found = [];
+    const seen = new Set();
+    const re = /[A-Za-z]:[\\/][^\s"'<>|*?\r\n]+|\$[A-Za-z_][A-Za-z0-9_]*(?:[\\/][^\s"'<>|*?\r\n]+)?|%[A-Za-z_][A-Za-z0-9_]*%(?:[\\/][^\s"'<>|*?\r\n]+)?|(?:[\w.\-]+[\\/]){1,8}[\w.\-]+/g;
+    let m;
+    while ((m = re.exec(blob)) && found.length < 80) {
+        const p = m[0].replace(/[.,;:)）】\]\}>`'"]+$/g, '');
+        if (!p || seen.has(p)) continue;
+        seen.add(p);
+        found.push(p);
+    }
+    return found;
+}
+
+function _ensureChatFilePane() {
+    let pane = document.getElementById('chatFilePane');
+    if (pane) return pane;
+    const body = document.getElementById('chatPanelBody');
+    if (!body) return null;
+    pane = document.createElement('div');
+    pane.id = 'chatFilePane';
+    pane.innerHTML = '<div class="chat-file-tabs" id="chatFileTabs"></div><div class="chat-file-view" id="chatFileView"></div>';
+    const tasks = document.getElementById('tasksSidePanel');
+    if (tasks && tasks.parentElement === body) body.insertBefore(pane, tasks);
+    else body.appendChild(pane);
+    return pane;
+}
+
+function _chatFileTabId(path) {
+    return String(path || '').replace(/\\/g, '/').toLowerCase();
+}
+
+function _renderChatFileTabs() {
+    const bar = document.getElementById('chatFileTabs');
+    if (!bar) return;
+    bar.innerHTML = _chatFileTabs.map((tab, i) => {
+        const active = tab.id === _chatFileActive ? ' active' : '';
+        const realPath = (tab.loaded && tab.loaded.path) || tab.path || '';
+        return `<button type="button" class="chat-file-tab${active}" draggable="true" data-file-path="${escapeHtml(realPath)}" onclick="_activateChatFileTab(${i})" title="${escapeHtml(realPath)}">`
+            + `<span>${escapeHtml(tab.title)}</span>`
+            + `<span class="chat-file-tab-x" onclick="event.stopPropagation();_closeChatFileTab(${i})">×</span>`
+            + `</button>`;
+    }).join('');
+}
+
+function _renderChatFileBody(tab) {
+    const view = document.getElementById('chatFileView');
+    if (!view || !tab) return;
+    if (tab.error) {
+        view.innerHTML = `<div class="chat-file-error">${escapeHtml(tab.error)}</div>`;
+        return;
+    }
+    if (!tab.loaded) {
+        view.innerHTML = `<div class="chat-file-error">正在打开…</div>`;
+        return;
+    }
+    const data = tab.loaded;
+    if (data.kind === 'image') {
+        const src = '/api/local-file?path=' + encodeURIComponent(data.path);
+        view.innerHTML = `<div class="main-ws-img"><img src="${src}" alt="${escapeHtml(data.filename || '')}"></div>`;
+        return;
+    }
+    if (data.kind === 'binary') {
+        view.innerHTML = `<div class="chat-file-error">${escapeHtml(data.message || '无法按文本打开')}</div>`;
+        return;
+    }
+    const text = data.content || '';
+    const name = data.filename || tab.title || '';
+    const isMd = /\.(md|markdown)$/i.test(name);
+    if (isMd && typeof _renderMdDocument === 'function') {
+        view.innerHTML = `<div class="md-preview">${_renderMdDocument(text)}</div>`
+            + (data.truncated ? '<div class="chat-file-error">文件较长，只显示前面一部分</div>' : '');
+        if (typeof _highlightMdCode === 'function') _highlightMdCode(view);
+        return;
+    }
+    const lines = text.split('\n');
+    const start = tab.lineStart || 0;
+    const end = tab.lineEnd || start;
+    const html = lines.map((line, idx) => {
+        const n = idx + 1;
+        const mark = start && n >= start && n <= end ? ' chat-file-line-mark' : '';
+        return `<div class="chat-file-line${mark}" id="chatFileLine${n}"><span class="chat-file-ln">${n}</span><span class="chat-file-code">${escapeHtml(line) || ' '}</span></div>`;
+    }).join('');
+    view.innerHTML = `<div class="chat-file-codeview">${html}</div>`
+        + (data.truncated ? '<div class="chat-file-error">文件较长，只显示前面一部分</div>' : '');
+    if (start) {
+        const el = document.getElementById('chatFileLine' + start);
+        if (el) el.scrollIntoView({ block: 'center' });
+    }
+}
+
+function _activateChatFileTab(index) {
+    const tab = _chatFileTabs[index];
+    if (!tab) return;
+    _chatFileActive = tab.id;
+    _renderChatFileTabs();
+    _renderChatFileBody(tab);
+}
+
+function _closeChatFileTab(index) {
+    const tab = _chatFileTabs[index];
+    if (!tab) return;
+    _chatFileTabs.splice(index, 1);
+    if (!_chatFileTabs.length) {
+        _chatFileActive = '';
+        document.getElementById('chatPanelBody')?.classList.remove('has-chat-files');
+        const view = document.getElementById('chatFileView');
+        if (view) view.innerHTML = '';
+        _renderChatFileTabs();
+        return;
+    }
+    if (tab.id === _chatFileActive) {
+        const next = _chatFileTabs[Math.min(index, _chatFileTabs.length - 1)];
+        _chatFileActive = next.id;
+        _renderChatFileBody(next);
+    }
+    _renderChatFileTabs();
+}
+
+async function _openGlobalChatFile(filePath, lineStart, lineEnd) {
+    const raw = String(filePath || '').trim();
+    if (!raw) return;
+    const fullscreen = (typeof _chatFullscreen !== 'undefined' && _chatFullscreen)
+        || document.body.classList.contains('chat-fullscreen');
+    if (!fullscreen && typeof toggleChatFullscreen === 'function') {
+        toggleChatFullscreen();
+    }
+    const pane = _ensureChatFilePane();
+    if (!pane) return;
+    document.getElementById('chatPanelBody')?.classList.add('has-chat-files');
+    const id = _chatFileTabId(raw);
+    let tab = _chatFileTabs.find(t => t.id === id);
+    if (!tab) {
+        const title = raw.replace(/\\/g, '/').split('/').pop() || raw;
+        tab = { id, path: raw, title, lineStart: lineStart || 0, lineEnd: lineEnd || 0, loaded: null, error: '' };
+        _chatFileTabs.push(tab);
+    } else {
+        tab.lineStart = lineStart || tab.lineStart || 0;
+        tab.lineEnd = lineEnd || tab.lineEnd || tab.lineStart || 0;
+        tab.error = '';
+    }
+    _chatFileActive = tab.id;
+    _renderChatFileTabs();
+    _renderChatFileBody(tab);
+    try {
+        const data = await api('/chat/local-preview', {
+            method: 'POST',
+            body: { path: raw, hints: _collectChatPathHints() },
+        });
+        if (!_chatFileTabs.includes(tab)) return;
+        tab.loaded = data;
+        tab.error = '';
+        if (data.filename) tab.title = data.filename;
+        if (_chatFileActive === id) {
+            _renderChatFileTabs();
+            _renderChatFileBody(tab);
+        }
+    } catch (e) {
+        tab.error = (e && e.message) ? e.message : '打开失败';
+        if (_chatFileActive === id) _renderChatFileBody(tab);
+    }
+}
+
 /** 从聊天/日志跳转打开文件：退出全屏 → 主舞台工作区 Tab，否则回退仓库页 */
-/** URL → Tab 标题：主机名 + 路径尾段（截断），开 Tab 列表里好认 */
+/** URL → Tab 标题：主机名(含端口) + 路径尾段（截断），开 Tab 列表里好认 */
 function _webTabTitle(url) {
     try {
         const u = new URL(url);
         const segs = (u.pathname || '').split('/').filter(Boolean);
         const last = segs.length ? decodeURIComponent(segs[segs.length - 1]).slice(0, 24) : '';
-        return u.hostname + (last ? ' · ' + last : '');
+        return (u.host || u.hostname) + (last ? ' · ' + last : '');
     } catch (e) {
         return String(url || '').replace(/^https?:\/\//i, '').slice(0, 40);
     }
@@ -24459,7 +25382,7 @@ function _webTabTitle(url) {
 
 /** 聊天里的超链接 → 主舞台「网页 Tab」内嵌打开；不在项目壳层时退回系统浏览器 */
 function openWebTabFromChat(url) {
-    url = String(url || '');
+    url = String(url || '').replace(/<\/?[a-zA-Z][^>]*>$/g, '').trim();
     if (!/^https?:\/\//i.test(url)) return;
     if (typeof adsShell !== 'undefined' && adsShell.isProjectShell && adsShell.isProjectShell() && currentProjectId) {
         try { _exitChatFullscreenSoft(); } catch {}
@@ -24477,7 +25400,10 @@ function _openUrlInSystemBrowser(url) {
 }
 
 function openRepoFileFromChat(filePath, lineStart, lineEnd) {
-    if (!currentProjectId) { showToast('请先选择项目', 'warning'); return; }
+    if (!currentProjectId) {
+        _openGlobalChatFile(filePath, lineStart, lineEnd);
+        return;
+    }
     const path = _normalizeChatFilePath(filePath);
     if (!path) return;
 
@@ -24522,7 +25448,7 @@ function _linkifyErrors(text) {
     // 1. MSVC: path\to\file.cpp(123): 或 path/to/file.cpp(123):
     escaped = escaped.replace(
         /([\w/\\.\-]+\.(?:cpp|h|cs|py|ts|js|go|rs|java|swift|kt|lua|ue|uasset|ini|cfg))\((\d+)\)/gi,
-        (_, fp, ln) => `<a class="err-file-link" onclick="openRepoFileFromChat('${fp.replace(/\\/g, '/')}')" title="打开 ${fp} 第 ${ln} 行">${fp}(${ln})</a>`
+        (_, fp, ln) => `<a class="err-file-link" href="#" draggable="true" data-file-path="${fp.replace(/\\/g, '/')}" onclick="event.preventDefault();openRepoFileFromChat('${fp.replace(/\\/g, '/')}')" title="打开 ${fp} 第 ${ln} 行">${fp}(${ln})</a>`
     );
 
     // 2. GCC/Python/Node: path/to/file.ext:行号  或  path/to/file.ext:行号:列号
@@ -24530,14 +25456,14 @@ function _linkifyErrors(text) {
         /([\w/\\.\-]+\.(?:cpp|h|cs|py|ts|js|go|rs|java|swift|kt|lua|ini|cfg)):(\d+)(?::\d+)?/gi,
         (match, fp, ln) => {
             if (match.includes('onclick=')) return match;  // 已处理过
-            return `<a class="err-file-link" onclick="openRepoFileFromChat('${fp.replace(/\\/g, '/')}')" title="打开 ${fp} 第 ${ln} 行">${match}</a>`;
+            return `<a class="err-file-link" href="#" draggable="true" data-file-path="${fp.replace(/\\/g, '/')}" onclick="event.preventDefault();openRepoFileFromChat('${fp.replace(/\\/g, '/')}')" title="打开 ${fp} 第 ${ln} 行">${match}</a>`;
         }
     );
 
     // 3. Python: File "path/to/file.py", line 123
     escaped = escaped.replace(
         /File &quot;([\w/\\.\-]+\.py)&quot;, line (\d+)/gi,
-        (_, fp, ln) => `File <a class="err-file-link" onclick="openRepoFileFromChat('${fp.replace(/\\/g, '/')}')" title="打开 ${fp} 第 ${ln} 行">&quot;${fp}&quot;</a>, line ${ln}`
+        (_, fp, ln) => `File <a class="err-file-link" href="#" draggable="true" data-file-path="${fp.replace(/\\/g, '/')}" onclick="event.preventDefault();openRepoFileFromChat('${fp.replace(/\\/g, '/')}')" title="打开 ${fp} 第 ${ln} 行">&quot;${fp}&quot;</a>, line ${ln}`
     );
 
     return escaped;
@@ -24797,6 +25723,131 @@ async function _loadSlashCommands() {
     return _slashCommands;
 }
 
+function _buildModelSelectorChipsHtml(cardId, models, currentModel) {
+    if (!models || !models.length) {
+        return `<div style="grid-column:1/-1;padding:12px;color:var(--text-muted);text-align:center;">暂无预设模型列表，可在右上角「⚙ 配置」中手动输入或使用 <code>/model &lt;模型名&gt;</code></div>`;
+    }
+    return models.map(m => {
+        const isCur = m === currentModel;
+        const safeM = String(m).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+        return `<button type="button" class="model-select-chip${isCur ? ' active' : ''}" data-model="${escapeHtml(m)}" onclick="_selectModelFromCard('${cardId}', '${safeM}')">`
+            + `<span class="model-chip-dot"></span>`
+            + `<span class="model-chip-name" title="${escapeHtml(m)}">${escapeHtml(m)}</span>`
+            + `<span class="model-chip-tag">当前</span>`
+            + `</button>`;
+    }).join('');
+}
+
+function _renderModelSelectorCardHtml(cardId, data) {
+    const models = Array.isArray(data.models) ? data.models : [];
+    const cur = data.current_model || '';
+    const isCli = data.api_format === 'cli';
+    const modeLabel = isCli ? `CLI · ${data.cli_type || 'claude'}` : `API · ${data.api_format || 'anthropic'}`;
+    const safeType = String(data.cli_type || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    const safeCmd = String(data.cli_cmd || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    const syncBtn = (isCli && data.cli_type !== 'custom')
+        ? `<button type="button" class="model-card-btn" id="${cardId}_sync" onclick="_syncModelSelectorCard('${cardId}', '${safeType}', '${safeCmd}')">↻ 同步列表</button>`
+        : '';
+    const filterHtml = models.length > 6
+        ? `<input type="text" class="model-card-filter" placeholder="🔍 搜索过滤模型…" oninput="_filterModelSelectorCard('${cardId}', this.value)">`
+        : '';
+    return `
+        <div class="chat-model-selector-card" id="${cardId}" data-current-model="${escapeHtml(cur)}">
+            <div class="model-card-header">
+                <div class="model-card-title">🤖 <span>选择模型</span> <code style="font-size:11px;opacity:.75;">/model</code></div>
+                <div class="model-card-actions">
+                    ${syncBtn}
+                    <button type="button" class="model-card-btn" onclick="showAgentLlmConfigModal('ChatAssistant')">⚙ 高级配置</button>
+                </div>
+            </div>
+            <div class="model-card-meta">
+                <span>当前模型：<span class="model-card-current-badge" id="${cardId}_cur">${escapeHtml(cur || '未设置')}</span></span>
+                <span>接入方式：<strong>${escapeHtml(modeLabel)}</strong></span>
+                <span>可用：<strong id="${cardId}_count">${models.length}</strong> 个</span>
+            </div>
+            ${filterHtml}
+            <div class="model-card-grid" id="${cardId}_list">
+                ${_buildModelSelectorChipsHtml(cardId, models, cur)}
+            </div>
+        </div>`;
+}
+
+function _filterModelSelectorCard(cardId, query) {
+    const list = document.getElementById(`${cardId}_list`);
+    if (!list) return;
+    const q = String(query || '').trim().toLowerCase();
+    list.querySelectorAll('.model-select-chip').forEach(btn => {
+        const name = (btn.dataset.model || '').toLowerCase();
+        btn.style.display = (!q || name.includes(q)) ? '' : 'none';
+    });
+}
+
+async function _selectModelFromCard(cardId, modelName) {
+    if (!modelName) return;
+    const card = document.getElementById(cardId);
+    const curBadge = document.getElementById(`${cardId}_cur`);
+    const list = document.getElementById(`${cardId}_list`);
+    if (card) card.dataset.currentModel = modelName;
+    if (curBadge) curBadge.textContent = modelName;
+    if (list) {
+        list.querySelectorAll('.model-select-chip').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.model === modelName);
+        });
+    }
+    try {
+        const url = currentProjectId
+            ? `/projects/${currentProjectId}/commands/model`
+            : `/commands/model`;
+        const resp = await originalApi(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ args: modelName, session_id: _currentChatSessionId }),
+        });
+        if (!resp.success) {
+            throw new Error(resp.output || '切换失败');
+        }
+        await checkLLMStatus();
+        showToast(`模型已切换为 ${modelName}`, 'success');
+        if (!currentProjectId) _saveGlobalChatToStorage();
+    } catch (e) {
+        showToast(`切换模型失败: ${e.message || e}`, 'error');
+    }
+}
+
+async function _syncModelSelectorCard(cardId, cliType, cliCmd) {
+    const btn = document.getElementById(`${cardId}_sync`);
+    const list = document.getElementById(`${cardId}_list`);
+    const countEl = document.getElementById(`${cardId}_count`);
+    const card = document.getElementById(cardId);
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = '同步中…';
+    }
+    try {
+        const data = await api('/llm/cli-models/refresh', {
+            method: 'POST',
+            body: { cli_type: cliType, cli_cmd: cliCmd },
+        });
+        const models = Array.isArray(data.models) ? data.models : [];
+        if (models.length && cliType) {
+            _cliModelOptions[cliType] = models;
+        }
+        const cur = card?.dataset?.currentModel || document.getElementById(`${cardId}_cur`)?.textContent || '';
+        if (list) list.innerHTML = _buildModelSelectorChipsHtml(cardId, models, cur);
+        if (countEl) countEl.textContent = String(models.length);
+        const filterInput = card?.querySelector('.model-card-filter');
+        if (filterInput && filterInput.value) _filterModelSelectorCard(cardId, filterInput.value);
+        showToast(data.message || `已同步 ${models.length} 个模型`, data.ok === false ? 'warning' : 'success');
+    } catch (e) {
+        showToast(`同步模型列表失败: ${e.message || e}`, 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = '↻ 同步列表';
+        }
+    }
+}
+
 async function _handleSlashCommand(input) {
     const parts = input.slice(1).split(/\s+/);
     const name = parts[0].toLowerCase();
@@ -24840,6 +25891,22 @@ async function _handleSlashCommand(input) {
                 sendChatMessage();
             }
             return;
+        }
+
+        // /model 无参数：弹出可交互的模型选择卡片
+        if (resp.success && resp.data && resp.data.type === 'model_selector') {
+            const cardId = _nextCardId('model_card');
+            const out = document.createElement('div');
+            out.className = 'chat-msg system-msg';
+            out.innerHTML = _renderModelSelectorCardHtml(cardId, resp.data);
+            container?.appendChild(out);
+            scrollChatToBottom();
+            if (!currentProjectId) _saveGlobalChatToStorage();
+            return;
+        }
+
+        if (resp.success && resp.data && resp.data.type === 'model_switched') {
+            checkLLMStatus();
         }
 
         // 渲染结果
@@ -25201,6 +26268,12 @@ function handleChatKeydown(e) {
 
     const input = document.getElementById('chatInput');
     if (!input) return;
+
+    if (e.key === 'Backspace' && input.selectionStart === 0 && input.selectionEnd === 0 && chatPendingDocs.length > 0) {
+        e.preventDefault();
+        removeChatDoc(chatPendingDocs.length - 1);
+        return;
+    }
 
     if (e.key === 'ArrowUp') {
         // 只在光标在第一行且输入框为空或单行时触发（避免干扰多行编辑）
@@ -28229,6 +29302,8 @@ async function refreshMetrics() {
 
         // 处理中工单
         const proc = d.processing ?? 0;
+        _runningMetricsProcessing = proc;
+        _updateRunningTasksPill();
         _setMetric('processing', proc,
             proc >= 10 ? 'danger' : proc >= 3 ? 'warn' : proc > 0 ? 'ok' : null);
 
@@ -28291,7 +29366,6 @@ function connectGlobalSSE() {
         _globalEventSource.addEventListener('cli_task_start', (e) => {
             const d = JSON.parse(e.data);
             _cliTaskRegister(d.task_id, d.title, d.tool || 'run_command', 'running');
-            _openTasksPanel();
             if (chatSending) {
                 _chatThinkingAppend({
                     step: 'start',
@@ -29443,6 +30517,15 @@ function _esSetShowThinking(checked) {
     _esHighlightOpenSession();
 }
 
+function _esResetOutputPlaceholder() {
+    const outEl = document.getElementById('esPanelOutput');
+    if (!outEl) return;
+    outEl.innerHTML = `
+        <div style="color:var(--text-muted);padding-top:30px;text-align:center;font-size:12px;">
+            ← 选择左侧会话查看完整气泡
+        </div>`;
+}
+
 // —— provider 切换（cursor / codebuddy），按项目存 localStorage ——
 function _esReadProviderPref(projectId) {
     try { return localStorage.getItem('esProvider:' + projectId) || 'cursor'; } catch { return 'cursor'; }
@@ -29451,9 +30534,12 @@ function _esSwitchProvider(provider) {
     if (!_esState || _esState.provider === provider) return;
     _esState.provider = provider;
     try { localStorage.setItem('esProvider:' + _esState.projectId, provider); } catch {}
-    // 换 provider 后旧选中的会话 id 不通用，清掉重新选
+    // 作废上一个 provider 的搜索/列表请求，换 provider 后旧选中的会话 id 不通用，清掉重新选并清空右栏残留内容
+    _esSearchSeq++;
+    clearTimeout(_esSearchTimer);
     _esState.activeSessionId = '';
     _esSaveActiveSession(_esState.projectId, '');
+    _esResetOutputPlaceholder();
     // 高亮切到新 provider
     const pane = document.querySelector('.external-sessions-pane');
     if (pane) {
@@ -29486,6 +30572,7 @@ function _esSaveSearchQuery(projectId, q) {
 /** 拉会话列表。_esState 填入 sessions / rootsResolved / providerAvailable，然后 _esRenderList */
 async function _esRefresh() {
     const pid = _esState.projectId;
+    const prov = _esState.provider;
     const listEl = document.getElementById('esPanelList');
     if (!pid) {
         if (listEl) listEl.innerHTML = `<div style="padding:12px;color:var(--text-muted);">未选择项目</div>`;
@@ -29493,7 +30580,8 @@ async function _esRefresh() {
     }
     if (listEl) listEl.innerHTML = `<div style="padding:12px;color:var(--text-muted);">加载中…</div>`;
     try {
-        const data = await api(`/projects/${encodeURIComponent(pid)}/external-sessions?provider=${encodeURIComponent(_esState.provider)}`);
+        const data = await api(`/projects/${encodeURIComponent(pid)}/external-sessions?provider=${encodeURIComponent(prov)}`);
+        if (_esState.projectId !== pid || _esState.provider !== prov) return;
         _esState.sessions = Array.isArray(data.sessions) ? data.sessions : [];
         _esState.allSessions = _esState.sessions.slice();
         _esState.filtered = _esState.sessions.slice();
@@ -29509,14 +30597,19 @@ async function _esRefresh() {
             _esRenderList();
             _esContentSearch(pendingQ, seq);
         }
-        // 恢复上次选中的会话：还在列表里就自动打开右栏；已被删则清记录
+        // 恢复上次选中的会话：还在列表里就自动打开右栏；已被删或还没选则默认打开第一条
         if (_esState.activeSessionId) {
             if (_esState.sessions.some(s => s.id === _esState.activeSessionId)) {
                 _esSelectSession(_esState.activeSessionId);
-            } else {
-                _esState.activeSessionId = '';
-                _esSaveActiveSession(pid, '');
+                return;
             }
+            _esState.activeSessionId = '';
+            _esSaveActiveSession(pid, '');
+        }
+        if (_esState.filtered.length > 0) {
+            _esSelectSession(_esState.filtered[0].id);
+        } else {
+            _esResetOutputPlaceholder();
         }
     } catch (e) {
         console.error('[external-sessions] list failed', e);
@@ -29777,7 +30870,7 @@ function _esWrapHits(root, q) {
         acceptNode(node) {
             if (!node.nodeValue || !node.nodeValue.toLowerCase().includes(ql)) return NodeFilter.FILTER_REJECT;
             const p = node.parentElement;
-            if (!p || p.closest('mark, script, style')) return NodeFilter.FILTER_REJECT;
+            if (!p || p.closest('mark, script, style, .chat-bubble-toolbar, .chat-msg-time')) return NodeFilter.FILTER_REJECT;
             if (hideThinking && p.closest('.es-group-item-thinking')) return NodeFilter.FILTER_REJECT;
             return NodeFilter.FILTER_ACCEPT;
         },
@@ -29836,11 +30929,14 @@ async function _esSelectSession(sessionId) {
     outEl.innerHTML = `<div style="color:var(--text-muted);padding:16px;">加载气泡…</div>`;
 
     const pid = _esState.projectId;
+    const prov = _esState.provider;
     try {
-        const data = await api(`/projects/${encodeURIComponent(pid)}/external-sessions/${encodeURIComponent(_esState.provider)}/${encodeURIComponent(sessionId)}`);
+        const data = await api(`/projects/${encodeURIComponent(pid)}/external-sessions/${encodeURIComponent(prov)}/${encodeURIComponent(sessionId)}`);
+        if (_esState.projectId !== pid || _esState.provider !== prov || _esState.activeSessionId !== sessionId) return;
         _esRenderSessionDetail(outEl, data);
     } catch (e) {
         _esSuppressScroll = false;  // 失败也要恢复记录，否则之后滚动都不落盘
+        if (_esState.projectId !== pid || _esState.provider !== prov || _esState.activeSessionId !== sessionId) return;
         console.error('[external-sessions] detail failed', e);
         outEl.innerHTML = `<div style="color:var(--danger);padding:16px;">加载失败：${escHtml(String(e.message || e))}</div>`;
     }
@@ -30094,10 +31190,10 @@ function _esRenderFilesChanged(m) {
         const stats = `${f.added ? `<span class="es-fc-add">+${f.added}</span>` : ''}${f.removed ? `<span class="es-fc-del">-${f.removed}</span>` : ''}`;
         const hasDiff = !!(f.diff && f.diff.trim());
         const rowTitle = hasDiff ? '点击展开/收起 diff' : escHtml(rawPath);
-        return `<div class="es-fc-row${hasDiff ? ' has-diff' : ''}" title="${rowTitle}"${hasDiff ? ` onclick="_esToggleFcDiff('${cardId}', ${i}, this)"` : ''}>` +
+        return `<div class="es-fc-row${hasDiff ? ' has-diff' : ''}" draggable="true" data-file-path="${escHtml(rawPath)}" title="${rowTitle}"${hasDiff ? ` onclick="_esToggleFcDiff('${cardId}', ${i}, this)"` : ''}>` +
             `${hasDiff ? '<span class="es-fc-arrow">▸</span>' : ''}${badge}` +
             `<span class="es-fc-name">${escHtml(name)}</span><span class="es-fc-stats">${stats}</span>` +
-            `<span class="es-fc-jump" title="在仓库中打开" onclick="event.stopPropagation();openRepoFileFromChat('${safePath}')">↗</span></div>` +
+            `<span class="es-fc-jump" draggable="true" data-file-path="${escHtml(rawPath)}" title="在仓库中打开" onclick="event.stopPropagation();openRepoFileFromChat('${safePath}')">↗</span></div>` +
             (hasDiff ? '<div class="es-fc-diff" style="display:none;"></div>' : '');
     }).join('');
     return `
@@ -30156,9 +31252,12 @@ function _esRenderBubble(m) {
     const foldable = _esDetectFoldableText(content);
     const role = foldable ? 'assistant' : ((m.role === 'user' || m.role === 'assistant') ? m.role : 'assistant');
     const kind = m.kind || 'text';
+    const toolbarHtml = (role === 'assistant' && !foldable && content && content.trim())
+        ? _buildChatBubbleToolbarHtml(_esState.projectId || currentProjectId)
+        : '';
     return `
         <div class="chat-msg ${role}" data-kind="${kind}">
-            <div class="chat-msg-content">${_esRenderBubbleInner(m, foldable)}${_esMsgTime(m)}</div>
+            <div class="chat-msg-content">${_esRenderBubbleInner(m, foldable)}${toolbarHtml}${_esMsgTime(m)}</div>
         </div>`;
 }
 
@@ -30365,7 +31464,7 @@ function _esRenderGroupToolItem(m, stepNo) {
                 <code>${escHtml(name)}</code>
                 ${statusMark}
                 ${preview ? `<span class="es-group-preview">${escHtml(preview)}</span>` : ''}
-                ${pathHint ? `<span class="es-group-path" title="${escHtml(pathHint)}">${escHtml(pathHint)}</span>` : ''}
+                ${pathHint ? `<span class="es-group-path" draggable="true" data-file-path="${escHtml(pathHint)}" title="${escHtml(pathHint)}">${escHtml(pathHint)}</span>` : ''}
             </div>
             <div class="es-chip-body" style="display:none;">${bodyHtml}</div>
         </div>`;
@@ -30476,10 +31575,10 @@ function _esInitImageViewer(container) {
         img.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
         badge.textContent = Math.round(scale * 100) + '%';
         badge.style.display = (scale === 1 && tx === 0 && ty === 0) ? 'none' : '';
+        img.draggable = (scale === 1 && tx === 0 && ty === 0);
         container.style.cursor = dragging ? 'grabbing' : (scale > 1 ? 'grab' : 'zoom-in');
     }
 
-    img.draggable = false;
     img.style.userSelect = 'none';
     container.style.touchAction = 'none';  // 触屏/触控板也走拖动，别触发浏览器手势
 
@@ -30500,7 +31599,7 @@ function _esInitImageViewer(container) {
     }, { passive: false });
 
     container.addEventListener('pointerdown', (e) => {
-        if (e.button !== 0) return;
+        if (e.button !== 0 || (scale === 1 && tx === 0 && ty === 0)) return;
         dragging = true;
         startX = e.clientX; startY = e.clientY;
         startTx = tx; startTy = ty;

@@ -7,9 +7,71 @@ from __future__ import annotations
 
 import logging
 import re
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("actions.chat.propose_project_icebreak")
+
+_IGNORE_NAMES = {
+    ".git", ".ads", ".claude", ".codebuddy", ".cursor", ".vscode", ".idea",
+    ".agent", "__pycache__", "node_modules", ".venv", "venv", ".gitignore",
+    ".env", ".env.example", "claude.md", "codebuddy.md", ".mcp-migrated",
+}
+_SCAFFOLD_EMPTY_DIRS = {"src", "docs", "tests"}
+
+
+def _inspect_existing_repo(repo_path: Optional[str]) -> Dict[str, Any]:
+    """检测 repo_path 是否为已有代码的存量工程，并提取代表性顶层目录/文件。"""
+    if not repo_path:
+        return {"is_existing": False, "entries": []}
+    root = Path(repo_path)
+    if not root.is_dir():
+        return {"is_existing": False, "entries": []}
+
+    notable: List[str] = []
+    substantive_count = 0
+    try:
+        items = sorted(root.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
+    except OSError:
+        return {"is_existing": False, "entries": []}
+
+    for item in items:
+        low = item.name.lower()
+        if low in _IGNORE_NAMES or low.startswith(".git"):
+            continue
+        if item.is_dir():
+            if low in _SCAFFOLD_EMPTY_DIRS:
+                try:
+                    has_child = any(True for _ in item.iterdir())
+                except OSError:
+                    has_child = False
+                if not has_child:
+                    continue
+            if low == "plugins":
+                # 仅含自动部署的 UnrealClientProtocol 不算存量业务代码
+                try:
+                    children = [c.name for c in item.iterdir()]
+                except OSError:
+                    children = []
+                if children == ["UnrealClientProtocol"]:
+                    continue
+            substantive_count += 1
+            notable.append(f"{item.name}/")
+        elif item.is_file():
+            if low == "readme.md":
+                try:
+                    txt = item.read_text(encoding="utf-8", errors="replace").strip()
+                except OSError:
+                    txt = ""
+                if not txt or ("由 AI 自动开发系统创建的项目" in txt and len(txt) < 240):
+                    continue
+            substantive_count += 1
+            notable.append(item.name)
+
+    return {
+        "is_existing": substantive_count >= 2,
+        "entries": notable[:6],
+    }
 
 
 def _blob(*parts: str) -> str:
@@ -29,13 +91,61 @@ def build_icebreak_payload(
     description: str = "",
     traits: Optional[List[str]] = None,
     tech_stack: str = "",
+    repo_path: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """根据项目背景生成破冰分析 + 可点选项。"""
+    """根据项目背景生成破冰分析 + 可点选项。自动区分『存量工程接入』与『从零新建项目』。"""
     name = (name or "").strip() or "新项目"
     description = (description or "").strip()
     traits = [str(t) for t in (traits or []) if str(t).strip()]
     tech_stack = (tech_stack or "").strip()
     text = _blob(name, description, tech_stack, " ".join(traits))
+
+    repo_info = _inspect_existing_repo(repo_path)
+    if repo_info["is_existing"]:
+        entries_str = "、".join(repo_info["entries"][:5])
+        stack_str = f"，技术栈：{tech_stack}" if tech_stack else ""
+        desc_str = f"（{description}）" if description else ""
+        analysis = (
+            f"检测到「{name}」{desc_str}是已有代码的存量工程"
+            f"（包含 {entries_str} 等）{stack_str}。"
+            "建议先对齐现有架构与实现进度，在此基础上增量迭代，而非从零重做原型。"
+        )
+        options = [
+            _opt(
+                "overview",
+                "梳理现有架构与进展",
+                f"请先读取「{name}」仓库的目录结构、README 和状态文档，帮我梳理当前已完成模块、技术架构与待办事项。",
+                "推荐",
+            ),
+            _opt(
+                "iterate",
+                "基于现有代码新增/迭代功能",
+                f"请结合「{name}」现有代码结构，帮我拆解下一条要推进的功能迭代需求并创建工单。",
+                "走工单流",
+            ),
+            _opt(
+                "audit",
+                "排查未完项与代码体检",
+                f"请检查「{name}」当前前后端实现的完整性、未打通环节或潜在问题，列出优先修复清单。",
+                "查问题",
+            ),
+            _opt(
+                "custom",
+                "我有明确任务",
+                f"项目「{name}」已有现成代码。先听我描述具体要改的模块或问题，再开始处理。",
+                "自己描述",
+            ),
+        ]
+        return {
+            "type": "propose_icebreak",
+            "title": "🧭 建议的切入方向（现有工程）",
+            "project_name": name,
+            "analysis": analysis,
+            "options": options,
+            "traits": traits,
+            "is_existing": True,
+            "source": "heuristic_existing",
+        }
 
     engine = next((t.split(":", 1)[-1] for t in traits if t.startswith("engine:")), "")
     platform = next((t.split(":", 1)[-1] for t in traits if t.startswith("platform:")), "")
@@ -54,10 +164,12 @@ def build_icebreak_payload(
 
     return {
         "type": "propose_icebreak",
+        "title": "🧭 建议的开发方向",
         "project_name": name,
         "analysis": analysis,
         "options": options,
         "traits": traits,
+        "is_existing": False,
         "source": "heuristic",
     }
 
@@ -211,18 +323,35 @@ async def persist_project_icebreak(
     description: str = "",
     traits: Optional[List[str]] = None,
     tech_stack: str = "",
+    repo_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """把破冰消息写入项目会话，刷新后能直接看到。"""
     from api.chat import _save_chat_message
     from database import db
     from utils import generate_id, now_iso
 
-    payload = build_icebreak_payload(name, description, traits, tech_stack)
+    if not repo_path and project_id:
+        try:
+            row = await db.fetch_one("SELECT git_repo_path FROM projects WHERE id = ?", (project_id,))
+            if row and row.get("git_repo_path"):
+                repo_path = row["git_repo_path"]
+        except Exception:
+            pass
+
+    payload = build_icebreak_payload(name, description, traits, tech_stack, repo_path=repo_path)
     session_id = generate_id("sess-")
-    intro = (
-        f"项目「{payload['project_name']}」已就绪。{payload['analysis']}\n"
-        "请选一个方向，我会据此创建第一个需求。"
-    )
+    if payload.get("is_existing"):
+        intro = (
+            f"已接入现有项目「{payload['project_name']}」。"
+            "请选择一个切入方式，或直接输入你要处理的模块与问题。"
+        )
+        sess_title = f"接入 · {payload['project_name']}"
+    else:
+        intro = (
+            f"项目「{payload['project_name']}」已就绪。"
+            "请选一个起步方向，我会据此创建第一个需求。"
+        )
+        sess_title = f"破冰 · {payload['project_name']}"
     await _save_chat_message(
         project_id=project_id,
         role="assistant",
@@ -233,7 +362,7 @@ async def persist_project_icebreak(
     try:
         await db.update(
             "chat_sessions",
-            {"title": f"破冰 · {payload['project_name']}", "updated_at": now_iso()},
+            {"title": sess_title, "updated_at": now_iso()},
             "id = ?",
             (session_id,),
         )
@@ -244,5 +373,5 @@ async def persist_project_icebreak(
         "project_id": project_id,
         "session_id": session_id,
         "persisted": True,
-        "reason": "新建项目破冰：方向卡片已写入项目聊天",
+        "reason": "项目破冰：方向卡片已写入项目聊天",
     }

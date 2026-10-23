@@ -333,35 +333,41 @@ CLI_MODEL_OPTIONS: Dict[str, list] = {
         "gemini-2.5-pro",
     ],
     "codebuddy": [
-        # CodeBuddy CLI 可用模型（来源：codebuddy 模型选择界面）
-        "claude-sonnet-4-6",
-        "claude-sonnet-4-6-1m",
-        "claude-opus-4-8",
-        "claude-opus-4-8-1m",
-        "claude-opus-4-7",
-        "claude-opus-4-7-1m",
-        "claude-opus-4-6",
-        "claude-opus-4-6-1m",
-        "claude-haiku-4-5",
+        # CodeBuddy CLI 可用模型（来源：codebuddy 最新同步列表）
+        "claude-sonnet-5",
+        "claude-sonnet-5-1m",
+        "claude-sonnet-4.6",
+        "claude-opus-5.5",
+        "claude-sonnet-5.5",
+        "claude-opus-5",
+        "claude-opus-4.8-1m",
+        "claude-opus-4.7-1m",
+        "claude-opus-4.6-1m",
         "gemini-3.1-pro",
         "gemini-3.5-flash",
-        "gemini-2.5-pro",
-        "gpt-5.5",
-        "gpt-5.4",
-        "gpt-5.3-codex",
-        "gpt-5.1-codex",
-        "gpt-5.1-codex-mini",
-        "glm-5.1-ioa",
-        "glm-5v-turbo-ioa",
-        "glm-5.0-ioa",
-        "glm-4.7-ioa",
+        "gpt-6-astra",
+        "gpt-6.1-sol",
+        "gpt-6-sol",
+        "gpt-6-luna",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+        "glm-5.3-ioa",
+        "glm-5.3-flash-ioa",
+        "glm-5.3-flashx",
+        "glm-5.2-ioa",
+        "glm-5.2-internal-ioa",
+        "minimax-m3.1-flash",
+        "minimax-m3-ioa",
         "minimax-m2.7-ioa",
-        "minimax-m2.5-ioa",
-        "kimi-k2.6-ioa",
-        "hy3-preview-ioa",
+        "kimi-k3-ioa",
+        "kimi-k2.8-preview",
+        "hy4-preview-ioa",
+        "hy3-ioa",
+        "echo",
+        "deepseek-v4.1-flash",
         "deepseek-v4-pro-ioa",
-        "deepseek-v4-flash-ioa",
-        "deepseek-v3-2-volc-ioa",
+        "mimo-v2.6-pro",
     ],
     "custom": [],   # 自定义工具不预设模型列表
     "tclaude": [
@@ -399,9 +405,51 @@ CLI_MODEL_OPTIONS: Dict[str, list] = {
 _CLI_MODEL_RUNTIME: Dict[str, list] = {}
 
 
+def _read_codebuddy_local_models() -> list:
+    """从 ~/.codebuddy/local_storage 读取 CodeBuddy 已同步的最新模型列表（毫秒级）。"""
+    from pathlib import Path
+    try:
+        ls_dir = Path.home() / ".codebuddy" / "local_storage"
+        if not ls_dir.is_dir():
+            return []
+        for info_file in sorted(ls_dir.glob("*.info"), key=lambda p: p.stat().st_mtime, reverse=True):
+            try:
+                if info_file.stat().st_size > 200_000:
+                    continue
+                raw = info_file.read_text(encoding="utf-8", errors="replace").strip()
+                if not raw.startswith("["):
+                    continue
+                arr = json.loads(raw)
+                if not isinstance(arr, list) or not arr:
+                    continue
+                data = arr[0].get("data") if isinstance(arr[0], dict) else None
+                if not isinstance(data, dict):
+                    continue
+                agents = data.get("agents")
+                if isinstance(agents, list) and agents:
+                    models = agents[0].get("models") if isinstance(agents[0], dict) else None
+                    if isinstance(models, list) and models:
+                        seen = set()
+                        out = []
+                        for m in models:
+                            if isinstance(m, str) and m.strip() and m.strip() not in seen:
+                                seen.add(m.strip())
+                                out.append(m.strip())
+                        if out:
+                            return out
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return []
+
+
 def get_cli_model_options() -> Dict[str, list]:
-    """内置列表 + 用户刷新后的运行时覆盖"""
+    """内置列表 + 本机 CLI 同步缓存 + 用户刷新后的运行时覆盖"""
     out = {k: list(v) for k, v in CLI_MODEL_OPTIONS.items()}
+    cb_local = _read_codebuddy_local_models()
+    if cb_local:
+        out["codebuddy"] = cb_local
     out.update(_CLI_MODEL_RUNTIME)
     return out
 
@@ -447,6 +495,28 @@ def _parse_help_supported_models(text: str) -> list:
     return out
 
 
+_CB_BG_REFRESH_TASK = None
+
+
+async def _run_cli_model_subprocess(query_cmd: list, cli_type: str, timeout: int) -> list:
+    import asyncio as _asyncio
+    proc = await _asyncio.create_subprocess_exec(
+        *query_cmd,
+        stdout=_asyncio.subprocess.PIPE,
+        stderr=_asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await _asyncio.wait_for(proc.communicate(), timeout=timeout)
+    text = LLMClient._decode_cli_text(stdout or b"") + "\n" + LLMClient._decode_cli_text(stderr or b"")
+    if cli_type == "cursor":
+        models = _parse_cursor_list_models(text)
+    else:
+        models = _parse_help_supported_models(text)
+    if models:
+        _CLI_MODEL_RUNTIME[cli_type] = models
+        logger.info("🖥️  CLI 模型列表已刷新: type=%s count=%d", cli_type, len(models))
+    return models
+
+
 async def fetch_cli_models(cli_type: str, cli_cmd: str = "") -> Dict[str, Any]:
     """
     向本地 CLI 查询可用模型列表。
@@ -454,6 +524,7 @@ async def fetch_cli_models(cli_type: str, cli_cmd: str = "") -> Dict[str, Any]:
     """
     import asyncio as _asyncio
     import shutil as _sh
+    global _CB_BG_REFRESH_TASK
 
     cli_type = (cli_type or "").strip() or "claude"
     adapter = _CLI_ADAPTERS.get(cli_type) or _CLI_ADAPTERS.get("custom") or {}
@@ -477,6 +548,26 @@ async def fetch_cli_models(cli_type: str, cli_cmd: str = "") -> Dict[str, Any]:
         # codebuddy / claude / tclaude：从 --help 解析 Currently supported
         query_cmd = cmd_prefix + ["--help"]
         timeout = 120
+
+    # CodeBuddy 的 --help 启动需联网耗时 ~30s，但其已同步模型缓存在 ~/.codebuddy/local_storage；
+    # 优先毫秒级读取本地同步缓存返回，同时后台异步跑一次 --help 保持缓存最新。
+    if cli_type == "codebuddy":
+        cb_local = _read_codebuddy_local_models()
+        if cb_local:
+            _CLI_MODEL_RUNTIME["codebuddy"] = cb_local
+            if (_CB_BG_REFRESH_TASK is None or _CB_BG_REFRESH_TASK.done()) and _sh.which(cmd_name):
+                async def _bg():
+                    try:
+                        await _run_cli_model_subprocess(query_cmd, "codebuddy", timeout)
+                    except Exception:
+                        pass
+                _CB_BG_REFRESH_TASK = _asyncio.create_task(_bg())
+            return {
+                "ok": True,
+                "models": cb_local,
+                "source": "live",
+                "message": f"已同步 {len(cb_local)} 个模型（来自 CLI 本地同步配置）",
+            }
 
     if not _sh.which(cmd_name) and cli_type != "cursor":
         # cursor 可能已解析到 node.exe，which(agent) 仍可用；找不到则回退内置

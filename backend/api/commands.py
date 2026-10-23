@@ -1870,39 +1870,101 @@ async def _cmd_help(args: str, project_id: Optional[str], context: dict) -> Comm
 
 async def _cmd_model(args: str, project_id: Optional[str], context: dict) -> CommandResult:
     """查看或切换当前模型"""
-    from llm_client import llm_client, get_cli_model_options
+    import asyncio as _asyncio
+    from llm_client import (
+        llm_client,
+        get_cli_model_options,
+        fetch_cli_models,
+        get_agent_llm_config,
+        _invalidate_agent_client,
+        _CLI_MODEL_RUNTIME,
+    )
     from config import settings
+    from database import db
 
     arg = args.strip()
+    override = await get_agent_llm_config("ChatAssistant")
+    api_format = (override or {}).get("api_format") or llm_client.api_format
+    cli_type = (override or {}).get("cli_type") or llm_client.cli_type
+    cli_cmd = (override or {}).get("cli_cmd") or llm_client.cli_cmd
 
     if not arg:
-        # 查看当前模型
-        if llm_client.api_format == "cli":
-            available = get_cli_model_options().get(llm_client.cli_type, [])
+        # 查看当前模型并弹出模型选择卡片
+        if api_format == "cli":
+            if cli_type == "codebuddy" or cli_type not in _CLI_MODEL_RUNTIME:
+                try:
+                    await _asyncio.wait_for(fetch_cli_models(cli_type, cli_cmd or ""), timeout=5.0)
+                except Exception:
+                    pass
+            available = get_cli_model_options().get(cli_type, [])
+            current_model = ((override or {}).get("cli_model") or llm_client.cli_model or "").strip()
             lines = [
-                f"**当前模型：** `{llm_client.cli_model}`",
-                f"**接入方式：** CLI · {llm_client.cli_type}",
+                f"**当前模型：** `{current_model}`",
+                f"**接入方式：** CLI · {cli_type}",
                 "",
             ]
             if available:
                 lines.append("**可用模型：**")
                 for m in available:
-                    marker = " ← 当前" if m == llm_client.cli_model else ""
+                    marker = " ← 当前" if m == current_model else ""
                     lines.append(f"- `{m}`{marker}")
-            lines.append("\n`/model <模型名>` 切换模型")
+            lines.append("\n点击卡片中的模型直接切换，或输入 `/model <模型名>`")
+            return CommandResult(
+                success=True,
+                output="\n".join(lines),
+                data={
+                    "type": "model_selector",
+                    "api_format": "cli",
+                    "cli_type": cli_type,
+                    "cli_cmd": cli_cmd or "",
+                    "current_model": current_model,
+                    "models": available,
+                },
+            )
         else:
-            lines = [
-                f"**当前模型：** `{llm_client.model}`",
-                f"**接入方式：** API · {llm_client.api_format}",
-                "\n`/model <模型名>` 切换模型",
+            current_model = ((override or {}).get("model") or llm_client.model or "").strip()
+            common_api_models = [
+                "claude-sonnet-4-6",
+                "claude-opus-4-8",
+                "claude-haiku-4-5",
+                "gpt-5.4",
+                "gemini-3.1-pro",
+                "deepseek-v4-pro-ioa",
             ]
-        return CommandResult(success=True, output="\n".join(lines))
+            if current_model and current_model not in common_api_models:
+                common_api_models.insert(0, current_model)
+            lines = [
+                f"**当前模型：** `{current_model}`",
+                f"**接入方式：** API · {api_format}",
+                "\n点击卡片中的模型直接切换，或输入 `/model <模型名>`",
+            ]
+            return CommandResult(
+                success=True,
+                output="\n".join(lines),
+                data={
+                    "type": "model_selector",
+                    "api_format": api_format,
+                    "cli_type": "",
+                    "cli_cmd": "",
+                    "current_model": current_model,
+                    "models": common_api_models,
+                },
+            )
 
     # 切换模型
-    if llm_client.api_format == "cli":
-        old = llm_client.cli_model
+    if api_format == "cli":
+        old = ((override or {}).get("cli_model") or llm_client.cli_model or "").strip()
         llm_client.cli_model = arg
         settings.LLM_CLI_MODEL = arg
+        if override is not None:
+            try:
+                await db.execute(
+                    "UPDATE agent_llm_config SET cli_model = ? WHERE agent_type = 'ChatAssistant'",
+                    (arg,),
+                )
+                _invalidate_agent_client("ChatAssistant")
+            except Exception:
+                pass
         # 持久化到 .env
         try:
             from config import BASE_DIR
@@ -1917,11 +1979,24 @@ async def _cmd_model(args: str, project_id: Optional[str], context: dict) -> Com
                 env_path.write_text(text, encoding="utf-8")
         except Exception:
             pass
-        return CommandResult(success=True, output=f"✅ 模型已切换：`{old}` → `{arg}`")
+        return CommandResult(
+            success=True,
+            output=f"✅ 模型已切换：`{old}` → `{arg}`",
+            data={"type": "model_switched", "old_model": old, "current_model": arg},
+        )
     else:
-        old = llm_client.model
+        old = ((override or {}).get("model") or llm_client.model or "").strip()
         llm_client.model = arg
         settings.LLM_MODEL = arg
+        if override is not None:
+            try:
+                await db.execute(
+                    "UPDATE agent_llm_config SET model = ? WHERE agent_type = 'ChatAssistant'",
+                    (arg,),
+                )
+                _invalidate_agent_client("ChatAssistant")
+            except Exception:
+                pass
         try:
             from config import BASE_DIR
             import re
@@ -1935,7 +2010,11 @@ async def _cmd_model(args: str, project_id: Optional[str], context: dict) -> Com
                 env_path.write_text(text, encoding="utf-8")
         except Exception:
             pass
-        return CommandResult(success=True, output=f"✅ 模型已切换：`{old}` → `{arg}`")
+        return CommandResult(
+            success=True,
+            output=f"✅ 模型已切换：`{old}` → `{arg}`",
+            data={"type": "model_switched", "old_model": old, "current_model": arg},
+        )
 
 
 # ── /clear ───────────────────────────────────────────────────────────────────

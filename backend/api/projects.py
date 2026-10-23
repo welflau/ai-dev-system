@@ -281,7 +281,7 @@ async def create_project(req: ProjectCreate):
                 from actions.chat.propose_project_icebreak import persist_project_icebreak
                 await persist_project_icebreak(
                     project_id, req.name, req.description or "",
-                    traits_list, req.tech_stack or "",
+                    traits_list, req.tech_stack or "", repo_path=repo_path,
                 )
         except Exception as e:
             logger.warning("项目破冰写入失败: %s", e)
