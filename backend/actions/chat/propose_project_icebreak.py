@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 from pathlib import Path
@@ -20,20 +21,211 @@ _IGNORE_NAMES = {
 _SCAFFOLD_EMPTY_DIRS = {"src", "docs", "tests"}
 
 
+def _read_text_safe(p: Path, limit: int = 32000) -> str:
+    try:
+        if p.is_file():
+            return p.read_text(encoding="utf-8", errors="replace")[:limit]
+    except OSError:
+        pass
+    return ""
+
+
+def _detect_launch_entries(root: Path) -> Dict[str, Any]:
+    """扫描存量仓库的环境启动入口文件与可启动的前后端服务（命令、工作目录、端口、前台访问 URL）。"""
+    entry_files: List[str] = []
+    launch_entries: List[Dict[str, Any]] = []
+
+    candidate_rel_files = [
+        "start.ps1", "start.bat", "start.cmd", "start.sh",
+        "run.ps1", "run.bat", "start_server.py", "run.py", "main.py", "app.py", "manage.py",
+        "backend/start.ps1", "backend/start.bat", "backend/start_server.py",
+        "backend/app/main.py", "backend/main.py", "backend/run.py", "backend/manage.py",
+        "frontend/package.json", "web/package.json", "client/package.json", "package.json",
+        "docker-compose.yml", "docker-compose.yaml",
+    ]
+    for rel in candidate_rel_files:
+        if (root / rel).is_file():
+            entry_files.append(rel)
+
+    root_start_txt = "\n".join(
+        _read_text_safe(root / fn)
+        for fn in ("start.ps1", "start.bat", "start.cmd", "start.sh", "run.ps1", "backend/start.ps1")
+        if (root / fn).is_file()
+    )
+    readme_txt = _read_text_safe(root / "README.md")
+    combined_hints = f"{root_start_txt}\n{readme_txt}"
+
+    # ── 1. 检测后端服务 (Backend) ──
+    be_dir: Optional[Path] = None
+    for sub in ("backend", "server"):
+        d = root / sub
+        if d.is_dir() and any((d / f).exists() for f in ("app", "main.py", "requirements.txt", "pyproject.toml", "manage.py")):
+            be_dir = d
+            break
+    if be_dir is None and any((root / f).exists() for f in ("start_server.py", "app/main.py", "main.py", "manage.py", "app.py")):
+        be_dir = root
+
+    if be_dir is not None:
+        uv_match = re.search(r"uvicorn\s+([\w\.:]+)(?:[^\r\n]*?--port\s+(\d+))?", combined_hints)
+        app_target = ""
+        be_port = 8000
+        be_framework = "FastAPI"
+        be_entry_file = "start.ps1" if (root / "start.ps1").is_file() else ""
+
+        if uv_match:
+            app_target = uv_match.group(1)
+            if uv_match.group(2):
+                be_port = int(uv_match.group(2))
+            if not be_entry_file:
+                if (be_dir / "start.ps1").is_file():
+                    be_entry_file = f"{be_dir.name}/start.ps1" if be_dir != root else "start.ps1"
+                elif (be_dir / "app" / "main.py").is_file():
+                    be_entry_file = f"{be_dir.name}/app/main.py" if be_dir != root else "app/main.py"
+        elif (be_dir / "app" / "main.py").is_file() or (be_dir / "main.py").is_file():
+            main_py = (be_dir / "app" / "main.py") if (be_dir / "app" / "main.py").is_file() else (be_dir / "main.py")
+            main_txt = _read_text_safe(main_py)
+            if "FastAPI" in main_txt or "uvicorn" in main_txt:
+                app_target = "app.main:app" if main_py.parent.name == "app" else "main:app"
+                pm = re.search(r"port\s*=\s*(\d+)", main_txt)
+                if pm:
+                    be_port = int(pm.group(1))
+                be_entry_file = be_entry_file or main_py.relative_to(root).as_posix()
+
+        if app_target:
+            py_exe = "python"
+            if (be_dir / ".venv" / "Scripts" / "python.exe").is_file():
+                py_exe = r'".venv\Scripts\python.exe"'
+            elif (root / ".venv" / "Scripts" / "python.exe").is_file():
+                py_exe = f'"{root / ".venv" / "Scripts" / "python.exe"}"'
+            be_cmd = f"{py_exe} -m uvicorn {app_target} --port {be_port}"
+            launch_entries.append({
+                "id": "backend",
+                "kind": "backend",
+                "label": f"后端服务 ({be_framework})",
+                "entry_file": be_entry_file or "backend",
+                "command": be_cmd,
+                "cwd": str(be_dir),
+                "port": be_port,
+                "url": f"http://localhost:{be_port}",
+                "docs_url": f"http://localhost:{be_port}/docs",
+            })
+        elif (be_dir / "start_server.py").is_file():
+            srv_py = be_dir / "start_server.py"
+            srv_txt = _read_text_safe(srv_py)
+            pm = re.search(r"port\s*=\s*(\d+)", srv_txt)
+            be_port = int(pm.group(1)) if pm else 8000
+            launch_entries.append({
+                "id": "backend",
+                "kind": "backend",
+                "label": "后端服务 (Python)",
+                "entry_file": srv_py.relative_to(root).as_posix(),
+                "command": "python start_server.py",
+                "cwd": str(be_dir),
+                "port": be_port,
+                "url": f"http://localhost:{be_port}",
+                "docs_url": f"http://localhost:{be_port}/docs" if "uvicorn" in srv_txt or "fastapi" in srv_txt.lower() else "",
+            })
+
+    # ── 2. 检测前端服务 (Frontend) ──
+    fe_dir: Optional[Path] = None
+    for sub in ("frontend", "web", "client"):
+        d = root / sub
+        if (d / "package.json").is_file():
+            fe_dir = d
+            break
+    if fe_dir is None and (root / "package.json").is_file():
+        fe_dir = root
+
+    if fe_dir is not None:
+        pkg_path = fe_dir / "package.json"
+        try:
+            pkg_data = json.loads(_read_text_safe(pkg_path) or "{}")
+        except Exception:
+            pkg_data = {}
+        scripts = pkg_data.get("scripts") if isinstance(pkg_data, dict) else {}
+        if isinstance(scripts, dict):
+            script_key = next((k for k in ("dev", "serve", "start") if k in scripts), "")
+            if script_key:
+                script_cmd = str(scripts.get(script_key) or "")
+                deps = {}
+                if isinstance(pkg_data.get("dependencies"), dict):
+                    deps.update(pkg_data["dependencies"])
+                if isinstance(pkg_data.get("devDependencies"), dict):
+                    deps.update(pkg_data["devDependencies"])
+
+                if "vite" in deps or "vite" in script_cmd:
+                    fw_name = "Vite"
+                elif "next" in deps or "next" in script_cmd:
+                    fw_name = "Next.js"
+                elif "nuxt" in deps:
+                    fw_name = "Nuxt"
+                elif "vue" in deps:
+                    fw_name = "Vue"
+                elif "react" in deps:
+                    fw_name = "React"
+                else:
+                    fw_name = "Web"
+
+                fe_port: Optional[int] = None
+                # 1) package.json script 里的 --port / -p
+                m_script_port = re.search(r"(?:--port|-p|PORT=)\s*(\d{2,5})", script_cmd)
+                if m_script_port:
+                    fe_port = int(m_script_port.group(1))
+                # 2) start.ps1 / README 里的 vite --port 或 Frontend : http://localhost:xxxx
+                if not fe_port:
+                    m_hint_port = (
+                        re.search(r"vite[^\r\n]*?--port\s+(\d{2,5})", combined_hints, re.IGNORECASE)
+                        or re.search(r"(?:前端|Frontend)[^\r\n]*?http://(?:localhost|127\.0\.0\.1):(\d{2,5})", combined_hints, re.IGNORECASE)
+                    )
+                    if m_hint_port:
+                        fe_port = int(m_hint_port.group(1))
+                # 3) vite.config.ts / vite.config.js
+                if not fe_port:
+                    for vcfg in ("vite.config.ts", "vite.config.js", "vite.config.mjs"):
+                        vtxt = _read_text_safe(fe_dir / vcfg)
+                        if vtxt:
+                            mv = re.search(r"\bport\s*:\s*(\d{2,5})", vtxt)
+                            if mv:
+                                fe_port = int(mv.group(1))
+                                break
+                if not fe_port:
+                    fe_port = 5173 if fw_name == "Vite" else 3000
+
+                fe_entry_file = pkg_path.relative_to(root).as_posix()
+                if (root / "start.ps1").is_file() and fe_dir != root:
+                    fe_entry_file = f"start.ps1 · {fe_entry_file}"
+
+                launch_entries.append({
+                    "id": "frontend",
+                    "kind": "frontend",
+                    "label": f"前端服务 ({fw_name})",
+                    "entry_file": fe_entry_file,
+                    "command": f"npm run {script_key}",
+                    "cwd": str(fe_dir),
+                    "port": fe_port,
+                    "url": f"http://localhost:{fe_port}",
+                })
+
+    return {
+        "entry_files": entry_files[:8],
+        "launch_entries": launch_entries,
+    }
+
+
 def _inspect_existing_repo(repo_path: Optional[str]) -> Dict[str, Any]:
-    """检测 repo_path 是否为已有代码的存量工程，并提取代表性顶层目录/文件。"""
+    """检测 repo_path 是否为已有代码的存量工程，并提取代表性顶层目录/文件及环境启动入口。"""
     if not repo_path:
-        return {"is_existing": False, "entries": []}
+        return {"is_existing": False, "entries": [], "entry_files": [], "launch_entries": []}
     root = Path(repo_path)
     if not root.is_dir():
-        return {"is_existing": False, "entries": []}
+        return {"is_existing": False, "entries": [], "entry_files": [], "launch_entries": []}
 
     notable: List[str] = []
     substantive_count = 0
     try:
         items = sorted(root.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
     except OSError:
-        return {"is_existing": False, "entries": []}
+        return {"is_existing": False, "entries": [], "entry_files": [], "launch_entries": []}
 
     for item in items:
         low = item.name.lower()
@@ -68,9 +260,13 @@ def _inspect_existing_repo(repo_path: Optional[str]) -> Dict[str, Any]:
             substantive_count += 1
             notable.append(item.name)
 
+    is_existing = substantive_count >= 2
+    launch_info = _detect_launch_entries(root) if is_existing else {"entry_files": [], "launch_entries": []}
     return {
-        "is_existing": substantive_count >= 2,
+        "is_existing": is_existing,
         "entries": notable[:6],
+        "entry_files": launch_info["entry_files"],
+        "launch_entries": launch_info["launch_entries"],
     }
 
 
@@ -105,10 +301,19 @@ def build_icebreak_payload(
         entries_str = "、".join(repo_info["entries"][:5])
         stack_str = f"，技术栈：{tech_stack}" if tech_stack else ""
         desc_str = f"（{description}）" if description else ""
+        launch_entries = repo_info.get("launch_entries") or []
+        entry_files = repo_info.get("entry_files") or []
+        if launch_entries:
+            svc_summary = "、".join(
+                f"{e.get('label', '服务')} (:{e.get('port')})" if e.get("port") else str(e.get("label", "服务"))
+                for e in launch_entries
+            )
+            launch_hint = f" 已识别到环境启动入口：{svc_summary}，可在下方直接检测/拉起后台服务并打开前台访问。"
+        else:
+            launch_hint = " 建议先对齐现有架构与实现进度，在此基础上增量迭代，而非从零重做原型。"
         analysis = (
             f"检测到「{name}」{desc_str}是已有代码的存量工程"
-            f"（包含 {entries_str} 等）{stack_str}。"
-            "建议先对齐现有架构与实现进度，在此基础上增量迭代，而非从零重做原型。"
+            f"（包含 {entries_str} 等）{stack_str}。{launch_hint}"
         )
         options = [
             _opt(
@@ -144,6 +349,8 @@ def build_icebreak_payload(
             "options": options,
             "traits": traits,
             "is_existing": True,
+            "entry_files": entry_files,
+            "launch_entries": launch_entries,
             "source": "heuristic_existing",
         }
 

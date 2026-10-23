@@ -177,9 +177,13 @@ def test_stage_ids_globally_unique():
             sop_ids.add(sid)
 
     # 插件 SKILL 与 fragment 同 stage_id 是第一版过渡：compose_sop 因重名跳过
-    # skill 插入，fragment 继续负责 reject_goto / ue_precompile。
-    # 删掉 engine_compile.yaml 时必须同时删掉本豁免，否则防撞测试失效。
-    _transitional_stage_shadows = {("engine-compile", "engine_compile")}
+    # skill 插入，fragment 继续负责 reject_goto（UE 还有 ue_precompile）。
+    # 删掉对应 yaml 时必须同时删掉本豁免，否则防撞测试失效。
+    _transitional_stage_shadows = {
+        ("engine-compile", "engine_compile"),
+        ("h5-typecheck", "h5_typecheck"),
+        ("h5-playtest", "h5_playtest"),
+    }
 
     seen = {}
     problems = []

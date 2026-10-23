@@ -69,6 +69,7 @@ framework:
     - express
     - spring
     - gin
+    - phaser         # H5 游戏（Phaser 3 + Vite）
 
 
 # ==================== 功能性维度（正交于项目类型）====================
@@ -156,6 +157,10 @@ constraints:
     - condition: { any_of: ["category:game"] }
       recommend: ["engine:*"]
       reason: "游戏项目需要明确引擎才能选对应 skill 和 SOP fragments"
+
+    - condition: { all_of: ["category:game", "platform:web"] }
+      recommend: ["framework:phaser"]
+      reason: "网页游戏标 framework:phaser 才会启用 H5 套件（脚手架 + tsc）"
 
     - condition: { any_of: ["category:service"] }
       recommend: ["framework:*", "lang:*"]

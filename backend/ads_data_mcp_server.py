@@ -609,6 +609,65 @@ async def confirm_bug(
 
 
 @mcp.tool()
+async def confirm_project(
+    name: str = "",
+    traits: str = "",
+    description: str = "",
+    git_remote_url: str = "",
+    local_path: str = "",
+    mode: str = "auto",
+    preset_id: str = "",
+    tech_stack: str = "",
+    local_repo_path: str = "",
+) -> str:
+    """
+    识别到用户想新建项目或打开本地目录时调用。
+    在 ADS 前端弹出项目草稿确认卡片，用户点「确认创建」后才真正建项目。
+    不直接创建项目，只产出草稿供用户确认。
+
+    触发时机：
+      - 用户说「新建项目」「做个 H5 游戏」「建个 Phaser 项目」且平台/类型已明确
+      - 用户发送本地目录路径（填 local_path，其它字段可留空）
+    不触发：闲聊、还在反问补齐 platform/category、用户只是问怎么建
+
+    traits 用逗号分隔，新建项目至少含 platform:* 与 category:*。
+    网页 Phaser 游戏再加 engine:none, framework:phaser, lang:typescript。
+    category:game 必须带 engine:*（ue5 / godot4 / unity / cocos / none）。
+    """
+    import httpx as _httpx
+
+    payload = {
+        "action": "confirm_project",
+        "data": {
+            "name": (name or "").strip(),
+            "traits": (traits or "").strip(),
+            "description": (description or "").strip(),
+            "git_remote_url": (git_remote_url or "").strip(),
+            "local_path": (local_path or "").strip(),
+            "mode": (mode or "auto").strip() or "auto",
+            "preset_id": (preset_id or "").strip(),
+            "tech_stack": (tech_stack or "").strip(),
+            "local_repo_path": (local_repo_path or "").strip(),
+        },
+    }
+
+    try:
+        async with _httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                f"{ADS_BASE_URL}/api/chat/mcp-action",
+                json=payload,
+            )
+        if resp.status_code == 200:
+            return resp.text
+        return json.dumps(
+            {"status": "error", "message": f"推送失败: HTTP {resp.status_code} {resp.text[:200]}"},
+            ensure_ascii=False,
+        )
+    except Exception as e:
+        return json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)
+
+
+@mcp.tool()
 async def run_command(
     command: str,
     cwd: str = "",

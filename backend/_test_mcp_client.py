@@ -122,13 +122,122 @@ def test_missing_config_file():
     print("✅ Test 5 配置文件缺失不崩通过")
 
 
+def test_http_mcp_port_sniffer():
+    """方案 1：测试项目候选端口提取与本地 /mcp 协议自动嗅探（含 JSON 与 SSE 两种响应格式 + DELETE 会话清理）"""
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    import threading
+    from mcp_client import (
+        _collect_candidate_mcp_ports,
+        probe_http_mcp_endpoint,
+        sniff_project_http_mcp_servers,
+        _load_project_mcp_config,
+        _SNIFFED_MCP_CACHE,
+    )
+
+    deleted_sessions = []
+
+    class _MockMcpHandler(BaseHTTPRequestHandler):
+        def log_message(self, format, *args):
+            pass
+
+        def do_POST(self):
+            if self.path != "/mcp":
+                self.send_response(404)
+                self.end_headers()
+                return
+            length = int(self.headers.get("Content-Length", "0"))
+            body = json.loads(self.rfile.read(length).decode("utf-8"))
+            if body.get("method") == "initialize":
+                resp_payload = {
+                    "jsonrpc": "2.0",
+                    "id": body.get("id", 1),
+                    "result": {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {"tools": {}},
+                        "serverInfo": {"name": "bagins", "version": "0.1.0"},
+                    },
+                }
+                # 模拟 StreamableHTTPServerTransport 的 text/event-stream 响应
+                sse_body = f"event: message\ndata: {json.dumps(resp_payload)}\n\n".encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("mcp-session-id", "mock-session-123")
+                self.send_header("Content-Length", str(len(sse_body)))
+                self.end_headers()
+                self.wfile.write(sse_body)
+
+        def do_DELETE(self):
+            sid = self.headers.get("mcp-session-id")
+            if sid:
+                deleted_sessions.append(sid)
+            self.send_response(200)
+            self.end_headers()
+
+    httpd = HTTPServer(("127.0.0.1", 0), _MockMcpHandler)
+    port = httpd.server_port
+    t = threading.Thread(target=httpd.serve_forever, daemon=True)
+    t.start()
+
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            # 模拟 Vite 项目配置端口为 mock server 端口
+            (repo / "package.json").write_text(
+                json.dumps({"name": "kinema-mock", "scripts": {"dev": "vite"}, "devDependencies": {"vite": "^8.0.0"}}),
+                encoding="utf-8",
+            )
+            (repo / "vite.config.ts").write_text(
+                f"export default {{ server: {{ port: {port} }} }};",
+                encoding="utf-8",
+            )
+
+            ports = _collect_candidate_mcp_ports(str(repo))
+            assert port in ports, f"Expected {port} in {ports}"
+
+            async def run_sniff():
+                info = await probe_http_mcp_endpoint(f"http://127.0.0.1:{port}/mcp")
+                assert info is not None
+                assert info["name"] == "bagins"
+                assert info["version"] == "0.1.0"
+                assert "mock-session-123" in deleted_sessions
+
+                discovered = await sniff_project_http_mcp_servers(str(repo))
+                assert "bagins" in discovered
+                assert discovered["bagins"]["url"] == f"http://127.0.0.1:{port}/mcp"
+                assert discovered["bagins"]["_source"] == "sniffed"
+                assert discovered["bagins"]["enabled"] is True
+
+                merged_cfg = _load_project_mcp_config(str(repo), include_user=False)
+                assert "bagins" in merged_cfg
+                assert merged_cfg["bagins"]["url"] == f"http://127.0.0.1:{port}/mcp"
+
+                # 显式 .ads/mcp_servers.json 可以覆盖/禁用自动嗅探结果
+                ads_dir = repo / ".ads"
+                ads_dir.mkdir(exist_ok=True)
+                (ads_dir / "mcp_servers.json").write_text(
+                    json.dumps({"bagins": {"enabled": False}}),
+                    encoding="utf-8",
+                )
+                merged_override = _load_project_mcp_config(str(repo), include_user=False)
+                assert merged_override["bagins"]["enabled"] is False
+
+            asyncio.run(run_sniff())
+            _SNIFFED_MCP_CACHE.clear()
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+    print("✅ Test 6 运行时 HTTP MCP 端口自动嗅探 + 会话清理 + 配置覆盖通过")
+
+
 def main():
     test_config_loads_and_filters_disabled()
     test_tool_name_namespacing()
     test_is_mcp_tool_routing()
     test_empty_config_no_crash()
     test_missing_config_file()
-    print("\n🎉 MCPClient 单测全部通过（5/5）")
+    test_http_mcp_port_sniffer()
+    print("\n🎉 MCPClient 单测全部通过（6/6）")
 
 
 if __name__ == "__main__":

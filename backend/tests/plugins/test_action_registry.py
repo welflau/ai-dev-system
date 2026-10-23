@@ -34,6 +34,12 @@ CONTENT_PLUGIN_ACTIONS = (
     "search_art_assets",
     "search_design_knowledge",
 )
+
+H5_PLUGIN_ACTIONS = (
+    "instantiate_h5_template",
+    "h5_typecheck",
+    "h5_playtest",
+)
 from skills.executable_loader import ExecutableSkill
 from skills.runner import SkillRunner
 
@@ -81,6 +87,16 @@ def test_ue_plugin_actions_are_discovered():
 def test_content_plugin_actions_are_discovered():
     names = available_action_names()
     for name in CONTENT_PLUGIN_ACTIONS:
+        action = create_action(name)
+        assert action is not None, name
+        assert action.name == name
+        assert name in names
+        assert require_action_class(name)().name == name
+
+
+def test_h5_plugin_actions_are_discovered():
+    names = available_action_names()
+    for name in H5_PLUGIN_ACTIONS:
         action = create_action(name)
         assert action is not None, name
         assert action.name == name

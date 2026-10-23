@@ -2870,12 +2870,31 @@ async def get_project_mcp_all(project_id: str):
     except Exception:
         pass
 
-    # 2. 用户 / 项目 MCP —— 复用 mcp_client 的多路解析
-    #    （用户级 ~/.codebuddy、~/.claude + 项目 .claude/.codebuddy/.ads）
+    # 2. 用户 / 项目 MCP —— 复用 mcp_client 的多路解析 + 运行时端口自动嗅探
+    #    （用户级 ~/.codebuddy、~/.claude + 项目 .claude/.codebuddy/.ads + 本机端口 /mcp 探测）
     #    敏感值（headers/env/token）不返回给前端。
     user_mcps = []
+    project_mcps = []
     try:
-        from mcp_client import _load_project_mcp_config, _detect_transport
+        from mcp_client import (
+            mcp_client,
+            _load_project_mcp_config,
+            _detect_transport,
+            sniff_project_http_mcp_servers,
+        )
+        if repo_path:
+            try:
+                sniffed = await sniff_project_http_mcp_servers(repo_path, timeout=0.6)
+                # 面板打开时若嗅探到的本机 HTTP MCP 尚未建连，顺手连接以拉取完整 tools 列表展示
+                for s_name, s_cfg in (sniffed or {}).items():
+                    if not s_cfg.get("enabled", True):
+                        continue
+                    existing = mcp_client._servers.get(s_name)
+                    if existing is None or existing.status in ("error", "stopped"):
+                        await mcp_client._start_project_server_bg(s_name, s_cfg)
+            except Exception as _se:
+                logger.debug("get_project_mcp_all 嗅探失败（忽略）: %s", _se)
+
         builtin_names = {m["name"] for m in builtin_mcps}
         merged = _load_project_mcp_config(repo_path or "")
         for name, cfg in merged.items():
@@ -2884,21 +2903,38 @@ async def get_project_mcp_all(project_id: str):
             src = cfg.get("_source", "user")
             transport = _detect_transport(cfg)
             is_plugin = src.startswith("plugin:")
-            user_mcps.append({
+            is_project = src in ("sniffed", "project", "ads", "cursor", "claude", "codebuddy", "workbuddy")
+            conn = mcp_client._servers.get(name)
+            runtime_status = conn.status if conn else None
+            runtime_tools = [t["name"] for t in conn.tools] if (conn and conn.tools) else []
+
+            # 对于自动嗅探到的本机 loopback 端点，展示无敏感性的本机 URL 方便用户确认
+            cmd_or_url = cfg.get("command", "")
+            if not cmd_or_url and cfg.get("_sniffed"):
+                cmd_or_url = cfg.get("url", "")
+
+            item = {
                 "name": name,
                 "description": cfg.get("description", ""),
-                "command": cfg.get("command", ""),      # 命令本身非敏感
+                "command": cmd_or_url,
                 "transport": transport,
                 "enabled": bool(cfg.get("enabled", True)),
-                "source": "plugin" if is_plugin else "user",
+                "status": runtime_status,
+                "tools": runtime_tools,
+                "source": "plugin" if is_plugin else ("project" if is_project else "user"),
                 "cli": next((c for c in ("codebuddy", "workbuddy", "cursor", "claude") if c in src), ""),
-                "config_source": src,                   # user:codebuddy / claude / ads / plugin:x
+                "config_source": src,                   # sniffed / user:codebuddy / claude / ads / plugin:x
+                "sniffed": bool(cfg.get("_sniffed")),
                 "pack_name": None,
                 "plugin_name": cfg.get("_plugin"),
                 # 端点扫到了但鉴权在 Client 侧 —— 前端要显示真实原因而非「未启用」
                 "needs_auth": bool(cfg.get("_needs_auth")),
-                # 注意：不返回 headers / env / url token 等敏感字段
-            })
+                # 注意：不返回 headers / env / 远端 url token 等敏感字段
+            }
+            if is_project:
+                project_mcps.append(item)
+            else:
+                user_mcps.append(item)
     except Exception as e:
         logger.debug("加载用户/项目 MCP 失败: %s", e)
 
@@ -2926,7 +2962,7 @@ async def get_project_mcp_all(project_id: str):
                 except Exception:
                     pass
 
-    all_mcps = builtin_mcps + user_mcps + pack_mcps
+    all_mcps = builtin_mcps + project_mcps + user_mcps + pack_mcps
     # Plugin 提供的 server 由 _load_project_mcp_config 混在 user_mcps 里，
     # 按 source 分拆出来（source 在上面按 _source 前缀已标好）
     plugin_mcps = [m for m in all_mcps if m.get("source") == "plugin"]
@@ -2936,13 +2972,14 @@ async def get_project_mcp_all(project_id: str):
     codebuddy_mcps = [m for m in all_mcps if m.get("cli") == "codebuddy"]
     workbuddy_mcps = [m for m in all_mcps if m.get("cli") == "workbuddy"]
     return {
-        "builtin": builtin_mcps, "user": user_mcps, "pack": pack_mcps,
+        "builtin": builtin_mcps, "project": project_mcps, "user": user_mcps, "pack": pack_mcps,
         "plugin": plugin_mcps,
         "cursor": cursor_mcps, "claude": claude_mcps,
         "codebuddy": codebuddy_mcps, "workbuddy": workbuddy_mcps,
         "all": all_mcps,
         "counts": {
-            "builtin": len(builtin_mcps), "user": len(user_mcps), "pack": len(pack_mcps),
+            "builtin": len(builtin_mcps), "project": len(project_mcps),
+            "user": len(user_mcps), "pack": len(pack_mcps),
             "plugin": len(plugin_mcps),
             "cursor": len(cursor_mcps), "claude": len(claude_mcps),
             "codebuddy": len(codebuddy_mcps), "workbuddy": len(workbuddy_mcps),

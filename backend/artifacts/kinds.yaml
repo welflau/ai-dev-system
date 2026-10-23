@@ -90,6 +90,22 @@ kinds:
     mime: application/json
     storage: file
 
+  typecheck_log:
+    description: |
+      TypeScript tsc --noEmit 结构化日志（错误/警告 + Phaser API 提示）。
+      由 H5 插件 skill h5-typecheck 声明 produces；第一版实际执行仍走
+      fragment h5_typecheck + DevAgent.run_h5_typecheck。
+    mime: application/json
+    storage: file
+
+  playtest_log:
+    description: |
+      H5 试玩结构化日志（vite build + 页面运行时错误 / 截图路径）。
+      由 H5 插件 skill h5-playtest 声明 produces；第一版实际执行仍走
+      fragment h5_playtest + TestAgent.run_h5_playtest。
+    mime: application/json
+    storage: file
+
   # ────────────────── 老产物（inline，禁止 produces） ──────────────────
   #
   # 登记它们不是为了让新 skill 产出，而是为了：

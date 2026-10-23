@@ -1,0 +1,29 @@
+# Phaser 仓库类型检查之后做一次运行时试玩
+id: h5_playtest
+name: H5 试玩
+insert_after: development
+priority: 86   # 低于 h5_typecheck(94)，先 tsc 再跑页面
+description: vite build 后用无头浏览器打开产物，收集 Phaser 运行时错误
+
+required_traits:
+  any_of:
+    - framework:phaser
+
+stage:
+  agent: TestAgent
+  action: run_h5_playtest
+  trigger_on: h5_playtest_pending
+  success_status: h5_playtest_passed
+  reject_status: h5_playtest_failed
+  reject_goto: development
+  config:
+    max_retries: 3
+    timeout_seconds: 180
+    observe_ms: 3000
+
+pipeline_view_contrib:
+  group: testing
+  create_if_missing:
+    name: 测试验证
+    icon: 🧪
+    insert_after: development

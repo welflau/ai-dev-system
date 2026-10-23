@@ -22,6 +22,7 @@ required_traits:
     - platform:wechat
     - engine:ue5               # UE 项目直接进引擎开发，HTML 原型无意义
     - engine:ue4
+    - framework:phaser         # Phaser 项目本身就是 H5 交付，不再做单文件原型
 
 stage:
   agent: DevAgent

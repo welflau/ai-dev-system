@@ -395,6 +395,7 @@ class _ChatToolExecutor:
         if short not in (
             "confirm_requirement", "confirm_bug",
             "confirm_direct_ticket", "confirm_requirements_batch",
+            "confirm_project",
         ):
             return
         try:
@@ -454,6 +455,37 @@ class _ChatToolExecutor:
                 "requirements": reqs,
                 "summary": (inp.get("summary") or "").strip(),
             }
+        elif short == "confirm_project":
+            if isinstance(parsed, dict):
+                nested = parsed.get("action")
+                if isinstance(nested, dict) and nested.get("type") == "confirm_project":
+                    data = nested
+                elif parsed.get("type") == "confirm_project":
+                    data = parsed
+            if data is None:
+                name = (inp.get("name") or "").strip()
+                local_path = (inp.get("local_path") or "").strip()
+                traits_raw = inp.get("traits") or []
+                if isinstance(traits_raw, str):
+                    traits = [t.strip() for t in traits_raw.replace("，", ",").split(",") if t.strip()]
+                elif isinstance(traits_raw, list):
+                    traits = [str(t).strip() for t in traits_raw if str(t).strip()]
+                else:
+                    traits = []
+                if name or local_path:
+                    if local_path or traits:
+                        data = {
+                            "type": "confirm_project",
+                            "name": name,
+                            "git_remote_url": (inp.get("git_remote_url") or "").strip(),
+                            "description": (inp.get("description") or "").strip(),
+                            "tech_stack": (inp.get("tech_stack") or "").strip(),
+                            "local_repo_path": (inp.get("local_repo_path") or local_path or "").strip(),
+                            "traits": traits,
+                            "preset_id": (inp.get("preset_id") or "").strip() or None,
+                            "mode": (inp.get("mode") or "auto").strip() or "auto",
+                            "extra_paths": [],
+                        }
         if not data:
             return
         current_type = data.get("type", "")
@@ -464,7 +496,7 @@ class _ChatToolExecutor:
         if current_type in self._COLLECT_ALL_TYPES:
             self.all_confirm_results.append(data)
         logger.info("MCP confirm 已合成 action（流式兜底）: %s %s",
-                    current_type, (data.get("title") or "")[:40])
+                    current_type, (data.get("title") or data.get("name") or "")[:40])
 
     async def _emit_thinking(self, tool_name: str, tool_input: dict, step: str, summary: str = "") -> None:
         """推送/记录思考日志。
@@ -480,6 +512,7 @@ class _ChatToolExecutor:
                 "git_log": "branch", "git_switch_branch": "branch",
                 "generate_document": "filename", "confirm_save_doc": "filename",
                 "confirm_requirement": "title", "confirm_bug": "title",
+                "confirm_project": "name", "confirm_direct_ticket": "title",
                 "load_skill": "skill_id", "read_local_file": "path", "ue_call": "command",
                 "glob": "pattern", "grep": "pattern", "list_directory": "path",
                 "shell": "command", "web_search": "query",
@@ -2085,10 +2118,11 @@ name: 项目名
   - `platform:*` —— `web` / `wechat` / `desktop` / `mobile` / `server` / `cli` 任选
   - `category:*` —— `app` / `game` / `service` / `library` 任选
   - 如果 `category:game`，还必须加 `engine:*`（`ue5` / `godot4` / `unity` / `cocos` / `none`）
+  - 网页 Phaser 游戏再加 `framework:phaser`（会启用 H5 套件：脚手架 + tsc）
 
 可选但推荐：
   - `lang:*`（python/javascript/cpp/gdscript/csharp/...）
-  - `framework:*`（react/vue/fastapi/...）
+  - `framework:*`（react/vue/fastapi/phaser/...）
   - 功能性 trait：`multiplayer` / `realtime` / `i18n` / `offline-first` 等
   - **preset_id**：如果 traits 跟某个 preset 完全匹配，填 preset_id 标记来源
 
@@ -2147,6 +2181,9 @@ name: 项目名
 ⛔ **禁止行为**：
 - 禁止在文字里写出"项目方案卡"的格式内容（项目名/Git仓库/本地路径/类型/技术栈列表）然后让用户点卡片——这样做卡片不会出现
 - 禁止说"请点击上方确认卡片"——如果没有调 confirm_project，就不会有卡片
+- 禁止说「这就出卡片」却不调用工具
+- **禁止跳过确认卡直接 POST /api/projects 建项目**——必须走 confirm_project，让用户点确认
+- CLI / codebuddy 模式下请直接调用 `confirm_project` 工具（ads-data MCP 已提供同名工具），不要只写文字
 - 调 confirm_project 后**不要重复用文字描述项目信息**，工具调用就是卡片本身
 
 ## 判断准则

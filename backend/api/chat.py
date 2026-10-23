@@ -4468,6 +4468,34 @@ async def global_chat_thinking_stream(session_id: str, request: Request):
     return EventSourceResponse(generator())
 
 
+class _GlobalMcpActionRequest(BaseModel):
+    action: str
+    data: dict = {}
+
+
+@global_chat_router.post("/mcp-action")
+async def global_mcp_action(req: _GlobalMcpActionRequest):
+    """CLI / ads-data MCP 回调：生成全局确认卡草稿（不落库）。
+
+    全局聊天没有项目 SSE，卡片靠 QueryEngine 从本接口返回值合成 ActionEvent。
+    """
+    action_name = (req.action or "").lower().strip()
+    data = dict(req.data or {})
+    if action_name != "confirm_project":
+        logger.warning("global_mcp_action: 未知 action=%s", action_name)
+        return {"status": "no_action", "reason": f"unknown action: {action_name}"}
+
+    traits = data.get("traits") or []
+    if isinstance(traits, str):
+        data["traits"] = [t.strip() for t in traits.replace("，", ",").split(",") if t.strip()]
+
+    from actions.chat.confirm_project import ConfirmProjectAction
+    result = await ConfirmProjectAction().run(data)
+    if not result.success:
+        return {"status": "error", "message": result.error or "确认卡片生成失败"}
+    return {"status": "ok", "action": result.data}
+
+
 @global_chat_router.post("/confirm-create-project")
 async def confirm_create_project(req: ConfirmCreateProjectRequest):
     """用户点击"确认创建"按钮后真正落库创建项目。"""
@@ -5003,3 +5031,212 @@ async def run_bg_command(req: _RunBgCommandRequest):
         "exit_code": proc.returncode,
         "stdout_tail": tail,
     }
+
+
+async def _probe_local_port(port: int, timeout: float = 0.25) -> bool:
+    """探测本机端口 (127.0.0.1 或 ::1) 是否处于监听状态。"""
+    if not port or port <= 0:
+        return False
+    for host in ("127.0.0.1", "::1"):
+        try:
+            _, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=timeout)
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except Exception:
+                pass
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def _find_bg_task_for_port(project_id: str, port: int) -> Optional[Dict[str, Any]]:
+    """在 _CLI_TASKS 中查找匹配指定端口的运行中后台服务任务。"""
+    if not port:
+        return None
+    port_tokens = (f":{port}", f" {port}", f"/{port}")
+    for t in _CLI_TASKS.values():
+        if t.get("status") != "running":
+            continue
+        title = str(t.get("title") or "")
+        sample = title + "\n" + "\n".join((t.get("output_lines") or [])[:25])
+        if any(tok in sample for tok in port_tokens):
+            if not project_id or not t.get("project_id") or t.get("project_id") == project_id:
+                return {"task_id": t["id"], "title": title}
+    return None
+
+
+class _EnvServiceStartRequest(BaseModel):
+    command: str
+    cwd: str = ""
+    title: str = ""
+    port: int = 0
+    force_restart: bool = False
+
+
+class _EnvServiceStopRequest(BaseModel):
+    task_id: str = ""
+    port: int = 0
+
+
+@router.get("/env-services/status")
+async def get_project_env_services_status(project_id: str, ports: str = ""):
+    """检测存量工程各启动入口端口是否已启动（无论在 ADS 后台任务还是外部终端启动）。"""
+    port_list: List[int] = []
+    for p in (ports or "").split(","):
+        p = p.strip()
+        if p.isdigit():
+            val = int(p)
+            if val > 0 and val not in port_list:
+                port_list.append(val)
+
+    if not port_list:
+        try:
+            row = await db.fetch_one("SELECT git_repo_path FROM projects WHERE id = ?", (project_id,))
+            if row and row.get("git_repo_path"):
+                from actions.chat.propose_project_icebreak import _detect_launch_entries
+                info = _detect_launch_entries(Path(row["git_repo_path"]))
+                for entry in info.get("launch_entries") or []:
+                    ep = int(entry.get("port") or 0)
+                    if ep > 0 and ep not in port_list:
+                        port_list.append(ep)
+        except Exception:
+            pass
+
+    results = await asyncio.gather(*[_probe_local_port(p) for p in port_list]) if port_list else []
+    services: Dict[str, Any] = {}
+    for p, listening in zip(port_list, results):
+        bg_task = _find_bg_task_for_port(project_id, p)
+        services[str(p)] = {
+            "port": p,
+            "running": bool(listening or bg_task),
+            "port_listening": bool(listening),
+            "in_ads_bg": bool(bg_task),
+            "task_id": bg_task["task_id"] if bg_task else "",
+            "task_title": bg_task["title"] if bg_task else "",
+        }
+    return {"ok": True, "services": services}
+
+
+async def _kill_process_on_port(project_id: str, port: int, task_id: str = "") -> None:
+    """终止指定 task_id 或占用指定端口（非 8000）的本地服务进程树。"""
+    import sys as _sys
+
+    tid = (task_id or "").strip()
+    if not tid and port > 0:
+        bg = _find_bg_task_for_port(project_id, port)
+        if bg:
+            tid = bg["task_id"]
+
+    proc = _BG_COMMAND_PROCS.get(tid) if tid else None
+    if proc is not None and proc.returncode is None:
+        try:
+            if _sys.platform == "win32" and proc.pid:
+                kp = await asyncio.create_subprocess_exec(
+                    "taskkill", "/F", "/T", "/PID", str(proc.pid),
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await kp.wait()
+            else:
+                proc.terminate()
+        except Exception as e:
+            logger.debug("stop bg proc err (%s): %s", tid, e)
+
+    if port > 0 and port != 8000 and _sys.platform == "win32":
+        try:
+            ns = await asyncio.create_subprocess_exec(
+                "netstat", "-ano",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            out, _ = await ns.communicate()
+            pids = set()
+            for line in out.decode("utf-8", errors="ignore").splitlines():
+                if "LISTENING" not in line:
+                    continue
+                parts = line.split()
+                if len(parts) >= 5 and parts[1].endswith(f":{port}"):
+                    if parts[-1].isdigit() and int(parts[-1]) > 0:
+                        pids.add(parts[-1])
+            for pid_str in pids:
+                kp = await asyncio.create_subprocess_exec(
+                    "taskkill", "/F", "/T", "/PID", pid_str,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await kp.wait()
+        except Exception as e:
+            logger.debug("kill port %s err: %s", port, e)
+
+    if port > 0:
+        for _ in range(8):
+            if not await _probe_local_port(port):
+                break
+            await asyncio.sleep(0.25)
+
+
+@router.post("/env-services/start")
+async def start_project_env_service(project_id: str, req: _EnvServiceStartRequest):
+    """从破冰卡片或环境面板一键在 ADS 后台启动项目服务，并等待端口就绪。"""
+    if req.port > 0 and req.force_restart:
+        await _kill_process_on_port(project_id, req.port)
+    elif req.port > 0:
+        if await _probe_local_port(req.port):
+            bg_task = _find_bg_task_for_port(project_id, req.port)
+            return {
+                "ok": True,
+                "already_running": True,
+                "port": req.port,
+                "running": True,
+                "in_ads_bg": bool(bg_task),
+                "task_id": bg_task["task_id"] if bg_task else "",
+            }
+
+    res = await run_bg_command(_RunBgCommandRequest(
+        command=req.command,
+        cwd=req.cwd,
+        project_id=project_id,
+        title=req.title or req.command,
+        startup_wait_s=2.0,
+    ))
+    task_id = res.get("task_id", "")
+    proc = _BG_COMMAND_PROCS.get(task_id)
+
+    port_ready = False
+    if req.port > 0:
+        for _ in range(16):
+            if await _probe_local_port(req.port):
+                port_ready = True
+                break
+            if proc is not None and proc.returncode is not None:
+                break
+            await asyncio.sleep(0.35)
+
+    running = port_ready or (proc is not None and proc.returncode is None)
+    if port_ready:
+        try:
+            proj = await db.fetch_one("SELECT git_repo_path FROM projects WHERE id = ?", (project_id,))
+            repo_path = (proj or {}).get("git_repo_path", "") if proj else ""
+            if repo_path:
+                from mcp_client import mcp_client
+                asyncio.create_task(mcp_client.warmup_project_servers(repo_path))
+        except Exception:
+            pass
+    return {
+        **res,
+        "port": req.port,
+        "running": running,
+        "port_listening": port_ready,
+        "in_ads_bg": bool(proc is not None and proc.returncode is None),
+    }
+
+
+@router.post("/env-services/stop")
+async def stop_project_env_service(project_id: str, req: _EnvServiceStopRequest):
+    """停止项目服务进程（Windows 下连同子进程树一并终止以释放端口）。"""
+    await _kill_process_on_port(project_id, req.port, req.task_id)
+    still_running = await _probe_local_port(req.port) if req.port > 0 else False
+    return {"ok": not still_running, "task_id": req.task_id, "running": still_running}
+

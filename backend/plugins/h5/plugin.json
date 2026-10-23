@@ -1,0 +1,9 @@
+{
+  "id": "h5",
+  "name": "H5 / Phaser",
+  "version": "0.1.0",
+  "description": "Phaser 3 + TypeScript 网页游戏：开发规范、Vite 脚手架、tsc、对仓库试玩。不另开沙箱目录。",
+  "required_traits": {
+    "any_of": ["framework:phaser"]
+  }
+}

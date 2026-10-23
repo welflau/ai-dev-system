@@ -82,6 +82,13 @@ RULES = [
     # ============= Node / 前端 =============
     {
         "glob": ["package.json"],
+        "dep_any_of": ["phaser"],
+        "emit": ["framework:phaser", "category:game", "platform:web", "lang:typescript"],
+        "confidence": 0.93,
+        "evidence": "package.json 依赖 phaser",
+    },
+    {
+        "glob": ["package.json"],
         "dep_any_of": ["react", "react-dom"],
         "emit": ["framework:react", "platform:web", "lang:javascript"],
         "confidence": 0.92,

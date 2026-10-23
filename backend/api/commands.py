@@ -1364,21 +1364,26 @@ async def _cmd_mcp_config(args: str, project_id: Optional[str], context: dict) -
 
         # ---- list（默认）----
         if op in ("list", ""):
+            from mcp_client import sniff_project_http_mcp_servers
+            try:
+                await sniff_project_http_mcp_servers(repo_path, timeout=0.5)
+            except Exception:
+                pass
             merged = mcp_client.get_merged_config_for_project(repo_path)
             sources = mcp_client.get_project_config_source(repo_path)
             status_map = {n: s.status for n, s in mcp_client._servers.items()}
 
-            lines = ["**当前项目 MCP Server 列表**（全局层 + 项目层合并）\n"]
-            lines.append(f"{'Server':<20} {'来源':<8} {'状态':<12} {'说明'}")
-            lines.append("-" * 65)
+            lines = ["**当前项目 MCP Server 列表**（全局层 + 项目层 + 自动嗅探合并）\n"]
+            lines.append(f"{'Server':<20} {'来源':<10} {'状态':<12} {'说明'}")
+            lines.append("-" * 68)
             for name, cfg in sorted(merged.items()):
                 src = sources.get(name, "global")
                 enabled = cfg.get("enabled", False)
                 svc_status = status_map.get(name, "disabled" if not enabled else "not_started")
                 status_icon = "✅ 运行中" if svc_status == "running" else ("⭕ 已禁用" if not enabled else "⚠ 未启动")
-                desc = cfg.get("description", "")[:30]
-                src_tag = "项目层" if src == "project" else "全局层"
-                lines.append(f"{name:<20} {src_tag:<8} {status_icon:<12} {desc}")
+                desc = cfg.get("description", "")[:35]
+                src_tag = "🛰️自动嗅探" if src == "sniffed" else ("项目层" if src in ("project", "ads", "cursor", "claude", "codebuddy", "workbuddy") else ("全局层" if src == "global" else src))
+                lines.append(f"{name:<20} {src_tag:<10} {status_icon:<12} {desc}")
 
             project_cfg = _load_project_mcp_config(repo_path)
             if not project_cfg:

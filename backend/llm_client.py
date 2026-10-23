@@ -268,6 +268,7 @@ def _tools_to_action_protocol(tools: list) -> str:
         "### 触发时机",
         "- 用户明确说要新增功能/需求（「帮我做…」「创建一个…」「新增…」「我需要…功能」）→ 输出 `CONFIRM_REQUIREMENT` 指令块",
         "- 用户描述 Bug/报错/崩溃/功能异常 → 输出 `CONFIRM_BUG` 指令块",
+        "- 用户要新建项目且 platform+category 已明确（「新建项目」「做个 H5 游戏」）→ 输出 `CONFIRM_PROJECT` 指令块",
         "- 用户说「安装 UCP」「部署 UnrealClientProtocol」「装一下 UCP 插件」→ 先走本地 `INSTALL_UCP` / `deploy_ucp.py`；**仅本地失败后再** WebSearch",
         "- 其他指令按各自描述中的时机使用",
         "- **纯问答、解释代码、讨论方案时不输出任何指令块**",
@@ -1056,34 +1057,31 @@ class LLMClient:
             except Exception as _oe:
                 logger.debug("🖥️  openspec MCP 注入判定失败（忽略）: %s", _oe)
 
-        # ── 项目级：合并 .ads/mcp_servers.json（可选）──
+        # ── 项目级：合并项目配置 + 自动嗅探到的项目 MCP ──
         if cwd:
-            ads_mcp = _Path(cwd) / ".ads" / "mcp_servers.json"
-            if ads_mcp.exists():
-                try:
-                    servers_cfg = _json.loads(ads_mcp.read_text(encoding="utf-8"))
-                    entries = servers_cfg if isinstance(servers_cfg, list) else servers_cfg.get("servers", [])
-                    skipped = []
-                    for s in entries:
-                        if not s.get("enabled", True):
-                            skipped.append(s.get("name") or s.get("id") or "?")
-                            continue
-                        name = s.get("name") or s.get("id") or ""
-                        if not name:
-                            continue
-                        entry: dict = {}
-                        if s.get("command"):
-                            entry["command"] = s["command"]
-                        if s.get("args"):
-                            entry["args"] = s["args"]
-                        if s.get("env"):
-                            entry["env"] = s["env"]
-                        if entry.get("command"):
-                            mcp_servers[name] = entry
-                    if skipped:
-                        logger.debug("🖥️  CLI MCP 注入：跳过已禁用 server: %s", skipped)
-                except Exception as e:
-                    logger.warning("🖥️  CLI MCP 注入：读取 %s 失败: %s", ads_mcp, e)
+            try:
+                from mcp_client import _load_project_mcp_config, _detect_transport
+                proj_mcps = _load_project_mcp_config(cwd, include_user=False)
+                for s_name, s_cfg in proj_mcps.items():
+                    if not s_cfg.get("enabled", True):
+                        continue
+                    if s_name in mcp_servers:
+                        continue
+                    transport = _detect_transport(s_cfg)
+                    if transport == "stdio" and s_cfg.get("command"):
+                        entry: dict = {"command": s_cfg["command"]}
+                        if s_cfg.get("args"):
+                            entry["args"] = s_cfg["args"]
+                        if s_cfg.get("env"):
+                            entry["env"] = s_cfg["env"]
+                        mcp_servers[s_name] = entry
+                    elif transport in ("http", "sse") and s_cfg.get("url"):
+                        entry = {"type": transport, "url": s_cfg["url"]}
+                        if s_cfg.get("headers"):
+                            entry["headers"] = s_cfg["headers"]
+                        mcp_servers[s_name] = entry
+            except Exception as e:
+                logger.warning("🖥️  CLI MCP 注入：读取项目 MCP 配置失败: %s", e)
 
         # 构造配置文件并返回参数
         # claude/claude-internal/tclaude → --settings（mcpServers 格式）

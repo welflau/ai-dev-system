@@ -142,11 +142,13 @@ def _load_project_mcp_config(repo_path: str, include_user: bool = True) -> Dict[
     """多路合并加载 MCP 配置，优先级从低到高：
 
     0. 用户级 ~/.cursor、~/.codebuddy、~/.workbuddy、~/.claude（include_user=True 时）
-    1. {repo}/.cursor/mcp.json       ["mcpServers"]
-    2. {repo}/.claude/settings.json  ["mcpServers"]
-    3. {repo}/.codebuddy/settings.json + {repo}/.codebuddy/mcp.json  ["mcpServers"]
-    4. {repo}/.workbuddy/settings.json + {repo}/.workbuddy/mcp.json  ["mcpServers"]
-    5. {repo}/.ads/mcp_servers.json  （ADS 格式，顶层即 servers，优先级最高）
+    0.5 自动嗅探到的项目本地 HTTP MCP Server（_SNIFFED_MCP_CACHE，不覆盖显式配置）
+    1. {repo}/.mcp.json              ["mcpServers"]
+    2. {repo}/.cursor/mcp.json       ["mcpServers"]
+    3. {repo}/.claude/settings.json  ["mcpServers"]
+    4. {repo}/.codebuddy/settings.json + {repo}/.codebuddy/mcp.json  ["mcpServers"]
+    5. {repo}/.workbuddy/settings.json + {repo}/.workbuddy/mcp.json  ["mcpServers"]
+    6. {repo}/.ads/mcp_servers.json  （ADS 格式，顶层即 servers，优先级最高）
 
     同名 server：高优先级的字段逐一覆盖低优先级。
     兼容 CodeBuddy 的 `disabled` 与 ADS/内置的 `enabled`。
@@ -162,23 +164,215 @@ def _load_project_mcp_config(repo_path: str, include_user: bool = True) -> Dict[
         _merge(_load_user_mcp_config())
 
     if repo_path:
+        # 0.5 自动嗅探缓存（优先级低于项目内显式配置文件，允许 .ads/mcp_servers.json 覆盖或 disable）
+        _merge(get_cached_sniffed_mcp_servers(repo_path))
+
         repo = Path(repo_path)
-        # 1. 项目 .cursor/mcp.json
+        # 1. 项目根 .mcp.json（Claude Code / 通用规范）
+        _merge(_read_mcp_servers_file(repo / ".mcp.json", "project"))
+        # 2. 项目 .cursor/mcp.json
         _merge(_read_mcp_servers_file(repo / ".cursor" / "mcp.json", "cursor"))
-        # 2. 项目 .claude/settings.json
+        # 3. 项目 .claude/settings.json + .claude/.mcp.json + .claude/mcp.json
         _merge(_read_mcp_servers_file(repo / ".claude" / "settings.json", "claude"))
-        # 2. 项目 .codebuddy/settings.json + mcp.json
+        _merge(_read_mcp_servers_file(repo / ".claude" / ".mcp.json", "claude"))
+        _merge(_read_mcp_servers_file(repo / ".claude" / "mcp.json", "claude"))
+        # 4. 项目 .codebuddy/settings.json + mcp.json + .mcp.json
         _merge(_read_mcp_servers_file(repo / ".codebuddy" / "settings.json", "codebuddy"))
         _merge(_read_mcp_servers_file(repo / ".codebuddy" / "mcp.json", "codebuddy"))
-        # 3. 项目 .workbuddy/settings.json + mcp.json
+        _merge(_read_mcp_servers_file(repo / ".codebuddy" / ".mcp.json", "codebuddy"))
+        # 5. 项目 .workbuddy/settings.json + mcp.json
         _merge(_read_mcp_servers_file(repo / ".workbuddy" / "settings.json", "workbuddy"))
         _merge(_read_mcp_servers_file(repo / ".workbuddy" / "mcp.json", "workbuddy"))
-        # 3. 项目 .ads/mcp_servers.json（顶层即 servers）
+        # 6. 项目 .ads/mcp_servers.json（顶层即 servers）
         _merge(_read_mcp_servers_file(repo / _PROJECT_MCP_RELPATH, "ads", top_level=True))
 
     if result:
         logger.debug("加载项目/用户 MCP 配置共 %d 个（repo=%s）", len(result), repo_path)
     return result
+
+
+# ==================== 方案 1：项目运行时 MCP 端口协议自动嗅探 ====================
+
+_SNIFFED_MCP_CACHE: Dict[str, Dict[str, Any]] = {}
+
+
+def _collect_candidate_mcp_ports(repo_path: str) -> List[int]:
+    """收集项目可能挂载 /mcp 端点的本机开发端口列表（排除 ADS 自身 8000 端口）。"""
+    ports: List[int] = []
+    if not repo_path:
+        return ports
+    root = Path(repo_path)
+    if not root.is_dir():
+        return ports
+
+    try:
+        from actions.chat.propose_project_icebreak import _detect_launch_entries
+        info = _detect_launch_entries(root)
+        for entry in info.get("launch_entries") or []:
+            p = int(entry.get("port") or 0)
+            if p > 0 and p != 8000 and p not in ports:
+                ports.append(p)
+    except Exception as e:
+        logger.debug("提取项目 launch_entries 端口失败: %s", e)
+
+    # 扫描源码 / 脚本中的 BAGINS_MCP_URL / MCP_URL 或显式 http://127.0.0.1:xxxx/mcp
+    import re
+    candidate_files = [
+        root / "vite.config.ts",
+        root / "vite.config.js",
+        root / "README.md",
+        root / ".env",
+        root / ".env.local",
+    ]
+    scripts_dir = root / "scripts"
+    if scripts_dir.is_dir():
+        try:
+            for sf in scripts_dir.iterdir():
+                if sf.is_file() and "mcp" in sf.name.lower():
+                    candidate_files.append(sf)
+        except OSError:
+            pass
+
+    for fp in candidate_files:
+        if not fp.is_file():
+            continue
+        try:
+            txt = fp.read_text(encoding="utf-8", errors="replace")[:16000]
+            for m in re.finditer(r"https?://(?:127\.0\.0\.1|localhost):(\d{2,5})(?:/mcp\b)?", txt):
+                p = int(m.group(1))
+                if p > 0 and p != 8000 and p not in ports:
+                    ports.append(p)
+        except OSError:
+            continue
+
+    return ports
+
+
+async def probe_http_mcp_endpoint(url: str, timeout: float = 0.6) -> Optional[Dict[str, Any]]:
+    """向候选 HTTP MCP 端点发送极轻量 JSON-RPC initialize 探测，识别是否为合法 MCP Server。
+
+    若握手成功，主动发送 DELETE 释放探测会话（避免在目标项目如 Kinema 留下僵尸连接记录），
+    并返回 {"name": ..., "version": ..., "url": url, "protocolVersion": ...}。
+    """
+    import httpx
+
+    init_payload = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {"name": "ads-mcp-sniffer", "version": "1.0.0"},
+        },
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=timeout, trust_env=False) as client:
+            resp = await client.post(url, json=init_payload, headers=headers)
+            if resp.status_code != 200:
+                return None
+
+            session_id = resp.headers.get("mcp-session-id") or resp.headers.get("Mcp-Session-Id")
+            ctype = (resp.headers.get("content-type") or "").lower()
+            raw_text = resp.text.strip()
+
+            data: Optional[Dict[str, Any]] = None
+            if "text/event-stream" in ctype or raw_text.startswith("event:") or raw_text.startswith("data:"):
+                for line in raw_text.splitlines():
+                    line = line.strip()
+                    if line.startswith("data:"):
+                        payload_str = line[5:].strip()
+                        if payload_str:
+                            try:
+                                data = json.loads(payload_str)
+                                break
+                            except Exception:
+                                pass
+            else:
+                try:
+                    data = resp.json()
+                except Exception:
+                    data = None
+
+            # 探测完成后立即清理临时会话，避免污染开发服务器的连接列表
+            if session_id:
+                try:
+                    await client.delete(url, headers={"mcp-session-id": session_id})
+                except Exception:
+                    pass
+
+            if not isinstance(data, dict):
+                return None
+            res_obj = data.get("result")
+            if not isinstance(res_obj, dict):
+                return None
+            server_info = res_obj.get("serverInfo")
+            if not isinstance(server_info, dict) or not server_info.get("name"):
+                return None
+
+            return {
+                "name": str(server_info["name"]).strip(),
+                "version": str(server_info.get("version") or "").strip(),
+                "protocolVersion": str(res_obj.get("protocolVersion") or ""),
+                "url": url,
+            }
+    except Exception:
+        return None
+
+
+async def sniff_project_http_mcp_servers(repo_path: str, timeout: float = 0.6) -> Dict[str, Dict[str, Any]]:
+    """主动嗅探项目的本地开发端口是否暴露了 `/mcp` (Streamable HTTP) 服务。
+
+    返回格式与 `_load_project_mcp_config` 一致：{server_name: cfg_dict}。
+    同时更新进程内缓存 `_SNIFFED_MCP_CACHE[repo_path]`。
+    """
+    if not repo_path:
+        return {}
+    norm_key = str(Path(repo_path).resolve()) if Path(repo_path).exists() else repo_path
+    ports = _collect_candidate_mcp_ports(repo_path)
+    if not ports:
+        return _SNIFFED_MCP_CACHE.get(norm_key, {})
+
+    urls = [f"http://127.0.0.1:{p}/mcp" for p in ports]
+    probes = await asyncio.gather(*(probe_http_mcp_endpoint(u, timeout=timeout) for u in urls))
+
+    discovered: Dict[str, Dict[str, Any]] = {}
+    for p, info in zip(ports, probes):
+        if not info:
+            continue
+        srv_name = info["name"]
+        ver_str = f" v{info['version']}" if info.get("version") else ""
+        discovered[srv_name] = {
+            "type": "http",
+            "transport": "http",
+            "url": info["url"],
+            "enabled": True,
+            "description": f"自动嗅探到的项目本地 MCP Server ({info['url']}{ver_str})",
+            "_source": "sniffed",
+            "_sniffed": True,
+            "_port": p,
+            "_version": info.get("version", ""),
+        }
+
+    if discovered:
+        _SNIFFED_MCP_CACHE[norm_key] = discovered
+    else:
+        # 若端口已关闭，清理旧缓存中不再响应的项
+        _SNIFFED_MCP_CACHE.pop(norm_key, None)
+
+    return discovered
+
+
+def get_cached_sniffed_mcp_servers(repo_path: str) -> Dict[str, Dict[str, Any]]:
+    """同步读取已嗅探到的项目 MCP 配置缓存。"""
+    if not repo_path:
+        return {}
+    norm_key = str(Path(repo_path).resolve()) if Path(repo_path).exists() else repo_path
+    return dict(_SNIFFED_MCP_CACHE.get(norm_key, {}))
 
 
 def _merge_mcp_configs(
@@ -479,12 +673,17 @@ class MCPClient:
         repo_path: str,
         traits: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
-        """合并全局层 + 项目层后，返回该项目可用的工具列表。
+        """合并全局层 + 项目层（含自动嗅探）后，返回该项目可用的工具列表。
 
         Phase 6：读取 {repo}/.ads/mcp_servers.json，与全局配置合并，
-        **非阻塞**：项目层新增 server 在后台启动，不阻塞当前请求；
-        下次调用时若已完成启动则纳入工具列表。
+        并自动嗅探项目的本地开发端口 `/mcp` 端点。
         """
+        if repo_path and not get_cached_sniffed_mcp_servers(repo_path):
+            try:
+                await sniff_project_http_mcp_servers(repo_path, timeout=0.5)
+            except Exception as e:
+                logger.debug("MCP 自动嗅探异常（忽略）: %s", e)
+
         project_cfg = _load_project_mcp_config(repo_path)
         if not project_cfg:
             # 无项目层配置，走原有全局逻辑
@@ -492,14 +691,46 @@ class MCPClient:
 
         merged = _merge_mcp_configs(self._servers_config, project_cfg)
 
-        # 项目层新增 server — 先同步加入 _warming_up，再 fire-and-forget 启动
-        # 同步 add 确保 _stream_mcp_status_events 能立即感知到待连接的 server
-        for name, cfg in merged.items():
+        # 项目层新增 server — 先启动自动嗅探到的本机 HTTP MCP（毫秒级握手），
+        # 再启动其余 stdio/远端 server，避免 Windows 下并发 spawn 多个子进程阻塞本机 HTTP 握手
+        sorted_items = sorted(
+            merged.items(),
+            key=lambda kv: (0 if kv[1].get("_sniffed") else 1),
+        )
+        sniffed_started_now = []
+        other_to_start = []
+        for name, cfg in sorted_items:
             if not cfg.get("enabled"):
                 continue
-            if name not in self._servers and name not in self._warming_up:
+            existing = self._servers.get(name)
+            need_start = (
+                (existing is None or (existing.status in ("error", "stopped") and cfg.get("_sniffed")))
+                and name not in self._warming_up
+            )
+            if need_start:
                 self._warming_up.add(name)  # 同步，create_task 之前
-                asyncio.create_task(self._start_project_server_bg(name, cfg))
+                if cfg.get("_sniffed"):
+                    sniffed_started_now.append((name, cfg))
+                else:
+                    other_to_start.append((name, cfg))
+
+        for name, cfg in sniffed_started_now:
+            asyncio.create_task(self._start_project_server_bg(name, cfg))
+
+        # 若嗅探到的 HTTP MCP 正在 _warming_up，先等待其完成握手（~0.2s），再派生耗时 stdio 进程
+        sniffed_warming = [
+            name for name, cfg in merged.items()
+            if cfg.get("_sniffed") and name in self._warming_up
+        ]
+        if sniffed_warming:
+            deadline = asyncio.get_running_loop().time() + 2.5
+            while any(n in self._warming_up for n in sniffed_warming):
+                if asyncio.get_running_loop().time() >= deadline:
+                    break
+                await asyncio.sleep(0.05)
+
+        for name, cfg in other_to_start:
+            asyncio.create_task(self._start_project_server_bg(name, cfg))
 
         # 按合并后配置过滤并收集当前已 running 的工具
         schemas = []
@@ -533,18 +764,33 @@ class MCPClient:
             self._warming_up.discard(name)
 
     async def warmup_project_servers(self, repo_path: str) -> None:
-        """项目打开时预热：后台启动该项目所有项目层 MCP server。
+        """项目打开时预热：先自动嗅探项目本地 /mcp 端口，再后台启动该项目所有项目层 MCP server。
 
         同步将待启动 server 加入 _warming_up，保证调用方可立即感知连接状态。
         """
+        if repo_path:
+            try:
+                await sniff_project_http_mcp_servers(repo_path, timeout=0.6)
+            except Exception as e:
+                logger.debug("warmup 嗅探项目 MCP 失败（忽略）: %s", e)
+
         project_cfg = _load_project_mcp_config(repo_path)
         if not project_cfg:
             return
         merged = _merge_mcp_configs(self._servers_config, project_cfg)
-        for name, cfg in merged.items():
+        sorted_items = sorted(
+            merged.items(),
+            key=lambda kv: (0 if kv[1].get("_sniffed") else 1),
+        )
+        for name, cfg in sorted_items:
             if not cfg.get("enabled"):
                 continue
-            if name not in self._servers and name not in self._warming_up:
+            existing = self._servers.get(name)
+            need_start = (
+                (existing is None or (existing.status in ("error", "stopped") and cfg.get("_sniffed")))
+                and name not in self._warming_up
+            )
+            if need_start:
                 logger.info("MCP 项目预热: 后台启动 %s", name)
                 self._warming_up.add(name)  # 同步 add，调用方可立即读到
                 asyncio.create_task(self._start_project_server_bg(name, cfg))

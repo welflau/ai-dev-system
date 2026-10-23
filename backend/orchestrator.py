@@ -2596,6 +2596,55 @@ class TicketOrchestrator:
             #      里没有 files，报「本次改动里没有可测的 UE 头文件」—— 症状指向选目标
             #      逻辑，根因其实在这儿，很难查。
             # 所以：自己写状态、自己 return，不碰产物表。
+            if action == "run_h5_typecheck":
+                r_status = result.get("status")
+                errors_list = result.get("errors") or []
+                if r_status == "success":
+                    new_status = await self._sop_success_status_for(
+                        project_id, action, default="h5_typecheck_passed",
+                        ticket_type=ticket.get("type"),
+                    )
+                    await db.update("tickets", {
+                        "status": new_status,
+                        "result": result_json,
+                        "updated_at": now_iso(),
+                    }, "id = ?", (ticket_id,))
+                    await self._log(
+                        project_id, requirement_id, ticket_id, agent_name,
+                        "complete", current_status, new_status,
+                        f"tsc 通过（{result.get('duration_ms', 0)}ms）",
+                        detail_data={
+                            "exit_code": result.get("exit_code"),
+                            "duration_ms": result.get("duration_ms"),
+                            "command": result.get("command"),
+                        },
+                    )
+                else:
+                    stage = await self._sop_stage_for(project_id, action, ticket.get("type"))
+                    new_status = (stage or {}).get("reject_status") or "h5_typecheck_failed"
+                    await db.update("tickets", {
+                        "status": new_status,
+                        "result": result_json,
+                        "updated_at": now_iso(),
+                    }, "id = ?", (ticket_id,))
+                    err_brief = "; ".join(
+                        f"{e.get('file', '?')}:{e.get('line', '?')} {e.get('code', '')} {(e.get('msg') or '')[:80]}"
+                        for e in errors_list[:3]
+                    )
+                    await self._log(
+                        project_id, requirement_id, ticket_id, agent_name,
+                        "reject", current_status, new_status,
+                        f"tsc 失败 · {len(errors_list)} errors · DevAgent.fix_issues 将修复",
+                        "warning",
+                        detail_data={
+                            "errors": errors_list[:10],
+                            "hints": (result.get("hints") or [])[:5],
+                            "err_brief": err_brief,
+                            "raw_tail": (result.get("raw_tail") or "")[-4000:],
+                        },
+                    )
+                return
+
             if action == "generate_ue_tests":
                 r_status = result.get("status")
                 tg = result.get("ue_test_gen") or {}
@@ -2840,6 +2889,61 @@ class TicketOrchestrator:
         elif agent_name == "TestAgent":
             # v0.19 Phase ②：UE playtest 阶段（action=run_playtest）有自己的结果语义
             # UEPlaytestAction 返回 status: success / playtest_failed / error
+            if action == "run_h5_playtest":
+                r_status = result.get("status")
+                errors_list = result.get("errors") or []
+                if r_status == "success":
+                    new_status = await self._sop_success_status_for(
+                        project_id, action, default="h5_playtest_passed",
+                        ticket_type=ticket.get("type"),
+                    )
+                    await db.update("tickets", {
+                        "status": new_status,
+                        "result": result_json,
+                        "updated_at": now_iso(),
+                    }, "id = ?", (ticket_id,))
+                    skip = "（运行时跳过）" if result.get("runtime_skipped") else ""
+                    await self._log(
+                        project_id, requirement_id, ticket_id, agent_name,
+                        "complete", current_status, new_status,
+                        f"H5 试玩通过{skip}（{result.get('duration_ms', 0)}ms）",
+                        detail_data={
+                            "duration_ms": result.get("duration_ms"),
+                            "warnings": (result.get("warnings") or [])[:5],
+                            "screenshots": (result.get("screenshots") or [])[:5],
+                            "runtime_skipped": bool(result.get("runtime_skipped")),
+                        },
+                    )
+                    await self._maybe_openspec_verify(
+                        project_id, ticket_id, stage_label="h5_playtest",
+                    )
+                else:
+                    stage = await self._sop_stage_for(project_id, action, ticket.get("type"))
+                    new_status = (stage or {}).get("reject_status") or "h5_playtest_failed"
+                    await db.update("tickets", {
+                        "status": new_status,
+                        "result": result_json,
+                        "updated_at": now_iso(),
+                    }, "id = ?", (ticket_id,))
+                    err_brief = "; ".join(
+                        f"{e.get('source', '?')}: {(e.get('msg') or '')[:80]}"
+                        for e in errors_list[:3]
+                    )
+                    await self._log(
+                        project_id, requirement_id, ticket_id, agent_name,
+                        "reject", current_status, new_status,
+                        f"H5 试玩失败 · {len(errors_list)} errors · DevAgent.fix_issues 将修复",
+                        "warning",
+                        detail_data={
+                            "errors": errors_list[:10],
+                            "warnings": (result.get("warnings") or [])[:5],
+                            "err_brief": err_brief,
+                            "raw_tail": (result.get("raw_tail") or "")[-4000:],
+                            "screenshots": (result.get("screenshots") or [])[:5],
+                        },
+                    )
+                return
+
             if action == "run_playtest":
                 r_status = result.get("status")
                 summary = result.get("summary") or {}
@@ -4451,6 +4555,8 @@ class TicketOrchestrator:
         "run_engine_compile", "run_engine_compile_check",
         "run_uat", "run_ci_deploy", "playtest",
         "write_html_prototype",  # 轻量本地生成，不走 ReAct LLM
+        "run_h5_typecheck",
+        "run_h5_playtest",
     })
 
     async def _log_agent_thought(
@@ -4688,7 +4794,7 @@ class TicketOrchestrator:
         stage_aliases = {
             "development": ("development",),
             "architecture": ("architecture",),
-            "testing": ("testing", "smoke_test", "play_test"),
+            "testing": ("testing", "smoke_test", "play_test", "h5_typecheck", "h5_playtest"),
             "review": ("code_review",),
             "deploy": ("deploy",),
             "verify": ("testing",),

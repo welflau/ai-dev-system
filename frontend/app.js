@@ -3867,33 +3867,45 @@ function _renderMcpView(container, data, source) {
         const srcBadge = `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:${sm.bg};color:${sm.color};margin-left:4px;">${sm.label}${_srcSuffix(srv)}</span>`;
         const tools = srv.tools || [];
         const toolsHtml = tools.length
-            ? `<div style="margin-top:4px;">${tools.map(t => `<code class="mcp-tool-tag">${escapeHtml(t)}</code>`).join('')}</div>` : '';
+            ? `<div class="mcp-tools" style="margin-top:6px;"><span class="mcp-tools-label">暴露工具 (${tools.length})</span>${tools.map(t => `<code class="mcp-tool-tag">${escapeHtml(t)}</code>`).join(' ')}</div>` : '';
         // 企业 connector 的端点扫到了，但凭证在原 Client 的保险库里，ADS 没有那份
         // 授权。显示「⚪ 未启用」会让人以为是自己关的，说清真实原因
         const statusHtml = srv.needs_auth
-            ? `<span class="mcp-server-status mcp-badge-warning" style="font-size:11px;margin-left:4px;"
+            ? `<span class="mcp-server-status mcp-badge-warning" style="font-size:11px;"
                      title="ADS 未持有该服务的授权凭证；请在原 AgentClient 里登录使用">🔒 需在 Client 侧授权</span>`
             : srv.status
-            ? `<span class="mcp-server-status mcp-badge-${statusClass(srv.status)}" style="font-size:11px;margin-left:4px;">${statusLabel(srv.status)}</span>`
+            ? `<span class="mcp-server-status mcp-badge-${statusClass(srv.status)}" style="font-size:11px;">${statusLabel(srv.status)}</span>`
             : (typeof srv.enabled === 'boolean'
-                ? `<span class="mcp-server-status mcp-badge-${srv.enabled?'success':'muted'}" style="font-size:11px;margin-left:4px;">${srv.enabled?'✅ 已启用':'⚪ 未启用'}</span>`
+                ? `<span class="mcp-server-status mcp-badge-${srv.enabled?'success':'muted'}" style="font-size:11px;">${srv.enabled?'✅ 已启用':'⚪ 未启用'}</span>`
                 : '');
+        const sniffedBadge = srv.sniffed
+            ? `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:rgba(16,185,129,.14);color:#10b981;" title="ADS 通过本机端口 /mcp 协议握手自动嗅探发现">🛰️ 自动嗅探</span>`
+            : '';
         const transportBadge = srv.transport
-            ? `<span style="font-size:10px;color:var(--text-muted);margin-left:4px;">${escapeHtml(srv.transport)}</span>` : '';
-        const clickData = escapeHtml(JSON.stringify({name:srv.name, description:srv.description||'', source:srv.source, pack_name:srv.pack_name||null, plugin_name:srv.plugin_name||null, marketplace:srv.marketplace||'', needs_auth:!!srv.needs_auth, file:srv.file||'', type:'MCP', emoji:'🔌', content:srv.command?'Command: '+srv.command:''}));
+            ? `<span style="font-size:10px;color:var(--text-muted);">${escapeHtml(srv.transport)}</span>` : '';
+        const detailLines = [];
+        if (srv.command) detailLines.push(`**Endpoint / Command**: \`${srv.command}\``);
+        if (tools.length) detailLines.push(`**暴露工具 (${tools.length})**:\n\n` + tools.map(t => `- \`${t}\``).join('\n'));
+        const clickData = escapeHtml(JSON.stringify({name:srv.name, description:srv.description||'', source:srv.source, pack_name:srv.pack_name||null, plugin_name:srv.plugin_name||null, marketplace:srv.marketplace||'', needs_auth:!!srv.needs_auth, file:srv.file||'', type:'MCP', emoji:'🔌', content:detailLines.join('\n\n')}));
         return `<div class="mcp-server-card" style="margin-bottom:6px;cursor:pointer;" onclick='showExtensionDetail(${clickData})'>
-            <div class="mcp-server-header">
-                <span class="mcp-server-name">🔌 ${escapeHtml(srv.name)}</span>${srcBadge}${statusHtml}${transportBadge}
+            <div class="mcp-server-header" style="gap:8px;flex-wrap:wrap;">
+                <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:0;">
+                    <span class="mcp-server-name">🔌 ${escapeHtml(srv.name)}</span>${srcBadge}${sniffedBadge}${transportBadge}
+                </div>
+                <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
+                    ${statusHtml}
+                </div>
             </div>
             ${srv.description ? `<div class="mcp-server-desc">${escapeHtml(srv.description)}</div>` : ''}
-            ${srv.command ? `<code style="font-size:10px;color:var(--text-muted);">${escapeHtml(srv.command)}</code>` : ''}
+            ${srv.command ? `<div style="margin-bottom:2px;"><code style="font-size:10px;color:var(--text-muted);word-break:break-all;">${escapeHtml(srv.command)}</code></div>` : ''}
             ${toolsHtml}
         </div>`;
     };
     _renderSourceGroups(container, data, source, renderItem, {
         builtin: { icon: '🏠', title: '全局 MCP',  desc: '来自 backend/mcp_servers.json' },
-        user:    { icon: '👤', title: '用户 MCP',   desc: '来自 ~/.codebuddy、~/.claude 及项目 .claude/.codebuddy/.ads 配置' },
-        pack:    { icon: '📦', title: 'Pack MCP',   desc: '已安装 ConfigPack 声明的 MCP 服务器' },
+        project: { icon: '📁', title: '项目 MCP',  desc: '自动嗅探到的本机 /mcp 服务，及项目 .ads/.cursor/.claude/.codebuddy 配置' },
+        user:    { icon: '👤', title: '用户 MCP',  desc: '来自 ~/.codebuddy、~/.claude、~/.cursor 用户级配置' },
+        pack:    { icon: '📦', title: 'Pack MCP',  desc: '已安装 ConfigPack 声明的 MCP 服务器' },
         plugin:  { icon: '🧩', title: 'Plugin MCP', desc: '各 Client 已启用插件声明的 MCP；企业 connector 需在原 Client 侧授权' },
     });
 }
@@ -7161,6 +7173,146 @@ function updateBreadcrumb(items) {
 
 // ==================== 项目列表 ====================
 
+function _parseProjectTraitsArray(p) {
+    let arr = [];
+    if (Array.isArray(p?.traits)) {
+        arr = p.traits.map(x => String(x || '').trim()).filter(Boolean);
+    } else if (typeof p?.traits === 'string' && p.traits.trim()) {
+        try {
+            const parsed = JSON.parse(p.traits);
+            if (Array.isArray(parsed)) arr = parsed.map(x => String(x || '').trim()).filter(Boolean);
+        } catch {
+            arr = p.traits.split(',').map(x => x.trim()).filter(Boolean);
+        }
+    }
+    return arr;
+}
+
+function _buildProjectTraitBadgesHtml(p) {
+    const rawTraits = _parseProjectTraitsArray(p);
+    const tSet = new Set(rawTraits.map(t => t.toLowerCase()));
+    const blob = `${p?.tech_stack || ''} ${p?.description || ''} ${p?.name || ''}`.toLowerCase();
+    const badges = [];
+    const seen = new Set();
+
+    const addBadge = (key, cls, iconSvg, label, title) => {
+        if (seen.has(key)) return;
+        seen.add(key);
+        badges.push(
+            `<span class="project-trait-badge trait-${cls}" title="${escHtml(title || label)}">${iconSvg}<span>${escHtml(label)}</span></span>`
+        );
+    };
+
+    const svgUE = `<svg class="trait-svg" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="currentColor" stroke-width="1.3"/><text x="8" y="10.8" text-anchor="middle" font-size="7.8" font-weight="800" font-family="serif" fill="currentColor">U</text></svg>`;
+    const svgUnity = `<svg class="trait-svg" viewBox="0 0 16 16" fill="none"><path d="M8 1.8L13.5 5v6L8 14.2 2.5 11V5L8 1.8z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M8 1.8V8m0 0l5.5 3M8 8L2.5 11" stroke="currentColor" stroke-width="1.1"/></svg>`;
+    const svgGodot = `<svg class="trait-svg" viewBox="0 0 16 16" fill="none"><rect x="2.5" y="4" width="11" height="8.5" rx="2.5" stroke="currentColor" stroke-width="1.3"/><circle cx="5.8" cy="7.8" r="1" fill="currentColor"/><circle cx="10.2" cy="7.8" r="1" fill="currentColor"/><path d="M5.5 10.5h5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>`;
+    const svgHtml = `<svg class="trait-svg" viewBox="0 0 16 16" fill="none"><path d="M3 2h10l-.9 10.2L8 14l-4.1-1.8L3 2z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M5.3 5.2h5.4l-.2 2.5H6l.2 2.2 1.8.6 1.8-.6.1-1.5" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+    const svgReact = `<svg class="trait-svg" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="1.4" fill="currentColor"/><ellipse cx="8" cy="8" rx="6.2" ry="2.4" stroke="currentColor" stroke-width="1.1"/><ellipse cx="8" cy="8" rx="6.2" ry="2.4" transform="rotate(60 8 8)" stroke="currentColor" stroke-width="1.1"/><ellipse cx="8" cy="8" rx="6.2" ry="2.4" transform="rotate(120 8 8)" stroke="currentColor" stroke-width="1.1"/></svg>`;
+    const svgVue = `<svg class="trait-svg" viewBox="0 0 16 16" fill="none"><path d="M2 3h2.8L8 8.8 11.2 3H14L8 13.5 2 3z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>`;
+    const svgFastApi = `<svg class="trait-svg" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.3" stroke="currentColor" stroke-width="1.2"/><path d="M8.7 3.8L5 8.6h2.7l-.4 3.6 3.7-4.8H8.3l.4-3.6z" fill="currentColor"/></svg>`;
+    const svgCode = `<svg class="trait-svg" viewBox="0 0 16 16" fill="none"><path d="M5.5 4.5L2 8l3.5 3.5M10.5 4.5L14 8l-3.5 3.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+    const svgGame = `<svg class="trait-svg" viewBox="0 0 16 16" fill="none"><rect x="1.8" y="4.5" width="12.4" height="7.5" rx="3.2" stroke="currentColor" stroke-width="1.3"/><path d="M5.2 6.8v2.8M3.8 8.2h2.8" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><circle cx="10.2" cy="7.3" r="0.8" fill="currentColor"/><circle cx="11.8" cy="8.9" r="0.8" fill="currentColor"/></svg>`;
+    const svgWeb = `<svg class="trait-svg" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.2" stroke="currentColor" stroke-width="1.2"/><ellipse cx="8" cy="8" rx="2.8" ry="6.2" stroke="currentColor" stroke-width="1.1"/><path d="M2 8h12" stroke="currentColor" stroke-width="1.1"/></svg>`;
+    const svgGit = `<svg class="trait-svg" viewBox="0 0 16 16" fill="none"><circle cx="5" cy="4.2" r="1.5" stroke="currentColor" stroke-width="1.2"/><circle cx="5" cy="11.8" r="1.5" stroke="currentColor" stroke-width="1.2"/><circle cx="11.2" cy="6.8" r="1.5" stroke="currentColor" stroke-width="1.2"/><path d="M5 5.7v4.6M5 6.8c2.5 0 3.5 0 6.2 0" stroke="currentColor" stroke-width="1.2"/></svg>`;
+
+    // 1. 引擎识别 (UE / Unity / Godot / Cocos / HTML5)
+    if (tSet.has('engine:ue5') || /\bue5\b|unreal\s*engine\s*5/i.test(blob)) {
+        addBadge('ue', 'ue', svgUE, 'UE5', 'Unreal Engine 5 (engine:ue5)');
+    } else if (tSet.has('engine:ue4') || /\bue4\b|unreal/i.test(blob)) {
+        addBadge('ue', 'ue', svgUE, 'UE4', 'Unreal Engine 4 (engine:ue4)');
+    }
+    if (tSet.has('engine:unity') || /\bunity\b/i.test(blob)) {
+        addBadge('unity', 'unity', svgUnity, 'Unity', 'Unity Engine (engine:unity)');
+    }
+    if (tSet.has('engine:godot4') || tSet.has('engine:godot3') || /\bgodot\b/i.test(blob)) {
+        addBadge('godot', 'godot', svgGodot, tSet.has('engine:godot3') ? 'Godot 3' : 'Godot 4', 'Godot Engine');
+    }
+    if (tSet.has('engine:cocos') || /\bcocos\b/i.test(blob)) {
+        addBadge('cocos', 'cocos', svgGame, 'Cocos', 'Cocos Engine (engine:cocos)');
+    }
+    if ((tSet.has('engine:none') && tSet.has('platform:web')) || /html5|canvas/i.test(blob)) {
+        addBadge('html5', 'html5', svgHtml, 'HTML5', 'HTML5 / Canvas 网页端 (platform:web + engine:none)');
+    }
+
+    // 2. 框架识别 (React / Vue / Phaser / FastAPI / Django / Flask / Express)
+    if (tSet.has('framework:phaser') || /\bphaser\b/i.test(blob)) {
+        addBadge('phaser', 'phaser', svgGame, 'Phaser', 'Phaser H5 游戏框架 (framework:phaser)');
+    }
+    if (tSet.has('framework:react') || /\breact\b/i.test(blob)) {
+        addBadge('react', 'react', svgReact, 'React', 'React 前端框架 (framework:react)');
+    }
+    if (tSet.has('framework:vue') || /\bvue\b/i.test(blob)) {
+        addBadge('vue', 'vue', svgVue, 'Vue', 'Vue 前端框架 (framework:vue)');
+    }
+    if (tSet.has('framework:fastapi') || /\bfastapi\b/i.test(blob)) {
+        addBadge('fastapi', 'fastapi', svgFastApi, 'FastAPI', 'FastAPI 后端框架 (framework:fastapi)');
+    } else if (tSet.has('framework:django')) {
+        addBadge('django', 'python', svgCode, 'Django', 'Django (framework:django)');
+    } else if (tSet.has('framework:flask')) {
+        addBadge('flask', 'python', svgCode, 'Flask', 'Flask (framework:flask)');
+    }
+
+    // 3. 编程语言识别 (C++ / C# / TypeScript / JavaScript / Python / Rust / Go)
+    if (tSet.has('lang:cpp') || /\bc\+\+\b|\bcpp\b/i.test(blob)) {
+        addBadge('cpp', 'cpp', svgCode, 'C++', 'C++ (lang:cpp)');
+    }
+    if (tSet.has('lang:csharp') || /\bc#\b|\bcsharp\b/i.test(blob)) {
+        addBadge('csharp', 'csharp', svgCode, 'C#', 'C# (lang:csharp)');
+    }
+    if (tSet.has('lang:typescript') || /\btypescript\b/i.test(blob)) {
+        addBadge('ts', 'ts', svgCode, 'TS', 'TypeScript (lang:typescript)');
+    }
+    if (tSet.has('lang:javascript') || (!tSet.has('lang:typescript') && /\bjavascript\b/i.test(blob))) {
+        addBadge('js', 'js', svgCode, 'JS', 'JavaScript (lang:javascript)');
+    }
+    if (tSet.has('lang:python') || /\bpython\b/i.test(blob)) {
+        addBadge('python', 'python', svgCode, 'Python', 'Python (lang:python)');
+    }
+    if (tSet.has('lang:rust')) {
+        addBadge('rust', 'rust', svgCode, 'Rust', 'Rust (lang:rust)');
+    }
+    if (tSet.has('lang:go')) {
+        addBadge('go', 'go', svgCode, 'Go', 'Go (lang:go)');
+    }
+
+    // 4. 平台与形态补充 (Web / 微信 / 游戏 / 应用 / 服务 / Git)
+    if (tSet.has('platform:wechat')) {
+        addBadge('wechat', 'wechat', svgWeb, '微信小程序', '微信生态 (platform:wechat)');
+    } else if (tSet.has('platform:web') && !seen.has('html5') && !seen.has('react') && !seen.has('vue')) {
+        addBadge('web', 'web', svgWeb, 'Web', '网页端 (platform:web)');
+    }
+    if (tSet.has('category:game')) {
+        addBadge('game', 'game', svgGame, 'Game', '游戏项目 (category:game)');
+    }
+    if (badges.length === 0 && tSet.has('vcs:git')) {
+        addBadge('git', 'git', svgGit, 'Git 仓库', 'Git 版本控制 (vcs:git)');
+    }
+
+    const visible = badges.slice(0, 5);
+    const extraCount = badges.length - visible.length;
+    if (extraCount > 0) {
+        visible.push(`<span class="project-trait-badge trait-more" title="${escHtml(rawTraits.join(', '))}">+${extraCount}</span>`);
+    }
+
+    // 主技术身份角标图标（显示在卡片右上角，一眼区分 UE / Unity / Godot / HTML5 / React 等）
+    let heroCls = 'git';
+    let heroSvg = svgGit;
+    let heroTitle = 'Git 工程';
+    if (seen.has('ue')) { heroCls = 'ue'; heroSvg = svgUE; heroTitle = 'Unreal Engine 项目'; }
+    else if (seen.has('unity')) { heroCls = 'unity'; heroSvg = svgUnity; heroTitle = 'Unity 项目'; }
+    else if (seen.has('godot')) { heroCls = 'godot'; heroSvg = svgGodot; heroTitle = 'Godot 项目'; }
+    else if (seen.has('html5')) { heroCls = 'html5'; heroSvg = svgHtml; heroTitle = 'HTML5 网页项目'; }
+    else if (seen.has('react')) { heroCls = 'react'; heroSvg = svgReact; heroTitle = 'React 项目'; }
+    else if (seen.has('vue')) { heroCls = 'vue'; heroSvg = svgVue; heroTitle = 'Vue 项目'; }
+    else if (seen.has('fastapi')) { heroCls = 'fastapi'; heroSvg = svgFastApi; heroTitle = 'FastAPI 项目'; }
+    else if (seen.has('python')) { heroCls = 'python'; heroSvg = svgCode; heroTitle = 'Python 项目'; }
+
+    return {
+        heroHtml: `<div class="project-card-hero-icon trait-${heroCls}" title="${escHtml(heroTitle)}">${heroSvg}</div>`,
+        badgesHtml: visible.length ? `<div class="project-card-traits">${visible.join('')}</div>` : '',
+    };
+}
+
 async function loadProjects() {
     const grid = document.getElementById('projectGrid');
     try {
@@ -7175,16 +7327,22 @@ async function loadProjects() {
                 </div>`;
             return;
         }
-        grid.innerHTML = projects.map(p => `
+        grid.innerHTML = projects.map(p => {
+            const { heroHtml, badgesHtml } = _buildProjectTraitBadgesHtml(p);
+            return `
             <div class="project-card" onclick="showProjectDetail('${p.id}')">
-                <h3>${escHtml(p.name)}</h3>
+                <div class="project-card-head">
+                    <h3>${escHtml(p.name)}</h3>
+                    ${heroHtml}
+                </div>
                 <p>${escHtml(p.description || '暂无描述')}</p>
+                ${badgesHtml}
                 <div class="card-stats">
                     <span class="stat-item">📅 ${formatDate(p.created_at)}</span>
                     <span class="stat-item">📌 ${p.status === 'active' ? '进行中' : '已归档'}</span>
                 </div>
-            </div>
-        `).join('');
+            </div>`;
+        }).join('');
     } catch (e) {
         grid.innerHTML = `<div class="empty-state" style="grid-column: 1 / -1;"><div class="emoji">❌</div><p>加载失败: ${escHtml(e.message)}</p></div>`;
     }
@@ -9800,7 +9958,51 @@ async function createCompileFixTask(cardId) {
     }
 }
 
+const _icebreakLaunchCards = {};
+
+function _buildIcebreakEnvBgControlsHtml(cardId, idx, state) {
+    const running = !!(state && state.running);
+    const inAdsBg = !!(state && state.in_ads_bg);
+    const taskId = (state && state.task_id) || '';
+    if (running) {
+        const logOrAdoptBtn = inAdsBg
+            ? `<button type="button" class="icebreak-env-link is-tasks" onclick="_openTasksPanel()" title="查看后台任务实时输出日志">📋 后台日志</button>`
+            : `<button type="button" class="icebreak-env-link is-tasks" onclick="startIcebreakEnvService('${cardId}', ${idx}, { forceRestart: true })" title="重启并纳入 ADS 后台任务面板采集实时日志">🔄 托管重启</button>`;
+        const stopBtn = `<button type="button" class="icebreak-env-link is-stop" onclick="stopIcebreakEnvService('${cardId}', ${idx}, '${escapeHtml(taskId)}')" title="停止该后台服务">⏹ 停止</button>`;
+        return `${logOrAdoptBtn}${stopBtn}`;
+    }
+    return `<button type="button" class="icebreak-env-link is-start" onclick="startIcebreakEnvService('${cardId}', ${idx})">▶️ 后台启动</button>`;
+}
+
+function _buildIcebreakEnvWebLinksHtml(cardId, idx, entry, projectName) {
+    const pName = projectName || '项目';
+    const label = entry.label || entry.id || '服务';
+    const url = entry.url || '';
+    const docsUrl = entry.docs_url || '';
+    const port = entry.port || '';
+    const shortHost = url.replace(/^https?:\/\//, '');
+    const links = [];
+
+    if (entry.kind === 'frontend' && url) {
+        links.push(
+            `<button type="button" class="icebreak-env-link is-web-primary" onclick="openIcebreakWebUrl('${cardId}', ${idx}, '${escapeHtml(url)}', '${escapeHtml(pName + ' · ' + label)}')" title="在右侧网页 Tab 中打开前台页面（若未启动将自动拉起）">🌐 前台访问 (${escapeHtml(shortHost)})</button>`,
+            `<a class="icebreak-env-link is-ext" href="${escapeHtml(url)}" target="_blank" rel="noopener" title="在系统浏览器新标签打开">↗</a>`
+        );
+    } else if (docsUrl) {
+        links.push(
+            `<button type="button" class="icebreak-env-link is-web" onclick="openIcebreakWebUrl('${cardId}', ${idx}, '${escapeHtml(docsUrl)}', '${escapeHtml(pName + ' · API 文档')}')" title="在右侧网页 Tab 打开 FastAPI Swagger 文档">📖 API 文档 (:${escapeHtml(String(port))}/docs)</button>`,
+            `<a class="icebreak-env-link is-ext" href="${escapeHtml(docsUrl)}" target="_blank" rel="noopener" title="在系统浏览器打开 API 文档">↗</a>`
+        );
+    } else if (url) {
+        links.push(
+            `<button type="button" class="icebreak-env-link is-web" onclick="openIcebreakWebUrl('${cardId}', ${idx}, '${escapeHtml(url)}', '${escapeHtml(pName + ' · ' + label)}')">🌐 前台访问 (${escapeHtml(shortHost)})</button>`
+        );
+    }
+    return links.join('');
+}
+
 function renderIcebreakCard(action) {
+    const cardId = _nextCardId('icebreak');
     const options = Array.isArray(action.options) ? action.options : [];
     const chips = options.map((o, i) => {
         const prompt = encodeURIComponent(o.prompt || o.label || '');
@@ -9812,13 +10014,243 @@ function renderIcebreakCard(action) {
         </button>`;
     }).join('');
     const title = action.title || (action.is_existing ? '🧭 建议的切入方向（现有工程）' : '🧭 建议的开发方向');
+
+    const launchEntries = Array.isArray(action.launch_entries) ? action.launch_entries : [];
+    const entryFiles = Array.isArray(action.entry_files) ? action.entry_files : [];
+    let envSectionHtml = '';
+
+    if (launchEntries.length > 0 || entryFiles.length > 0) {
+        _icebreakLaunchCards[cardId] = {
+            projectName: action.project_name || '',
+            entries: launchEntries,
+            states: {},
+        };
+
+        const filesHtml = entryFiles.length > 0
+            ? `<div class="icebreak-env-files">
+                <span>📂 识别到入口文件：</span>
+                ${entryFiles.map(f => `<span class="icebreak-env-file-chip" onclick="if(typeof openRepoFileFromChat==='function')openRepoFileFromChat('${escapeHtml(f)}')" title="点击在工作区 Tab 预览 ${escapeHtml(f)}">📄 ${escapeHtml(f)}</span>`).join('')}
+               </div>`
+            : '';
+
+        const itemsHtml = launchEntries.map((entry, idx) => {
+            const icon = entry.kind === 'frontend' ? '🖥️' : '⚙️';
+            const portBadge = entry.port ? `<span class="icebreak-env-port">:${escapeHtml(String(entry.port))}</span>` : '';
+            const bgCtrls = _buildIcebreakEnvBgControlsHtml(cardId, idx, null);
+            const webLinks = _buildIcebreakEnvWebLinksHtml(cardId, idx, entry, action.project_name);
+            return `
+            <div class="icebreak-env-item" id="${cardId}_item_${idx}" data-running="0">
+                <div class="icebreak-env-info">
+                    <div class="icebreak-env-name-row">
+                        <span>${icon} ${escapeHtml(entry.label || entry.id || '服务')}</span>
+                        ${portBadge}
+                        <span class="icebreak-env-badge is-checking" id="${cardId}_badge_${idx}">⏳ 检测状态...</span>
+                    </div>
+                    <div class="icebreak-env-cmd" title="${escapeHtml((entry.cwd ? '[' + entry.cwd + '] ' : '') + (entry.command || ''))}">
+                        ${escapeHtml(entry.entry_file ? entry.entry_file + ' → ' : '')}${escapeHtml(entry.command || '')}
+                    </div>
+                </div>
+                <div class="icebreak-env-actions">
+                    <span id="${cardId}_bg_${idx}" style="display:inline-flex;gap:6px;align-items:center;">${bgCtrls}</span>
+                    ${webLinks}
+                </div>
+            </div>`;
+        }).join('');
+
+        envSectionHtml = `
+        <div class="icebreak-env-section" id="${cardId}_env">
+            <div class="icebreak-env-header">
+                <div class="icebreak-env-title">🚀 环境启动入口与前台访问</div>
+                <div style="display:flex;gap:6px;align-items:center;">
+                    <button type="button" class="icebreak-env-link" onclick="refreshIcebreakEnvStatus('${cardId}', true)" title="检测后台服务端口运行状态">🔄 刷新状态</button>
+                    ${launchEntries.length > 0 ? `<button type="button" class="icebreak-env-link is-start" id="${cardId}_start_all" onclick="startAllIcebreakEnvServices('${cardId}')">▶️ 一键后台启动</button>` : ''}
+                </div>
+            </div>
+            ${filesHtml}
+            <div class="icebreak-env-list">${itemsHtml}</div>
+        </div>`;
+
+        setTimeout(() => refreshIcebreakEnvStatus(cardId, false), 80);
+    }
+
     return `
-    <div class="chat-action-card chat-icebreak-card" style="border-left-color:var(--primary);">
+    <div class="chat-action-card chat-icebreak-card" id="${cardId}" style="border-left-color:var(--primary);">
         <div class="action-title">${escapeHtml(title)}</div>
         <div class="action-detail" style="margin-bottom:8px;">${escapeHtml(action.analysis || '')}</div>
+        ${envSectionHtml}
         <div class="icebreak-options">${chips}</div>
-        <div class="icebreak-foot">点一项即作为你的决策发给助手；也可以自己输入。</div>
+        <div class="icebreak-foot">可先在上方启动后台服务或点击「前台访问」打开预览 Tab；点下方任一方向即发送给助手。</div>
     </div>`;
+}
+
+async function refreshIcebreakEnvStatus(cardId, showFeedback = false) {
+    const cfg = _icebreakLaunchCards[cardId];
+    if (!cfg || !currentProjectId) return;
+    const ports = cfg.entries.map(e => e.port).filter(Boolean).join(',');
+    try {
+        const res = await api(`/projects/${currentProjectId}/chat/env-services/status?ports=${encodeURIComponent(ports)}`);
+        const services = (res && res.services) || {};
+        let allRunning = cfg.entries.length > 0;
+        cfg.entries.forEach((entry, idx) => {
+            const st = services[String(entry.port)] || { running: false, in_ads_bg: false };
+            cfg.states[idx] = st;
+            if (!st.running) allRunning = false;
+
+            const itemEl = document.getElementById(`${cardId}_item_${idx}`);
+            const badgeEl = document.getElementById(`${cardId}_badge_${idx}`);
+            const bgEl = document.getElementById(`${cardId}_bg_${idx}`);
+            if (itemEl) {
+                itemEl.dataset.running = st.running ? '1' : '0';
+                itemEl.classList.toggle('is-running', !!st.running);
+            }
+            if (badgeEl) {
+                if (st.running) {
+                    badgeEl.className = 'icebreak-env-badge is-running';
+                    badgeEl.textContent = st.in_ads_bg ? '🟢 已启动 (后台运行中)' : '🟢 已启动 (端口就绪)';
+                } else {
+                    badgeEl.className = 'icebreak-env-badge is-stopped';
+                    badgeEl.textContent = '⚪ 未启动';
+                }
+            }
+            if (bgEl) {
+                bgEl.innerHTML = _buildIcebreakEnvBgControlsHtml(cardId, idx, st);
+            }
+        });
+        const startAllBtn = document.getElementById(`${cardId}_start_all`);
+        if (startAllBtn) {
+            if (allRunning) {
+                startAllBtn.className = 'icebreak-env-link is-tasks';
+                startAllBtn.innerHTML = '🟢 全部已启动 · 查看后台';
+                startAllBtn.onclick = () => { if (typeof _openTasksPanel === 'function') _openTasksPanel(); };
+            } else {
+                startAllBtn.className = 'icebreak-env-link is-start';
+                startAllBtn.innerHTML = '▶️ 一键后台启动';
+                startAllBtn.onclick = () => startAllIcebreakEnvServices(cardId);
+            }
+        }
+        if (showFeedback && typeof showToast === 'function') {
+            showToast('已刷新环境启动状态', 'info');
+        }
+    } catch (e) {
+        console.warn('[icebreak env status]', e);
+    }
+}
+
+async function startIcebreakEnvService(cardId, idx, opts = {}) {
+    const cfg = _icebreakLaunchCards[cardId];
+    if (!cfg || !cfg.entries[idx] || !currentProjectId) return false;
+    const entry = cfg.entries[idx];
+    const badgeEl = document.getElementById(`${cardId}_badge_${idx}`);
+    const bgEl = document.getElementById(`${cardId}_bg_${idx}`);
+    if (badgeEl) {
+        badgeEl.className = 'icebreak-env-badge is-checking';
+        badgeEl.textContent = '⏳ 正在后台拉起...';
+    }
+    if (bgEl) {
+        const btn = bgEl.querySelector('button');
+        if (btn) { btn.disabled = true; btn.textContent = '⏳ 启动中...'; }
+    }
+    try {
+        const title = `${cfg.projectName || 'Project'} ${entry.label || entry.id || 'Service'} (:${entry.port || ''})`;
+        const res = await api(`/projects/${currentProjectId}/chat/env-services/start`, {
+            method: 'POST',
+            body: {
+                command: entry.command,
+                cwd: entry.cwd || '',
+                title,
+                port: entry.port || 0,
+                force_restart: !!opts.forceRestart,
+            },
+        });
+        await refreshIcebreakEnvStatus(cardId, false);
+        if (typeof _syncRunningCliTasksForProject === 'function') {
+            _syncRunningCliTasksForProject(currentProjectId);
+        }
+        if (!opts.silentToast && typeof showToast === 'function') {
+            if (res && res.already_running) {
+                showToast(`${entry.label} 已经在运行中 (:${entry.port})`, 'info');
+            } else if (res && res.running) {
+                showToast(`${entry.label} 已在后台启动 (:${entry.port})`, 'success');
+            } else {
+                showToast(`${entry.label} 启动异常，请打开后台任务查看日志`, 'warning');
+            }
+        }
+        return !!(res && res.running);
+    } catch (e) {
+        if (typeof showToast === 'function') showToast(`启动失败: ${e.message}`, 'error');
+        await refreshIcebreakEnvStatus(cardId, false);
+        return false;
+    }
+}
+
+async function stopIcebreakEnvService(cardId, idx, taskId = '') {
+    const cfg = _icebreakLaunchCards[cardId];
+    if (!cfg || !cfg.entries[idx] || !currentProjectId) return;
+    const entry = cfg.entries[idx];
+    const badgeEl = document.getElementById(`${cardId}_badge_${idx}`);
+    if (badgeEl) {
+        badgeEl.className = 'icebreak-env-badge is-checking';
+        badgeEl.textContent = '⏳ 停止中...';
+    }
+    try {
+        await api(`/projects/${currentProjectId}/chat/env-services/stop`, {
+            method: 'POST',
+            body: { task_id: taskId, port: entry.port || 0 },
+        });
+        await refreshIcebreakEnvStatus(cardId, false);
+        if (typeof _syncRunningCliTasksForProject === 'function') {
+            _syncRunningCliTasksForProject(currentProjectId);
+        }
+        if (typeof showToast === 'function') {
+            showToast(`已停止 ${entry.label}`, 'info');
+        }
+    } catch (e) {
+        if (typeof showToast === 'function') showToast(`停止失败: ${e.message}`, 'error');
+        await refreshIcebreakEnvStatus(cardId, false);
+    }
+}
+
+async function startAllIcebreakEnvServices(cardId) {
+    const cfg = _icebreakLaunchCards[cardId];
+    if (!cfg || !Array.isArray(cfg.entries)) return;
+    const startAllBtn = document.getElementById(`${cardId}_start_all`);
+    if (startAllBtn) {
+        startAllBtn.disabled = true;
+        startAllBtn.textContent = '⏳ 正在启动全部服务...';
+    }
+    for (let i = 0; i < cfg.entries.length; i++) {
+        const st = cfg.states[i];
+        if (!st || !st.running) {
+            await startIcebreakEnvService(cardId, i, { silentToast: true });
+        }
+    }
+    if (startAllBtn) startAllBtn.disabled = false;
+    await refreshIcebreakEnvStatus(cardId, false);
+    if (typeof showToast === 'function') {
+        showToast('后台服务已全部启动，可点击「前台访问」打开页面', 'success');
+    }
+}
+
+async function openIcebreakWebUrl(cardId, idx, url, title) {
+    if (!url) return;
+    const itemEl = document.getElementById(`${cardId}_item_${idx}`);
+    const isRunning = itemEl ? itemEl.dataset.running === '1' : true;
+    if (!isRunning) {
+        if (typeof showToast === 'function') {
+            showToast('检测到该服务尚未启动，正在后台自动拉起并打开页面...', 'info');
+        }
+        await startIcebreakEnvService(cardId, idx, { silentToast: true });
+    }
+    if (typeof openWebTabFromChat === 'function') {
+        openWebTabFromChat(url, title);
+    } else if (typeof adsShell !== 'undefined' && typeof adsShell.openMain === 'function') {
+        try { _exitChatFullscreenSoft(); } catch {}
+        try { adsShell.openRight({ tab: 'chat' }); } catch {}
+        try { adsShell.remountChatToWorkbench(); } catch {}
+        adsShell.openMain({ type: 'web', url, title: title || _webTabTitle(url) });
+    } else {
+        window.open(url, '_blank', 'noopener');
+    }
 }
 
 function pickIcebreakOption(encodedPrompt) {
@@ -10373,6 +10805,8 @@ function _renderProgressHealth(el, health) {
 const _ACTION_HINTS = {
     run_engine_compile: '🔨 UBT 全量编译中，C++ 编译通常需要 3-10 分钟，无输出属正常现象，请耐心等待。',
     run_engine_compile_check: '🔨 UBT 增量编译检查中，通常 1-3 分钟，无输出属正常现象。',
+    run_h5_typecheck: '🔎 正在对 Phaser 仓库跑 tsc --noEmit…',
+    run_h5_playtest: '🎮 正在 build 并打开 H5 产物检查运行时错误…',
     run_uat: '📦 RunUAT 打包中，根据项目大小需要 5-20 分钟。',
     playtest: '🎮 Play-In-Editor 测试运行中，等待测试结果…',
 };
@@ -15356,6 +15790,8 @@ const STATUS_LABELS = {
     review_in_progress: '🔍 审查中', review_passed: '审查通过',
     acceptance_passed: '✅ 验收通过', acceptance_rejected: '❌ 验收不通过',
     testing_in_progress: '🧪 测试中', testing_done: '测试通过', testing_failed: '测试不通过',
+    h5_typecheck_passed: 'H5 类型检查通过', h5_typecheck_failed: 'H5 类型检查失败',
+    h5_playtest_passed: 'H5 试玩通过', h5_playtest_failed: 'H5 试玩失败',
     deploying: '🚀 部署中', deployed: '已部署', cancelled: '已取消',
     blocked: '🚧 已阻塞',
     submitted: '已提交', analyzing: '分析中', decomposed: '已拆单',
@@ -15394,6 +15830,10 @@ const DISPLAY_STATUS_MAP = {
     acceptance_rejected:        'blocked',
     testing_failed:             'blocked',
     html_prototype_failed:      'blocked',
+    h5_typecheck_failed:        'blocked',
+    h5_typecheck_passed:        'in_review',
+    h5_playtest_failed:         'blocked',
+    h5_playtest_passed:         'in_review',
     blocked:                    'blocked',
     // 已完成
     testing_done:               'done',
@@ -20884,7 +21324,23 @@ function _getRunningTasksCount() {
     return cliRunning + bgTickets;
 }
 
+let _icebreakRefreshTimer = null;
+
+function _scheduleIcebreakEnvRefresh() {
+    if (_icebreakRefreshTimer) clearTimeout(_icebreakRefreshTimer);
+    _icebreakRefreshTimer = setTimeout(() => {
+        _icebreakRefreshTimer = null;
+        if (typeof _icebreakLaunchCards !== 'object' || !_icebreakLaunchCards) return;
+        for (const cardId of Object.keys(_icebreakLaunchCards)) {
+            if (document.getElementById(cardId)) {
+                refreshIcebreakEnvStatus(cardId, false);
+            }
+        }
+    }, 500);
+}
+
 function _updateRunningTasksPill() {
+    _scheduleIcebreakEnvRefresh();
     const bar = document.getElementById('chatRunningTasksBar');
     const label = document.getElementById('chatRunningTasksLabel');
     const pill = document.getElementById('chatRunningTasksPill');
@@ -25381,12 +25837,14 @@ function _webTabTitle(url) {
 }
 
 /** 聊天里的超链接 → 主舞台「网页 Tab」内嵌打开；不在项目壳层时退回系统浏览器 */
-function openWebTabFromChat(url) {
+function openWebTabFromChat(url, customTitle) {
     url = String(url || '').replace(/<\/?[a-zA-Z][^>]*>$/g, '').trim();
     if (!/^https?:\/\//i.test(url)) return;
     if (typeof adsShell !== 'undefined' && adsShell.isProjectShell && adsShell.isProjectShell() && currentProjectId) {
         try { _exitChatFullscreenSoft(); } catch {}
-        adsShell.openMain({ type: 'web', url, title: _webTabTitle(url) });
+        try { adsShell.openRight({ tab: 'chat' }); } catch {}
+        try { adsShell.remountChatToWorkbench(); } catch {}
+        adsShell.openMain({ type: 'web', url, title: customTitle || _webTabTitle(url) });
         return;
     }
     window.open(url, '_blank');

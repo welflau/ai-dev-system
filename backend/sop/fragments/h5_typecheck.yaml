@@ -1,0 +1,28 @@
+# Phaser / TypeScript 仓库开发后跑一次 tsc
+id: h5_typecheck
+name: H5 类型检查
+insert_after: development
+priority: 94   # 低于 engine_compile(95)，高于 play_test(85)
+description: 对 Phaser + TypeScript 仓库跑 tsc --noEmit，拦住类型级错误
+
+required_traits:
+  any_of:
+    - framework:phaser
+
+stage:
+  agent: DevAgent
+  action: run_h5_typecheck
+  trigger_on: h5_typecheck_pending
+  success_status: h5_typecheck_passed
+  reject_status: h5_typecheck_failed
+  reject_goto: development
+  config:
+    max_retries: 3
+    timeout_seconds: 90
+
+pipeline_view_contrib:
+  group: testing
+  create_if_missing:
+    name: 测试验证
+    icon: 🧪
+    insert_after: development

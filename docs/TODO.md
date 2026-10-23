@@ -1,31 +1,106 @@
 # AI Dev System — 待办清单
 
-> 最后更新: 2026-07-22
+> 最后更新: 2026-10-19
+> 对照：`dev-notes/2026-08` ~ `2026-10`、`docs/202610*.md`、前端 `app.js` / 后端工单与产物总线。
 
 ---
 
 ## 🎯 待办（未完成）
 
-### 工单后台任务专用窗口
+### OpenSpec 灰色状态说明（低优先）
 
-**背景**：工单执行过程中有大量 CLI 任务（UBT 编译、Playtest、Deploy 等），输出只能在全局后台任务面板看到，无法按工单过滤查看完整命令行输出。
+工单会话三层总览栏中，规范层 Propose/Apply/Verify/Archive 全灰时，当前只有 `○ 待进行` 图例。
 
-**需求**：
-- 工单详情页加"后台任务"区（或 Tab），只显示该工单相关的 CLI 任务
-- 每个任务可展开查看完整命令行输出（复用 `cli_task_log` 表，filter by ticket_id / session_key）
-- 和工单会话面板打通，AI 对话时可引用这些输出作为上下文
+**现状**（2026-10-19 对照 `frontend/app.js` `_buildThreeLayerBar`）：`openspec_stage` 为空时四个节点都是 `tlb-pending`，没有额外说明。
 
-**参考实现**：
-- 后端：`cli_task_log` 表已有 `session_key` 字段，可按工单 session 过滤
-- 前端：在工单抽屉"进展时间轴"下方加"后台任务"折叠区，复用现有 `_renderCliTaskOutput()`
+**需求**：全灰时在规范层行末加一个小提示「未触发 OpenSpec 流程」，或加 tooltip 说明原因（未安装/未触发 Propose）。
 
 ---
 
-### OpenSpec 灰色状态说明（低优先）
+### 工单后台任务：对话引用输出（剩余）
 
-工单会话三层总览栏中，规范层 Propose/Apply/Verify/Archive 全灰时，当前只有 `○ 待进行` 图例，用户需要更明确的提示。
+按工单过滤查看、展开完整命令行输出已经落地（见下方已完成）。还没做的是：AI 对话时把该工单的后台任务输出引用进上下文。
 
-**需求**：全灰时在规范层行末加一个小提示「未触发 OpenSpec 流程」，或加 tooltip 说明原因（未安装/未触发 Propose）。
+---
+
+### 能力自描述与动态组装 · 明确不做 / 历史债务
+
+主线已交付（见已完成）。方案 `docs/20261017_01` §7.2 记下、代码未改的：
+
+- 阶段间并行被压成串行。拓扑能表达「A、B 并行后汇入 C」，orchestrator 的 `transition_rules` 是单链，出路是阶段内 `dispatch_subtask`。
+- 3 处 trait 拼写漂移（`i18n` / `multiplayer:true` / `prototype:html`）和 11 项库内 trait 漂移。防漂测试只拦住新增，已知项在白名单里。
+- 上游 producer skipped 后，下游 required consumer 仍会启动。当前只在 prompt 里标 `_artifacts_missing`。
+- 同一工单返工会覆盖旧产物文件，没有版本回溯。
+
+---
+
+### 群聊 Phase 2
+
+PM 循环和话题分支已可用（见已完成）。`dev-notes/2026-10-14_01` 留下：
+
+- 验收点完成度精确版（PM 显式输出每条状态；现在是关键词启发式）
+- `reply_to` @引用高亮
+- `agent_stream` 每字符滚动节流
+- 更多 Role Agent 入群聊 roster
+- 进行中实时打断、Agent 私聊（成本高，独立评估）
+
+---
+
+### 外部会话：不绑项目的全局浏览
+
+Cursor / CodeBuddy / Claude Code 的项目内浏览、导入为 ADS 会话已落地。`docs/20261009_01` 阶段 2 还挂着：当前 API 都在 `/api/projects/{pid}` 下，全局 AI 助手要另加 `/api/external-sessions`。
+
+---
+
+## ✅ 已完成（2026-10）
+
+### ✅ 能力自描述与动态组装（2026-10-15~17）
+
+接新能力从「fragment + skills.json + SKILL.md」收成一个 `SKILL.md`（新 kind 再登记 `artifacts/kinds.yaml`）。`consumes` / `produces` 拓扑排序，产物走 ArtifactStore。测试 290 → 322。真实 CLI 跑通 demo-outline / demo-draft / demo-cover（含 4.3MB PNG）。顺带修了 LightAI key 被进程环境旧值盖过 `.env`。
+
+方案：`docs/20261015_01`、回顾：`docs/20261017_01`。DevNote：`dev-notes/2026-10-15_01` ~ `2026-10-17_01`。
+
+### ✅ 多 Agent 群聊（2026-10-12~14）
+
+黑板 Phase 1、PM 决策循环（目标提炼、用户介入、纪要）、话题分支（continue / resume / new，归档上限 8）。
+
+方案：`docs/20261012_01`、`docs/20261013_02`。DevNote：`2026-10-12_07`、`2026-10-13_01`、`2026-10-13_02`、`2026-10-14_01`。
+`docs/20261013_03` 文头仍写「待实现」，实现以 10-14 DevNote 为准。
+
+### ✅ 外部会话浏览器（2026-10-09~12）
+
+项目内浏览 Cursor / CodeBuddy / Claude Code 会话：时间戳、图片、代码块、FilesChanged 行内 diff、滚动与选中记忆、导入为 ADS 聊天会话。
+
+方案：`docs/20261009_01`。DevNote：`dev-notes/2026-10-10_*`、`2026-10-12_01` ~ `2026-10-12_06`。
+
+### ✅ Agent 级 LLM 配置（2026-10-11）
+
+每个 Agent 可单独配 API 或 CLI。AI 助手头像打开配置。方案：`docs/20261011_01`。DevNote：`2026-10-11_01`。
+
+---
+
+## ✅ 已完成（2026-08 ~ 09）
+
+### ✅ 工单后台任务按工单过滤（2026-08-02，后续补命令落库）
+
+工单聊天头部「📟 后台任务」→ `_openTicketTasksPanel`，`_tasksTicketFilter` 只显示该工单。输出复用 `_renderCliTaskOutput`。真命令在 `ticket_command_log`，`GET /tickets/{id}/command-logs`，与从日志合成的任务按 `log_id` 去重。
+
+DevNote：`2026-08-02_01`、`2026-09-20_03`。
+
+### ✅ OpenSpec 可见性、Apply、Checkpoint、壳层与知识库（2026-08）
+
+- OpenSpec propose 过程可见、Apply 接入、change_id 前后端一致、非代码工单跳过 UE 编译
+- 工单 Checkpoint 快照 / 时间轴还原 / CLI 钩子与 GC
+- 壳层工作区、主舞台文件查看器、知识库统一查看器与 FTS 浏览
+- Cursor CLI 接入
+
+DevNote：`2026-08-02_01`、`2026-08-06_*`、`2026-08-07_*`、`2026-08-11_01`、`2026-08-24_*`、`2026-08-25_01`。
+
+### ✅ UE 工单闭环、Test/Artist、对话追踪（2026-09）
+
+UE 工单流转闭环、TestAgent UE 静态分析、ArtistAgent、时间轴日志双向定位、turn_id 贯通与 trace 页。
+
+DevNote：`2026-09-10_*`、`2026-09-11_*`、`2026-09-19_01`、`2026-09-29_01`、`2026-10-01_01`。
 
 ---
 
@@ -57,7 +132,7 @@
 
 ---
 
-## 🎯 待办（未完成）
+## ✅ 已完成（2026-05）
 
 ### ✅ H. 系统自进化：成功经验自动沉淀为 Skill（已完成 2026-05-22）
 

@@ -441,6 +441,10 @@ STATUS_LABELS = {
     "html_prototype_in_progress": "🌐 HTML原型开发中",
     "html_prototype_done": "HTML原型完成",
     "html_prototype_failed": "HTML原型失败",
+    "h5_typecheck_passed": "H5 类型检查通过",
+    "h5_typecheck_failed": "H5 类型检查失败",
+    "h5_playtest_passed": "H5 试玩通过",
+    "h5_playtest_failed": "H5 试玩失败",
     # 工单状态 — 新 Agent 阶段
     "planning_in_progress": "策划中",
     "planning_done": "策划完成",

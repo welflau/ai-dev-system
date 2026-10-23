@@ -75,6 +75,7 @@ _ARGS_HINT_KEY: Dict[str, str] = {
     "git_log": "branch", "git_switch_branch": "branch",
     "generate_document": "filename", "confirm_save_doc": "filename",
     "confirm_requirement": "title", "confirm_bug": "title",
+    "confirm_project": "name", "confirm_direct_ticket": "title",
     "load_skill": "skill_id", "read_local_file": "path", "ue_call": "command",
     "glob": "pattern", "grep": "pattern", "list_directory": "path",
     "shell": "command", "web_search": "query",
@@ -235,6 +236,14 @@ def _format_result_summary(tool_name: str, result_text: str) -> str:
     return result_text[:80].replace("\n", " ")
 
 
+def _normalize_trait_list(raw) -> list:
+    if isinstance(raw, list):
+        return [str(t).strip() for t in raw if str(t).strip()]
+    if isinstance(raw, str):
+        return [t.strip() for t in raw.replace("，", ",").split(",") if t.strip()]
+    return []
+
+
 def _synthesize_confirm_action(
     tool_name: str, tool_input: dict, result_text: str = "",
 ) -> Optional[dict]:
@@ -244,6 +253,7 @@ def _synthesize_confirm_action(
     if short not in (
         "confirm_requirement", "confirm_bug",
         "confirm_direct_ticket", "confirm_requirements_batch",
+        "confirm_project",
     ):
         return None
     try:
@@ -299,6 +309,32 @@ def _synthesize_confirm_action(
             "type": "confirm_requirements_batch",
             "requirements": reqs,
             "summary": (inp.get("summary") or "").strip(),
+        }
+    if short == "confirm_project":
+        if isinstance(parsed, dict):
+            nested = parsed.get("action")
+            if isinstance(nested, dict) and nested.get("type") == "confirm_project":
+                return nested
+            if parsed.get("type") == "confirm_project":
+                return parsed
+        name = (inp.get("name") or "").strip()
+        local_path = (inp.get("local_path") or "").strip()
+        traits = _normalize_trait_list(inp.get("traits"))
+        if not name and not local_path:
+            return None
+        if not local_path and not traits:
+            return None
+        return {
+            "type": "confirm_project",
+            "name": name,
+            "git_remote_url": (inp.get("git_remote_url") or "").strip(),
+            "description": (inp.get("description") or "").strip(),
+            "tech_stack": (inp.get("tech_stack") or "").strip(),
+            "local_repo_path": (inp.get("local_repo_path") or local_path or "").strip(),
+            "traits": traits,
+            "preset_id": (inp.get("preset_id") or "").strip() or None,
+            "mode": (inp.get("mode") or "auto").strip() or "auto",
+            "extra_paths": [],
         }
     return None
 
@@ -495,7 +531,8 @@ class QueryEngine:
                             all_confirm_results.append(_synth)
                             logger.info(
                                 "CLI confirm 合成 ActionEvent: %s %s",
-                                _synth.get("type"), (_synth.get("title") or "")[:40],
+                                _synth.get("type"),
+                                (_synth.get("title") or _synth.get("name") or "")[:40],
                             )
                             yield ActionEvent(action_data=_synth)
                     elif etype == "stop":

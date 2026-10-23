@@ -51,6 +51,7 @@ class SkillLoader:
         self._load_config()
         self._load_rules()
         self._scan_marketplace_dirs()
+        self._scan_plugin_knowledge_skills()
 
     def _load_config(self) -> None:
         """从 skills.json 读取配置；文件不存在时静默跳过"""
@@ -493,6 +494,61 @@ class SkillLoader:
                         len(self._marketplace_index),
                         ", ".join(list(self._marketplace_index.keys())[:5]))
 
+    def _scan_plugin_knowledge_skills(self) -> None:
+        """把 ``plugins/*/skills/*/SKILL.md`` 里带 inject_to、无 x-runner 的注册成可注入知识。
+
+        可执行 skill（有 x-runner）走 SkillRunner，不进 Agent 提示词。
+        """
+        try:
+            from plugins.registry import iter_plugin_dirs
+            plugin_dirs = iter_plugin_dirs()
+        except Exception as e:
+            logger.debug("扫描插件知识 skill 失败: %s", e)
+            return
+
+        added = 0
+        for plugin_dir in plugin_dirs:
+            skills_root = plugin_dir / "skills"
+            if not skills_root.is_dir():
+                continue
+            try:
+                skill_dirs = [d for d in sorted(skills_root.iterdir()) if d.is_dir()]
+            except OSError:
+                continue
+            for skill_dir in skill_dirs:
+                md = skill_dir / "SKILL.md"
+                if not md.is_file():
+                    continue
+                try:
+                    text = md.read_text(encoding="utf-8")
+                except OSError:
+                    continue
+                fm, _body = _parse_frontmatter(text)
+                if fm.get("x-runner") or fm.get("x_runner"):
+                    continue
+                inject_to = fm.get("inject_to") or []
+                if not inject_to:
+                    continue
+                skill_id = skill_dir.name
+                if skill_id in self.skills:
+                    continue
+                self.skills[skill_id] = {
+                    "name": fm.get("name") or skill_id,
+                    "description": str(fm.get("description") or "")[:200],
+                    "type": "plugin_knowledge",
+                    "file_path": str(md),
+                    "inject_to": list(inject_to),
+                    "traits_match": fm.get("traits_match") or {},
+                    "priority": fm.get("priority", "high"),
+                    "enabled": True,
+                    "prompt_file": None,
+                    "paths": fm.get("paths") or [],
+                    "group": fm.get("group"),
+                }
+                added += 1
+        if added:
+            logger.info("🔌 插件知识 Skill: %d 条", added)
+
     def get_skill_prompt(self, skill_id: str) -> Optional[str]:
         """读取单个 skill 的 prompt 内容；禁用 / 文件缺失时返回 None。
 
@@ -515,14 +571,14 @@ class SkillLoader:
         if config.get("type") == "scan_dir":
             return self._build_scan_dir_prompt(skill_id, config)
 
-        if config.get("type") == "marketplace_item":
+        if config.get("type") in ("marketplace_item", "plugin_knowledge"):
             file_path = config.get("file_path")
             if not file_path:
                 return None
             try:
                 return Path(file_path).read_text(encoding="utf-8").strip()
             except Exception as e:
-                logger.warning("读取 marketplace_item '%s' 失败: %s", skill_id, e)
+                logger.warning("读取 %s '%s' 失败: %s", config.get("type"), skill_id, e)
                 return None
 
         prompt_rel = config.get("prompt_file")
@@ -645,6 +701,7 @@ class SkillLoader:
         self._load_config()
         self._load_rules()
         self._scan_marketplace_dirs()
+        self._scan_plugin_knowledge_skills()
 
 
 # ==================== helper ====================

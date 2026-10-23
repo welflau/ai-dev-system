@@ -45,6 +45,8 @@ class DevAgent(BaseAgent):
             return await self._do_fix_issues(context)
         elif task_name == "run_engine_compile":
             return await self._do_run_engine_compile(context)
+        elif task_name == "run_h5_typecheck":
+            return await self._do_run_h5_typecheck(context)
         elif task_name == "generate_ue_tests":
             return await self._do_generate_ue_tests(context)
         elif task_name == "write_html_prototype":
@@ -83,6 +85,15 @@ class DevAgent(BaseAgent):
         # ActionResult.to_dict() 已经把 status / errors / warnings / products 都平铺好
         return result.to_dict()
 
+    async def _do_run_h5_typecheck(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Phaser 仓库 tsc --noEmit。缺实现走 error（orchestrator 会 blocked）。"""
+        from plugins.registry import create_action
+        action = create_action("h5_typecheck")
+        if action is None:
+            return {"status": "error", "error": "h5_typecheck 未注册（H5 插件未加载）"}
+        result = await action.run(context)
+        return result.to_dict()
+
     async def _do_develop(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """开发：有 OpenSpec change/tasks 时强制走 Apply；否则 WriteCode / PlanCodeChange。"""
         existing_code = context.get("existing_code", {})
@@ -92,6 +103,7 @@ class DevAgent(BaseAgent):
         project_id = context.get("project_id", "")
         repo_path = context.get("repo_path", "")
         await self._inject_superpowers(context, project_id, repo_path)
+        await self._ensure_h5_scaffold(context, repo_path)
 
         # 步骤 1：代码生成（OpenSpec Apply 优先）
         t0 = time.monotonic()
@@ -375,6 +387,10 @@ class DevAgent(BaseAgent):
             cur_status = (cur or {}).get("status") or ""
             if cur_status == "engine_compile_failed":
                 failure_type = "engine_compile_failed"
+            elif cur_status == "h5_typecheck_failed":
+                failure_type = "h5_typecheck_failed"
+            elif cur_status == "h5_playtest_failed":
+                failure_type = "h5_playtest_failed"
             elif cur_status == "play_test_failed":
                 # v0.19 Phase ②：UE Automation playtest 失败
                 failure_type = "play_test_failed"
@@ -389,8 +405,8 @@ class DevAgent(BaseAgent):
             elif cur_status == "acceptance_rejected":
                 failure_type = "acceptance_rejected"
 
-            # 对于编译失败，从最近的 reject 日志 detail 里拿 errors 列表
-            if failure_type == "engine_compile_failed":
+            # 对于编译 / tsc 失败，从最近的 reject 日志 detail 里拿 errors 列表
+            if failure_type in ("engine_compile_failed", "h5_typecheck_failed", "h5_playtest_failed"):
                 log = await db.fetch_one(
                     """SELECT detail FROM ticket_logs
                        WHERE ticket_id = ? AND action = 'reject'
@@ -532,15 +548,19 @@ class DevAgent(BaseAgent):
                     context["ticket_description"] = (
                         f"{context.get('ticket_description', '')} [返工原因] {rr}"
                     )
-            elif ft == "engine_compile_failed":
+            elif ft in ("engine_compile_failed", "h5_typecheck_failed", "h5_playtest_failed"):
                 errs = context.get("compile_errors") or []
                 if errs:
+                    label = {
+                        "h5_typecheck_failed": "tsc 错误",
+                        "h5_playtest_failed": "H5 试玩错误",
+                    }.get(ft, "编译错误")
                     brief = "; ".join(
                         f"{e.get('file', '?')}:{e.get('line', '?')} {e.get('code', '')} {(e.get('msg') or '')[:80]}"
                         for e in errs[:5]
                     )
                     context["ticket_description"] = (
-                        f"{context.get('ticket_description', '')} [编译错误] {brief}"
+                        f"{context.get('ticket_description', '')} [{label}] {brief}"
                     )
             else:
                 ti = context.get("test_issues", [])
@@ -647,6 +667,31 @@ class DevAgent(BaseAgent):
         except Exception as e:
             logger.warning("查询 error_playbooks 失败: %s", e)
             context["error_playbooks"] = []
+
+    async def _ensure_h5_scaffold(self, context: Dict[str, Any], repo_path: str) -> None:
+        """空 Phaser 仓库先落 Vite 脚手架，再让 WriteCode 改场景。"""
+        if not repo_path:
+            return
+        traits = context.get("traits") or context.get("project_traits") or []
+        if "framework:phaser" not in traits:
+            return
+        if (Path(repo_path) / "package.json").exists():
+            return
+        project_name = (
+            context.get("project_name")
+            or context.get("name")
+            or Path(repo_path).name
+            or "h5-game"
+        )
+        result = await require_action("instantiate_h5_template").run({
+            "target_dir": repo_path,
+            "project_name": project_name,
+            "allow_overwrite": False,
+        })
+        if result.success:
+            logger.info("🧩 空 Phaser 仓库已实例化脚手架: %s", result.message)
+        else:
+            logger.warning("H5 脚手架跳过: %s", result.message)
 
     # ──────────────────────────────────────────────────────────────
     # Superpowers 纪律注入

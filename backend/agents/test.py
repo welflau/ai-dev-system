@@ -56,6 +56,8 @@ class TestAgent(BaseAgent):
         # v0.19 Phase ②：UE Automation Framework 冒烟测试
         if task_name == "run_playtest":
             return await self.run_playtest(context)
+        if task_name == "run_h5_playtest":
+            return await self.run_h5_playtest(context)
         return {"status": "error", "message": f"未知任务: {task_name}"}
 
     async def run_playtest(self, context: Dict[str, Any]) -> Dict[str, Any]:
@@ -84,6 +86,14 @@ class TestAgent(BaseAgent):
         d = result.to_dict() if hasattr(result, "to_dict") else (result.data or {})
         # orchestrator 按 status 分流：success → play_test_passed；其他 → play_test_failed / BLOCKED
         return d
+
+    async def run_h5_playtest(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """对 Phaser 仓库 vite build + 无头浏览器收运行时错误。"""
+        from plugins.registry import require_action
+
+        action = require_action("h5_playtest")
+        result = await action.run(context)
+        return result.to_dict() if hasattr(result, "to_dict") else (result.data or {})
 
     async def run_tests(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """主测试流程：5 层测试"""
