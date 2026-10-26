@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import inspect
 import json
 import logging
 import pkgutil
@@ -351,3 +352,73 @@ def get_ads_plugin(plugin_id: str, *, traits: Optional[List[str]] = None) -> Opt
     else:
         info["active"] = _match_traits(info.get("required_traits"), set(traits))
     return info
+
+
+def _project_traits(project: Dict[str, Any]) -> set:
+    raw = project.get("traits") if isinstance(project, dict) else None
+    if isinstance(raw, (list, tuple, set)):
+        return {str(t) for t in raw if t}
+    if isinstance(raw, str) and raw.strip():
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return set()
+        if isinstance(data, list):
+            return {str(t) for t in data if t}
+    return set()
+
+
+async def collect_workspace_roots(project: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """按项目 traits 收集各插件声明的工作区根（引擎目录等）。
+
+    插件在自己的 ``workspace.py`` 里提供 ``workspace_roots(project)``，
+    返回 ``{id, label, path, kind, available, message}``。宿主不认识
+    UE / Unity 的安装位置，只做 traits 过滤和字段整理。没写这个文件的
+    插件不出现在仓库页上。
+    """
+    from actions.base import _match_traits
+
+    traits = _project_traits(project or {})
+    roots: List[Dict[str, Any]] = []
+    for plugin_dir in iter_plugin_dirs():
+        ws_file = plugin_dir / "workspace.py"
+        if not ws_file.is_file():
+            continue
+        info = _read_plugin_manifest(plugin_dir)
+        if not _match_traits(info.get("required_traits"), traits):
+            continue
+        mod_name = f"plugins.{plugin_dir.name}.workspace"
+        try:
+            mod = importlib.import_module(mod_name)
+            fn = getattr(mod, "workspace_roots", None)
+            if not callable(fn):
+                continue
+            result = fn(project)
+            if inspect.isawaitable(result):
+                result = await result
+        except Exception as e:
+            logger.warning("加载插件工作区根失败 %s: %s", mod_name, e)
+            continue
+        if not isinstance(result, list):
+            continue
+        for item in result:
+            if not isinstance(item, dict):
+                continue
+            item_id = str(item.get("id") or "root").strip() or "root"
+            path = str(item.get("path") or "").strip()
+            available = bool(item.get("available", True)) and bool(path)
+            if available:
+                try:
+                    available = Path(path).is_dir()
+                except OSError:
+                    available = False
+            roots.append({
+                "id": f"{plugin_dir.name}.{item_id}",
+                "plugin_id": plugin_dir.name,
+                "label": str(item.get("label") or plugin_dir.name),
+                "path": path if available else "",
+                "kind": str(item.get("kind") or "folder"),
+                "available": available,
+                "message": "" if available else str(item.get("message") or "目录不可用"),
+            })
+    return roots

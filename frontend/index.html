@@ -604,7 +604,7 @@
                                 <button class="btn btn-sm" id="gitLogToggleBtn" onclick="toggleGitLogPanel()">📜 提交记录</button>
                             </div>
                         </div>
-                        <!-- VCS 子 Tab：一个项目可以同时有 git 仓库和 P4 workspace -->
+                        <!-- VCS 子 Tab：Git / P4 是宿主的；引擎目录 Tab 由匹配的插件追加 -->
                         <div class="repo-vcs-bar">
                             <div class="inner-tabs" role="tablist" id="repoVcsTabs">
                                 <button class="inner-tab active" data-vcs-tab="git" onclick="switchRepoVcsTab('git')">
@@ -2543,7 +2543,7 @@
     <!-- ==================== Toast 通知 ==================== -->
     <div class="toast-container" id="toastContainer"></div>
 
-    <script src="/static/app.js?v=20261023d"></script>
+    <script src="/static/app.js?v=20261025a"></script>
 </body>
 </html>
 

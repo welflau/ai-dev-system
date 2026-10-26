@@ -16011,6 +16011,7 @@ let _repoList = { git: [], p4: [], other: [], repos: [] };
 let _repoVcsTab = 'git';      // 当前子 Tab
 let _repoCurrentKey = '';     // 当前仓库的 key（后端给的路径哈希，不是绝对路径）
 let _repoLoadedFor = '';      // 已经加载过 repos 的 projectId，切项目时重置
+let _workspaceRoots = [];     // 插件贡献的目录 Tab（UE/Unity 引擎目录等）
 // 从聊天/时间轴/日志跳过来时置位：这些入口给的是主仓库相对路径，
 // 不能落到用户上次选的那个仓库上（见 openRepoFileFromChat）
 let _repoForcePrimaryOnce = false;
@@ -16039,6 +16040,20 @@ function _reposForCurrentTab() {
 
 function _currentRepo() {
     return (_repoList.repos || []).find(r => r.key === _repoCurrentKey) || null;
+}
+
+/** 当前子 Tab 如果是插件贡献的目录（root:<plugin>.<id>），返回那条根。 */
+function _currentWorkspaceRoot() {
+    if (!_repoVcsTab || !_repoVcsTab.startsWith('root:')) return null;
+    const id = _repoVcsTab.slice(5);
+    return (_workspaceRoots || []).find(r => r.id === id) || null;
+}
+
+function _workspaceApiPath(relPath, kind) {
+    const root = _currentWorkspaceRoot();
+    if (!root) return '';
+    const q = relPath ? `?path=${encodeURIComponent(relPath)}` : '';
+    return `/projects/${currentProjectId}/workspace-roots/${encodeURIComponent(root.id)}/${kind}${q}`;
 }
 
 /** 当前仓库是不是项目主仓库 —— 是的话继续走老的 /git/* 接口，
@@ -16089,10 +16104,16 @@ async function loadRepoPage(forceRefresh = false) {
                     _repoCurrentKey = first ? first.key : _repoCurrentKey;
                 }
             }
+            _workspaceRoots = await _fetchWorkspaceRoots();
+            if ((pref.vcs || '').startsWith('root:')
+                && _workspaceRoots.some(r => ('root:' + r.id) === pref.vcs)) {
+                _repoVcsTab = pref.vcs;
+            }
         } catch (e) {
             console.warn('仓库识别失败，退回单仓库模式:', e);
             _repoList = { git: [], p4: [], other: [], repos: [] };
             _repoCurrentKey = '';
+            _workspaceRoots = [];
         }
     }
 
@@ -16123,7 +16144,7 @@ function _renderRepoVcsBar() {
     if (cg) cg.textContent = gitTotal ? String(gitTotal) : '';
     if (cp) cp.textContent = counts.p4 ? String(counts.p4) : '';
 
-    document.querySelectorAll('#repoVcsTabs .inner-tab').forEach(btn => {
+    document.querySelectorAll('#repoVcsTabs .inner-tab:not([data-workspace-root])').forEach(btn => {
         const which = btn.dataset.vcsTab;
         const n = which === 'p4' ? (counts.p4 || 0) : gitTotal;
         btn.classList.toggle('active', which === _repoVcsTab);
@@ -16133,6 +16154,7 @@ function _renderRepoVcsBar() {
             ? (which === 'p4' ? '这个项目没有检测到 P4 workspace' : '这个项目没有检测到 Git 仓库')
             : `${n} 个仓库`;
     });
+    _renderWorkspaceRootTabs();
 
     // P4 子 Tab 下没有分支和提交记录的概念，藏掉对应控件
     const isGit = _repoVcsTab === 'git';
@@ -16148,9 +16170,54 @@ function _renderRepoVcsBar() {
     _renderRepoPicker();
 }
 
+/** 插件贡献的目录 Tab，跟在 Git / P4 后面。有没有、叫什么，由插件决定。 */
+function _renderWorkspaceRootTabs() {
+    const bar = document.getElementById('repoVcsTabs');
+    if (!bar) return;
+    bar.querySelectorAll('.inner-tab[data-workspace-root]').forEach(el => el.remove());
+    (_workspaceRoots || []).forEach(root => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'inner-tab';
+        btn.dataset.vcsTab = 'root:' + root.id;
+        btn.dataset.workspaceRoot = root.id;
+        if (!root.available) btn.classList.add('disabled');
+        if (('root:' + root.id) === _repoVcsTab) btn.classList.add('active');
+        btn.title = root.available
+            ? (root.path || root.label || '')
+            : (root.message || '未定位到目录');
+        const label = document.createElement('span');
+        label.textContent = root.label || '引擎目录';
+        btn.appendChild(label);
+        btn.addEventListener('click', () => switchRepoVcsTab('root:' + root.id));
+        bar.appendChild(btn);
+    });
+}
+
+async function _fetchWorkspaceRoots() {
+    try {
+        const rows = await api(`/projects/${currentProjectId}/workspace-roots`);
+        return Array.isArray(rows) ? rows : [];
+    } catch (e) {
+        console.warn('插件目录识别失败:', e);
+        return [];
+    }
+}
+
 function _renderRepoPicker() {
     const el = document.getElementById('repoPicker');
     if (!el) return;
+    const ws = _currentWorkspaceRoot();
+    if (ws) {
+        if (!ws.available) {
+            el.innerHTML = `<span class="repo-picker-empty">${escapeHtml(ws.message || '未定位到目录')}</span>`;
+            return;
+        }
+        el.innerHTML = `<span class="repo-picker-single" title="${escapeHtml(ws.path)}">
+            <span class="repo-badge">引擎目录</span>
+            <span class="repo-picker-path">${escapeHtml(ws.path)}</span></span>`;
+        return;
+    }
     const list = _reposForCurrentTab();
 
     if (!list.length) {
@@ -16232,6 +16299,25 @@ function _repoSearchInput(val) {
 async function _repoRunSearch(q, seq) {
     const container = document.getElementById('repoTree');
     if (!container) return;
+    const ws = _currentWorkspaceRoot();
+    if (ws) {
+        if (!ws.available) {
+            container.innerHTML = `<div class="empty-state"><div class="emoji">🧩</div><p>${escapeHtml(ws.message || '未定位到目录')}</p></div>`;
+            return;
+        }
+        container.innerHTML = '<div class="empty-state"><div class="emoji">🔍</div><p>正在过滤…</p></div>';
+        try {
+            const data = await api(
+                `/projects/${currentProjectId}/workspace-roots/${encodeURIComponent(ws.id)}/search?q=${encodeURIComponent(q)}`
+            );
+            if (seq !== _repoSearchSeq) return;
+            _renderRepoSearchHits(container, data);
+        } catch (e) {
+            if (seq !== _repoSearchSeq) return;
+            container.innerHTML = `<div class="empty-state"><div class="emoji">❌</div><p>过滤失败: ${escapeHtml(e.message || e)}</p></div>`;
+        }
+        return;
+    }
     if (!_repoCurrentKey) {
         container.innerHTML = '<div class="empty-state"><div class="emoji">🔍</div><p>还没识别到仓库，无法过滤</p></div>';
         return;
@@ -16315,14 +16401,21 @@ async function loadRepoTree() {
     _activeTreeItem = null;
 
     const repo = _currentRepo();
-    if (!repo && (_repoList.repos || []).length) {
+    const ws = _currentWorkspaceRoot();
+    if (!ws && !repo && (_repoList.repos || []).length) {
         container.innerHTML = '<div class="empty-state"><div class="emoji">📂</div><p>请先选择仓库</p></div>';
         return;
     }
 
     // Git 子 Tab 显示分支；P4 没有分支，显示 Stream（//depot/...）
     const branchTag = document.getElementById('repoBranchTag');
-    if (branchTag) {
+    if (ws) {
+        if (branchTag) branchTag.style.display = 'none';
+        if (!ws.available) {
+            container.innerHTML = `<div class="empty-state"><div class="emoji">🧩</div><p>${escapeHtml(ws.message || '未定位到目录')}</p></div>`;
+            return;
+        }
+    } else if (branchTag) {
         if (_repoVcsTab === 'p4') {
             const stream = (repo && repo.p4 && repo.p4.stream) || '';
             branchTag.textContent = stream ? stream : '';
@@ -16356,6 +16449,11 @@ async function loadRepoTree() {
 /** 拉某个目录的**一层**内容。
  *  没识别到仓库时退回老的 /git/tree（它现在也有深度上限，见 git_manager.get_file_tree） */
 async function _fetchRepoLevel(relPath) {
+    const ws = _currentWorkspaceRoot();
+    if (ws) {
+        const q = relPath ? `?path=${encodeURIComponent(relPath)}` : '';
+        return await api(`/projects/${currentProjectId}/workspace-roots/${encodeURIComponent(ws.id)}/tree${q}`);
+    }
     if (_repoCurrentKey) {
         const q = relPath ? `?path=${encodeURIComponent(relPath)}` : '';
         return await api(`/projects/${currentProjectId}/repos/${_repoCurrentKey}/tree${q}`);
@@ -16520,6 +16618,10 @@ function mountModelPreview(container, rawUrl, fileName) {
 /** 双击仓库树里的文件：开到主舞台新标签。单击仍走右侧预览。 */
 function openRepoFileInTab(path) {
     if (!path || !currentProjectId) return;
+    if (_currentWorkspaceRoot()) {
+        viewRepoFile(path, null);
+        return;
+    }
     if (typeof adsShell === 'undefined' || !adsShell.openMain || !(adsShell.isProjectShell && adsShell.isProjectShell())) {
         viewRepoFile(path, null);
         return;
@@ -16582,9 +16684,12 @@ async function viewRepoFile(path, itemEl) {
     // 先判断扩展名：图片和 3D 模型走 file-raw，不碰文本 API（后端对二进制返回 404）
     const imgExts = ['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp', 'ico', 'bmp'];
     const modelExts = ['glb', 'gltf'];
-    const rawUrl = _isPrimaryRepo()
-        ? `/api/projects/${currentProjectId}/git/file-raw?path=${encodeURIComponent(path)}`
-        : `/api/projects/${currentProjectId}/repos/${_repoCurrentKey}/file-raw?path=${encodeURIComponent(path)}`;
+    const wsRaw = _workspaceApiPath(path, 'file-raw');
+    const rawUrl = wsRaw
+        ? `/api${wsRaw}`
+        : (_isPrimaryRepo()
+            ? `/api/projects/${currentProjectId}/git/file-raw?path=${encodeURIComponent(path)}`
+            : `/api/projects/${currentProjectId}/repos/${_repoCurrentKey}/file-raw?path=${encodeURIComponent(path)}`);
     if (modelExts.includes(ext)) {
         infoBar.innerHTML = `
             <span class="file-info-badge">${escapeHtml(ext)}</span>
@@ -16609,9 +16714,10 @@ async function viewRepoFile(path, itemEl) {
         const branchParam = repoBranch ? `&branch=${encodeURIComponent(repoBranch)}` : '';
         // 主仓库继续走 /git/file（它支持按分支读历史版本）；
         // 其他仓库走 /repos/{key}/file，只能读工作区当前内容（第一版够用）
-        const url = _isPrimaryRepo()
-            ? `/projects/${currentProjectId}/git/file?path=${encodeURIComponent(path)}${branchParam}`
-            : `/projects/${currentProjectId}/repos/${_repoCurrentKey}/file?path=${encodeURIComponent(path)}`;
+        const url = _workspaceApiPath(path, 'file')
+            || (_isPrimaryRepo()
+                ? `/projects/${currentProjectId}/git/file?path=${encodeURIComponent(path)}${branchParam}`
+                : `/projects/${currentProjectId}/repos/${_repoCurrentKey}/file?path=${encodeURIComponent(path)}`);
         const data = await api(url);
         const content = (data.content || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
         const size = data.size ? formatFileSize(data.size) : '';

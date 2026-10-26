@@ -1,0 +1,9 @@
+{
+  "id": "unity",
+  "name": "Unity",
+  "version": "0.1.0",
+  "description": "Unity 项目的编辑器目录。仓库页上的引擎文件夹 Tab 由本插件声明，宿主不写死安装路径。",
+  "required_traits": {
+    "any_of": ["engine:unity"]
+  }
+}

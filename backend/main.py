@@ -332,6 +332,7 @@ async def global_exception_handler(request, exc):
 # 注册 API 路由
 from api.projects import router as projects_router
 from api.repos import router as repos_router
+from api.workspace_roots import router as workspace_roots_router
 from api.requirements import router as requirements_router
 from api.tickets import router as tickets_router
 from api.agents import router as agents_router
@@ -365,6 +366,7 @@ from api.external_sessions import router as external_sessions_router
 app.include_router(projects_router)
 # repos 的前缀也是 /api/projects，但路径段（/repos/...）不和 projects 冲突
 app.include_router(repos_router)
+app.include_router(workspace_roots_router)
 app.include_router(requirements_router)
 app.include_router(tickets_router)
 app.include_router(agents_router)
