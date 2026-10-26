@@ -91,9 +91,33 @@ class TestAgent(BaseAgent):
         """对 Phaser 仓库 vite build + 无头浏览器收运行时错误。"""
         from plugins.registry import require_action
 
+        ctx = dict(context)
+        ctx.setdefault("agent_type", self.agent_type)
+        t0 = time.monotonic()
+        await self.emit_step(
+            "H5 试玩（vite build + 浏览器）", ctx, phase="start",
+            step_index=1, step_total=1,
+        )
         action = require_action("h5_playtest")
-        result = await action.run(context)
-        return result.to_dict() if hasattr(result, "to_dict") else (result.data or {})
+        result = await action.run(ctx)
+        d = result.to_dict() if hasattr(result, "to_dict") else (result.data or {})
+        dur = int((time.monotonic() - t0) * 1000)
+        ok = bool(getattr(result, "success", False) or d.get("status") == "success")
+        task_id = str(d.get("task_id") or "")
+        if ok:
+            await self.emit_step(
+                "H5 试玩（vite build + 浏览器）", ctx, phase="done",
+                step_index=1, step_total=1, duration_ms=dur,
+                task_id=task_id,
+            )
+        else:
+            await self.emit_step(
+                "H5 试玩（vite build + 浏览器）", ctx, phase="error",
+                step_index=1, step_total=1, duration_ms=dur,
+                reason=getattr(result, "message", "") or d.get("message") or "",
+                task_id=task_id,
+            )
+        return d
 
     async def run_tests(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """主测试流程：5 层测试"""

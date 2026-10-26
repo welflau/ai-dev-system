@@ -42,7 +42,8 @@ UEPlaytestAction — 跑 UE Automation Framework 冒烟测试（v0.19 Phase ②A
   - exit=0 且无失败测试           → success
   - exit!=0 或有任何 failed 测试  → playtest_failed（→ orchestrator reject_goto fix_issues）
   - 引擎/uproject 找不到等环境问题 → error（→ orchestrator BLOCKED）
-  - 超时                          → playtest_failed（可回开发重试），不是 error。
+  - 超时且已经解析出测试结果      → playtest_failed（可回开发重试）
+  - 超时但没有测试行 / 模块没加载 → error（blocked，不改业务代码）
     超时不等于「环境坏了」，多半是测试自己挂住/项目里根本没测试，
     判成 error 会让工单直接 BLOCKED 等人工，把一次可自愈的失败升级成死单。
     TK-E2EREAL-09110951 就是这么死的。
@@ -358,6 +359,9 @@ class UEPlaytestAction(ActionBase):
         ]
         cmd_str = " ".join(f'"{c}"' if " " in c else c for c in cmd)
         await _log(f"[playtest] cmd: {cmd_str}")
+        from plugins.ue5.command_trace import emit_ue_step, seal_ue_command
+        await emit_ue_step(context, "UE Automation", "start")
+        trace_cwd = str(up.parent)
 
         # 执行（流式）
         # 用 subprocess.Popen + 线程队列，绕开 asyncio.create_subprocess_exec
@@ -379,8 +383,14 @@ class UEPlaytestAction(ActionBase):
                 encoding="utf-8",
                 errors="replace",
             )
-        except FileNotFoundError:
-            return await _err_log(f"启动 Editor-Cmd 失败: {editor_cmd} 不存在或权限不足")
+        except FileNotFoundError as fe:
+            return await seal_ue_command(
+                context,
+                await _err_log(f"启动 Editor-Cmd 失败: {editor_cmd} 不存在或权限不足"),
+                source="ue_playtest", tool="automation", step_name="UE Automation",
+                command=cmd_str, cwd=trace_cwd, exit_code=-1, status="error",
+                output=repr(fe), ok=False, reason="启动 Editor-Cmd 失败",
+            )
         except Exception as e:
             import traceback as _tb
             detail = f"{type(e).__name__}({e.args!r}): str={str(e)!r}"
@@ -392,7 +402,13 @@ class UEPlaytestAction(ActionBase):
             except Exception:
                 pass
             logger.error("Playtest Popen Exception %s\n%s", detail, tb_str)
-            return await _err_log(f"启动 Editor-Cmd 异常: {detail}")
+            return await seal_ue_command(
+                context,
+                await _err_log(f"启动 Editor-Cmd 异常: {detail}"),
+                source="ue_playtest", tool="automation", step_name="UE Automation",
+                command=cmd_str, cwd=trace_cwd, exit_code=-1, status="error",
+                output=detail, ok=False, reason="启动 Editor-Cmd 异常",
+            )
 
         await _log(f"[playtest] subprocess pid={proc.pid}, 开始读 stdout (thread mode)...")
 
@@ -446,36 +462,64 @@ class UEPlaytestAction(ActionBase):
             except Exception:
                 pass
             duration_ms = int((time.time() - t0) * 1000)
-            # 超时判 playtest_failed（不是 error）：orchestrator 对 error 一律 BLOCKED
-            # 等人工，而超时的常见成因（测试挂住 / 项目没测试 / 关卡加载卡住）都是
-            # reject_goto development 能处理的。判 error 等于把可自愈失败升级成死单。
             partial = "\n".join(collected)
             parsed_partial = _parse_automation_output(partial)
-            return ActionResult(
-                success=False,
-                data={
-                    "status": "playtest_failed",
-                    "exit_code": -1,
-                    "timed_out": True,
-                    "duration_ms": duration_ms,
-                    "command": cmd_str,
-                    "tests": parsed_partial["tests"],
-                    "summary": parsed_partial["summary"],
-                    "screenshots": _find_screenshots(screenshot_dir),
-                    "engine_used": engine_info.to_dict(),
-                    "test_filter": test_filter,
-                    "test_names": test_names,
-                    "module_load_errors": [],
-                    "raw_head": partial[:8192],
-                    "raw_tail": partial[-8192:] if len(partial) > 8192 else "",
-                    "message": (
-                        f"Playtest 超时（{timeout_seconds}s）—— 进程未在期限内退出。"
-                        f"已解析到 {parsed_partial['summary'].get('total', 0)} 个测试。"
-                        f"若项目无 Automation 测试，请确认引擎支持 -TestExit；"
-                        f"否则检查是否有测试挂住。"
-                    ),
-                },
-                message=f"Playtest 超时（{timeout_seconds}s）",
+            summary = parsed_partial["summary"]
+            failed_count = int(summary.get("failed") or 0)
+            total_count = int(summary.get("total") or 0)
+            has_test_rows = bool(parsed_partial["tests"]) or total_count > 0
+            module_load_errors = _missing_modules(partial)
+            if module_load_errors and failed_count == 0:
+                status = "error"
+                message = (
+                    f"Playtest 超时（{timeout_seconds}s）且检测到模块未加载，"
+                    "按环境问题处理，不打回改业务代码。"
+                )
+            elif not has_test_rows:
+                status = "error"
+                message = (
+                    f"Playtest 超时（{timeout_seconds}s）且没有 Automation 测试输出，"
+                    "疑似引擎启动或环境问题，不打回改业务代码。"
+                )
+            elif failed_count == 0:
+                status = "playtest_failed"
+                message = (
+                    f"Playtest 超时（{timeout_seconds}s）：测试已有结论（"
+                    f"{summary.get('passed', 0)}/{total_count} 通过），但进程未退出。"
+                )
+            else:
+                status = "playtest_failed"
+                message = (
+                    f"Playtest 超时（{timeout_seconds}s）—— 已解析到 "
+                    f"{failed_count}/{total_count} 个失败用例，进程未在期限内退出。"
+                )
+            return await seal_ue_command(
+                context,
+                ActionResult(
+                    success=False,
+                    data={
+                        "status": status,
+                        "exit_code": -1,
+                        "timed_out": True,
+                        "duration_ms": duration_ms,
+                        "command": cmd_str,
+                        "tests": parsed_partial["tests"],
+                        "summary": summary,
+                        "screenshots": _find_screenshots(screenshot_dir),
+                        "engine_used": engine_info.to_dict(),
+                        "test_filter": test_filter,
+                        "test_names": test_names,
+                        "module_load_errors": module_load_errors,
+                        "raw_head": partial[:8192],
+                        "raw_tail": partial[-8192:] if len(partial) > 8192 else "",
+                        "message": message,
+                    },
+                    message=message,
+                    error=message if status == "error" else None,
+                ),
+                source="ue_playtest", tool="automation", step_name="UE Automation",
+                command=cmd_str, cwd=trace_cwd, exit_code=-1, status="timeout",
+                duration_ms=duration_ms, output=partial, ok=False, reason=message[:120],
             )
 
         proc.wait(timeout=5)
@@ -504,14 +548,9 @@ class UEPlaytestAction(ActionBase):
         head = text[:8192]
         tail = text[-8192:] if len(text) > 8192 else ""
 
-        # TODO G：检测 module not loaded 错误，供自愈逻辑使用
-        module_load_errors: list = []
-        if status == "playtest_failed":
-            try:
-                from plugins.ue5.actions.ue_uproject_heal import _extract_missing_modules
-                module_load_errors = _extract_missing_modules(head + tail)
-            except Exception:
-                pass
+        module_load_errors = _missing_modules(head + tail) if status == "playtest_failed" else []
+        if module_load_errors and failed_count == 0 and status == "playtest_failed":
+            status = "error"
 
         data: Dict[str, Any] = {
             "status": status,
@@ -529,17 +568,41 @@ class UEPlaytestAction(ActionBase):
             "module_load_errors": module_load_errors,  # TODO G：缺失模块列表
         }
 
-        msg = (
-            f"Playtest 通过 ({summary['passed']}/{summary['total']}，耗时 {duration_ms // 1000}s)"
-            if status == "success"
-            else f"Playtest 失败 ({summary['failed']}/{summary['total']} failed)"
-        )
+        if status == "error" and module_load_errors:
+            msg = (
+                "Playtest 检测到模块未加载（"
+                + ", ".join(str(m) for m in module_load_errors[:5])
+                + "），按环境问题处理，不打回改业务代码。"
+            )
+            data["message"] = msg
+        elif status == "success":
+            msg = f"Playtest 通过 ({summary['passed']}/{summary['total']}，耗时 {duration_ms // 1000}s)"
+        else:
+            msg = f"Playtest 失败 ({summary['failed']}/{summary['total']} failed)"
         logger.info(msg)
-        return ActionResult(
-            success=(status == "success"),
-            data=data,
-            message=msg,
+        return await seal_ue_command(
+            context,
+            ActionResult(
+                success=(status == "success"),
+                data=data,
+                message=msg,
+                error=msg if status == "error" else None,
+            ),
+            source="ue_playtest", tool="automation", step_name="UE Automation",
+            command=cmd_str, cwd=trace_cwd, exit_code=exit_code,
+            status="success" if status == "success" else "error",
+            duration_ms=duration_ms, output=text,
+            ok=(status == "success"),
+            reason="" if status == "success" else msg[:120],
         )
+
+
+def _missing_modules(text: str) -> list:
+    try:
+        from plugins.ue5.actions.ue_uproject_heal import _extract_missing_modules
+        return _extract_missing_modules(text) or []
+    except Exception:
+        return []
 
 
 def _err(msg: str, detail: Optional[Dict] = None) -> ActionResult:

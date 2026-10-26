@@ -2933,7 +2933,7 @@ async def get_all_ticket_conversations(project_id: str):
             "type": "conversation",
             "id": conv["id"] + "_resp",
             "role": "assistant",
-            "content": conv["response"] or "",
+            "content": (conv["response"] or "")[:4000],
             "agent_type": conv["agent_type"],
             "action": conv["action"],
             "model": conv["model"],
@@ -2943,8 +2943,8 @@ async def get_all_ticket_conversations(project_id: str):
             "status": conv["status"],
             "created_at": conv["created_at"],
             "is_agent": True,
-            "thinking_steps": thinking_steps if thinking_steps else None,
-            "thinking_text": thinking_text if thinking_text else None,
+            "thinking_steps": thinking_steps[:15] if thinking_steps else None,
+            "thinking_text": thinking_text[:1200] if thinking_text else None,
         })
 
     # 合并 logs
@@ -3005,12 +3005,14 @@ async def get_all_ticket_conversations(project_id: str):
             ],
         })
 
-    # 每个 ticket 内按时间排序
+    # 每个 ticket 内按时间排序，全项目聚合流默认保留每单最近 50 条（避免 1500+ 条 3MB JSON 卡死前端）
     result_tickets = []
     total_messages = 0
     for t in tickets:
         messages = conv_by_ticket.get(t["id"], [])
         messages.sort(key=lambda m: m.get("created_at", ""))
+        if len(messages) > 50:
+            messages = messages[-50:]
         total_messages += len(messages)
         result_tickets.append({
             "id": t["id"],
@@ -4059,6 +4061,15 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
         yield _sse("message_done", {"full_text": "", "final_action": _open_action, "rounds": 0})
         return
 
+    # ── 新建 H5 / Phaser 项目：不依赖 CLI tool_use，直接出确认卡 ──
+    _h5_action = await _detect_new_h5_project(expanded_message_g)
+    if _h5_action:
+        await _save_chat_message("__global__", "user", req.message,
+                                 images=req.images, session_id=_sid)
+        yield _sse("action", _h5_action)
+        yield _sse("message_done", {"full_text": "", "final_action": _h5_action, "rounds": 0})
+        return
+
     yield _sse("turn_begin", {"turn_id": _msg_group_key_g})
 
     # @mention Agent 路由：提前推送 agent_info 事件
@@ -4176,7 +4187,12 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
                 save_thinking_g = _thinking_rounds_g if _thinking_rounds_g else (
                     ev.get("thinking_steps") or thinking_steps or None
                 )
-                final_action = final_action or ev.get("action")
+                _picked = ev.get("action") or _pop_global_mcp_action(_sid)
+                if _picked and not final_action:
+                    final_action = _picked
+                    yield _sse("action", final_action)
+                else:
+                    final_action = final_action or _picked
                 if _agent_override_g and not final_action:
                     _ac_g2 = _AGENT_CONFIG[_agent_override_g]
                     final_action = {"type": "group_agent_reply",
@@ -4471,13 +4487,32 @@ async def global_chat_thinking_stream(session_id: str, request: Request):
 class _GlobalMcpActionRequest(BaseModel):
     action: str
     data: dict = {}
+    session_id: str = ""
+
+
+# CLI 直调 MCP 时 QueryEngine 可能收不到 tool_result；流结束时从这里取卡。
+_pending_global_mcp_actions: dict[str, dict] = {}
+
+
+def _stash_global_mcp_action(session_id: str, action: dict) -> None:
+    sid = (session_id or "").strip() or "default"
+    _pending_global_mcp_actions[sid] = action
+    logger.info("全局 MCP action 已暂存 session=%s type=%s", sid, action.get("type"))
+
+
+def _pop_global_mcp_action(session_id: str) -> dict | None:
+    sid = (session_id or "").strip() or "default"
+    action = _pending_global_mcp_actions.pop(sid, None)
+    if action is None and sid != "default":
+        action = _pending_global_mcp_actions.pop("default", None)
+    return action
 
 
 @global_chat_router.post("/mcp-action")
 async def global_mcp_action(req: _GlobalMcpActionRequest):
     """CLI / ads-data MCP 回调：生成全局确认卡草稿（不落库）。
 
-    全局聊天没有项目 SSE，卡片靠 QueryEngine 从本接口返回值合成 ActionEvent。
+    全局聊天没有项目 SSE。先暂存 action，流式结束时由 generator 补发。
     """
     action_name = (req.action or "").lower().strip()
     data = dict(req.data or {})
@@ -4493,6 +4528,7 @@ async def global_mcp_action(req: _GlobalMcpActionRequest):
     result = await ConfirmProjectAction().run(data)
     if not result.success:
         return {"status": "error", "message": result.error or "确认卡片生成失败"}
+    _stash_global_mcp_action(req.session_id, result.data)
     return {"status": "ok", "action": result.data}
 
 
@@ -4641,6 +4677,35 @@ async def _detect_open_project(message: str, projects: list) -> dict | None:
         "name": matched.get("name", ""),
         "message": f"正在打开项目「{matched.get('name', '')}」…",
     }
+
+
+_NEW_H5_RE = _re2.compile(
+    r'(新建|创建|做个|做一个|出确认卡片|出卡片).{0,48}(H5|h5|Phaser|phaser|网页.?游戏|小游戏)'
+    r'|(H5|h5|Phaser|phaser|网页.?游戏|小游戏).{0,48}(新建|创建|出确认卡片|出卡片)',
+    _re2.IGNORECASE,
+)
+
+
+async def _detect_new_h5_project(message: str) -> dict | None:
+    """新建 H5/Phaser 项目时直接出确认卡，不依赖 CLI tool_use。"""
+    text = (message or "").strip()
+    if not text or not _NEW_H5_RE.search(text):
+        return None
+    from actions.chat.confirm_project import ConfirmProjectAction
+    result = await ConfirmProjectAction().run({
+        "name": "PhaserGame",
+        "traits": [
+            "platform:web", "category:game", "engine:none",
+            "framework:phaser", "lang:typescript",
+        ],
+        "description": "H5 网页游戏（Phaser 3 + TypeScript）",
+        "mode": "auto",
+    })
+    if not result.success:
+        logger.warning("H5 新建项目拦截失败: %s", result.error)
+        return None
+    logger.info("H5 新建项目拦截：直接出 confirm_project 卡")
+    return result.data
 
 
 def _expand_file_refs(message: str) -> tuple[str, list[str]]:

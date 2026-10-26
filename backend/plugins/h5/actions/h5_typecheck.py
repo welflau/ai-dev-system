@@ -87,6 +87,15 @@ def phaser_api_hints(errors: List[Dict[str, Any]]) -> List[str]:
         if "Cannot find module 'phaser'" in msg and "phaser-mod" not in seen:
             seen.add("phaser-mod")
             hints.append("找不到 phaser：在仓库根目录执行 npm install。")
+        if (
+            code == "TS2345"
+            and "type 'string' is not assignable to parameter of type 'number'" in msg
+            and "color-hex-num" not in seen
+        ):
+            seen.add("color-hex-num")
+            hints.append(
+                "Phaser 的 rectangle/fillStyle/lineStyle/setStrokeStyle 颜色参数只接受数值（如 0x1e293b 或 parseInt(hex.slice(1), 16)），不接受 '#1e293b' 字符串。"
+            )
     return hints
 
 
@@ -97,7 +106,9 @@ def resolve_tsc_cmd(repo: Path) -> Optional[List[str]]:
         return [str(local), "--noEmit", "-p", str(repo)]
     npx = shutil.which("npx") or shutil.which("npx.cmd")
     if npx:
-        return [npx, "--yes", "tsc", "--noEmit", "-p", str(repo)]
+        # 注意：npm 上的 `tsc` 包是废弃占位包（会打印 "This is not the tsc command you are looking for" 并 exit 1），
+        # 必须显式指定 `--package typescript` 才会调用真正的 TypeScript 编译器。
+        return [npx, "--yes", "--package", "typescript", "tsc", "--noEmit", "-p", str(repo)]
     return None
 
 
@@ -130,6 +141,51 @@ class H5TypecheckAction(ActionBase):
                 error="仓库没有 tsconfig.json",
             )
 
+        timeout = int((context.get("sop_config") or {}).get("timeout_seconds") or
+                      context.get("timeout_seconds") or 90)
+        from plugins.h5.actions.h5_playtest import (
+            _emit_ticket_step,
+            _trace_from_context,
+            resolve_bin,
+            run_and_trace,
+        )
+        trace = _trace_from_context(context)
+        trace["agent_type"] = str(context.get("agent_type") or "DevAgent")
+
+        # 若 node_modules 或本地 tsc 缺失（如分支切换/首次检出），先自动执行 npm install 并记入时间轴与任务 Log
+        bin_name = "tsc.cmd" if os.name == "nt" else "tsc"
+        local_tsc = root / "node_modules" / ".bin" / bin_name
+        if (root / "package.json").is_file() and (not (root / "node_modules").is_dir() or not local_tsc.is_file()):
+            npm = resolve_bin(root, "npm")
+            if npm:
+                inst_t0 = time.monotonic()
+                await _emit_ticket_step(trace, "安装 npm 依赖", "start")
+                inst_code, inst_raw, inst_rid = await run_and_trace(
+                    npm + ["install"], root, max(timeout, 180),
+                    tool="npm:install", trace=trace,
+                )
+                inst_dur = int((time.monotonic() - inst_t0) * 1000)
+                if inst_code != 0:
+                    await _emit_ticket_step(
+                        trace, "安装 npm 依赖", "error",
+                        duration_ms=inst_dur, reason=inst_raw[-160:], task_id=inst_rid,
+                    )
+                    return ActionResult(
+                        success=False,
+                        data={
+                            "status": "error",
+                            "command": " ".join(npm + ["install"]),
+                            "raw_tail": inst_raw[-4000:],
+                            "task_id": inst_rid,
+                        },
+                        message=f"npm install 失败: {inst_raw[-200:]}",
+                        error="npm install failed",
+                    )
+                await _emit_ticket_step(
+                    trace, "安装 npm 依赖", "done",
+                    duration_ms=inst_dur, task_id=inst_rid,
+                )
+
         cmd = resolve_tsc_cmd(root)
         if not cmd:
             return ActionResult(
@@ -139,8 +195,6 @@ class H5TypecheckAction(ActionBase):
                 error="tsc not found",
             )
 
-        timeout = int((context.get("sop_config") or {}).get("timeout_seconds") or
-                      context.get("timeout_seconds") or 90)
         t0 = time.monotonic()
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -170,24 +224,51 @@ class H5TypecheckAction(ActionBase):
         errors = [e for e in parse_tsc_output(raw) if e["severity"] == "error"]
         warnings = [e for e in parse_tsc_output(raw) if e["severity"] == "warning"]
         hints = phaser_api_hints(errors)
+
+        record_id = ""
+        ticket_id = str(context.get("ticket_id") or "")
+        if ticket_id:
+            try:
+                import shlex
+                from command_log import record_traced_command
+                record_id = await record_traced_command(
+                    source="h5_typecheck",
+                    tool="tsc:noEmit",
+                    command=" ".join(shlex.quote(str(c)) for c in cmd),
+                    cwd=str(root),
+                    exit_code=int(proc.returncode or 0),
+                    status="success" if (proc.returncode == 0 and not errors) else "error",
+                    duration_ms=duration_ms,
+                    output=raw,
+                    ticket_id=ticket_id,
+                    project_id=str(context.get("project_id") or ""),
+                    requirement_id=str(context.get("requirement_id") or ""),
+                    agent_type=str(context.get("agent_type") or "DevAgent"),
+                )
+            except Exception as e:
+                logger.debug("tsc 命令记录失败（非致命）: %s", e)
+
+        cmd_str = " ".join(str(c) for c in cmd)
         data = {
             "exit_code": proc.returncode,
             "duration_ms": duration_ms,
-            "command": cmd,
+            "command": cmd_str,
             "errors": errors[:40],
             "warnings": warnings[:20],
             "hints": hints,
             "raw_tail": raw[-4000:],
+            "task_id": record_id,
         }
         if proc.returncode == 0 and not errors:
             data["status"] = "success"
             return ActionResult(success=True, data=data, message="tsc 通过")
 
         data["status"] = "typecheck_failed"
+        clean_raw = re.sub(r"\x1b\[[0-9;?]*[ -/]*[@-~]", "", raw or "").strip()
         brief = "; ".join(
             f"{e['file']}:{e['line']} {e['code']} {e['msg'][:60]}"
             for e in errors[:3]
-        ) or (raw[:200] if raw else "tsc 失败且无法解析错误")
+        ) or (clean_raw[:200] if clean_raw else "tsc 失败且无法解析错误")
         return ActionResult(
             success=False,
             data=data,

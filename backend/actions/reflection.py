@@ -113,18 +113,22 @@ def _format_previous_code(previous_code: Dict[str, str], max_files: int = 5,
 
 
 def _parse_json_lenient(raw: str) -> Dict[str, Any]:
-    """容错 JSON 解析：剥 markdown 包裹；提取第一对大括号内容"""
+    """容错 JSON 解析：优先复用 LLMClient._extract_json_value（支持前置散文 + 围栏 + raw_decode）"""
+    try:
+        from llm_client import LLMClient
+        obj, _ = LLMClient._extract_json_value(raw or "")
+        if isinstance(obj, dict):
+            return obj
+    except Exception:
+        pass
     s = (raw or "").strip()
-    # 剥 ```json ... ``` 包裹
     if s.startswith("```"):
         lines = [ln for ln in s.split("\n") if not ln.strip().startswith("```")]
         s = "\n".join(lines).strip()
-    # 直接解
     try:
         return json.loads(s)
     except Exception:
         pass
-    # 提取第一对平衡大括号
     start = s.find("{")
     end = s.rfind("}")
     if start >= 0 and end > start:
@@ -171,130 +175,24 @@ class ReflectionAction(ActionBase):
         similar_failures = context.get("similar_failures") or []
         error_playbooks = context.get("error_playbooks") or []
 
-        # 构建失败信号段
-        compile_errors = context.get("compile_errors") or []
-        compile_warnings = context.get("compile_warnings") or []
-        compile_cmd = context.get("compile_command") or ""
-
-        # P2：编译失败但拿不到任何结构化 error（UBT 零输出 / UBA / mutex / 环境问题）。
-        # 此时失败信号为空，硬喂给 LLM 只会"编空气"——它会抓着工单描述瞎猜（实测跑题到
-        # OpenSpec 流程）。直接返回低置信度最小反思，指向环境排查，不浪费 LLM 调用。
-        # 注：P0 已让 UBT 零输出判 error→blocked，正常不会走到这里；此为防御性兜底
-        # （例如 compile_failed 有 errors 但未透传、或 fix_issues 被手动触发的场景）。
-        if failure_type == "engine_compile_failed" and not compile_errors:
-            logger.warning("Reflection: engine_compile_failed 但无 compile_errors，返回环境问题最小反思")
-            reflection = {
-                "root_cause": "编译失败但未捕获到任何结构化错误信息，疑似环境级问题"
-                              "（UBT 零输出 / UBA 子进程 / mutex / 引擎路径），而非代码语法错误。",
-                "missed_requirements": [],
-                "previous_attempt_issue": "上一次编译没有产生可解析的 error 输出，无法定位代码问题。",
-                "strategy_change": "先排查引擎/构建环境（确认 UBT 可正常启动、无残留 mutex、"
-                                   "引擎版本与 .uproject 匹配），而非盲目改代码。建议人工介入检查。",
-                "specific_changes": [
-                    "检查 UnrealBuildTool 是否能独立运行（手动执行编译命令看 stdout）",
-                    "确认无残留 UBA/编译进程占用 mutex",
-                    "核对引擎版本与 EngineAssociation 一致",
-                ],
-                "confidence": 0.2,
-            }
+        from plugins.registry import build_plugin_reflection_signal
+        plugin_signal = build_plugin_reflection_signal(failure_type, context)
+        # 插件可在构建信号时写入通用槽，用来跳过 LLM（例如零输出的环境级编译失败）。
+        # 槽里不出现具体引擎名，宿主只认这个 dict。
+        override = context.get("_reflection_override")
+        if isinstance(override, dict) and override.get("root_cause"):
+            logger.info("Reflection: 使用插件提供的环境级反思，跳过 LLM")
             return ActionResult(
                 success=True,
-                data={"reflection": reflection, "retry_count": retry_count},
+                data={"reflection": override, "retry_count": retry_count},
             )
-
-        if failure_type == "acceptance_rejected":
+        if plugin_signal:
+            failure_signal = plugin_signal
+        elif failure_type == "acceptance_rejected":
             failure_signal = f"ProductAgent 验收不通过。理由：\n{rejection_reason}"
         elif failure_type == "testing_failed":
             issues_text = "\n".join(f"  - {i}" for i in test_issues[:10]) if test_issues else "(无具体 issue)"
             failure_signal = f"TestAgent 测试不通过。问题列表：\n{issues_text}"
-        elif failure_type == "engine_compile_failed":
-            # v0.18 Phase D：UE 编译失败场景 —— errors 已结构化
-            lines = []
-            lines.append(f"UnrealBuildTool 编译失败 ({len(compile_errors)} errors, {len(compile_warnings)} warnings)。")
-            if compile_cmd:
-                lines.append(f"编译命令: `{compile_cmd}`")
-            lines.append("\n错误列表（最多前 10 条）：")
-            for e in compile_errors[:10]:
-                fname = (e.get("file") or "?").split("\\")[-1].split("/")[-1]
-                lines.append(
-                    f"  - [{e.get('category', '?')}] {fname}:{e.get('line', '?')} "
-                    f"{e.get('code', '')} — {(e.get('msg') or '')[:180]}"
-                )
-            if compile_warnings:
-                lines.append("\n部分警告（前 3 条）：")
-                for w in compile_warnings[:3]:
-                    fname = (w.get("file") or "?").split("\\")[-1].split("/")[-1]
-                    lines.append(
-                        f"  - [{w.get('category', '?')}] {fname}:{w.get('line', '?')} "
-                        f"{w.get('code', '')} — {(w.get('msg') or '')[:120]}"
-                    )
-            lines.append(
-                "\n⚠️ UE 常见坑：\n"
-                "  - 同名头文件（UHT 禁止）\n"
-                "  - 漏 UCLASS/UFUNCTION/UPROPERTY 宏\n"
-                "  - Build.cs 缺模块依赖（Core/CoreUObject/Engine/InputCore/EnhancedInput 等）\n"
-                "  - include 的头文件路径错误（.generated.h 要匹配 class 名）\n"
-                "  - GENERATED_BODY() 遗漏 或位置错\n"
-                "  - 在 .cpp 直接 new FClass() 但 class 没继承 UObject 走不了 GC\n"
-                "\n🚫 重要：这是 Unreal Engine C++ 项目，修复时只能输出 .h/.cpp/.Build.cs 文件！\n"
-                "  绝对不能输出 Python/JavaScript/HTML/Flask/FastAPI 代码。\n"
-                "  如果你觉得需要写 Python——你理解错了编译错误，请重新分析上面的 error 列表。"
-            )
-            failure_signal = "\n".join(lines)
-        elif failure_type == "play_test_failed":
-            # v0.19 Phase ②：UE Automation 测试失败
-            failed_tests = context.get("failed_tests") or []
-            summary = context.get("playtest_summary") or {}
-            pt_cmd = context.get("playtest_command") or ""
-            lines = []
-            lines.append(
-                f"UE Automation 测试失败 ({summary.get('failed', len(failed_tests))}/"
-                f"{summary.get('total', 0)} failed)。"
-            )
-            if pt_cmd:
-                lines.append(f"测试命令: `{pt_cmd}`")
-            lines.append("\n失败测试（最多前 5 个）：")
-            for t in failed_tests[:5]:
-                name = t.get("name", "?")
-                errs = "; ".join((t.get("errors") or [])[:2])[:200] or "(未捕获 error 行)"
-                lines.append(f"  - {name}")
-                lines.append(f"    → {errs}")
-            lines.append(
-                "\n⚠️ UE Automation 常见失败原因：\n"
-                "  - Functional Test actor 未正确 Register（需 PostRegisterAllComponents 注册）\n"
-                "  - 资产引用路径过期（BP 重命名后 C++ 里的 SoftObjectPath 没更新）\n"
-                "  - Enhanced Input mapping 缺失（IA / IMC 没在 BP 或 DefaultInput.ini 里绑）\n"
-                "  - Tick 逻辑依赖某帧已初始化但未用 FTimerHandle/GameState 等待\n"
-                "  - nullrhi 模式下 UMG/渲染相关断言（检查是否强依赖真 GPU）\n"
-                "  - Spawn/Replication 依赖客户端世界，单机 playtest 跑不到"
-            )
-            failure_signal = "\n".join(lines)
-        elif failure_type == "self_test_failed":
-            # v0.19.x A 方案：UE 静态预检（Layer 1）失败
-            issues = context.get("ue_blocking_issues") or []
-            lines = []
-            lines.append(
-                f"UE 自测失败（Layer 1 静态预检）：{len(issues)} 条 blocking issues。"
-                f"**每条都是静态可发现的 UE C++ 常见错**，请按 suggest 逐条修复。"
-            )
-            lines.append("\n问题清单：")
-            for idx, iss in enumerate(issues[:10], 1):
-                rule = iss.get("rule", "?")
-                file = iss.get("file", "?")
-                line = iss.get("line")
-                msg = (iss.get("msg") or "").replace("\n", " ")[:220]
-                suggest = iss.get("suggest") or ""
-                lines.append(
-                    f"{idx}. [{rule}] {file}:{line or '?'} — {msg}"
-                )
-                if suggest:
-                    lines.append(f"   → 建议: {suggest}")
-            lines.append(
-                "\n⚠️ 这些错在下游 UBT 编译会必然暴露（3-5 分钟后），"
-                "但我们在开发阶段就用静态规则提前拦住。请严格按 suggest 修正，不要引入新的同类问题。\n"
-                "\n🚫 提醒：这是 UE C++ 项目。修复时只输出 .h/.cpp/.Build.cs，绝对不能写 Python/JS/HTML！"
-            )
-            failure_signal = "\n".join(lines)
         elif failure_type == "development_failed":
             # 代码生成没产出有效代码：LLM 超时 / 返回空 / 只吐了降级模板。
             # 这类失败不是「代码写错了」，是「压根没写」，反思要盯的是**为什么没产出**。

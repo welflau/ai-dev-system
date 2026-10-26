@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI 自动开发系统</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20261023d">
+    <link rel="stylesheet" href="/static/styles.css?v=20261024a">
     <!-- highlight.js 语法高亮 -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
@@ -2091,8 +2091,12 @@
     <aside class="drawer" id="ticketDrawer">
         <div class="drawer-resize-handle" id="drawerResizeHandle"></div>
         <div class="drawer-header">
-            <div class="drawer-title" id="drawerTitle"></div>
+            <div class="drawer-title-wrap">
+                <div class="drawer-title" id="drawerTitle"></div>
+                <span class="drawer-status-pill" id="drawerStatusPill" style="display:none;" onclick="jumpToActiveTimelineStep()" title="点击快速定位到时间轴当前步骤"></span>
+            </div>
             <div class="drawer-header-actions">
+                <button class="btn-icon" id="drawerFullscreenBtn" onclick="toggleTicketFullscreen()" title="全屏">⛶</button>
                 <button class="btn-icon" id="drawerDockBtn" onclick="toggleDrawerDock()"
                         title="切换 浮动/固定（Dock）模式" style="display:none;">📌</button>
                 <button class="btn-icon" id="drawerCloseBtn" onclick="closeDrawer()" title="关闭">&times;</button>

@@ -1214,6 +1214,30 @@ async def update_subtask(ticket_id: str, subtask_id: str, status: str = None):
 # ==================== 看板 ====================
 
 
+def _classify_board_column(status: str, status_map: dict) -> str:
+    """将任意工单状态（含 SOP fragments 派生的动态状态）归入看板 5 列之一，保证工单绝不在看板上消失。"""
+    s = (status or "").strip()
+    if s in status_map:
+        return status_map[s]
+    if s in ("cancelled", "waiting_subtasks"):
+        return s
+    if s in ("done", "completed"):
+        return "done"
+    if s == "todo":
+        return "pending"
+    if s == "packaged":
+        return "in_review"
+    if s in ("packaging_pending", "ue_content_pending"):
+        return "in_progress"
+    if s == "in_progress" or s.endswith("_in_progress"):
+        return "in_progress"
+    if s == "in_review" or s.endswith(("_passed", "_done", "_ready")):
+        return "in_review"
+    if s.endswith(("_failed", "_rejected")):
+        return "blocked"
+    return "in_progress"
+
+
 @router.get("/api/projects/{project_id}/board")
 async def get_board(project_id: str, requirement_id: str = None):
     """获取看板数据（按状态分组）"""
@@ -1226,15 +1250,20 @@ async def get_board(project_id: str, requirement_id: str = None):
 
     tickets = await db.fetch_all(sql, tuple(params))
 
-    # 按看板列分组
-    board = {}
+    status_map = {}
     for col_name, statuses in BOARD_COLUMNS.items():
-        status_values = [s.value for s in statuses]
-        board[col_name] = [
-            {**t, "status_label": STATUS_LABELS.get(t["status"], t["status"])}
-            for t in tickets
-            if t["status"] in status_values
-        ]
+        for st in statuses:
+            status_map[st.value if hasattr(st, "value") else str(st)] = col_name
+
+    board = {col_name: [] for col_name in BOARD_COLUMNS}
+    for t in tickets:
+        st = t["status"]
+        col = _classify_board_column(st, status_map)
+        if col in board:
+            board[col].append({
+                **t,
+                "status_label": STATUS_LABELS.get(st, st),
+            })
 
     # 已取消的单独放
     board["cancelled"] = [
@@ -1540,6 +1569,93 @@ async def _annotate_chat_anchors(ticket_id: str, items: list) -> list:
     return items
 
 
+_TERMINAL_TICKET_STATUSES = {
+    "completed", "accepted", "done", "blocked", "cancelled",
+}
+
+
+def _step_pair_key(item: dict) -> tuple:
+    detail = item.get("_detail") or {}
+    return (
+        item.get("agent_type") or "",
+        detail.get("step_index") or 0,
+        detail.get("step_name") or "",
+    )
+
+
+def _promote_in_flight_steps(items: list, ticket_status: str = "") -> list:
+    """把当前轮次里尚未收到 done/error 的 skill_step_start 提上主时间轴。
+
+    为什么不在 _classify_tier 里一刀切把所有 skill_step_start 设为 primary：
+    已完成步骤的 start 留在主轴只会让每个步骤出现两行（开始 + 完成）。
+    但正在跑的那一步还没有 done，沉在「详细日志」里会让主时间轴停在上一条
+    已完成步骤，看不出当前卡在哪。
+
+    只看最后一条 thought_start / tool_start / assign 之后的尾段；若那条
+    skill_step_start 后面还没有同步骤的 done/error，且后面也没有 thought_done /
+    complete / reject / blocked 收尾，就标 `_tier='primary'` + `_running=True`。
+    """
+    if (ticket_status or "") in _TERMINAL_TICKET_STATUSES:
+        return items
+
+    log_indices = [idx for idx, it in enumerate(items) if it.get("_type") == "log"]
+    if not log_indices:
+        return items
+
+    # 找最近一次 Agent 动作起点
+    boundary = 0
+    for idx in reversed(log_indices):
+        act = items[idx].get("action") or ""
+        if act in ("thought_start", "tool_start", "assign"):
+            boundary = idx
+            break
+
+    tail = [idx for idx in log_indices if idx >= boundary]
+    # 若尾段已经收尾（thought_done / tool_done / complete / reject / blocked），说明不在跑
+    for idx in tail:
+        if (items[idx].get("action") or "") in (
+            "thought_done", "tool_done", "complete", "reject", "blocked", "cancelled",
+        ):
+            return items
+
+    finished_keys = set()
+    for idx in tail:
+        act = items[idx].get("action") or ""
+        if act in ("skill_step_done", "skill_step_error"):
+            finished_keys.add(_step_pair_key(items[idx]))
+
+    # 尾段里同 key 只取最后一条未完结的 start
+    in_flight_idx = None
+    for idx in tail:
+        it = items[idx]
+        if (it.get("action") or "") == "skill_step_start":
+            if _step_pair_key(it) not in finished_keys:
+                in_flight_idx = idx
+
+    from llm_client import get_ticket_live_stream
+    live_text = get_ticket_live_stream(items[tail[0]].get("ticket_id") or "")
+
+    if in_flight_idx is not None:
+        items[in_flight_idx]["_tier"] = "primary"
+        items[in_flight_idx]["_running"] = True
+        if live_text:
+            items[in_flight_idx]["_live_stream"] = live_text
+
+    # 若尾段连一条未完结的 skill_step 都没有，但 thought_start / tool_start 本身在跑，
+    # 给起点标 _running，让阶段头和起点行能顯示正在处理
+    for idx in reversed(tail):
+        act = items[idx].get("action") or ""
+        if act in ("thought_start", "tool_start"):
+            items[idx]["_running"] = True
+            if live_text and in_flight_idx is None:
+                items[idx]["_live_stream"] = live_text
+            if act == "tool_start":
+                items[idx]["_tier"] = "primary"
+            break
+
+    return items
+
+
 async def _annotate_task_refs(ticket_id: str, items: list) -> list:
     """给有真实命令记录的日志标 `_task_ref`（= ticket_command_log.id）。
 
@@ -1562,12 +1678,260 @@ async def _annotate_task_refs(ticket_id: str, items: list) -> list:
         return items
 
     ref_map = {r["log_id"]: r["id"] for r in rows if r.get("log_id")}
-    if not ref_map:
-        return items
     for item in items:
         rid = ref_map.get(item.get("id"))
+        if not rid:
+            det = item.get("_detail") or {}
+            tid = str(det.get("task_id") or "")
+            if tid.startswith("TCMD-"):
+                rid = tid
         if rid:
             item["_task_ref"] = rid
+    return items
+
+
+async def _annotate_media_previews(ticket_id: str, items: list) -> list:
+    """为时间轴条目补充 `_media_paths`（仓库相对路径列表），供前端直接渲染缩略图并点击打开到 Tab。
+
+    同时兼容历史数据：
+    1. ArtistAgent 的 `generate_assets` 日志与 `assets_ready` 评论：从 `artifacts(type='asset_manifest')`
+       的 YAML 内容里提取 `docs/.../assets/placeholder/*.png` 等图片路径；
+    2. `self_test` / `h5_playtest` / `acceptance_review` / `run_tests`：从日志 `_detail`、
+       `tickets.result` 或仓库 `docs/.../screenshots/` 目录提取对应截图。
+    """
+    import re as _re
+
+    _IMG_EXT_RE = _re.compile(r"\.(png|jpg|jpeg|gif|svg|webp|bmp)$", _re.IGNORECASE)
+
+    # 1. 从 artifacts 提取本工单的资产图片路径与测试截图路径
+    asset_img_paths: list[str] = []
+    artifact_shots: list[str] = []
+    try:
+        arts = await db.fetch_all(
+            "SELECT type, path, content FROM artifacts WHERE ticket_id = ? ORDER BY created_at DESC",
+            (ticket_id,),
+        )
+        for a in arts or []:
+            atype = a.get("type") or ""
+            if atype == "asset_manifest" and a.get("content") and not asset_img_paths:
+                raw_c = str(a["content"])
+                try:
+                    c_obj = json.loads(raw_c)
+                    if isinstance(c_obj, dict):
+                        files_str = "\n".join(str(v) for v in (c_obj.get("files") or {}).values())
+                        raw_c = files_str + "\n" + raw_c
+                except Exception:
+                    pass
+                for m in _re.findall(r"path:\s*([^\s\r\n\"'\\}]+)", raw_c):
+                    clean_p = m.strip().replace("\\", "/")
+                    if _IMG_EXT_RE.search(clean_p) and clean_p not in asset_img_paths:
+                        asset_img_paths.append(clean_p)
+            elif atype == "screenshot" and a.get("path"):
+                sp = str(a["path"]).strip().replace("\\", "/")
+                if sp and sp not in artifact_shots:
+                    artifact_shots.append(sp)
+    except Exception as e:
+        logger.debug("提取工单媒体产物跳过: %s", e)
+
+    # 2. 从 tickets 表 + 磁盘 docs/Reqs/<req_short>/<ticket_short>/ + project_environments 提取截图、报告与预览链接
+    self_test_shots: list[str] = []
+    playtest_shots: list[str] = []
+    acceptance_shots: list[str] = []
+    report_map: dict[str, str] = {}
+    preview_url: str = ""
+    repo_root_posix = ""
+    try:
+        t_row = await db.fetch_one(
+            "SELECT project_id, requirement_id, result FROM tickets WHERE id = ?",
+            (ticket_id,),
+        )
+        project_id = (t_row or {}).get("project_id") or ""
+        req_id = (t_row or {}).get("requirement_id") or ""
+        rdir = None
+        if project_id:
+            p_row = await db.fetch_one(
+                "SELECT git_repo_path FROM projects WHERE id = ?",
+                (project_id,),
+            )
+            rdir = (p_row or {}).get("git_repo_path")
+            if not rdir:
+                from git_manager import git_manager
+                rdir = git_manager._repo_path(project_id)
+            if rdir:
+                repo_root_posix = str(rdir).replace("\\", "/").rstrip("/") + "/"
+
+            # 查询项目的预览环境地址（优先 running 的 dev/test，其次任意已配置的 url）
+            env_rows = await db.fetch_all(
+                "SELECT env_type, status, url FROM project_environments WHERE project_id = ?",
+                (project_id,),
+            )
+            by_env = {r["env_type"]: r for r in (env_rows or []) if r.get("url")}
+            for pref in ("dev", "test", "prod"):
+                if pref in by_env and by_env[pref].get("status") == "running":
+                    preview_url = str(by_env[pref]["url"])
+                    break
+            if not preview_url:
+                for pref in ("dev", "test", "prod"):
+                    if pref in by_env:
+                        preview_url = str(by_env[pref]["url"])
+                        break
+
+        if t_row and t_row.get("result"):
+            try:
+                res_obj = json.loads(t_row["result"])
+                if isinstance(res_obj, dict):
+                    st = res_obj.get("self_test") or {}
+                    if isinstance(st, dict):
+                        for s in (st.get("screenshots") or []):
+                            u = s.get("url") if isinstance(s, dict) else str(s or "")
+                            u = u.replace("\\", "/")
+                            if u and u not in self_test_shots:
+                                self_test_shots.append(u)
+                    acc_s = res_obj.get("screenshot_path") or ""
+                    if acc_s:
+                        acceptance_shots.append(str(acc_s).replace("\\", "/"))
+            except Exception:
+                pass
+
+        # 直接扫描磁盘 docs/Reqs/<req_short>/<ticket_short>/，即使 tickets.result 已被后续阶段覆盖也能找回所有截图与报告
+        if rdir and req_id and ticket_id:
+            from pathlib import Path as _P
+            req_short = str(req_id).split("-")[-1]
+            tk_short = str(ticket_id).split("-")[-1]
+            tk_docs_rel = f"docs/Reqs/{req_short}/{tk_short}"
+            tk_docs_dir = _P(rdir) / "docs" / "Reqs" / req_short / tk_short
+            if tk_docs_dir.is_dir():
+                for rpt_name in ("dev-notes.md", "code-review.md", "acceptance-review.md", "PRD.md", "architecture.md"):
+                    if (tk_docs_dir / rpt_name).is_file():
+                        report_map[rpt_name] = f"{tk_docs_rel}/{rpt_name}"
+                shots_dir = tk_docs_dir / "screenshots"
+                if shots_dir.is_dir():
+                    for png in sorted(shots_dir.glob("*.png"), key=lambda p: p.stat().st_mtime, reverse=True):
+                        rel_png = f"{tk_docs_rel}/screenshots/{png.name}"
+                        if png.name.startswith("dev_") and rel_png not in self_test_shots:
+                            self_test_shots.append(rel_png)
+                        elif png.name == "h5_playtest.png" and rel_png not in playtest_shots:
+                            playtest_shots.append(rel_png)
+                        elif png.name.startswith("acceptance_") and rel_png not in acceptance_shots:
+                            acceptance_shots.append(rel_png)
+    except Exception:
+        pass
+
+    def _norm_rel(p: str) -> str:
+        s = str(p or "").strip().replace("\\", "/")
+        if repo_root_posix and s.lower().startswith(repo_root_posix.lower()):
+            s = s[len(repo_root_posix):]
+        return s
+
+    for item in items:
+        media: list[str] = []
+        if item.get("_type") == "comment":
+            phase = str(item.get("phase") or "")
+            content = str(item.get("content") or "")
+            if phase == "assets_ready" or "资产落地完成" in content:
+                for p in asset_img_paths:
+                    np = _norm_rel(p)
+                    if np and np not in media:
+                        media.append(np)
+            elif phase == "development_done" or "自测：" in content:
+                for p in self_test_shots[:1]:
+                    np = _norm_rel(p)
+                    if np and np not in media:
+                        media.append(np)
+                if preview_url:
+                    item["_preview_url"] = preview_url
+                if "dev-notes.md" in report_map:
+                    item["_report_files"] = [report_map["dev-notes.md"]]
+            # 评论正文里若有反引号包裹的图片路径也提取出来
+            for m in _re.findall(r"`([^`]+\.(?:png|jpg|jpeg|gif|svg|webp))`", content, _re.IGNORECASE):
+                np = _norm_rel(m)
+                if np and np not in media:
+                    media.append(np)
+            if media:
+                item["_media_paths"] = media
+            continue
+
+        det = item.get("_detail") or {}
+        act = str(item.get("action") or "")
+        ag = str(item.get("agent_type") or "")
+        to_st = str(item.get("to_status") or "")
+        msg = str(item.get("_message") or det.get("message") or "")
+        step_name = str(det.get("step_name") or "")
+
+        # 先收集 detail 里显式带的图片路径（file_paths / files / media_paths / screenshots）
+        for key in ("media_paths", "screenshots", "file_paths", "git_files", "files"):
+            val = det.get(key)
+            if not isinstance(val, list):
+                continue
+            for entry in val:
+                raw_p = entry.get("url") if isinstance(entry, dict) else str(entry or "")
+                np = _norm_rel(raw_p)
+                if np and ("/" in np) and _IMG_EXT_RE.search(np) and np not in media:
+                    media.append(np)
+
+        # 补充历史 ArtistAgent 完成日志（仅挂在 generate_assets / thought_done 上，避免 thought_start 和 checkpoint 重复出现）
+        if ag == "ArtistAgent" and act in ("generate_assets", "thought_done", "complete") and asset_img_paths:
+            for p in asset_img_paths:
+                np = _norm_rel(p)
+                if np and np not in media:
+                    media.append(np)
+
+        # 补充自测验证步骤或开发完成日志的自测截图 + 预览链接 + 自测报告
+        if (act == "skill_step_done" and step_name == "自测验证") or (
+            act == "complete" and ag == "DevAgent" and ("自测" in msg or to_st == "development_done")
+        ):
+            for p in self_test_shots[:1]:
+                np = _norm_rel(p)
+                if np and np not in media:
+                    media.append(np)
+            if preview_url:
+                item["_preview_url"] = preview_url
+            if "dev-notes.md" in report_map:
+                item["_report_files"] = [report_map["dev-notes.md"]]
+
+        # 补充 H5 试玩步骤与完成日志的试玩截图 + 预览链接（不挂在 skill_step_start 上）
+        if (act in ("skill_step_done", "skill_step_error") and "H5 试玩" in step_name) or (
+            ag == "TestAgent" and act in ("complete", "reject") and (to_st in ("h5_playtest_passed", "h5_playtest_failed") or "H5 试玩" in msg)
+        ):
+            for p in playtest_shots:
+                np = _norm_rel(p)
+                if np and np not in media:
+                    media.append(np)
+            if preview_url or det.get("preview_url"):
+                item["_preview_url"] = str(det.get("preview_url") or preview_url)
+
+        # 补充代码审查报告芯片
+        if ag == "ReviewAgent" and act == "code_review" and "code-review.md" in report_map:
+            item["_report_files"] = [report_map["code-review.md"]]
+
+        # 补充产品验收截图 + 验收报告芯片 + 预览链接
+        if ag == "ProductAgent" and act in ("thought_done", "accept", "reject"):
+            for p in acceptance_shots[:1]:
+                np = _norm_rel(p)
+                if np and np not in media:
+                    media.append(np)
+            if preview_url:
+                item["_preview_url"] = preview_url
+            if "acceptance-review.md" in report_map:
+                item["_report_files"] = [report_map["acceptance-review.md"]]
+
+        # 补充 TestAgent 测试截图 + 预览链接
+        if ag == "TestAgent" and act == "complete" and ("测试通过" in msg or to_st == "testing_done"):
+            for p in (artifact_shots or playtest_shots or self_test_shots[:1]):
+                np = _norm_rel(p)
+                if np and np not in media:
+                    media.append(np)
+            if preview_url:
+                item["_preview_url"] = preview_url
+
+        # 补充 DeployAgent 部署完成的在线预览链接
+        if ag == "DeployAgent" and act == "complete":
+            if det.get("preview_url") or preview_url:
+                item["_preview_url"] = str(det.get("preview_url") or preview_url)
+
+        if media:
+            item["_media_paths"] = media[:12]
+
     return items
 
 
@@ -1674,11 +2038,18 @@ async def get_ticket_timeline(ticket_id: str):
     # 排序**之后**才标阶段：继承逻辑依赖时序，先标后排会把继承串错
     items, stage_groups = await _annotate_timeline_stages(ticket_id, items)
 
+    t_row = await db.fetch_one("SELECT status FROM tickets WHERE id = ?", (ticket_id,))
+    ticket_status = (t_row or {}).get("status") or ""
+    items = _promote_in_flight_steps(items, ticket_status=ticket_status)
+
     # 标注「这条在工单对话里的落点」，前端据此决定要不要渲染跳转链接
     items = await _annotate_chat_anchors(ticket_id, items)
 
     # 标注「这条背后有真实命令记录」，前端据此渲染「📟 后台记录」链接
     items = await _annotate_task_refs(ticket_id, items)
+
+    # 标注「这条日志或评论关联的截图 / 资产图片」（兼容历史已落库记录）
+    items = await _annotate_media_previews(ticket_id, items)
 
     return {"timeline": items, "total": len(items), "stage_groups": stage_groups}
 
@@ -1698,6 +2069,7 @@ async def add_ticket_comment(ticket_id: str, body: dict, background_tasks: Backg
     comment_id = "CMT-" + generate_id()
     created_at = now_iso()
     reply_to_log_id = body.get("reply_to_log_id") or None
+    reply_to_comment_id = body.get("reply_to_comment_id") or None
     await db.insert("ticket_comments", {
         "id": comment_id,
         "ticket_id": ticket_id,
@@ -1707,6 +2079,7 @@ async def add_ticket_comment(ticket_id: str, body: dict, background_tasks: Backg
         "content": content,
         "phase": body.get("phase"),
         "reply_to_log_id": reply_to_log_id,
+        "reply_to_comment_id": reply_to_comment_id,
         "created_at": created_at,
     })
 
@@ -1716,6 +2089,8 @@ async def add_ticket_comment(ticket_id: str, body: dict, background_tasks: Backg
         "comment_id": comment_id,
         "author_type": "human",
         "content": content,
+        "reply_to_log_id": reply_to_log_id,
+        "reply_to_comment_id": reply_to_comment_id,
         "created_at": created_at,
     })
 

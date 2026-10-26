@@ -419,6 +419,8 @@ class BaseAgent(ABC):
         duration_ms: int = 0,
         files: Optional[List[str]] = None,
         reason: str = "",
+        task_id: str = "",
+        output_summary: str = "",
     ) -> None:
         """Agent action 代码中的手动步骤打点，写 skill_step_start / skill_step_done 到 ticket_logs。
 
@@ -458,7 +460,7 @@ class BaseAgent(ABC):
                     message += f" — {reason[:120]}"
                 level = "error"
 
-            detail_json = _json.dumps({
+            detail_obj: Dict[str, Any] = {
                 "message": message,
                 "step_name": step_name,
                 "step_index": step_index,
@@ -468,7 +470,12 @@ class BaseAgent(ABC):
                 "files": file_list,
                 "file_count": len(file_list),
                 "reason": reason,
-            }, ensure_ascii=False)
+            }
+            if task_id:
+                detail_obj["task_id"] = task_id
+            if output_summary:
+                detail_obj["output_summary"] = output_summary
+            detail_json = _json.dumps(detail_obj, ensure_ascii=False)
 
             await db.execute(
                 "INSERT INTO ticket_logs "
@@ -483,6 +490,7 @@ class BaseAgent(ABC):
                     "id": log_id, "ticket_id": ticket_id,
                     "agent_type": self.agent_type, "action": action,
                     "detail": detail_json, "level": level, "created_at": created_at,
+                    "_task_ref": task_id or "",
                 })
         except Exception as e:
             logger.debug("emit_step 失败: %s", e)

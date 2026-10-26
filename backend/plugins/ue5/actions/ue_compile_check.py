@@ -334,6 +334,9 @@ class UECompileCheckAction(ActionBase):
         cmd_str = " ".join(f'"{c}"' if " " in c else c for c in cmd)
         # 启动前先把命令推出来，即便 subprocess 启动失败也能看到"准备执行什么"
         await _log(f"[ubt] cmd: {cmd_str}")
+        from plugins.ue5.command_trace import emit_ue_step, seal_ue_command
+        await emit_ue_step(context, "UBT 编译", "start")
+        trace_cwd = str(up.parent)
 
         # 5. 执行
         # v0.19.x: 用 subprocess.Popen + 线程队列替代 asyncio.create_subprocess_exec
@@ -360,11 +363,23 @@ class UECompileCheckAction(ActionBase):
             )
         except FileNotFoundError as fe:
             logger.error("UBT FileNotFoundError: ubt=%s err=%r", ubt, fe, exc_info=True)
-            return await _err_log(f"启动 UBT 失败: {ubt} 不存在或权限不足")
+            return await seal_ue_command(
+                context,
+                await _err_log(f"启动 UBT 失败: {ubt} 不存在或权限不足"),
+                source="ue_compile_check", tool="ubt", step_name="UBT 编译",
+                command=cmd_str, cwd=trace_cwd, exit_code=-1, status="error",
+                output=repr(fe), ok=False, reason="启动 UBT 失败",
+            )
         except Exception as e:
             logger.error("UBT Popen Exception type=%s repr=%r", type(e).__name__, e, exc_info=True)
             err_detail = f"{type(e).__name__}: {e!r}"
-            return await _err_log(f"启动 UBT 异常: {err_detail}")
+            return await seal_ue_command(
+                context,
+                await _err_log(f"启动 UBT 异常: {err_detail}"),
+                source="ue_compile_check", tool="ubt", step_name="UBT 编译",
+                command=cmd_str, cwd=trace_cwd, exit_code=-1, status="error",
+                output=err_detail, ok=False, reason="启动 UBT 异常",
+            )
 
         await _log(f"[ubt] subprocess pid={proc.pid}, 开始读 stdout (thread mode)...")
 
@@ -422,14 +437,21 @@ class UECompileCheckAction(ActionBase):
                 pass
             reader.join(timeout=2)
             duration_ms = int((time.time() - t0) * 1000)
-            return _err(
-                f"UBT 超时（{timeout_seconds}s）",
-                detail={
-                    "duration_ms": duration_ms,
-                    "command": cmd_str,
-                    "engine_used": engine_info.to_dict(),
-                    "partial_output": "\n".join(collected_lines[-100:]),
-                },
+            return await seal_ue_command(
+                context,
+                _err(
+                    f"UBT 超时（{timeout_seconds}s）",
+                    detail={
+                        "duration_ms": duration_ms,
+                        "command": cmd_str,
+                        "engine_used": engine_info.to_dict(),
+                        "partial_output": "\n".join(collected_lines[-100:]),
+                    },
+                ),
+                source="ue_compile_check", tool="ubt", step_name="UBT 编译",
+                command=cmd_str, cwd=trace_cwd, exit_code=-1, status="timeout",
+                duration_ms=duration_ms, output="\n".join(collected_lines),
+                ok=False, reason=f"UBT 超时（{timeout_seconds}s）",
             )
 
         proc.wait(timeout=10)
@@ -509,11 +531,20 @@ class UECompileCheckAction(ActionBase):
             msg = env_err_msg
         else:
             msg = f"编译失败（{len(errors)} 个 error, {len(warnings)} 个 warning）"
-        return ActionResult(
-            success=(status == "success"),
-            data=data,
-            message=msg,
-            error=(env_err_msg if status == "error" else None),
+        return await seal_ue_command(
+            context,
+            ActionResult(
+                success=(status == "success"),
+                data=data,
+                message=msg,
+                error=(env_err_msg if status == "error" else None),
+            ),
+            source="ue_compile_check", tool="ubt", step_name="UBT 编译",
+            command=cmd_str, cwd=trace_cwd, exit_code=exit_code,
+            status="success" if status == "success" else "error",
+            duration_ms=duration_ms, output=text,
+            ok=(status == "success"),
+            reason="" if status == "success" else msg[:120],
         )
 
 

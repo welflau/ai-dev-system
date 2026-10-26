@@ -171,6 +171,40 @@ for name, raw in [
     d = find_content_defects(raw, "a.ts")
     check(f"回复仍被识别/{name}", any("首行" in x for x in d), str(d))
 
+# ========== 7. 无围栏回复散文（PhaserGame 真实事故回归） ==========
+UNFENCED_TS = (
+    "Typecheck passes. 已按要求修改 `src/scenes/GameScene.ts`，将占位文字替换为可编译的空壳类。\n\n"
+    "修改后的完整文件内容：\n\n"
+    "import Phaser from 'phaser';\n"
+    "export class GameScene extends Phaser.Scene {}\n"
+)
+got_ts, note_ts = strip_code_fences(UNFENCED_TS, "src/scenes/GameScene.ts")
+check("无围栏 TS: 剥除前置中文散文", got_ts.startswith("import Phaser from 'phaser';"), repr(got_ts[:40]))
+check("无围栏 TS: 净化后无缺陷", find_content_defects(got_ts, "src/scenes/GameScene.ts") == [])
+
+UNFENCED_JSON = (
+    "已恢复 `package.json` 为有效的脚手架配置。\n\n"
+    "修改后的完整文件内容如下（未用 markdown 代码块包裹）：\n\n"
+    "{\n"
+    '  "name": "phaser-game",\n'
+    '  "private": true\n'
+    "}\n\n"
+    "说明：原文件内容为被误写入的占位文字（非有效 JSON）。\n"
+)
+got_json, note_json = strip_code_fences(UNFENCED_JSON, "package.json")
+check("无围栏 JSON: 剥除首尾散文", got_json.strip().startswith("{") and got_json.strip().endswith("}"))
+check("无围栏 JSON: 净化后可解析且无缺陷", find_content_defects(got_json, "package.json") == [])
+
+UNFENCED_MJS = (
+    "File written and verified working (it correctly flags the currently-corrupted `package.json`). Full content below.\n\n"
+    "#!/usr/bin/env node\n"
+    "import path from 'node:path';\n"
+    "console.log(path.sep);\n"
+)
+got_mjs, _ = strip_code_fences(UNFENCED_MJS, "scripts/verify-files.mjs")
+check("无围栏 MJS: 从 shebang 开始保留", got_mjs.startswith("#!/usr/bin/env node"))
+check("无围栏 MJS: 净化后无缺陷", find_content_defects(got_mjs, "scripts/verify-files.mjs") == [])
+
 print(f"\n=== {len(PASSED)} 通过 / {len(FAILED)} 失败 ===")
 if FAILED:
     for f in FAILED:

@@ -165,6 +165,9 @@ class UEScreenshotAction(ActionBase):
         ]
         cmd_str = " ".join(str(c) for c in cmd)
         await _log(f"[screenshot] cmd: {cmd_str}")
+        from plugins.ue5.command_trace import emit_ue_step, seal_ue_command
+        await emit_ue_step(context, "UE 截图", "start")
+        trace_cwd = str(up.parent)
         await _log(f"[screenshot] 打开 Editor 截关卡视图（30-90s）...")
 
         # 启动进程（线程模式，与 UBT 同方案）
@@ -183,7 +186,14 @@ class UEScreenshotAction(ActionBase):
                 errors="replace",
             )
         except Exception as e:
-            return _err(f"启动 UnrealEditor 异常: {type(e).__name__}: {e!r}")
+            err_detail = f"{type(e).__name__}: {e!r}"
+            return await seal_ue_command(
+                context,
+                _err(f"启动 UnrealEditor 异常: {err_detail}"),
+                source="ue_screenshot", tool="ue-cmd", step_name="UE 截图",
+                command=cmd_str, cwd=trace_cwd, exit_code=-1, status="error",
+                output=err_detail, ok=False, reason="启动 UnrealEditor 异常",
+            )
 
         await _log(f"[screenshot] subprocess pid={proc.pid}")
 
@@ -288,22 +298,33 @@ class UEScreenshotAction(ActionBase):
             except Exception as e:
                 await _log(f"[screenshot] 拷贝失败: {e}")
 
+        output = "\n".join(collected)
         if saved_paths:
-            return ActionResult(
-                success=True,
-                data={
-                    "status": "success",
-                    "screenshots": saved_paths,
-                    "screenshot_count": len(saved_paths),
-                    "duration_ms": duration_ms,
-                    "command": cmd_str,
-                    "engine_used": engine_info.to_dict(),
-                    "message": f"截图 {len(saved_paths)} 张（{duration_ms // 1000}s）",
-                },
+            shot_msg = f"截图 {len(saved_paths)} 张（{duration_ms // 1000}s）"
+            return await seal_ue_command(
+                context,
+                ActionResult(
+                    success=True,
+                    data={
+                        "status": "success",
+                        "screenshots": saved_paths,
+                        "screenshot_count": len(saved_paths),
+                        "duration_ms": duration_ms,
+                        "command": cmd_str,
+                        "engine_used": engine_info.to_dict(),
+                        "message": shot_msg,
+                    },
+                    message=shot_msg,
+                ),
+                source="ue_screenshot", tool="ue-cmd", step_name="UE 截图",
+                command=cmd_str, cwd=trace_cwd, exit_code=0, status="success",
+                duration_ms=duration_ms, output=output, ok=True,
             )
-        else:
-            await _log("[screenshot] 未找到截图文件（项目可能无默认地图，或 GPU 不可用导致黑屏）")
-            return ActionResult(
+        await _log("[screenshot] 未找到截图文件（项目可能无默认地图，或 GPU 不可用导致黑屏）")
+        miss_msg = "未找到截图，项目可能无默认地图或 GPU 不可用"
+        return await seal_ue_command(
+            context,
+            ActionResult(
                 success=False,
                 data={
                     "status": "no_screenshot",
@@ -312,10 +333,15 @@ class UEScreenshotAction(ActionBase):
                     "duration_ms": duration_ms,
                     "command": cmd_str,
                     "engine_used": engine_info.to_dict(),
-                    "message": "未找到截图，项目可能无默认地图或 GPU 不可用",
+                    "message": miss_msg,
                     "partial_log": "\n".join(collected[-30:]),
                 },
-            )
+                message=miss_msg,
+            ),
+            source="ue_screenshot", tool="ue-cmd", step_name="UE 截图",
+            command=cmd_str, cwd=trace_cwd, exit_code=1, status="error",
+            duration_ms=duration_ms, output=output, ok=False, reason=miss_msg,
+        )
 
 
 def _err(msg: str) -> ActionResult:

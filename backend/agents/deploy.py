@@ -79,6 +79,19 @@ class DeployAgent(BaseAgent):
         if isinstance(result, dict) and result.get("error"):
             return {"status": "error", "message": result["error"]}
 
+        # 对 Web/H5 项目同时确保本地 dev 预览服务已启动并指向最新构建产物，供时间轴展示「在线试玩/预览链接」
+        preview_url = None
+        if project_id:
+            try:
+                from git_manager import git_manager
+                skip_reason = await self._skip_preview_reason(
+                    project_id, "dev", str(git_manager._repo_path(project_id)),
+                )
+                if not skip_reason:
+                    preview_url = await self.deploy_env(project_id, "dev")
+            except Exception as _pe:
+                logger.debug("run_ci_deploy 启动预览服务跳过: %s", _pe)
+
         # strategy.trigger_build 是异步 fire-and-forget，这里只知道启动结果。
         # 具体成败通过 ci_build_completed SSE 事件后续通知，这里先标 success-pending。
         return {
@@ -87,6 +100,7 @@ class DeployAgent(BaseAgent):
                 "strategy": strategy.name,
                 "build_type": build_type,
                 "build_id": result.get("build_id") if isinstance(result, dict) else None,
+                "preview_url": preview_url,
             },
             "files": {},
         }
@@ -299,34 +313,42 @@ class DeployAgent(BaseAgent):
                     await git_manager._run_git(str(deploy_dir), "checkout", branch)
                     await git_manager._run_git(str(deploy_dir), "pull", "origin", branch)
 
-            # 停掉旧的预览服务
+                # Vite/H5 项目构建产物在 dist/（通常未纳入 git），每次部署强制同步主仓库最新 dist/
+                src_dist = Path(repo_path) / "dist"
+                dst_dist = deploy_dir / "dist"
+                if (src_dist / "index.html").is_file():
+                    try:
+                        if dst_dist.exists():
+                            shutil.rmtree(str(dst_dist), ignore_errors=True)
+                        shutil.copytree(str(src_dist), str(dst_dist), dirs_exist_ok=True)
+                    except Exception as _ce:
+                        logger.debug("复制 dist 到 %s 失败（忽略）: %s", env_type, _ce)
+
+            # 停掉旧的预览服务进程（如有）
             key = (project_id, env_type)
-            old = cls._preview_servers.pop(key, None)  # pop 避免並發競態 KeyError
-            if old:
+            old = cls._preview_servers.pop(key, None)
+            if old and old.get("process"):
                 try:
                     old["process"].terminate()
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(0.2)
                 except Exception:
                     pass
 
-            # 启动 HTTP 预览服务
-            proc = subprocess.Popen(
-                ["python", "-m", "http.server", str(port)],
-                cwd=deploy_path,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            await asyncio.sleep(1)
+            # Vite/H5 打包项目优先服务 dist/ 目录（否则根 index.html 引用 /src/main.ts 浏览器无法直接跑）
+            serve_cwd = deploy_path
+            if (Path(deploy_path) / "dist" / "index.html").is_file():
+                serve_cwd = str(Path(deploy_path) / "dist")
 
-            if proc.poll() is not None:
-                logger.warning("[%s] 预览服务启动失败: 端口 %d 可能被占用", env_type, port)
-                return None
-
-            url = f"http://localhost:{port}"
+            # 直接复用 ADS 后端主服务（8000 端口）内置静态预览路由，不再额外拉起 `python -m http.server <随机端口>` 子进程！
+            # 彻底杜绝：1) Cursor IDE 监听到新端口自动弹出多个内置浏览器 Tab；2) 每次重启 hash 端口漂移导致旧链接失效。
+            port = 8000
+            url = f"http://localhost:8000/api/projects/{project_id}/preview/{env_type}/index.html"
             cls._preview_servers[key] = {
                 "port": port,
-                "process": proc,
+                "process": None,
+                "builtin": True,
                 "deploy_path": deploy_path,
+                "serve_cwd": serve_cwd,
             }
 
             # 获取当前 commit

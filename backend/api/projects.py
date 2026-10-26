@@ -432,13 +432,152 @@ async def upload_docs_to_project(project_id: str, files: List[UploadFile] = File
     }
 
 
+_PROJECT_PREVIEW_CACHE: dict[str, tuple[float, Optional[str]]] = {}
+_PROJECT_PREVIEW_TTL = 60.0
+
+
+async def _attach_project_preview_images(projects: list) -> list:
+    """为项目列表中的每个项目解析最佳预览图 URL（`preview_image` 字段）。
+
+    查找优先级（均采用定向非递归匹配 + 60s 内存缓存，避免扫大盘阻塞）：
+      1. 仓库磁盘上的封面或运行截图（`public/brand/*cover*`、`docs/Reqs/*/*/screenshots/*.png`、
+         `Docs/screenshots/*.png`、`tests/screenshots/*.png`、`screenshots/*.png`、`Saved/AutoScreenshot.png` 等）
+      2. `chat_images/ue_screenshots/<project_id>/*.png`
+      3. 数据库 `tickets.result` / `ticket_logs.detail` 中记录的历史分支截图路径（由 `git/file-raw` 跨分支读取）
+    """
+    import re as _re
+    import time as _time
+    from urllib.parse import quote as _quote
+    from config import BASE_DIR as _BASE_DIR
+
+    now = _time.monotonic()
+    need_db_lookup = any(
+        (p["id"] not in _PROJECT_PREVIEW_CACHE) or (now - _PROJECT_PREVIEW_CACHE[p["id"]][0] > _PROJECT_PREVIEW_TTL)
+        for p in projects
+    )
+
+    db_shot_map: dict[str, str] = {}
+    if need_db_lookup:
+        try:
+            shot_re = _re.compile(r"(docs/[^\s\"'\\]+?\.(?:png|jpg|jpeg|webp))", _re.IGNORECASE)
+            t_rows = await db.fetch_all(
+                "SELECT project_id, result FROM tickets WHERE result LIKE '%screenshots%' ORDER BY updated_at DESC"
+            )
+            for r in t_rows or []:
+                pid = r.get("project_id")
+                if not pid or pid in db_shot_map:
+                    continue
+                matches = shot_re.findall(str(r.get("result") or "").replace("\\\\", "/"))
+                if matches:
+                    db_shot_map[pid] = matches[-1]
+
+            l_rows = await db.fetch_all(
+                "SELECT project_id, detail FROM ticket_logs WHERE action IN ('complete', 'accept', 'reject', 'skill_step_done') AND detail LIKE '%screenshots%' ORDER BY created_at DESC LIMIT 400"
+            )
+            for r in l_rows or []:
+                pid = r.get("project_id")
+                if not pid or pid in db_shot_map:
+                    continue
+                matches = shot_re.findall(str(r.get("detail") or "").replace("\\\\", "/"))
+                if matches:
+                    db_shot_map[pid] = matches[-1]
+        except Exception as e:
+            logger.debug("查询项目数据库截图缓存跳过: %s", e)
+
+    disk_patterns = (
+        "public/brand/*cover*.png",
+        "public/brand/*cover*.jpg",
+        "public/brand/*cover*.webp",
+        "docs/Reqs/*/*/screenshots/*.png",
+        "docs/*/*/screenshots/*.png",
+        "docs/*/screenshots/*.png",
+        "Docs/screenshots/*.png",
+        "tests/screenshots/*.png",
+        "screenshots/*.png",
+        "Saved/AutoScreenshot.png",
+        "Saved/Screenshots/*/*.png",
+        "Saved/Automation/Screenshots/*.png",
+        "frontend/src/assets/keyframe-default-first.png",
+    )
+
+    out = []
+    for p in projects:
+        item = dict(p)
+        pid = item.get("id") or ""
+        cached = _PROJECT_PREVIEW_CACHE.get(pid)
+        if cached and (now - cached[0] <= _PROJECT_PREVIEW_TTL):
+            item["preview_image"] = cached[1]
+            out.append(item)
+            continue
+
+        preview_url: Optional[str] = None
+        try:
+            _ensure_git_path(item)
+            rdir_raw = item.get("git_repo_path") or git_manager._repo_path(pid)
+            rdir = Path(str(rdir_raw)) if rdir_raw else None
+            if rdir and rdir.is_dir():
+                candidates: list[Path] = []
+                for pat in disk_patterns:
+                    for m in rdir.glob(pat):
+                        try:
+                            if m.is_file() and not m.name.startswith("_tmp_") and m.stat().st_size > 1500:
+                                candidates.append(m)
+                        except OSError:
+                            continue
+                    if candidates:
+                        break
+                if candidates:
+                    # 选最新修改的一张截图
+                    best = max(candidates, key=lambda f: f.stat().st_mtime)
+                    rel_posix = best.relative_to(rdir).as_posix()
+                    preview_url = f"/api/projects/{pid}/git/file-raw?path={_quote(rel_posix)}"
+
+            if not preview_url:
+                ue_shot_dir = _BASE_DIR / "chat_images" / "ue_screenshots" / pid
+                if ue_shot_dir.is_dir():
+                    ue_pngs = [f for f in ue_shot_dir.glob("*.png") if f.is_file() and f.stat().st_size > 1500]
+                    if ue_pngs:
+                        best_ue = max(ue_pngs, key=lambda f: f.stat().st_mtime)
+                        preview_url = f"/api/projects/{pid}/screenshots/{_quote(best_ue.name)}"
+
+            if not preview_url and pid in db_shot_map:
+                rel_db = db_shot_map[pid]
+                preview_url = f"/api/projects/{pid}/git/file-raw?path={_quote(rel_db)}"
+
+            # 兜底：若当前工作区在 main 分支而截图提交在 feat/develop 分支，对普通体量 Git 仓库快速查最近提交里的 screenshots/*.png
+            if not preview_url and rdir and (rdir / ".git").is_dir() and not (rdir / "Engine").is_dir():
+                import subprocess as _sp
+                try:
+                    gr = _sp.run(
+                        ["git", "log", "--all", "-n", "15", "--pretty=format:", "--name-only", "--", "*screenshots/*.png"],
+                        cwd=str(rdir), capture_output=True, text=True, timeout=0.8,
+                    )
+                    if gr.returncode == 0 and gr.stdout:
+                        for ln in gr.stdout.splitlines():
+                            s = ln.strip().replace("\\", "/")
+                            if s and "placeholder" not in s:
+                                preview_url = f"/api/projects/{pid}/git/file-raw?path={_quote(s)}"
+                                break
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.debug("解析项目 %s 预览图失败（忽略）: %s", pid, e)
+
+        _PROJECT_PREVIEW_CACHE[pid] = (now, preview_url)
+        item["preview_image"] = preview_url
+        out.append(item)
+
+    return out
+
+
 @router.get("")
 async def list_projects():
-    """获取项目列表"""
+    """获取项目列表（附带自动解析的项目预览图 `preview_image`）"""
     projects = await db.fetch_all(
         "SELECT * FROM projects WHERE id != '__global__' ORDER BY created_at DESC"
     )
-    return {"projects": projects, "total": len(projects)}
+    enriched = await _attach_project_preview_images(projects)
+    return {"projects": enriched, "total": len(enriched)}
 
 
 @router.get("/{project_id}")
@@ -1058,21 +1197,62 @@ async def get_project_screenshot(project_id: str, filename: str):
 
 
 @router.get("/{project_id}/git/file-raw")
-async def get_git_file_raw(project_id: str, path: str):
-    """读取仓库中的二进制文件（图片等）"""
-    from fastapi.responses import FileResponse as FR
+async def get_git_file_raw(project_id: str, path: str, branch: str = None):
+    """读取仓库中的二进制文件（图片等）：先读磁盘工作区，若切了分支磁盘没有则从 git 对象库读取"""
+    import mimetypes
+    import subprocess as _sp
+    from fastapi.responses import FileResponse as FR, Response
     project = await db.fetch_one("SELECT * FROM projects WHERE id = ?", (project_id,))
     if not project:
         raise HTTPException(404, "项目不存在")
     _ensure_git_path(project)
-    resolved = await git_manager.resolve_file_path(project_id, path)
-    if not resolved:
-        raise HTTPException(404, "文件不存在")
     repo_dir = git_manager._repo_path(project_id)
+
+    # 若传入了绝对路径且位于仓库内，自动转为相对路径
+    norm_path = str(path or "").replace("\\", "/")
+    repo_posix = str(repo_dir).replace("\\", "/").rstrip("/") + "/"
+    if norm_path.lower().startswith(repo_posix.lower()):
+        norm_path = norm_path[len(repo_posix):]
+
+    resolved = await git_manager.resolve_file_path(project_id, norm_path, branch=branch)
+    if not resolved:
+        resolved = norm_path.lstrip("/")
     file_path = repo_dir.joinpath(*resolved.split("/"))
-    if not file_path.is_file():
-        raise HTTPException(404, "文件不存在")
-    return FR(str(file_path))
+    if file_path.is_file():
+        return FR(str(file_path))
+
+    # 磁盘当前分支没有该文件（例如已切到新 feat 分支）：从指定分支或所有本地分支的 git 对象库读取二进制字节
+    mime_type, _ = mimetypes.guess_type(resolved)
+    media_type = mime_type or "application/octet-stream"
+    refs_to_try = [branch] if branch else []
+    refs_to_try.extend(["HEAD", "develop", "main", "master"])
+    try:
+        br_res = _sp.run(
+            ["git", "for-each-ref", "--format=%(refname:short)", "refs/heads/"],
+            cwd=str(repo_dir), capture_output=True, text=True, timeout=5,
+        )
+        if br_res.returncode == 0:
+            for b in br_res.stdout.splitlines():
+                b = b.strip()
+                if b and b not in refs_to_try:
+                    refs_to_try.append(b)
+    except Exception:
+        pass
+
+    for ref in refs_to_try:
+        if not ref:
+            continue
+        try:
+            r = _sp.run(
+                ["git", "show", f"{ref}:{resolved}"],
+                cwd=str(repo_dir), capture_output=True, timeout=10,
+            )
+            if r.returncode == 0 and r.stdout:
+                return Response(content=r.stdout, media_type=media_type)
+        except Exception:
+            continue
+
+    raise HTTPException(404, "文件不存在")
 
 
 @router.get("/{project_id}/git/diff")
@@ -1122,17 +1302,26 @@ async def get_project_environments(project_id: str):
     result = []
     for env_type in ("dev", "test", "prod"):
         env = env_map.get(env_type, {})
-        # 检查进程是否真的还在运行
+        deploy_path = env.get("deploy_path", "")
+        has_builtin_files = bool(
+            deploy_path
+            and _Path(deploy_path).is_dir()
+            and (
+                (_Path(deploy_path) / "dist" / "index.html").is_file()
+                or (_Path(deploy_path) / "index.html").is_file()
+            )
+        )
+        # 检查进程是否真的还在运行（或内置静态预览目录已就绪）
         key = (project_id, env_type)
-        actually_running = key in DeployAgent._preview_servers
+        actually_running = (key in DeployAgent._preview_servers) or (
+            env.get("status") == "running" and has_builtin_files
+        )
         status = "running" if actually_running else "inactive"
         if env.get("status") == "running" and not actually_running:
             await db.execute(
                 "UPDATE project_environments SET status = 'inactive' WHERE project_id = ? AND env_type = ?",
                 (project_id, env_type),
             )
-
-        deploy_path = env.get("deploy_path", "")
         db_branch = env.get("branch", "")
         actual_branch = ""
         sync_note = ""   # 同步动作备忘（供前端 toast / 日志）
@@ -1229,6 +1418,53 @@ async def stop_environment(project_id: str, env_type: str):
 
     await DeployAgent.stop_env(project_id, env_type)
     return {"status": "ok", "env_type": env_type}
+
+
+@router.get("/{project_id}/preview/{env_type}")
+async def redirect_project_preview_root(project_id: str, env_type: str):
+    """重定向到内置静态预览入口 index.html"""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url=f"/api/projects/{project_id}/preview/{env_type}/index.html")
+
+
+@router.get("/{project_id}/preview/{env_type}/{asset_path:path}")
+async def serve_project_preview_asset(project_id: str, env_type: str, asset_path: str = "index.html"):
+    """使用 ADS 8000 端口直接托管 Web/H5 项目的 dev/test/prod 静态预览产物（dist/ 或根目录）。
+
+    不再拉起额外的 `python -m http.server <9xxx>` 子进程，彻底避免 Cursor IDE
+    自动监听新端口并弹出多个内置 Simple Browser 标签页。
+    """
+    from fastapi.responses import FileResponse as FR
+    if env_type not in ("dev", "test", "prod"):
+        raise HTTPException(400, "环境类型无效")
+
+    project = await db.fetch_one("SELECT * FROM projects WHERE id = ?", (project_id,))
+    if not project:
+        raise HTTPException(404, "项目不存在")
+    _ensure_git_path(project)
+
+    repo_path = str(git_manager._repo_path(project_id))
+    deploy_dir = Path(repo_path) if env_type == "dev" else Path(f"{repo_path}_{env_type}")
+    if not deploy_dir.is_dir():
+        deploy_dir = Path(repo_path)
+
+    serve_root = (deploy_dir / "dist") if (deploy_dir / "dist" / "index.html").is_file() else deploy_dir
+    rel = (asset_path or "index.html").strip().lstrip("/").replace("\\", "/")
+    if not rel or ".." in rel.split("/"):
+        rel = "index.html"
+
+    target = (serve_root / rel).resolve()
+    try:
+        target.relative_to(serve_root.resolve())
+    except ValueError:
+        raise HTTPException(403, "非法路径")
+
+    if target.is_dir():
+        target = target / "index.html"
+    if not target.is_file():
+        raise HTTPException(404, f"预览资源不存在: {rel}")
+
+    return FR(str(target))
 
 
 @router.post("/detect-local")

@@ -3,17 +3,20 @@
 对着 git 仓库跑，不另开 DATA_DIR 沙箱，不常驻 Vite。
 build 失败或页面 JS 异常 → status=playtest_failed（SOP reject_goto）。
 缺 Node / 缺 index.html → status=error。
-未装 Playwright 时 build 通过也算过，带 runtime_skipped 警告。
+缺 Playwright / Chromium 时先自动安装，安装失败才 runtime_skipped。
 """
 from __future__ import annotations
 
 import asyncio
 import http.server
+import json
 import logging
 import os
+import shlex
 import shutil
 import socket
 import socketserver
+import sys
 import threading
 import time
 from pathlib import Path
@@ -33,6 +36,220 @@ _CONSOLE_NOISE = (
 def is_runtime_noise(msg: str) -> bool:
     text = msg or ""
     return any(p in text for p in _CONSOLE_NOISE)
+
+
+_MISSING_BROWSER_NEEDLES = (
+    "executable doesn't exist",
+    "browsertype.launch",
+    "winerror 2",
+    "系统找不到指定的文件",
+    "playwright was not found",
+    "browser has not been found",
+)
+
+
+def is_missing_browser(exc: BaseException) -> bool:
+    """Playwright 驱动/Chromium 未装：环境问题，不能当成游戏试玩失败。"""
+    if isinstance(exc, FileNotFoundError):
+        return True
+    err = (str(exc) or "").lower()
+    return any(n in err for n in _MISSING_BROWSER_NEEDLES)
+
+
+def playwright_driver_ok() -> bool:
+    try:
+        from playwright._impl._driver import compute_driver_executable
+        node, cli = compute_driver_executable()
+        return Path(node).is_file() and Path(cli).is_file()
+    except Exception:
+        return False
+
+
+def _trace_from_context(context: Dict[str, Any]) -> Dict[str, str]:
+    return {
+        "ticket_id": str(context.get("ticket_id") or ""),
+        "project_id": str(context.get("project_id") or ""),
+        "requirement_id": str(context.get("requirement_id") or ""),
+        "agent_type": str(context.get("agent_type") or "TestAgent"),
+    }
+
+
+def _cmd_line(cmd: List[str]) -> str:
+    return " ".join(shlex.quote(str(c)) for c in cmd)
+
+
+async def _emit_ticket_step(
+    trace: Optional[Dict[str, Any]],
+    step_name: str,
+    phase: str,
+    *,
+    duration_ms: int = 0,
+    reason: str = "",
+    task_id: str = "",
+) -> str:
+    """安装/构建步骤写到工单时间轴（skill_step_*），完成时可挂 task_id。"""
+    ticket_id = (trace or {}).get("ticket_id") or ""
+    project_id = (trace or {}).get("project_id") or ""
+    if not ticket_id:
+        return ""
+    try:
+        from database import db
+        from events import event_manager
+        from utils import generate_id, now_iso
+
+        action = f"skill_step_{phase}" if phase in ("start", "done", "error") else "skill_step_done"
+        log_id = generate_id("LOG")
+        created_at = now_iso()
+        if phase == "start":
+            message = f"{step_name} · 开始"
+            level = "info"
+        elif phase == "done":
+            dur_str = f" ({int(duration_ms)}ms)" if duration_ms else ""
+            message = f"{step_name} · 完成{dur_str}"
+            level = "info"
+        else:
+            dur_str = f" ({int(duration_ms)}ms)" if duration_ms else ""
+            message = f"{step_name} · 失败{dur_str}"
+            if reason:
+                message += f" — {reason[:120]}"
+            level = "error"
+
+        detail_obj: Dict[str, Any] = {
+            "message": message,
+            "step_name": step_name,
+            "phase": phase,
+            "duration_ms": duration_ms,
+            "reason": reason,
+        }
+        if task_id:
+            detail_obj["task_id"] = task_id
+        detail_json = json.dumps(detail_obj, ensure_ascii=False)
+
+        await db.execute(
+            "INSERT INTO ticket_logs "
+            "(id, ticket_id, requirement_id, project_id, agent_type, action, detail, level, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (log_id, ticket_id, (trace or {}).get("requirement_id"),
+             project_id or "__global__", (trace or {}).get("agent_type") or "TestAgent",
+             action, detail_json, level, created_at),
+        )
+        if project_id:
+            await event_manager.publish_to_project(project_id, "log_added", {
+                "id": log_id, "ticket_id": ticket_id,
+                "agent_type": (trace or {}).get("agent_type") or "TestAgent",
+                "action": action, "detail": detail_json, "level": level,
+                "created_at": created_at,
+                "_task_ref": task_id or "",
+            })
+        return log_id
+    except Exception as e:
+        logger.debug("h5 步骤打点失败（非致命）: %s", e)
+        return ""
+
+
+async def run_and_trace(
+    cmd: List[str],
+    cwd: Path,
+    timeout: int,
+    *,
+    tool: str,
+    trace: Optional[Dict[str, Any]] = None,
+) -> Tuple[int, str, str]:
+    """跑命令，有工单时写入时间轴 + ticket_command_log（可点「📟 后台记录」）。"""
+    t0 = time.monotonic()
+    code, raw = await run_cmd(cmd, cwd, timeout)
+    record_id = ""
+    ticket_id = (trace or {}).get("ticket_id") or ""
+    if ticket_id:
+        status = "timeout" if code == 124 else ("error" if code != 0 else "success")
+        try:
+            from command_log import record_traced_command
+            record_id = await record_traced_command(
+                source="h5_playtest",
+                tool=tool,
+                command=_cmd_line(cmd),
+                cwd=str(cwd),
+                exit_code=code,
+                status=status,
+                duration_ms=_ms(t0),
+                output=raw,
+                ticket_id=ticket_id,
+                project_id=(trace or {}).get("project_id") or "",
+                requirement_id=(trace or {}).get("requirement_id") or "",
+                agent_type=(trace or {}).get("agent_type") or "TestAgent",
+            )
+        except Exception as e:
+            logger.debug("h5 命令记录失败（非致命）: %s", e)
+    return code, raw, record_id
+
+
+async def ensure_playwright_chromium(
+    timeout: int = 300,
+    trace: Optional[Dict[str, Any]] = None,
+) -> Tuple[bool, str]:
+    """缺包或缺 Chromium 时当场装。成功返回 (True, 备注)。
+
+    真要装的时候打 skill_step，每条 pip / playwright 命令进时间轴和任务 Log。
+    """
+    py = sys.executable
+    cwd = Path.cwd()
+    steps: List[str] = []
+    needed = False
+    last_rid = ""
+    t0 = time.monotonic()
+
+    try:
+        import playwright  # noqa: F401
+    except ImportError:
+        needed = True
+        steps.append("pip install playwright")
+        await _emit_ticket_step(trace, "自动安装 Playwright Chromium", "start")
+        code, raw, last_rid = await run_and_trace(
+            [py, "-m", "pip", "install", "playwright"], cwd, timeout,
+            tool="pip:playwright", trace=trace,
+        )
+        if code != 0:
+            await _emit_ticket_step(
+                trace, "自动安装 Playwright Chromium", "error",
+                duration_ms=_ms(t0), reason=raw[-160:], task_id=last_rid,
+            )
+            return False, f"pip install playwright 失败: {raw[-300:]}"
+
+    if not playwright_driver_ok():
+        if not needed:
+            await _emit_ticket_step(trace, "自动安装 Playwright Chromium", "start")
+        needed = True
+        steps.append("pip install --force-reinstall playwright")
+        code, raw, last_rid = await run_and_trace(
+            [py, "-m", "pip", "install", "--force-reinstall", "playwright"],
+            cwd, timeout, tool="pip:playwright-reinstall", trace=trace,
+        )
+        if code != 0 or not playwright_driver_ok():
+            await _emit_ticket_step(
+                trace, "自动安装 Playwright Chromium", "error",
+                duration_ms=_ms(t0), reason=raw[-160:], task_id=last_rid,
+            )
+            return False, f"playwright driver 缺失: {raw[-300:]}"
+
+    steps.append("playwright install chromium")
+    logger.info("h5_playtest 自动安装 Chromium…")
+    chrom_cmd = [py, "-m", "playwright", "install", "chromium"]
+    code, raw, last_rid = await run_and_trace(
+        chrom_cmd, cwd, timeout, tool="playwright:install-chromium", trace=trace,
+    )
+    if code != 0:
+        if needed:
+            await _emit_ticket_step(
+                trace, "自动安装 Playwright Chromium", "error",
+                duration_ms=_ms(t0), reason=raw[-160:], task_id=last_rid,
+            )
+        return False, f"playwright install chromium 失败: {raw[-400:]}"
+    if needed:
+        await _emit_ticket_step(
+            trace, "自动安装 Playwright Chromium", "done",
+            duration_ms=_ms(t0), task_id=last_rid,
+        )
+    return True, "；".join(steps)
 
 
 def resolve_bin(repo: Path, name: str) -> Optional[List[str]]:
@@ -95,11 +312,21 @@ async def browse_and_collect(
     *,
     observe_ms: int = 3000,
     screenshot: Optional[Path] = None,
+    auto_install: bool = True,
+    trace: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """打开页面，收集 pageerror / console.error。未装 Playwright 返回 skipped。"""
+    """打开页面，收集 pageerror / console.error。缺浏览器时先自动安装再试一次。"""
     try:
         from playwright.async_api import async_playwright
     except ImportError:
+        if auto_install:
+            ok, msg = await ensure_playwright_chromium(trace=trace)
+            if ok:
+                return await browse_and_collect(
+                    url, observe_ms=observe_ms, screenshot=screenshot,
+                    auto_install=False, trace=trace,
+                )
+            return {"skipped": True, "reason": f"自动安装 Playwright 失败: {msg}"}
         return {"skipped": True, "reason": "playwright 未安装"}
 
     errors: List[Dict[str, str]] = []
@@ -114,10 +341,13 @@ async def browse_and_collect(
             }))
 
             def _on_console(msg: Any) -> None:
-                text = msg.text()
-                if msg.type == "error" and not is_runtime_noise(text):
+                raw_t = getattr(msg, "text", "")
+                text = raw_t() if callable(raw_t) else str(raw_t or "")
+                raw_tp = getattr(msg, "type", "")
+                mtype = raw_tp() if callable(raw_tp) else str(raw_tp or "")
+                if mtype == "error" and not is_runtime_noise(text):
                     errors.append({"source": "console.error", "msg": text})
-                elif msg.type == "warning" and not is_runtime_noise(text):
+                elif mtype == "warning" and not is_runtime_noise(text):
                     warnings.append(text)
 
             page.on("console", _on_console)
@@ -132,7 +362,15 @@ async def browse_and_collect(
             await browser.close()
     except Exception as e:
         err = str(e)
-        if "Executable doesn't exist" in err or "browserType.launch" in err:
+        if is_missing_browser(e) and auto_install:
+            ok, msg = await ensure_playwright_chromium(trace=trace)
+            if ok:
+                return await browse_and_collect(
+                    url, observe_ms=observe_ms, screenshot=screenshot,
+                    auto_install=False, trace=trace,
+                )
+            return {"skipped": True, "reason": f"自动安装 Playwright 失败: {msg}；原错误: {err[:160]}"}
+        if is_missing_browser(e):
             return {"skipped": True, "reason": f"Playwright 浏览器未安装: {err[:200]}"}
         return {
             "skipped": False,
@@ -174,14 +412,24 @@ class H5PlaytestAction(ActionBase):
         observe_ms = int(sop.get("observe_ms") or context.get("observe_ms") or 3000)
         t0 = time.monotonic()
         notes: List[str] = []
+        trace = _trace_from_context(context)
 
         npm = resolve_bin(root, "npm")
         if not (root / "node_modules").is_dir():
             if not npm:
                 return _env("找不到 npm，请安装 Node.js")
             notes.append("node_modules 缺失，执行 npm install")
-            code, raw = await run_cmd(npm + ["install"], root, min(timeout, 180))
+            inst_t0 = time.monotonic()
+            await _emit_ticket_step(trace, "安装 npm 依赖", "start")
+            code, raw, rid = await run_and_trace(
+                npm + ["install"], root, min(timeout, 180),
+                tool="npm:install", trace=trace,
+            )
             if code != 0:
+                await _emit_ticket_step(
+                    trace, "安装 npm 依赖", "error",
+                    duration_ms=_ms(inst_t0), reason=raw[-160:], task_id=rid,
+                )
                 return _fail(
                     "npm install 失败",
                     errors=[{"source": "npm", "msg": raw[-500:]}],
@@ -189,13 +437,21 @@ class H5PlaytestAction(ActionBase):
                     raw_tail=raw[-4000:],
                     duration_ms=_ms(t0),
                     notes=notes,
+                    task_id=rid,
                 )
+            await _emit_ticket_step(
+                trace, "安装 npm 依赖", "done",
+                duration_ms=_ms(inst_t0), task_id=rid,
+            )
 
         vite = resolve_bin(root, "vite")
         if not vite:
             return _env("找不到 vite，请在仓库执行 npm install")
         build_cmd = vite + ["build"]
-        code, raw = await run_cmd(build_cmd, root, min(timeout, 120))
+        code, raw, _rid = await run_and_trace(
+            build_cmd, root, min(timeout, 120),
+            tool="vite:build", trace=trace,
+        )
         if code != 0:
             return _fail(
                 "vite build 失败",
@@ -204,6 +460,7 @@ class H5PlaytestAction(ActionBase):
                 raw_tail=raw[-4000:],
                 duration_ms=_ms(t0),
                 notes=notes,
+                task_id=_rid,
             )
         notes.append("vite build 通过")
 
@@ -216,6 +473,7 @@ class H5PlaytestAction(ActionBase):
                 raw_tail=raw[-2000:],
                 duration_ms=_ms(t0),
                 notes=notes,
+                task_id=_rid,
             )
 
         port = pick_free_port()
@@ -227,21 +485,38 @@ class H5PlaytestAction(ActionBase):
             shot = root / docs_prefix / "screenshots" / "h5_playtest.png"
         screenshots: List[str] = []
         try:
-            runtime = await browse_and_collect(url, observe_ms=observe_ms, screenshot=shot)
+            runtime = await browse_and_collect(
+                url, observe_ms=observe_ms, screenshot=shot, trace=trace,
+            )
         finally:
             httpd.shutdown()
             httpd.server_close()
 
         if shot and shot.is_file():
-            screenshots.append(shot.as_posix())
+            try:
+                screenshots.append(shot.relative_to(root).as_posix())
+            except Exception:
+                screenshots.append(shot.as_posix())
+
+        # 若上下文含 project_id，顺手刷新常驻 dev 预览服务（指向 dist/），让时间轴上的「🎮 在线试玩」链接随时可点开
+        preview_url = ""
+        project_id = str(context.get("project_id") or "")
+        if project_id:
+            try:
+                from agents.deploy import DeployAgent
+                preview_url = await DeployAgent.deploy_env(project_id, "dev") or ""
+            except Exception:
+                pass
 
         data: Dict[str, Any] = {
-            "command": build_cmd,
+            "command": _cmd_line(build_cmd),
             "duration_ms": _ms(t0),
-            "url": url,
+            "url": preview_url or url,
+            "preview_url": preview_url,
             "notes": notes,
             "screenshots": screenshots,
             "raw_tail": raw[-2000:],
+            "task_id": _rid,
         }
 
         if runtime.get("skipped"):
@@ -301,20 +576,23 @@ def _fail(
     msg: str,
     *,
     errors: List[Dict[str, Any]],
-    command: List[str],
+    command: Any,
     raw_tail: str,
     duration_ms: int,
     notes: List[str],
+    task_id: str = "",
 ) -> ActionResult:
+    cmd_str = _cmd_line(command) if isinstance(command, list) else str(command or "")
     return ActionResult(
         success=False,
         data={
             "status": "playtest_failed",
             "errors": errors,
-            "command": command,
+            "command": cmd_str,
             "raw_tail": raw_tail,
             "duration_ms": duration_ms,
             "notes": notes,
+            "task_id": task_id,
         },
         message=msg,
         error=msg,

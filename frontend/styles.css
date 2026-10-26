@@ -322,6 +322,8 @@ body.shell-project .main-container {
 }
 
 .project-card {
+    position: relative;
+    overflow: hidden;
     background: var(--bg-card);
     border: 1px solid var(--border);
     border-radius: var(--radius);
@@ -335,6 +337,65 @@ body.shell-project .main-container {
     border-color: var(--primary);
     transform: translateY(-2px);
     box-shadow: 0 4px 20px rgba(79, 70, 229, 0.15);
+}
+.project-card-bg {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    overflow: hidden;
+    border-radius: inherit;
+}
+.project-card-bg img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center;
+    transform: scale(1.08);
+    filter: blur(3px) saturate(1.12) brightness(0.8);
+    transition: transform 0.35s ease, filter 0.35s ease;
+}
+.project-card.has-preview-bg:hover .project-card-bg img {
+    transform: scale(1.14);
+    filter: blur(1.5px) saturate(1.16) brightness(0.9);
+}
+.project-card-glass {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+        165deg,
+        rgba(15, 23, 42, 0.42) 0%,
+        rgba(15, 23, 42, 0.62) 55%,
+        rgba(10, 15, 30, 0.78) 100%
+    );
+    backdrop-filter: blur(4px) saturate(130%);
+    -webkit-backdrop-filter: blur(4px) saturate(130%);
+}
+.project-card-content {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+}
+.project-card.has-preview-bg h3 {
+    color: #f8fafc;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, 0.65);
+}
+.project-card.has-preview-bg p {
+    color: rgba(226, 232, 240, 0.9);
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.55);
+}
+.project-card.has-preview-bg .project-trait-badge,
+.project-card.has-preview-bg .project-card-hero-icon {
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.28);
+}
+.project-card.has-preview-bg .stat-item {
+    color: rgba(203, 213, 225, 0.92);
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
 }
 .project-card-head {
     display: flex;
@@ -533,7 +594,7 @@ body.shell-project .main-container {
 
 .project-layout {
     display: grid;
-    grid-template-columns: var(--sidebar-width) 1fr var(--right-workbench-width, 0px);
+    grid-template-columns: var(--sidebar-width) minmax(0, 1fr) var(--right-workbench-width, 0px);
     grid-template-rows: 1fr;
     height: var(--app-stage-height);
     max-height: var(--app-stage-height);
@@ -542,7 +603,7 @@ body.shell-project .main-container {
 }
 .project-layout.sidebar-collapsed {
     /* 收起后不留左侧窄轨，主区吃满；展开按钮进内容区标题栏 */
-    grid-template-columns: 0px 1fr var(--right-workbench-width, 0px);
+    grid-template-columns: 0px minmax(0, 1fr) var(--right-workbench-width, 0px);
 }
 .project-layout.right-open {
     --right-workbench-width: var(--ads-right-width, 520px);
@@ -565,6 +626,7 @@ body.chat-open.shell-project #projectListPage {
     grid-row: 1;
     display: flex;
     flex-direction: column;
+    min-width: 0;
     min-height: 0;
     overflow: hidden;
     position: relative;
@@ -963,6 +1025,7 @@ body.shell-project.has-docked-drawer .main-container {
     overflow-x: auto;    /* 允许横向滚动条，不能 hidden */
     padding: 20px;
     padding-bottom: 28px;
+    min-width: 0;
     min-height: 0;
     display: flex;
     flex-direction: column;
@@ -1045,13 +1108,48 @@ body.shell-project .board-filters .btn-sm {
        某个 tab 的标题真正钉在顶部，就在那个 tab 内自己套 sticky wrapper
        （参考 chat-trace 的 .chat-trace-sticky）。 */
     overflow-y: auto;
-    overflow-x: hidden;
+    overflow-x: auto;
     /* 抵消外层 .content-area padding-right:20px（styles.css:799），
        滚动条紧贴内容区右边缘，不再多出一条 20px 暗色带；
        padding-right 补回来让 tab 内容宽度不变 */
     margin-right: -20px;
     padding-right: 20px;
     scrollbar-gutter: stable;
+}
+
+/* 工单看板 Tab：独立固定顶部筛选栏 + 底部常驻横向滚动条，任何垂直位置都能直接左右拉动看板 */
+#tab-board.tab-content.active:not(.ws-hidden) {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding-bottom: 4px;
+}
+#tab-board > .board-header {
+    flex-shrink: 0;
+}
+#tab-board > .board {
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+    min-width: 0;
+    overflow-x: auto;
+    overflow-y: auto;
+    padding-bottom: 10px;
+}
+#tab-board > .board::-webkit-scrollbar {
+    height: 10px;
+    width: 6px;
+}
+#tab-board > .board::-webkit-scrollbar-track {
+    background: rgba(15, 23, 42, 0.45);
+    border-radius: 5px;
+}
+#tab-board > .board::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, 0.45);
+    border-radius: 5px;
+}
+#tab-board > .board::-webkit-scrollbar-thumb:hover {
+    background: rgba(148, 163, 184, 0.75);
 }
 /* 有工作区文档时隐藏页面并锁滚动；标题栏常驻时同样顶对齐 */
 .content-area.ws-doc-active {
@@ -1146,7 +1244,9 @@ body.shell-project .main-ws-tabbar,
     display: none;
     flex: 1;
     flex-direction: column;
+    min-width: 0;
     min-height: 0;
+    overflow: hidden;
     margin: 0 -20px -28px;
     background: var(--bg);
 }
@@ -1266,12 +1366,52 @@ body.shell-project .main-ws-tabbar,
     min-height: 0;
 }
 .main-ws-tree-head {
-    padding: 8px 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 10px 6px 12px;
     font-size: 11px;
     font-weight: 600;
     color: var(--text-muted);
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
+}
+.main-ws-tree-refresh-btn {
+    width: 22px;
+    height: 22px;
+    font-size: 13px;
+    line-height: 1;
+    color: var(--text-muted);
+    border-radius: 4px;
+    cursor: pointer;
+}
+.main-ws-tree-refresh-btn:hover {
+    color: var(--text);
+    background: var(--bg-hover);
+}
+.main-ws-tree-err-box {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 12px;
+}
+.main-ws-tree-retry-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    font-size: 11px;
+    border-radius: 5px;
+    color: var(--text);
+    background: rgba(99, 102, 241, 0.16);
+    border: 1px solid rgba(99, 102, 241, 0.4);
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+.main-ws-tree-retry-btn:hover {
+    background: rgba(99, 102, 241, 0.28);
+    border-color: rgba(99, 102, 241, 0.7);
 }
 .main-ws-tree-list {
     flex: 1;
@@ -1624,13 +1764,12 @@ body.shell-project .main-ws-tabbar,
 }
 
 .board-column {
-    flex: 1 1 0;
-    min-width: 160px;     /* Dock drawer + AI 助手都开时 6 列也能挤进来；空间够时仍均分 */
+    flex: 1 0 185px;
+    min-width: 185px;     /* 5 列至少 973px，右侧面板展开时自动出现底部水平滚动条；宽屏下仍靠 flex-grow:1 均分 */
     background: var(--bg-elevated);
     border-radius: var(--radius);
     display: flex;
     flex-direction: column;
-    /* 所有列靠 flex:1 1 0 均分父容器宽度，不管有无工单都等宽 */
 }
 .board-column-blocked {
     background: rgba(220, 38, 38, 0.06);
@@ -2514,6 +2653,20 @@ body.shell-project .main-ws-tabbar,
     color: var(--primary, #7c6af7);
     background: rgba(124, 106, 247, 0.12);
 }
+.log-task-link.log-task-btn {
+    opacity: .92;
+    padding: 1px 7px;
+    border-radius: 4px;
+    border: 1px solid rgba(124, 106, 247, 0.35);
+    background: rgba(124, 106, 247, 0.10);
+    color: var(--primary, #9b8cf8);
+    font-weight: 500;
+}
+.log-task-link.log-task-btn:hover {
+    opacity: 1;
+    border-color: rgba(124, 106, 247, 0.65);
+    background: rgba(124, 106, 247, 0.22);
+}
 .compile-err-list {
     flex: 1;
     min-width: 0;
@@ -2682,12 +2835,67 @@ body.chat-open .drawer.docked {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 10px;
     padding: 16px 20px;
     border-bottom: 1px solid var(--border);
+}
+.drawer-title-wrap {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    flex: 1;
+    flex-wrap: wrap;
 }
 .drawer-title {
     font-size: 16px;
     font-weight: 600;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.drawer-status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 9px;
+    border-radius: 12px;
+    font-size: 11.5px;
+    font-weight: 500;
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+    flex-shrink: 0;
+    transition: transform 0.12s, background 0.15s, border-color 0.15s;
+}
+.drawer-status-pill:hover {
+    transform: translateY(-1px);
+}
+.drawer-status-pill.is-running {
+    color: #60a5fa;
+    background: rgba(59, 130, 246, 0.15);
+    border: 1px solid rgba(59, 130, 246, 0.45);
+    box-shadow: 0 0 10px rgba(59, 130, 246, 0.15);
+}
+.drawer-status-pill.is-running:hover {
+    background: rgba(59, 130, 246, 0.25);
+    border-color: rgba(59, 130, 246, 0.75);
+}
+.drawer-status-pill.is-error {
+    color: #f87171;
+    background: rgba(239, 68, 68, 0.14);
+    border: 1px solid rgba(239, 68, 68, 0.4);
+}
+.drawer-status-pill.is-done {
+    color: #4ade80;
+    background: rgba(34, 197, 94, 0.14);
+    border: 1px solid rgba(34, 197, 94, 0.4);
+}
+.drawer-status-pill.is-idle {
+    color: var(--text-secondary, #cbd5e1);
+    background: rgba(148, 163, 184, 0.12);
+    border: 1px solid rgba(148, 163, 184, 0.3);
 }
 
 .drawer-body {
@@ -7344,24 +7552,30 @@ body.chat-open .chat-panel {
 
 /* ── 全屏模式 ────────────────────────────────────── */
 /* 全屏时顶栏隐藏，指标条顶置；chrome 占位只留指标条高度，避免退出后「顶端留空」 */
-body.chat-fullscreen {
+body.chat-fullscreen,
+body.ticket-fullscreen {
     --chrome-top: var(--metrics-bar-height);
     --app-stage-height: calc(100vh - var(--metrics-bar-height));
 }
-/* 隐藏其他区域，只留 chat-panel */
+/* 隐藏其他区域，只留全屏面板 */
 body.chat-fullscreen .top-bar,
 body.chat-fullscreen #projectPage > .project-layout,
-body.chat-fullscreen #projectListPage {
+body.chat-fullscreen #projectListPage,
+body.ticket-fullscreen .top-bar,
+body.ticket-fullscreen #projectPage > .project-layout,
+body.ticket-fullscreen #projectListPage {
     display: none !important;
 }
-/* 全屏模式下强制隐藏工单抽屉和遮罩 */
+/* 聊天全屏模式下强制隐藏工单抽屉和遮罩 */
 body.chat-fullscreen .drawer,
-body.chat-fullscreen .drawer-overlay {
+body.chat-fullscreen .drawer-overlay,
+body.ticket-fullscreen .drawer-overlay {
     display: none !important;
 }
 
-body.chat-fullscreen .chat-panel {
-    /* 必须 fixed：壳层里曾设 relative，全屏时 chat 已挪到 body */
+body.chat-fullscreen .chat-panel,
+body.ticket-fullscreen #ticketDrawer {
+    /* 必须 fixed：壳层里曾设 relative，全屏时面板已挪到 body */
     position: fixed !important;
     left: 0 !important;
     right: 0 !important;
@@ -7378,25 +7592,37 @@ body.chat-fullscreen .chat-panel {
     z-index: 150 !important;
 }
 /* 全屏时显示关闭钮（壳层工作台内默认隐藏） */
-body.chat-fullscreen #chatPanelCloseBtn {
+body.chat-fullscreen #chatPanelCloseBtn,
+body.ticket-fullscreen #drawerCloseBtn {
     display: inline-flex !important;
 }
+body.ticket-fullscreen #drawerDockBtn,
+body.ticket-fullscreen .drawer-resize-handle {
+    display: none !important;
+}
+body.ticket-fullscreen #ticketDrawer > .drawer-body {
+    max-width: 1120px;
+    width: 100%;
+    margin: 0 auto;
+    box-sizing: border-box;
+}
 
-/* 全屏时 metrics-bar 顶置，z-index 高于 chat-panel */
-body.chat-fullscreen .metrics-bar {
+/* 全屏时 metrics-bar 顶置，z-index 高于全屏面板 */
+body.chat-fullscreen .metrics-bar,
+body.ticket-fullscreen .metrics-bar {
     top: 0 !important;
     z-index: 200;
 }
 
 /* 非全屏：强制顶栏可见、指标条回到顶栏下方（防止全屏残留导致顶端留空） */
-body:not(.chat-fullscreen) .top-bar {
+body:not(.chat-fullscreen):not(.ticket-fullscreen) .top-bar {
     display: flex !important;
     top: 0 !important;
     height: var(--topbar-height) !important;
     z-index: 100 !important;
     visibility: visible !important;
 }
-body:not(.chat-fullscreen) .metrics-bar {
+body:not(.chat-fullscreen):not(.ticket-fullscreen) .metrics-bar {
     top: var(--topbar-height) !important;
     z-index: 99 !important;
 }
@@ -12839,6 +13065,24 @@ body.chat-board-left #groupBoardSidebar {
 .timeline-stage.ts-error::before { background: var(--error); }
 .timeline-stage.ts-warn { border-left-color: rgba(245, 158, 11, 0.5); }
 .timeline-stage.ts-warn::before { background: var(--warning, #f59e0b); }
+.timeline-stage.ts-running { border-left-color: rgba(59, 130, 246, 0.7); }
+.timeline-stage.ts-running::before {
+    background: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.25);
+    animation: agent-pulse 1.4s ease-in-out infinite;
+}
+.ts-running-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 7px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 500;
+    color: #60a5fa;
+    background: rgba(59, 130, 246, 0.14);
+    border: 1px solid rgba(59, 130, 246, 0.35);
+}
 .timeline-stage.open { border-left-color: var(--border-light); }
 
 .timeline-stage-header {
@@ -13558,6 +13802,36 @@ body.chat-board-left #groupBoardSidebar {
     color: var(--text-muted);
     border-left: 2px solid var(--border);
 }
+.log-skill-step.step-running,
+.log-item.log-item-running {
+    color: var(--text, #e2e8f0);
+    border-left: 2px solid #3b82f6;
+    background: linear-gradient(90deg, rgba(59, 130, 246, 0.12) 0%, rgba(59, 130, 246, 0.02) 85%);
+    border-radius: 0 6px 6px 0;
+    animation: step-running-glow 2s ease-in-out infinite;
+}
+@keyframes step-running-glow {
+    0%, 100% { border-left-color: #3b82f6; background-color: rgba(59, 130, 246, 0.08); }
+    50%      { border-left-color: #93c5fd; background-color: rgba(59, 130, 246, 0.16); }
+}
+.skill-step-spinner {
+    display: inline-block;
+    color: #60a5fa;
+    font-weight: 700;
+    animation: spin 1.1s linear infinite;
+}
+.skill-step-running-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 0 6px;
+    border-radius: 9px;
+    font-size: 11px;
+    font-weight: 500;
+    color: #60a5fa;
+    background: rgba(59, 130, 246, 0.15);
+    animation: agent-pulse 1.5s ease-in-out infinite;
+}
 .log-skill-step.step-done {
     color: var(--text-secondary);
     border-left: 2px solid var(--success);
@@ -13844,10 +14118,22 @@ body.chat-board-left #groupBoardSidebar {
    ------------------------------------------------------------ */
 #tasksSidePanel.tasks-in-main-ws {
     width: auto !important;
+    max-width: 100%;
     flex: 1;
     flex-shrink: 1;
+    min-width: 0;
     min-height: 0;
+    overflow: hidden;
     border-left: none;
+}
+#tasksSidePanel.tasks-in-main-ws #tasksPanelOutput {
+    min-width: 0;
+    overflow-x: hidden;
+}
+#tasksSidePanel.tasks-in-main-ws .cto-line {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
 }
 /* 主舞台宽得多，列表那栏可以给宽一点的下限 */
 #tasksSidePanel.tasks-in-main-ws #tasksPanelList { min-width: 180px; }
@@ -14555,3 +14841,179 @@ body.chat-board-left #groupBoardSidebar {
 .external-sessions-pane.es-hide-thinking .es-group-item-thinking {
     display: none;
 }
+
+/* ==================== 时间轴图片 / 资产缩略图预览 ==================== */
+.thought-file-chip.thought-image-chip {
+    border-color: rgba(56, 189, 248, 0.35);
+    color: #7dd3fc;
+}
+.thought-file-chip.thought-image-chip:hover {
+    background: rgba(56, 189, 248, 0.14);
+    border-color: rgba(56, 189, 248, 0.65);
+}
+.tl-media-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 8px;
+}
+.tl-media-card {
+    width: 118px;
+    border-radius: 6px;
+    overflow: hidden;
+    background: rgba(15, 23, 42, 0.72);
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    cursor: pointer;
+    transition: transform 0.14s ease, border-color 0.14s ease, box-shadow 0.14s ease;
+    display: flex;
+    flex-direction: column;
+}
+.tl-media-card:hover {
+    transform: translateY(-1px);
+    border-color: rgba(96, 165, 250, 0.7);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+}
+.tl-media-thumb-wrap {
+    position: relative;
+    width: 100%;
+    height: 68px;
+    background: repeating-conic-gradient(rgba(255,255,255,0.04) 0% 25%, rgba(0,0,0,0.2) 0% 50%) 50% / 12px 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+.tl-media-thumb {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+    display: block;
+}
+.tl-media-badge {
+    position: absolute;
+    top: 4px;
+    left: 4px;
+    font-size: 9px;
+    line-height: 1.2;
+    padding: 1px 4px;
+    border-radius: 3px;
+    background: rgba(15, 23, 42, 0.82);
+    color: #cbd5e1;
+    border: 1px solid rgba(148, 163, 184, 0.25);
+    pointer-events: none;
+}
+.tl-media-caption {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px;
+    padding: 3px 6px;
+    font-size: 10px;
+    color: var(--text-muted);
+    background: rgba(15, 23, 42, 0.9);
+    border-top: 1px solid rgba(148, 163, 184, 0.14);
+}
+.tl-media-caption > span:first-child {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+}
+.tl-media-open-hint {
+    font-size: 9px;
+    color: #60a5fa;
+    flex-shrink: 0;
+    opacity: 0.8;
+}
+.tl-media-card:hover .tl-media-open-hint {
+    opacity: 1;
+}
+
+/* ==================== 时间轴测试结果动作条 / 在线试玩 / 检查项徽章 ==================== */
+.tl-test-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-top: 6px;
+}
+.tl-preview-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px;
+    border-radius: 5px;
+    font-size: 11px;
+    font-weight: 500;
+    color: #34d399;
+    background: rgba(16, 185, 129, 0.14);
+    border: 1px solid rgba(52, 211, 153, 0.42);
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease, transform 0.12s ease;
+}
+.tl-preview-btn:hover {
+    background: rgba(16, 185, 129, 0.24);
+    border-color: rgba(52, 211, 153, 0.75);
+    transform: translateY(-1px);
+}
+.tl-preview-url {
+    font-family: monospace;
+    font-size: 10px;
+    color: #a7f3d0;
+    opacity: 0.9;
+}
+.tl-preview-ext {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-size: 10px;
+    color: #93c5fd;
+    background: rgba(59, 130, 246, 0.12);
+    border: 1px solid rgba(96, 165, 250, 0.32);
+    text-decoration: none;
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+.tl-preview-ext:hover {
+    background: rgba(59, 130, 246, 0.24);
+    border-color: rgba(96, 165, 250, 0.65);
+}
+.tl-check-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-top: 6px;
+}
+.tl-check-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 10px;
+    line-height: 1.4;
+}
+.tl-check-pill.ok {
+    color: #86efac;
+    background: rgba(34, 197, 94, 0.1);
+    border: 1px solid rgba(34, 197, 94, 0.28);
+}
+.tl-check-pill.fail {
+    color: #fca5a5;
+    background: rgba(239, 68, 68, 0.12);
+    border: 1px solid rgba(239, 68, 68, 0.35);
+}
+.tl-check-pill small {
+    opacity: 0.75;
+    font-size: 9px;
+}
+.thought-file-chip.thought-report-chip {
+    border-color: rgba(167, 139, 250, 0.4);
+    color: #c4b5fd;
+}
+.thought-file-chip.thought-report-chip:hover {
+    background: rgba(167, 139, 250, 0.16);
+    border-color: rgba(167, 139, 250, 0.7);
+}
+
+

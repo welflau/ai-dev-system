@@ -354,6 +354,127 @@ def get_ads_plugin(plugin_id: str, *, traits: Optional[List[str]] = None) -> Opt
     return info
 
 
+# ==================== 插件级失败反思扩展钩子 ====================
+
+def _find_plugin_reflection_module(failure_type: str) -> Optional[Any]:
+    """扫描 `backend/plugins/<id>/reflection.py`，查找声明了 `HANDLED_FAILURE_TYPES`
+    包含 `failure_type` 的插件反思模块。"""
+    if not failure_type:
+        return None
+    for plugin_dir in iter_plugin_dirs():
+        refl_file = plugin_dir / "reflection.py"
+        if not refl_file.is_file():
+            continue
+        mod_name = f"plugins.{plugin_dir.name}.reflection"
+        try:
+            mod = importlib.import_module(mod_name)
+        except Exception as e:
+            logger.warning("加载插件反思模块失败 %s: %s", mod_name, e)
+            continue
+        handled = getattr(mod, "HANDLED_FAILURE_TYPES", None) or ()
+        if failure_type in handled:
+            return mod
+    return None
+
+
+def is_plugin_failure_type(failure_type: str) -> bool:
+    """判断某个失败状态（如 `h5_typecheck_failed`）是否由插件套件接管反思。"""
+    return _find_plugin_reflection_module(failure_type) is not None
+
+
+def enrich_plugin_fix_context(
+    failure_type: str,
+    reject_detail: Dict[str, Any],
+    context: Dict[str, Any],
+) -> bool:
+    """若插件提供了 `enrich_fix_context(failure_type, reject_detail, context)`，调用它并返回 True。"""
+    mod = _find_plugin_reflection_module(failure_type)
+    if mod is None:
+        return False
+    fn = getattr(mod, "enrich_fix_context", None)
+    if callable(fn):
+        fn(failure_type, reject_detail, context)
+        return True
+    return False
+
+
+def build_plugin_reflection_signal(
+    failure_type: str,
+    context: Dict[str, Any],
+) -> Optional[str]:
+    """若插件提供了 `build_reflection_signal(failure_type, context)`，返回格式化后的失败信号文本。"""
+    mod = _find_plugin_reflection_module(failure_type)
+    if mod is None:
+        return None
+    fn = getattr(mod, "build_reflection_signal", None)
+    if callable(fn):
+        return fn(failure_type, context)
+    return None
+
+
+def apply_plugin_deterministic_fixes(
+    failure_type: str,
+    repo_path: str,
+    compile_errors: List[Dict[str, Any]],
+    existing_code: Dict[str, str],
+) -> Dict[str, str]:
+    """若插件提供了确定性代码自愈函数 `apply_deterministic_fixes`，调用它返回 `{path: fixed_content}`。"""
+    mod = _find_plugin_reflection_module(failure_type)
+    if mod is None:
+        return {}
+    fn = getattr(mod, "apply_deterministic_fixes", None)
+    if callable(fn):
+        return fn(failure_type, repo_path, compile_errors, existing_code) or {}
+    return {}
+
+
+# ==================== 插件级产品验收扩展钩子 ====================
+
+async def build_plugin_acceptance_evidence(
+    context: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """根据项目 `project_traits` 查找激活插件的 `acceptance.py`，调用
+    `build_acceptance_evidence(context)` 派生领域专属的验收证据包与验收准则。"""
+    traits = set(context.get("project_traits") or [])
+    if not traits and context.get("project_id"):
+        try:
+            from database import db
+            proj = await db.fetch_one(
+                "SELECT traits FROM projects WHERE id = ?",
+                (context["project_id"],),
+            )
+            raw_t = (proj or {}).get("traits")
+            if isinstance(raw_t, str) and raw_t.strip():
+                traits = set(json.loads(raw_t))
+            elif isinstance(raw_t, list):
+                traits = set(raw_t)
+        except Exception:
+            pass
+
+    from actions.base import _match_traits
+
+    for plugin_dir in iter_plugin_dirs():
+        acc_file = plugin_dir / "acceptance.py"
+        if not acc_file.is_file():
+            continue
+        p_info = _read_plugin_manifest(plugin_dir)
+        # 若声明了 required_traits 且当前项目 traits 不匹配，则跳过
+        if traits and not _match_traits(p_info.get("required_traits"), traits):
+            continue
+        mod_name = f"plugins.{plugin_dir.name}.acceptance"
+        try:
+            mod = importlib.import_module(mod_name)
+            fn = getattr(mod, "build_acceptance_evidence", None)
+            if callable(fn):
+                res = await fn(context)
+                if isinstance(res, dict) and res:
+                    logger.info("🔌 插件 %s 已注入专属产品验收证据包", plugin_dir.name)
+                    return res
+        except Exception as e:
+            logger.warning("加载/执行插件验收模块失败 %s: %s", mod_name, e)
+    return None
+
+
 def _project_traits(project: Dict[str, Any]) -> set:
     raw = project.get("traits") if isinstance(project, dict) else None
     if isinstance(raw, (list, tuple, set)):
@@ -422,3 +543,6 @@ async def collect_workspace_roots(project: Dict[str, Any]) -> List[Dict[str, Any
                 "message": "" if available else str(item.get("message") or "目录不可用"),
             })
     return roots
+
+
+

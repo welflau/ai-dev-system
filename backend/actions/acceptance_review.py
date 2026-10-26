@@ -84,18 +84,54 @@ class AcceptanceReviewAction(ActionBase):
         screenshot_info = ""
         screenshot_path = ""
         screenshot_data_url: Optional[str] = None
+        from llm_client import get_effective_llm_client
+        eff_client = await get_effective_llm_client()
+        is_cli_mode = getattr(eff_client, "api_format", "") == "cli"
+
         if module in ("frontend", "design", "other") and project_id:
             screenshot_result = await self._run_and_screenshot(project_id, docs_prefix)
             if screenshot_result:
                 screenshot_path = screenshot_result.get("url", "")
-                screenshot_data_url = _load_screenshot_as_data_url(screenshot_path, project_id)
-                if screenshot_data_url:
-                    screenshot_info = "\n\n## 页面运行截图\n**已附带截图作为 vision 输入，请直接观察截图内容判断功能是否实现，不要猜测。**"
+                if is_cli_mode:
+                    screenshot_info = (
+                        f"\n\n## 页面运行状态\n"
+                        f"Playwright 无头浏览器已成功打开页面并完成渲染（截图已归档至 `{screenshot_path}`；"
+                        f"当前评审为纯文本环境，无需也不要尝试用工具去读取该图片文件，请直接结合下方的自动化试玩客观报告与核心代码实现进行验收）。"
+                    )
                 else:
-                    # 截图拍了但读不出来（路径错等）→ 降级到文本描述
-                    screenshot_info = f"\n\n## 页面运行截图\n截图保存在: {screenshot_path}（但 vision 加载失败，本次仅能按代码/文件名判断）"
+                    screenshot_data_url = _load_screenshot_as_data_url(screenshot_path, project_id)
+                    if screenshot_data_url:
+                        screenshot_info = "\n\n## 页面运行截图\n**已附带截图作为 vision 输入，请直接观察截图内容判断功能是否实现，不要猜测。**"
+                    else:
+                        # 截图拍了但读不出来（路径错等）→ 降级到文本描述
+                        screenshot_info = f"\n\n## 页面运行截图\n截图保存在: {screenshot_path}（但 vision 加载失败，本次仅能按代码/文件名判断）"
 
-        # 构建验收上下文（基于效果，不基于代码）
+        # === 插件派生验收能力（如 plugins/h5/acceptance.py）===
+        from plugins.registry import build_plugin_acceptance_evidence
+        plugin_acc = await build_plugin_acceptance_evidence(context)
+        plugin_evidence_md = ""
+        plugin_rules_md = ""
+        if plugin_acc:
+            extra_items = plugin_acc.get("extra_check_items") or []
+            for item in extra_items:
+                if item not in check_items:
+                    check_items = list(check_items) + [item]
+            if plugin_acc.get("evidence_markdown"):
+                plugin_evidence_md = "\n\n" + str(plugin_acc["evidence_markdown"]).strip()
+            if plugin_acc.get("acceptance_rules"):
+                plugin_rules_md = "\n" + str(plugin_acc["acceptance_rules"]).strip()
+        elif is_cli_mode:
+            # 通用兜底：CLI 纯文本模式下若无插件提供代码摘要，也附带关键代码片段避免模型因看不到文件拒审
+            existing_code = context.get("existing_code") or {}
+            if existing_code:
+                snippets = []
+                for fp in (dev_files or list(existing_code.keys()))[:5]:
+                    if fp in existing_code and not fp.startswith("docs/"):
+                        snippets.append(f"### `{fp}`\n```\n{str(existing_code[fp])[:1200]}\n```")
+                if snippets:
+                    plugin_evidence_md = "\n\n## 📄 核心代码实现摘要\n" + "\n\n".join(snippets)
+
+        # 构建验收上下文（基于效果 + 插件客观运行证据）
         checklist = "\n".join(f"  {i+1}. {item}" for i, item in enumerate(check_items))
 
         vision_hint = ""
@@ -113,27 +149,31 @@ class AcceptanceReviewAction(ActionBase):
 ## 需求描述
 {ticket_description[:500]}
 
-## 产出文件（仅供参考，不做验收依据）
+## 产出文件
 {', '.join(dev_files[:10]) or '无'}
 仓库已有文件: {', '.join(repo_code_files[:10]) or '无'}
 
 ## 开发备注
 {str(dev_result.get('notes', ''))[:200]}
-{screenshot_info}{vision_hint}
+{screenshot_info}{vision_hint}{plugin_evidence_md}
 
 ## 验收检查清单
 {checklist}
 
 ## 验收标准
-- 有截图时，以**截图为准**判断功能是否实现（不要看文件名猜）
-- 无截图时，退回基于代码文件名和开发备注判断
+- 有 vision 截图输入时，结合截图判断；若当前为纯文本模式（无 vision 图片流），**严禁因为无法用工具读取本地截图文件而判 0 分**，必须依据上方提供的【自动化试玩客观报告】与【核心代码实现摘要】判断功能是否已实现
 - 功能符合需求描述 = 通过
-- 评分 {pass_score} 分及以上为通过"""
+- 评分 {pass_score} 分及以上为通过{plugin_rules_md}"""
 
+        node_instruction = (
+            "作为产品经理，综合自动化运行检测报告与核心代码实现判断需求是否达标。严禁因纯文本环境下无法直接读取截图文件而判 0 分。"
+            if is_cli_mode
+            else "作为产品经理，基于**截图里看得见的运行效果**验收。只判断截图里能不能看到需求里提到的功能，不要猜测代码。"
+        )
         node = ActionNode(
             key="acceptance_review",
             expected_type=ReviewOutput,
-            instruction="作为产品经理，基于**截图里看得见的运行效果**验收。只判断截图里能不能看到需求里提到的功能，不要猜测代码。",
+            instruction=node_instruction,
         )
         await node.fill(
             req=req_context,
@@ -214,6 +254,8 @@ class AcceptanceReviewAction(ActionBase):
                 "review": review.model_dump() if review else {},
                 "degraded": bool(degrade_note),
                 "degrade_reason": degrade_note,
+                "screenshot_path": screenshot_path,
+                "screenshots": [screenshot_path] if screenshot_path else [],
             },
             message=f"验收未执行（LLM 降级）: {degrade_note}" if degrade_note else "",
             files={f"{docs_prefix}acceptance-review.md": review_md},
@@ -224,7 +266,9 @@ class AcceptanceReviewAction(ActionBase):
         from git_manager import git_manager
 
         repo_dir = git_manager._repo_path(project_id)
-        index_path = repo_dir / "index.html"
+        # Vite / 现代打包项目若已产出 dist/index.html，优先服务 dist/（否则根 index.html 引用 /src/main.ts 无法被静态 http.server 执行）
+        serve_dir = repo_dir / "dist" if (repo_dir / "dist" / "index.html").is_file() else repo_dir
+        index_path = serve_dir / "index.html"
         if not index_path.exists():
             return {}
 
@@ -237,7 +281,7 @@ class AcceptanceReviewAction(ActionBase):
         try:
             proc = subprocess.Popen(
                 ["python", "-m", "http.server", str(port)],
-                cwd=str(repo_dir), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                cwd=str(serve_dir), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
             await asyncio.sleep(2)
             if proc.poll() is not None:

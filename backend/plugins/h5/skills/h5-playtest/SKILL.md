@@ -57,4 +57,4 @@ x-runner:
 1. 确认 `repo_path` 有 `package.json` / `index.html`。
 2. 调用一次 `h5_playtest`。不要自己起 Vite、不要自己拼 http.server。
 3. `status=success` 结束；`playtest_failed` 把 `errors` 交回，不要在本阶段重试。
-4. `runtime_skipped` 表示没装 Playwright，只保证 build 过。
+4. 缺 Playwright / Chromium 时 action 会先 `pip install` + `playwright install chromium`，装完再试玩。只有安装失败才 `runtime_skipped`。

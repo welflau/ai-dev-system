@@ -41,17 +41,29 @@ class SelfTestAction(ActionBase):
         if not files:
             return ActionResult(success=True, data={"self_test": {"passed": True, "total": 0, "checks": [], "summary": "无文件"}})
 
+        # Phase -1: 落盘前先净化，剥掉围栏和无围栏回复散文，同步回 context["_files"]
+        try:
+            from content_sanitizer import find_content_defects, sanitize_delivery_files
+            cleaned_files, _san_warns = sanitize_delivery_files(files, source="self_test")
+            files.clear()
+            files.update(cleaned_files)
+        except Exception as e:
+            logger.debug("SelfTest 预净化异常: %s", e)
+
         file_names = list(files.keys())
 
-        # === Phase 0: 提前落盘 ===
-        # 历史：flush 只在截图阶段做、只在有入口前端项目做，导致 SelfTest 跑完磁盘还
-        # 可能是空的，orchestrator 的 write_and_commit 失败时 SelfTest 也不会发现。
-        # 现在：所有场景一开始就 flush，后续检查等价于"磁盘刚写内容"。
+        # === Phase 0: 提前落盘（仅写入无污染缺陷的文件，防止把脏回复覆盖到干净磁盘文件上） ===
         sop_cfg = context.get("sop_config") or {}
         verify_disk = bool(sop_cfg.get("verify_disk_files", True))
         if project_id and files:
             try:
-                await self._flush_files_to_repo(project_id, files)
+                from content_sanitizer import find_content_defects
+                clean_to_flush = {
+                    fp: c for fp, c in files.items()
+                    if not isinstance(c, str) or not find_content_defects(c, fp)
+                }
+                if clean_to_flush:
+                    await self._flush_files_to_repo(project_id, clean_to_flush)
             except Exception as e:
                 logger.warning("SelfTest 预落盘失败: %s", e)
 
@@ -82,10 +94,18 @@ class SelfTestAction(ActionBase):
         checks.append({"name": "代码非空", "passed": non_empty, "detail": "通过" if non_empty else "存在空文件"})
         if non_empty: passed += 1
 
-        # 4. 语法检查
+        # 4. 语法与内容污染检查（含 .py / .html / .json / .ts/.js 回复散文检测）
         total += 1
         syntax_ok, syntax_errors = True, []
+        from content_sanitizer import find_content_defects
         for fp, content in files.items():
+            if not isinstance(content, str):
+                continue
+            defects = find_content_defects(content, fp)
+            if defects:
+                syntax_errors.append(f"{fp}: {'; '.join(defects)}")
+                syntax_ok = False
+                continue
             if fp.endswith(".py"):
                 try:
                     compile(content, fp, "exec")

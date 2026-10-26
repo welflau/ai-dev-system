@@ -41,6 +41,27 @@ def test_synthesize_confirm_project_error_is_none():
     ) is None
 
 
+def test_detect_new_h5_project_from_plain_request():
+    from api.chat import _detect_new_h5_project
+    action = asyncio.run(_detect_new_h5_project("新建项目，H5游戏"))
+    assert action is not None
+    assert action["type"] == "confirm_project"
+    assert "framework:phaser" in action["traits"]
+
+
+def test_detect_new_h5_project_ignores_unrelated():
+    from api.chat import _detect_new_h5_project
+    assert asyncio.run(_detect_new_h5_project("这个工单卡在哪")) is None
+
+
+def test_stash_and_pop_global_mcp_action():
+    from api.chat import _pop_global_mcp_action, _stash_global_mcp_action
+    _pop_global_mcp_action("sess-test")
+    _stash_global_mcp_action("sess-test", {"type": "confirm_project", "name": "X"})
+    assert _pop_global_mcp_action("sess-test")["name"] == "X"
+    assert _pop_global_mcp_action("sess-test") is None
+
+
 def test_confirm_project_action_phaser_traits():
     result = asyncio.run(ConfirmProjectAction().run({
         "name": "PhaserGame",

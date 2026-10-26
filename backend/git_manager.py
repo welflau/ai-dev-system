@@ -219,6 +219,16 @@ class GitManager:
         self._push_remotes: Dict[str, str] = {}
         # 最近一次 push 诊断（供编排器/API 展示下一步）
         self._last_push_status: Dict[str, Dict[str, Any]] = {}
+        # 按仓库目录加互斥锁，防止后台 CI (develop_build) 与主干 Orchestrator 并发执行 git 写命令争抢 .git/index.lock
+        self._cwd_locks: Dict[str, asyncio.Lock] = {}
+
+    def _get_cwd_lock(self, cwd: str) -> asyncio.Lock:
+        norm = str(Path(cwd).resolve()).lower() if cwd else ""
+        lock = self._cwd_locks.get(norm)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._cwd_locks[norm] = lock
+        return lock
 
     def set_project_path(self, project_id: str, path: str):
         """设置项目的自定义仓库路径"""
@@ -266,25 +276,54 @@ class GitManager:
             )
 
         status = "success"
-        try:
-            loop = asyncio.get_running_loop()
-            result = await loop.run_in_executor(None, _blocking)
-            rc = result.returncode
-            out = (result.stdout or "").strip()
-            err = (result.stderr or "").strip()
-            if rc != 0:
-                status = "error"
-        except subprocess.TimeoutExpired as te:
-            # .output / .stderr 在 text=True 下是 str（非 bytes），且含超时前
-            # 已经收到的部分输出——这是超时现场唯一的线索，别丢。
-            rc, status = 124, "timeout"
-            out = (te.output or "").strip() if isinstance(te.output, str) else ""
-            partial = (te.stderr or "").strip() if isinstance(te.stderr, str) else ""
-            err = f"git 超时（>{timeout}s）: {' '.join(cmd[:4])}"
-            if partial:
-                err += f"\n{partial}"
-        except Exception as e:
-            rc, out, err, status = 1, "", str(e), "error"
+        _MUTATING_VERBS = {
+            "add", "commit", "checkout", "switch", "merge", "rebase",
+            "clean", "reset", "stash", "pull", "push", "rm", "mv", "branch",
+        }
+        is_mutating = verb in _MUTATING_VERBS
+        cwd_lock = self._get_cwd_lock(cwd) if is_mutating else None
+
+        async def _exec_with_retry():
+            nonlocal rc, out, err, status
+            for attempt in range(4):
+                try:
+                    loop = asyncio.get_running_loop()
+                    result = await loop.run_in_executor(None, _blocking)
+                    rc = result.returncode
+                    out = (result.stdout or "").strip()
+                    err = (result.stderr or "").strip()
+                    if rc != 0:
+                        status = "error"
+                        if "index.lock" in err and attempt < 3:
+                            lock_file = Path(cwd) / ".git" / "index.lock"
+                            try:
+                                if lock_file.is_file() and (time.time() - lock_file.stat().st_mtime) > 10:
+                                    lock_file.unlink(missing_ok=True)
+                                    logger.warning("🧹 自动清理陈旧 .git/index.lock: %s", lock_file)
+                            except Exception:
+                                pass
+                            await asyncio.sleep(0.5 * (attempt + 1))
+                            status = "success"
+                            continue
+                    break
+                except subprocess.TimeoutExpired as te:
+                    rc, status = 124, "timeout"
+                    out = (te.output or "").strip() if isinstance(te.output, str) else ""
+                    partial = (te.stderr or "").strip() if isinstance(te.stderr, str) else ""
+                    err = f"git 超时（>{timeout}s）: {' '.join(cmd[:4])}"
+                    if partial:
+                        err += f"\n{partial}"
+                    break
+                except Exception as e:
+                    rc, out, err, status = 1, "", str(e), "error"
+                    break
+
+        rc, out, err = 0, "", ""
+        if cwd_lock is not None:
+            async with cwd_lock:
+                await _exec_with_retry()
+        else:
+            await _exec_with_retry()
 
         await self._record_git_command(cmd, cwd, rc, out, err, status,
                                        int((time.time() - t0) * 1000))
@@ -315,8 +354,9 @@ class GitManager:
                 command=" ".join(cmd), cwd=str(cwd),
                 exit_code=rc, status=status, duration_ms=duration_ms,
                 output=output,
-                # 失败一律不算噪音，哪怕是 rev-parse——失败的 plumbing 往往就是断点
-                noise=(status == "success" and _is_noise_git(cmd)),
+                # 纯读操作（show / rev-parse / status 等）探测文件存在性时 rc!=0 也是例行噪音，
+                # 不该刷进后台任务面板
+                noise=_is_noise_git(cmd) if verb in _GIT_READ_VERBS else (status == "success" and _is_noise_git(cmd)),
                 ticket_id=ck.get("ticket_id") or "",
                 requirement_id=ck.get("requirement_id") or "",
                 project_id=ck.get("project_id") or "",
@@ -666,8 +706,13 @@ Thumbs.db
         """切换到指定分支"""
         repo_dir = str(self._repo_path(project_id))
         # 先清理可能冲突的未跟踪文件（如 .pyc 缓存）
-        # 保留 openspec/（OpenSpec 规范目录，应跨分支持久存在）和 .env
-        await self._run_git(repo_dir, "clean", "-fd", "--exclude=.env", "--exclude=openspec")
+        # 保留 openspec/、.env、node_modules/，以及尚未写入 .gitignore 的 UE 产物目录
+        await self._run_git(
+            repo_dir, "clean", "-fd",
+            "--exclude=.env", "--exclude=openspec", "--exclude=node_modules",
+            "--exclude=Binaries", "--exclude=Intermediate",
+            "--exclude=Saved", "--exclude=DerivedDataCache",
+        )
         await self._run_git(repo_dir, "checkout", ".")
         rc, _, err = await self._run_git(repo_dir, "checkout", branch_name)
         if rc != 0:
@@ -1134,6 +1179,11 @@ Thumbs.db
         if not repo_dir.exists():
             return {"name": project_id, "children": []}
 
+        _SKIP_DIRS = {
+            "__pycache__", "node_modules", "dist", "target", "Binaries",
+            "Intermediate", "Saved", "DerivedDataCache", ".venv", "venv",
+        }
+
         def _scan_dir(path: Path, relative: str = "", depth: int = 0) -> List[Dict]:
             children = []
             try:
@@ -1148,7 +1198,7 @@ Thumbs.db
             for item in items:
                 if item.name.startswith("."):
                     continue
-                if item.name == "__pycache__":
+                if item.name in _SKIP_DIRS:
                     continue
 
                 rel_path = f"{relative}/{item.name}" if relative else item.name

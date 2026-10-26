@@ -37,6 +37,7 @@ class _LLMContext:
     _action: contextvars.ContextVar = contextvars.ContextVar('llm_action', default=None)
     # 一次对话的 turn_id：用户发一条消息 → 这一轮里所有 LLM 调用共享同一个值
     _turn_id: contextvars.ContextVar = contextvars.ContextVar('llm_turn_id', default=None)
+    _session_id: contextvars.ContextVar = contextvars.ContextVar('llm_session_id', default=None)
     # v0.20 skill 执行上下文 —— CLI 模式下注入 skill_io MCP server 用。
     # CLI 分支不传 tools（证据见 tests/skills/test_cli_mode_tool_gap.py），
     # skill 的 builtin 工具只能靠 MCP 被命名调用；而 MCP server 是独立进程，
@@ -76,6 +77,11 @@ class _LLMContext:
     def turn_id(self, v): self._turn_id.set(v)
 
     @property
+    def session_id(self): return self._session_id.get()
+    @session_id.setter
+    def session_id(self, v): self._session_id.set(v)
+
+    @property
     def skill_io(self): return self._skill_io.get()
     @skill_io.setter
     def skill_io(self, v): self._skill_io.set(v)
@@ -105,6 +111,32 @@ def set_skill_io_context(
     } if output_root else None
 
 
+# ── 工单实时思考流累加缓冲（供后台任务面板打开/刷新时回填完整上下文）──────────────
+_TICKET_LIVE_STREAM: dict[str, str] = {}
+_TICKET_LIVE_STREAM_MAX = 120_000
+
+
+def append_ticket_live_stream(ticket_id: str, delta: str) -> None:
+    if not ticket_id or not delta:
+        return
+    prev = _TICKET_LIVE_STREAM.get(ticket_id, "")
+    merged = prev + delta
+    if len(merged) > _TICKET_LIVE_STREAM_MAX:
+        merged = "…(早期输出已省略)\n" + merged[-_TICKET_LIVE_STREAM_MAX:]
+    _TICKET_LIVE_STREAM[ticket_id] = merged
+
+
+def get_ticket_live_stream(ticket_id: str) -> str:
+    if not ticket_id:
+        return ""
+    return _TICKET_LIVE_STREAM.get(ticket_id, "")
+
+
+def clear_ticket_live_stream(ticket_id: str) -> None:
+    if ticket_id:
+        _TICKET_LIVE_STREAM.pop(ticket_id, None)
+
+
 def set_llm_context(
     ticket_id: str = None,
     requirement_id: str = None,
@@ -112,14 +144,18 @@ def set_llm_context(
     agent_type: str = None,
     action: str = None,
     turn_id: str = None,
+    session_id: str = None,
 ):
     """设置 LLM 调用上下文（在 Agent 执行前调用，协程安全）"""
+    if ticket_id and (_llm_ctx.ticket_id != ticket_id or _llm_ctx.action != action):
+        clear_ticket_live_stream(ticket_id)
     _llm_ctx.ticket_id = ticket_id
     _llm_ctx.requirement_id = requirement_id
     _llm_ctx.project_id = project_id
     _llm_ctx.agent_type = agent_type
     _llm_ctx.action = action
     _llm_ctx.turn_id = turn_id
+    _llm_ctx.session_id = session_id
 
 
 def clear_llm_context():
@@ -130,6 +166,7 @@ def clear_llm_context():
     _llm_ctx.agent_type = None
     _llm_ctx.action = None
     _llm_ctx.turn_id = None
+    _llm_ctx.session_id = None
 
 
 def _truncate(text: str, max_len: int = 200) -> str:
@@ -911,80 +948,38 @@ class LLMClient:
     def _messages_to_stdin(self, messages: List[Dict]) -> bytes:
         """
         将 messages 转为 CLI stdin bytes。
-        - 无图片：纯文本（兼容旧行为）
-        - 有图片：JSON 格式（claude/codebuddy 支持 JSON stdin 含 image blocks）
-
-        JSON 格式：单条 user 消息，content 为 blocks 数组。
-        system prompt 拼入最前面的 text block，图片 blocks 跟在文本后。
+        注意：CLI 子进程（codebuddy/claude --print）未加 --input-format stream-json 时，
+        stdin 按纯文本 prompt 读取。若把含 base64 图片的 JSON 字典直接塞进纯文本 stdin，
+        既会丢掉 system_text（JSON 格式要求等），又会让 deepseek 等模型在数万字符 base64
+        上空转 600s 超时。因此统一走 _messages_to_prompt 提取纯文本（含 <ads_context>）。
         """
-        import json as _json
-
-        # 检查是否有图片 block
-        has_image = False
-        for m in messages:
-            content = m.get("content", "")
-            if isinstance(content, list):
-                for b in content:
-                    if isinstance(b, dict) and b.get("type") == "image":
-                        has_image = True
-                        break
-            if has_image:
-                break
-
-        if not has_image:
-            return self._messages_to_prompt(messages).encode("utf-8")
-
-        # 有图片：构建 JSON stdin
-        system_text = ""
-        last_user_text = ""
-        last_user_images = []
-
-        for m in messages:
-            role = m.get("role", "")
-            content = m.get("content", "")
-            if role == "system":
-                system_text = content if isinstance(content, str) else " ".join(
-                    b.get("text", "") for b in content
-                    if isinstance(b, dict) and b.get("type") == "text"
-                )
-            elif role == "user":
-                if isinstance(content, list):
-                    last_user_text = " ".join(
-                        b.get("text", "") for b in content
-                        if isinstance(b, dict) and b.get("type") == "text"
-                    )
-                    last_user_images = [
-                        b for b in content
-                        if isinstance(b, dict) and b.get("type") == "image"
-                    ]
-                else:
-                    last_user_text = content or ""
-                    last_user_images = []
-
-        # 构建 blocks：system(ads_context) + text + 图片
-        full_text = (f"<ads_context>\n{system_text}\n</ads_context>\n\n" + last_user_text).strip() \
-            if system_text else last_user_text
-        user_blocks = []
-        if full_text:
-            user_blocks.append({"type": "text", "text": last_user_text})
-        user_blocks.extend(last_user_images)
-
-        payload = {"role": "user", "content": user_blocks}
-        return _json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        return self._messages_to_prompt(messages).encode("utf-8")
 
     @staticmethod
     def _build_settings_args(cli_type: str, cwd: Optional[str]) -> tuple:
         """
         为 claude/codebuddy CLI 构建 --settings 参数。
 
-        始终注入 ads-data MCP server（全局，提供 confirm_requirement 等工具）。
-        若 <cwd>/.ads/mcp_servers.json 存在，额外合并项目级 server。
-        extra_args 可直接追加到 cmd 中；tmp_path 用完后由调用方删除。
-
-        不支持 --settings 的 cli_type 时返回 ([], None)。
+        关键：结构化单次调用（如 ActionNode 的 write_prd / plan_code_change / _modify_file /
+        reflect / code_review / acceptance_review）只需要纯文本生成，**禁止给 CLI 开工具和 MCP**！
+        否则 codebuddy 会在每次修改文件时自主调 Bash / Read / git status / git log 空转几十轮，
+        把一次 10 秒的文本改写拖成 3~11 分钟（60,000 行 stdout）。
+        只有聊天助手（ChatAssistant）或显式带 skill_io 的调用才挂载 MCP 与工具。
         """
         if cli_type not in ("claude", "claude-internal", "codebuddy", "tclaude"):
             logger.debug("🖥️  CLI MCP 注入跳过：cli_type=%s 不支持 --settings", cli_type)
+            return [], None
+
+        _act = (_llm_ctx.action or "").lower()
+        _agent = (_llm_ctx.agent_type or "")
+        _is_pure_generation = (
+            _agent != "ChatAssistant"
+            and not _llm_ctx.skill_io
+            and "chat" not in _act
+        )
+        if _is_pure_generation:
+            # 纯文本/JSON 生成不挂载 ads-data MCP，也不给仓库 cwd（调用方将 cwd 切到临时空目录），
+            # 防止 CLI 代理自主扫描仓库或调 MCP 工具空转
             return [], None
 
         import json as _json
@@ -1007,6 +1002,7 @@ class LLMClient:
                     "ADS_DB_PATH": str(_backend_dir / "data" / "ai_dev_system.db"),
                     "ADS_BASE_URL": "http://localhost:8000",
                     "ADS_PROJECT_ID": _ctx_project_id,
+                    "ADS_SESSION_ID": _llm_ctx.session_id or "",
                 },
             }
         }
@@ -1268,7 +1264,13 @@ class LLMClient:
         stdin_data = self._messages_to_stdin(messages) if use_stdin else None
 
         cwd = None
-        if _llm_ctx.project_id:
+        _act_for_cwd = (_llm_ctx.action or "").lower()
+        _needs_repo_cwd = (
+            _llm_ctx.agent_type == "ChatAssistant"
+            or bool(_llm_ctx.skill_io)
+            or "chat" in _act_for_cwd
+        )
+        if _llm_ctx.project_id and _needs_repo_cwd:
             try:
                 from database import db as _db
                 proj = await _db.fetch_one(
@@ -1282,6 +1284,11 @@ class LLMClient:
                         logger.info("🖥️  CLI cwd → %s", cwd)
             except Exception as _e:
                 logger.debug("CLI cwd 查询失败（忽略）: %s", _e)
+        elif not _needs_repo_cwd:
+            import tempfile as _tf, os as _os2
+            _isolated_dir = _os2.path.join(_tf.gettempdir(), "ads_cli_pure_gen")
+            _os2.makedirs(_isolated_dir, exist_ok=True)
+            cwd = _isolated_dir
 
         # 注入 .ads/mcp_servers.json → --settings（须在 prompt 参数之前）
         _settings_args, _settings_tmp = self._build_settings_args(self.cli_type, cwd)
@@ -1458,15 +1465,20 @@ class LLMClient:
         流式过程中已由 _call_cli_stream 推送 ticket_llm_token，前端可显示思考过程。
         """
         parts: list = []
-        # 立刻推一条占位，避免长时间无 token 时前端完全空白
+        # 立刻推一条占位，避免长时间无 token 时前端完全空白，同时在累加流中标记新一次调用起点
         if _llm_ctx.ticket_id and _llm_ctx.project_id:
             try:
+                _hdr = (
+                    f"\n── ⏳ 调用模型 ({_llm_ctx.agent_type or 'Agent'}"
+                    f"{' · ' + _llm_ctx.action if _llm_ctx.action else ''}) ──\n"
+                )
+                append_ticket_live_stream(_llm_ctx.ticket_id, _hdr)
                 from events import event_manager as _em
                 await _em.publish_to_project(
                     _llm_ctx.project_id, "ticket_llm_token",
                     {"ticket_id": _llm_ctx.ticket_id,
                      "agent": _llm_ctx.agent_type or "Agent",
-                     "delta": "⏳ 正在调用模型…\n", "kind": "status"},
+                     "delta": _hdr, "kind": "status"},
                 )
             except Exception:
                 pass
@@ -1540,9 +1552,16 @@ class LLMClient:
 
         stdin_data = self._messages_to_stdin(messages) if use_stdin else None
 
-        # CLI 模式：以项目 git_repo_path 作为工作目录，让 CLI 工具感知项目上下文
+        # CLI 模式：聊天/SkillRunner 才以项目 git_repo_path 作为工作目录；
+        # 纯生成（ActionNode / _modify_file / reflect）切到隔离空目录，防止 CLI 自主跑 git/Bash 慢 10 倍
         cwd = None
-        if _llm_ctx.project_id:
+        _act_for_cwd = (_llm_ctx.action or "").lower()
+        _needs_repo_cwd = (
+            _llm_ctx.agent_type == "ChatAssistant"
+            or bool(_llm_ctx.skill_io)
+            or "chat" in _act_for_cwd
+        )
+        if _llm_ctx.project_id and _needs_repo_cwd:
             try:
                 from database import db as _db
                 proj = await _db.fetch_one(
@@ -1555,6 +1574,11 @@ class LLMClient:
                         cwd = proj["git_repo_path"]
             except Exception as _e:
                 logger.debug("CLI cwd 查询失败（忽略）: %s", _e)
+        elif not _needs_repo_cwd:
+            import tempfile as _tf, os as _os2
+            _isolated_dir = _os2.path.join(_tf.gettempdir(), "ads_cli_pure_gen")
+            _os2.makedirs(_isolated_dir, exist_ok=True)
+            cwd = _isolated_dir
 
         # 注入 .ads/mcp_servers.json → --settings（须在 prompt 参数之前）
         _settings_args, _settings_tmp = self._build_settings_args(self.cli_type, cwd)
@@ -1800,6 +1824,7 @@ class LLMClient:
                                 _tok_buf_len += len(chunk)
                                 if _tok_buf_len >= _TOK_THRESHOLD:
                                     _bat = ''.join(_tok_buf); _tok_buf = []; _tok_buf_len = 0
+                                    append_ticket_live_stream(_llm_ctx.ticket_id, _bat)
                                     from events import event_manager as _em
                                     await _em.publish_to_project(
                                         _llm_ctx.project_id, "ticket_llm_token",
@@ -1815,6 +1840,7 @@ class LLMClient:
                                 _tok_buf_len += len(chunk)
                                 if _tok_buf_len >= _TOK_THRESHOLD:
                                     _bat = ''.join(_tok_buf); _tok_buf = []; _tok_buf_len = 0
+                                    append_ticket_live_stream(_llm_ctx.ticket_id, _bat)
                                     from events import event_manager as _em
                                     await _em.publish_to_project(
                                         _llm_ctx.project_id, "ticket_llm_token",
@@ -1849,12 +1875,14 @@ class LLMClient:
                     # flush 剩余 token buffer
                     if _tok_buf and _llm_ctx.ticket_id and _llm_ctx.project_id:
                         try:
+                            _rem = ''.join(_tok_buf) + "\n"
+                            append_ticket_live_stream(_llm_ctx.ticket_id, _rem)
                             from events import event_manager as _em
                             await _em.publish_to_project(
                                 _llm_ctx.project_id, "ticket_llm_token",
                                 {"ticket_id": _llm_ctx.ticket_id,
                                  "agent": _llm_ctx.agent_type or "Agent",
-                                 "delta": ''.join(_tok_buf), "done": True},
+                                 "delta": _rem, "done": True},
                             )
                         except Exception:
                             pass
@@ -2234,6 +2262,59 @@ class LLMClient:
         except Exception as e:
             logger.warning("[tool-use] 保存会话记录失败: %s", e)
 
+    @staticmethod
+    def _extract_json_value(text: str) -> tuple:
+        """从可能夹杂前后散文或 markdown 围栏的文本中提取 JSON（dict 优先，其次 list）。
+        返回 (parsed_obj, start_pos)；解析失败返回 (None, -1)。
+
+        修复真实事故：原实现写的是
+          `start = cleaned.find("[") if "[" in cleaned else cleaned.find("{")`
+        只要 JSON 对象 `{ "files": {...}, "key_implementations": [...] }` 内部含有数组 `[`，
+        `"[" in cleaned` 就为 True，于是从数组 `[` 截到 `]`，把外层 `{...}` 整个切碎，
+        导致 WriteCodeAction 连续报 JSON 解析失败而触发 5 次 reject → blocked。
+        """
+        if not text:
+            return None, -1
+        s = text.strip()
+
+        # 1. 若含 ```json ... ``` 围栏，优先尝试围栏内部
+        import re as _re
+        for m in _re.finditer(r"```(?:json)?\s*([\s\S]*?)```", s, _re.IGNORECASE):
+            inner = m.group(1).strip()
+            if not inner:
+                continue
+            try:
+                return json.loads(inner), m.start(1)
+            except json.JSONDecodeError:
+                pass
+
+        # 2. 用 JSONDecoder.raw_decode 扫描所有 '{' 与 '[' 起点
+        #    散文里可能偶发出现 '{'（如“首字节必须为 '{'”），raw_decode 遇到非法 JSON 会继续往后找。
+        decoder = json.JSONDecoder()
+        best_dict = (None, -1, -1)   # (obj, pos, span_len)
+        best_list = (None, -1, -1)
+
+        for idx, ch in enumerate(s):
+            if ch not in ("{", "["):
+                continue
+            try:
+                obj, end_idx = decoder.raw_decode(s, idx)
+            except json.JSONDecodeError:
+                continue
+            span = end_idx - idx
+            if isinstance(obj, dict):
+                if span > best_dict[2]:
+                    best_dict = (obj, idx, span)
+            elif isinstance(obj, list):
+                if span > best_list[2]:
+                    best_list = (obj, idx, span)
+
+        if best_dict[0] is not None:
+            return best_dict[0], best_dict[1]
+        if best_list[0] is not None:
+            return best_list[0], best_list[1]
+        return None, -1
+
     async def generate(self, prompt: str, **kwargs) -> str:
         """简便方法：单次生成"""
         messages = [{"role": "user", "content": prompt}]
@@ -2281,16 +2362,11 @@ class LLMClient:
                         list(result.keys()) if isinstance(result, dict) else f"list[{len(result)}]")
             return result
         except json.JSONDecodeError:
-            # 尝试找到 JSON 部分
-            start = cleaned.find("[") if "[" in cleaned else cleaned.find("{")
-            end = cleaned.rfind("]") + 1 if "]" in cleaned else cleaned.rfind("}") + 1
-            if start >= 0 and end > start:
-                try:
-                    result = json.loads(cleaned[start:end])
-                    logger.info("   📦 [%s] JSON 二次解析成功 (从位置 %d 提取)", ctx, start)
-                    return result
-                except json.JSONDecodeError:
-                    pass
+            result, pos = self._extract_json_value(cleaned)
+            if result is not None:
+                logger.info("   📦 [%s] JSON 二次解析成功 (从位置 %d 提取, keys: %s)", ctx, pos,
+                            list(result.keys()) if isinstance(result, dict) else f"list[{len(result)}]")
+                return result
             logger.error("   ❌ [%s] JSON 解析失败! 原始响应: %s", ctx, _truncate(cleaned, 300))
             return None
 

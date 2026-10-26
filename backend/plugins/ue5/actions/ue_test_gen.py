@@ -496,6 +496,8 @@ UMyComponent* Comp = Owner->FindComponentByClass<UMyComponent>();
                 return True, "编译检查不可用，跳过: ue_compile_check 未注册"
         except Exception as e:
             return True, f"编译检查不可用，跳过: {e}"   # 编不了就别拦，交给下游 engine_compile
+        from plugins.ue5.command_trace import emit_ue_step
+        await emit_ue_step(context, "单文件编译验证", "start")
         try:
             result = await compile_action.run({
                 **context,
@@ -504,8 +506,19 @@ UMyComponent* Comp = Owner->FindComponentByClass<UMyComponent>();
             })
         except Exception as e:
             logger.warning("ue_test_gen SingleFile 编译异常: %s", e)
+            await emit_ue_step(
+                context, "单文件编译验证", "error", reason=str(e)[:120],
+            )
             return True, ""   # 同上：基础设施问题不该判测试有罪
         d = result.data or {}
+        await emit_ue_step(
+            context,
+            "单文件编译验证",
+            "done" if d.get("status") == "success" else "error",
+            duration_ms=int(d.get("duration_ms") or 0),
+            task_id=str(d.get("task_id") or ""),
+            reason="" if d.get("status") == "success" else str(d.get("message") or "")[:120],
+        )
         if d.get("status") == "success":
             return True, ""
         errs = d.get("errors") or []

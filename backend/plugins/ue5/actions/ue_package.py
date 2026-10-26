@@ -226,6 +226,9 @@ class UEPackageAction(ActionBase):
             cmd.append("-build")
         cmd_str = " ".join(f'"{c}"' if " " in c else c for c in cmd)
         await _log(f"[package] cmd: {cmd_str}")
+        from plugins.ue5.command_trace import emit_ue_step, seal_ue_command
+        await emit_ue_step(context, "RunUAT 打包", "start")
+        trace_cwd = str(Path(uproject_path).parent)
 
         # 执行（subprocess.Popen + 线程队列，与 ue_compile_check 保持一致）
         import subprocess as _subprocess
@@ -245,11 +248,24 @@ class UEPackageAction(ActionBase):
                 encoding="utf-8",
                 errors="replace",
             )
-        except FileNotFoundError:
-            return await _err_log(f"启动 RunUAT 失败: {run_uat} 不存在或权限不足")
+        except FileNotFoundError as fe:
+            return await seal_ue_command(
+                context,
+                await _err_log(f"启动 RunUAT 失败: {run_uat} 不存在或权限不足"),
+                source="ue_package", tool="runuat", step_name="RunUAT 打包",
+                command=cmd_str, cwd=trace_cwd, exit_code=-1, status="error",
+                output=repr(fe), ok=False, reason="启动 RunUAT 失败",
+            )
         except Exception as e:
             logger.error("Package Popen Exception type=%s repr=%r", type(e).__name__, e, exc_info=True)
-            return await _err_log(f"启动 RunUAT 异常: {type(e).__name__}: {e!r}")
+            err_detail = f"{type(e).__name__}: {e!r}"
+            return await seal_ue_command(
+                context,
+                await _err_log(f"启动 RunUAT 异常: {err_detail}"),
+                source="ue_package", tool="runuat", step_name="RunUAT 打包",
+                command=cmd_str, cwd=trace_cwd, exit_code=-1, status="error",
+                output=err_detail, ok=False, reason="启动 RunUAT 异常",
+            )
 
         await _log(f"[package] subprocess pid={proc.pid}, 开始读 stdout (thread mode)...")
 
@@ -303,14 +319,21 @@ class UEPackageAction(ActionBase):
             except Exception:
                 pass
             duration_ms = int((time.time() - t0) * 1000)
-            return _err(
-                f"Package 超时（{timeout_seconds}s）",
-                detail={
-                    "duration_ms": duration_ms,
-                    "command": cmd_str,
-                    "engine_used": engine_info.to_dict(),
-                    "partial_output": "\n".join(collected[-100:]),
-                },
+            return await seal_ue_command(
+                context,
+                _err(
+                    f"Package 超时（{timeout_seconds}s）",
+                    detail={
+                        "duration_ms": duration_ms,
+                        "command": cmd_str,
+                        "engine_used": engine_info.to_dict(),
+                        "partial_output": "\n".join(collected[-100:]),
+                    },
+                ),
+                source="ue_package", tool="runuat", step_name="RunUAT 打包",
+                command=cmd_str, cwd=trace_cwd, exit_code=-1, status="timeout",
+                duration_ms=duration_ms, output="\n".join(collected),
+                ok=False, reason=f"Package 超时（{timeout_seconds}s）",
             )
 
         proc.wait(timeout=5)
@@ -354,10 +377,19 @@ class UEPackageAction(ActionBase):
             if status == "success"
             else f"打包失败 ({len(errors)} errors)"
         )
-        return ActionResult(
-            success=(status == "success"),
-            data=data,
-            message=msg,
+        return await seal_ue_command(
+            context,
+            ActionResult(
+                success=(status == "success"),
+                data=data,
+                message=msg,
+            ),
+            source="ue_package", tool="runuat", step_name="RunUAT 打包",
+            command=cmd_str, cwd=trace_cwd, exit_code=exit_code,
+            status="success" if status == "success" else "error",
+            duration_ms=duration_ms, output=text,
+            ok=(status == "success"),
+            reason="" if status == "success" else msg[:120],
         )
 
 

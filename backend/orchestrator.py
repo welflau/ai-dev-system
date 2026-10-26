@@ -1615,6 +1615,15 @@ class TicketOrchestrator:
                         "reason": "global_reject_limit",
                     },
                 )
+                asyncio.create_task(self._diagnose_blocked_ticket(
+                    project_id=project_id,
+                    ticket_id=ticket_id,
+                    current_ticket=dict(ticket),
+                    agent_name="Orchestrator",
+                    action="global_reject_limit",
+                    error_msg=f"工单已被打回 {reject_cnt_global} 次（最后状态: {from_status}），超过上限 {MAX_RETRIES} 次",
+                    blocked_from_status=from_status,
+                ))
                 return
 
             # 检查前置依赖是否完成
@@ -1696,6 +1705,15 @@ class TicketOrchestrator:
                         {"ticket_id": ticket_id, "from": current_status,
                          "to": TicketStatus.BLOCKED.value, "reason": "max_retries_exceeded"},
                     )
+                    asyncio.create_task(self._diagnose_blocked_ticket(
+                        project_id=project_id,
+                        ticket_id=ticket_id,
+                        current_ticket=dict(ticket),
+                        agent_name=rule.get("agent") or "Orchestrator",
+                        action=rework_source,
+                        error_msg=f"阶段「{rework_source}」（{current_status}）连续失败 {reject_cnt} 次（上限 {max_retries}）",
+                        blocked_from_status=current_status,
+                    ))
                     return
 
             agent_name = rule["agent"]
@@ -1842,7 +1860,12 @@ class TicketOrchestrator:
                 logger.warning("切换分支异常(非致命): %s", br_err)
 
             # 构建上下文（传入当前 Agent 名，供 KnowledgeLoader 差异化加载知识）
+            # 注意：此时数据库里的 tickets.status 已被上面的 `if next_status` 改写为
+            # `development_in_progress`，而 ticket["status"] 仍保留着触发态（如 `h5_typecheck_failed`、
+            # `engine_compile_failed`）。必须把 `trigger_status` 透传进 context，否则
+            # DevAgent._do_fix_issues 去查数据库只会读到 `development_in_progress`，永远走兜底 `testing_failed`！
             context = await self._build_context(ticket, agent_name=agent_name)
+            context["trigger_status"] = current_status
 
             # 注入 SOP 阶段配置到 context
             sop_config = rule.get("config", {})
@@ -2207,8 +2230,10 @@ class TicketOrchestrator:
             ))
             return
 
-        # 保存执行结果（先 pop 二进制媒体文件，避免 JSON 序列化失败）
+        # 保存执行结果（先 pop 二进制媒体文件，避免 JSON 序列化失败；但把图片路径记入 result["media_paths"] 供时间轴展示缩略图与打开 Tab）
         media_files_temp = result.pop("_media_files", None)  # 暂存，稍后写入 Git
+        if isinstance(media_files_temp, dict) and media_files_temp:
+            result["media_paths"] = list(media_files_temp.keys())
         result_json = json.dumps(result, ensure_ascii=False)
         if media_files_temp:
             result["_media_files"] = media_files_temp  # 写完 JSON 后放回，供 _handle_git_files 使用
@@ -2284,17 +2309,25 @@ class TicketOrchestrator:
                 project_id, requirement_id, ticket_id, agent_name,
                 action, current_status, new_status,
                 f"资产落地完成：{_sourced} 命中资产库 / {_ph} 占位图 / {_skip} 待人工",
-                detail_data={"total": _total, "sourced": _sourced,
-                             "placeholder": _ph, "skipped": _skip},
+                detail_data={
+                    "total": _total, "sourced": _sourced,
+                    "placeholder": _ph, "skipped": _skip,
+                    "media_paths": result.get("media_paths") or [],
+                    "git_files": (git_result.get("files") if git_result else []) or [],
+                },
             )
-            # 占位图和待人工项需要美术介入，写进评论让人看得见
+            # 占位图和待人工项需要美术介入，写进评论让人看得见（顺带把生成的图片路径附在评论后，方便直接预览点开）
             _warn = ""
             if _ph or _skip:
                 _warn = (f"\n⚠️ {_ph} 个占位图需替换"
                          + (f"，{_skip} 项需人工提供" if _skip else ""))
+            _media_list = result.get("media_paths") or []
+            _media_note = ""
+            if _media_list:
+                _media_note = "\n🖼️ 产出图片：" + ", ".join(f"`{p}`" for p in _media_list[:12])
             await self._write_phase_comment(
                 project_id, ticket_id, agent_name,
-                f"✅ 资产落地完成：共 {_total} 项，{_sourced} 个命中资产库。{_warn}",
+                f"✅ 资产落地完成：共 {_total} 项，{_sourced} 个命中资产库。{_warn}{_media_note}",
                 phase=new_status,
             )
             return
@@ -2617,6 +2650,7 @@ class TicketOrchestrator:
                             "exit_code": result.get("exit_code"),
                             "duration_ms": result.get("duration_ms"),
                             "command": result.get("command"),
+                            "task_id": result.get("task_id") or "",
                         },
                     )
                 else:
@@ -2641,6 +2675,9 @@ class TicketOrchestrator:
                             "hints": (result.get("hints") or [])[:5],
                             "err_brief": err_brief,
                             "raw_tail": (result.get("raw_tail") or "")[-4000:],
+                            "command": result.get("command"),
+                            "exit_code": result.get("exit_code"),
+                            "task_id": result.get("task_id") or "",
                         },
                     )
                 return
@@ -2761,15 +2798,25 @@ class TicketOrchestrator:
 
             # develop/rework 产出文件列表（供时间轴/会话文件链接渲染）
             _dev_files = list((result.get("files") or {}).keys())
+            _dev_media = list(result.get("media_paths") or [])
+            for mp in _dev_media:
+                if mp not in _dev_files:
+                    _dev_files.append(mp)
+            _st_shots = [
+                (s.get("url") if isinstance(s, dict) else str(s))
+                for s in (self_test.get("screenshots") or [])
+                if s
+            ]
             _dev_file_names = [p.replace("\\", "/").split("/")[-1] for p in _dev_files]
             await self._log(
                 project_id, requirement_id, ticket_id, agent_name,
                 "complete", current_status, new_status,
                 f"开发完成 | 自测: {test_summary}",
                 detail_data={
-                    "files_count": len(result.get("files", {})),
+                    "files_count": len(_dev_files),
                     "files": _dev_file_names[:50],       # 文件名（chip 显示）
                     "file_paths": _dev_files[:50],        # 完整相对路径（点击定位）
+                    "screenshots": _st_shots[:10],        # 自测截图（时间轴缩略图预览）
                     "result_summary": str(result.get("dev_result", {}).get("notes", ""))[:500],
                     "self_test": self_test,
                     "git_commit": git_result.get("commit_hash") if git_result else None,
@@ -2864,12 +2911,16 @@ class TicketOrchestrator:
                 "updated_at": now_iso(),
             }, "id = ?", (ticket_id,))
 
+            _acc_shots = [result["screenshot_path"]] if result.get("screenshot_path") else []
             if new_status == TicketStatus.ACCEPTANCE_PASSED.value:
                 await self._log(
                     project_id, requirement_id, ticket_id, agent_name,
                     "accept", current_status, new_status,
                     "验收通过，转测试",
-                    detail_data={"git_commit": git_result.get("commit_hash") if git_result else None},
+                    detail_data={
+                        "git_commit": git_result.get("commit_hash") if git_result else None,
+                        "screenshots": _acc_shots,
+                    },
                 )
                 # Failure Library：验收通过说明本工单的历次反思策略最终奏效
                 try:
@@ -2911,7 +2962,11 @@ class TicketOrchestrator:
                             "duration_ms": result.get("duration_ms"),
                             "warnings": (result.get("warnings") or [])[:5],
                             "screenshots": (result.get("screenshots") or [])[:5],
+                            "preview_url": result.get("preview_url") or "",
+                            "has_canvas": result.get("has_canvas", True),
                             "runtime_skipped": bool(result.get("runtime_skipped")),
+                            "command": result.get("command"),
+                            "task_id": result.get("task_id") or "",
                         },
                     )
                     await self._maybe_openspec_verify(
@@ -2940,6 +2995,8 @@ class TicketOrchestrator:
                             "err_brief": err_brief,
                             "raw_tail": (result.get("raw_tail") or "")[-4000:],
                             "screenshots": (result.get("screenshots") or [])[:5],
+                            "command": result.get("command"),
+                            "task_id": result.get("task_id") or "",
                         },
                     )
                 return
@@ -3060,6 +3117,11 @@ class TicketOrchestrator:
             # 成功分支要认所有"非失败"状态 —— smoke_test 阶段成功时是
             # smoke_test_passed 而非 testing_done，用 == 判会被误当成失败打回。
             if new_status != TicketStatus.TESTING_FAILED.value:
+                _tr_shots = [
+                    (s.get("url") if isinstance(s, dict) else str(s))
+                    for s in (result.get("test_result", {}).get("screenshots") or [])
+                    if s
+                ]
                 await self._log(
                     project_id, requirement_id, ticket_id, agent_name,
                     "complete", current_status, new_status,
@@ -3067,6 +3129,7 @@ class TicketOrchestrator:
                     detail_data={
                         "git_commit": git_result.get("commit_hash") if git_result else None,
                         "git_files": git_result.get("files", []) if git_result else [],
+                        "screenshots": _tr_shots[:10],
                     },
                 )
                 # Failure Library：测试通过也算历次反思策略奏效
@@ -4364,10 +4427,10 @@ class TicketOrchestrator:
                     _flatten(n["children"], path)
         _flatten(children)
 
-        # 读取关键文件内容（入口文件 + src/ 下的代码文件）
+        # 读取关键文件内容（入口/配置文件 + src/ 与 scripts/ 下的代码文件）
         code = {}
-        ENTRY_FILES = {"index.html", "main.py", "app.py", "package.json"}
-        CODE_EXTS = {".html", ".js", ".jsx", ".ts", ".tsx", ".py", ".css", ".json"}
+        ENTRY_FILES = {"index.html", "main.py", "app.py", "package.json", "tsconfig.json", "vite.config.ts", "vite.config.js"}
+        CODE_EXTS = {".html", ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".py", ".css", ".json"}
         total_chars = 0
         MAX_TOTAL = 15000
         MAX_PER_FILE = 3000
@@ -4379,8 +4442,8 @@ class TicketOrchestrator:
             _, ext = (fname.rsplit(".", 1) if "." in fname else (fname, ""))
             ext = f".{ext}" if ext else ""
 
-            # 优先读入口文件，其次 src/ 下的代码文件
-            should_read = fname in ENTRY_FILES or (fp.startswith("src/") and ext in CODE_EXTS)
+            # 优先读入口/配置文件，其次 src/ 或 scripts/ 下的代码文件
+            should_read = fname in ENTRY_FILES or (fp.startswith(("src/", "scripts/")) and ext in CODE_EXTS)
             if not should_read:
                 continue
 
@@ -4609,14 +4672,26 @@ class TicketOrchestrator:
                     parts.append(f"备注: {notes}")
                 msg = " | ".join(parts)
 
-                # 结构化文件列表，供前端渲染文件标签
+                # 结构化文件列表，供前端渲染文件标签与图片缩略图
                 detail_data = {}
-                if files:
-                    full_paths = list(files.keys())[:8]
+                media_dict = (result or {}).get("_media_files") or {}
+                media_paths = list(media_dict.keys()) if isinstance(media_dict, dict) else list((result or {}).get("media_paths") or [])
+                all_paths = list(files.keys()) + [p for p in media_paths if p not in files]
+                all_names = [p.replace("\\", "/").split("/")[-1] for p in all_paths]
+                shots = list((result or {}).get("screenshots") or [])
+                st_shots = ((result or {}).get("self_test") or {}).get("screenshots") or []
+                tr_shots = ((result or {}).get("test_result") or {}).get("screenshots") or []
+                for s in (st_shots + tr_shots):
+                    u = s.get("url") if isinstance(s, dict) else s
+                    if u and u not in shots:
+                        shots.append(u)
+                if all_paths or shots:
                     detail_data = {
-                        "files": file_names[:8],
-                        "file_paths": full_paths,
-                        "file_count": len(files),
+                        "files": all_names[:16],
+                        "file_paths": all_paths[:16],
+                        "file_count": len(all_paths),
+                        "screenshots": shots[:10],
+                        "media_paths": media_paths[:16],
                         "elapsed_ms": elapsed_ms,
                         "status": status,
                     }
@@ -5305,11 +5380,51 @@ class TicketOrchestrator:
             except Exception:
                 pass
 
+            # 若用户是在某条具体日志（或挂在该日志下的评论串）上追问，向上追溯绑定的 log 详情注入 prompt
+            bound_log_brief = ""
+            try:
+                cur_cid = comment_id
+                bound_log_id = None
+                for _ in range(6):
+                    if not cur_cid:
+                        break
+                    crow = await db.fetch_one(
+                        "SELECT reply_to_log_id, reply_to_comment_id FROM ticket_comments WHERE id = ?",
+                        (cur_cid,),
+                    )
+                    if not crow:
+                        break
+                    if crow.get("reply_to_log_id"):
+                        bound_log_id = crow["reply_to_log_id"]
+                        break
+                    cur_cid = crow.get("reply_to_comment_id")
+                log_row = None
+                if bound_log_id:
+                    log_row = await db.fetch_one(
+                        "SELECT action, detail FROM ticket_logs WHERE id = ?", (bound_log_id,)
+                    )
+                if not log_row:
+                    log_row = await db.fetch_one(
+                        "SELECT action, detail FROM ticket_logs WHERE ticket_id = ? AND action = 'reject' ORDER BY created_at DESC LIMIT 1",
+                        (ticket_id,),
+                    )
+                if log_row and log_row.get("detail"):
+                    ld = json.loads(log_row["detail"])
+                    l_parts = [f"[{log_row.get('action')}] {ld.get('message') or ''}"]
+                    if ld.get("errors"):
+                        l_parts.append("报错明细: " + json.dumps(ld["errors"][:5], ensure_ascii=False))
+                    if ld.get("raw_tail"):
+                        l_parts.append("控制台输出尾部: " + str(ld["raw_tail"])[-400:])
+                    bound_log_brief = "\n".join(l_parts)
+            except Exception:
+                pass
+
             prompt = (
                 f"你是 {agent_name}，正在处理工单「{title}」。\n"
                 f"当前状态：{status}\n"
                 f"工单描述：{description}\n"
                 + (f"最新产出摘要：{result_brief}\n" if result_brief else "")
+                + (f"关联日志/报错详情：\n{bound_log_brief}\n" if bound_log_brief else "")
                 + f"\n== 历史对话 ==\n{history_text}\n"
                 f"\n== 用户最新评论 ==\n{comment_content}\n"
                 "\n请针对用户评论简洁回复（2-4句）。"

@@ -1177,7 +1177,7 @@ class ChatAssistantAgent(BaseAgent):
         )
 
         set_llm_context(agent_type=self.agent_type, action="global_chat_stream",
-                        turn_id=turn_id)
+                        turn_id=turn_id, session_id=session_id)
         try:
             async for event in engine.run(messages, system_prompt, tools, context):
                 if isinstance(event, TextDeltaEvent):

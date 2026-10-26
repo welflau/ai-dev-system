@@ -135,3 +135,103 @@ async def record_command(
         # 记录失败绝不能把被记录的命令带下水
         logger.warning("命令记录写入失败 %s %s: %s", source, tool, e)
     return rid
+
+
+async def record_traced_command(
+    *,
+    source: str,
+    tool: str,
+    command: str,
+    cwd: str = "",
+    exit_code: Optional[int] = None,
+    status: str = "success",
+    duration_ms: Optional[int] = None,
+    output: str = "",
+    noise: bool = False,
+    ticket_id: str = "",
+    requirement_id: str = "",
+    project_id: str = "",
+    agent_type: str = "",
+) -> str:
+    """给不经过 POST_TOOL_USE 的命令写时间轴 + 可点的后台记录。
+
+    `command_record_hook` 只在 SkillRunner / run_action 的 hook 链上取
+    `offer_command_record`。TestAgent 直接 `action.run(context)` 的路径
+    （H5 试玩里的 pip / playwright install / npm install）走不到 hook，
+    不在这里成对写入的话，时间轴没有安装过程，也没有「📟 后台记录」。
+
+    配对方式和 hook 相同：先生成 `record_id`，写进 `ticket_logs.detail.task_id`，
+    `ticket_command_log.log_id` 指回这条日志。没有 ticket_id 就整段跳过，
+    避免再留下 ticket_id='' 的孤儿行。
+    """
+    if not ticket_id:
+        return ""
+
+    record_id = generate_id("TCMD")
+    log_id = generate_id("LOG")
+    now = now_iso()
+
+    if status == "timeout":
+        head = f"⏱ {tool} 超时"
+    elif status == "error":
+        head = f"❌ {tool} exit={exit_code}"
+    else:
+        head = f"📟 {tool}"
+    message = f"{head} · {command[:100]}"
+
+    import json
+    detail = json.dumps({
+        "message": message,
+        "tool": tool,
+        "command": command,
+        "exit_code": exit_code,
+        "duration_ms": duration_ms,
+        "cwd": cwd or "",
+        "status": status,
+        "task_id": record_id,
+    }, ensure_ascii=False)
+
+    log_ok = False
+    try:
+        await db.execute(
+            "INSERT INTO ticket_logs "
+            "(id, ticket_id, project_id, agent_type, action, detail, level, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                log_id, ticket_id, project_id or "__global__",
+                agent_type or "System",
+                "command_run", detail,
+                "error" if status != "success" else "info",
+                now,
+            ),
+        )
+        log_ok = True
+    except Exception as log_err:
+        logger.debug("command_run 时间轴写入失败（记录仍会保留）: %s", log_err)
+
+    await record_command(
+        record_id=record_id, log_id=log_id if log_ok else "",
+        source=source, tool=tool, command=command, cwd=cwd,
+        exit_code=exit_code, status=status, duration_ms=duration_ms,
+        output=output, noise=noise,
+        ticket_id=ticket_id, project_id=project_id,
+        requirement_id=requirement_id, agent_type=agent_type,
+    )
+
+    if project_id and log_ok:
+        try:
+            from events import event_manager
+            await event_manager.publish_to_project(project_id, "log_added", {
+                "id": log_id,
+                "agent_type": agent_type or "System",
+                "action": "command_run",
+                "detail": detail,
+                "level": "error" if status != "success" else "info",
+                "created_at": now,
+                "ticket_id": ticket_id,
+                "_task_ref": record_id,
+            })
+        except Exception as sse_err:
+            logger.debug("record_traced_command SSE 失败（非致命）: %s", sse_err)
+
+    return record_id

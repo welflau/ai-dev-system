@@ -39,6 +39,7 @@ ADS_BASE_URL = os.environ.get("ADS_BASE_URL", "http://localhost:8000")
 
 # 当前会话的项目 ID（由 llm_client 注入，避免 DeepSeek 搜索 project_id）
 ADS_PROJECT_ID = os.environ.get("ADS_PROJECT_ID", "")
+ADS_SESSION_ID = os.environ.get("ADS_SESSION_ID", "")
 
 mcp = FastMCP("ads-data")
 
@@ -638,6 +639,7 @@ async def confirm_project(
 
     payload = {
         "action": "confirm_project",
+        "session_id": ADS_SESSION_ID,
         "data": {
             "name": (name or "").strip(),
             "traits": (traits or "").strip(),

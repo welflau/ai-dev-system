@@ -207,52 +207,63 @@ class CIPipelineRunner:
         """Develop 构建: 语法检查 + 冒烟测试 → 通过则合入主分支（main 或 master）"""
         logs = []
 
-        # 检测主分支名（main 或 master）
-        primary = await git_manager.get_primary_branch(project_id)
+        # 记录进入 CI 前的工作区分支（通常是正在跑下一张工单的 feat/... 分支），构建结束后切回去，
+        # 避免把共享工作区留在 main 上导致后续工单 Agent 误向 main 提交触发保护告警
+        orig_branch = await git_manager.get_current_branch(project_id)
 
-        # 切到 develop 分支
-        await git_manager.switch_branch(project_id, "develop")
-        head = await self._get_branch_head(project_id, "develop")
-        await db.update("ci_builds", {"commit_hash": head}, "id = ?", (build_id,))
-        logs.append({"step": "checkout", "msg": f"切换到 develop 分支 (HEAD: {head})"})
+        try:
+            # 检测主分支名（main 或 master）
+            primary = await git_manager.get_primary_branch(project_id)
 
-        # 模拟构建: 语法检查
-        repo_path = str(git_manager._repo_path(project_id))
-        syntax_ok, syntax_log = await self._check_syntax(repo_path)
-        logs.append({"step": "syntax_check", "msg": syntax_log, "passed": syntax_ok})
+            # 切到 develop 分支
+            await git_manager.switch_branch(project_id, "develop")
+            head = await self._get_branch_head(project_id, "develop")
+            await db.update("ci_builds", {"commit_hash": head}, "id = ?", (build_id,))
+            logs.append({"step": "checkout", "msg": f"切换到 develop 分支 (HEAD: {head})"})
 
-        # 模拟冒烟测试
-        smoke_ok, smoke_log = await self._smoke_test(repo_path)
-        logs.append({"step": "smoke_test", "msg": smoke_log, "passed": smoke_ok})
+            # 模拟构建: 语法检查
+            repo_path = str(git_manager._repo_path(project_id))
+            syntax_ok, syntax_log = await self._check_syntax(repo_path)
+            logs.append({"step": "syntax_check", "msg": syntax_log, "passed": syntax_ok})
 
-        # 模拟单元测试
-        unit_ok, unit_log = await self._run_tests(repo_path)
-        logs.append({"step": "unit_test", "msg": unit_log, "passed": unit_ok})
+            # 模拟冒烟测试
+            smoke_ok, smoke_log = await self._smoke_test(repo_path)
+            logs.append({"step": "smoke_test", "msg": smoke_log, "passed": smoke_ok})
 
-        all_passed = syntax_ok and smoke_ok
+            # 模拟单元测试
+            unit_ok, unit_log = await self._run_tests(repo_path)
+            logs.append({"step": "unit_test", "msg": unit_log, "passed": unit_ok})
 
-        if not all_passed:
-            await self._fail_build(build_id, project_id,
-                                   "Develop 构建失败: 语法检查或冒烟测试未通过", logs)
-            return
+            all_passed = syntax_ok and smoke_ok
 
-        # 构建通过 → 合入主分支
-        logs.append({"step": "merge", "msg": f"构建通过，开始合并 develop → {primary}"})
+            if not all_passed:
+                await self._fail_build(build_id, project_id,
+                                       "Develop 构建失败: 语法检查或冒烟测试未通过", logs)
+                return
 
-        # 确保主分支存在
-        await git_manager.ensure_branch(project_id, primary)
+            # 构建通过 → 合入主分支
+            logs.append({"step": "merge", "msg": f"构建通过，开始合并 develop → {primary}"})
 
-        merge_result = await git_manager.merge_branch(
-            project_id, "develop", primary,
-            message=f"ci: develop → {primary} (build {build_id[:12]})",
-            keep_conflict=True,  # 冲突时保留现场，下面尝试自动解决
-        )
+            # 确保主分支存在
+            await git_manager.ensure_branch(project_id, primary)
 
-        # 冲突自动解决：分文件类型分派策略
-        if not merge_result["success"] and merge_result.get("has_conflict"):
-            merge_result = await self._auto_resolve_conflict(
-                build_id, project_id, merge_result, logs,
+            merge_result = await git_manager.merge_branch(
+                project_id, "develop", primary,
+                message=f"ci: develop → {primary} (build {build_id[:12]})",
+                keep_conflict=True,  # 冲突时保留现场，下面尝试自动解决
             )
+
+            # 冲突自动解决：分文件类型分派策略
+            if not merge_result["success"] and merge_result.get("has_conflict"):
+                merge_result = await self._auto_resolve_conflict(
+                    build_id, project_id, merge_result, logs,
+                )
+        finally:
+            if orig_branch and orig_branch.startswith("feat/"):
+                try:
+                    await git_manager.switch_branch(project_id, orig_branch)
+                except Exception:
+                    pass
 
         if merge_result["success"]:
             merge_commit = merge_result.get("commit", "")

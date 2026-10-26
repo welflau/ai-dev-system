@@ -55,6 +55,13 @@ _SYSTEM_PROMPT = """你是资深 DevOps 运维工程师，正在诊断一条自�
 
 
 def _parse_json_lenient(raw: str) -> Dict[str, Any]:
+    try:
+        from llm_client import LLMClient
+        obj, _ = LLMClient._extract_json_value(raw or "")
+        if isinstance(obj, dict):
+            return obj
+    except Exception:
+        pass
     s = (raw or "").strip()
     if s.startswith("```"):
         lines = [ln for ln in s.split("\n") if not ln.strip().startswith("```")]

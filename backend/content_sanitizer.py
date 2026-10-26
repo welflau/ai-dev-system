@@ -56,9 +56,11 @@ _FENCE_RE = re.compile(r"^[ \t]*```+[ \t]*([a-zA-Z0-9_+#.\-]*)[ \t]*$", re.MULTI
 # 散文信号：出现这些就更像人在说话，而不是源码
 _PROSE_HINTS = (
     "已修复", "已完成", "已恢复", "已剔除", "已更新", "已调整", "已添加",
-    "修复了", "完整内容", "以下是", "如下所示", "说明：", "注意：",
+    "已按要求", "已生成", "已写入", "已创建", "已替换", "修改后的",
+    "修复了", "完整内容", "文件内容", "以下是", "如下所示", "说明：", "注意：",
     "here is", "here's", "i've ", "i have ", "fixed", "updated the",
-    "the following", "as requested", "let me know",
+    "the following", "as requested", "let me know", "full content",
+    "file written", "verified working", "typecheck passes",
 )
 
 # 代码信号：出现这些就更像源码而不是散文
@@ -122,6 +124,95 @@ def _looks_like_prose(text: str) -> bool:
     return False
 
 
+_CODE_LINE_START_RE = re.compile(
+    r"^(?:"
+    r"#!|"
+    r"//|/\*|\*|--|<!|@[A-Za-z_]|"
+    r"(?:import|export|from|const|let|var|function|async|class|interface|type|enum|"
+    r"namespace|declare|module|public|private|protected|readonly|abstract| default|"
+    r"def|return|if|for|while|switch|try|catch|package|using|struct| void|int|float|bool)\b|"
+    r"#include\b|#define\b|#pragma\b|"
+    r"[\{\[\(<]"
+    r")"
+)
+
+
+def _looks_like_code_start_line(line: str) -> bool:
+    s = (line or "").strip()
+    if not s:
+        return False
+    if _looks_like_prose(s) and not s.startswith(("//", "/*", "*", "#", "--", "<!--")):
+        return False
+    return bool(_CODE_LINE_START_RE.match(s))
+
+
+def _strip_unfenced_prose(content: str, ext: str) -> Tuple[str, Optional[str]]:
+    """处理『无围栏但前后带解释散文』的回复（当 prompt 要求不要围栏时极常见）。"""
+    import json as _json
+
+    # 1. JSON 文件：若整体解析失败，尝试剥掉首尾散文提取外层 {...} / [...]
+    if ext == ".json":
+        s = content.strip()
+        try:
+            _json.loads(s)
+            return content, None
+        except Exception:
+            pass
+        # 找第一个独立成行的 { 或 [ 与最后一个独立成行的 } 或 ]
+        m_obj = re.search(r"(^\s*\{[\s\S]*^\s*\})", content, re.MULTILINE)
+        m_arr = re.search(r"(^\s*\[[\s\S]*^\s*\])", content, re.MULTILINE)
+        cand = m_obj.group(1) if m_obj else (m_arr.group(1) if m_arr else "")
+        if cand:
+            outside = (content[:content.find(cand)] + "\n" + content[content.find(cand) + len(cand):]).strip()
+            if _looks_like_prose(outside):
+                try:
+                    _json.loads(cand)
+                    return cand.strip("\n"), f"剔除 JSON 外围无围栏回复文本（{len(outside)} 字符）"
+                except Exception:
+                    pass
+        return content, None
+
+    # 2. 源码文件：首行是散文（非注释）时，向后找第一行真正的源码/注释起点
+    lines = content.splitlines()
+    non_empty_indices = [i for i, ln in enumerate(lines) if ln.strip()]
+    if not non_empty_indices:
+        return content, None
+
+    first_idx = non_empty_indices[0]
+    first_line = lines[first_idx].strip()
+    if _is_comment_or_docstring(first_line) or not _looks_like_prose(first_line):
+        return content, None
+
+    code_start = None
+    for idx in non_empty_indices[1:]:
+        ln = lines[idx].strip()
+        if _looks_like_code_start_line(ln):
+            code_start = idx
+            break
+
+    if code_start is None:
+        return content, None
+
+    kept = lines[code_start:]
+    # 检查尾部是否还挂着「说明：…」「注意：…」之类散文段落
+    while kept:
+        last_ln = kept[-1].strip()
+        if not last_ln:
+            kept.pop()
+            continue
+        if not _is_comment_or_docstring(last_ln) and _looks_like_prose(last_ln):
+            kept.pop()
+            continue
+        break
+
+    body = "\n".join(kept).strip("\n")
+    if not body or not any(h in body for h in _CODE_HINTS):
+        return content, None
+
+    head_prose = " ".join(ln.strip() for ln in lines[:code_start] if ln.strip())[:60]
+    return body, f"剔除无围栏前置/后置回复文本（开头：{head_prose}…）"
+
+
 def strip_code_fences(content: str, path: str = "") -> Tuple[str, Optional[str]]:
     """摘掉 LLM 回复里的围栏和散文，返回 (净化后内容, 说明) 。
 
@@ -143,8 +234,9 @@ def strip_code_fences(content: str, path: str = "") -> Tuple[str, Optional[str]]
         return content, None  # .md 的围栏是正文
 
     spans = _fence_spans(content)
+    if len(spans) == 0:
+        return _strip_unfenced_prose(content, ext)
     if len(spans) != 1:
-        # 0 个：没围栏，无事可做。
         # 多个：可能是文档或多文件回复，切哪个都可能错，不猜。
         return content, None
 
@@ -199,6 +291,13 @@ def find_content_defects(content: str, path: str = "") -> List[str]:
 
     if content.lstrip().startswith("[LLM_UNAVAILABLE]"):
         defects.append("内容是 LLM 不可用的占位符")
+
+    if ext == ".json":
+        import json as _json
+        try:
+            _json.loads(content)
+        except Exception as e:
+            defects.append(f"JSON 语法无效：{e.msg} (line {e.lineno})")
 
     return defects
 

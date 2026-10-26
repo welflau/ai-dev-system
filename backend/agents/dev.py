@@ -91,8 +91,30 @@ class DevAgent(BaseAgent):
         action = create_action("h5_typecheck")
         if action is None:
             return {"status": "error", "error": "h5_typecheck 未注册（H5 插件未加载）"}
-        result = await action.run(context)
-        return result.to_dict()
+        ctx = dict(context)
+        ctx.setdefault("agent_type", self.agent_type)
+        t0 = time.monotonic()
+        await self.emit_step(
+            "H5 类型检查（tsc --noEmit）", ctx, phase="start",
+            step_index=1, step_total=1,
+        )
+        result = await action.run(ctx)
+        d = result.to_dict()
+        dur = int((time.monotonic() - t0) * 1000)
+        task_id = str(d.get("task_id") or "")
+        if result.success or d.get("status") == "success":
+            await self.emit_step(
+                "H5 类型检查（tsc --noEmit）", ctx, phase="done",
+                step_index=1, step_total=1, duration_ms=dur, task_id=task_id,
+            )
+        else:
+            await self.emit_step(
+                "H5 类型检查（tsc --noEmit）", ctx, phase="error",
+                step_index=1, step_total=1, duration_ms=dur,
+                reason=result.message or d.get("message") or "",
+                task_id=task_id,
+            )
+        return d
 
     async def _do_develop(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """开发：有 OpenSpec change/tasks 时强制走 Apply；否则 WriteCode / PlanCodeChange。"""
@@ -165,9 +187,53 @@ class DevAgent(BaseAgent):
         t1 = time.monotonic()
         await self.emit_step("自测验证", context, phase="start", step_index=2, step_total=step_total)
         test_result = await self.run_action("self_test", context)
+        st = test_result.get("self_test") or {}
+        st_checks = st.get("checks") or []
+        st_shots = [
+            (s.get("url") if isinstance(s, dict) else str(s))
+            for s in (st.get("screenshots") or [])
+            if s
+        ]
+        st_files = list((test_result.get("files") or {}).keys())
+        for sp in st_shots:
+            if sp not in st_files:
+                st_files.append(sp)
+        st_lines = [st.get("summary") or ""]
+        failed_checks = []
+        for ck in st_checks:
+            if isinstance(ck, dict):
+                mark = "✓" if ck.get("passed") else "✗"
+                st_lines.append(f"  {mark} {ck.get('name', '?')}: {ck.get('detail', '')}")
+                if not ck.get("passed") and ck.get("name") in ("语法检查", "代码非空", "磁盘落地"):
+                    failed_checks.append(f"{ck.get('name')}: {ck.get('detail', '')}")
+        st_summary = "\n".join(x for x in st_lines if x).strip()
+        st_dur = int((time.monotonic() - t1) * 1000)
+
+        if failed_checks:
+            fail_detail = "；".join(failed_checks)
+            await self.emit_step("自测验证", context, phase="error", step_index=2, step_total=step_total,
+                                 duration_ms=st_dur,
+                                 files=st_files,
+                                 reason=fail_detail,
+                                 output_summary=st_summary)
+            return {
+                "status": "development_failed",
+                "message": f"自测未通过（{fail_detail}）",
+                "files": files,
+                "self_test": st,
+                "dev_result": code_result.get("dev_result") or {"files": files, "notes": fail_detail},
+                "code_gen_failure": {
+                    "reason": f"自测未通过：{fail_detail}",
+                    "file_count": len(files),
+                    "files": list(files.keys())[:20],
+                    "notes": st_summary[:300],
+                },
+            }
+
         await self.emit_step("自测验证", context, phase="done", step_index=2, step_total=step_total,
-                             duration_ms=int((time.monotonic() - t1) * 1000),
-                             files=list((test_result.get("files") or {}).keys()))
+                             duration_ms=st_dur,
+                             files=st_files,
+                             output_summary=st_summary)
 
         # 合并结果
         result = {**code_result}
@@ -383,20 +449,27 @@ class DevAgent(BaseAgent):
         failure_type = "testing_failed"   # 默认兜底
 
         if ticket_id:
-            cur = await db.fetch_one("SELECT status FROM tickets WHERE id = ?", (ticket_id,))
-            cur_status = (cur or {}).get("status") or ""
-            if cur_status == "engine_compile_failed":
-                failure_type = "engine_compile_failed"
-            elif cur_status == "h5_typecheck_failed":
-                failure_type = "h5_typecheck_failed"
-            elif cur_status == "h5_playtest_failed":
-                failure_type = "h5_playtest_failed"
-            elif cur_status == "play_test_failed":
-                # v0.19 Phase ②：UE Automation playtest 失败
-                failure_type = "play_test_failed"
-            elif cur_status == "self_test_failed":
-                # v0.19.x A 方案：UE 静态预检（Layer 1）失败
-                failure_type = "self_test_failed"
+            from plugins.registry import enrich_plugin_fix_context, is_plugin_failure_type
+
+            # 关键：orchestrator 在调 agent.execute("fix_issues") 前已经把数据库 tickets.status
+            # 改成了 `development_in_progress`！所以必须优先读 context["trigger_status"]，
+            # 兜底再查最近一条 reject 日志的 to_status，最后才看 tickets.status。
+            cur_status = str(context.get("trigger_status") or "")
+            if not cur_status or cur_status.endswith("_in_progress"):
+                last_rej = await db.fetch_one(
+                    """SELECT to_status FROM ticket_logs
+                       WHERE ticket_id = ? AND action = 'reject'
+                       ORDER BY created_at DESC LIMIT 1""",
+                    (ticket_id,),
+                )
+                if last_rej and last_rej.get("to_status"):
+                    cur_status = str(last_rej["to_status"])
+            if not cur_status:
+                cur = await db.fetch_one("SELECT status FROM tickets WHERE id = ?", (ticket_id,))
+                cur_status = (cur or {}).get("status") or ""
+
+            if is_plugin_failure_type(cur_status):
+                failure_type = cur_status
             elif cur_status == "development_failed":
                 # 代码生成本身没产出有效代码（LLM 超时 / 零文件 / 只有降级模板）
                 failure_type = "development_failed"
@@ -405,45 +478,36 @@ class DevAgent(BaseAgent):
             elif cur_status == "acceptance_rejected":
                 failure_type = "acceptance_rejected"
 
-            # 对于编译 / tsc 失败，从最近的 reject 日志 detail 里拿 errors 列表
-            if failure_type in ("engine_compile_failed", "h5_typecheck_failed", "h5_playtest_failed"):
+            # 插件级失败上下文提取（plugins/<id>/reflection.py）
+            if is_plugin_failure_type(failure_type):
                 log = await db.fetch_one(
                     """SELECT detail FROM ticket_logs
                        WHERE ticket_id = ? AND action = 'reject'
                        ORDER BY created_at DESC LIMIT 1""",
                     (ticket_id,),
                 )
-                if log and log.get("detail"):
-                    try:
-                        det = json.loads(log["detail"])
-                        context["compile_errors"] = det.get("errors") or []
-                        context["compile_warnings"] = det.get("warnings") or []
-                        context["compile_command"] = det.get("command") or ""
-                        logger.info(
-                            "🔧 fix_issues 接到编译失败 context: %d errors",
-                            len(context["compile_errors"]),
-                        )
-                    except Exception as e:
-                        logger.warning("解析编译失败 detail 异常: %s", e)
-
-            # v0.19.x A 方案：UE 静态预检失败 → 从 artifacts 拉 blocking issues
-            # （self_test 失败时 orchestrator 把 issues 存进 ticket.result）
-            if failure_type == "self_test_failed":
                 t_row = await db.fetch_one(
                     "SELECT result FROM tickets WHERE id = ?", (ticket_id,)
                 )
                 if t_row and t_row.get("result"):
+                    context["_ticket_result_json"] = t_row["result"]
+                det: Dict[str, Any] = {}
+                if log and log.get("detail"):
                     try:
-                        r = json.loads(t_row["result"])
-                        st = r.get("self_test") or {}
-                        blocking_issues = st.get("ue_blocking_issues") or []
-                        context["ue_blocking_issues"] = blocking_issues
-                        logger.info(
-                            "🔍 fix_issues 接到 UE 自测 blocking context: %d issues",
-                            len(blocking_issues),
-                        )
+                        parsed = json.loads(log["detail"])
+                        if isinstance(parsed, dict):
+                            det = parsed
                     except Exception as e:
-                        logger.warning("解析 self_test result 异常: %s", e)
+                        logger.warning("解析插件失败 detail 异常: %s", e)
+                try:
+                    enrich_plugin_fix_context(failure_type, det, context)
+                    logger.info(
+                        "🔌 fix_issues 插件接管 %s context: %d errors",
+                        failure_type, len(context.get("compile_errors") or []),
+                    )
+                except Exception as e:
+                    logger.warning("插件 enrich_fix_context 异常: %s", e)
+                context.pop("_ticket_result_json", None)
 
             # 代码生成失败：从最近一条 reject 日志读失败原因，注入反思
             if failure_type == "development_failed":
@@ -466,44 +530,23 @@ class DevAgent(BaseAgent):
                     except Exception as e:
                         logger.warning("解析代码生成失败 detail 异常: %s", e)
 
-            # v0.19：playtest 失败，从 reject 日志拿失败测试列表
-            if failure_type == "play_test_failed":
-                log = await db.fetch_one(
-                    """SELECT detail FROM ticket_logs
-                       WHERE ticket_id = ? AND action = 'reject'
-                       ORDER BY created_at DESC LIMIT 1""",
-                    (ticket_id,),
-                )
-                if log and log.get("detail"):
-                    try:
-                        det = json.loads(log["detail"])
-                        context["failed_tests"] = det.get("tests") or []
-                        context["playtest_summary"] = det.get("summary") or {}
-                        context["playtest_command"] = det.get("command") or ""
-                        logger.info(
-                            "🎮 fix_issues 接到 playtest 失败 context: %d failed tests",
-                            len(context["failed_tests"]),
-                        )
-                    except Exception as e:
-                        logger.warning("解析 playtest 失败 detail 异常: %s", e)
-
-                # v0.20 UCP：若 Editor 可用，查当前关卡 Actor 列表辅助 Reflexion
-                if context.get("ucp_available"):
-                    try:
-                        from plugins.registry import require_action
-                        ucp_result = await require_action("ue_editor_control").run({
-                            "op": "get_actors",
-                            "project_id": context.get("project_id"),
-                        })
-                        if ucp_result.success:
-                            actors = ucp_result.data.get("result", [])
-                            context["editor_state"] = {
-                                "actors": actors[:50],  # 最多50个
-                                "actor_count": len(actors),
-                            }
-                            logger.info("🎮 UCP editor_state 注入: %d actors", len(actors))
-                    except Exception as e:
-                        logger.debug("UCP editor_state 查询失败（非致命）: %s", e)
+            # 编辑器现场查询，不是失败信号格式化。诊断字段已由插件 enrich 写入。
+            if failure_type == "play_test_failed" and context.get("ucp_available"):
+                try:
+                    from plugins.registry import require_action
+                    ucp_result = await require_action("ue_editor_control").run({
+                        "op": "get_actors",
+                        "project_id": context.get("project_id"),
+                    })
+                    if ucp_result.success:
+                        actors = ucp_result.data.get("result", [])
+                        context["editor_state"] = {
+                            "actors": actors[:50],
+                            "actor_count": len(actors),
+                        }
+                        logger.info("🎮 UCP editor_state 注入: %d actors", len(actors))
+                except Exception as e:
+                    logger.debug("UCP editor_state 查询失败（非致命）: %s", e)
 
         context["failure_type"] = failure_type
         return await self._do_retry_with_reflection(context)
@@ -523,8 +566,31 @@ class DevAgent(BaseAgent):
         sop_cfg = context.get("sop_config") or {}
         enable_reflection = sop_cfg.get("enable_reflection", True)
 
+        # 若插件确定性快修器已能 100% 解决本次编译/类型错误，直接跳过 120s 的 LLM 反思，秒进 _do_develop
+        skip_llm_reflection = False
+        try:
+            from plugins.registry import apply_plugin_deterministic_fixes
+            ft_cur = context.get("failure_type") or ""
+            errs_cur = context.get("compile_errors") or []
+            if ft_cur and errs_cur:
+                auto_fixed = apply_plugin_deterministic_fixes(
+                    ft_cur,
+                    context.get("repo_path") or "",
+                    errs_cur,
+                    context.get("existing_code") or {},
+                )
+                err_files = {
+                    (e.get("file") or "").replace("\\", "/").lstrip("./")
+                    for e in errs_cur if e.get("file")
+                }
+                if err_files and err_files.issubset(set(auto_fixed.keys())):
+                    skip_llm_reflection = True
+                    logger.info("⚡ 插件确定性自愈已覆盖全部报错文件 %s，跳过 LLM 反思直接修复", list(err_files))
+        except Exception:
+            pass
+
         reflection = None
-        if enable_reflection and self.has_action("reflect"):
+        if enable_reflection and self.has_action("reflect") and not skip_llm_reflection:
             # 步骤 2：反思根因
             t1 = time.monotonic()
             await self.emit_step("反思失败根因", context, phase="start", step_index=2, step_total=step_total)
@@ -532,8 +598,14 @@ class DevAgent(BaseAgent):
             reflection = refl_result.get("reflection") or {}
             reflection["retry_count"] = context.get("retry_count", 1)
             context["reflection"] = reflection
+            refl_summary_lines = [
+                f"根因：{reflection.get('root_cause') or '(无)'}",
+                f"下一步策略：{reflection.get('next_strategy') or '(无)'}",
+                f"置信度：{reflection.get('confidence', '?')}",
+            ]
             await self.emit_step("反思失败根因", context, phase="done", step_index=2, step_total=step_total,
-                                 duration_ms=int((time.monotonic() - t1) * 1000))
+                                 duration_ms=int((time.monotonic() - t1) * 1000),
+                                 output_summary="\n".join(refl_summary_lines))
             logger.info(
                 "🔍 Reflection 已注入（retry=%d, confidence=%.2f）",
                 reflection["retry_count"],
@@ -548,20 +620,15 @@ class DevAgent(BaseAgent):
                     context["ticket_description"] = (
                         f"{context.get('ticket_description', '')} [返工原因] {rr}"
                     )
-            elif ft in ("engine_compile_failed", "h5_typecheck_failed", "h5_playtest_failed"):
+            elif context.get("compile_errors"):
                 errs = context.get("compile_errors") or []
-                if errs:
-                    label = {
-                        "h5_typecheck_failed": "tsc 错误",
-                        "h5_playtest_failed": "H5 试玩错误",
-                    }.get(ft, "编译错误")
-                    brief = "; ".join(
-                        f"{e.get('file', '?')}:{e.get('line', '?')} {e.get('code', '')} {(e.get('msg') or '')[:80]}"
-                        for e in errs[:5]
-                    )
-                    context["ticket_description"] = (
-                        f"{context.get('ticket_description', '')} [{label}] {brief}"
-                    )
+                brief = "; ".join(
+                    f"{e.get('file', '?')}:{e.get('line', '?')} {e.get('code', '')} {(e.get('msg') or '')[:80]}"
+                    for e in errs[:5]
+                )
+                context["ticket_description"] = (
+                    f"{context.get('ticket_description', '')} [编译/门禁错误] {brief}"
+                )
             else:
                 ti = context.get("test_issues", [])
                 if ti:
@@ -574,8 +641,16 @@ class DevAgent(BaseAgent):
         await self.emit_step("重新开发", context, phase="start", step_index=3, step_total=step_total)
         t2 = time.monotonic()
         result = await self._do_develop(context)
-        await self.emit_step("重新开发", context, phase="done", step_index=3, step_total=step_total,
-                             duration_ms=int((time.monotonic() - t2) * 1000))
+        re_files = list((result.get("files") or {}).keys())
+        re_ok = result.get("status") not in ("error", "development_failed")
+        await self.emit_step(
+            "重新开发", context,
+            phase="done" if re_ok else "error",
+            step_index=3, step_total=step_total,
+            duration_ms=int((time.monotonic() - t2) * 1000),
+            files=re_files,
+            reason="" if re_ok else (result.get("message") or "重新开发未通过"),
+        )
 
         # 4. 带出反思，供 orchestrator 写入 ticket_logs
         if reflection:
