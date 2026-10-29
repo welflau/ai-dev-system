@@ -84,7 +84,7 @@ async def lifespan(app: FastAPI):
     from permissions.gate import permission_gate as _pg
     logger.info("权限审批 PermissionGate 就绪（超时=%ds，高风险规则 %d 条）",
                 _pg.APPROVAL_TIMEOUT_SECONDS if hasattr(_pg, 'APPROVAL_TIMEOUT_SECONDS') else 300,
-                0)
+                len(getattr(_pg, '_HIGH_RISK_RULES', [])))
 
     from llm_client import llm_client
     if llm_client.is_configured:
@@ -1041,6 +1041,26 @@ class NoCacheStaticMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(NoCacheStaticMiddleware)
 
+
+class ArtResGuardMiddleware(BaseHTTPMiddleware):
+    """守卫 /art-res 静态服务：拦截敏感路径，防止私有/未入库资产被直接访问。
+
+    G_ArtRes 根目录下存在 private/（含未授权角色模型）、.git/、node_modules/
+    等不应通过 HTTP 暴露的内容。StaticFiles 挂载整个根目录时，这些路径必须
+    在进入静态文件处理前拦掉，否则会通过 /art-res/private/... 直接下载。
+    """
+    _FORBIDDEN = ("/art-res/private", "/art-res/.git", "/art-res/node_modules")
+
+    async def dispatch(self, request, call_next):
+        path = request.url.path
+        blocked = any(path == p or path.startswith(p + "/") for p in self._FORBIDDEN)
+        if blocked:
+            return Response(status_code=404)
+        return await call_next(request)
+
+
+app.add_middleware(ArtResGuardMiddleware)
+
 if frontend_dir.exists():
     app.mount("/static", StaticFiles(directory=str(frontend_dir)), name="static")
 
@@ -1069,6 +1089,16 @@ app.mount("/screenshots", StaticFiles(directory=str(_screenshots_dir)), name="sc
 _generated_images_dir = _BASE_DIR / "generated-images"
 _generated_images_dir.mkdir(exist_ok=True)
 app.mount("/generated-images", StaticFiles(directory=str(_generated_images_dir)), name="generated-images")
+
+# 挂载美术资产库目录（G_ArtRes，供资产库缩略图访问）。
+# 文件路径格式为相对 G_ArtRes 根目录（如 icons/lucide/xxx.svg），前端用
+# window.artAssetsBase + file_path 拼接访问。private/、.git/、node_modules/
+# 由 ArtResGuardMiddleware 拦截。
+_art_res_path = settings.ART_ASSETS_LOCAL_PATH
+if _art_res_path and Path(_art_res_path).exists():
+    app.mount("/art-res", StaticFiles(directory=str(_art_res_path)), name="art-res")
+else:
+    logger.warning("ART_ASSETS_LOCAL_PATH 未配置或目录不存在，跳过 /art-res 静态挂载（资产缩略图不可用）")
 
 
 import mimetypes as _mimetypes

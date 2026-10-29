@@ -22,16 +22,17 @@ else:
     BASE_DIR = Path(__file__).resolve().parent
     _FRONTEND_DEFAULT = str(BASE_DIR.parent / "frontend")
 
-# .env 是 LightAI key 的权威来源（image_gen 的 refresh 端点写的就是 .env）。
-# load_dotenv 默认 override=False，进程环境里残留的旧 key（如宿主进程启动时
-# 注入的过期 LIGHTAI_API_KEY）会盖过 .env → 401。这里强制用 .env 覆盖，
-# 杜绝「.env 已更新但服务仍读旧 key」。
+# backend/.env 是权威配置源（image_gen 的 refresh 端点写的就是它）。
+# 服务可能从项目根目录启动（start-backend.bat 会 cd 到项目根），此时
+# load_dotenv() 加载的是根目录 .env（只有基础 LLM 配置），而 ART_ASSETS_LOCAL_PATH、
+# GLOBAL_KNOWLEDGE_LOCAL_PATH、LIGHTAI_* 等都在 backend/.env 里，会读不到。
+# 因此这里强制用 backend/.env 覆盖全部非空变量，确保配置一致、可读。
 _ENV_PATH = (_APP_DIR if _FROZEN else BASE_DIR) / ".env"
 try:
     _dotenv = dotenv_values(str(_ENV_PATH))
-    for _k in ("LIGHTAI_API_KEY", "LIGHTAI_API_BASE"):
-        if _dotenv.get(_k):
-            os.environ[_k] = _dotenv[_k]
+    for _k, _v in _dotenv.items():
+        if _v:
+            os.environ[_k] = _v
 except Exception:
     pass
 

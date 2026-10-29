@@ -276,10 +276,9 @@ body.shell-project .main-container {
     overflow: hidden;
 }
 
-/* 项目列表页：固定高度 + flex 列布局，让日志面板吸附到底部 */
+/* 项目列表页（全局页）：两列布局（侧栏 + 内容区），由 .global-layout 承接 */
 #projectListPage.page.active {
-    display: flex;
-    flex-direction: column;
+    display: block;
     padding: 0;
     height: var(--app-stage-height);
     overflow: hidden;
@@ -293,6 +292,109 @@ body.shell-project .main-container {
     flex: 1;
     overflow-y: auto;
     min-height: 0;   /* 允许 flex 子元素缩小 */
+}
+
+/* ── 全局页两列布局 ────────────────────────────── */
+.global-layout {
+    display: flex;
+    flex-direction: column;  /* 工具条在上横跨全宽，下方侧栏 + 内容 */
+    height: 100%;
+    position: relative;
+}
+/* 顶部工具条（常驻横跨全宽）：收起/展开按钮固定在此，
+   按了收起后按钮不跳位 —— 侧栏只收起导航部分 */
+.global-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: var(--shell-titlebar-height);
+    min-height: var(--shell-titlebar-height);
+    padding: 0 12px 0 10px;
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    box-sizing: border-box;
+}
+.global-toolbar h3 {
+    min-width: 0;
+    margin: 0;
+    font-size: 15px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+/* 工具条上的面板标题 / 操作按钮组：由 switchGlobalPanel 按 data-gt-panel 切换显隐 */
+.gt-panel-title,
+.gt-panel-actions {
+    display: none;
+    align-items: center;
+    gap: 8px;
+}
+.gt-panel-title.on,
+.gt-panel-actions.on {
+    display: flex;
+}
+.gt-panel-title {
+    margin-left: 12px;
+    min-width: 0;
+}
+.gt-title {
+    font-size: 15px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+.gt-sub {
+    font-size: 12px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.gt-panel-actions {
+    margin-left: auto;   /* 按钮组贴右 */
+    flex-shrink: 0;
+}
+.global-main {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+}
+.global-main .sidebar {
+    grid-row: auto;  /* .sidebar 默认 grid-row:1，flex 下显式复位避免歧义 */
+}
+.global-layout.sidebar-collapsed .sidebar {
+    display: none;
+}
+.global-content {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+.global-panel {
+    display: none;
+    flex: 1;
+    min-height: 0;
+    flex-direction: column;
+}
+.global-panel.active {
+    display: flex;
+}
+.global-panel .page-header {
+    margin-bottom: 0;  /* 间距由 .global-panel-body 的 padding 控制 */
+}
+.global-panel-body {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+    padding: 8px 24px 16px;
+}
+.global-asset-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 8px;
 }
 
 /* ==================== 项目列表 ==================== */

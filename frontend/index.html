@@ -152,21 +152,86 @@
     <!-- ==================== 主内容 ==================== -->
     <main class="main-container">
 
-        <!-- 项目列表页 -->
+        <!-- 项目列表页（全局页） -->
         <section id="projectListPage" class="page active">
-            <div class="page-header">
-                <h1>我的项目</h1>
-                <div class="page-header-actions">
-                    <button class="btn btn-ghost" onclick="showSystemSettingsModal()">⚙️ 系统设置</button>
-                    <button class="btn btn-ghost" onclick="showGlobalChatTraceModal()">🗂 全局对话追踪</button>
-                    <button class="btn btn-secondary" onclick="showImportProjectModal()">📥 导入现有工程</button>
-                    <button class="btn btn-primary" onclick="showCreateProjectModal()">+ 新建项目</button>
-                </div>
-            </div>
-            <div class="project-grid" id="projectGrid"></div>
+            <div class="global-layout" id="globalLayout">
+                <!-- 顶部工具条（常驻横跨全宽）：左侧全局侧栏控制 + 右侧当前面板标题/操作。
+                     面板标题与按钮放工具条上，内容区只留主体（随 switchGlobalPanel 切换显隐） -->
+                <div class="global-toolbar">
+                    <button type="button" class="sidebar-toggle-btn" id="globalSidebarToggleBtn"
+                            onclick="toggleGlobalSidebar()" title="收起侧栏"
+                            aria-label="收起侧栏" aria-expanded="true">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                            <path d="M2 1.5A1.5 1.5 0 0 0 .5 3v10A1.5 1.5 0 0 0 2 14.5h12a1.5 1.5 0 0 0 1.5-1.5V3A1.5 1.5 0 0 0 14 1.5H2zM2 2.5h3v11H2a.5.5 0 0 1-.5-.5V3a.5.5 0 0 1 .5-.5zm4 0h8a.5.5 0 0 1 .5.5v10a.5.5 0 0 1-.5.5H6v-11z"/>
+                        </svg>
+                    </button>
 
-            <!-- 全局 AI 助手日志面板（底部停靠，与项目页面日志面板同款） -->
-            <div class="log-panel" id="globalLogPanel" style="flex-shrink:0;">
+                    <!-- 面板：项目 -->
+                    <div class="gt-panel-title on" data-gt-panel="projects">
+                        <span class="gt-title">我的项目</span>
+                    </div>
+                    <div class="gt-panel-actions on" data-gt-panel="projects">
+                        <button class="btn btn-ghost" onclick="showSystemSettingsModal()">⚙️ 系统设置</button>
+                        <button class="btn btn-ghost" onclick="showGlobalChatTraceModal()">🗂 全局对话追踪</button>
+                        <button class="btn btn-secondary" onclick="showImportProjectModal()">📥 导入现有工程</button>
+                        <button class="btn btn-primary" onclick="showCreateProjectModal()">+ 新建项目</button>
+                    </div>
+
+                    <!-- 面板：知识库 -->
+                    <div class="gt-panel-title" data-gt-panel="knowledge">
+                        <span class="gt-title">全局知识库</span>
+                        <span class="gt-sub">跨项目共享，来自 G_Knowledge</span>
+                    </div>
+
+                    <!-- 面板：资产库 -->
+                    <div class="gt-panel-title" data-gt-panel="assets">
+                        <span class="gt-title">全局资产库</span>
+                        <span class="gt-sub">跨项目共享，来自 G_ArtRes</span>
+                    </div>
+
+                    <!-- 面板：Agent -->
+                    <div class="gt-panel-title" data-gt-panel="agents">
+                        <span class="gt-title">全局 Agent</span>
+                        <span class="gt-sub">内置注册表（跨项目共享）</span>
+                    </div>
+                </div>
+                <div class="global-main">
+                <!-- 全局侧边栏（仅导航） -->
+                <aside class="sidebar" id="globalSidebar">
+                    <nav class="sidebar-nav">
+                        <a class="nav-item active" data-global-panel="projects" onclick="switchGlobalPanel('projects')">🏠 项目</a>
+                        <a class="nav-item" data-global-panel="knowledge" onclick="switchGlobalPanel('knowledge')">📚 知识库</a>
+                        <a class="nav-item" data-global-panel="assets" onclick="switchGlobalPanel('assets')">🖼️ 资产库</a>
+                        <a class="nav-item" data-global-panel="agents" onclick="switchGlobalPanel('agents')">🤖 Agent</a>
+                    </nav>
+                </aside>
+
+                <!-- 全局内容区 -->
+                <div class="global-content">
+                    <!-- 面板：项目列表（默认） -->
+                    <div class="global-panel active" id="globalPanel-projects">
+                        <div class="project-grid" id="projectGrid"></div>
+                    </div>
+
+                    <!-- 面板：全局知识库 -->
+                    <div class="global-panel" id="globalPanel-knowledge">
+                        <div class="global-panel-body" id="globalKnowledgeList"><div class="empty-state-sm">加载中...</div></div>
+                    </div>
+
+                    <!-- 面板：全局资产库 -->
+                    <div class="global-panel" id="globalPanel-assets">
+                        <div class="global-panel-body">
+                            <div id="globalAssetGrid" class="global-asset-grid"></div>
+                        </div>
+                    </div>
+
+                    <!-- 面板：全局 Agent -->
+                    <div class="global-panel" id="globalPanel-agents">
+                        <div class="global-panel-body" id="globalAgentList"><div class="empty-state-sm">加载中...</div></div>
+                    </div>
+
+                    <!-- 全局 AI 助手日志面板（底部停靠，与项目页面日志面板同款） -->
+                    <div class="log-panel" id="globalLogPanel" style="flex-shrink:0;">
                 <div class="log-panel-resize" id="globalLogPanelResize"></div>
                 <div class="log-panel-header">
                     <div class="log-panel-title">
@@ -194,6 +259,9 @@
                     </div>
                 </div>
             </div>
+                </div><!-- /global-content -->
+                </div><!-- /global-main -->
+            </div><!-- /global-layout -->
         </section>
 
         <!-- 项目详情页 -->

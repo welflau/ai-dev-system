@@ -11,6 +11,10 @@ let currentProject = null;
 let currentPipelineReqId = null;
 let eventSource = null;
 
+// 美术资产库（G_ArtRes）静态服务 base。后端 main.py 挂载 /art-res 指向
+// ART_ASSETS_LOCAL_PATH，资产 file_path 为相对该根目录的路径（如 icons/lucide/xxx.svg）。
+window.artAssetsBase = '/art-res/';
+
 // 全局聊天状态快照——进入项目时保存，返回列表时恢复
 let _globalChatHistory = [];
 let _globalChatDom = '';
@@ -3120,6 +3124,7 @@ function showProjectList() {
     closeDrawer();   // 切走时把工单详情抽屉收起来，否则列表页会继续顶着
     disconnectSSE();
     showPage('projectListPage');
+    initGlobalSidebarState();  // 恢复全局侧栏收起/展开偏好
     updateBreadcrumb([{ text: '项目列表', onClick: 'showProjectList()' }]);
     loadProjects();
     // 聊天面板切换到全局模式
@@ -3428,6 +3433,153 @@ function switchTab(tab) {
     }
 }
 
+// ==================== 全局页侧边栏 ====================
+const _GLOBAL_SIDEBAR_KEY = 'ads.shell.globalSidebarCollapsed';
+
+function _globalLayoutEl() {
+    return document.getElementById('globalLayout');
+}
+
+function setGlobalSidebarCollapsed(collapsed) {
+    const layout = _globalLayoutEl();
+    if (layout) layout.classList.toggle('sidebar-collapsed', !!collapsed);
+    const title = collapsed ? '打开侧栏' : '收起侧栏';
+    // 常驻工具条上的按钮：位置固定，只更新状态文案
+    const btn = document.getElementById('globalSidebarToggleBtn');
+    if (btn) {
+        btn.title = title;
+        btn.setAttribute('aria-label', title);
+        btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    }
+    try { localStorage.setItem(_GLOBAL_SIDEBAR_KEY, collapsed ? '1' : '0'); } catch {}
+}
+
+function toggleGlobalSidebar() {
+    const layout = _globalLayoutEl();
+    if (!layout) return;
+    setGlobalSidebarCollapsed(!layout.classList.contains('sidebar-collapsed'));
+}
+
+function initGlobalSidebarState() {
+    let collapsed = false;
+    try { collapsed = localStorage.getItem(_GLOBAL_SIDEBAR_KEY) === '1'; } catch {}
+    setGlobalSidebarCollapsed(collapsed);
+}
+
+function switchGlobalPanel(panel) {
+    // 侧栏高亮
+    document.querySelectorAll('#globalSidebar .nav-item').forEach(n => n.classList.remove('active'));
+    const nav = document.querySelector(`#globalSidebar .nav-item[data-global-panel="${panel}"]`);
+    if (nav) nav.classList.add('active');
+
+    // 面板切换
+    document.querySelectorAll('.global-panel').forEach(p => p.classList.remove('active'));
+    const panelEl = document.getElementById(`globalPanel-${panel}`);
+    if (panelEl) panelEl.classList.add('active');
+
+    // 工具条上的标题/按钮组跟随面板切换
+    document.querySelectorAll('.global-toolbar [data-gt-panel]').forEach(el => {
+        el.classList.toggle('on', el.dataset.gtPanel === panel);
+    });
+
+    // 按需加载（幂等，重复进入会重新拉取）
+    if (panel === 'knowledge') renderGlobalKnowledge();
+    if (panel === 'assets') renderGlobalAssets();
+    if (panel === 'agents') renderGlobalAgents();
+}
+
+async function renderGlobalKnowledge() {
+    const box = document.getElementById('globalKnowledgeList');
+    if (!box) return;
+    box.innerHTML = '<div class="empty-state-sm">加载中...</div>';
+    try {
+        const d = await api('/knowledge/global');
+        const docs = d.docs || [];
+        if (!docs.length) {
+            box.innerHTML = '<div class="empty-state-sm">暂无全局知识文档</div>';
+            return;
+        }
+        box.innerHTML = docs.map(doc => {
+            const fname = escHtml(doc.filename || '');
+            const size = doc.size ? (doc.size / 1024).toFixed(1) + ' KB' : '';
+            const mtime = doc.modified_at ? new Date(doc.modified_at * 1000).toLocaleString() : '';
+            return `<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;padding:10px 14px;margin-bottom:6px;">
+                <span style="font-size:14px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">📄 ${fname}</span>
+                <span style="font-size:12px;color:var(--text-muted);flex-shrink:0;">${size}${mtime ? ' · ' + mtime : ''}</span>
+            </div>`;
+        }).join('');
+    } catch (e) {
+        box.innerHTML = `<div class="empty-state-sm" style="color:var(--error)">加载失败: ${escHtml(e.message)}</div>`;
+    }
+}
+
+async function renderGlobalAssets() {
+    const grid = document.getElementById('globalAssetGrid');
+    if (!grid) return;
+    grid.innerHTML = '<div class="empty-state-sm" style="grid-column:1/-1">加载中...</div>';
+    try {
+        const d = await api('/art-assets?limit=100&offset=0');
+        const assets = d.assets || [];
+        if (!assets.length) {
+            grid.innerHTML = '<div class="empty-state-sm" style="grid-column:1/-1">暂无全局资产</div>';
+            return;
+        }
+        grid.innerHTML = assets.map(a => {
+            const typeEmoji = {icon:'🔷',illustration:'🖼️',photo:'📷',sprite:'🎮',model:'📦',audio:'🎵',animation:'🎞️'}[a.type] || '📁';
+            // 预览优先级：本地 G_ArtRes 文件（图片格式）→ source_url → emoji 兜底
+            const IMG_FORMATS = ['svg','png','jpg','jpeg','webp','gif','bmp'];
+            const fmt = (a.format || '').toLowerCase();
+            const localUrl = (IMG_FORMATS.includes(fmt) && a.file_path)
+                ? (window.artAssetsBase || '/art-res/') + a.file_path
+                : '';
+            const srcUrl = localUrl || (a.source_url || '').trim();
+            const preview = srcUrl
+                ? `<img src="${escHtml(srcUrl)}" style="width:100%;height:56px;object-fit:contain;border-radius:4px;background:var(--bg);" loading="lazy" onerror="this.parentElement.innerHTML='<span style=&quot;font-size:28px;&quot;>${typeEmoji}</span>'">`
+                : `<span style="font-size:28px;">${typeEmoji}</span>`;
+            const tags = (a.tags || []).slice(0, 2).join(' ');
+            return `<div style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:6px;padding:8px;cursor:pointer;text-align:center;" onclick="copyArtAssetPath('${escHtml(a.file_path || '')}','${escHtml(a.id)}')" title="${escHtml(a.name)}">
+                <div style="height:56px;display:flex;align-items:center;justify-content:center;overflow:hidden;">${preview}</div>
+                <div style="font-size:11px;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text);">${escHtml(a.name)}</div>
+                <div style="font-size:10px;color:var(--text-muted);">${escHtml(a.source || '')} ${escHtml(tags)}</div>
+            </div>`;
+        }).join('');
+    } catch (e) {
+        grid.innerHTML = `<div class="empty-state-sm" style="grid-column:1/-1;color:var(--error)">加载失败: ${escHtml(e.message)}</div>`;
+    }
+}
+
+async function renderGlobalAgents() {
+    const box = document.getElementById('globalAgentList');
+    if (!box) return;
+    box.innerHTML = '<div class="empty-state-sm">加载中...</div>';
+    try {
+        const d = await api('/agents');
+        const agents = d.agents || [];
+        if (!agents.length) {
+            box.innerHTML = '<div class="empty-state-sm">暂无 Agent</div>';
+            return;
+        }
+        box.innerHTML = agents.map(a => {
+            const icon = a.icon || '🤖';
+            const role = escHtml(a.role || '');
+            const actionCount = (a.actions || []).length;
+            const status = a.status || 'idle';
+            const statusColor = status === 'running' ? 'var(--success)' : (status === 'error' ? 'var(--danger)' : 'var(--text-muted)');
+            return `<div style="display:flex;align-items:center;gap:12px;background:var(--bg-card);border:1px solid var(--border);border-radius:6px;padding:10px 14px;margin-bottom:6px;">
+                <span style="font-size:20px;">${icon}</span>
+                <div style="flex:1;min-width:0;">
+                    <div style="font-size:14px;color:var(--text);">${escHtml(a.name || '')}</div>
+                    <div style="font-size:12px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${role}</div>
+                </div>
+                <span style="font-size:11px;color:var(--text-muted);flex-shrink:0;">${actionCount} actions</span>
+                <span style="font-size:11px;color:${statusColor};flex-shrink:0;">● ${escHtml(status)}</span>
+            </div>`;
+        }).join('');
+    } catch (e) {
+        box.innerHTML = `<div class="empty-state-sm" style="color:var(--error)">加载失败: ${escHtml(e.message)}</div>`;
+    }
+}
+
 // ==================== 资产库 ====================
 let _assetOffset = 0;
 const _assetPageSize = 40;
@@ -3467,8 +3619,9 @@ async function searchArtAssets(reset = true) {
         } else {
             grid.insertAdjacentHTML('beforeend', assets.map(a => {
                 const ext = (a.file_path || '').split('.').pop().toLowerCase();
-                const preview = ext === 'svg' && a.file_path
-                    ? `<img src="${encodeURI((window.artAssetsBase||'')+a.file_path)}" style="width:48px;height:48px;object-fit:contain;" onerror="this.style.display='none'">`
+                const IMG_EXTS = ['svg','png','jpg','jpeg','webp','gif','bmp'];
+                const preview = IMG_EXTS.includes(ext) && a.file_path
+                    ? `<img src="${encodeURI((window.artAssetsBase||'/art-res/')+a.file_path)}" style="width:48px;height:48px;object-fit:contain;" loading="lazy" onerror="this.style.display='none'">`
                     : `<span style="font-size:28px;">${{icon:'🔷',illustration:'🖼️',photo:'📷',sprite:'🎮',model:'📦',audio:'🎵',animation:'🎞️'}[a.type]||'📁'}</span>`;
                 const tags = (a.tags||[]).slice(0,2).join(' ');
                 return `<div style="background:var(--bg-elevated);border:1px solid var(--border);border-radius:6px;padding:8px;cursor:pointer;text-align:center;" onclick="copyArtAssetPath('${escHtml(a.file_path||'')}','${escHtml(a.id)}')" title="${escHtml(a.name)}">
@@ -18643,11 +18796,35 @@ async function _switchProjectInFullscreen(projectId) {
         const data = await api(`/projects/${projectId}`);
         currentProjectId = projectId;
         currentProject = data.project || data;
+        // 补齐 showProjectDetail 的上下文切换（原来只改 currentProject + 重载聊天）：
+        // - SSE 还连着旧项目，新项目的实时事件收不到、旧项目事件继续串台
+        // - 日志面板还挂着旧项目的历史
+        // 刻意不调 enterProject（它会把全屏退掉）、不调 showPage（全屏下面板盖住页面）
+        disconnectSSE();
+        connectSSE(projectId);
+        clearLogPanel();
+        loadLogPanelHistory();
         // _updateChatPanelForContext 自己会按当前模式补载（全屏时面板一定是开的），
         // 原来紧跟一句 loadChatHistory() 是第二次加载：两个请求抢着写同一个
         // #chatMessages，谁后返回谁赢。去掉重复那次。
         _updateChatPanelForContext();
         _persistChatWorkspace();
+        // 兜底：上面加载链路的任何一环静默失效时，消息区会停在空白，直到退出全屏
+        // 才被 openRight 的 hasContent 检查救回。典型：页面刷新后恢复流程尚未走完
+        // （_chatWsPersistReady=false）就点了切换项目 → _updateChatPanelForContext
+        // 走「只清空不加载」分支，而恢复流程稍后的加载又因 context 已变被 stale
+        // 拦截，之后没有任何人再补载。这里延迟检查一次，空白则补载。
+        setTimeout(() => {
+            if (!_chatFullscreen) return;   // 已退出全屏：openRight 的补载会接管
+            const box = document.getElementById('chatMessages');
+            if (!box) return;
+            const hasAnything = box.querySelector(
+                '.chat-msg, .chat-confirm-card, .chat-action-card, .chat-welcome, .chat-typing, .chat-job-hint'
+            );
+            if (!hasAnything && !chatSending && !_streamAbortController) {
+                _reloadChatForCurrentMode();
+            }
+        }, 800);
     } catch (e) {
         showToast(`切换项目失败: ${e.message}`, 'error');
     }
@@ -18664,6 +18841,18 @@ function _switchToGlobalChat() {
     _globalChatHistory = [];
     _updateChatPanelForContext();
     _persistChatWorkspace();
+    // 与 _switchProjectInFullscreen 同款兜底：恢复流程中切换时消息区会停在空白
+    setTimeout(() => {
+        if (!_chatFullscreen) return;
+        const box = document.getElementById('chatMessages');
+        if (!box) return;
+        const hasAnything = box.querySelector(
+            '.chat-msg, .chat-confirm-card, .chat-action-card, .chat-welcome, .chat-typing, .chat-job-hint'
+        );
+        if (!hasAnything && !chatSending && !_streamAbortController) {
+            _reloadChatForCurrentMode();
+        }
+    }, 800);
 }
 
 function _updateFullscreenProjectLabel() {
