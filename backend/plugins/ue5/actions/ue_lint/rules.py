@@ -855,6 +855,89 @@ def rule_R9_delegate_pairing(
     return issues
 
 
+# ==================== R10: 交互回调空引用守卫（IsValid） ====================
+
+# BindAction("Name", IE_Pressed, this, &Class::Func) → 回调名 Func
+_RE_BIND_ACTION = re.compile(
+    r"BindAction\s*\(\s*[^,]+,\s*[^,]+,\s*[^,]+,\s*(?:&\w+::)?(\w+)"
+)
+
+
+def _find_func_body(content: str, func_name: str) -> Optional[str]:
+    """找到 `返回类型 类名::函数名(...)` 的定义体（从 { 到匹配 }）。找不到返回 None。"""
+    pattern = re.compile(
+        r"\w+\s+\w+::" + re.escape(func_name) + r"\s*\([^)]*\)\s*(?:const\s*)?(?:override\s*)?\{"
+    )
+    m = pattern.search(content)
+    if not m:
+        return None
+    brace_start = content.index("{", m.start())
+    depth = 0
+    for i in range(brace_start, len(content)):
+        if content[i] == "{":
+            depth += 1
+        elif content[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return content[brace_start:i + 1]
+    return None
+
+
+def rule_R10_null_guard(
+    content: str, file_path_rel: str, repo_path: Path, ctx: Dict[str, Any]
+) -> List[Issue]:
+    """交互回调（AddDynamic / BindAction 绑定的函数）体内应有 IsValid 空引用守卫。
+
+    保守策略：只报 warning。仅检查「回调函数体内是否含 IsValid」，不含则提示。
+    不深入分析访问了哪个对象（静态分析对象生命周期太复杂）。
+    """
+    if not file_path_rel.endswith((".h", ".cpp")):
+        return []
+
+    callbacks: Dict[str, int] = {}  # 回调名 -> 绑定处行号
+
+    for m in _RE_ADD_DYNAMIC.finditer(content):
+        line_no = content[:m.start()].count("\n") + 1
+        snippet = content[max(0, m.start() - 120):m.end() + 20]
+        if _is_skipped_by_escape(snippet, "R10"):
+            continue
+        callbacks.setdefault(m.group(2), line_no)
+
+    for m in _RE_BIND_ACTION.finditer(content):
+        line_no = content[:m.start()].count("\n") + 1
+        snippet = content[max(0, m.start() - 120):m.end() + 20]
+        if _is_skipped_by_escape(snippet, "R10"):
+            continue
+        callbacks.setdefault(m.group(1), line_no)
+
+    if not callbacks:
+        return []
+
+    issues: List[Issue] = []
+    for cb, line_no in sorted(callbacks.items(), key=lambda x: x[1]):
+        body = _find_func_body(content, cb)
+        if body is None:
+            continue  # 回调定义不在本文件（跨文件），跳过
+        if "IsValid" in body:
+            continue
+        issues.append({
+            "rule": "R10",
+            "file": file_path_rel,
+            "line": line_no,
+            "blocking": False,
+            "category": "null-guard",
+            "msg": (
+                f"交互回调 {cb}() 体内未发现 IsValid 空引用守卫。"
+                f"回调里访问其他 Actor/对象前应检查 IsValid，防止对象已销毁导致崩溃"
+            ),
+            "suggest": (
+                f"在 {cb}() 里访问其他对象前加 if (IsValid(X)) 守卫；"
+                f"若确认无需守卫可加 @ue-lint-skip R10 逃生注释"
+            ),
+        })
+    return issues
+
+
 _RULE_FUNCS = [
     rule_R8_ue_file_types,   # 最高优先：先拦退化行为
     rule_R1_uclass_genbody,
@@ -865,6 +948,7 @@ _RULE_FUNCS = [
     rule_R6_include_order,
     rule_R7_type_headers,
     rule_R9_delegate_pairing,
+    rule_R10_null_guard,
 ]
 
 
