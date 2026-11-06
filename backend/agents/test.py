@@ -227,6 +227,21 @@ class TestAgent(BaseAgent):
                 lines.append(f"| `{name}` | {icon} {result} | {err_str} |")
             lines.append("")
 
+        # Phase 3a：交互表（筛选交互类测试 Functional/Interaction/Input）
+        # 对齐 MagicAI 的「交互安全追踪」——UE Automation Functional 测试即交互验证。
+        interaction_tests = [
+            t for t in tests
+            if any(kw in (t.get("name") or "").lower()
+                   for kw in ("functional", "interaction", "input"))
+        ]
+        if interaction_tests:
+            lines += ["## 交互表", "", "| 交互测试 | 结果 |", "|---|---|"]
+            for t in interaction_tests:
+                result = t.get("result", "?")
+                icon = {"passed": "✅", "failed": "❌", "skipped": "⏭️"}.get(result, "❓")
+                lines.append(f"| `{t.get('name', '?')}` | {icon} {result} |")
+            lines.append("")
+
         problems: List[str] = []
         for e in compile_errors[:10]:
             problems.append(
