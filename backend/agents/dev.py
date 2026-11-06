@@ -51,7 +51,7 @@ class DevAgent(BaseAgent):
             return await self._do_generate_ue_tests(context)
         elif task_name == "write_html_prototype":
             return await self._do_write_html_prototype(context)
-        return {"status": "error", "message": f"未知任务: {task_name}"}
+        return await self._run_registered_action(task_name, context)
 
     async def _do_write_html_prototype(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """HTML 原型验证阶段：生成单文件 HTML 原型验证核心玩法循环。"""

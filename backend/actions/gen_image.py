@@ -26,6 +26,7 @@ REACT 循环是单线程顺序推理。返回 request_id 会逼 LLM 自己写「
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 from pathlib import Path
@@ -46,6 +47,69 @@ _SIZES = ("1K", "2K", "4K")
 # 文件名白名单：只允许图片扩展名，且不含路径分隔符
 _SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 _IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp")
+
+IMAGE_BLOCKED_MARKER = ".ads-image-blocked.json"
+IMAGE_BLOCK_STOP = (
+    "生图后端失败，已停止本 skill 的生图。"
+    "禁止重试 gen_image，禁止 confirm_video_gate。"
+    "写完已有文本后立即 done，工单转人工处理（检查 LIGHTAI_API_KEY / 引擎）。"
+)
+
+
+def write_image_blocked_marker(
+    root: Path, error: str, extra: Optional[Dict[str, Any]] = None,
+) -> Path:
+    root.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "type": "image_gen_blocked",
+        "image_blocked": True,
+        "needs_human": True,
+        "error": error,
+        **(extra or {}),
+    }
+    path = root / IMAGE_BLOCKED_MARKER
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def read_image_blocked_marker(root: Optional[Path]) -> Optional[Dict[str, Any]]:
+    if root is None:
+        return None
+    base = Path(root)
+    paths = [base / IMAGE_BLOCKED_MARKER]
+    if base.is_dir():
+        paths.extend(sorted(base.glob(f"*/{IMAGE_BLOCKED_MARKER}")))
+    for path in paths:
+        if not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if isinstance(data, dict) and (
+            data.get("image_blocked") or data.get("needs_human")
+        ):
+            return data
+    return None
+
+
+def clear_image_blocked_markers(root: Optional[Path]) -> int:
+    """恢复工单重跑 visual 前清掉生图阻塞标记，否则新一轮仍会拒绝 gen_image。"""
+    if root is None:
+        return 0
+    base = Path(root)
+    paths = [base / IMAGE_BLOCKED_MARKER]
+    if base.is_dir():
+        paths.extend(base.glob(f"*/{IMAGE_BLOCKED_MARKER}"))
+    n = 0
+    for path in paths:
+        try:
+            if path.is_file():
+                path.unlink()
+                n += 1
+        except OSError:
+            continue
+    return n
 
 
 class GenImageAction(ActionBase):
@@ -130,6 +194,18 @@ class GenImageAction(ActionBase):
             return None
         return name
 
+    def _fail_blocked(
+        self, out_dir: Path, error: str, extra: Optional[Dict[str, Any]] = None,
+    ) -> ActionResult:
+        data = {"image_blocked": True, "needs_human": True, **(extra or {})}
+        try:
+            write_image_blocked_marker(out_dir, error, extra)
+            if self._subdir:
+                write_image_blocked_marker(out_dir.parent, error, extra)
+        except Exception as e:
+            logger.warning("写入生图阻塞标记失败: %s", e)
+        return ActionResult(success=False, error=error, data=data)
+
     # ──────────────────────── 执行 ────────────────────────
 
     async def run(self, context: Dict[str, Any]) -> ActionResult:
@@ -155,10 +231,7 @@ class GenImageAction(ActionBase):
         from config import settings
         if not settings.LIGHTAI_API_KEY:
             # 明确报缺配置，而不是让 LightAI 返回 401 后变成「生成失败」
-            return ActionResult(
-                success=False,
-                error="LIGHTAI_API_KEY 未配置，无法生图",
-            )
+            return self._fail_blocked(out_dir, "LIGHTAI_API_KEY 未配置，无法生图")
 
         engine = str(context.get("engine")
                      or settings.LIGHTAI_IMAGE_ENGINE or "gemini")
@@ -186,32 +259,33 @@ class GenImageAction(ActionBase):
                     engine, filename, prompt)
 
         task_id, url = await _create_and_poll(req)
+        extra = {"engine": engine, "filename": filename}
         if not task_id:
             # `_create_lightai_task` 把异常吞成 None，真实原因只在它的
             # logger.warning 里。给出可自查的方向 —— 常见的是 401（key 过期）
             # 或 429 重试耗尽（并发任务超时）。
-            return ActionResult(
-                success=False,
-                error=(
-                    f"LightAI 任务创建失败（engine={engine}）。常见原因："
-                    f"①LIGHTAI_API_KEY 无效或过期（HTTP 401）②网络不通 "
-                    f"③引擎 {engine} 不可用 ④并发任务等待超时（HTTP 429）。"
-                    f"精确错误见 image_processor 的 WARNING 日志"
-                ),
+            return self._fail_blocked(
+                out_dir,
+                f"LightAI 任务创建失败（engine={engine}）。常见原因："
+                f"①LIGHTAI_API_KEY 无效或过期（HTTP 401）②网络不通 "
+                f"③引擎 {engine} 不可用 ④并发任务等待超时（HTTP 429）。"
+                f"精确错误见 image_processor 的 WARNING 日志",
+                extra,
             )
         if not url:
             # 区分「超时」与「任务失败」对排查很重要，但 _poll_lightai_task
             # 两种情况都返回 None，只能在这里统一描述
-            return ActionResult(
-                success=False,
-                error=(f"LightAI 任务未产出图片（task={task_id}, engine={engine}）"
-                       f"—— 可能超时或被内容策略拒绝"),
+            return self._fail_blocked(
+                out_dir,
+                f"LightAI 任务未产出图片（task={task_id}, engine={engine}）"
+                f"—— 可能超时或被内容策略拒绝",
+                extra,
             )
 
         saved = await _download_image(url, out_dir, filename)
         if not saved:
-            return ActionResult(
-                success=False, error=f"图片下载失败: {url[:120]}",
+            return self._fail_blocked(
+                out_dir, f"图片下载失败: {url[:120]}", extra,
             )
 
         path = Path(saved)
@@ -219,8 +293,8 @@ class GenImageAction(ActionBase):
         if size == 0:
             # 下载成功但零字节 —— 让它失败，否则 _collect_outputs 会回收一个
             # 空文件当成功产出，下游 consumes 拿到坏图
-            return ActionResult(
-                success=False, error=f"下载的图片为空文件: {filename}",
+            return self._fail_blocked(
+                out_dir, f"下载的图片为空文件: {filename}", extra,
             )
 
         logger.info("🎨 gen_image 完成 %s (%d bytes)", filename, size)

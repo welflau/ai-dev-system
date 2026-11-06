@@ -63,10 +63,14 @@ def list_packs() -> List[Dict[str, Any]]:
 
 def get_recommended_packs(traits: List[str]) -> List[str]:
     """根据 traits 返回推荐 pack 名称（去重、保序）。"""
+    traits = traits or []
+    is_video = "category:video" in traits or "pipeline:video" in traits
     seen: set = set()
     result: List[str] = []
-    for trait in (traits or []):
+    for trait in traits:
         for pack_name in _TRAIT_PACK_MAP.get(trait, []):
+            if is_video and pack_name == "web-dev":
+                continue
             if pack_name not in seen:
                 seen.add(pack_name)
                 result.append(pack_name)

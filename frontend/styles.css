@@ -916,23 +916,35 @@ body.shell-project #topbarChatToggle {
     min-height: 0;
     min-width: 0;
     overflow: hidden;
+    position: relative;
 }
 .rw-pane {
     min-width: 0;
     min-height: 0;
     overflow: hidden;
-    display: none;
-    flex-direction: column;
-    position: relative;
-}
-/* Tab 模式：只显示当前 pane */
-.project-layout.right-open:not(.right-split) .rw-pane.active-pane {
     display: flex;
+    flex-direction: column;
+    position: absolute;
+    inset: 0;
+    visibility: hidden;
+    pointer-events: none;
+    z-index: 0;
+}
+/* Tab 模式：只显示当前 pane（不用 display:none，否则切回来 scrollTop 会丢） */
+.project-layout.right-open:not(.right-split) .rw-pane.active-pane {
+    visibility: visible;
+    pointer-events: auto;
+    position: relative;
+    inset: auto;
+    z-index: 1;
     flex: 1;
 }
 /* 分屏模式：两半都显示 */
 .project-layout.right-split .rw-pane {
-    display: flex;
+    visibility: visible;
+    pointer-events: auto;
+    position: relative;
+    inset: auto;
 }
 .project-layout.right-split #rwTicketPane {
     flex: var(--rw-split-left, 1) 1 0;
@@ -1867,7 +1879,7 @@ body.shell-project .main-ws-tabbar,
 
 .board-column {
     flex: 1 0 185px;
-    min-width: 185px;     /* 5 列至少 973px，右侧面板展开时自动出现底部水平滚动条；宽屏下仍靠 flex-grow:1 均分 */
+    min-width: 185px;     /* 6 列至少 1160px，右侧面板展开时自动出现底部水平滚动条；宽屏下仍靠 flex-grow:1 均分 */
     background: var(--bg-elevated);
     border-radius: var(--radius);
     display: flex;
@@ -1883,6 +1895,21 @@ body.shell-project .main-ws-tabbar,
 .board-column-blocked .column-count {
     background: rgba(220, 38, 38, 0.20);
     color: #f87171;
+}
+.board-column-cancelled {
+    background: rgba(148, 163, 184, 0.06);
+    border: 1px solid rgba(148, 163, 184, 0.18);
+    opacity: 0.92;
+}
+.board-column-cancelled .column-header {
+    color: var(--text-muted);
+}
+.board-column-cancelled .column-count {
+    background: rgba(148, 163, 184, 0.18);
+    color: var(--text-muted);
+}
+.board-column-cancelled .ticket-card {
+    opacity: 0.78;
 }
 
 .column-header {
@@ -1979,6 +2006,22 @@ body.shell-project .main-ws-tabbar,
     align-items: center;
     font-size: 11px;
     color: var(--text-muted);
+    gap: 6px;
+}
+.ticket-card-time-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 6px;
+    font-size: 10px;
+    color: var(--text-muted);
+}
+.ticket-card-time {
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    letter-spacing: 0.01em;
+    opacity: 0.9;
 }
 .ticket-status-label {
     font-size: 11px;
@@ -2998,6 +3041,44 @@ body.chat-open .drawer.docked {
     color: var(--text-secondary, #cbd5e1);
     background: rgba(148, 163, 184, 0.12);
     border: 1px solid rgba(148, 163, 184, 0.3);
+}
+
+.drawer-sticky-nav {
+    position: sticky;
+    top: -20px;
+    z-index: 6;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    margin: -8px -20px 12px;
+    padding: 8px 20px 10px;
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border);
+}
+.drawer-nav-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+.drawer-nav-btn {
+    border: 1px solid var(--border);
+    background: var(--bg-elevated, rgba(255,255,255,0.03));
+    color: var(--text-secondary);
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    cursor: pointer;
+}
+.drawer-nav-btn:hover {
+    color: var(--text);
+    border-color: var(--primary);
+}
+.drawer-nav-btn-task {
+    margin-left: auto;
+    color: var(--primary, #58a6ff);
+    border-color: rgba(88, 166, 255, 0.45);
 }
 
 .drawer-body {
@@ -7806,6 +7887,10 @@ body.chat-fullscreen #chatPanelSwitchArrow {
     transition: background 0.12s;
 }
 #projectSwitcherDropdown .ps-global:hover { background: var(--bg-elevated); }
+#projectSwitcherDropdown .ps-global.active {
+    background: rgba(99,102,241,.1);
+    color: var(--primary);
+}
 
 /* 全屏：始终给主面板 body 和 input 加限宽居中 padding */
 body.chat-fullscreen .chat-panel > .chat-panel-body,
@@ -8750,6 +8835,25 @@ body.chat-board-left #groupBoardSidebar {
 .chat-msg-bubble .chat-file-link,
 .chat-msg-bubble .chat-kb-link {
     cursor: pointer;
+}
+.chat-msg-bubble .chat-bubble-doc-chip {
+    pointer-events: auto;
+    cursor: pointer;
+    vertical-align: middle;
+    max-width: min(100%, 420px);
+    margin: 2px 0;
+}
+.chat-msg.user .chat-bubble-doc-chip {
+    background: rgba(255, 255, 255, 0.18);
+    border-color: rgba(255, 255, 255, 0.42);
+}
+.chat-msg.user .chat-bubble-doc-chip .chat-doc-chip-name,
+.chat-msg.user .chat-bubble-doc-chip .chat-doc-chip-icon {
+    color: #fff;
+}
+.chat-msg.user .chat-bubble-doc-chip:hover {
+    background: rgba(255, 255, 255, 0.28);
+    border-color: rgba(255, 255, 255, 0.6);
 }
 
 /* 聊天气泡文字右键菜单（WebView / 桌面壳无系统菜单时用） */
@@ -9734,6 +9838,47 @@ body.chat-board-left #groupBoardSidebar {
     display: block;
 }
 
+.chat-sm-badge {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    min-width: 14px;
+    height: 14px;
+    padding: 0 3px;
+    border-radius: 7px;
+    background: var(--primary, #6366f1);
+    color: #fff;
+    font-size: 9px;
+    line-height: 14px;
+    text-align: center;
+}
+#chatMaterialsBtn { position: relative; }
+.sm-list { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+.sm-item {
+    display: flex; gap: 10px; align-items: center;
+    padding: 8px; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--bg);
+}
+.sm-thumb {
+    width: 48px; height: 48px; object-fit: cover; border-radius: 6px;
+    background: var(--bg-secondary); flex-shrink: 0;
+    cursor: pointer;
+}
+.sm-meta { flex: 1; min-width: 0; font-size: 12px; }
+.sm-meta .sm-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.sm-meta .sm-sub { color: var(--text-muted); font-size: 11px; margin-top: 2px; }
+.sm-actions { display: flex; flex-wrap: wrap; gap: 4px; }
+.sm-picker { margin-top: 10px; padding: 8px; border: 1px dashed var(--border); border-radius: 8px; font-size: 12px; }
+.sm-picker-title { color: var(--text-muted); margin-bottom: 6px; }
+.sm-picker label { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
+.chat-bubble-img-wrap { position: relative; display: inline-block; }
+.sm-img-collect {
+    position: absolute; top: 4px; right: 4px;
+    border: none; border-radius: 4px; padding: 2px 5px;
+    background: rgba(0,0,0,.55); color: #fff; font-size: 11px; cursor: pointer;
+    display: none;
+}
+.chat-bubble-img-wrap:hover .sm-img-collect { display: inline-block; }
 .chat-bubble-img:hover {
     opacity: 0.88;
 }
@@ -10692,12 +10837,74 @@ body.chat-board-left #groupBoardSidebar {
 
 /* v0.19.x 工单「📍 当前进度」区 */
 .ticket-action-progress {
-    background: var(--bg-card, rgba(255, 255, 255, 0.03));
+    background: var(--bg-elevated, rgba(255, 255, 255, 0.04));
     border-left: 3px solid var(--primary, #58a6ff);
     border-radius: 6px;
-    padding: 12px 14px;
-    margin: 0 0 14px 0;
+    padding: 10px 12px 8px;
+    margin: 0;
     font-size: 12px;
+}
+.drawer-sticky-nav .ticket-sticky-gate-slot {
+    margin-top: 8px;
+    max-height: 46vh;
+    overflow: auto;
+}
+.ticket-blocked-card {
+    background: rgba(239, 68, 68, 0.08);
+    border: 1px solid rgba(239, 68, 68, 0.35);
+    border-left: 3px solid var(--error, #ef4444);
+    border-radius: 6px;
+    padding: 10px 12px 8px;
+    color: var(--text);
+}
+.ticket-blocked-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
+    font-size: 13px;
+}
+.ticket-blocked-icon { font-size: 14px; }
+.ticket-blocked-why {
+    margin: 0 0 8px;
+    font-size: 12px;
+    line-height: 1.65;
+    color: var(--text-secondary);
+}
+.ticket-blocked-next {
+    margin: 0 0 8px;
+    padding-left: 18px;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text);
+}
+.ticket-blocked-files {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    margin-bottom: 8px;
+    font-size: 11px;
+    color: var(--text-muted);
+}
+.ticket-blocked-foot {
+    display: flex;
+    gap: 12px;
+    justify-content: flex-end;
+    font-size: 12px;
+}
+.drawer-sticky-nav .ticket-pending-gate {
+    margin: 0;
+    padding: 0;
+}
+.drawer-sticky-nav .ticket-pending-gate .chat-action-card {
+    margin: 0;
+}
+.drawer-sticky-nav .ticket-action-progress .progress-foot {
+    display: flex;
+    gap: 12px;
+    justify-content: flex-end;
+    text-align: right;
 }
 .ticket-action-progress .progress-head {
     display: flex;
@@ -10758,9 +10965,12 @@ body.chat-board-left #groupBoardSidebar {
     font-family: ui-monospace, SFMono-Regular, monospace;
     font-size: 11px;
     color: var(--text-muted);
-    overflow-x: auto;
-    white-space: nowrap;
-    max-height: 40px;
+    overflow: hidden;
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    max-height: 54px;
     line-height: 1.6;
 }
 .ticket-action-progress .progress-foot {
@@ -10809,6 +11019,14 @@ body.chat-board-left #groupBoardSidebar {
     font-size: 11px;
     color: var(--text-secondary);
     line-height: 1.5;
+}
+.ticket-action-progress .progress-action-hint.is-info {
+    background: rgba(88,166,255,0.08);
+    border-color: rgba(88,166,255,0.25);
+}
+.ticket-action-progress .progress-action-hint.is-zombie {
+    background: rgba(234,74,90,0.10);
+    border-color: rgba(234,74,90,0.35);
 }
 /* 呼吸动画：silent/starting 状态表示进程存活 */
 @keyframes progress-pulse {
@@ -14139,6 +14357,46 @@ body.chat-board-left #groupBoardSidebar {
     cursor: pointer;
 }
 .cto-copy-btn:hover { color: var(--primary); border-color: var(--primary); }
+.cto-hint {
+    position: sticky;
+    top: 28px;
+    z-index: 1;
+    margin: 0;
+    padding: 8px 10px;
+    font-family: inherit;
+    font-size: 12px;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    color: var(--text);
+    background: rgba(240,160,32,0.12);
+    border-bottom: 1px solid rgba(240,160,32,0.28);
+}
+.cto-hint.is-info {
+    background: rgba(88,166,255,0.10);
+    border-bottom-color: rgba(88,166,255,0.28);
+}
+.cto-hint.is-wait {
+    background: rgba(240,160,32,0.12);
+}
+.cto-hint.is-zombie {
+    background: rgba(234,74,90,0.12);
+    border-bottom-color: rgba(234,74,90,0.35);
+}
+.cto-source-btn,
+.cto-stop-btn {
+    flex-shrink: 0;
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    color: var(--text-muted);
+    font-size: 11px;
+    padding: 1px 6px;
+    cursor: pointer;
+    line-height: 1.4;
+}
+.cto-source-btn:hover { color: var(--primary); border-color: var(--primary); }
+.cto-stop-btn { color: var(--danger, #ea4a5a); }
+.cto-stop-btn:hover { background: rgba(234,74,90,.12); }
 
 .cto-body { padding: 4px 0 8px 0; }
 
@@ -14254,6 +14512,13 @@ body.chat-board-left #groupBoardSidebar {
 }
 .tasks-tab:hover { color: var(--text-secondary); }
 .tasks-tab.active { color: var(--primary, #7c6af7); border-bottom-color: var(--primary, #7c6af7); font-weight: 600; }
+.tasks-tab-count {
+    font-size: 10px;
+    font-weight: 400;
+    opacity: .55;
+    margin-left: 4px;
+}
+.tasks-tab.active .tasks-tab-count { opacity: .85; }
 
 /* 日期分隔符 */
 .tasks-day-sep {
@@ -14318,6 +14583,43 @@ body.chat-board-left #groupBoardSidebar {
 .tpi-seq  { font-size: 9px; color: var(--text-muted); opacity: .5; min-width: 16px; text-align: right; flex-shrink: 0; }
 .tpi-icon { font-size: 11px; flex-shrink: 0; }
 .tpi-title { font-size: 11px; font-weight: 500; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tpi-stop {
+    flex-shrink: 0;
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 11px;
+    padding: 0 2px;
+    cursor: pointer;
+    opacity: .55;
+    line-height: 1;
+}
+.tpi-stop:hover { color: var(--danger, #ea4a5a); opacity: 1; }
+.tpi-source {
+    max-width: 72px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--primary, #7c6af7);
+    cursor: pointer;
+    opacity: .85;
+}
+.tpi-source:hover { text-decoration: underline; opacity: 1; }
+.tasks-grp-source,
+.tasks-grp-stop {
+    flex-shrink: 0;
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 3px;
+    color: var(--text-muted);
+    font-size: 10px;
+    padding: 0 4px;
+    cursor: pointer;
+    opacity: .7;
+    line-height: 1.4;
+}
+.tasks-grp-source:hover { color: var(--primary); opacity: 1; }
+.tasks-grp-stop:hover { color: var(--danger, #ea4a5a); opacity: 1; }
 .tpi-meta {
     display: flex;
     align-items: center;

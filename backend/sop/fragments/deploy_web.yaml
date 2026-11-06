@@ -10,6 +10,9 @@ required_traits:
   any_of:
     - platform:web
     - category:app
+  none_of:
+    - pipeline:video
+    - category:video
 
 stage:
   agent: DeployAgent

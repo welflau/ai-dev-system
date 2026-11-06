@@ -135,6 +135,27 @@ presets:
       - rest api
       - 微服务
 
+  # ===================== AI 视频制片 =====================
+
+  ai-video:
+    label: "AI 视频 / 短片"
+    description: "Director 导演制片：动画解说、故事动画、AI 漫剧 / 微电影"
+    traits:
+      - category:video
+      - pipeline:video
+    keywords:
+      - AI 视频
+      - 短片
+      - 漫剧
+      - 微电影
+      - 动画解说
+      - 故事动画
+      - 分镜
+      - 生视频
+      - director
+      - Seedance
+      - 即梦视频
+
 
 # ==================== 维度冲突规则（用于扣分）====================
 #

@@ -88,7 +88,8 @@ def _traits_in_sop() -> dict:
             for v in node:
                 walk(v, where)
 
-    for p in list((SOP_DIR / "fragments").glob("*.yaml")) + [SOP_DIR / "_core.yaml"]:
+    from sop.loader import iter_all_fragment_files
+    for p in list(iter_all_fragment_files()) + [SOP_DIR / "_core.yaml"]:
         walk(yaml.safe_load(p.read_text(encoding="utf-8")) or {}, p.name)
     return used
 
@@ -170,7 +171,8 @@ def test_stage_ids_globally_unique():
     for s in core.get("base_stages") or []:
         if s.get("id"):
             sop_ids.add(s["id"])
-    for p in (SOP_DIR / "fragments").glob("*.yaml"):
+    from sop.loader import iter_all_fragment_files
+    for p in iter_all_fragment_files():
         frag = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
         sid = (frag.get("stage") or {}).get("id") or frag.get("id")
         if sid:
@@ -285,6 +287,8 @@ def test_pipeline_dimension_registered():
     valid = _taxonomy_traits()
     assert "pipeline:code" in valid
     assert "pipeline:content" in valid
+    assert "pipeline:video" in valid
+    assert "category:video" in valid
 
 
 def test_ue_content_ticket_type_registered():

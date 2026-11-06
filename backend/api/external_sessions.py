@@ -237,8 +237,9 @@ async def import_external_session(
     imported = 0
     for t in turns:
         urls = _save_external_images(project_id, p, session_id, t["images"])
+        msg_id = generate_id("MSG")
         await db.insert("chat_messages", {
-            "id": generate_id("MSG"),
+            "id": msg_id,
             "project_id": project_id,
             "role": t["role"],
             "content": t["text"],
@@ -246,6 +247,19 @@ async def import_external_session(
             "session_id": sid,
             "created_at": t.get("created_at") or now_iso(),
         })
+        if urls:
+            try:
+                from materials.registry import material_registry
+                await material_registry.attach_urls(
+                    session_id=sid,
+                    project_id=project_id,
+                    urls=urls,
+                    origin="import",
+                    message_id=msg_id,
+                    metadata={"provider": provider, "external_session_id": session_id},
+                )
+            except Exception as e:
+                logger.warning("登记导入图片失败: %s", e)
         imported += 1
 
     await db.execute(

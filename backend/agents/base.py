@@ -91,6 +91,28 @@ class BaseAgent(ABC):
         """旧模式兼容：子类没有用 Action 组合时的 fallback"""
         return {"status": "error", "message": f"Agent {self.agent_type} 没有 Action: {task_name}"}
 
+    async def _run_registered_action(self, task_name: str, context: Dict[str, Any]) -> Dict[str, Any]:
+        """execute 的具名分支都没接住时，按 Action 注册名再试一次。
+
+        已经写在前面的任务名（run_engine_compile、run_playtest 等）不会走到这里。
+        未注册的名字仍返回 error，宿主会把工单标成 blocked。
+        """
+        from plugins.registry import create_action
+        action = create_action(task_name)
+        if action is None:
+            return {"status": "error", "message": f"未知任务: {task_name}"}
+        result = await action.run(context)
+        if hasattr(result, "to_dict"):
+            data = result.to_dict()
+            if isinstance(data, dict):
+                return data
+        data = getattr(result, "data", None)
+        if isinstance(data, dict) and data:
+            return data
+        if isinstance(result, dict):
+            return result
+        return {"status": "error", "message": f"插件 Action {task_name} 无结果"}
+
     async def _resolve_skills_prompt(self, context: Dict[str, Any]) -> str:
         """v0.17: 根据 context.project_id 拉项目 traits，动态计算 skills prompt。
         A-2 补全：同时注入项目记忆（所有 Agent 共享）。
@@ -607,7 +629,7 @@ class BaseAgent(ABC):
     }
 
     async def get_memory_prompt(self, project_id: str, limit: int = 5) -> str:
-        """A-3: 查询 agent_memory，以 MEMORY.md 索引样式返回注入文本。
+        """A-3: 查询 agent_memory + CLI 文件记忆，以 MEMORY.md 索引样式返回注入文本。
         同时追加项目 wiki 知识库索引（.ads/wiki/_wiki_index.md）。
         """
         if not project_id:
@@ -621,14 +643,46 @@ class BaseAgent(ABC):
                    ORDER BY created_at DESC LIMIT ?""",
                 (project_id, limit),
             )
-            if rows:
-                lines = ["## 项目记忆（MEMORY）\n"]
-                for r in rows:
-                    label = self._MEMORY_TYPE_LABELS.get(r["type"], "📝")
-                    lines.append(f"- [{label}] **{r['title']}**（{r['created_at'][:10]}）")
-                    if r["content"] and r["content"].strip():
-                        lines.append(f"  {r['content'][:120].strip()}")
-                lines.append("\n如需完整记忆请调用 get_memory 工具。")
+            mem_lines = []
+            seen = set()
+            for r in rows or []:
+                title = (r["title"] or "").strip()
+                key = title.lower()
+                if key:
+                    seen.add(key)
+                label = self._MEMORY_TYPE_LABELS.get(r["type"], "📝")
+                mem_lines.append(f"- [{label}] **{title}**（{(r['created_at'] or '')[:10]}）")
+                if r["content"] and r["content"].strip():
+                    mem_lines.append(f"  {r['content'][:120].strip()}")
+
+            # 补读 CodeBuddy/Claude 用户目录记忆（CLI 常写这里，DB 可能为空）
+            try:
+                proj = await db.fetch_one(
+                    "SELECT git_repo_path FROM projects WHERE id = ?", (project_id,)
+                )
+                repo_path = (proj or {}).get("git_repo_path") or ""
+                if repo_path:
+                    from cli_file_memory import load_cli_file_memories
+                    for ci in load_cli_file_memories(repo_path, limit=limit):
+                        title = (ci.get("title") or "").strip()
+                        key = title.lower()
+                        if key and key in seen:
+                            continue
+                        if key:
+                            seen.add(key)
+                        label = self._MEMORY_TYPE_LABELS.get(ci.get("type"), "📝")
+                        src = ci.get("source") or "cli"
+                        mem_lines.append(
+                            f"- [{label}/{src}] **{title}**（{(ci.get('created_at') or '')[:10]}）"
+                        )
+                        if ci.get("content"):
+                            mem_lines.append(f"  {str(ci['content'])[:120].strip()}")
+            except Exception as e:
+                logger.debug("get_memory_prompt CLI 文件记忆: %s", e)
+
+            if mem_lines:
+                lines = ["## 项目记忆（MEMORY）\n", *mem_lines,
+                         "\n如需完整记忆请调用 get_memory 工具。"]
                 parts.append("\n".join(lines))
         except Exception as e:
             logger.debug("BaseAgent.get_memory_prompt 失败: %s", e)

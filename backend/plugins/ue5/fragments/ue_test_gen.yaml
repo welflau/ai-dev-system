@@ -27,6 +27,9 @@ stage:
   # 生成失败不阻塞工单（Action 恒返回 success），这里配 reject 只是兜底语义完整
   reject_status: ue_test_gen_failed
   reject_goto: development
+  # 必须在 develop 产物落库前 return，否则状态被写回 development_done 会空转，
+  # 并且 type=code 的 artifact 会盖掉 dev_result。
+  closeout: status
   config:
     max_retries: 1
     timeout_seconds: 420

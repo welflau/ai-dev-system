@@ -98,6 +98,7 @@ backend/skills/marketplace/download_*
 
 # �����ڲ���û��ϴ� / Agent ���ɣ�������Դ�룩
 backend/chat_images/
+backend/data/session_materials/
 backend/screenshots/
 backend/run_build_called.txt
 *.db.bak

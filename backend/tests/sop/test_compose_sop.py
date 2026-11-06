@@ -148,6 +148,10 @@ def test_t3d_godot_game_gets_html_prototype():
     # UE 项目则被排除
     ue = compose_sop(traits=["category:game", "engine:ue5"], ticket_type="feature")
     assert "html_prototype" not in ids_of(ue)
+    # 编译阶段在 UE 插件里，Godot 不再误挂 UE 的 UBT
+    assert "engine_compile" not in ids
+    assert "play_test" not in ids
+    assert "deploy_ue" not in ids
 
 
 # ───────────────────── T4：branch_only 不参与线性链 ─────────────────────
@@ -313,6 +317,32 @@ def test_t8_transition_rules_keys_unique_and_complete():
 
     assert "pending" in rules
     assert rules["pending"]["agent"] == "PlannerAgent"
+    assert rules["pending"]["action"] == "write_prd"
+    assert rules["pending"]["next_status"] == "planning_in_progress"
+
+
+def test_dispatch_gate_every_auto_stage_has_in_progress():
+    """门禁：可自动派单的阶段必须有 in_progress，pending/write_prd 不能再漏。
+
+    漏了的后果：工单 status 不改，30s 轮询把 trigger_on 当新单反复派发。
+    """
+    profiles = [
+        ([], None),
+        (["platform:web", "category:app"], "feature"),
+        (["category:video", "pipeline:video"], "feature"),
+        (["pipeline:content"], "feature"),
+    ]
+    for traits, ttype in profiles:
+        cfg = compose_sop(traits=traits, ticket_type=ttype)
+        rules = sop_to_transition_rules(cfg)
+        assert rules["pending"]["next_status"] == "planning_in_progress", traits
+        assert not any("没有 in_progress" in d for d in cfg["sop_diagnostics"]), cfg["sop_diagnostics"]
+        for s in cfg["stages"]:
+            if s.get("branch_only") or not s.get("trigger_on"):
+                continue
+            ns = rules[s["trigger_on"]]["next_status"]
+            assert ns, f"stage {s['id']} trigger {s['trigger_on']} 没有 in_progress ({traits})"
+            assert ns != s["trigger_on"]
 
 
 def test_t8b_reject_goto_derives_fix_issues_rules():
@@ -476,6 +506,24 @@ def test_t11b_content_pipeline_prunes_code_stages():
     ]
 
 
+@pytest.mark.real_plugin_skills
+@pytest.mark.real_builtin_skills
+def test_t11b2_video_pipeline_prunes_code_and_skips_demo():
+    """pipeline:video 与 content 同样裁代码阶段，但不装配文章 demo 链。"""
+    cfg = compose_sop(traits=["category:video", "pipeline:video"], ticket_type="feature")
+    ids = ids_of(cfg)
+    assert ids[0] == "planning"
+    assert "director_brief" in ids
+    assert "director_deliver" in ids
+    assert "demo_outline" not in ids
+    assert "architecture" not in ids
+    assert "development" not in ids
+    assert cfg["dropped_base_stages"] == [
+        "architecture", "code_review", "development",
+        "development_retry", "rework",
+    ]
+
+
 def test_t11c_content_pipeline_first_stage_still_triggers_on_pending():
     """**裁剪后首个阶段仍被 pending 触发** —— 否则工单永久卡死。
 
@@ -492,6 +540,7 @@ def test_t11c_content_pipeline_first_stage_still_triggers_on_pending():
     assert cfg["stages"][0]["trigger_on"] == "pending"
     rules = sop_to_transition_rules(cfg)
     assert "pending" in rules, "规则表缺 pending 键 → 工单永远起不来"
+    assert rules["pending"]["next_status"] == "planning_in_progress"
 
 
 def test_t11c2_relink_forces_entry_status_on_first_stage():

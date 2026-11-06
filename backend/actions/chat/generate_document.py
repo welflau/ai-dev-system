@@ -131,6 +131,24 @@ class GenerateDocumentAction(ActionBase):
                 "metadata": json.dumps({"source": "chat_assistant", "commit": commit_hash}),
                 "created_at": now_iso(),
             })
+            sid = context.get("session_id")
+            if sid:
+                try:
+                    from materials.registry import material_registry
+                    await material_registry.attach(
+                        session_id=sid,
+                        project_id=project_id,
+                        name=filename,
+                        origin="export",
+                        content=content.encode("utf-8"),
+                        mime="text/markdown",
+                        status="promoted",
+                        promoted_sink="repo",
+                        promoted_id=file_path,
+                        metadata={"path": file_path, "commit": commit_hash},
+                    )
+                except Exception as _e:
+                    logger.debug("登记会话导出文档失败: %s", _e)
 
             await event_manager.publish_to_project(
                 project_id,

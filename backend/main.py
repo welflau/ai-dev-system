@@ -286,6 +286,21 @@ async def lifespan(app: FastAPI):
     gc_task = asyncio.create_task(_checkpoint_gc_loop())
     logger.info("Checkpoint GC 已调度（TTL 14 天，6h 轮询）")
 
+    async def _session_materials_gc_loop():
+        await asyncio.sleep(45)
+        while True:
+            try:
+                from materials.gc import gc_expired as sm_gc
+                stats = await sm_gc()
+                if stats.get("expired") or stats.get("trimmed"):
+                    logger.info("Session materials GC: %s", stats)
+            except Exception as e:
+                logger.debug("Session materials GC 跳过: %s", e)
+            await asyncio.sleep(6 * 3600)
+
+    sm_gc_task = asyncio.create_task(_session_materials_gc_loop())
+    logger.info("会话素材 GC 已调度（TTL 14 天，6h 轮询）")
+
     logger.info("Server: http://localhost:%s", settings.PORT)
     logger.info("App:    http://localhost:%s/app", settings.PORT)
     logger.info("=" * 60)
@@ -298,6 +313,7 @@ async def lifespan(app: FastAPI):
     ci_task.cancel()
     auto_task.cancel()
     gc_task.cancel()
+    sm_gc_task.cancel()
     try:
         from mcp_client import mcp_client
         await mcp_client.stop_all_servers()
@@ -362,6 +378,8 @@ from api.chat import internal_router as internal_router
 from api.openspec import router as openspec_router
 from api.plugins import router as plugins_router
 from api.external_sessions import router as external_sessions_router
+from api.session_materials import project_router as session_materials_project_router
+from api.session_materials import global_router as session_materials_global_router
 
 app.include_router(projects_router)
 # repos 的前缀也是 /api/projects，但路径段（/repos/...）不和 projects 冲突
@@ -397,6 +415,8 @@ app.include_router(internal_router)
 app.include_router(openspec_router)
 app.include_router(plugins_router)
 app.include_router(external_sessions_router)
+app.include_router(session_materials_project_router)
+app.include_router(session_materials_global_router)
 
 
 # ==================== 系统端点 ====================

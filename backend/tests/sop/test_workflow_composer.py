@@ -23,6 +23,7 @@ BUILTIN = {"ticket_brief"}
 def mk(
     stage_id: str, consumes=(), produces=(), *,
     priority: int = 50, traits=None, ticket_type=None, skill_id=None,
+    agent="SkillAgent",
 ) -> WorkflowSkill:
     """造一个 WorkflowSkill。consumes/produces 传 kind 字符串即可。"""
     return WorkflowSkill(
@@ -38,6 +39,7 @@ def mk(
         required_traits=traits,
         required_ticket_type=ticket_type,
         priority=priority,
+        agent=agent,
     )
 
 
@@ -60,6 +62,22 @@ def test_skill_to_stage_derives_all_status_names():
     assert stage["action"] == "skill_demo_draft"
     assert stage["success_status"] == "demo_draft_done"
     assert stage["reject_status"] == "demo_draft_failed"
+    assert stage["config"]["_run_as_agent"] == SKILL_AGENT
+
+
+def test_skill_to_stage_honors_host_agent():
+    """x-workflow.agent 写入 SOP stage.agent，默认仍是 SkillAgent。
+
+    这只改归属，不改 action 前缀（仍是 skill_*），也不配 reject_goto。
+    """
+    stage = skill_to_stage(mk(
+        "demo_draft", ["content_outline"], ["draft_article"],
+        agent="PlannerAgent",
+    ))
+    assert stage["agent"] == "PlannerAgent"
+    assert stage["action"] == "skill_demo_draft"
+    assert stage["config"]["_run_as_agent"] == "PlannerAgent"
+    assert "reject_goto" not in stage
 
 
 def test_stage_has_no_reject_goto():

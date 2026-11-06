@@ -29,8 +29,9 @@ class ConfirmRequirementAction(ActionBase):
             "name": self.name,
             "description": (
                 "当用户明确表达想要新增/开发某个功能时使用（例如「我想要…」「帮我开发…」"
-                "「新增一个…」「做一个…」）。此工具只产出草稿给用户确认，不会真的创建需求。"
+                "「新增一个…」「做一个…」「现在能开始了」）。此工具只产出草稿给用户确认，不会真的创建需求。"
                 "若用户只是在提问、描述现有问题、报 BUG，则不要调用此工具。"
+                "AI 视频/漫剧项目必须出试片/简报/分镜，禁止网页 MVP、Next.js、首页/播放页。"
             ),
             "input_schema": {
                 "type": "object",
@@ -62,6 +63,14 @@ class ConfirmRequirementAction(ActionBase):
 
         if not title:
             return ActionResult(success=False, error="需求标题不能为空")
+
+        from actions.chat.video_identity import reject_web_requirement_for_video
+        blocked = await reject_web_requirement_for_video(
+            context.get("project_id") or "", title, description,
+            traits=context.get("project_traits"),
+        )
+        if blocked:
+            return ActionResult(success=False, error=blocked)
 
         return ActionResult(
             success=True,
@@ -149,6 +158,17 @@ class ConfirmRequirementsBatchAction(ActionBase):
         if not items:
             return ActionResult(success=False, error="requirements 中没有有效条目")
 
+        from actions.chat.video_identity import reject_web_requirement_for_video
+        project_id = context.get("project_id") or ""
+        traits = context.get("project_traits")
+        for item in items:
+            blocked = await reject_web_requirement_for_video(
+                project_id, item.get("title") or "", item.get("description") or "",
+                traits=traits,
+            )
+            if blocked:
+                return ActionResult(success=False, error=blocked)
+
         return ActionResult(
             success=True,
             data={
@@ -187,6 +207,14 @@ class ConfirmDirectTicketAction(ActionBase):
 
         if not title:
             return ActionResult(success=False, error="工单标题不能为空")
+
+        from actions.chat.video_identity import reject_web_requirement_for_video
+        blocked = await reject_web_requirement_for_video(
+            context.get("project_id") or "", title, description,
+            traits=context.get("project_traits"),
+        )
+        if blocked:
+            return ActionResult(success=False, error=blocked)
 
         return ActionResult(
             success=True,

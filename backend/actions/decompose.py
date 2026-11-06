@@ -58,11 +58,22 @@ class DecomposeAction(ActionBase):
             if code_files:
                 code_context += f"\n## 项目文件（{len(code_files)} 个）\n" + "\n".join(f"  - {f}" for f in code_files[:15]) + "\n"
 
+        traits = context.get("project_traits") or []
+        video_section = ""
+        if "pipeline:video" in traits or "category:video" in traits:
+            video_section = """
+## 项目类型：AI 视频 / 漫剧
+本项目走导演制片（小说 → 分镜 → 生图 → 配音 → 合成），不是软件工程。
+拆单必须是制片工作包，例如：第一集工作包/视频简报、讲稿与分镜、视觉与声音、试生成、成片交付。
+禁止拆成网站/App 页面、Next.js、路由、mock API、脚手架这类开发工单。
+工单 module 用 video 或 production。
+"""
+
         req_context = f"""## 需求
 标题: {title}
 描述: {description}
 优先级: {priority}
-{summary_section}{code_context}
+{summary_section}{code_context}{video_section}
 ## 拆单规则
 
 **首先判断复杂度**:

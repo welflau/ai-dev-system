@@ -296,8 +296,10 @@ def build_icebreak_payload(
     tech_stack = (tech_stack or "").strip()
     text = _blob(name, description, tech_stack, " ".join(traits))
 
+    is_video = "category:video" in traits or "pipeline:video" in traits
     repo_info = _inspect_existing_repo(repo_path)
-    if repo_info["is_existing"]:
+    # 视频项目即使仓库里有误拆的网页文档，也走导演制片破冰，不当成存量网站。
+    if repo_info["is_existing"] and not is_video:
         entries_str = "、".join(repo_info["entries"][:5])
         stack_str = f"，技术栈：{tech_stack}" if tech_stack else ""
         desc_str = f"（{description}）" if description else ""
@@ -392,6 +394,35 @@ def _analyze(
     is_game: bool,
 ) -> tuple[str, List[Dict[str, str]]]:
     desc_hint = f"：{description}" if description else ""
+
+    if (
+        "category:video" in traits
+        or "pipeline:video" in traits
+        or _has_any(text, ["漫剧", "ai 视频", "ai视频", "ai-video", "短片", "微电影", "分镜", "生视频"])
+    ):
+        return (
+            f"「{name}」是 AI 视频 / 漫剧项目{desc_hint}。走导演制片（小说 → 分镜 → 生图 → 配音 → 合成），不是做网站。",
+            [
+                _opt(
+                    "pilot",
+                    "先做第一集试片",
+                    f"为「{name}」初始化第一集工作包：选定章节，出视频简报和分镜，先跑通 1 个镜头试生成。不要做网页。",
+                    "推荐",
+                ),
+                _opt(
+                    "brief",
+                    "先写视频简报",
+                    f"先给「{name}」写视频简报（受众、时长、集数、画风、声音），确认后再拆分镜。",
+                    "先对齐",
+                ),
+                _opt(
+                    "script",
+                    "从小说拆分镜",
+                    f"根据「{name}」已有小说或剧本，拆第一章分镜、镜头提示词和试生成计划。",
+                    "已有剧本",
+                ),
+            ],
+        )
 
     if _has_any(text, ["flappy", "flap", "小鸟飞", "飞翔小鸟", "飞小鸟"]):
         return (
@@ -546,8 +577,26 @@ async def persist_project_icebreak(
             pass
 
     payload = build_icebreak_payload(name, description, traits, tech_stack, repo_path=repo_path)
-    session_id = generate_id("sess-")
-    if payload.get("is_existing"):
+    sess_row = None
+    if project_id:
+        try:
+            sess_row = await db.fetch_one(
+                "SELECT id FROM chat_sessions WHERE project_id = ? ORDER BY last_active_at DESC LIMIT 1",
+                (project_id,),
+            )
+        except Exception:
+            sess_row = None
+    created_new_session = not sess_row
+    session_id = sess_row["id"] if sess_row else generate_id("sess-")
+    is_video = "category:video" in (traits or []) or "pipeline:video" in (traits or [])
+    if is_video:
+        intro = (
+            f"「{payload['project_name']}」是 AI 视频 / 漫剧，走导演制片"
+            "（小说 → 分镜 → 生图 → 配音 → 合成），不是做网站。"
+            "请选一个起步方向。"
+        )
+        sess_title = f"破冰 · {payload['project_name']}"
+    elif payload.get("is_existing"):
         intro = (
             f"已接入现有项目「{payload['project_name']}」。"
             "请选择一个切入方式，或直接输入你要处理的模块与问题。"
@@ -566,15 +615,16 @@ async def persist_project_icebreak(
         action=payload,
         session_id=session_id,
     )
-    try:
-        await db.update(
-            "chat_sessions",
-            {"title": sess_title, "updated_at": now_iso()},
-            "id = ?",
-            (session_id,),
-        )
-    except Exception:
-        pass
+    if created_new_session:
+        try:
+            await db.update(
+                "chat_sessions",
+                {"title": sess_title, "updated_at": now_iso()},
+                "id = ?",
+                (session_id,),
+            )
+        except Exception:
+            pass
     return {
         "type": "propose_icebreak",
         "project_id": project_id,

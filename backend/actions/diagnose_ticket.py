@@ -110,6 +110,95 @@ def _minimal_diagnosis(error_msg: str, note: str = "") -> Dict[str, Any]:
     }
 
 
+_SKILL_LABELS = {
+    "director-prompts": "分镜 Prompt",
+    "director-visual": "人物与音色",
+    "director-script": "讲稿与拆解",
+    "director-brief": "视频简报",
+    "director-clip-trial": "试生成片段",
+    "director-batch-gen": "批量生成",
+}
+
+
+def _is_timeout_block(skill_status: str, error_msg: str) -> bool:
+    s = f"{skill_status} {error_msg}"
+    return skill_status == "budget_exceeded" or "超时" in s or "timeout" in s.lower()
+
+
+def synthesize_blocked_diagnosis(
+    *,
+    skill_id: str = "",
+    skill_status: str = "",
+    error_msg: str = "",
+    action: str = "",
+    outputs: List[Any] | None = None,
+    artifacts: List[Any] | None = None,
+    extra_files: List[Any] | None = None,
+) -> Dict[str, Any]:
+    """不调模型的阻塞说明。CLI 刚超时再去跑 LLM 诊断，会再卡 400 秒。"""
+    files: List[str] = []
+    seen = set()
+
+    def add(raw: Any) -> None:
+        s = str(raw or "").replace("\\", "/").strip()
+        if not s or s in seen:
+            return
+        seen.add(s)
+        files.append(s)
+
+    for p in outputs or []:
+        add(p)
+    for art in artifacts or []:
+        if isinstance(art, dict):
+            add(art.get("path"))
+        else:
+            add(art)
+    for p in extra_files or []:
+        add(p)
+
+    label = _SKILL_LABELS.get(skill_id or "", skill_id or action or "当前阶段")
+    msg = (error_msg or "").strip()
+    if _is_timeout_block(skill_status, msg):
+        return {
+            "symptom": f"{label} 超时，工单已阻塞",
+            "root_cause": (
+                f"{msg or '调用超时'}。这是预算到点被掐断，不是上一阶段产物坏了。"
+                f"{' 缺的是这一步要写的 shot_prompts.md。' if skill_id == 'director-prompts' else ''}"
+                " 人物设定 / 场景 / 音色如果已经在产出里，重跑这一步即可。"
+            ),
+            "severity": "medium",
+            "suggested_actions": [
+                {
+                    "action": "解除 blocked，从当前阶段重跑（上一阶段产物还在）",
+                    "who": "user",
+                    "priority": 1,
+                },
+                {
+                    "action": "打开后台任务，看超时前写到了哪一步",
+                    "who": "user",
+                    "priority": 2,
+                },
+            ],
+            "confidence": 0.86,
+            "related_files": files[:12],
+            "note": "本地规则诊断（超时/预算），未再调模型",
+            "created_at": datetime.utcnow().isoformat() + "Z",
+        }
+    return {
+        "symptom": f"{label} 失败，工单已阻塞",
+        "root_cause": msg or f"{skill_id or action or 'Agent'} 返回 {skill_status or 'error'}",
+        "severity": "medium",
+        "suggested_actions": [
+            {"action": "打开后台任务看完整失败日志", "who": "user", "priority": 1},
+            {"action": "解除 blocked 后从当前阶段重跑", "who": "user", "priority": 2},
+        ],
+        "confidence": 0.55,
+        "related_files": files[:12],
+        "note": "本地规则诊断，未再调模型",
+        "created_at": datetime.utcnow().isoformat() + "Z",
+    }
+
+
 class DiagnoseTicketAction(ActionBase):
 
     @property
@@ -131,6 +220,16 @@ class DiagnoseTicketAction(ActionBase):
         sop_stage = context.get("sop_stage") or {}
         project_traits = context.get("project_traits") or []
         project_id = context.get("project_id")
+
+        if _is_timeout_block("", error_msg):
+            return ActionResult(success=True, data={
+                "diagnosis": synthesize_blocked_diagnosis(
+                    skill_id=str(context.get("skill_id") or ""),
+                    skill_status="budget_exceeded",
+                    error_msg=error_msg,
+                    action=failed_action,
+                ),
+            })
 
         # Agent 报错流程：先搜知识库，再交给 LLM 诊断
         kb_hits: List[Dict[str, Any]] = []

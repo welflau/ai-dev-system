@@ -222,6 +222,16 @@ class CreateProjectAction(ActionBase):
                     # 不执行 add/commit/push（避免在大型项目上扫描几万文件卡住）
                     if git_remote_url:
                         await git_manager.set_remote(project_id, git_remote_url)
+                elif os.path.isdir(repo_path) and os.listdir(repo_path):
+                    # 目录已存在且非空（但无 .git）：按「导入已有项目」处理，
+                    # 只注册路径，绝不 git init/add/commit。
+                    # 否则会把存量源码纳入 init commit，或 commit 失败留下空仓库，
+                    # 后续 switch_branch 的 git clean 会误删这些未跟踪源码
+                    # （2026-10-27 TestOGEngine 事故）。
+                    logger.info(
+                        "目录已存在且非空（无 .git），按导入已有项目处理，跳过 git 初始化: %s",
+                        repo_path,
+                    )
                 else:
                     # 全新建仓库流程
                     os.makedirs(repo_path, exist_ok=True)

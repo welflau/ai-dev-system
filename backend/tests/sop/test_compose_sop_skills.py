@@ -139,8 +139,8 @@ def test_skill_block_inserted_before_branch_only(tmp_path):
 
     assert order.index("demo_cover") < order.index("rework")
     assert order.index("demo_cover") < order.index("development_retry")
-    # 缺省锚点 = 最后一个非 branch_only（deploy）之后
-    assert order.index("deploy") < order.index("demo_outline")
+    # _core.yaml skill_block_anchor.insert_before: acceptance
+    assert order.index("demo_outline") < order.index("acceptance")
 
 
 def test_skill_chain_topologically_ordered(tmp_path):
@@ -215,6 +215,40 @@ def test_state_chain_is_connected_through_skills(tmp_path):
                 f"≠ 上一阶段 success={prev_success}"
             )
         prev_success = s["success_status"]
+
+
+def test_skill_stage_can_select_host_role(tmp_path):
+    """x-workflow.agent: PlannerAgent 必须出现在 transition_rules 里。
+
+    只改 stage dict 不写进 rules 的话，orchestrator 仍会派 SkillAgent。
+    非法 agent 在 parse 阶段出局，不会混进 SOP。
+    """
+    write_skill(
+        tmp_path, "host-brief", stage_id="host_brief",
+        consumes=["ticket_brief"],
+        produces=[("content_outline", "outline.md")],
+        extra_lines=["agent: PlannerAgent"],
+    )
+    cfg = compose_sop(traits=[], ticket_type="feature", repo_path=str(tmp_path))
+    by_id = {s["id"]: s for s in cfg["stages"]}
+    assert by_id["host_brief"]["agent"] == "PlannerAgent"
+    assert by_id["host_brief"]["config"]["_run_as_agent"] == "PlannerAgent"
+    rules = sop_to_transition_rules(cfg)
+    trigger = by_id["host_brief"]["trigger_on"]
+    assert rules[trigger]["agent"] == "PlannerAgent"
+    assert rules[trigger]["config"]["skill_id"] == "host-brief"
+
+
+def test_invalid_host_agent_skill_is_dropped(tmp_path):
+    """未知 Agent 名 → skill 出局，不能静默装进 SOP。"""
+    write_skill(
+        tmp_path, "ghost-brief", stage_id="ghost_brief",
+        consumes=["ticket_brief"],
+        produces=[("content_outline", "outline.md")],
+        extra_lines=["agent: VideoDirectorAgent"],
+    )
+    cfg = compose_sop(traits=[], ticket_type="feature", repo_path=str(tmp_path))
+    assert "ghost_brief" not in {s["id"] for s in cfg["stages"]}
 
 
 def test_skill_stages_are_dispatchable(tmp_path):
@@ -333,9 +367,10 @@ def test_content_pipeline_full_integration(tmp_path):
     # base 被裁到只剩 3 个
     assert "development" not in order
     assert "architecture" not in order
-    # skill 链在 deploy 之后、无 branch_only 残留
-    assert order == ["planning", "acceptance", "deploy",
-                     "demo_outline", "demo_draft", "demo_cover"]
+    # skill 链在 acceptance 之前：先出内容再验收
+    assert order == ["planning",
+                     "demo_outline", "demo_draft", "demo_cover",
+                     "acceptance", "deploy"]
 
     # 首个阶段仍被 pending 触发（裁剪后的硬约束）
     assert cfg["stages"][0]["trigger_on"] == "pending"

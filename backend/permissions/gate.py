@@ -29,14 +29,20 @@ class PermissionDeniedError(RuntimeError):
 #   pattern   : 对 tool_input 的 JSON 化字符串做 re.search；None 表示工具本身即高风险
 #   risk_label: 展示给用户的风险说明
 _HIGH_RISK_RULES: list[Tuple[str, Optional[re.Pattern], str]] = [
-    # Shell 危险命令
-    ("shell", re.compile(r'\brm\s+-[rRfF]', re.I),             "删除文件（rm -rf）"),
-    ("shell", re.compile(r'git\s+push\s+.*--force', re.I),     "强制推送（git push --force）"),
+    # Shell 危险命令 —— 删除类
+    ("shell", re.compile(r'\brm\s+-[rRfF]', re.I),              "删除文件/目录（rm -rf）"),
+    ("shell", re.compile(r'\bgit\s+clean\b', re.I),             "删除未跟踪文件（git clean）"),
+    ("shell", re.compile(r'\bdel\s+/[sSqQ]', re.I),             "删除文件（del /s /q）"),
+    ("shell", re.compile(r'\bRemove-Item\b.*-Recurse', re.I),   "删除文件/目录（Remove-Item -Recurse）"),
+    ("shell", re.compile(r'\brmdir\s+/[sS]', re.I),             "删除目录（rmdir /s）"),
+    ("shell", re.compile(r'\bgit\s+reset\s+--hard', re.I),      "强制重置（git reset --hard）"),
+    # Shell 其他危险命令
+    ("shell", re.compile(r'git\s+push\s+.*--force', re.I),      "强制推送（git push --force）"),
     ("shell", re.compile(r'DROP\s+TABLE|DROP\s+DATABASE', re.I), "删除数据库表"),
-    ("shell", re.compile(r'\bformat\s+[a-zA-Z]:', re.I),       "磁盘格式化"),
+    ("shell", re.compile(r'\bformat\s+[a-zA-Z]:', re.I),        "磁盘格式化"),
     ("shell", re.compile(r'\b(shutdown|reboot|halt|poweroff)\b', re.I), "关机/重启"),
     # Git Merge 合入主干
-    ("git_merge", re.compile(r'\b(main|master)\b', re.I),      "合入主干分支"),
+    ("git_merge", re.compile(r'\b(main|master)\b', re.I),       "合入主干分支"),
 ]
 
 

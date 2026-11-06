@@ -97,12 +97,17 @@ def test_tools_only_reach_api_branch():
 # ════════════════ 修复：MCP server 本体 ════════════════
 
 def test_mcp_server_exists_and_declares_tools():
-    """server 文件在位，且声明了四个工具。"""
+    """server 文件在位，且声明了基础工具 + 导演 CLI 工具。"""
     assert MCP_SERVER.is_file()
     src = MCP_SERVER.read_text(encoding="utf-8")
-    for tool in ("write_output", "read_repo_file", "gen_image", "list_outputs"):
+    for tool in (
+        "write_output", "read_repo_file", "gen_image", "list_outputs",
+        "write_repo_file", "init_work_package", "confirm_video_gate",
+        "probe_backend", "gen_video", "gen_video_batch", "download_video", "done",
+    ):
         assert f"async def {tool}(" in src, f"缺工具 {tool}"
-    assert src.count("@mcp.tool()") == 4
+    assert "director-knowledge/" in src
+    assert src.count("@mcp.tool()") >= 4
 
 
 def test_mcp_server_reads_root_from_env_not_from_llm():
@@ -145,9 +150,14 @@ def test_mcp_server_is_standalone_process():
 
 def test_not_injected_outside_skill_context():
     """没在跑 skill 时不注入 —— 普通聊天不该看到 write_output。"""
-    servers = _settings_servers()
-    assert "skill_io" not in servers
-    assert "ads-data" in servers, "全局 server 应始终在"
+    prev = _llm_ctx.agent_type
+    _llm_ctx.agent_type = "ChatAssistant"
+    try:
+        servers = _settings_servers()
+        assert "skill_io" not in servers
+        assert "ads-data" in servers, "全局 server 应始终在"
+    finally:
+        _llm_ctx.agent_type = prev
 
 
 def test_injected_when_skill_context_set():
@@ -156,6 +166,10 @@ def test_injected_when_skill_context_set():
         repo="F:/fake-repo",
         allowed_exts=[".md"],
         tools=["write_file"],
+        knowledge_root="F:/ads/backend/plugins/director/knowledge",
+        write_mode="repo",
+        project_id="PRJ-x",
+        ticket_id="TK-x",
     )
     servers = _settings_servers()
     assert "skill_io" in servers
@@ -164,6 +178,14 @@ def test_injected_when_skill_context_set():
     assert env["SKILL_REPO"] == "F:/fake-repo"
     assert env["SKILL_ALLOWED_EXTS"] == ".md"
     assert Path(env["SKILL_BACKEND_DIR"]).name == "backend"
+    assert env["SKILL_TOOLS"] == "write_file"
+    assert env["SKILL_KNOWLEDGE_ROOT"].replace("\\", "/").endswith("director/knowledge")
+    assert env["SKILL_WRITE_MODE"] == "repo"
+    assert env["SKILL_PROJECT_ID"] == "PRJ-x"
+    assert env["SKILL_TICKET_ID"] == "TK-x"
+    assert env.get("DB_PATH"), "skill_io 必须带 DB_PATH，否则确认卡会写进另一份库"
+    ads = servers["ads-data"]["env"]
+    assert ads.get("ADS_DB_PATH") == env["DB_PATH"]
 
 
 def test_image_subdir_passed_through():
@@ -345,3 +367,55 @@ def test_output_root_differs_from_cli_cwd():
         rel = str(root).replace("\\", "/").split("fake-repo/")[-1]
         assert rel.startswith(expect_prefix)
         assert "/" in rel, f"{skill_id} 的产出目录就在仓库根，落差不存在？"
+
+
+@pytest.mark.real_plugin_skills
+def test_director_brief_mentions_mcp_and_forbids_source_repo():
+    skill = load_executable_skill("director-brief")
+    assert skill is not None
+    body = skill.body
+    for name in (
+        "mcp__skill_io__read_repo_file",
+        "mcp__skill_io__init_work_package",
+        "mcp__skill_io__write_repo_file",
+        "mcp__skill_io__confirm_video_gate",
+    ):
+        assert name in body, f"director-brief 缺 {name}"
+    assert "D:\\A_Works\\director" in body
+    prompt = SkillRunner(skill)._build_system({
+        "ticket_title": "第一集视频简报",
+        "project_traits": ["category:video", "pipeline:video"],
+        "repo_path": "F:/ADS_Projects/TombRaiderComic",
+    })
+    assert "mcp__skill_io__init_work_package" in prompt
+    assert "director-knowledge/" in prompt
+    assert "D:\\A_Works\\director" in prompt
+
+
+@pytest.mark.real_plugin_skills
+def test_director_clip_trial_mentions_gen_video_mcp():
+    skill = load_executable_skill("director-clip-trial")
+    assert skill is not None
+    prompt = SkillRunner(skill)._build_system({
+        "ticket_title": "第一集试片",
+        "project_traits": ["category:video", "pipeline:video"],
+    })
+    assert "mcp__skill_io__gen_video" in prompt
+    assert "mcp__skill_io__probe_backend" in prompt
+
+
+def test_resolve_read_target_knowledge_prefix(tmp_path: Path, monkeypatch):
+    knowledge = tmp_path / "knowledge"
+    knowledge.mkdir()
+    target = knowledge / "modes" / "cinematic-drama"
+    target.mkdir(parents=True)
+    (target / "workflow.md").write_text("# wf", encoding="utf-8")
+    import skills.skill_io_mcp_server as sio
+    monkeypatch.setattr(sio, "_KNOWLEDGE_ROOT", str(knowledge))
+    monkeypatch.setattr(sio, "_REPO", str(tmp_path / "repo"))
+    path, err = sio.resolve_read_target("director-knowledge/modes/cinematic-drama/workflow.md")
+    assert err == ""
+    assert path is not None
+    assert path.name == "workflow.md"
+    _, bad = sio.resolve_read_target("director-knowledge/../secrets")
+    assert bad

@@ -3,6 +3,7 @@ AI 自动开发系统 - 工单 API
 """
 import json
 import logging
+from datetime import datetime
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Body
 from database import db
 from models import (
@@ -20,6 +21,429 @@ logger = logging.getLogger("api.tickets")
 from events import event_manager
 
 router = APIRouter(tags=["tickets"])
+
+# 后台任务面板「停止」可取消的在途状态（不含人审 *_ready，避免误关确认卡）
+_STOPPABLE_TICKET_STATUSES = (
+    "pending", "queued", "todo",
+    "running", "in_progress", "executing",
+    "waiting_subtasks",
+)
+_UNSTOPPABLE_TICKET_STATUSES = {
+    "cancelled", "blocked", "deployed", "completed", "done", "success", "error",
+}
+_UNSTOPPABLE_TICKET_SUFFIXES = ("_ready", "_done", "_failed", "_rejected", "_passed")
+
+
+def ticket_status_is_stoppable(status: str) -> bool:
+    """pending / in_progress / director_visual_in_progress 可停；人审 *_ready 不停。"""
+    s = (status or "").strip()
+    if not s or s in _UNSTOPPABLE_TICKET_STATUSES:
+        return False
+    if s.endswith(_UNSTOPPABLE_TICKET_SUFFIXES):
+        return False
+    if s in _STOPPABLE_TICKET_STATUSES:
+        return True
+    return s.endswith("_in_progress")
+
+
+def compute_ticket_action_progress(
+    started_at: str | None,
+    updated_at: str | None,
+    *,
+    now: datetime | None = None,
+) -> dict:
+    """elapsed / silence / health。
+
+    `now_iso()` 写的是本地 naive ISO。若按 UTC 解析，东八区会出现负 elapsed，
+    health 会一直是 active，前端就永远不提示「卡住了」。
+    """
+    now_aw = now or datetime.now().astimezone()
+    if now_aw.tzinfo is None:
+        now_aw = now_aw.replace(tzinfo=datetime.now().astimezone().tzinfo)
+
+    def _parse(s: str | None):
+        if not s:
+            return None
+        raw = str(s).strip()
+        try:
+            if raw.endswith("Z"):
+                raw = raw[:-1] + "+00:00"
+            dt = datetime.fromisoformat(raw)
+        except Exception:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=now_aw.tzinfo)
+        return dt.astimezone(now_aw.tzinfo)
+
+    started = _parse(started_at)
+    updated = _parse(updated_at)
+
+    elapsed_ms = None
+    if started is not None:
+        elapsed_ms = max(0, int((now_aw - started).total_seconds() * 1000))
+
+    silence_ms = None
+    if updated is not None:
+        silence_ms = max(0, int((now_aw - updated).total_seconds() * 1000))
+
+    if updated is None:
+        if elapsed_ms is None or elapsed_ms < 60_000:
+            health = "starting"
+        elif elapsed_ms < 300_000:
+            health = "silent"
+        else:
+            health = "zombie"
+    elif silence_ms is None or silence_ms < 60_000:
+        health = "active"
+    elif silence_ms < 300_000:
+        health = "silent"
+    else:
+        health = "zombie"
+
+    return {
+        "elapsed_ms": elapsed_ms,
+        "silence_ms": silence_ms,
+        "health": health,
+    }
+
+
+def _cancelled_ticket_fields() -> dict:
+    return {
+        "status": "cancelled",
+        "updated_at": now_iso(),
+        "current_action": None,
+        "current_action_latest_log": None,
+    }
+
+
+def _posix_rel(path) -> str:
+    return str(path or "").replace("\\", "/").strip().lstrip("./")
+
+
+def _gate_matches_ticket(data: dict | None, ticket_id: str) -> bool:
+    if not isinstance(data, dict):
+        return False
+    gid = str(data.get("ticket_id") or "")
+    if gid and ticket_id and gid != ticket_id:
+        return False
+    return True
+
+
+def _gate_paths(data: dict | None) -> list:
+    if not isinstance(data, dict):
+        return []
+    paths = [p for p in (data.get("preview_paths") or []) if p]
+    for item in data.get("preview_urls") or []:
+        if isinstance(item, dict) and item.get("path"):
+            paths.append(item["path"])
+    return paths
+
+
+def _paths_have_video_clip(paths) -> bool:
+    for p in paths or []:
+        s = str(p or "").replace("\\", "/").lower()
+        if s.endswith(".mp4") or s.endswith(".webm"):
+            return True
+    return False
+
+
+def _gate_fits_status(data: dict | None, status: str) -> bool:
+    """试片确认卡必须带 mp4；别的阶段的旧卡不能拿来充数。"""
+    if not isinstance(data, dict):
+        return False
+    if str(status or "") == "director_clip_trial_ready":
+        return _paths_have_video_clip(_gate_paths(data))
+    return True
+
+
+def collect_ticket_output_files(
+    *,
+    artifacts=None,
+    result=None,
+    pending_gate=None,
+    ticket_id: str = "",
+) -> list:
+    """工单可点开的产物路径：确认卡 preview > result > artifacts 表。"""
+    paths: list = []
+    seen = set()
+
+    def add(raw) -> None:
+        s = _posix_rel(raw)
+        if not s or s.endswith(".ads-waiting-human.json") or s in seen:
+            return
+        seen.add(s)
+        paths.append(s)
+
+    gate = pending_gate if isinstance(pending_gate, dict) else {}
+    if not _gate_matches_ticket(gate, ticket_id):
+        gate = {}
+    for p in gate.get("preview_paths") or []:
+        add(p)
+    for item in gate.get("preview_urls") or []:
+        if isinstance(item, dict):
+            add(item.get("path"))
+
+    result = result if isinstance(result, dict) else {}
+    waiting = result.get("waiting_human") if isinstance(result.get("waiting_human"), dict) else {}
+    if not _gate_matches_ticket(waiting, ticket_id):
+        waiting = {}
+    for p in (waiting or {}).get("preview_paths") or []:
+        add(p)
+    for art in result.get("artifacts") or []:
+        if isinstance(art, dict):
+            add(art.get("path"))
+    for out in result.get("outputs") or []:
+        s = _posix_rel(out)
+        if not s:
+            continue
+        if s.startswith(("works/", "artifacts/", "docs/")):
+            add(s)
+        elif "/" in s:
+            add("works/" + s)
+        else:
+            add(s)
+
+    for art in artifacts or []:
+        if isinstance(art, dict):
+            add(art.get("path"))
+    return paths[:30]
+
+
+def _parse_ticket_result(ticket: dict) -> dict:
+    raw = (ticket or {}).get("result")
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {}
+        except (json.JSONDecodeError, TypeError):
+            return {}
+    return {}
+
+
+_READY_GATE_TITLES = {
+    "director_brief_ready": "确认 Mode 与简报",
+    "director_script_ready": "确认讲稿与拆解",
+    "director_visual_ready": "确认人物与音色",
+    "director_clip_trial_ready": "确认试生成片段",
+}
+
+
+def _normalize_pending_gate(raw: dict, ticket: dict | None) -> dict:
+    data = dict(raw or {})
+    data["type"] = data.get("type") or "confirm_video_gate"
+    data["waiting_human"] = True
+    data["_state"] = "pending"
+    if ticket:
+        data["ticket_id"] = data.get("ticket_id") or ticket.get("id") or ""
+        data["project_id"] = data.get("project_id") or ticket.get("project_id") or ""
+        status = str(ticket.get("status") or "")
+        if not data.get("title"):
+            data["title"] = _READY_GATE_TITLES.get(status, "确认当前制作产物")
+    data.setdefault("title", "确认当前制作产物")
+    data.setdefault("summary", "")
+    data.setdefault("preview_paths", [])
+    data.setdefault("preview_urls", [])
+    data.setdefault("work_slug", "")
+    return data
+
+
+async def _chat_pending_video_gate(project_id: str, ticket_id: str):
+    from database import db as _db
+    try:
+        rows = await _db.fetch_all(
+            """SELECT id, session_id, action_data, action_state, created_at
+               FROM chat_messages
+               WHERE project_id = ? AND action_type = 'confirm_video_gate'
+               ORDER BY created_at DESC LIMIT 30""",
+            (project_id,),
+        )
+    except Exception as e:
+        logger.debug("读取 pending gate 失败: %s", e)
+        return None
+    for row in rows or []:
+        try:
+            data = json.loads(row.get("action_data") or "{}")
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        if str(data.get("ticket_id") or "") != ticket_id:
+            continue
+        state = str(row.get("action_state") or data.get("_state") or "pending")
+        data["_message_id"] = row.get("id") or data.get("_message_id") or ""
+        data["session_id"] = row.get("session_id") or data.get("session_id") or ""
+        data["_state"] = state
+        if state == "pending":
+            return data
+    return None
+
+
+async def _gate_message_still_pending(message_id: str) -> bool:
+    mid = str(message_id or "").strip()
+    if not mid:
+        return True
+    from database import db as _db
+    try:
+        row = await _db.fetch_one(
+            "SELECT action_state FROM chat_messages WHERE id = ?", (mid,),
+        )
+    except Exception:
+        return True
+    if not row:
+        return True
+    return str(row.get("action_state") or "pending") == "pending"
+
+
+async def _gate_from_work_marker(project_id: str, ticket: dict | None):
+    """CLI 人审卡常写在 works/<slug>/.ads-waiting-human.json，对话里可能没有。"""
+    from database import db as _db
+    from pathlib import Path
+    row = await _db.fetch_one(
+        "SELECT git_repo_path FROM projects WHERE id = ?", (project_id,),
+    )
+    repo = str((row or {}).get("git_repo_path") or "")
+    if not repo:
+        return None
+    works = Path(repo) / "works"
+    if not works.is_dir():
+        return None
+    tid = str((ticket or {}).get("id") or "")
+    status = str((ticket or {}).get("status") or "")
+    markers = sorted(
+        works.glob("*/.ads-waiting-human.json"),
+        key=lambda p: p.stat().st_mtime, reverse=True,
+    )
+    for path in markers:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        if not isinstance(data, dict) or not data.get("waiting_human"):
+            continue
+        if not _gate_matches_ticket(data, tid):
+            continue
+        if tid and not str(data.get("ticket_id") or ""):
+            continue
+        if not _gate_fits_status(data, status):
+            continue
+        if not await _gate_message_still_pending(data.get("_message_id") or ""):
+            continue
+        return _normalize_pending_gate(data, ticket)
+    return None
+
+
+async def load_ticket_pending_gate(project_id: str, ticket_id: str, ticket=None):
+    """工单抽屉的人审卡。对话里有 pending 卡优先；没有时，*_ready 工单从 result / 工作包标记合成。"""
+    from database import db as _db
+    if not project_id or not ticket_id:
+        return None
+    chat_gate = await _chat_pending_video_gate(project_id, ticket_id)
+    if chat_gate:
+        return chat_gate
+    if ticket is None:
+        try:
+            ticket = await _db.fetch_one(
+                "SELECT * FROM tickets WHERE id = ? AND project_id = ?",
+                (ticket_id, project_id),
+            )
+        except Exception:
+            ticket = None
+    status = str((ticket or {}).get("status") or "")
+    if not status.endswith("_ready"):
+        return None
+    result = _parse_ticket_result(ticket or {})
+    waiting = result.get("waiting_human") if isinstance(result.get("waiting_human"), dict) else {}
+    if (
+        _gate_matches_ticket(waiting, ticket_id)
+        and _gate_fits_status(waiting, status)
+        and (waiting.get("waiting_human") or waiting.get("preview_paths") or waiting.get("title"))
+        and await _gate_message_still_pending(waiting.get("_message_id") or "")
+    ):
+        return _normalize_pending_gate(waiting, ticket)
+    disk = await _gate_from_work_marker(project_id, ticket)
+    if disk:
+        return disk
+    files = collect_ticket_output_files(result=result, ticket_id=ticket_id)
+    if status == "director_clip_trial_ready" and not _paths_have_video_clip(files):
+        return None
+    if not files and not waiting:
+        return None
+    return _normalize_pending_gate({
+        "title": _READY_GATE_TITLES.get(status, "确认当前制作产物"),
+        "preview_paths": files,
+    }, ticket)
+
+
+def _synthetic_output_artifacts(paths: list) -> list:
+    now = now_iso()
+    rows = []
+    for i, path in enumerate(paths or []):
+        rel = _posix_rel(path)
+        if not rel:
+            continue
+        name = rel.rsplit("/", 1)[-1]
+        rows.append({
+            "id": f"SYN-OUT-{i}",
+            "type": "file",
+            "kind": "",
+            "name": name,
+            "path": rel,
+            "content": None,
+            "metadata": None,
+            "created_at": now,
+        })
+    return rows
+
+
+async def _abort_ticket_runtime(ticket_id: str) -> int:
+    """释放编排占用并杀掉该工单在途 CLI（codebuddy 进程树）。"""
+    try:
+        from orchestrator import orchestrator
+        orchestrator._release_ticket(ticket_id)
+    except Exception:
+        pass
+    try:
+        from llm_client import abort_ticket_cli
+        return int(await abort_ticket_cli(ticket_id) or 0)
+    except Exception as e:
+        logger.warning("终止工单 CLI 失败 %s: %s", (ticket_id or "")[:12], e)
+        return 0
+
+
+async def _publish_ticket_cancelled(project_id: str, ticket_id: str, old_status: str) -> None:
+    if not project_id:
+        return
+    try:
+        await event_manager.publish_to_project(
+            project_id,
+            "ticket_status_changed",
+            {"ticket_id": ticket_id, "from": old_status, "to": "cancelled", "agent": "Operator"},
+        )
+    except Exception:
+        pass
+
+
+async def _cancel_ticket_status_only(row: dict, message: str = "工单已取消") -> None:
+    """只改状态、停 CLI、释放编排器占用，不回滚仓库。"""
+    tid = row["id"]
+    old = row.get("status") or ""
+    await db.update(
+        "tickets",
+        _cancelled_ticket_fields(),
+        "id = ?",
+        (tid,),
+    )
+    await _abort_ticket_runtime(tid)
+    try:
+        await _log_ticket(
+            row.get("project_id"), row.get("requirement_id"), tid,
+            None, "cancelled", old, "cancelled", message,
+        )
+    except Exception:
+        pass
+    await _publish_ticket_cancelled(row.get("project_id") or "", tid, old)
 
 
 # ==================== 工单 CRUD ====================
@@ -161,6 +585,18 @@ async def get_ticket(project_id: str, ticket_id: str):
                 "snippet": snippet,
             }
 
+    ticket_result = _parse_ticket_result(ticket)
+    pending_gate = await load_ticket_pending_gate(project_id, ticket_id, ticket=ticket)
+    output_files = collect_ticket_output_files(
+        artifacts=artifacts, result=ticket_result, pending_gate=pending_gate,
+    )
+    if pending_gate and not pending_gate.get("preview_paths") and output_files:
+        pending_gate["preview_paths"] = output_files
+    existing_paths = {_posix_rel((a or {}).get("path")) for a in (artifacts or [])}
+    extra_files = [p for p in output_files if p not in existing_paths]
+    if extra_files:
+        artifacts = list(artifacts or []) + _synthetic_output_artifacts(extra_files)
+
     return {
         **ticket,
         "branch_name": branch_name,
@@ -169,6 +605,8 @@ async def get_ticket(project_id: str, ticket_id: str):
         "logs": logs,
         "artifacts": artifacts,
         "child_tickets": child_tickets,
+        "pending_gate": pending_gate,
+        "output_files": output_files,
     }
 
 
@@ -179,8 +617,6 @@ async def get_ticket_current_action(project_id: str, ticket_id: str):
     返回 current_action / started_at / latest_log / updated_at + 后端算好的
     elapsed_ms / silence_ms / health，让前端直接渲染不用自己算。
     """
-    from datetime import datetime, timezone
-
     ticket = await db.fetch_one(
         "SELECT id, current_action, current_action_started_at, "
         "current_action_latest_log, current_action_updated_at "
@@ -198,71 +634,19 @@ async def get_ticket_current_action(project_id: str, ticket_id: str):
             "health": None,
         }
 
-    def _parse_iso(s: str):
-        if not s:
-            return None
-        try:
-            # aiosqlite 回来的 ISO 字符串可能带 Z 或不带时区
-            if s.endswith("Z"):
-                s = s[:-1] + "+00:00"
-            return datetime.fromisoformat(s)
-        except Exception:
-            return None
-
-    now = datetime.now(timezone.utc)
-
-    started_at = _parse_iso(ticket.get("current_action_started_at"))
-    updated_at = _parse_iso(ticket.get("current_action_updated_at"))
-
-    elapsed_ms = None
-    if started_at:
-        try:
-            if started_at.tzinfo is None:
-                started_at = started_at.replace(tzinfo=timezone.utc)
-            elapsed_ms = int((now - started_at).total_seconds() * 1000)
-        except Exception:
-            pass
-
-    silence_ms = None
-    if updated_at:
-        try:
-            if updated_at.tzinfo is None:
-                updated_at = updated_at.replace(tzinfo=timezone.utc)
-            silence_ms = int((now - updated_at).total_seconds() * 1000)
-        except Exception:
-            pass
-
-    # 活性判定（秒）：
-    #   < 60s  有新 log 或 刚开始没 log  → active / starting
-    #   60-300 → silent
-    #   > 300  → zombie（可能进程挂了）
-    if updated_at is None:
-        # 还没收到 log 心跳
-        if elapsed_ms is None or elapsed_ms < 60_000:
-            health = "starting"
-        elif elapsed_ms < 300_000:
-            health = "silent"
-        else:
-            health = "zombie"
-    else:
-        if silence_ms is None:
-            health = "active"
-        elif silence_ms < 60_000:
-            health = "active"
-        elif silence_ms < 300_000:
-            health = "silent"
-        else:
-            health = "zombie"
-
+    prog = compute_ticket_action_progress(
+        ticket.get("current_action_started_at"),
+        ticket.get("current_action_updated_at"),
+    )
     return {
         "ticket_id": ticket_id,
         "current_action": current_action,
         "started_at": ticket.get("current_action_started_at"),
-        "elapsed_ms": elapsed_ms,
+        "elapsed_ms": prog["elapsed_ms"],
         "latest_log": ticket.get("current_action_latest_log"),
         "latest_log_at": ticket.get("current_action_updated_at"),
-        "silence_ms": silence_ms,
-        "health": health,
+        "silence_ms": prog["silence_ms"],
+        "health": prog["health"],
     }
 
 
@@ -322,11 +706,28 @@ async def cancel_ticket(
     if not existing:
         raise HTTPException(404, "工单不存在")
 
-    if existing["status"] in ("deployed", "cancelled"):
+    if existing["status"] == "deployed":
         raise HTTPException(400, "工单已完成或已取消")
+    if existing["status"] == "cancelled":
+        # 状态已经 cancelled，但仍可能有 CLI 在跑（上次只改了库、没杀进程）
+        n = await _abort_ticket_runtime(ticket_id)
+        await _publish_ticket_cancelled(project_id, ticket_id, "cancelled")
+        return {
+            "message": "已停止运行中的任务" if n else "工单已取消",
+            "reverted": False,
+            "killed": n,
+        }
 
     old_status = existing["status"]
     revert_result = None
+
+    await db.update(
+        "tickets",
+        _cancelled_ticket_fields(),
+        "id = ?",
+        (ticket_id,),
+    )
+    await _abort_ticket_runtime(ticket_id)
 
     if revert:
         try:
@@ -334,24 +735,6 @@ async def cancel_ticket(
         except Exception as e:
             logger.warning("取消工单 revert 失败（仍将取消状态）: %s", e, exc_info=True)
             revert_result = {"ok": False, "error": str(e)}
-
-    # 尽量从编排器在途集合里摘掉
-    try:
-        from orchestrator import orchestrator
-        release = getattr(orchestrator, "_release_ticket", None) or getattr(orchestrator, "release_ticket", None)
-        if callable(release):
-            maybe = release(ticket_id)
-            if hasattr(maybe, "__await__"):
-                await maybe
-    except Exception:
-        pass
-
-    await db.update(
-        "tickets",
-        {"status": "cancelled", "updated_at": now_iso()},
-        "id = ?",
-        (ticket_id,),
-    )
 
     msg = "工单已取消"
     if revert:
@@ -367,8 +750,9 @@ async def cancel_ticket(
 
     await _log_ticket(
         project_id, existing["requirement_id"], ticket_id,
-        None, "update_status", old_status, "cancelled", msg
+        None, "cancelled", old_status, "cancelled", msg
     )
+    await _publish_ticket_cancelled(project_id, ticket_id, old_status)
     if revert and revert_result:
         try:
             action = "checkpoint_restore" if revert_result.get("strategy") == "checkpoint" else "revert"
@@ -777,6 +1161,41 @@ async def _get_or_create_standalone_req(project_id: str) -> str:
     return req_id
 
 
+@router.post("/api/projects/{project_id}/tickets/cancel-active")
+async def cancel_active_tickets(project_id: str):
+    """取消该项目排队中 / 执行中的工单（不回滚代码）。
+
+    给全局后台任务面板「全部停止」用：列表只展示最早 10 条 pending，
+    这里按项目把同类在途工单一并停掉，避免点十次还漏四十条。
+    """
+    project = await db.fetch_one("SELECT id, name FROM projects WHERE id = ?", (project_id,))
+    if not project:
+        raise HTTPException(404, "项目不存在")
+    placeholders = ",".join("?" * len(_STOPPABLE_TICKET_STATUSES))
+    rows = await db.fetch_all(
+        f"""SELECT id, status, project_id, requirement_id, title
+            FROM tickets
+            WHERE project_id = ?
+              AND (status IN ({placeholders}) OR status LIKE '%_in_progress')""",
+        (project_id, *_STOPPABLE_TICKET_STATUSES),
+    )
+    cancelled = 0
+    for row in rows:
+        try:
+            await _cancel_ticket_status_only(
+                row, message="后台任务面板停止：工单已取消（未回滚代码）"
+            )
+            cancelled += 1
+        except Exception as e:
+            logger.warning("cancel-active 跳过 %s: %s", row.get("id"), e)
+    return {
+        "ok": True,
+        "project_id": project_id,
+        "project_name": project.get("name") or "",
+        "cancelled": cancelled,
+    }
+
+
 @router.post("/api/projects/{project_id}/tickets/create-direct")
 async def create_direct_ticket(project_id: str, req: DirectTicketCreate):
     """直接创建独立工单（不经过需求拆单，挂在独立工单桶需求下）。"""
@@ -822,6 +1241,15 @@ async def create_direct_ticket(project_id: str, req: DirectTicketCreate):
         ticket_data["source_message_id"] = req.source_message_id
     if req.source_session_id:
         ticket_data["source_session_id"] = req.source_session_id
+    if req.material_ids:
+        try:
+            from materials.registry import material_registry
+            ticket_data["description"] = (
+                ticket_data["description"] + await material_registry.markdown_links(req.material_ids)
+            )
+            await material_registry.mark_promoted(req.material_ids, "ticket", ticket_id)
+        except Exception as _e:
+            logger.debug("附加会话素材失败: %s", _e)
     await db.insert("tickets", ticket_data)
 
     # 回填聊天草稿卡片为已执行（有 source_message_id 精确更新；否则按标题匹配最近 pending 草稿）
@@ -1115,6 +1543,43 @@ async def diagnose_ticket(project_id: str, ticket_id: str, background_tasks: Bac
     return {"message": "诊断已触发，结果将异步写入 tickets.diagnosis"}
 
 
+async def _ticket_sop_stages(project_id: str, ticket_type: str | None):
+    row = await db.fetch_one("SELECT traits FROM projects WHERE id = ?", (project_id,))
+    traits = json.loads((row or {}).get("traits") or "[]")
+    if not isinstance(traits, list):
+        traits = []
+    from sop.loader import compose_sop
+    return compose_sop(traits=traits, ticket_type=ticket_type).get("stages", [])
+
+
+async def _last_blocked_from(ticket_id: str) -> str | None:
+    row = await db.fetch_one(
+        """SELECT from_status FROM ticket_logs
+           WHERE ticket_id = ? AND action = 'blocked'
+           ORDER BY created_at DESC LIMIT 1""",
+        (ticket_id,),
+    )
+    return (row or {}).get("from_status")
+
+
+@router.get("/api/projects/{project_id}/tickets/{ticket_id}/unblock-targets")
+async def get_unblock_targets(project_id: str, ticket_id: str):
+    """解除 blocked 时给前端的 SOP 感知选项。视频项目不会再推荐 architecture_done。"""
+    existing = await db.fetch_one(
+        "SELECT * FROM tickets WHERE id = ? AND project_id = ?",
+        (ticket_id, project_id),
+    )
+    if not existing:
+        raise HTTPException(404, "工单不存在")
+    from sop.status_repair import build_unblock_targets
+    stages = await _ticket_sop_stages(project_id, existing.get("type"))
+    blocked_from = await _last_blocked_from(ticket_id)
+    return {
+        "targets": build_unblock_targets(stages, blocked_from, STATUS_LABELS),
+        "blocked_from": blocked_from,
+    }
+
+
 @router.post("/api/projects/{project_id}/tickets/{ticket_id}/unblock")
 async def unblock_ticket(project_id: str, ticket_id: str, target_status: str = "pending"):
     """解除 blocked 工单（人工介入后使用）。
@@ -1133,6 +1598,22 @@ async def unblock_ticket(project_id: str, ticket_id: str, target_status: str = "
 
     if existing["status"] != TicketStatus.BLOCKED.value:
         raise HTTPException(400, f"当前状态「{existing['status']}」不是 blocked，无需解除")
+
+    # 视频/内容 SOP 没有 architecture：把软件默认项改成可派单的 trigger。
+    requested = target_status
+    try:
+        from sop.status_repair import sop_safe_unblock_target
+        stages = await _ticket_sop_stages(project_id, existing.get("type"))
+        target_status = sop_safe_unblock_target(
+            requested, stages, await _last_blocked_from(ticket_id),
+        )
+        if target_status != requested:
+            logger.info(
+                "unblock target remapped %s → %s (ticket %s SOP 无对应软件阶段)",
+                requested, target_status, ticket_id,
+            )
+    except Exception as e:
+        logger.warning("unblock SOP remap 失败，沿用原目标 %s: %s", requested, e)
 
     # 校验 target_status 是合法枚举
     valid_statuses = {s.value for s in TicketStatus}
@@ -1160,10 +1641,13 @@ async def unblock_ticket(project_id: str, ticket_id: str, target_status: str = "
         (ticket_id,),
     )
 
+    remap_note = (
+        f"（已从 {requested} 改到当前 SOP 可派单状态）" if requested != target_status else ""
+    )
     await _log_ticket(
         project_id, existing["requirement_id"], ticket_id,
         "Operator", "unblock", TicketStatus.BLOCKED.value, target_status,
-        f"工单已从 blocked 解除 → {target_status}"
+        f"工单已从 blocked 解除 → {target_status}{remap_note}"
         + (f"（reject 计数清零，此前累计 {cleared} 次）" if cleared else ""),
     )
 
@@ -1183,7 +1667,140 @@ async def unblock_ticket(project_id: str, ticket_id: str, target_status: str = "
     return {
         "message": "工单已解除 blocked",
         "new_status": target_status,
+        "requested_status": requested,
         "reject_count_cleared": cleared,
+    }
+
+
+async def _last_cancelled_from(ticket_id: str) -> str | None:
+    row = await db.fetch_one(
+        """SELECT from_status FROM ticket_logs
+           WHERE ticket_id = ? AND action = 'cancelled'
+           ORDER BY created_at DESC LIMIT 1""",
+        (ticket_id,),
+    )
+    return (row or {}).get("from_status")
+
+
+def _status_allowed_for_restore(status: str, stages: list) -> bool:
+    s = (status or "").strip()
+    if not s or s in ("cancelled", "blocked", "deployed"):
+        return False
+    if s in STATUS_LABELS or s in {x.value for x in TicketStatus}:
+        return True
+    from sop.status_repair import _ids_and_triggers
+    _, triggers, successes = _ids_and_triggers(stages)
+    return s in triggers or s in successes or s.endswith("_ready")
+
+
+@router.get("/api/projects/{project_id}/tickets/{ticket_id}/restore-targets")
+async def get_restore_cancelled_targets(project_id: str, ticket_id: str):
+    """已取消工单恢复时的 SOP 感知选项。"""
+    existing = await db.fetch_one(
+        "SELECT * FROM tickets WHERE id = ? AND project_id = ?",
+        (ticket_id, project_id),
+    )
+    if not existing:
+        raise HTTPException(404, "工单不存在")
+    if existing["status"] != TicketStatus.CANCELLED.value:
+        raise HTTPException(400, f"当前状态「{existing['status']}」不是已取消")
+    from sop.status_repair import build_restore_cancelled_targets
+    stages = await _ticket_sop_stages(project_id, existing.get("type"))
+    cancelled_from = await _last_cancelled_from(ticket_id)
+    return {
+        "targets": build_restore_cancelled_targets(stages, cancelled_from, STATUS_LABELS),
+        "cancelled_from": cancelled_from,
+    }
+
+
+@router.post("/api/projects/{project_id}/tickets/{ticket_id}/restore")
+async def restore_cancelled_ticket(
+    project_id: str, ticket_id: str, target_status: str = "",
+):
+    """把已取消工单拉回可派单状态并立刻重跑。默认从取消前那个阶段继续。"""
+    existing = await db.fetch_one(
+        "SELECT * FROM tickets WHERE id = ? AND project_id = ?",
+        (ticket_id, project_id),
+    )
+    if not existing:
+        raise HTTPException(404, "工单不存在")
+    if existing["status"] != TicketStatus.CANCELLED.value:
+        raise HTTPException(400, f"当前状态「{existing['status']}」不是已取消")
+
+    stages = await _ticket_sop_stages(project_id, existing.get("type"))
+    cancelled_from = await _last_cancelled_from(ticket_id)
+    from sop.status_repair import (
+        build_restore_cancelled_targets,
+        restore_target_from_cancelled_status,
+    )
+    requested = (target_status or "").strip()
+    if not requested:
+        requested = restore_target_from_cancelled_status(cancelled_from, stages)
+    allowed = {t["status"] for t in build_restore_cancelled_targets(
+        stages, cancelled_from, STATUS_LABELS,
+    )}
+    if requested not in allowed:
+        requested = restore_target_from_cancelled_status(cancelled_from, stages)
+    if not _status_allowed_for_restore(requested, stages):
+        raise HTTPException(400, f"目标状态「{requested}」不可恢复")
+
+    try:
+        from llm_client import clear_ticket_cli_abort
+        clear_ticket_cli_abort(ticket_id)
+    except Exception:
+        pass
+
+    cleared_markers = 0
+    try:
+        proj = await db.fetch_one(
+            "SELECT git_repo_path FROM projects WHERE id = ?", (project_id,),
+        )
+        repo = (proj or {}).get("git_repo_path") or ""
+        if repo:
+            from pathlib import Path
+            from actions.gen_image import clear_image_blocked_markers
+            root = Path(repo)
+            cleared_markers = clear_image_blocked_markers(root / "works")
+            cleared_markers += clear_image_blocked_markers(root)
+    except Exception as e:
+        logger.warning("恢复时清理生图阻塞标记失败: %s", e)
+
+    await db.update(
+        "tickets",
+        {
+            "status": requested,
+            "updated_at": now_iso(),
+            "current_action": None,
+            "current_action_latest_log": None,
+        },
+        "id = ?",
+        (ticket_id,),
+    )
+    await _log_ticket(
+        project_id, existing["requirement_id"], ticket_id,
+        "Operator", "restore_cancelled", "cancelled", requested,
+        f"已取消工单恢复 → {requested}"
+        + (f"（清掉 {cleared_markers} 个生图阻塞标记）" if cleared_markers else ""),
+    )
+    try:
+        await event_manager.publish_to_project(
+            project_id,
+            "ticket_status_changed",
+            {"ticket_id": ticket_id, "from": "cancelled", "to": requested, "agent": "Operator"},
+        )
+    except Exception:
+        pass
+    try:
+        from orchestrator import orchestrator
+        await orchestrator._publish_ticket_ready(project_id, ticket_id)
+    except Exception as e:
+        logger.warning("恢复后触发派单失败（将由轮询兜底）: %s", e)
+
+    return {
+        "message": f"工单已恢复 → {STATUS_LABELS.get(requested, requested)}",
+        "new_status": requested,
+        "cancelled_from": cancelled_from,
+        "cleared_image_blocked": cleared_markers,
     }
 
 
@@ -1305,7 +1922,7 @@ async def get_board(project_id: str, requirement_id: str = None):
 async def get_board_by_module(project_id: str):
     """按模块分组视图"""
     tickets = await db.fetch_all(
-        "SELECT * FROM tickets WHERE project_id = ? AND status != 'cancelled' ORDER BY priority, sort_order",
+        "SELECT * FROM tickets WHERE project_id = ? ORDER BY priority, sort_order",
         (project_id,),
     )
 
@@ -1385,7 +2002,9 @@ async def get_ticket_logs(ticket_id: str):
 # 次级日志的 action 前缀（默认折叠）
 # command_run 进这里：单条命令是执行细节，不是叙事节点；失败的会因 level='error'
 # 被 _classify_tier 自动提到 primary，正合需要。
-_SECONDARY_ACTIONS = {"chat:", "llm_call", "tool_call", "shell_exec",
+# llm_call 不在这里：它是「Agent 正在跟模型说话」的叙事节点，主时间轴要能看见。
+# react_tool / ToolSearch / Read 才是刷屏的工具流水，默认进「工具流水」。
+_SECONDARY_ACTIONS = {"chat:", "tool_call", "shell_exec",
                       "react_tool", "skill_step_start", "command_run"}
 
 # OpenSpec / 建单等生命周期事件必须进主时间轴（否则 started=info 会被扔进「详细日志」
@@ -1397,7 +2016,7 @@ _PRIMARY_ACTIONS = {
     "openspec_apply_started", "openspec_apply", "openspec_apply_partial",
     "openspec_apply_failed", "openspec_verify", "openspec_verify_failed",
     "openspec_archive",
-    "skill_workflow_start", "thought_start",
+    "skill_workflow_start", "thought_start", "llm_call",
     "phase_complete", "manual_action", "verification_approved",
     "verification_rejected", "artifact_added", "milestone_architecture",
     # checkpoint / before_write 单独分流；仅 ticket_start、phase_boundary、restore 上主轴
@@ -1433,7 +2052,7 @@ def _classify_tier(item: dict) -> str:
     # thought_done 标记 Agent 阶段完成 → 一律 primary
     if action == "thought_done":
         return "primary"
-    # LLM/工具调用 / 步骤开始 → secondary
+    # 工具流水 / 步骤开始 → secondary（llm_call 已在 _PRIMARY_ACTIONS）
     for prefix in _SECONDARY_ACTIONS:
         if action.startswith(prefix) or action == prefix:
             return "secondary"
@@ -1650,16 +2269,26 @@ def _promote_in_flight_steps(items: list, ticket_status: str = "") -> list:
         if live_text:
             items[in_flight_idx]["_live_stream"] = live_text
 
-    # 若尾段连一条未完结的 skill_step 都没有，但 thought_start / tool_start 本身在跑，
-    # 给起点标 _running，让阶段头和起点行能顯示正在处理
+    # 尾段里把「正在跑」标到人能看懂的节点上：当前步骤 / 当前 LLM / 当前思考。
+    # 不要标 react_tool —— 那会把主时间轴变成工具流水。
+    marked_llm = False
+    marked_thought = False
     for idx in reversed(tail):
         act = items[idx].get("action") or ""
-        if act in ("thought_start", "tool_start"):
+        if not marked_llm and act == "llm_call":
+            items[idx]["_tier"] = "primary"
             items[idx]["_running"] = True
-            if live_text and in_flight_idx is None:
+            if live_text:
+                items[idx]["_live_stream"] = live_text
+            marked_llm = True
+        if not marked_thought and act in ("thought_start", "tool_start"):
+            items[idx]["_running"] = True
+            if live_text and in_flight_idx is None and not marked_llm:
                 items[idx]["_live_stream"] = live_text
             if act == "tool_start":
                 items[idx]["_tier"] = "primary"
+            marked_thought = True
+        if marked_llm and marked_thought:
             break
 
     return items
@@ -1696,6 +2325,66 @@ async def _annotate_task_refs(ticket_id: str, items: list) -> list:
                 rid = tid
         if rid:
             item["_task_ref"] = rid
+    return items
+
+
+async def _annotate_pending_gate_files(ticket_id: str, items: list) -> list:
+    """人审 *_ready 的日志/评论补上产物 chip 和确认卡锚点。"""
+    try:
+        ticket = await db.fetch_one(
+            "SELECT project_id, result, status FROM tickets WHERE id = ?",
+            (ticket_id,),
+        )
+    except Exception:
+        return items
+    if not ticket:
+        return items
+    try:
+        arts = await db.fetch_all(
+            "SELECT path FROM artifacts WHERE ticket_id = ?",
+            (ticket_id,),
+        )
+    except Exception:
+        arts = []
+    pending = await load_ticket_pending_gate(ticket.get("project_id") or "", ticket_id, ticket=ticket)
+    result = _parse_ticket_result(ticket)
+    files = collect_ticket_output_files(
+        result=result,
+        pending_gate=pending,
+        ticket_id=ticket_id,
+    )
+    # 旧评论没写路径时才回退到产物表；有确认卡就只挂卡上的文件，避免把角色图贴到试片确认上。
+    if not files:
+        files = collect_ticket_output_files(
+            artifacts=arts,
+            result=result,
+            pending_gate=pending,
+            ticket_id=ticket_id,
+        )
+    if not files and not pending:
+        return items
+    for item in items:
+        to_st = str(item.get("to_status") or "")
+        phase = str(item.get("phase") or "")
+        det = item.get("_detail") or {}
+        waiting = (
+            det.get("skill_status") == "waiting_human"
+            or to_st.endswith("_ready")
+            or phase.endswith("_ready")
+        )
+        if not waiting:
+            continue
+        if files:
+            existing = list(item.get("_report_files") or [])
+            for f in files:
+                if f not in existing:
+                    existing.append(f)
+            item["_report_files"] = existing
+        if pending:
+            item["_gate"] = {
+                "message_id": pending.get("_message_id") or "",
+                "session_id": pending.get("session_id") or "",
+            }
     return items
 
 
@@ -1759,7 +2448,7 @@ async def _annotate_media_previews(ticket_id: str, items: list) -> list:
         rdir = None
         if project_id:
             p_row = await db.fetch_one(
-                "SELECT git_repo_path FROM projects WHERE id = ?",
+                "SELECT git_repo_path, traits FROM projects WHERE id = ?",
                 (project_id,),
             )
             rdir = (p_row or {}).get("git_repo_path")
@@ -1769,21 +2458,31 @@ async def _annotate_media_previews(ticket_id: str, items: list) -> list:
             if rdir:
                 repo_root_posix = str(rdir).replace("\\", "/").rstrip("/") + "/"
 
-            # 查询项目的预览环境地址（优先 running 的 dev/test，其次任意已配置的 url）
-            env_rows = await db.fetch_all(
-                "SELECT env_type, status, url FROM project_environments WHERE project_id = ?",
-                (project_id,),
+            # 视频/内容没有网页可玩，不要把 H5 试玩链接挂到时间轴上。
+            from actions.chat.video_identity import is_video_traits, parse_traits
+            _traits = parse_traits((p_row or {}).get("traits"))
+            attach_playtest = not (
+                is_video_traits(_traits)
+                or "pipeline:content" in _traits
+                or "category:content" in _traits
             )
-            by_env = {r["env_type"]: r for r in (env_rows or []) if r.get("url")}
-            for pref in ("dev", "test", "prod"):
-                if pref in by_env and by_env[pref].get("status") == "running":
-                    preview_url = str(by_env[pref]["url"])
-                    break
-            if not preview_url:
+
+            # 查询项目的预览环境地址（优先 running 的 dev/test，其次任意已配置的 url）
+            if attach_playtest:
+                env_rows = await db.fetch_all(
+                    "SELECT env_type, status, url FROM project_environments WHERE project_id = ?",
+                    (project_id,),
+                )
+                by_env = {r["env_type"]: r for r in (env_rows or []) if r.get("url")}
                 for pref in ("dev", "test", "prod"):
-                    if pref in by_env:
+                    if pref in by_env and by_env[pref].get("status") == "running":
                         preview_url = str(by_env[pref]["url"])
                         break
+                if not preview_url:
+                    for pref in ("dev", "test", "prod"):
+                        if pref in by_env:
+                            preview_url = str(by_env[pref]["url"])
+                            break
 
         if t_row and t_row.get("result"):
             try:
@@ -1858,6 +2557,11 @@ async def _annotate_media_previews(ticket_id: str, items: list) -> list:
                     media.append(np)
             if media:
                 item["_media_paths"] = media
+            if phase.endswith("_ready"):
+                quoted = [_norm_rel(m) for m in _re.findall(r"`([^`]+)`", content)]
+                files = [p for p in quoted if p and "/" in p and not p.endswith(".ads-waiting-human.json")]
+                if files:
+                    item["_report_files"] = files
             continue
 
         det = item.get("_detail") or {}
@@ -1940,6 +2644,27 @@ async def _annotate_media_previews(ticket_id: str, items: list) -> list:
 
         if media:
             item["_media_paths"] = media[:12]
+
+        # skill 人审：把产物路径挂到 complete / *_ready 评论上，前端渲染成可点 chip
+        det_files = []
+        for key in ("file_paths", "files", "outputs"):
+            val = det.get(key)
+            if isinstance(val, list):
+                for entry in val:
+                    raw_p = entry.get("path") if isinstance(entry, dict) else str(entry or "")
+                    np = _norm_rel(raw_p)
+                    if np and np not in det_files:
+                        det_files.append(np)
+        waiting = (
+            det.get("skill_status") == "waiting_human"
+            or to_st.endswith("_ready")
+        )
+        if waiting and det_files:
+            existing = list(item.get("_report_files") or [])
+            for f in det_files:
+                if f not in existing:
+                    existing.append(f)
+            item["_report_files"] = existing
 
     return items
 
@@ -2059,6 +2784,9 @@ async def get_ticket_timeline(ticket_id: str):
 
     # 标注「这条日志或评论关联的截图 / 资产图片」（兼容历史已落库记录）
     items = await _annotate_media_previews(ticket_id, items)
+
+    # 人审节点：把产物路径和确认卡锚点挂到 *_ready 条目（兼容旧评论没写路径）
+    items = await _annotate_pending_gate_files(ticket_id, items)
 
     return {"timeline": items, "total": len(items), "stage_groups": stage_groups}
 
@@ -2462,3 +3190,131 @@ async def get_ticket_graph(project_id: str, requirement_id: str = None):
                 })
 
     return {"nodes": nodes, "edges": edges}
+
+
+@router.post("/api/tickets/{ticket_id}/video-gate")
+async def resolve_director_video_gate(ticket_id: str, body: dict = Body(...)):
+    """确认或打回 Director 人审节点（``*_ready`` → ``*_done`` / 打回后重跑本 skill）。"""
+    action = str(body.get("action") or "").strip().lower()
+    if action not in ("confirm", "reject"):
+        raise HTTPException(400, "action 必须是 confirm 或 reject")
+    ticket = await db.fetch_one("SELECT * FROM tickets WHERE id = ?", (ticket_id,))
+    if not ticket:
+        raise HTTPException(404, "工单不存在")
+    current = str(ticket["status"] or "")
+    if not current.endswith("_ready"):
+        raise HTTPException(400, f"当前状态不是待确认（{current}）")
+    prefix = current[: -len("_ready")]
+    reason = str(body.get("reason") or "").strip()
+    if action == "reject" and not reason:
+        raise HTTPException(400, "打回必须填写原因")
+    new_status = f"{prefix}_done" if action == "confirm" else f"{prefix}_rejected"
+    now = now_iso()
+    archived = []
+    if action == "reject":
+        slug = str(body.get("work_slug") or "").strip()
+        paths = body.get("preview_paths") or []
+        if not isinstance(paths, list):
+            paths = [paths] if paths else []
+        try:
+            project = await db.fetch_one(
+                "SELECT * FROM projects WHERE id = ?", (ticket["project_id"],)
+            )
+            repo = str((project or {}).get("git_repo_path") or "")
+            if repo:
+                from plugins.director.work_package import archive_paths, find_existing_slug
+                slug = slug or find_existing_slug(repo) or ""
+                if slug:
+                    archived = archive_paths(repo, slug, [str(p) for p in paths if p])
+        except Exception as e:
+            logger.warning("video-gate 归档失败: %s", e)
+        try:
+            from orchestrator import orchestrator
+            await orchestrator._write_phase_comment(
+                ticket["project_id"], ticket_id, "Operator",
+                f"人审打回 {prefix}：{reason}",
+                phase=new_status,
+            )
+        except Exception:
+            pass
+
+    await db.update("tickets", {"status": new_status, "updated_at": now}, "id = ?", (ticket_id,))
+    try:
+        from plugins.director.work_package import package_dir, find_existing_slug
+        project = await db.fetch_one(
+            "SELECT git_repo_path FROM projects WHERE id = ?", (ticket["project_id"],),
+        )
+        repo = str((project or {}).get("git_repo_path") or "")
+        waiting = (_parse_ticket_result(ticket) or {}).get("waiting_human") or {}
+        slug = str(
+            body.get("work_slug")
+            or (waiting.get("work_slug") if isinstance(waiting, dict) else "")
+            or ""
+        ).strip()
+        if repo:
+            slug = slug or find_existing_slug(repo) or ""
+            if slug:
+                marker = package_dir(repo, slug) / ".ads-waiting-human.json"
+                if marker.is_file():
+                    marker.unlink()
+    except Exception as e:
+        logger.warning("video-gate 清理 waiting_human 标记失败: %s", e)
+    msg_id = str(body.get("message_id") or "").strip()
+    if msg_id:
+        try:
+            await db.execute(
+                "UPDATE chat_messages SET action_state=? WHERE id=?",
+                ("executed" if action == "confirm" else "cancelled", msg_id),
+            )
+        except Exception:
+            pass
+    await event_manager.publish_to_project(
+        ticket["project_id"], "ticket_status_changed",
+        {"ticket_id": ticket_id, "from": current, "to": new_status, "agent": "Operator"},
+    )
+
+    dispatch_status = new_status
+    if action == "reject":
+        try:
+            project = await db.fetch_one(
+                "SELECT traits FROM projects WHERE id = ?", (ticket["project_id"],)
+            )
+            traits = []
+            raw_traits = (project or {}).get("traits")
+            if isinstance(raw_traits, list):
+                traits = raw_traits
+            elif isinstance(raw_traits, str) and raw_traits.strip():
+                try:
+                    parsed = json.loads(raw_traits)
+                    if isinstance(parsed, list):
+                        traits = parsed
+                except json.JSONDecodeError:
+                    traits = []
+            from sop.loader import compose_sop
+            cfg = compose_sop(traits=traits, ticket_type=ticket.get("type") or "feature")
+            stage = next((s for s in cfg.get("stages") or [] if s.get("id") == prefix), None)
+            if stage and stage.get("trigger_on"):
+                dispatch_status = stage["trigger_on"]
+                await db.update(
+                    "tickets",
+                    {"status": dispatch_status, "updated_at": now_iso()},
+                    "id = ?", (ticket_id,),
+                )
+        except Exception as e:
+            logger.warning("video-gate 打回重跑定位失败: %s", e)
+
+    try:
+        from orchestrator import orchestrator
+        import asyncio
+        asyncio.create_task(orchestrator.process_ticket(ticket["project_id"], ticket_id))
+    except Exception as e:
+        logger.warning("video-gate 触发调度失败: %s", e)
+    return {
+        "ok": True,
+        "ticket_id": ticket_id,
+        "from": current,
+        "to": dispatch_status,
+        "gate_status": new_status,
+        "reason": reason,
+        "archived": archived,
+    }

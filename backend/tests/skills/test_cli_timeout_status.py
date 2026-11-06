@@ -80,6 +80,29 @@ def test_cli_timeout_without_text_still_budget_exceeded():
     assert "MessageDoneEvent" not in kinds
 
 
+class _AbortedLLM:
+    is_configured = True
+    api_format = "cli"
+
+    async def _call_cli_stream(self, messages, temperature, max_tokens,
+                               resume_session_id="", timeout_override=None):
+        yield {"type": "text_delta", "delta": "思考中…"}
+        yield {"type": "cli_timeout", "timeout": 0, "reason": "aborted",
+               "partial_text": "思考中…"}
+
+
+def test_cli_aborted_yields_stopped_not_success():
+    """点停止：cli_timeout reason=aborted → 工单已停止，不当 success。"""
+    engine = QueryEngine(llm_client=_AbortedLLM(), tool_executor=_NoopExecutor())
+    events = _collect(engine, [{"role": "user", "content": "跑 skill"}],
+                      "system", [], {})
+    kinds = [type(e).__name__ for e in events]
+    assert "BudgetExceededEvent" in kinds
+    assert "MessageDoneEvent" not in kinds
+    budget_ev = next(e for e in events if isinstance(e, BudgetExceededEvent))
+    assert "停止" in budget_ev.reason
+
+
 def test_runner_timeout_is_budget_exceeded_even_with_artifact(tmp_path, monkeypatch):
     """runner 层：超时但产物已落盘 → status=budget_exceeded，不是 success。
 

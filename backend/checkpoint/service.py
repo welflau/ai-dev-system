@@ -435,7 +435,7 @@ class CheckpointService:
                 for p in restored + deleted:
                     await git_manager._run_git(repo_dir, "add", "--", p)
                     if p in deleted:
-                        await git_manager._run_git(repo_dir, "rm", "-rf", "--ignore-unmatch", "--", p)
+                        await git_manager._run_git(repo_dir, "rm", "-rf", "--ignore-unmatch", "--", p, allow_destructive=True)
                 commit_hash = await git_manager.commit(
                     project_id,
                     message or f"[Operator] restore checkpoint {checkpoint_id[-8:]}",

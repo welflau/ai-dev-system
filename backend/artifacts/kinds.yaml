@@ -80,6 +80,78 @@ kinds:
     mime: text/markdown
     storage: file
 
+  # ────────────────── Director 视频制片 ──────────────────
+
+  video_brief:
+    description: Mode、style、画幅、时长、语言、情节范围与生成锁
+    mime: application/json
+    storage: file
+
+  narration_script:
+    description: 解说/故事的定稿讲稿与片段拆分（旁白.md）
+    mime: text/markdown
+    storage: file
+
+  drama_breakdown:
+    description: 剧情模式的片段表、对白、开场/结束状态
+    mime: text/markdown
+    storage: file
+
+  character_bible:
+    description: 人物清单、出现片段、参考图路径与确认状态
+    mime: text/markdown
+    storage: file
+
+  character_ref:
+    description: 人物参考图（可多文件）
+    mime: image/png
+    storage: file
+    binary: true
+
+  scene_bible:
+    description: 剧情模式场景与连续性主体（可选）
+    mime: text/markdown
+    storage: file
+
+  voice_plan:
+    description: 音色路线（内置库 / 新建锚点）与角色映射
+    mime: text/markdown
+    storage: file
+
+  voice_anchor:
+    description: 已锁定音色
+    mime: audio/wav
+    storage: file
+    binary: true
+
+  shot_prompts:
+    description: 逐片段视频 Prompt 索引
+    mime: text/markdown
+    storage: file
+
+  clip_trial:
+    description: 仅片段 1 的试生成
+    mime: video/mp4
+    storage: file
+    binary: true
+
+  video_clip:
+    description: 正式视频片段（多文件）
+    mime: video/mp4
+    storage: file
+    binary: true
+
+  video_package:
+    description: 交付清单（片段路径、任务 ID、模型/参数、缺失项）
+    mime: application/json
+    storage: file
+
+  video_cover:
+    description: Animated Explainer 发布封面（可选）
+    mime: image/png
+    storage: file
+    binary: true
+
   # ────────────────── 引擎编译（UE 插件 skill 声明；执行仍走 fragment） ──────────────────
 
   compile_log:

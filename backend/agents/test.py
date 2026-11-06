@@ -71,7 +71,7 @@ class TestAgent(BaseAgent):
             return await self.run_playtest(context)
         if task_name == "run_h5_playtest":
             return await self.run_h5_playtest(context)
-        return {"status": "error", "message": f"未知任务: {task_name}"}
+        return await self._run_registered_action(task_name, context)
 
     async def run_playtest(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """跑 UE Automation Framework 测试（headless UnrealEditor-Cmd）"""

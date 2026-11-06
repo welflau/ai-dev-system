@@ -55,6 +55,13 @@ async def main():
         check("不传 project_id 时是全局视图", g.success and len(g_pids) >= min(2, len(owners)),
               f"{len(g_tasks)} 条任务，来自 {len(g_pids)} 个项目")
         check("全局视图提示文案正确", "全局视图" in (g.output or ""))
+        sourced = [t for t in g_tasks if t.get("type") in ("ticket", "ci_build")]
+        if sourced:
+            check("工单/CI 带 project_name 或 session_label，能回溯来源",
+                  all((t.get("project_name") or t.get("session_label")) for t in sourced),
+                  f"{len(sourced)} 条")
+            check("工单/CI 的 session_key 是 project:{id}，不会粘到当前对话",
+                  all(str(t.get("session_key") or "").startswith("project:") for t in sourced))
 
         if len(owners) < 2:
             _lines.append("[SKIP] 库里只有 <2 个项目有任务，隔离用例意义不大")

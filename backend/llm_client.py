@@ -88,6 +88,146 @@ class _LLMContext:
 
 _llm_ctx = _LLMContext()
 
+# 工单停止：登记正在跑的 CLI 子进程，点「停止」时按 ticket_id 杀进程树。
+# 不登记的话 cancel 只改 tickets.status，codebuddy --print 会继续流思考。
+_LIVE_CLI_PROCS: Dict[str, list] = {}
+_ABORTED_TICKETS: set = set()
+_ABORT_EVENTS: Dict[str, Any] = {}
+
+
+def _ensure_abort_event(ticket_id: str):
+    import asyncio
+    if not ticket_id:
+        return None
+    ev = _ABORT_EVENTS.get(ticket_id)
+    if ev is None:
+        ev = asyncio.Event()
+        _ABORT_EVENTS[ticket_id] = ev
+        if ticket_id in _ABORTED_TICKETS:
+            ev.set()
+    return ev
+
+
+def register_cli_proc(proc, ticket_id: str = "") -> None:
+    tid = ticket_id or _llm_ctx.ticket_id
+    if not tid or proc is None:
+        return
+    bucket = _LIVE_CLI_PROCS.setdefault(tid, [])
+    if proc not in bucket:
+        bucket.append(proc)
+    _ensure_abort_event(tid)
+
+
+def ticket_has_live_cli(ticket_id: str) -> bool:
+    """该工单是否还有未退出的 CLI 子进程（轮询用来避免 30s 再派一发）。"""
+    if not ticket_id:
+        return False
+    bucket = _LIVE_CLI_PROCS.get(ticket_id) or []
+    live = [p for p in bucket if p is not None and getattr(p, "returncode", None) is None]
+    if live:
+        _LIVE_CLI_PROCS[ticket_id] = live
+        return True
+    _LIVE_CLI_PROCS.pop(ticket_id, None)
+    return False
+
+
+def unregister_cli_proc(proc) -> None:
+    if proc is None:
+        return
+    tid = _llm_ctx.ticket_id
+    keys = [tid] if tid else list(_LIVE_CLI_PROCS.keys())
+    for k in keys:
+        bucket = _LIVE_CLI_PROCS.get(k) or []
+        if proc in bucket:
+            bucket.remove(proc)
+        if not bucket:
+            _LIVE_CLI_PROCS.pop(k, None)
+
+
+def clear_ticket_cli_abort(ticket_id: str) -> None:
+    """新一轮 process_ticket 开始时清掉上一轮的停止标记。"""
+    if not ticket_id:
+        return
+    _ABORTED_TICKETS.discard(ticket_id)
+    _ABORT_EVENTS.pop(ticket_id, None)
+
+
+def ticket_cli_was_aborted(ticket_id: str = "") -> bool:
+    tid = ticket_id or _llm_ctx.ticket_id
+    return bool(tid) and tid in _ABORTED_TICKETS
+
+
+async def _await_cancelled(task) -> None:
+    """取消旁路 waiter 时必须吞掉 CancelledError。
+
+    `except Exception` 接不住它（3.8+ 是 BaseException）。漏出去会把
+    正在等模型首包的 process_ticket 一并取消，界面只剩「调用模型」占位。
+    """
+    import asyncio
+    if task is None:
+        return
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    except Exception:
+        pass
+
+
+async def _kill_cli_proc_tree(proc) -> None:
+    """Windows 上 codebuddy 经 cmd 拉起 node，必须 /T 杀整棵树。"""
+    import sys
+    import asyncio
+    if proc is None:
+        return
+    pid = getattr(proc, "pid", None)
+    if pid and sys.platform == "win32":
+        try:
+            kp = await asyncio.create_subprocess_exec(
+                "taskkill", "/F", "/T", "/PID", str(pid),
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await kp.wait()
+            return
+        except Exception as e:
+            logger.debug("taskkill CLI pid=%s: %s", pid, e)
+    if getattr(proc, "returncode", 0) is None:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+        except Exception as e:
+            logger.debug("proc.kill CLI: %s", e)
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=5)
+        except Exception:
+            pass
+
+
+async def abort_ticket_cli(ticket_id: str) -> int:
+    """杀掉该工单在途 CLI。先打 aborted 标记，再杀进程。返回尝试终止的进程数。"""
+    if not ticket_id:
+        return 0
+    _ABORTED_TICKETS.add(ticket_id)
+    ev = _ensure_abort_event(ticket_id)
+    if ev is not None:
+        ev.set()
+    procs = list(_LIVE_CLI_PROCS.pop(ticket_id, []) or [])
+    n = 0
+    for proc in procs:
+        try:
+            await _kill_cli_proc_tree(proc)
+            n += 1
+        except Exception as e:
+            logger.warning("abort_ticket_cli 终止失败 ticket=%s: %s", ticket_id[:12], e)
+    if n:
+        logger.info("🛑 已终止工单 %s 的 %d 个 CLI 进程", ticket_id[:12], n)
+    else:
+        logger.info("🛑 工单 %s 无登记中的 CLI 进程（已标记 aborted）", ticket_id[:12])
+    return n
+
 
 def set_skill_io_context(
     output_root: str = "",
@@ -95,6 +235,14 @@ def set_skill_io_context(
     allowed_exts: Optional[List[str]] = None,
     image_subdir: str = "",
     tools: Optional[List[str]] = None,
+    knowledge_root: str = "",
+    write_mode: str = "",
+    project_id: str = "",
+    ticket_id: str = "",
+    ticket_title: str = "",
+    requirement_id: str = "",
+    session_id: str = "",
+    skill_id: str = "",
 ):
     """声明本次 LLM 调用处于某个 skill 的执行上下文里（SkillRunner 调用）。
 
@@ -108,6 +256,14 @@ def set_skill_io_context(
         "allowed_exts": list(allowed_exts or []),
         "image_subdir": image_subdir,
         "tools": list(tools or []),
+        "knowledge_root": knowledge_root or "",
+        "write_mode": write_mode or "",
+        "project_id": project_id or "",
+        "ticket_id": ticket_id or "",
+        "ticket_title": ticket_title or "",
+        "requirement_id": requirement_id or "",
+        "session_id": session_id or "",
+        "skill_id": skill_id or "",
     } if output_root else None
 
 
@@ -994,12 +1150,18 @@ class LLMClient:
         # 取当前 LLM 上下文的 project_id，注入给 MCP server 作默认值
         _ctx_project_id = _llm_ctx.project_id or ""
 
+        try:
+            from config import settings as _settings
+            _db_path = str(getattr(_settings, "DB_PATH", "") or (_backend_dir / "data" / "ai_dev_system.db"))
+        except Exception:
+            _db_path = str(_backend_dir / "data" / "ai_dev_system.db")
         mcp_servers: dict = {
             "ads-data": {
                 "command": _python_exe,
                 "args": [str(_backend_dir / "ads_data_mcp_server.py")],
                 "env": {
-                    "ADS_DB_PATH": str(_backend_dir / "data" / "ai_dev_system.db"),
+                    "ADS_DB_PATH": _db_path,
+                    "DB_PATH": _db_path,
                     "ADS_BASE_URL": "http://localhost:8000",
                     "ADS_PROJECT_ID": _ctx_project_id,
                     "ADS_SESSION_ID": _llm_ctx.session_id or "",
@@ -1024,6 +1186,19 @@ class LLMClient:
                 _env["SKILL_ALLOWED_EXTS"] = ",".join(_skill_io["allowed_exts"])
             if _skill_io.get("image_subdir"):
                 _env["SKILL_IMAGE_SUBDIR"] = _skill_io["image_subdir"]
+            if _skill_io.get("tools"):
+                _env["SKILL_TOOLS"] = ",".join(
+                    str(t).split(":", 1)[0] for t in _skill_io["tools"] if str(t).strip()
+                )
+            if _skill_io.get("knowledge_root"):
+                _env["SKILL_KNOWLEDGE_ROOT"] = str(_skill_io["knowledge_root"])
+            if _skill_io.get("write_mode"):
+                _env["SKILL_WRITE_MODE"] = str(_skill_io["write_mode"])
+            for _k in ("project_id", "ticket_id", "ticket_title", "requirement_id", "session_id", "skill_id"):
+                if _skill_io.get(_k):
+                    _env[f"SKILL_{_k.upper()}"] = str(_skill_io[_k])
+            _env["DB_PATH"] = _db_path
+            _env["ADS_DB_PATH"] = _db_path
             mcp_servers["skill_io"] = {
                 "command": _python_exe,
                 "args": [str(_backend_dir / "skills" / "skill_io_mcp_server.py")],
@@ -1312,6 +1487,8 @@ class LLMClient:
         else:
             logger.debug("🖥️  CLI 非流式：最终命令（无 MCP 注入）: %s", " ".join(_cmd_display))
 
+        proc = None
+        _cli_tid = _llm_ctx.ticket_id or ""
         try:
             proc = await _asyncio.create_subprocess_exec(
                 *cmd,
@@ -1323,6 +1500,10 @@ class LLMClient:
                 # 与 _call_cli_stream 一致：codebuddy 工具结果单行 JSON 常 >64KB 默认 limit
                 limit=16 * 1024 * 1024,
             )
+            register_cli_proc(proc, ticket_id=_cli_tid)
+            if ticket_cli_was_aborted():
+                await _kill_cli_proc_tree(proc)
+                return "[已停止]", None
 
             if use_stream:
                 full_text = await self._parse_cli_stream(proc, stdin_data)
@@ -1332,9 +1513,11 @@ class LLMClient:
                         proc.communicate(input=stdin_data), timeout=self.cli_timeout
                     )
                 except _asyncio.TimeoutError:
-                    proc.kill()
+                    await _kill_cli_proc_tree(proc)
                     logger.error("CLI 调用超时（%ds）: %s", self.cli_timeout, self.cli_cmd)
                     return self._fallback_response(messages), None
+                if ticket_cli_was_aborted():
+                    return "[已停止]", None
 
                 if proc.returncode != 0:
                     err_msg = self._decode_cli_text(stderr)[:500]
@@ -1356,6 +1539,8 @@ class LLMClient:
             logger.error("CLI 调用异常: %s", e)
             return self._fallback_response(messages), None
         finally:
+            if proc is not None:
+                unregister_cli_proc(proc)
             if _settings_tmp:
                 try:
                     _os.unlink(_settings_tmp)
@@ -1388,6 +1573,11 @@ class LLMClient:
                 nonlocal full_text
                 # 不用 async for：超长行会抛 LimitOverrunError 并中断整次调用
                 while True:
+                    if ticket_cli_was_aborted():
+                        await _kill_cli_proc_tree(proc)
+                        if not full_text:
+                            full_text = "[已停止]"
+                        break
                     try:
                         raw_line = await proc.stdout.readline()
                     except _asyncio.LimitOverrunError as _loe:
@@ -1601,6 +1791,8 @@ class LLMClient:
         else:
             logger.debug("🖥️  CLI 流式：最终命令（无 MCP 注入）: %s", " ".join(_cmd_display))
 
+        proc = None
+        _cli_tid = _llm_ctx.ticket_id or ""
         try:
             proc = await _asyncio.create_subprocess_exec(
                 *cmd,
@@ -1611,6 +1803,13 @@ class LLMClient:
                 cwd=cwd,
                 limit=16 * 1024 * 1024,  # 16MB，防止大工具结果触发 LimitOverrunError
             )
+            register_cli_proc(proc, ticket_id=_cli_tid)
+            if ticket_cli_was_aborted():
+                await _kill_cli_proc_tree(proc)
+                yield {"type": "text_delta", "delta": "\n[已停止]"}
+                yield {"type": "cli_timeout", "timeout": 0, "reason": "aborted",
+                       "partial_text": ""}
+                return
 
             if stdin_data and proc.stdin:
                 proc.stdin.write(stdin_data)
@@ -1791,12 +1990,38 @@ class LLMClient:
                 _tok_buf_len: int = 0
                 _TOK_THRESHOLD = 60  # chars
 
+                abort_ev = _ensure_abort_event(_llm_ctx.ticket_id) if _llm_ctx.ticket_id else None
+                _hb_last = 0.0
+
+                async def _queue_get_or_abort(timeout: float):
+                    if abort_ev is not None and abort_ev.is_set():
+                        return ("aborted", None)
+                    get_t = _asyncio.create_task(queue.get())
+                    abort_t = _asyncio.create_task(abort_ev.wait()) if abort_ev is not None else None
+                    wait_set = {get_t}
+                    if abort_t is not None:
+                        wait_set.add(abort_t)
+                    done, pending = await _asyncio.wait(
+                        wait_set, timeout=timeout,
+                        return_when=_asyncio.FIRST_COMPLETED,
+                    )
+                    for p in pending:
+                        await _await_cancelled(p)
+                    if abort_ev is not None and abort_ev.is_set():
+                        return ("aborted", None)
+                    if get_t in done:
+                        try:
+                            return ("item", get_t.result())
+                        except Exception:
+                            return ("timeout", None)
+                    return ("timeout", None)
+
                 try:
                     while True:
                         remaining = deadline - _asyncio.get_event_loop().time()
                         if remaining <= 0:
                             reader_task.cancel()
-                            proc.kill()
+                            await _kill_cli_proc_tree(proc)
                             logger.error("CLI 流式调用超时（%.0fs）", effective_timeout)
                             if not full_text:
                                 yield {"type": "text_delta",
@@ -1806,10 +2031,32 @@ class LLMClient:
                             yield {"type": "cli_timeout", "timeout": effective_timeout,
                                    "partial_text": full_text}
                             break
-                        try:
-                            item = await _asyncio.wait_for(queue.get(), timeout=min(remaining, 5.0))
-                        except _asyncio.TimeoutError:
-                            # 5 秒内没有新内容，检查进程是否还活着
+                        kind_wait, item = await _queue_get_or_abort(min(remaining, 5.0))
+                        if kind_wait == "aborted":
+                            reader_task.cancel()
+                            await _kill_cli_proc_tree(proc)
+                            logger.info("🛑 CLI 流式调用被工单停止打断")
+                            yield {"type": "text_delta", "delta": "\n[已停止]"}
+                            yield {"type": "cli_timeout", "timeout": 0, "reason": "aborted",
+                                   "partial_text": full_text}
+                            break
+                        if kind_wait == "timeout":
+                            # 等首包时 stdout 可能几分钟没行。刷新工单 updated_at，
+                            # 避免 orchestrator 60s 僵尸门把活 CLI 打回 pending。
+                            _now_hb = time.monotonic()
+                            if _llm_ctx.ticket_id and _now_hb - _hb_last >= 20:
+                                _hb_last = _now_hb
+                                try:
+                                    from database import db as _hb_db
+                                    from utils import now_iso as _hb_now
+                                    await _hb_db.update(
+                                        "tickets",
+                                        {"updated_at": _hb_now()},
+                                        "id = ?",
+                                        (_llm_ctx.ticket_id,),
+                                    )
+                                except Exception:
+                                    pass
                             if proc.returncode is not None:
                                 break
                             continue
@@ -1904,7 +2151,7 @@ class LLMClient:
                             full_text = f"[CLI错误] {full_text[:500]}"
                     yield {"type": "text_delta", "delta": full_text}
                 except _asyncio.TimeoutError:
-                    proc.kill()
+                    await _kill_cli_proc_tree(proc)
                     yield {"type": "text_delta",
                            "delta": f"[CLI错误] 调用超时（{effective_timeout:.0f}s）"}
                     yield {"type": "cli_timeout", "timeout": effective_timeout,
@@ -1915,6 +2162,8 @@ class LLMClient:
         except Exception as e:
             yield {"type": "text_delta", "delta": f"[CLI错误] {e}"}
         finally:
+            if proc is not None:
+                unregister_cli_proc(proc)
             if _settings_tmp:
                 try:
                     _os.unlink(_settings_tmp)
@@ -2735,6 +2984,50 @@ class LLMClient:
         ):
             yield ev
 
+    async def _iter_tool_chunks(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: List[Dict[str, Any]],
+        system: str,
+        temperature: float,
+        max_tokens: int,
+        enable_thinking: bool = False,
+        thinking_budget: int = 8000,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """统一工具调用事件流：按 api_format 产出归一化 chunk。
+
+        事件类型：text_delta / thinking_delta / thinking_done / tool_use_block / stop / error
+        - anthropic：走流式 _call_anthropic_tools_stream
+        - openai 兼容（含混元 HY）：无流式 tool-use，非流式 _call_openai_tools 拉全量后包装
+        """
+        if self.api_format == "anthropic":
+            async for chunk in self._call_anthropic_tools_stream(
+                messages, tools, system, temperature, max_tokens,
+                enable_thinking=enable_thinking, thinking_budget=thinking_budget,
+            ):
+                yield chunk
+            return
+
+        resp = await self._call_openai_tools(messages, tools, system, temperature, max_tokens)
+        if resp is None:
+            yield {"type": "error", "message": "LLM 调用失败，详见后端日志"}
+            return
+        for block in resp.get("content", []):
+            if block.get("type") == "text":
+                yield {"type": "text_delta", "delta": block.get("text", "")}
+            elif block.get("type") == "tool_use":
+                yield {
+                    "type": "tool_use_block",
+                    "id": block.get("id", ""),
+                    "name": block.get("name", ""),
+                    "input": block.get("input", {}),
+                }
+        yield {
+            "type": "stop",
+            "stop_reason": resp.get("stop_reason", "end_turn"),
+            "usage": resp.get("usage", {}),
+        }
+
     async def _chat_with_tools_stream(
         self,
         messages: List[Dict[str, Any]],
@@ -2791,7 +3084,7 @@ class LLMClient:
             tool_use_blocks: List[Dict] = []
             stop_reason = "end_turn"
 
-            async for ev in self._call_anthropic_tools_stream(
+            async for ev in self._iter_tool_chunks(
                 history, tools, system, temperature, max_tokens
             ):
                 etype = ev["type"]
@@ -2984,7 +3277,17 @@ class LLMClient:
                 })
 
             stop_reason = "tool_use" if oai_msg.get("tool_calls") else "end_turn"
-            return {"stop_reason": stop_reason, "content": content_blocks}
+            usage = data.get("usage") or {}
+            return {
+                "stop_reason": stop_reason,
+                "content": content_blocks,
+                # 必须回填 token 用量：Budget 的「原地踏步」检测靠每轮增量，
+                # 缺 usage 会被当成连续 0 增量误判空转、第 3 轮掐断对话（HY 实测触发）
+                "usage": {
+                    "input_tokens":  usage.get("prompt_tokens", 0) or 0,
+                    "output_tokens": usage.get("completion_tokens", 0) or 0,
+                },
+            }
         except Exception as e:
             logger.error("OpenAI tool-use 调用失败: %s", e)
             return None

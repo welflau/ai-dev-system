@@ -21,8 +21,9 @@ Skills（5 个）
   • UE Python 执行 [built-in] — 在运行中的 UE Editor 执行 Python
   • Blueprint 生成 [built-in] — 根据描述生成 Blueprint
 
-全局 Rules（3 条）
-  • global [always] — 全项目通用规范（语言一致性 / 命名 / 文档 / 安全）
+全局 Rules
+  • global [always] — 硬基线（语言一致性 / 安全红线），每轮短注入
+  • global-coding [scene:coding] — 命名/文档/commit/测试细则，写代码时才注入
   • ue5 [traits] — UE5 项目专属规范
   • cpp [paths] — C++ 文件专属规范
 

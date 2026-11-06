@@ -3,8 +3,8 @@ SOP 配置加载器
 从 YAML 文件加载工作流定义，转换为 orchestrator 可用的 transition_rules
 
 v0.17 Trait-First 扩展：
-- compose_sop(traits, ticket_type) —— 从 _core.yaml + fragments/*.yaml
-  按 traits/ticket_type 过滤动态组装 SOP
+- compose_sop(traits, ticket_type) —— 从 _core.yaml、宿主 fragments/*.yaml、
+  以及 traits 命中的 plugins/<id>/fragments/*.yaml 动态组装 SOP
 - load_sop() 保持向后兼容，作为无 traits 场景的兜底
 """
 import logging
@@ -17,11 +17,54 @@ logger = logging.getLogger("sop")
 SOP_DIR = Path(__file__).parent
 FRAGMENTS_DIR = SOP_DIR / "fragments"
 CORE_FILE = SOP_DIR / "_core.yaml"
+# 插件目录。引擎自己的阶段放 plugins/<id>/fragments/，不写进宿主 fragments。
+PLUGINS_DIR = SOP_DIR.parent / "plugins"
 
 # compose_sop 的结果缓存。key = (traits tuple, ticket_type, repo_path)。
 # 不用 functools.lru_cache：参数含 list（不可哈希），且需要 invalidate_sop_cache
 # 这个带日志的显式清理入口。
 _COMPOSE_CACHE: Dict[tuple, Dict[str, Any]] = {}
+
+
+def iter_all_fragment_files() -> List[Path]:
+    """宿主 fragments 加上每个插件的 fragments。不按 traits 过滤。
+
+    防漂测试要用全量清单。运行时组装走 ``_fragment_files_for``，
+    先看插件 ``plugin.json`` 的 required_traits，对不上的目录整份跳过。
+    """
+    files: List[Path] = []
+    if FRAGMENTS_DIR.is_dir():
+        files.extend(sorted(FRAGMENTS_DIR.glob("*.yaml")))
+    if PLUGINS_DIR.is_dir():
+        for plugin_dir in sorted(p for p in PLUGINS_DIR.iterdir() if p.is_dir() and not p.name.startswith(("_", "."))):
+            frag_dir = plugin_dir / "fragments"
+            if frag_dir.is_dir():
+                files.extend(sorted(frag_dir.glob("*.yaml")))
+    return files
+
+
+def _fragment_files_for(traits_set: Set[str]) -> List[Path]:
+    """当前项目用得到的片段文件。宿主的一律纳入，插件的要 traits 命中。"""
+    files: List[Path] = []
+    if FRAGMENTS_DIR.is_dir():
+        files.extend(sorted(FRAGMENTS_DIR.glob("*.yaml")))
+    if not PLUGINS_DIR.is_dir():
+        return files
+    try:
+        from actions.base import _match_traits
+        from plugins.registry import _read_plugin_manifest
+    except Exception as e:
+        logger.warning("插件片段扫描不可用: %s", e)
+        return files
+    for plugin_dir in sorted(p for p in PLUGINS_DIR.iterdir() if p.is_dir() and not p.name.startswith(("_", "."))):
+        frag_dir = plugin_dir / "fragments"
+        if not frag_dir.is_dir():
+            continue
+        info = _read_plugin_manifest(plugin_dir)
+        if not _match_traits(info.get("required_traits"), traits_set):
+            continue
+        files.extend(sorted(frag_dir.glob("*.yaml")))
+    return files
 
 
 def load_sop(name: str = "default_sop") -> Dict[str, Any]:
@@ -94,7 +137,7 @@ def _compose_sop_uncached(
 
     流程：
       1. 读 _core.yaml 的 base_stages，按 required_traits 裁剪
-      2. 扫 fragments/*.yaml
+      2. 扫宿主 fragments 与 traits 命中的插件 fragments
       3. 按 required_traits / required_ticket_type 过滤 fragments
       4. 按 insert_after / insert_before 插入 base_stages
       5. 同插入点按 priority 降序（priority 大的靠近锚点）
@@ -138,20 +181,26 @@ def _compose_sop_uncached(
     # 裁掉了锚点而自己还活着的 fragment —— 必须在下面报 ERROR，不能静默追加末尾
     sop_diagnostics: List[str] = []
 
-    # 2-4. 扫 fragments，过滤 + 分类（按 insert_after/before 分桶）
+    # 2-4. 扫宿主 fragments 和已启用插件的 fragments，过滤 + 分类
     frag_entries: List[Dict] = []
-    if FRAGMENTS_DIR.exists():
-        for ff in sorted(FRAGMENTS_DIR.glob("*.yaml")):
-            try:
-                with open(ff, "r", encoding="utf-8") as f:
-                    frag = yaml.safe_load(f) or {}
-            except Exception as e:
-                logger.warning("fragment %s 解析失败: %s", ff.name, e)
-                continue
+    seen_ids: Set[str] = set()
+    for ff in _fragment_files_for(traits_set):
+        try:
+            with open(ff, "r", encoding="utf-8") as f:
+                frag = yaml.safe_load(f) or {}
+        except Exception as e:
+            logger.warning("fragment %s 解析失败: %s", ff.name, e)
+            continue
 
-            if not _fragment_matches(frag, traits_set, ticket_type):
-                continue
-            frag_entries.append(frag)
+        if not _fragment_matches(frag, traits_set, ticket_type):
+            continue
+        frag_id = str(frag.get("id") or "")
+        if frag_id and frag_id in seen_ids:
+            logger.error("fragment id 重复，跳过 %s（id=%s）", ff, frag_id)
+            continue
+        if frag_id:
+            seen_ids.add(frag_id)
+        frag_entries.append(frag)
 
     # 5. 按 priority 升序排：低优先级先插入，高优先级后插入。
     # 因为 insert(idx+1) 会把后插入的挤到锚点+1 位置，导致高优先级最终更靠近锚点（先执行）。
@@ -276,6 +325,7 @@ def _compose_sop_uncached(
     result["ticket_type_used"] = ticket_type
     # 裁剪/失锚/skill 链降级等结构性问题，供前端 SOP 预览与排障读取
     result["dropped_base_stages"] = sorted(dropped_base_ids)
+    sop_diagnostics.extend(_in_progress_gate_diagnostics(composed))
     result["sop_diagnostics"] = sop_diagnostics
 
     logger.info(
@@ -843,6 +893,7 @@ def _get_next_status(stage: Dict) -> Optional[str]:
 
     # 常见的 in_progress 状态映射
     status_map = {
+        ("PlannerAgent", "write_prd"): "planning_in_progress",
         ("ArchitectAgent", "design_architecture"): "architecture_in_progress",
         ("DevAgent", "develop"): "development_in_progress",
         ("DevAgent", "rework"): "development_in_progress",
@@ -850,7 +901,41 @@ def _get_next_status(stage: Dict) -> Optional[str]:
         ("TestAgent", "run_tests"): "testing_in_progress",
     }
 
-    return status_map.get((agent, action))
+    mapped = status_map.get((agent, action))
+    if mapped:
+        return mapped
+    # 未进表的 stage（如视频 SOP 的 director_*）也要有 in_progress，
+    # 否则工单一直停在 trigger_on（pending），30s 轮询会当成新单反复派发。
+    sid = (stage.get("id") or "").strip()
+    if sid:
+        return f"{sid}_in_progress"
+    return None
+
+
+def _in_progress_gate_diagnostics(stages: List[Dict]) -> List[str]:
+    """可自动派单的阶段必须有 in_progress。这是 SOP 门禁，不是提示。
+
+    缺了的后果：orchestrator 不改 tickets.status，工单一直停在 trigger_on
+    （常见是 pending），30s 轮询把它当新单再派，CLI 叠罗汉、界面只有「调用模型」。
+    """
+    diags: List[str] = []
+    for stage in stages or []:
+        if stage.get("branch_only"):
+            continue
+        trigger = stage.get("trigger_on")
+        if not trigger:
+            continue
+        if not _get_next_status(stage):
+            diags.append(
+                "ERROR: stage {id} ({agent}.{action}) trigger_on={trig} "
+                "没有 in_progress/next_status，轮询会把该状态当成空闲工单反复派发。".format(
+                    id=stage.get("id") or "?",
+                    agent=stage.get("agent") or "?",
+                    action=stage.get("action") or "?",
+                    trig=trigger,
+                )
+            )
+    return diags
 
 
 # =============================================================================

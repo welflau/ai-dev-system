@@ -545,4 +545,40 @@ async def collect_workspace_roots(project: Dict[str, Any]) -> List[Dict[str, Any
     return roots
 
 
+def collect_stage_hooks() -> Dict[str, Any]:
+    """收集各插件 pipeline.py 里的 STAGE_HOOKS。
+
+    片段用名字引用钩子（on_success / on_failure）。宿主按名字调用，
+    不在编排器里写引擎分支。同名时后扫描到的插件覆盖前面的，并打错误日志。
+    """
+    hooks: Dict[str, Any] = {}
+    for plugin_dir in iter_plugin_dirs():
+        if not (plugin_dir / "pipeline.py").is_file():
+            continue
+        mod_name = f"plugins.{plugin_dir.name}.pipeline"
+        try:
+            mod = importlib.import_module(mod_name)
+        except Exception as e:
+            logger.warning("加载插件阶段钩子失败 %s: %s", mod_name, e)
+            continue
+        table = getattr(mod, "STAGE_HOOKS", None)
+        if not isinstance(table, dict):
+            continue
+        for name, fn in table.items():
+            if not isinstance(name, str) or not name.strip() or not callable(fn):
+                continue
+            if name in hooks:
+                logger.error(
+                    "阶段钩子重名 %s，插件 %s 覆盖了先注册的实现",
+                    name, plugin_dir.name,
+                )
+            hooks[name] = fn
+    return hooks
+
+
+def stage_hook(name: str):
+    """按片段里写的名字取钩子。没有登记则返回 None。"""
+    return collect_stage_hooks().get(name)
+
+
 

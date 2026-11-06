@@ -30,6 +30,7 @@ def _build_allowed_roots() -> list[Path]:
     return [
         backend_dir / "ue_plugins",
         backend_dir / "skills",
+        backend_dir / "plugins",
         backend_dir / "docs",
         backend_dir / "sop",
         backend_dir.parent / "docs",   # 项目 docs/
@@ -68,7 +69,7 @@ def _is_safe_path(path: Path, user_provided: bool = False) -> tuple[bool, str]:
         except ValueError:
             continue
 
-    return False, f"路径不在允许的目录范围内（允许: ue_plugins/, skills/, docs/, sop/）"
+    return False, f"路径不在允许的目录范围内（允许: ue_plugins/, skills/, plugins/, docs/, sop/）"
 
 
 def _read_file_sync(path: Path) -> str:
@@ -170,6 +171,7 @@ def _build_allowed_roots() -> list[Path]:
     return [
         backend_dir / "ue_plugins",
         backend_dir / "skills",
+        backend_dir / "plugins",
         backend_dir / "docs",
         backend_dir / "sop",
         backend_dir.parent / "docs",   # 项目 docs/
@@ -208,7 +210,7 @@ def _is_safe_path(path: Path, user_provided: bool = False) -> tuple[bool, str]:
         except ValueError:
             continue
 
-    return False, f"路径不在允许的目录范围内（允许: ue_plugins/, skills/, docs/, sop/）"
+    return False, f"路径不在允许的目录范围内（允许: ue_plugins/, skills/, plugins/, docs/, sop/）"
 
 
 class ReadLocalFileAction(ActionBase):

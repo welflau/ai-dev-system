@@ -18,6 +18,9 @@ stage:
   success_status: play_test_passed
   reject_status: play_test_failed
   reject_goto: development
+  closeout: status
+  on_success: [openspec_verify]
+  on_failure: [uproject_heal]
   config:
     timeout_seconds: 600       # 首次可能 3-5 min（shader 编译）
     test_filter: "Project."    # UE Automation filter，默认只跑项目自身的 Functional Tests

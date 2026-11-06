@@ -20,8 +20,14 @@ from models import (
 )
 from utils import generate_id, now_iso
 from events import event_manager
-from llm_client import set_llm_context, clear_llm_context
+from llm_client import set_llm_context, clear_llm_context, llm_client
 from git_manager import git_manager
+
+
+def analysis_progress_message(elapsed_s: int, step: str, timeout_s: int) -> str:
+    """PRD 分析心跳文案。看板实时日志靠它判断还活着。"""
+    step = (step or "等待 LLM").strip()
+    return f"PRD 分析仍在进行（已 {int(elapsed_s)}s / 超时 {int(timeout_s)}s）：{step}"
 
 logger = logging.getLogger("orchestrator")
 
@@ -41,6 +47,142 @@ _MEDIA_COMMIT_LABELS = {
 from agent_registry import instantiate_agents
 
 
+def stage_hook_names(stage: Dict, key: str) -> List[str]:
+    """片段 stage 上的 on_success / on_failure。只认字符串名字。"""
+    raw = (stage or {}).get(key) or []
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list):
+        return []
+    return [item.strip() for item in raw if isinstance(item, str) and item.strip()]
+
+
+def is_skill_run_result(agent_name: str, result: Any) -> bool:
+    """skill 阶段的结果必须走 `_handle_skill_agent_result`。
+
+    不能只看 `agent_name == "SkillAgent"`：`x-workflow.agent` 可以点名
+    PlannerAgent 等宿主 Role，执行引擎仍是 SkillRunner。只认名字的话，
+    那些结果会落到 `_handle_agent_result` 末尾的 `else` —— 状态不推进，
+    同一条 rule 反复命中，skill 被无限重跑烧 token。
+    """
+    if agent_name == "SkillAgent":
+        return True
+    if not isinstance(result, dict):
+        return False
+    return bool(result.get("skill_id") or result.get("skill_status"))
+
+
+def rewind_trigger(stages: List[Dict], stage_id: str) -> Optional[str]:
+    """回跳目标是组合后该阶段的 trigger_on，不是 YAML 里手写的那个，也不是阶段 id。"""
+    for stage in stages or []:
+        if stage.get("id") == stage_id:
+            trigger = stage.get("trigger_on")
+            return str(trigger) if trigger else None
+    return None
+
+
+def closeout_log_level(result: Dict, ok: bool) -> str:
+    if not ok:
+        return "warning"
+    warnings = result.get("warnings") or []
+    nested = result.get("ue_test_gen")
+    if isinstance(nested, dict) and nested.get("warnings"):
+        warnings = nested.get("warnings") or []
+    return "warning" if warnings else "info"
+
+
+def closeout_message(
+    stage: Dict, result: Dict, ok: bool, notes: Optional[List[str]] = None,
+) -> str:
+    extra = "".join(str(item) for item in (notes or []) if item)
+    name = str(stage.get("name") or stage.get("id") or "阶段")
+    nested = result.get("ue_test_gen")
+    if isinstance(nested, dict) and nested.get("summary"):
+        return f"{nested['summary']}{extra}"
+    summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+    try:
+        secs = int(result.get("duration_ms") or 0) // 1000
+    except (TypeError, ValueError):
+        secs = 0
+    goto = stage.get("reject_goto")
+    tail = f"，打回 {goto}" if (not ok and goto) else ""
+    if ok:
+        if "total" in summary:
+            return (
+                f"{name} 通过（{summary.get('passed', 0)}/{summary.get('total', 0)}，{secs}s）{extra}"
+            )
+        target = result.get("target_name")
+        bits: List[str] = []
+        if result.get("duration_ms") is not None:
+            bits.append(f"{secs}s")
+        if target:
+            bits.append(f"target={target}")
+        if bits:
+            return f"{name} 通过（{'，'.join(bits)}）{extra}"
+        return f"{name} 通过{extra}"
+    errors = result.get("errors") or []
+    if errors:
+        return f"{name} 失败 · {len(errors)} 个错误{tail}{extra}"
+    if "total" in summary:
+        return (
+            f"{name} 失败 · {summary.get('failed', 0)}/{summary.get('total', 0)} failed{tail}{extra}"
+        )
+    return f"{name} 失败{tail}{extra}"
+
+
+def closeout_detail(result: Dict) -> Dict[str, Any]:
+    """收尾日志要带上反思和验收还在读的字段。"""
+    detail: Dict[str, Any] = {}
+    if not isinstance(result, dict):
+        return detail
+    errors = [item for item in (result.get("errors") or []) if isinstance(item, dict)]
+    if errors:
+        detail["errors"] = errors[:10]
+        parts = []
+        for item in errors[:3]:
+            fname = str(item.get("file") or "?").replace("\\", "/").split("/")[-1]
+            parts.append(
+                f"{fname}:{item.get('line', '?')} {item.get('code', '')} "
+                f"{str(item.get('msg') or '')[:80]}"
+            )
+        detail["err_brief"] = "; ".join(parts)
+    warnings = result.get("warnings") or []
+    if warnings:
+        detail["warnings"] = list(warnings)[:5]
+    for key, limit in (("hints", 5), ("screenshots", 5)):
+        value = result.get(key)
+        if isinstance(value, list) and value:
+            detail[key] = value[:limit]
+    products = result.get("products")
+    if products:
+        detail["products"] = products
+    for key in ("exit_code", "duration_ms", "command", "task_id", "summary", "target_name"):
+        value = result.get(key)
+        if value not in (None, "", [], {}):
+            detail[key] = value
+    raw_tail = result.get("raw_tail")
+    if raw_tail:
+        detail["raw_tail"] = str(raw_tail)[-4000:]
+    tests = result.get("tests") or []
+    failed = [item for item in tests if isinstance(item, dict) and item.get("result") == "failed"]
+    if failed:
+        detail["tests"] = failed[:10]
+        briefs = []
+        for item in failed[:3]:
+            first = (item.get("errors") or ["?"])[:1]
+            briefs.append(f"{item.get('name', '?')}: {str(first[0])[:60]}")
+        detail["fail_brief"] = "; ".join(briefs)
+    module_errors = result.get("module_load_errors") or []
+    if module_errors:
+        detail["module_load_errors"] = module_errors
+    nested = result.get("ue_test_gen")
+    if isinstance(nested, dict):
+        detail["generated"] = nested.get("generated") or []
+        if nested.get("warnings"):
+            detail["warnings"] = list(nested.get("warnings") or [])[:10]
+    return detail
+
+
 class TicketOrchestrator:
     """工单编排器 — 管理需求拆单和工单在 Agent 之间的流转"""
 
@@ -50,6 +192,11 @@ class TicketOrchestrator:
 
         # 正在处理的工单（防止重复处理）。claim 必须在 process_ticket 入口、且在任何 await 之前完成。
         self._processing: set = set()
+        # process_ticket 协程本身。_processing 曾被外部 _release_ticket 清掉，
+        # 但任务还在等模型；僵尸检测必须看这个，不能只看集合。
+        self._running_tasks: Dict[str, asyncio.Task] = {}
+        # 正在跑的需求分析。进程重启后面会丢，靠轮询把 status=analyzing 且不在此集合里的需求续跑。
+        self._analyzing_reqs: set = set()
 
         # 每个项目的并发限制，防止大批需求同时涌入耗尽 LLM 配额
         self._MAX_CONCURRENT_PER_PROJECT = 1   # 顶层工单：每项目同时处理 1 个（DB 稳定）
@@ -303,22 +450,31 @@ class TicketOrchestrator:
         所以按项目 traits + 工单 type 读 SOP 声明。
 
         找不到（无 traits / compose 失败 / action 不在 SOP 里）→ None，调用方兜底。
+
+        同一个 action 出现多次时返回组合结果里的第一个。`run_ci_deploy` 因此不能
+        打 `closeout: status`，否则先出现的那个阶段会把另一个的状态语义吃掉。
         """
+        for stage in await self._sop_stages_for(project_id, ticket_type):
+            if stage.get("action") == action:
+                return stage
+        return None
+
+    async def _sop_stages_for(
+        self, project_id: str, ticket_type: Optional[str] = None,
+    ) -> List[Dict]:
         try:
             row = await db.fetch_one(
                 "SELECT traits FROM projects WHERE id = ?", (project_id,)
             )
             traits = json.loads((row or {}).get("traits") or "[]")
             if not isinstance(traits, list) or not traits:
-                return None
-
+                return []
             from sop.loader import compose_sop
-            for stage in compose_sop(traits=traits, ticket_type=ticket_type).get("stages", []):
-                if stage.get("action") == action:
-                    return stage
+            stages = compose_sop(traits=traits, ticket_type=ticket_type).get("stages") or []
+            return [stage for stage in stages if isinstance(stage, dict)]
         except Exception as e:
-            logger.warning("读取 SOP stage 失败（action=%s）: %s", action, e)
-        return None
+            logger.warning("读取 SOP stages 失败: %s", e)
+            return []
 
     async def _sop_success_status_for(
         self, project_id: str, action: str, *, default: str,
@@ -327,6 +483,122 @@ class TicketOrchestrator:
         """该项目 SOP 里 `action` 阶段声明的 success_status，找不到返回 default。"""
         stage = await self._sop_stage_for(project_id, action, ticket_type)
         return (stage or {}).get("success_status") or default
+
+    async def _invoke_stage_hook(self, name: str, ctx: Dict) -> Optional[Dict]:
+        from plugins.registry import stage_hook
+        fn = stage_hook(name)
+        if fn is None:
+            logger.warning("阶段钩子未注册: %s", name)
+            return None
+        try:
+            outcome = await fn(self, ctx)
+        except Exception as e:
+            logger.warning("阶段钩子 %s 失败（忽略）: %s", name, e)
+            return None
+        return outcome if isinstance(outcome, dict) else None
+
+    async def _apply_fragment_closeout(
+        self,
+        project_id: str,
+        ticket_id: str,
+        ticket: Dict,
+        agent_name: str,
+        action: str,
+        result: Dict,
+        result_json: str,
+        current_status: str,
+        requirement_id: Optional[str],
+    ) -> bool:
+        """阶段声明了 closeout: status 时，按片段写状态并跑钩子。
+
+        返回 True 表示这次结果已经收尾，调用方必须 return，不能再落到
+        develop 的产物落库。没有这个标记时返回 False，原路径继续。
+        """
+        stages = await self._sop_stages_for(project_id, ticket.get("type"))
+        stage = next((item for item in stages if item.get("action") == action), None)
+        if not stage or stage.get("closeout") != "status":
+            return False
+
+        ctx = {
+            "project_id": project_id,
+            "ticket_id": ticket_id,
+            "requirement_id": requirement_id,
+            "agent_name": agent_name,
+            "action": action,
+            "result": result,
+            "stage": stage,
+            "stages": stages,
+            "current_status": current_status,
+        }
+        ok = result.get("status") == "success"
+        if ok:
+            new_status = stage.get("success_status") or ""
+            if not new_status:
+                logger.error("阶段 %s 声明了 closeout 但没有 success_status", stage.get("id"))
+                return True
+            await db.update("tickets", {
+                "status": new_status,
+                "result": result_json,
+                "updated_at": now_iso(),
+            }, "id = ?", (ticket_id,))
+            await self._log(
+                project_id, requirement_id, ticket_id, agent_name,
+                "complete", current_status, new_status,
+                closeout_message(stage, result, True),
+                level=closeout_log_level(result, True),
+                detail_data=closeout_detail(result),
+            )
+            for name in stage_hook_names(stage, "on_success"):
+                await self._invoke_stage_hook(name, ctx)
+            return True
+
+        notes: List[str] = []
+        for name in stage_hook_names(stage, "on_failure"):
+            outcome = await self._invoke_stage_hook(name, ctx)
+            if not outcome:
+                continue
+            rewind_id = outcome.get("rewind_to_stage")
+            if rewind_id:
+                trigger = rewind_trigger(stages, str(rewind_id))
+                if not trigger:
+                    logger.warning(
+                        "钩子 %s 要求回到阶段 %s，组合后的 SOP 里没有它的 trigger_on",
+                        name, rewind_id,
+                    )
+                    if outcome.get("log_note"):
+                        notes.append(str(outcome["log_note"]))
+                    continue
+                await self._log(
+                    project_id, requirement_id, ticket_id, agent_name,
+                    "action", current_status, trigger,
+                    str(outcome.get("log_message") or f"回到阶段 {rewind_id}"),
+                    detail_data=outcome.get("detail") if isinstance(outcome.get("detail"), dict) else {},
+                )
+                await db.update("tickets", {
+                    "status": trigger,
+                    "updated_at": now_iso(),
+                }, "id = ?", (ticket_id,))
+                return True
+            if outcome.get("log_note"):
+                notes.append(str(outcome["log_note"]))
+
+        new_status = stage.get("reject_status") or ""
+        if not new_status:
+            logger.error("阶段 %s 声明了 closeout 但没有 reject_status", stage.get("id"))
+            return True
+        await db.update("tickets", {
+            "status": new_status,
+            "result": result_json,
+            "updated_at": now_iso(),
+        }, "id = ?", (ticket_id,))
+        await self._log(
+            project_id, requirement_id, ticket_id, agent_name,
+            "reject", current_status, new_status,
+            closeout_message(stage, result, False, notes),
+            "warning",
+            detail_data=closeout_detail(result),
+        )
+        return True
 
     def invalidate_project_rules(self, project_id: str):
         """清除指定项目的 rules 缓存（当 traits 变动时调用）"""
@@ -386,6 +658,20 @@ class TicketOrchestrator:
         all_statuses -= self._TERMINAL_STATUSES
         return list(all_statuses)
 
+    @staticmethod
+    def _status_is_executing(status: str) -> bool:
+        """执行中、进程一死就会变成僵尸的状态。
+
+        不能只认软件 SOP 那几个枚举：视频链的 director_visual_in_progress
+        不在 transition_rules 的 trigger 里，硬编码名单一漏，重启后永远扫不到。
+        """
+        s = (status or "").strip()
+        if not s:
+            return False
+        if s.endswith("_in_progress") or s == TicketStatus.DEPLOYING.value:
+            return True
+        return False
+
     def get_agent_status(self) -> Dict:
         """获取所有 Agent 的实时状态"""
         return {
@@ -430,11 +716,13 @@ class TicketOrchestrator:
         if not ticket_id:
             return
         try:
+            ts = now_iso()
             await db.update("tickets", {
                 "current_action": action_label,
-                "current_action_started_at": now_iso(),
+                "current_action_started_at": ts,
                 "current_action_latest_log": None,
-                "current_action_updated_at": None,
+                "current_action_updated_at": ts,
+                "updated_at": ts,
             }, "id = ?", (ticket_id,))
         except Exception as e:
             logger.debug("set_ticket_current_action 失败（忽略）: %s", e)
@@ -550,6 +838,7 @@ class TicketOrchestrator:
                 await db.update("tickets", {
                     "current_action_latest_log": line,
                     "current_action_updated_at": ts,
+                    "updated_at": ts,
                 }, "id = ?", (ticket_id,))
             except Exception:
                 pass
@@ -580,26 +869,79 @@ class TicketOrchestrator:
     def _release_ticket(self, ticket_id: str) -> None:
         self._processing.discard(ticket_id)
 
+    def _ticket_held_by_this_process(self, ticket_id: str) -> bool:
+        """本进程还在跑这张工单：禁止当成僵尸回退。
+
+        实测：write_prd 等模型首包时 `_processing` 可能已被外部 `_release_ticket`
+        清掉、CLI 也没登记上，但 process_ticket 协程和 Agent 状态仍是 working。
+        只看集合会把活任务 78s 后打回 pending。
+        """
+        if not ticket_id:
+            return False
+        task = (self._running_tasks or {}).get(ticket_id)
+        if task is not None and not task.done():
+            return True
+        if ticket_id in self._processing:
+            return True
+        for info in (self._agent_status or {}).values():
+            if info.get("status") == "working" and info.get("ticket_id") == ticket_id:
+                return True
+        for held in self._project_active.values():
+            if ticket_id in held:
+                return True
+        for held in self._project_subtask_active.values():
+            if ticket_id in held:
+                return True
+        try:
+            from llm_client import ticket_has_live_cli
+            if ticket_has_live_cli(ticket_id):
+                return True
+        except Exception:
+            pass
+        return False
+
+    async def _ticket_heartbeat(self, ticket_id: str, interval: float = 20.0):
+        """等模型首包时可能几分钟没有 log。不刷新 updated_at，60s 僵尸门会误杀。"""
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                await db.update(
+                    "tickets", {"updated_at": now_iso()}, "id = ?", (ticket_id,),
+                )
+            except Exception:
+                pass
+
     def _enqueue_ticket(
         self, project_id: str, ticket_id: str, *, is_subtask: bool = False, source: str = "",
     ) -> bool:
         """轮询侧调度：占项目槽 + create_task(_poll_process)。
 
-        真正互斥在 process_ticket claim。不要在此处因 `_processing` 拒绝调度——
-        续跑发布 ticket_ready 时当前协程往往尚未 finally release。
+        续跑走 ticket_ready → process_ticket，不经过这里。所以这里可以（也应该）
+        拒绝已在处理 / 已占槽 / CLI 仍在跑的工单，否则 30s 一轮会叠出一串 write_prd。
         """
+        if ticket_id in self._processing:
+            return False
+        try:
+            from llm_client import ticket_has_live_cli
+            if ticket_has_live_cli(ticket_id):
+                logger.info("⏭ 调度跳过 %s（CLI 仍在跑）", ticket_id[:12])
+                return False
+        except Exception:
+            pass
         if is_subtask:
             subtask_set = self._project_subtask_active.setdefault(project_id, set())
-            if ticket_id not in subtask_set:
-                if len(subtask_set) >= self._MAX_CONCURRENT_SUBTASKS:
-                    return False
-                subtask_set.add(ticket_id)
+            if ticket_id in subtask_set:
+                return False
+            if len(subtask_set) >= self._MAX_CONCURRENT_SUBTASKS:
+                return False
+            subtask_set.add(ticket_id)
         else:
             active_set = self._project_active.setdefault(project_id, set())
-            if ticket_id not in active_set:
-                if len(active_set) >= self._MAX_CONCURRENT_PER_PROJECT:
-                    return False
-                active_set.add(ticket_id)
+            if ticket_id in active_set:
+                return False
+            if len(active_set) >= self._MAX_CONCURRENT_PER_PROJECT:
+                return False
+            active_set.add(ticket_id)
         logger.info("⚡ 调度工单 %s（%s）", ticket_id[:12], source or "enqueue")
         asyncio.create_task(self._poll_process(project_id, ticket_id, is_subtask=is_subtask))
         return True
@@ -644,6 +986,46 @@ class TicketOrchestrator:
                 logger.error("轮询异常: %s", e, exc_info=True)
             await asyncio.sleep(interval)
 
+    async def _repair_status_outside_sop(
+        self, project_id: str, ticket: dict, current_status: str,
+    ) -> Optional[str]:
+        """status 不在当前项目 SOP 里时（视频工单被 unblock 到 architecture_done），
+        回退到第一条可派单 trigger，避免看板永久停在「审核中」。"""
+        try:
+            from sop.loader import compose_sop
+            from sop.status_repair import next_status_if_outside_sop
+            row = await db.fetch_one(
+                "SELECT traits FROM projects WHERE id = ?", (project_id,),
+            )
+            traits = json.loads((row or {}).get("traits") or "[]")
+            if not isinstance(traits, list):
+                traits = []
+            stages = compose_sop(
+                traits=traits, ticket_type=ticket.get("type"),
+            ).get("stages", [])
+            new_status = next_status_if_outside_sop(current_status, stages)
+            if not new_status:
+                return None
+            ticket_id = ticket["id"]
+            await db.update("tickets", {
+                "status": new_status, "updated_at": now_iso(),
+            }, "id = ?", (ticket_id,))
+            await self._log(
+                project_id, ticket.get("requirement_id"), ticket_id, "Orchestrator",
+                "sop_repair", current_status, new_status,
+                f"工单状态「{current_status}」不在当前 SOP 中"
+                f"（对应软件阶段已被裁掉），已回退到「{new_status}」继续派单。",
+                "warning",
+                detail_data={"from": current_status, "to": new_status},
+            )
+            logger.info(
+                "🔧 SOP 状态修复: %s %s → %s", ticket_id, current_status, new_status,
+            )
+            return new_status
+        except Exception as e:
+            logger.warning("_repair_status_outside_sop 失败: %s", e)
+            return None
+
     async def _zombie_rewind_status(self, ticket_id: str, status: str) -> Optional[str]:
         """僵尸工单该回退到哪个状态重跑。
 
@@ -663,11 +1045,20 @@ class TicketOrchestrator:
         MAX_ZOMBIE_REWIND = 3
         rewind_cnt = 0
         try:
-            row = await db.fetch_one(
-                """SELECT COUNT(*) AS c FROM ticket_logs
-                   WHERE ticket_id = ? AND action = 'zombie_reset' AND from_status = ?""",
-                (ticket_id, status),
+            reset_row = await db.fetch_one(
+                """SELECT created_at FROM ticket_logs
+                   WHERE ticket_id = ? AND action IN ('unblock', 'reject_reset')
+                   ORDER BY created_at DESC LIMIT 1""",
+                (ticket_id,),
             )
+            since = (reset_row or {}).get("created_at")
+            sql = """SELECT COUNT(*) AS c FROM ticket_logs
+                     WHERE ticket_id = ? AND action = 'zombie_reset' AND from_status = ?"""
+            params: list = [ticket_id, status]
+            if since:
+                sql += " AND created_at > ?"
+                params.append(since)
+            row = await db.fetch_one(sql, tuple(params))
             rewind_cnt = (row or {}).get("c", 0) or 0
         except Exception as e:
             logger.debug("zombie_reset 计数失败: %s", e)
@@ -713,42 +1104,41 @@ class TicketOrchestrator:
         # 1. v0.17: 找出所有状态在**任一项目 SOP** 中的工单（考虑 traits 派生的额外状态）
         actionable_statuses = await self._get_all_actionable_statuses()
 
-        # 2. 也扫描"进行中"但可能是僵尸的工单（被打回后卡住的）
-        in_progress_statuses = [
-            TicketStatus.HTML_PROTOTYPE_IN_PROGRESS.value,
-            TicketStatus.PLANNING_IN_PROGRESS.value,
-            TicketStatus.UX_DESIGN_IN_PROGRESS.value,
-            TicketStatus.ART_DESIGN_IN_PROGRESS.value,
-            TicketStatus.ARCHITECTURE_IN_PROGRESS.value,
-            TicketStatus.DEVELOPMENT_IN_PROGRESS.value,
-            TicketStatus.TESTING_IN_PROGRESS.value,
-            TicketStatus.DEPLOYING.value,
-        ]
-
+        # 2. 执行中状态：SOP trigger 里没有 *_in_progress（那是 next_status）。
+        #    硬编码软件阶段会漏掉 director_visual_in_progress，重启后轮询看不见，
+        #    界面一直「正在干什么」其实进程已经死了。用 GLOB 扫全部 *_in_progress。
         # 3. Phase 4: 也扫 waiting_subtasks，用于检测子 Ticket 是否全部完成
         from actions.chat.dispatch_subtask import WAITING_SUBTASKS_STATUS
         waiting_statuses = [WAITING_SUBTASKS_STATUS]
 
-        all_statuses = list(set(actionable_statuses + in_progress_statuses + waiting_statuses))
-        if not all_statuses:
-            return
-
-        placeholders = ",".join(["?"] * len(all_statuses))
+        all_statuses = list(set(actionable_statuses + waiting_statuses))
+        if all_statuses:
+            placeholders = ",".join(["?"] * len(all_statuses))
+            where = (
+                f"t.status IN ({placeholders}) "
+                f"OR t.status GLOB '*_in_progress' "
+                f"OR t.status = 'deploying'"
+            )
+            params = tuple(all_statuses)
+        else:
+            where = "t.status GLOB '*_in_progress' OR t.status = 'deploying'"
+            params = ()
         sql = f"""
             SELECT t.*, r.status as req_status
             FROM tickets t
             LEFT JOIN requirements r ON t.requirement_id = r.id
-            WHERE t.status IN ({placeholders})
+            WHERE {where}
             ORDER BY t.priority ASC, t.sort_order ASC
         """
-        tickets = await db.fetch_all(sql, tuple(all_statuses))
+        tickets = await db.fetch_all(sql, params)
 
         for t in tickets:
             ticket_id = t["id"]
             project_id = t["project_id"]
 
-            # 跳过正在处理的
-            if ticket_id in self._processing:
+            # 跳过本进程还在跑的（含项目槽 / 活 CLI）。否则等模型首包时
+            # updated_at 不动，60s 僵尸门会把活 write_prd 打回 pending 再派。
+            if self._ticket_held_by_this_process(ticket_id):
                 continue
 
             # 跳过需求已暂停/取消的
@@ -762,11 +1152,13 @@ class TicketOrchestrator:
                 await self._check_subtasks_complete(ticket_id, project_id, t)
                 continue
 
-            # 对于"进行中"状态：检查是否僵尸（updated_at 超过 60 秒没更新）
-            if status in in_progress_statuses:
+            # 对于"进行中"状态：本进程没在跑，且 updated_at 超过 300 秒没更新
+            # → 才是僵尸（进程重启 / Agent 崩溃）。活任务等首包也会 89s 无 log，
+            # 不能在这里打回 pending，否则同一轮 poll 立刻再派，assign→zombie 循环。
+            if self._status_is_executing(status):
                 from datetime import datetime
                 try:
-                    updated_str = t["updated_at"]
+                    updated_str = t["updated_at"] or ""
                     # 去掉时区信息统一比较
                     if "+" in updated_str:
                         updated_str = updated_str.split("+")[0]
@@ -775,7 +1167,8 @@ class TicketOrchestrator:
                     updated = datetime.fromisoformat(updated_str)
                     now_dt = datetime.now()
                     age = (now_dt - updated).total_seconds()
-                    if age < 60:
+                    # 等模型首包 78–90s 无 log 是正常的，60s 会误杀活 write_prd。
+                    if age < 300:
                         continue  # 还在正常处理中，跳过
                 except Exception as e:
                     logger.warning("僵尸检测时间解析失败: %s (%s)", t["updated_at"], e)
@@ -791,6 +1184,11 @@ class TicketOrchestrator:
                 # 正确语义是**回退重跑**：退回该阶段的触发态，让 SOP 重新派单。
                 reset_to = await self._zombie_rewind_status(ticket_id, status)
                 if reset_to and reset_to != status:
+                    try:
+                        from llm_client import abort_ticket_cli
+                        await abort_ticket_cli(ticket_id)
+                    except Exception:
+                        pass
                     await db.update("tickets", {
                         "status": reset_to, "updated_at": now_iso()
                     }, "id = ?", (ticket_id,))
@@ -804,7 +1202,14 @@ class TicketOrchestrator:
                         detail_data={"stale_seconds": int(age), "from": status, "to": reset_to},
                     )
                     logger.info("🔧 僵尸工单已回退重跑: %s → %s", status, reset_to)
-                    status = reset_to  # 用新状态继续判断
+                    # 本轮不再立刻派单：否则 rewind→pending 后同一拍 assign，
+                    # 界面上就是 assign → thought_start → zombie_reset 循环。
+                    continue
+                logger.warning(
+                    "🧟 僵尸工单无法回退，保持挂起: %s status=%s (%.0fs)",
+                    ticket_id[:12], status, age,
+                )
+                continue
 
             # 检查依赖（仅对 pending 和有依赖的状态检查）
             if status in actionable_statuses:
@@ -835,6 +1240,28 @@ class TicketOrchestrator:
         # ── 自动拾取 open BUG ──
         # 扫描所有项目中 status=open 且未关联 ticket 的 BUG，自动触发修复工作流
         await self._poll_open_bugs()
+        await self._resume_stuck_analyses()
+
+    async def _resume_stuck_analyses(self):
+        """status=analyzing 但本进程没在跑 → 上次进程死了，重新拆单。"""
+        rows = await db.fetch_all(
+            "SELECT id, project_id, title FROM requirements WHERE status = 'analyzing'"
+        )
+        for row in rows or []:
+            rid = row["id"]
+            if rid in self._analyzing_reqs:
+                continue
+            logger.warning("🧟 需求分析中断，重新开始: %s「%s」", rid[:12], (row.get("title") or "")[:40])
+            try:
+                await self._log(
+                    row["project_id"], rid, None, "Orchestrator",
+                    "zombie_reset", "analyzing", "analyzing",
+                    "需求分析在进程重启后中断，正在重新开始 PRD 分析。",
+                    "warning",
+                )
+            except Exception as e:
+                logger.debug("写需求分析续跑日志失败: %s", e)
+            asyncio.create_task(self.handle_requirement(row["project_id"], rid))
 
     async def _poll_open_bugs(self):
         """扫描所有 status=open 的 BUG，自动触发修复（无需手动点击）"""
@@ -1122,6 +1549,10 @@ class TicketOrchestrator:
 
     async def handle_requirement(self, project_id: str, requirement_id: str):
         """处理需求：分析 + 拆单"""
+        if requirement_id in self._analyzing_reqs:
+            logger.info("需求分析已在进行，跳过重复调度: %s", requirement_id[:12])
+            return
+        self._analyzing_reqs.add(requirement_id)
         try:
             requirement = await db.fetch_one(
                 "SELECT * FROM requirements WHERE id = ?", (requirement_id,)
@@ -1134,6 +1565,33 @@ class TicketOrchestrator:
             logger.info("━" * 60)
 
             agent = self.agents["ProductAgent"]
+            llm_fmt = getattr(llm_client, "api_format", "") or "unknown"
+            llm_name = (
+                f"CLI {getattr(llm_client, 'cli_type', '') or getattr(llm_client, 'cli_model', '')}"
+                if llm_fmt == "cli"
+                else f"{llm_fmt} {getattr(llm_client, 'model', '')}"
+            ).strip()
+            timeout_s = int(
+                getattr(llm_client, "cli_timeout", 0) or getattr(llm_client, "timeout", 0) or 1800
+            )
+            current_step = {"name": "准备分析"}
+
+            async def on_step(msg: str):
+                current_step["name"] = msg
+                await self._log(
+                    project_id, requirement_id, None, "ProductAgent",
+                    "progress", "analyzing", "analyzing", msg,
+                )
+
+            await on_step(
+                f"开始 PRD 分析「{requirement['title']}」：{llm_name}，超时 {timeout_s}s。"
+                f"分析期间会写进度，不会一直空白。"
+            )
+            await self._log_agent_thought(
+                project_id, requirement_id, None,
+                "ProductAgent", "analyze_and_decompose", "start",
+                title=requirement.get("title") or "",
+            )
 
             # 发 SSE：开始分析
             await event_manager.publish_to_project(
@@ -1155,29 +1613,72 @@ class TicketOrchestrator:
             # 之后再判断复杂度/拆出工单，防止与已有架构冲突或重复）
             from memory import AgentMemory
             try:
+                await on_step("正在读取项目代码上下文…")
                 code_ctx = await AgentMemory(project_id).get_code_context()
                 existing_files = code_ctx.get("file_list", [])
                 existing_code = code_ctx.get("code", {})
                 if existing_files:
                     logger.info("📂 decompose 读到代码上下文: %d 文件, %d 片段",
                                 len(existing_files), len(existing_code))
+                    await on_step(f"已读取 {len(existing_files)} 个文件、{len(existing_code)} 段代码，开始理解项目。")
+                else:
+                    await on_step("项目还没有代码，直接按需求拆单。")
             except Exception as e:
                 logger.warning("decompose 读代码上下文失败: %s", e)
                 existing_files, existing_code = [], {}
+                await on_step(f"读取代码上下文失败（{e}），将按需求原文拆单。")
 
             # Agent 执行拆单
             logger.info("🤖 ProductAgent.analyze_and_decompose 开始执行...")
             req_start = time.time()
-            result = await agent.execute("analyze_and_decompose", {
-                "title": requirement["title"],
-                "description": requirement["description"],
-                "priority": requirement["priority"],
-                "project_id": project_id,
-                "existing_files": existing_files,
-                "existing_code": existing_code,
-            })
+
+            async def _heartbeat():
+                elapsed = 0
+                while True:
+                    await asyncio.sleep(20)
+                    elapsed += 20
+                    try:
+                        await self._log(
+                            project_id, requirement_id, None, "ProductAgent",
+                            "heartbeat", "analyzing", "analyzing",
+                            analysis_progress_message(elapsed, current_step["name"], timeout_s),
+                        )
+                    except Exception as hb_err:
+                        logger.debug("需求分析心跳失败: %s", hb_err)
+
+            hb_task = asyncio.create_task(_heartbeat())
+            try:
+                project_traits: list = []
+                try:
+                    prow = await db.fetch_one("SELECT traits FROM projects WHERE id = ?", (project_id,))
+                    if prow and prow.get("traits"):
+                        raw = prow["traits"]
+                        project_traits = json.loads(raw) if isinstance(raw, str) else list(raw)
+                except Exception:
+                    project_traits = []
+                result = await agent.execute("analyze_and_decompose", {
+                    "title": requirement["title"],
+                    "description": requirement["description"],
+                    "priority": requirement["priority"],
+                    "project_id": project_id,
+                    "existing_files": existing_files,
+                    "existing_code": existing_code,
+                    "project_traits": project_traits,
+                    "on_step": on_step,
+                })
+            finally:
+                hb_task.cancel()
+                try:
+                    await hb_task
+                except asyncio.CancelledError:
+                    pass
             req_elapsed = int((time.time() - req_start) * 1000)
             logger.info("🤖 ProductAgent.analyze_and_decompose 完成 (%dms) → status=%s", req_elapsed, result.get("status"))
+            await self._log_agent_thought(
+                project_id, requirement_id, None,
+                "ProductAgent", "analyze_and_decompose", "done",
+                result=result, elapsed_ms=req_elapsed,
+            )
 
             clear_llm_context()
 
@@ -1489,6 +1990,8 @@ class TicketOrchestrator:
                 )
             except Exception as log_err:
                 logger.error("记录需求错误日志也失败了: %s", log_err)
+        finally:
+            self._analyzing_reqs.discard(requirement_id)
 
     # ==================== 工单流转 ====================
 
@@ -1533,8 +2036,18 @@ class TicketOrchestrator:
         if not self._try_claim_ticket(ticket_id):
             logger.info("⏭ 跳过工单 %s（已有处理中任务）", ticket_id[:12])
             return
+        _cur_task = asyncio.current_task()
+        if _cur_task is not None:
+            self._running_tasks[ticket_id] = _cur_task
         ticket = None  # except/finally 都会读它，取工单本身失败时别再抛 NameError
         try:
+            try:
+                from llm_client import ticket_has_live_cli
+                if ticket_has_live_cli(ticket_id):
+                    logger.info("⏭ 跳过工单 %s（上一轮 CLI 仍在跑，不重复派单）", ticket_id[:12])
+                    return
+            except Exception:
+                pass
             ticket = await db.fetch_one(
                 "SELECT * FROM tickets WHERE id = ?", (ticket_id,)
             )
@@ -1564,6 +2077,13 @@ class TicketOrchestrator:
                     ticket_id[:12], ticket["status"],
                 )
                 return
+
+            # 新一轮执行：清掉上一轮「停止」留下的 CLI aborted 标记
+            try:
+                from llm_client import clear_ticket_cli_abort
+                clear_ticket_cli_abort(ticket_id)
+            except Exception:
+                pass
 
             # 检查需求是否被暂停或取消
             requirement = await db.fetch_one(
@@ -1668,6 +2188,13 @@ class TicketOrchestrator:
             rule = project_rules.get(current_status)
 
             if not rule:
+                repaired = await self._repair_status_outside_sop(
+                    project_id, ticket, current_status,
+                )
+                if repaired and repaired != current_status:
+                    current_status = repaired
+                    rule = project_rules.get(current_status)
+            if not rule:
                 # 终态或无规则，不处理
                 return
 
@@ -1719,21 +2246,38 @@ class TicketOrchestrator:
             agent_name = rule["agent"]
             action = rule["action"]
             next_status = rule.get("next_status")
+            if not next_status:
+                # 门禁：没有 in_progress 就会在 trigger 状态上空转，30s 轮询再派一发。
+                next_status = f"{action}_in_progress" if action else None
+                logger.error(
+                    "🛑 SOP 门禁：%s.%s 在状态 %s 上没有 in_progress，"
+                    "已兜底改写为 %s。请把该 stage 补进 _get_next_status。",
+                    agent_name, action, current_status, next_status,
+                )
 
-            # ── P1：非代码工单跳过 UE 引擎编译 ──────────────────────────
-            # engine_compile fragment 对所有工单触发，但"验证 OpenSpec 流程 / 跑通某流程 /
-            # 测试 N 件套"这类非代码工单没有可编译的 C++，硬编译只会空转报错。
-            # 启发式：标题+描述命中非代码关键词 → 跳过编译，直接推进到 engine_compile_passed。
+            # ── P1：片段声明 skip_when: noncode_ticket 的阶段 ──────────
+            # 非代码工单（验证流程、跑通某流程）没有可编译的源码，硬跑只会空转。
+            # 跳到该阶段自己的 success_status，不在这里写死 action 名或目标状态。
             #
             # ── P2：无界面工单跳过 UX / 美术设计 ───────────────────────
             # 同理，ux_design / art_design 的 trait 条件（platform:* / category:game）
             # 对桌面和游戏项目必然命中，纯后端/纯 C++ 逻辑工单也会被拉去做
             # 交互设计和视觉规范，实测空转 153s 且产出无人使用。
             _skip_reason = None
-            if action == "run_engine_compile" and self._is_noncode_ticket(ticket):
-                _skip_reason = ("noncode_ticket", "engine_compile_passed",
-                                "检测到非代码工单（验证/流程类，无可编译 C++），"
-                                "跳过 UE 引擎编译，直接进入后续阶段。")
+            _skip_stage = await self._sop_stage_for(
+                project_id, action, ticket.get("type"),
+            )
+            if (
+                (_skip_stage or {}).get("skip_when") == "noncode_ticket"
+                and self._is_noncode_ticket(ticket)
+            ):
+                _skip_to = (_skip_stage or {}).get("success_status") or ""
+                if _skip_to:
+                    _skip_reason = (
+                        "noncode_ticket", _skip_to,
+                        "检测到非代码工单（验证/流程类，无可编译源码），"
+                        f"跳过{_skip_stage.get('name') or action}，直接进入后续阶段。",
+                    )
             elif (action in ("write_ux_design", "write_art_design")
                     and not self._needs_design_stage(ticket)):
                 # 跳到该阶段的 success_status，让流水线接着往下走
@@ -1924,9 +2468,20 @@ class TicketOrchestrator:
                 title=ticket.get("title", ""),
             )
 
+            hb_task = asyncio.create_task(self._ticket_heartbeat(ticket_id))
             try:
-                result = await agent.execute(action, context)
+                # skill stage 必须经 SkillRunner。SOP 上的 agent 只是宿主 Role
+                # （时间轴 / LLM agent_type / inject_to），不能直接调
+                # PlannerAgent.execute("skill_xxx")——那会落到「未知任务」。
+                result = await self._execute_assigned_agent(
+                    agent_name, action, context,
+                )
             finally:
+                hb_task.cancel()
+                try:
+                    await hb_task
+                except (asyncio.CancelledError, Exception):
+                    pass
                 await self._clear_ticket_current_action(ticket_id)
             agent_elapsed = int((time.time() - agent_start) * 1000)
             logger.info(
@@ -2082,6 +2637,12 @@ class TicketOrchestrator:
                     self._release_ticket(ticket_id)
                     await self._publish_ticket_ready(project_id, ticket_id)
 
+        except asyncio.CancelledError:
+            logger.warning(
+                "⚠️ 工单处理被取消 [%s]，CLI 可能仍在跑；不应当成僵尸回退",
+                ticket_id[:12] if ticket_id else "?",
+            )
+            raise
         except Exception as e:
             logger.error("❌ 工单处理异常 [%s]: %s", ticket_id[:12] if ticket_id else "?", e, exc_info=True)
             # 标记 Agent 空闲（失败）
@@ -2102,6 +2663,7 @@ class TicketOrchestrator:
             except Exception as log_err:
                 logger.error("记录工单错误日志也失败了: %s", log_err)
         finally:
+            self._running_tasks.pop(ticket_id, None)
             self._release_ticket(ticket_id)
             # 兜底：异常路径下排队的阶段回退也要生效，否则用户看到「已重置」但工单不动
             try:
@@ -2130,6 +2692,33 @@ class TicketOrchestrator:
                 clear_checkpoint_context()
             except Exception:
                 pass
+
+    async def _execute_assigned_agent(
+        self,
+        agent_name: str,
+        action: str,
+        context: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """真正调用 Agent.execute。
+
+        skill stage（`sop_config.skill_id`）一律交给 SkillAgent / SkillRunner。
+        SOP 上的 `agent` 只决定：时间轴归属、LLM `agent_type`、inject_to 知识。
+        若直接调 `PlannerAgent.execute("skill_xxx")`，会落到「未知任务」error
+        再被 `_handle_agent_result` 的 error→blocked 吃掉，skill 永远跑不起来。
+        """
+        sop = context.get("sop_config") or {}
+        executor_name = "SkillAgent" if sop.get("skill_id") else agent_name
+        executor = self.agents.get(executor_name)
+        if executor is None:
+            need = (
+                f"（skill_id={sop.get('skill_id')} 需要 SkillAgent 作为执行引擎）"
+                if sop.get("skill_id") else ""
+            )
+            return {
+                "status": "error",
+                "message": f"SOP 声明的 Agent「{executor_name}」未注册{need}",
+            }
+        return await executor.execute(action, context)
 
     async def _handle_agent_result(
         self,
@@ -2244,6 +2833,14 @@ class TicketOrchestrator:
             agent_name, action, result
         )
 
+        # 片段声明 closeout: status 的阶段在这里收尾并 return。
+        # 不能落到后面的 develop 产物落库，否则测试生成会把状态写回 development_done。
+        if await self._apply_fragment_closeout(
+            project_id, ticket_id, ticket, agent_name, action,
+            result, result_json, current_status, requirement_id,
+        ):
+            return
+
         if agent_name == "DevAgent" and action == "write_html_prototype":
             new_status = TicketStatus.HTML_PROTOTYPE_DONE.value
             await db.update("tickets", {
@@ -2269,12 +2866,13 @@ class TicketOrchestrator:
             )
             return
 
-        if agent_name == "SkillAgent":
+        if is_skill_run_result(agent_name, result):
             await self._handle_skill_agent_result(
                 project_id=project_id, ticket_id=ticket_id, ticket=ticket,
                 requirement_id=requirement_id, action=action,
                 result=result, result_json=result_json,
                 current_status=current_status,
+                agent_name=agent_name,
             )
             return
 
@@ -2555,80 +3153,6 @@ class TicketOrchestrator:
             })
 
         elif agent_name == "DevAgent":
-            # v0.18 Phase D：UE 引擎编译阶段（action=run_engine_compile）有自己的结果语义。
-            # UECompileCheckAction 返回 status 可以是 success / compile_failed（早期 error
-            # 已在开头的 BLOCKED 分支被捕获，此处只可能到 success 或 compile_failed）。
-            if action == "run_engine_compile":
-                r_status = result.get("status")
-                errors_list = result.get("errors") or []
-                if r_status == "success":
-                    new_status = "engine_compile_passed"
-                    await db.update("tickets", {
-                        "status": new_status,
-                        "result": result_json,
-                        "updated_at": now_iso(),
-                    }, "id = ?", (ticket_id,))
-                    # v0.19.x：编译通过 → 把关联 Bug 标为 fixed
-                    await self._resolve_compile_bug(ticket_id, project_id)
-                    await self._log(
-                        project_id, requirement_id, ticket_id, agent_name,
-                        "complete", current_status, new_status,
-                        f"UBT 编译通过（{result.get('duration_ms', 0) // 1000}s，"
-                        f"target={result.get('target_name')}）",
-                        detail_data={
-                            "exit_code": result.get("exit_code"),
-                            "duration_ms": result.get("duration_ms"),
-                            "products": result.get("products"),
-                            "command": result.get("command"),
-                        },
-                    )
-                    # 通过不落 artifacts（产物列表已在 result 里有）
-                else:
-                    # compile_failed → 走 reject_goto: development 链路
-                    new_status = "engine_compile_failed"
-                    await db.update("tickets", {
-                        "status": new_status,
-                        "result": result_json,
-                        "updated_at": now_iso(),
-                    }, "id = ?", (ticket_id,))
-                    err_brief = "; ".join(
-                        f"{e.get('file', '?').split(chr(92))[-1]}:{e.get('line', '?')} {e.get('code', '')} {e.get('msg', '')[:80]}"
-                        for e in errors_list[:3]
-                    )
-                    await self._log(
-                        project_id, requirement_id, ticket_id, agent_name,
-                        "reject", current_status, new_status,
-                        f"UBT 编译失败 · {len(errors_list)} errors · 已创建 Bug 记录，DevAgent.fix_issues 将修复",
-                        "warning",
-                        detail_data={
-                            "errors": errors_list[:10],
-                            "warnings": (result.get("warnings") or [])[:5],
-                            "exit_code": result.get("exit_code"),
-                            "duration_ms": result.get("duration_ms"),
-                            "command": result.get("command"),
-                            "err_brief": err_brief,
-                            # 原始 UBT stdout 末尾（供前端"原始 raw log"折叠块展示）。
-                            # errors=[] 但 exit!=0 时尤其有用——此时唯一的诊断线索就在这里。
-                            "raw_tail": (result.get("raw_tail") or "")[-4000:],
-                        },
-                    )
-                    # v0.19.x：编译失败自动创建 Bug 记录（走正式 Bug 流程）
-                    await self._create_compile_bug(
-                        project_id, requirement_id, ticket_id, errors_list, err_brief,
-                    )
-                return   # 不进入下面的产物落库
-
-            # UE Automation 测试生成（action=generate_ue_tests）同样有自己的结果语义。
-            #
-            # 少了这个分支会出两件事，真机跑一张工单就撞上了（114 次空转）：
-            #   ① 落到下面「常规 develop」的收尾，status 被写回 development_done，
-            #      而 development_done 的 trigger 正是 generate_ue_tests 本身 ——
-            #      派单 → 成功 → 写回原状态 → 再派单，每秒一轮的死循环。
-            #   ② 顺带把本 Action 的结果存成 type='code' 的 artifact，把 develop 阶段的
-            #      dev_result **覆盖掉**。于是第 2 轮起 _pick_targets 读到的 dev_result
-            #      里没有 files，报「本次改动里没有可测的 UE 头文件」—— 症状指向选目标
-            #      逻辑，根因其实在这儿，很难查。
-            # 所以：自己写状态、自己 return，不碰产物表。
             if action == "run_h5_typecheck":
                 r_status = result.get("status")
                 errors_list = result.get("errors") or []
@@ -2681,37 +3205,6 @@ class TicketOrchestrator:
                         },
                     )
                 return
-
-            if action == "generate_ue_tests":
-                r_status = result.get("status")
-                tg = result.get("ue_test_gen") or {}
-                gen_list = tg.get("generated") or []
-                warns = tg.get("warnings") or []
-                # 状态从 SOP 声明里取，不写死字符串：fragment 改了名这里不用跟着改。
-                if r_status == "success":
-                    new_status = await self._sop_success_status_for(
-                        project_id, action, default="ue_test_gen_passed",
-                        ticket_type=ticket.get("type"),
-                    )
-                else:
-                    # 生成器设计上永不返回失败（失败都收敛成 success + warnings），
-                    # 这条是防御：真出了非 success 就走 SOP 声明的返工路径，
-                    # 而不是默默当成功放行。
-                    stage = await self._sop_stage_for(project_id, action, ticket.get("type"))
-                    new_status = (stage or {}).get("reject_status") or "ue_test_gen_failed"
-                await db.update("tickets", {
-                    "status": new_status,
-                    "result": result_json,
-                    "updated_at": now_iso(),
-                }, "id = ?", (ticket_id,))
-                await self._log(
-                    project_id, requirement_id, ticket_id, agent_name,
-                    "complete", current_status, new_status,
-                    tg.get("summary") or "未生成测试",
-                    level="warning" if warns else "info",
-                    detail_data={"generated": gen_list, "warnings": warns[:10]},
-                )
-                return   # 不进入下面的产物落库（别覆盖 dev_result）
 
             # 常规 develop / rework / fix_issues → development_done
             # v0.19.x A 方案：若 self_test 失败（UE blocking 静态错）→ self_test_failed
@@ -2938,8 +3431,6 @@ class TicketOrchestrator:
                 )
 
         elif agent_name == "TestAgent":
-            # v0.19 Phase ②：UE playtest 阶段（action=run_playtest）有自己的结果语义
-            # UEPlaytestAction 返回 status: success / playtest_failed / error
             if action == "run_h5_playtest":
                 r_status = result.get("status")
                 errors_list = result.get("errors") or []
@@ -3000,98 +3491,6 @@ class TicketOrchestrator:
                         },
                     )
                 return
-
-            if action == "run_playtest":
-                r_status = result.get("status")
-                summary = result.get("summary") or {}
-                failed_tests = [t for t in (result.get("tests") or []) if t.get("result") == "failed"]
-                if r_status == "success":
-                    new_status = "play_test_passed"
-                    await db.update("tickets", {
-                        "status": new_status,
-                        "result": result_json,
-                        "updated_at": now_iso(),
-                    }, "id = ?", (ticket_id,))
-                    await self._log(
-                        project_id, requirement_id, ticket_id, agent_name,
-                        "complete", current_status, new_status,
-                        f"Playtest 通过（{summary.get('passed', 0)}/{summary.get('total', 0)}，"
-                        f"{result.get('duration_ms', 0) // 1000}s）",
-                        detail_data={
-                            "exit_code": result.get("exit_code"),
-                            "duration_ms": result.get("duration_ms"),
-                            "summary": summary,
-                            "screenshots": (result.get("screenshots") or [])[:5],
-                            "command": result.get("command"),
-                        },
-                    )
-                    # OpenSpec Verify（规范层）——「测试阶段通过」才触发。
-                    # 历史实现只挂在 TestAgent.run_tests 里（test.py:192 的
-                    # `if all_passed`），但 run_tests 来自 smoke_test fragment，
-                    # required_traits 是 category:service / category:app。
-                    # UE 项目（category:game）compose 出来的 SOP 只有 play_test，
-                    # 根本没有 run_tests 阶段 —— 全库 run_tests 日志 0 条，
-                    # 而所有带 openspec_stage 的工单都是 UE 项目。
-                    # 结果：Verify 挂在一个这类项目走不到的阶段上，
-                    # openspec_stage 永远停在 applied，Archive 也就无从谈起。
-                    # 这里补上 play_test 侧的触发点，两条测试路径语义对齐。
-                    await self._maybe_openspec_verify(
-                        project_id, ticket_id, stage_label="play_test",
-                    )
-                else:
-                    # TODO G：playtest_failed 时先尝试 uproject 自愈
-                    module_errors = result.get("module_load_errors") or []
-                    if module_errors:
-                        heal_result = await self._try_uproject_heal(
-                            project_id, ticket_id, result
-                        )
-                        if heal_result.get("healed"):
-                            # 自愈成功 → 重走编译+测试（状态回退到 engine_compile）
-                            added = heal_result.get("added_plugins", [])
-                            await self._log(
-                                project_id, requirement_id, ticket_id, agent_name,
-                                "action", current_status, "engine_compile",
-                                f"uproject 自愈：追加插件 {', '.join(added)}，重新编译+测试",
-                                detail_data={"added_plugins": added, "heal_result": heal_result},
-                            )
-                            await db.update("tickets", {
-                                "status": "engine_compile",
-                                "updated_at": now_iso(),
-                            }, "id = ?", (ticket_id,))
-                            return   # Orchestrator 下次轮询到 engine_compile 继续
-
-                    # playtest_failed → play_test_failed → SOP reject_goto development
-                    new_status = "play_test_failed"
-                    await db.update("tickets", {
-                        "status": new_status,
-                        "result": result_json,
-                        "updated_at": now_iso(),
-                    }, "id = ?", (ticket_id,))
-                    fail_brief = "; ".join(
-                        f"{t.get('name', '?')}: {'/'.join((t.get('errors') or ['?'])[:1])[:60]}"
-                        for t in failed_tests[:3]
-                    )
-                    heal_note = ""
-                    if module_errors:
-                        heal_note = f"（已尝试 uproject 自愈，无有效插件可补充）"
-                    await self._log(
-                        project_id, requirement_id, ticket_id, agent_name,
-                        "reject", current_status, new_status,
-                        f"Playtest 失败 · {summary.get('failed', len(failed_tests))}/{summary.get('total', 0)} failed · "
-                        f"将触发 DevAgent.fix_issues 修复{heal_note}",
-                        "warning",
-                        detail_data={
-                            "tests": failed_tests[:10],
-                            "summary": summary,
-                            "screenshots": (result.get("screenshots") or [])[:5],
-                            "exit_code": result.get("exit_code"),
-                            "duration_ms": result.get("duration_ms"),
-                            "command": result.get("command"),
-                            "fail_brief": fail_brief,
-                            "module_load_errors": module_errors,
-                        },
-                    )
-                return   # 不进入下面的常规 testing 分支
 
             # 测试结果（只接受合法状态）
             test_status = result.get("status", "testing_done")
@@ -3327,13 +3726,17 @@ class TicketOrchestrator:
         result: Dict,
         result_json: str,
         current_status: str,
+        agent_name: str = "SkillAgent",
     ):
-        """SkillAgent 的结果 → 推进状态 + 登记产物。
+        """Skill 阶段的结果 → 推进状态 + 登记产物。
 
         为什么必须有这个分支：缺了它结果会落到 `_handle_agent_result` 末尾的
         `else: new_status = current_status` —— 状态不推进，同一条 rule 反复命中，
-        skill 被无限重跑烧 token。ArtistAgent（2247 行）和 UEEditorAgent
-        （2383 行）的注释都记着同一个坑，它们都是踩了才补的分支。
+        skill 被无限重跑烧 token。ArtistAgent 和 UEEditorAgent 的注释都
+        记着同一个坑，它们都是踩了才补的分支。
+
+        `agent_name` 是 SOP 上的宿主 Role（可能是 PlannerAgent 等），不是
+        执行引擎 SkillAgent。时间轴 / 评论 / SSE 记宿主。
 
         状态来源优先级：
           1. `result["success_status"]` —— SkillAgent 从 sop_config 回传，最可靠
@@ -3368,14 +3771,72 @@ class TicketOrchestrator:
             )
             skill_status = "partial"
 
-        if skill_status in ("success", "partial"):
+        if skill_status == "waiting_human" and (sop_cfg.get("_produces") or []):
+            declared = {
+                p.get("kind") for p in (sop_cfg.get("_produces") or [])
+                if isinstance(p, dict) and p.get("kind")
+            }
+            got = {a.get("kind") for a in artifacts if a.get("kind")}
+            # 人审看的是「这次有没有做出要审的东西」。clip-trial 还会声明
+            # voice_anchor，visual 还会声明 scene_bible，Mode 不同并不都会落盘，
+            # 不能按「声明的 kind 一个不漏」卡死。空产出才是上次那种假确认卡。
+            if declared and not (declared & got):
+                fail_msg = (
+                    f"skill {skill_id} 进入人审但必产出未齐"
+                    f"（需要 {sorted(declared)}，"
+                    f"实际 {sorted(k for k in got if k)}）"
+                )
+                skill_status = "error"
+                result["message"] = fail_msg
+
+        if skill_status == "waiting_human":
+            new_status = (
+                sop_cfg.get("_ready_status")
+                or result.get("success_status")
+                or f"{sop_cfg.get('_stage_id') or skill_id}_ready"
+            )
+            gate_files = self._skill_gate_file_paths(result)
+            waiting_human = result.get("waiting_human") or {}
+            if not isinstance(waiting_human, dict):
+                waiting_human = {}
+            await db.update("tickets", {
+                "status": new_status, "result": result_json, "updated_at": now_iso(),
+            }, "id = ?", (ticket_id,))
+            await self._log(
+                project_id, requirement_id, ticket_id, agent_name,
+                "complete", current_status, new_status,
+                f"skill {skill_id} 等待人工确认（{rounds} 轮）",
+                "info",
+                detail_data={
+                    "skill_id": skill_id, "skill_status": skill_status,
+                    "outputs": outputs[:20], "rounds": rounds,
+                    "run_as_agent": agent_name,
+                    "files": gate_files[:20],
+                    "file_paths": gate_files[:20],
+                    "gate_message_id": waiting_human.get("_message_id") or "",
+                    "gate_session_id": waiting_human.get("session_id") or "",
+                },
+            )
+            comment_lines = [f"⏸ skill `{skill_id}` 已产出，等待确认。"]
+            if gate_files:
+                comment_lines.append(
+                    "产物：" + "、".join(f"`{p}`" for p in gate_files[:8])
+                )
+            if waiting_human.get("_message_id"):
+                comment_lines.append("确认卡已发到对话，也可在工单里直接确认。")
+            await self._write_phase_comment(
+                project_id, ticket_id, agent_name,
+                "\n".join(comment_lines),
+                phase=new_status,
+            )
+        elif skill_status in ("success", "partial"):
             new_status = success_status
             await db.update("tickets", {
                 "status": new_status, "result": result_json, "updated_at": now_iso(),
             }, "id = ?", (ticket_id,))
             kinds = [a.get("kind") for a in artifacts if a.get("kind")]
             await self._log(
-                project_id, requirement_id, ticket_id, "SkillAgent",
+                project_id, requirement_id, ticket_id, agent_name,
                 "complete", current_status, new_status,
                 f"skill {skill_id} {'部分完成' if skill_status == 'partial' else '完成'}"
                 f"（{rounds} 轮，{len(outputs)} 个产出）",
@@ -3383,11 +3844,11 @@ class TicketOrchestrator:
                 detail_data={
                     "skill_id": skill_id, "skill_status": skill_status,
                     "outputs": outputs[:20], "artifact_kinds": kinds,
-                    "rounds": rounds,
+                    "rounds": rounds, "run_as_agent": agent_name,
                 },
             )
             await self._write_phase_comment(
-                project_id, ticket_id, "SkillAgent",
+                project_id, ticket_id, agent_name,
                 f"{'⚠️' if skill_status == 'partial' else '✅'} "
                 f"skill `{skill_id}` 执行完成"
                 + (f"，产出：{', '.join(kinds)}" if kinds else "")
@@ -3404,12 +3865,15 @@ class TicketOrchestrator:
                 "status": new_status, "result": result_json, "updated_at": now_iso(),
             }, "id = ?", (ticket_id,))
             await self._log(
-                project_id, requirement_id, ticket_id, "SkillAgent",
+                project_id, requirement_id, ticket_id, agent_name,
                 "skip", current_status, new_status,
                 f"skill {skill_id} 不可用，已跳过 | "
                 f"{str(result.get('message') or '')[:200]}",
                 "warning",
-                detail_data={"skill_id": skill_id, "reason": result.get("message")},
+                detail_data={
+                    "skill_id": skill_id, "reason": result.get("message"),
+                    "run_as_agent": agent_name,
+                },
             )
 
         else:
@@ -3420,11 +3884,34 @@ class TicketOrchestrator:
             # reject_goto（否则 sop_to_transition_rules 会派生无限重试规则）。
             new_status = TicketStatus.BLOCKED.value
             fail_msg = str(result.get("message") or f"skill {skill_id} 未成功")
+            extra_files = []
+            try:
+                art_rows = await db.fetch_all(
+                    "SELECT path FROM artifacts WHERE ticket_id = ? "
+                    "ORDER BY created_at DESC LIMIT 20",
+                    (ticket_id,),
+                )
+                extra_files = [r.get("path") for r in (art_rows or []) if r.get("path")]
+            except Exception:
+                extra_files = []
+            from actions.diagnose_ticket import synthesize_blocked_diagnosis
+            diagnosis = synthesize_blocked_diagnosis(
+                skill_id=str(skill_id or ""),
+                skill_status=str(skill_status or ""),
+                error_msg=fail_msg,
+                action=action,
+                outputs=outputs,
+                artifacts=artifacts,
+                extra_files=extra_files,
+            )
             await db.update("tickets", {
-                "status": new_status, "result": result_json, "updated_at": now_iso(),
+                "status": new_status,
+                "result": result_json,
+                "diagnosis": json.dumps(diagnosis, ensure_ascii=False),
+                "updated_at": now_iso(),
             }, "id = ?", (ticket_id,))
             await self._log(
-                project_id, requirement_id, ticket_id, "SkillAgent",
+                project_id, requirement_id, ticket_id, agent_name,
                 "blocked", current_status, new_status,
                 f"skill {skill_id} 执行失败（{skill_status}），已标记 blocked "
                 f"等待人工介入 | {fail_msg[:300]}",
@@ -3432,25 +3919,47 @@ class TicketOrchestrator:
                 detail_data={
                     "skill_id": skill_id, "skill_status": skill_status,
                     "error": fail_msg, "outputs": outputs[:20], "rounds": rounds,
+                    "run_as_agent": agent_name,
                 },
             )
             await self._write_phase_comment(
-                project_id, ticket_id, "SkillAgent",
+                project_id, ticket_id, agent_name,
                 f"❌ skill `{skill_id}` 执行失败（{skill_status}），需人工介入。"
                 f"\n{fail_msg[:300]}",
                 phase=new_status,
+            )
+            await event_manager.publish_to_project(
+                project_id, "ticket_blocked",
+                {
+                    "ticket_id": ticket_id,
+                    "from": current_status,
+                    "to": new_status,
+                    "agent": agent_name,
+                    "action": action,
+                    "error": fail_msg[:300],
+                    "diagnosis": diagnosis,
+                },
+            )
+            # CLI 刚超时再调 LLM 诊断会再卡一轮。skill 失败用本地说明即可。
+            await event_manager.publish_to_project(
+                project_id, "ticket_diagnosed",
+                {"ticket_id": ticket_id, "diagnosis": diagnosis},
             )
 
         await event_manager.publish_to_project(
             project_id, "ticket_status_changed",
             {"ticket_id": ticket_id, "from": current_status,
-             "to": new_status, "agent": "SkillAgent"},
+             "to": new_status, "agent": agent_name},
         )
 
         # 推进到下一阶段。和函数末尾的通用收尾逻辑一致 —— 这里 early-return
         # 了所以必须自己做，否则 skill 链会在第一个 stage 之后停住，
         # 只能等 30s 的 poll_loop 兜底（poll 间隔见 poll_loop 的默认参数）。
-        if new_status != current_status and new_status != TicketStatus.BLOCKED.value:
+        if (
+            new_status != current_status
+            and new_status != TicketStatus.BLOCKED.value
+            and not str(new_status).endswith("_ready")
+        ):
             await asyncio.sleep(0.5)
             updated = await db.fetch_one(
                 "SELECT status FROM tickets WHERE id = ?", (ticket_id,)
@@ -3503,6 +4012,40 @@ class TicketOrchestrator:
             return False
         got = {a.get("kind") for a in artifacts if a.get("kind")}
         return declared.issubset(got)
+
+    @staticmethod
+    def _skill_gate_file_paths(result: Dict) -> List[str]:
+        """人审节点给工单看的产物路径：优先确认卡 preview，其次产物总线，再补 skill 相对路径。"""
+        paths: List[str] = []
+        seen = set()
+
+        def add(raw: Any) -> None:
+            s = str(raw or "").replace("\\", "/").strip().lstrip("./")
+            if not s or s.endswith(".ads-waiting-human.json") or s in seen:
+                return
+            seen.add(s)
+            paths.append(s)
+
+        waiting = result.get("waiting_human") if isinstance(result.get("waiting_human"), dict) else {}
+        for p in (waiting or {}).get("preview_paths") or []:
+            add(p)
+        for item in (waiting or {}).get("preview_urls") or []:
+            if isinstance(item, dict):
+                add(item.get("path"))
+        for art in result.get("artifacts") or []:
+            if isinstance(art, dict):
+                add(art.get("path"))
+        for out in result.get("outputs") or []:
+            s = str(out or "").replace("\\", "/").strip().lstrip("./")
+            if not s:
+                continue
+            if s.startswith(("works/", "artifacts/", "docs/")):
+                add(s)
+            elif "/" in s:
+                add("works/" + s)
+            else:
+                add(s)
+        return paths[:20]
 
     # ==================== Git 文件处理 ====================
 
@@ -4532,10 +5075,49 @@ class TicketOrchestrator:
                 "sop_stage": sop_stage,
             }
 
-            from actions.diagnose_ticket import DiagnoseTicketAction
-            action_obj = DiagnoseTicketAction()
-            result = await action_obj.run(context)
-            diagnosis = (result.data or {}).get("diagnosis") or {}
+            parsed_result: Dict[str, Any] = {}
+            try:
+                raw_result = current_ticket.get("result")
+                parsed_result = (
+                    _json.loads(raw_result) if isinstance(raw_result, str)
+                    else (raw_result or {})
+                )
+                if not isinstance(parsed_result, dict):
+                    parsed_result = {}
+            except Exception:
+                parsed_result = {}
+            skill_id = str(parsed_result.get("skill_id") or "")
+            skill_status = str(parsed_result.get("skill_status") or "")
+            extra_files = []
+            try:
+                art_rows = await db.fetch_all(
+                    "SELECT path FROM artifacts WHERE ticket_id = ? "
+                    "ORDER BY created_at DESC LIMIT 20",
+                    (ticket_id,),
+                )
+                extra_files = [r.get("path") for r in (art_rows or []) if r.get("path")]
+            except Exception:
+                extra_files = []
+
+            from actions.diagnose_ticket import (
+                DiagnoseTicketAction,
+                _is_timeout_block,
+                synthesize_blocked_diagnosis,
+            )
+            if _is_timeout_block(skill_status, error_msg):
+                diagnosis = synthesize_blocked_diagnosis(
+                    skill_id=skill_id,
+                    skill_status=skill_status,
+                    error_msg=error_msg,
+                    action=action,
+                    outputs=parsed_result.get("outputs") or [],
+                    artifacts=parsed_result.get("artifacts") or [],
+                    extra_files=extra_files,
+                )
+            else:
+                action_obj = DiagnoseTicketAction()
+                result = await action_obj.run(context)
+                diagnosis = (result.data or {}).get("diagnosis") or {}
 
             # 写回 ticket
             await db.update(

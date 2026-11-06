@@ -1,4 +1,6 @@
 """UE 编译成套：插件 skill 可发现，且不会在 SOP 里插出第二个编译阶段。"""
+from pathlib import Path
+
 import pytest
 
 from skills.executable_loader import (
@@ -46,3 +48,26 @@ def test_compose_sop_does_not_duplicate_engine_compile():
     assert "与已有阶段重名" in diags
     # 插入顺序仍由 fragment priority 决定，不被 skill 链打乱
     assert ids.index("ue_test_gen") < ids.index("engine_compile") < ids.index("play_test")
+
+
+def test_ue_stage_fragments_live_in_the_plugin():
+    """UE 专有阶段不留在宿主 sop/fragments。Unity 没有自己的编译 Action，不继承 UE 这段。"""
+    backend = Path(__file__).resolve().parents[2]
+    plugin_frags = backend / "plugins" / "ue5" / "fragments"
+    host_frags = backend / "sop" / "fragments"
+    names = (
+        "engine_compile.yaml",
+        "play_test.yaml",
+        "deploy_ue.yaml",
+        "ue_test_gen.yaml",
+        "ue_content_gen.yaml",
+    )
+    for name in names:
+        assert (plugin_frags / name).is_file()
+        assert not (host_frags / name).exists()
+
+    unity = compose_sop(traits=["category:game", "engine:unity"], ticket_type="feature")
+    unity_ids = [s["id"] for s in unity["stages"]]
+    assert "engine_compile" not in unity_ids
+    assert "play_test" not in unity_ids
+    assert "deploy_ue" not in unity_ids

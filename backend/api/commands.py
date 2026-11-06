@@ -2091,26 +2091,31 @@ async def _cmd_tasks(args: str, project_id: Optional[str], context: dict) -> Com
 
     try:
         # project_id 为空 = 全局视图；非空 = 只看本项目。
-        # 用 `AND project_id = ?` 拼在同一条 SQL 上，避免两套语句走样。
-        pid_cond = " AND project_id = ?" if project_id else ""
+        # JOIN projects 取来源名，条件打在 t./b. 上。
         pid_args = (project_id,) if project_id else ()
+        t_pid_cond = " AND t.project_id = ?" if project_id else ""
 
-        # 正在执行的工单（running / in_progress）
+        # 正在执行的工单（running / in_progress / director_*_in_progress）
         running_tickets = await db.fetch_all(
-            f"""SELECT id, title, status, assigned_agent, current_action, updated_at, project_id
-               FROM tickets
-               WHERE status IN ('running','in_progress','executing'){pid_cond}
-               ORDER BY updated_at DESC
+            f"""SELECT t.id, t.title, t.status, t.assigned_agent, t.current_action,
+                      t.updated_at, t.created_at, t.project_id, p.name AS project_name
+               FROM tickets t
+               LEFT JOIN projects p ON p.id = t.project_id
+               WHERE (t.status IN ('running','in_progress','executing')
+                      OR t.status LIKE '%_in_progress'){t_pid_cond}
+               ORDER BY t.updated_at DESC
                LIMIT 20""",
             pid_args,
         )
 
         # 待执行的工单（pending / queued）
         pending_tickets = await db.fetch_all(
-            f"""SELECT id, title, status, project_id
-               FROM tickets
-               WHERE status IN ('pending','queued','todo'){pid_cond}
-               ORDER BY created_at ASC
+            f"""SELECT t.id, t.title, t.status, t.project_id, t.created_at,
+                      p.name AS project_name
+               FROM tickets t
+               LEFT JOIN projects p ON p.id = t.project_id
+               WHERE t.status IN ('pending','queued','todo'){t_pid_cond}
+               ORDER BY t.created_at ASC
                LIMIT 10""",
             pid_args,
         )
@@ -2173,11 +2178,14 @@ async def _cmd_tasks(args: str, project_id: Optional[str], context: dict) -> Com
             lines.append("")
 
         # CI 构建任务
+        b_pid_cond = " AND b.project_id = ?" if project_id else ""
         ci_builds = await db.fetch_all(
-            f"""SELECT id, project_id, build_type, status, created_at, raw_output_tail
-               FROM ci_builds
-               WHERE status IN ('running','pending'){pid_cond}
-               ORDER BY created_at DESC
+            f"""SELECT b.id, b.project_id, b.build_type, b.status, b.created_at,
+                      b.raw_output_tail, p.name AS project_name
+               FROM ci_builds b
+               LEFT JOIN projects p ON p.id = b.project_id
+               WHERE b.status IN ('running','pending'){b_pid_cond}
+               ORDER BY b.created_at DESC
                LIMIT 10""",
             pid_args,
         )
@@ -2192,6 +2200,18 @@ async def _cmd_tasks(args: str, project_id: Optional[str], context: dict) -> Com
         else:
             lines.append("\n> 全局视图：显示所有项目的工单与构建")
 
+        def _source_fields(row: dict, kind: str) -> dict:
+            pid = row.get("project_id") or ""
+            name = (row.get("project_name") or "").strip()
+            label = f"项目 {name}" if name else (f"项目 {pid[:8]}" if pid else "其他项目")
+            return {
+                "project_id": pid,
+                "project_name": name,
+                "session_key": f"project:{pid}" if pid else f"{kind}:unknown",
+                "session_label": label,
+                "created_at": row.get("created_at") or row.get("updated_at") or "",
+            }
+
         # 构建结构化任务列表供前端分屏使用
         task_items = []
         for t in running_tickets:
@@ -2199,29 +2219,29 @@ async def _cmd_tasks(args: str, project_id: Optional[str], context: dict) -> Com
                 "id": t["id"], "type": "ticket",
                 "title": (t.get("title") or "")[:60],
                 "status": t.get("status", ""),
-                "project_id": t.get("project_id", ""),
                 "action": t.get("current_action", ""),
                 "elapsed": elapsed(t.get("updated_at", "")),
                 "agent": t.get("assigned_agent", ""),
+                **_source_fields(t, "ticket"),
             })
         for t in pending_tickets:
             task_items.append({
                 "id": t["id"], "type": "ticket",
                 "title": (t.get("title") or "")[:60],
                 "status": t.get("status", ""),
-                "project_id": t.get("project_id", ""),
                 "action": "", "elapsed": "", "agent": "",
+                **_source_fields(t, "ticket"),
             })
         for b in ci_builds:
             task_items.append({
                 "id": b["id"], "type": "ci_build",
                 "title": f"CI: {b.get('build_type','build')}",
                 "status": b.get("status", ""),
-                "project_id": b.get("project_id", ""),
                 "action": b.get("build_type", ""),
                 "elapsed": elapsed(b.get("created_at", "")),
                 "agent": "CI Pipeline",
                 "log_tail": b.get("raw_output_tail", ""),
+                **_source_fields(b, "ci"),
             })
 
         return CommandResult(

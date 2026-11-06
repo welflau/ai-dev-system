@@ -167,6 +167,9 @@ class Database:
             ("chat_messages", "kind", "TEXT DEFAULT 'message'"),
             # 会话来源标记：chat=AI助手 / group=群聊会议（AI助手 历史加载要排除 group）
             ("chat_sessions", "source", "TEXT DEFAULT 'chat'"),
+            # 会话生图完成后回挂 session_materials
+            ("image_requests", "session_id", "TEXT"),
+            ("image_requests", "message_id", "TEXT"),
             # v0.20 产物总线：artifacts 表增列（语义见 SCHEMA_SQL 里 artifacts 的注释）。
             #
             # 为什么走 _auto_migrate 而不是只写 SCHEMA_SQL：老库的 artifacts 表已存在，
@@ -923,6 +926,8 @@ CREATE TABLE IF NOT EXISTS image_requests (
     result_url      TEXT,                       -- 生成图片的 URL（临时）
     result_path     TEXT,                       -- 下载后本地路径（相对资产库根）
     error_msg       TEXT,
+    session_id      TEXT,                       -- 会话生图回挂 session_materials
+    message_id      TEXT,
     created_at      TEXT NOT NULL,
     updated_at      TEXT NOT NULL
 );
@@ -1133,6 +1138,33 @@ CREATE TABLE IF NOT EXISTS checkpoint_files (
 );
 CREATE INDEX IF NOT EXISTS idx_cp_ticket ON checkpoints(ticket_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_cpf_cp ON checkpoint_files(checkpoint_id);
+
+-- ============================================================
+-- 会话临时素材（探索期中间文件，不进 ArtifactStore / art_assets）
+-- 方案：docs/20261101_01_会话临时素材管理方案.md
+-- ============================================================
+CREATE TABLE IF NOT EXISTS session_materials (
+    id             TEXT PRIMARY KEY,
+    session_id     TEXT NOT NULL,
+    project_id     TEXT,
+    message_id     TEXT,
+    name           TEXT NOT NULL,
+    mime           TEXT NOT NULL DEFAULT '',
+    size_bytes     INTEGER NOT NULL DEFAULT 0,
+    rel_path       TEXT NOT NULL,
+    public_url     TEXT,
+    origin         TEXT NOT NULL DEFAULT 'upload',
+    status         TEXT NOT NULL DEFAULT 'scratch',
+    expires_at     TEXT,
+    promoted_sink  TEXT,
+    promoted_id    TEXT,
+    metadata       TEXT,
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sm_session ON session_materials(session_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_sm_project ON session_materials(project_id, status);
+CREATE INDEX IF NOT EXISTS idx_sm_status  ON session_materials(status, expires_at);
 """
 
 

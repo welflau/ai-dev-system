@@ -29,7 +29,8 @@ from skills.executable_loader import WorkflowSkill
 
 logger = logging.getLogger("sop.workflow_composer")
 
-# skill stage 统一由 SkillAgent 执行（决策 2：新能力不新增 Agent）
+# skill stage 默认由 SkillAgent 执行。x-workflow.agent 可改成已注册宿主 Role
+# （决策：新能力仍不新增 Agent 类；agent: 只选宿主，执行引擎仍是 SkillRunner）。
 SKILL_AGENT = "SkillAgent"
 
 
@@ -57,10 +58,11 @@ def skill_to_stage(skill: WorkflowSkill) -> Dict[str, Any]:
     失败走 blocked 等人工，见 orchestrator 的 SkillAgent 分支。
     """
     sid = skill.stage_id
+    agent = skill.agent or SKILL_AGENT
     return {
         "id": sid,
         "name": skill.stage_name,
-        "agent": SKILL_AGENT,
+        "agent": agent,
         "action": _stage_action(sid),
         "trigger_on": f"{sid}_pending",          # 占位，relink 会改写
         "success_status": f"{sid}_done",
@@ -77,6 +79,11 @@ def skill_to_stage(skill: WorkflowSkill) -> Dict[str, Any]:
             "_consumes": [c.to_dict() for c in skill.consumes],
             "_produces": [p.to_dict() for p in skill.produces],
             "_fanout": skill.fanout,
+            "_human_gate": skill.human_gate,
+            "_ready_status": f"{sid}_ready" if skill.human_gate else f"{sid}_done",
+            # 宿主 Role（可能 ≠ SkillAgent）。orchestrator 用它做时间轴归属，
+            # 真正 execute 仍走 SkillAgent / SkillRunner。
+            "_run_as_agent": agent,
             # UI 分组声明透传给 compose_sop 的 _skill_view_contribs，
             # 让 skill 能像 fragment 一样贡献 pipeline_view 组
             "_pipeline_view_contrib": skill.pipeline_view_contrib,

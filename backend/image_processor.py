@@ -363,16 +363,35 @@ async def process_image_request(req_id: str) -> None:
         await _finish_with_ascii(req)
         return
 
-    # 下载图片到资产库 + 自动入库
+    # 下载图片。会话生图登记为临时素材，不进全局 art_assets。
     art_assets_path = Path(settings.ART_ASSETS_LOCAL_PATH) if settings.ART_ASSETS_LOCAL_PATH else None
     result_path = None
-    if art_assets_path and art_assets_path.exists():
-        ext = "png" if "png" in image_url else "jpg"
-        filename = f"{req_id}.{ext}"
+    is_chat = (req.get("requester") or "") == "chat"
+    ext = "png" if "png" in (image_url or "") else "jpg"
+    filename = f"{req_id}.{ext}"
+    if is_chat:
+        from config import DATA_DIR
+        sid = req.get("session_id") or "default"
+        save_dir = DATA_DIR / "session_materials" / sid
+        result_path = await _download_image(image_url, save_dir, filename)
+        if result_path:
+            try:
+                from materials.registry import material_registry
+                await material_registry.attach(
+                    session_id=sid,
+                    project_id=req.get("project_id") or None,
+                    name=filename,
+                    origin="generated",
+                    src_path=result_path,
+                    mime=f"image/{ext}",
+                    message_id=req.get("message_id"),
+                    metadata={"image_request_id": req_id, "prompt": req.get("prompt", "")[:200]},
+                )
+            except Exception as e:
+                logger.warning("登记会话生图失败: %s", e)
+    elif art_assets_path and art_assets_path.exists():
         save_dir = art_assets_path / "2d" / "generated"
         result_path = await _download_image(image_url, save_dir, filename)
-
-        # P3-4：自动写入 art_assets 表（AI 生图结果入库）
         if result_path:
             await _store_generated_image(req_id, dict(req), result_path, image_url)
 
@@ -577,6 +596,8 @@ async def request_image(
     image_size: str = "2K",
     callback_doc: str = "",
     callback_tag: str = "",
+    session_id: str = "",
+    message_id: str = "",
 ) -> str:
     """提交图片生成请求，返回占位符标签 [IMG_PENDING:id]"""
     req_id = generate_id("IMG")
@@ -595,6 +616,8 @@ async def request_image(
         "callback_doc": callback_doc,
         "callback_tag": tag,
         "status": "pending",
+        "session_id": session_id or None,
+        "message_id": message_id or None,
         "created_at": now_iso(),
         "updated_at": now_iso(),
     })

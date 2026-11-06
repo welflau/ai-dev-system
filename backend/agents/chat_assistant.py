@@ -192,6 +192,22 @@ _PROJECT_ONLY_TOOLS = {
 # _CROSS_SCOPE_TOOLS 保留用于向后兼容，全局模式现在直接用"全量 - PROJECT_ONLY"
 _CROSS_SCOPE_TOOLS = set()  # 不再需要，逻辑移入 _exposed_tool_schemas
 
+# 写代码相关意图 → 注入 scene=coding 细则（global-coding），闲聊不加
+_CODING_SCENE_RE = re.compile(
+    r"(改代码|写代码|实现|修复|修一下|重构|单测|测试用例|提交|"
+    r"commit|refactor|bug\s*fix|\bbug\b|implement|code\s*review|补丁|patch|"
+    r"\.(py|ts|tsx|js|jsx|cpp|h|hpp|cs|go|rs|java)\b)",
+    re.I,
+)
+
+
+def _infer_rules_scene(context: dict) -> str | None:
+    """根据本轮用户话推断 rules scene；非编码场景返回 None（只留 alwaysApply）。"""
+    msg = (context.get("user_message") or context.get("message") or "").strip()
+    if msg and _CODING_SCENE_RE.search(msg):
+        return "coding"
+    return None
+
 
 # 本次会话写文件记录（project_id → [file_path, ...]）
 _session_file_changes: dict = {}
@@ -291,11 +307,18 @@ class _ChatToolExecutor:
     # 需要收集全量结果的类型（用户需要逐条确认）
     _COLLECT_ALL_TYPES = {"confirm_requirement", "confirm_requirements_batch", "confirm_bug"}
 
-    def __init__(self, agent: "ChatAssistantAgent", project_id: Optional[str] = None, session_id: Optional[str] = None):
+    def __init__(
+        self,
+        agent: "ChatAssistantAgent",
+        project_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        project_traits: Optional[List[str]] = None,
+    ):
         """project_id=None 表示全局聊天场景（项目列表页），此时 ctx 里不注入 project_id"""
         self.agent = agent
         self.project_id = project_id
         self.session_id = session_id   # 全局聊天思考日志 SSE session
+        self.project_traits = [str(t) for t in (project_traits or []) if str(t).strip()]
         self.primary_action_result: Optional[Dict[str, Any]] = None
         self._primary_tier: int = 99  # 越小越优先
         # 批量收集：confirm_requirement / confirm_bug 每次调用都保留，供前端渲染多张卡片
@@ -346,6 +369,8 @@ class _ChatToolExecutor:
         ctx = dict(tool_input)
         if self.project_id is not None:
             ctx["project_id"] = self.project_id
+        if self.project_traits and "project_traits" not in ctx:
+            ctx["project_traits"] = self.project_traits
         # 注入 session_id（供 SetSessionFlagAction 等工具读取）
         if self.session_id is not None:
             ctx["session_id"] = self.session_id
@@ -368,6 +393,12 @@ class _ChatToolExecutor:
         else:
             summary = result.message or data.get("message") or ("成功" if result.success else result.error or "失败")
         await self._emit_thinking(tool_name, tool_input, step="done", summary=summary)
+
+        if not result.success:
+            return json.dumps(
+                {"error": result.error or "失败", "status": "error"},
+                ensure_ascii=False,
+            )
 
         # 按优先级更新 primary_action_result
         current_type = data.get("type", "")
@@ -702,7 +733,11 @@ class ChatAssistantAgent(BaseAgent):
 
         history_len = len(history) if history else 0
         system_prompt = await self._build_system_prompt(
-            project, {**project_context, "history_len": history_len}
+            project, {
+                **project_context,
+                "history_len": history_len,
+                "user_message": user_message or "",
+            }
         )
         messages = await self._assemble_messages(history, user_message, images)
 
@@ -723,7 +758,7 @@ class ChatAssistantAgent(BaseAgent):
         )
         tools += await self._get_mcp_schemas(traits=project_traits, repo_path=_repo_path or None)
 
-        executor = _ChatToolExecutor(self, project["id"])
+        executor = _ChatToolExecutor(self, project["id"], project_traits=project_traits)
 
         set_llm_context(
             project_id=project["id"],
@@ -804,7 +839,11 @@ class ChatAssistantAgent(BaseAgent):
 
         history_len = len(history) if history else 0
         system_prompt = await self._build_system_prompt(
-            project, {**project_context, "history_len": history_len}
+            project, {
+                **project_context,
+                "history_len": history_len,
+                "user_message": user_message or "",
+            }
         )
         # @mention Agent：在 system_prompt 前注入 Agent persona，限制不触发写操作工具
         if agent_override:
@@ -854,7 +893,9 @@ class ChatAssistantAgent(BaseAgent):
             scope="project", traits=project_traits, repo_path=_repo_path or None,
         )
         tools += await self._get_mcp_schemas(traits=project_traits, repo_path=_repo_path or None)
-        inner_executor = _ChatToolExecutor(self, project["id"], session_id=session_id)
+        inner_executor = _ChatToolExecutor(
+            self, project["id"], session_id=session_id, project_traits=project_traits,
+        )
         executor = ChatToolExecutorAdapter(inner_executor)
 
         # L9 Feature Flags：運行時 budget 覆蓋
@@ -1568,18 +1609,50 @@ class ChatAssistantAgent(BaseAgent):
         精简版系统提示词 —— 不再列 [ACTION:XXX] 格式，
         因为能力通过 Anthropic 原生 tools 字段提供给 LLM，与 prompt 正交。
         """
+        import json as _json
+        try:
+            _raw = project.get("traits") or "[]"
+            project_traits = _json.loads(_raw) if isinstance(_raw, str) else list(_raw)
+            if not isinstance(project_traits, list):
+                project_traits = []
+        except Exception:
+            project_traits = []
+        project_traits = [str(t) for t in project_traits]
+        from actions.chat.video_identity import (
+            INACTIVE_REQUIREMENT_STATUSES,
+            is_video_traits,
+            video_chat_routing_section,
+        )
+        is_video_project = is_video_traits(project_traits)
+
         req_list = context.get("recent_requirements", [])
+        active_reqs = [
+            r for r in req_list
+            if (r.get("status") or "") not in INACTIVE_REQUIREMENT_STATUSES
+        ]
         if req_list:
             req_summary = "\n".join(
                 f"  - [{r['status']}] {r['title']} (ID: {r['id']})" for r in req_list[:10]
             )
         else:
             req_summary = "  暂无需求"
-            req_summary += (
-                "\n  【空项目破冰】看板还是空的。用户寒暄、说「开始」或没给具体需求时："
-                "根据上面的项目名称/描述/特征，主动给出 3-4 个可行开发方向（含取舍），"
-                "让用户选一个后再 confirm_requirement。不要只回「请问需要什么」或通用分类。"
-            )
+        if not active_reqs:
+            if any("网页" in str(r.get("title") or "") for r in req_list):
+                req_summary += (
+                    "\n  【误拆已取消】「网页 MVP」是错误路由，禁止重开或沿用页面范围。"
+                )
+            if is_video_project:
+                req_summary += (
+                    "\n  【空项目破冰】这是 AI 漫剧。用户说开始或寒暄时，给出："
+                    "1) 先做第一集试片 2) 先写视频简报 3) 从小说拆分镜，"
+                    "让用户选后再 confirm_requirement。禁止提网页/Next.js。"
+                )
+            else:
+                req_summary += (
+                    "\n  【空项目破冰】看板还是空的。用户寒暄、说「开始」或没给具体需求时："
+                    "根据上面的项目名称/描述/特征，主动给出 3-4 个可行开发方向（含取舍），"
+                    "让用户选一个后再 confirm_requirement。不要只回「请问需要什么」或通用分类。"
+                )
 
         ticket_summary = context.get("ticket_summary", "暂无工单")
         file_tree = context.get("file_tree", "")
@@ -1614,17 +1687,6 @@ class ChatAssistantAgent(BaseAgent):
             except Exception:
                 pass
 
-        # v0.18：解析项目 traits，若是 UE 项目则加 UE 专属意图路由
-        import json as _json
-        try:
-            _raw = project.get("traits") or "[]"
-            project_traits = _json.loads(_raw) if isinstance(_raw, str) else list(_raw)
-            if not isinstance(project_traits, list):
-                project_traits = []
-        except Exception:
-            project_traits = []
-        project_traits = [str(t) for t in project_traits]
-
         # 套件门控：查项目已启用的套件，按需过滤 rules/skills
         _enabled_packs: set = set()
         try:
@@ -1633,12 +1695,14 @@ class ChatAssistantAgent(BaseAgent):
         except Exception:
             pass
 
-        # Rules 层：全局编码准则（alwaysApply=true）放在 system prompt 最前面
-        # rules/global.md 包含语言一致性 / 命名 / 安全红线等，对所有项目生效
+        # Rules 层：global 硬基线 alwaysApply；global-coding 等仅 scene=coding 时注入
         rules_content = ""
         try:
             from skills import skill_loader as _sl
-            rule_ids = _sl.get_rules_for_context(traits=project_traits, enabled_packs=_enabled_packs)
+            _scene = _infer_rules_scene(context)
+            rule_ids = _sl.get_rules_for_context(
+                traits=project_traits, enabled_packs=_enabled_packs, scene=_scene,
+            )
             rules_parts = []
             for rid in rule_ids:
                 content = _sl.rules.get(rid, {}).get("content", "")
@@ -1732,6 +1796,8 @@ class ChatAssistantAgent(BaseAgent):
             if project_traits else "- 项目特征：（未设置）"
         )
 
+        video_routing = video_chat_routing_section() if is_video_project else ""
+
         ue_routing = ""
         if is_ue_project:
             _repo_for_ucp = (project.get("git_repo_path") or "").replace("\\", "/")
@@ -1803,7 +1869,7 @@ UnrealBuildTool.exe {{ProjectName}}Editor Win64 Development "{{path/to/project.u
 - 技术栈：{project.get('tech_stack') or '未指定'}
 - Git 仓库：{project.get('git_repo_path') or '未配置'}
 {traits_line}
-{_build_manual_mode_section(project, context.get('history_len', 0))}{ue_routing}
+{_build_manual_mode_section(project, context.get('history_len', 0))}{video_routing}{ue_routing}
 {skills_section}
 ## 你的能力
 你配有一组工具（见 tools 参数），用于：
@@ -1868,9 +1934,9 @@ UnrealBuildTool.exe {{ProjectName}}Editor Win64 Development "{{path/to/project.u
 - 你可以在**同一轮回复里连续调多个工具**（Anthropic tool_use 原生支持 ReAct 循环）
 - 典型的合理链式调用：
   - **"重跑/重新做/重来 XX 需求"** → 在同一轮里依次调 `close_requirement`（关闭旧的）
-    + `confirm_requirement`（生成同标题新草稿）。**不要先调 get_requirement_pipeline 诊断**，
-    用户已经明确说"重跑"就是要重来，诊断是多余步骤。新需求的 title 用老需求的 title，
-    description 从上下文里的"## 当前需求状态"推测，或用老需求的文本作为基础。
+    + `confirm_requirement`（生成新草稿）。**不要先调 get_requirement_pipeline 诊断**，
+    用户已经明确说"重跑"就是要重来，诊断是多余步骤。
+    一般用老需求标题；**但 AI 视频项目禁止用「网页 MVP」原标题**，必须改成第一集试片/简报/分镜。
   - **"把 XX 合并到 YY"** → `git_list_branches`（确认分支存在）+ `git_merge`
   - **"查看 XX 卡在哪"** → `get_requirement_pipeline` + `get_requirement_logs`（两边数据一起看更全面）
 - 只在意图真的含糊时才停下来追问，不要把明确意图当含糊意图处理
@@ -1968,11 +2034,11 @@ UnrealBuildTool.exe {{ProjectName}}Editor Win64 Development "{{path/to/project.u
         else:
             proj_lines = "  （尚无项目）"
 
-        # Rules 层：全局聊天同样注入全局编码准则
+        # Rules 层：全局聊天只注入 alwaysApply 硬基线（global），不塞编码细则
         global_rules_content = ""
         try:
             from skills import skill_loader as _sl
-            rule_ids = _sl.get_rules_for_context(traits=[], enabled_packs=set())
+            rule_ids = _sl.get_rules_for_context(traits=[], enabled_packs=set(), scene=None)
             rules_parts = []
             for rid in rule_ids:
                 content = _sl.rules.get(rid, {}).get("content", "")
@@ -2114,9 +2180,9 @@ name: 项目名
 **新建项目时（全字段模式）**，必填：
 - **name**（必填）：项目名称。用户未指定时**自动生成**一个简短有辨识度的名字（2-4词，如 JumpGame / TaskBoard），用户可在卡片里修改
 - **git_remote_url**（必填）：Git 远程仓库 URL
-- **traits**（必填）：项目特征标签数组，至少包含：
-  - `platform:*` —— `web` / `wechat` / `desktop` / `mobile` / `server` / `cli` 任选
-  - `category:*` —— `app` / `game` / `service` / `library` 任选
+- **traits**（必填）：项目特征标签数组：
+  - 软件/游戏：至少 `platform:*`（`web` / `wechat` / `desktop` / `mobile` / `server` / `cli`）+ `category:*`（`app` / `game` / `service` / `library`）
+  - **AI 视频 / 漫剧**（preset `ai-video`）：`category:video` + `pipeline:video` 即可，**不要**再加 `platform:web`。加上会把项目当成网站，破冰和拆单都会变成网页 MVP
   - 如果 `category:game`，还必须加 `engine:*`（`ue5` / `godot4` / `unity` / `cocos` / `none`）
   - 网页 Phaser 游戏再加 `framework:phaser`（会启用 H5 套件：脚手架 + tsc）
 

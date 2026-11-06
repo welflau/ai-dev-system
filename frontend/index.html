@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI 自动开发系统</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20261024a">
+    <link rel="stylesheet" href="/static/styles.css?v=20261103g">
     <!-- highlight.js 语法高亮 -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
@@ -534,6 +534,14 @@
                                     <span class="column-count" id="count-blocked">0</span>
                                 </div>
                                 <div class="column-body" id="col-blocked"></div>
+                            </div>
+                            <div class="board-column board-column-cancelled" data-status="cancelled">
+                                <div class="column-header">
+                                    <span class="column-status-dot" style="background:var(--text-muted);border-radius:50%;width:10px;height:10px;display:inline-block;"></span>
+                                    <span class="column-title">已取消</span>
+                                    <span class="column-count" id="count-cancelled">0</span>
+                                </div>
+                                <div class="column-body" id="col-cancelled"></div>
                             </div>
                         </div>
                     </div>
@@ -1974,6 +1982,7 @@
                 </button>
                 <button class="btn-icon chat-panel-btn" onclick="onNewChatClick()" title="新建" id="newChatBtn">＋</button>
                 <button class="btn-icon chat-panel-btn" onclick="toggleMemoryPanel()" title="记忆管理" id="chatMemoryBtn">🧠</button>
+                <button class="btn-icon chat-panel-btn" onclick="toggleSessionMaterials()" title="本会话素材" id="chatMaterialsBtn">🖼<span id="chatMaterialsBadge" class="chat-sm-badge" style="display:none;">0</span></button>
                 <button class="btn-icon chat-panel-btn" onclick="toggleChatHistory()" title="历史对话" id="chatHistoryBtn">🕐</button>
                 <button class="btn-icon chat-panel-btn" id="chatSplitBtn" onclick="addChatSplitPane()" title="新增分屏" style="display:none;">⊞</button>
                 <button class="btn-icon chat-panel-btn" id="chatFullscreenBtn" onclick="toggleChatFullscreen()" title="全屏">⛶</button>
@@ -2004,6 +2013,13 @@
                 <button class="btn btn-xs" onclick="loadMemoryPanel('','external_ref')" id="memFilterExternal">🔗 外部</button>
             </div>
             <div id="memoryPanelList" style="overflow-y:auto;flex:1;padding:0 8px 8px;"></div>
+        </div>
+        <div id="sessionMaterialsPanel" class="chat-history-panel" style="display:none;">
+            <div class="chat-history-panel-header">
+                <span style="font-weight:600;font-size:13px;">本会话素材</span>
+                <button class="btn-icon" onclick="toggleSessionMaterials()" title="关闭">✕</button>
+            </div>
+            <div id="sessionMaterialsList" class="sm-list"></div>
         </div>
         <!-- v0.20 历史对话面板 -->
         <div id="chatHistoryPanel" class="chat-history-panel" style="display:none;">
@@ -2062,10 +2078,10 @@
                 </div>
                 <!-- 状态过滤标签页 -->
                 <div id="tasksFilterTabs" style="display:flex;gap:0;padding:0 12px;border-bottom:1px solid var(--border);flex-shrink:0;">
-                    <button class="tasks-tab active" data-filter="all"     onclick="_setTasksFilter('all')">全部</button>
-                    <button class="tasks-tab"         data-filter="running" onclick="_setTasksFilter('running')">进行中</button>
-                    <button class="tasks-tab"         data-filter="success" onclick="_setTasksFilter('success')">完成</button>
-                    <button class="tasks-tab"         data-filter="error"   onclick="_setTasksFilter('error')">失败</button>
+                    <button class="tasks-tab active" data-filter="all"     onclick="_setTasksFilter('all')">全部<span class="tasks-tab-count"></span></button>
+                    <button class="tasks-tab"         data-filter="running" onclick="_setTasksFilter('running')">进行中<span class="tasks-tab-count"></span></button>
+                    <button class="tasks-tab"         data-filter="success" onclick="_setTasksFilter('success')">完成<span class="tasks-tab-count"></span></button>
+                    <button class="tasks-tab"         data-filter="error"   onclick="_setTasksFilter('error')">失败<span class="tasks-tab-count"></span></button>
                 </div>
                 <!-- 搜索框 -->
                 <div style="padding:4px 8px;border-bottom:1px solid var(--border);flex-shrink:0;">
@@ -2439,6 +2455,7 @@
                                     style="width:100%; padding:8px; background:var(--bg); border:1px solid var(--border); border-radius:var(--radius-sm); color:var(--text);">
                                 <option value="anthropic">API 模式（Anthropic）</option>
                                 <option value="openai">API 模式（OpenAI 兼容）</option>
+                                <option value="hy">混元 HY（个人 API Key）</option>
                                 <option value="cli">CLI 模式（本地命令行工具）</option>
                             </select>
                         </div>
@@ -2502,6 +2519,10 @@
                             <div class="form-group">
                                 <label>模型名称</label>
                                 <input type="text" id="llmModel" placeholder="gpt-4">
+                            </div>
+                            <div id="llmHyHint" style="display:none; padding:10px; background:rgba(59,130,246,0.08); border-radius:var(--radius-sm); border-left:3px solid #3b82f6; font-size:12px; color:var(--text-muted); line-height:1.6; margin-bottom:8px;">
+                                混元个人 API Key 在 <strong>tokenlink.woa.com</strong> 申请，无需审批、自动接入个人 Token 额度。<br>
+                                可用模型：<strong>hy4</strong> / hy3。Key 仅限本人使用，禁止对外服务或共享。
                             </div>
                             <div class="form-row">
                                 <div class="form-group">
@@ -2615,7 +2636,7 @@
     <!-- ==================== Toast 通知 ==================== -->
     <div class="toast-container" id="toastContainer"></div>
 
-    <script src="/static/app.js?v=20261025a"></script>
+    <script src="/static/app.js?v=20261103g"></script>
 </body>
 </html>
 

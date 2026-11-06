@@ -509,7 +509,7 @@ class CIPipelineRunner:
 
         # ---- 报告类：git checkout --theirs <file> ----
         for f in report_files:
-            rc, _, err = await git_manager._run_git(repo_dir, "checkout", "--theirs", "--", f)
+            rc, _, err = await git_manager._run_git(repo_dir, "checkout", "--theirs", "--", f, allow_destructive=True)
             if rc != 0:
                 logger.warning("checkout --theirs 失败 (%s): %s", f, err)
                 logs.append({"step": "auto_resolve", "msg": f"报告文件 {f} checkout --theirs 失败", "passed": False})

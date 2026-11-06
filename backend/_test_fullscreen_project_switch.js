@@ -66,5 +66,29 @@ check('切项目不直接调 loadChatHistory（由 _updateChatPanelForContext �
 check('切项目仍走 _updateChatPanelForContext 按模式分派',
     switchCode.includes('_updateChatPanelForContext()'));
 
+// ── 4. 全局助手标题不能挂磁盘路径 ──────────────────────────
+const applyTitle = fnBody('_applyChatPanelTitle');
+const looksPath = fnBody('_looksLikeFsPath');
+const sessTitle = fnBody('_sessionDisplayTitle');
+const ctxFn = fnBody('_updateChatPanelForContext');
+const globalCode = globalFn.split('\n').filter(l => !l.trim().startsWith('//')).join('\n');
+
+check('有 _applyChatPanelTitle：无项目时标题带「全局」',
+    applyTitle.includes('AI 助手 · 全局'));
+check('有 _looksLikeFsPath：识别 Windows 盘符路径',
+    looksPath.includes('^[A-Za-z]:[\\\\/]'));
+check('_sessionDisplayTitle 把磁盘路径当无效标题',
+    sessTitle.includes('_looksLikeFsPath(t)'));
+check('切 context 时立刻清掉会话小字（不等异步加载）',
+    ctxFn.includes('_clearChatPanelSessionTitle()'));
+check('切到全局不再因已经是全局而直接 return（否则路径小字清不掉）',
+    !/if\s*\(\s*!currentProjectId\s*\)\s*return\s*;/.test(globalCode));
+check('已在全局时仍会 _applyChatPanelTitle',
+    globalCode.includes('_applyChatPanelTitle()'));
+check('切到全局会 disconnectSSE（不要还挂着上一个项目）',
+    globalCode.includes('disconnectSSE()'));
+check('项目切换下拉在全局时把「全局 AI 助手」标成当前',
+    app.includes("ps-global${currentProjectId ? '' : ' active'}"));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

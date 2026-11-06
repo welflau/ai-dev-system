@@ -21,6 +21,25 @@ ENV_CONFIG = {
     "prod": {"port_offset": 200, "label": "生产环境", "branch": "main"},
 }
 
+_ENGINE_TRAIT_PREFIXES = ("engine:ue", "engine:unity", "engine:godot")
+
+
+def preview_skip_kind(traits) -> Optional[str]:
+    """HTTP 试玩该不该起。None=可以起网页预览；video/content/engine=跳过。
+
+    视频/漫剧成品在 works/，没有 index.html 可玩。不能因为仓库里残留了网页
+    脚手架就把「在线试玩」挂到时间轴上。
+    """
+    cleaned = [str(t).strip() for t in (traits or []) if str(t).strip()]
+    from actions.chat.video_identity import is_video_traits
+    if is_video_traits(cleaned):
+        return "video"
+    if "pipeline:content" in cleaned or "category:content" in cleaned:
+        return "content"
+    if any(t.startswith(p) for t in cleaned for p in _ENGINE_TRAIT_PREFIXES):
+        return "engine"
+    return None
+
 
 class DeployAgent(BaseAgent):
 
@@ -113,17 +132,26 @@ class DeployAgent(BaseAgent):
 
         preview_url = None
         skip_reason = None
+        deploy_kind = "web"
         if project_id:
             from git_manager import git_manager
             skip_reason = await self._skip_preview_reason(
                 project_id, "dev", str(git_manager._repo_path(project_id)),
             )
+            if skip_reason:
+                if str(skip_reason).startswith("视频"):
+                    deploy_kind = "video"
+                elif str(skip_reason).startswith("内容"):
+                    deploy_kind = "content"
+                else:
+                    deploy_kind = "engine"
             if not skip_reason:
                 preview_url = await self.deploy_env(project_id, "dev")
 
         files = self._generate_deploy_files(
             ticket_title, docs_prefix, preview_url,
-            engine_project=bool(skip_reason),
+            engine_project=deploy_kind == "engine",
+            kind=deploy_kind,
         )
 
         # OpenSpec Archive（规范层，可选，merge 后归档到 openspec/archive/）
@@ -207,7 +235,6 @@ class DeployAgent(BaseAgent):
 
         例外：引擎项目里确实带 web 前端（根目录有 index.html）时照常部署。
         """
-        engine_traits = ("engine:ue", "engine:unity", "engine:godot")
         try:
             from database import db as _db
             proj = await _db.fetch_one(
@@ -219,15 +246,20 @@ class DeployAgent(BaseAgent):
             traits = _j.loads(proj.get("traits") or "[]")
             if not isinstance(traits, list):
                 return None
-            hit = next(
-                (t for t in traits
-                 if any(str(t).startswith(e) for e in engine_traits)),
-                None,
-            )
-            if not hit:
+            kind = preview_skip_kind(traits)
+            if kind == "video":
+                return "视频/漫剧项目没有网页试玩，HTTP 预览无意义"
+            if kind == "content":
+                return "内容项目没有网页试玩，HTTP 预览无意义"
+            if kind != "engine":
                 return None
 
-            # 引擎项目但带 web 前端 → 仍然部署
+            hit = next(
+                (t for t in traits
+                 if any(str(t).startswith(e) for e in _ENGINE_TRAIT_PREFIXES)),
+                "engine",
+            )
+            # 引擎项目但带 web 前端 → 仍然部署。视频/内容即使有残留 index.html 也不试玩。
             if repo_path and (Path(repo_path) / "index.html").is_file():
                 return None
 
@@ -309,7 +341,8 @@ class DeployAgent(BaseAgent):
                 else:
                     # 已有 .git，fetch + checkout
                     await git_manager._run_git(str(deploy_dir), "fetch", "origin")
-                    await git_manager._run_git(str(deploy_dir), "clean", "-fd")
+                    # 隔离部署目录（{repo}_{env}）的部署前清理，非用户源码目录，允许
+                    await git_manager._run_git(str(deploy_dir), "clean", "-fd", allow_destructive=True)
                     await git_manager._run_git(str(deploy_dir), "checkout", branch)
                     await git_manager._run_git(str(deploy_dir), "pull", "origin", branch)
 
@@ -415,17 +448,18 @@ class DeployAgent(BaseAgent):
     def _generate_deploy_files(
         self, title: str, docs_prefix: str, preview_url: str = None,
         engine_project: bool = False,
+        kind: str = None,
     ) -> Dict:
         """生成部署配置文件。
 
-        engine_project=True（UE/Unity/Godot）时不产出 Dockerfile / docker-compose ——
-        这套模板是 Python + uvicorn 的，对引擎项目毫无意义，实测在 TestFPS 和
-        TestGame 仓库里都留下了 `FROM python:3.10-slim` 的垃圾文件。
-        引擎项目的交付走 deploy_ue fragment（RunUAT 打包），不靠 Docker。
+        kind=engine（UE/Unity/Godot）或 video/content 时不产出 Dockerfile ——
+        这套模板是 Python + uvicorn 的。视频成品在 works/，没有网页可玩。
         """
+        kind = kind or ("engine" if engine_project else "web")
         files = {}
+        skip_docker = kind in ("engine", "video", "content")
 
-        if not engine_project:
+        if not skip_docker:
             files["build/Dockerfile"] = """FROM python:3.10-slim
 WORKDIR /app
 COPY requirements.txt .
@@ -449,7 +483,15 @@ services:
         if preview_url:
             preview_section = f"\n## 本地预览\n\n- 预览地址: {preview_url}\n"
 
-        if engine_project:
+        if kind in ("video", "content"):
+            label = "AI 视频/漫剧" if kind == "video" else "内容"
+            files[f"{docs_prefix}deploy.md"] = f"""# 交付说明 - {title}
+
+本项目为{label}，成品在 `works/` 与工单产出里，不部署网站，也没有「在线试玩」。
+
+请在工单产出中打开视频 / 图片 / 文稿。HTTP 静态预览已跳过。
+"""
+        elif kind == "engine":
             files[f"{docs_prefix}deploy.md"] = f"""# 部署文档 - {title}
 
 ## 交付方式

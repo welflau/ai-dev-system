@@ -1908,7 +1908,8 @@ async def preview_assembly(req: PreviewAssemblyRequest):
     warnings = []
     has_platform = any(t.startswith("platform:") for t in traits)
     has_category = any(t.startswith("category:") for t in traits)
-    if not has_platform:
+    is_video = "category:video" in traits or "pipeline:video" in traits
+    if not has_platform and not is_video:
         warnings.append("缺 platform:* trait（推荐至少有一个）")
     if not has_category:
         warnings.append("缺 category:* trait（决定主流程方向）")
@@ -1916,6 +1917,8 @@ async def preview_assembly(req: PreviewAssemblyRequest):
     has_engine = any(t.startswith("engine:") for t in traits)
     if has_game and not has_engine:
         warnings.append("category:game 但缺 engine:*（ue5/godot4/unity/none），SOP 会缺引擎编译阶段")
+    if "category:video" in traits and "pipeline:video" not in traits:
+        warnings.append("category:video 但缺 pipeline:video，会装配文章 demo 链或内容/设计插件")
 
     if not sop_stages:
         warnings.append("SOP 为空，无可执行阶段")
@@ -1931,6 +1934,11 @@ async def preview_assembly(req: PreviewAssemblyRequest):
         suggestions.append({
             "hint": "若需国际化，可加 i18n，SOP 会自动插入 i18n_check 阶段",
             "trait": "i18n",
+        })
+    if "category:video" in traits and "pipeline:video" not in traits:
+        suggestions.append({
+            "hint": "视频项目应加 pipeline:video，才会启用 Director 制片链",
+            "trait": "pipeline:video",
         })
 
     return {
@@ -2024,7 +2032,7 @@ async def list_memory(
     type: str = "",
     limit: int = 50,
 ):
-    """列出项目记忆（支持搜索和类型过滤）"""
+    """列出项目记忆（DB agent_memory + CLI ~/.codebuddy|~/.claude 文件记忆）。"""
     from database import db
     pid = project_id if project_id != "__global__" else "__global__"
     try:
@@ -2054,7 +2062,43 @@ async def list_memory(
                    ORDER BY created_at DESC LIMIT ?""",
                 (pid, limit),
             )
-        return {"memories": [dict(r) for r in rows], "total": len(rows)}
+        memories = []
+        for r in rows:
+            item = dict(r)
+            item.setdefault("source", "ads")
+            item.setdefault("readonly", False)
+            memories.append(item)
+
+        # 合并 CodeBuddy/Claude 用户目录下的项目记忆文件
+        if pid != "__global__":
+            proj = await db.fetch_one(
+                "SELECT git_repo_path FROM projects WHERE id = ?", (pid,)
+            )
+            repo_path = (proj or {}).get("git_repo_path") or ""
+            if repo_path:
+                try:
+                    from cli_file_memory import load_cli_file_memories
+                    cli_items = load_cli_file_memories(
+                        repo_path, query=query or "", type_filter=type or "", limit=limit,
+                    )
+                    # 标题去重：同 title 优先保留 DB（可删），再补 CLI
+                    seen_titles = {
+                        (m.get("title") or "").strip().lower()
+                        for m in memories if (m.get("title") or "").strip()
+                    }
+                    for ci in cli_items:
+                        t = (ci.get("title") or "").strip().lower()
+                        if t and t in seen_titles:
+                            continue
+                        memories.append(ci)
+                        if t:
+                            seen_titles.add(t)
+                except Exception as e:
+                    logger.warning("合并 CLI 文件记忆失败: %s", e)
+
+        memories.sort(key=lambda m: m.get("created_at") or "", reverse=True)
+        memories = memories[: max(1, min(limit, 200))]
+        return {"memories": memories, "total": len(memories)}
     except Exception as e:
         from fastapi import HTTPException
         raise HTTPException(status_code=500, detail=str(e))
@@ -2062,8 +2106,11 @@ async def list_memory(
 
 @router.delete("/{project_id}/memory/{memory_id}")
 async def delete_memory(project_id: str, memory_id: str):
-    """删除一条记忆"""
+    """删除一条记忆（CLI 文件记忆只读，不可删）。"""
     from database import db
+    if (memory_id or "").startswith("cli:"):
+        from fastapi import HTTPException
+        raise HTTPException(400, "CLI 文件记忆为只读，请在对应 CLI 记忆目录中修改")
     try:
         await db.execute("DELETE FROM agent_memory WHERE id = ?", (memory_id,))
         return {"success": True, "id": memory_id}

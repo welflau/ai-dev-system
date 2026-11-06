@@ -49,6 +49,34 @@ def _is_noise_git(cmd: List[str]) -> bool:
     return False
 
 
+def _destructive_git_reason(verb: str, args: tuple) -> Optional[str]:
+    """判断 git 命令是否破坏性（删除/丢弃数据）。
+
+    返回原因字符串表示应拦截；返回 None 表示可执行。
+    破坏性定义：会删除未跟踪文件 / 丢弃提交 / 丢弃工作区未提交修改 / 丢 stash。
+    """
+    if verb == "clean":
+        return "git clean 会删除未跟踪文件"
+    if verb == "reset":
+        if any(a == "--hard" for a in args):
+            return "git reset --hard 会丢弃提交与工作区修改"
+        return None
+    if verb == "rm":
+        if "--cached" not in args:
+            return "git rm 会删除工作区文件"
+        return None
+    if verb == "checkout":
+        # checkout . / checkout -- <path> / checkout <ref> -- <path> 会丢弃工作区修改
+        if "--" in args or "." in args:
+            return "git checkout . / -- <path> 会丢弃工作区未提交修改"
+        return None
+    if verb == "stash":
+        if any(a in ("drop", "clear") for a in args):
+            return "git stash drop/clear 会丢弃暂存内容"
+        return None
+    return None
+
+
 def classify_push_failure(
     stderr: str = "",
     *,
@@ -244,7 +272,7 @@ class GitManager:
             return Path(self._custom_paths[project_id])
         return PROJECTS_DIR / project_id
 
-    async def _run_git(self, cwd: str, *args: str) -> tuple:
+    async def _run_git(self, cwd: str, *args: str, allow_destructive: bool = False) -> tuple:
         """执行 git 命令，返回 (returncode, stdout, stderr)。
 
         三件事一起做：超时、不阻塞事件循环、落 ticket_command_log。
@@ -256,10 +284,23 @@ class GitManager:
           整个超时时长，加超时的意义就打了折。
         - 超时返回 **124**（GNU timeout(1) 的约定）而不是 1：全库 ~65 个调用点
           遍布 `if rc != 0`，返 1 跟「正常失败」分不开，124 一眼能认。
+        - **破坏性命令拦截**：clean / reset --hard / rm / checkout . -- <path> /
+          stash drop|clear 默认直接拒绝（返回 rc=1），除非调用方显式
+          allow_destructive=True（仅限 rollback / checkpoint 恢复 / CI 冲突解决
+          这类用户明确意图的操作）。
         """
         import subprocess
         cmd = ["git"] + list(args)
         verb = args[0] if args else ""
+
+        # 破坏性命令拦截（2026-10-27 TestOGEngine 事故：git clean 误删源码）
+        reason = _destructive_git_reason(verb, tuple(args))
+        if reason is not None and not allow_destructive:
+            rc, out, err = 1, "", f"破坏性 git 命令被拦截：{reason}"
+            logger.warning("🚫 拦截破坏性 git 命令 [%s]: %s", " ".join(cmd), reason)
+            await self._record_git_command(cmd, cwd, rc, out, err, "blocked", 0)
+            return (rc, out, err)
+
         timeout = _GIT_TIMEOUT_NETWORK if verb in _GIT_NETWORK_VERBS else _GIT_TIMEOUT
         t0 = time.time()
 
@@ -703,17 +744,13 @@ Thumbs.db
         return True
 
     async def switch_branch(self, project_id: str, branch_name: str) -> bool:
-        """切换到指定分支"""
+        """切换到指定分支。
+
+        只做 checkout，不执行任何删除/覆盖操作（不再 git clean / checkout .）。
+        未跟踪文件冲突或本地有未提交修改时，checkout 会失败并返回 False，
+        由上层决定如何处理（2026-10-27 TestOGEngine 事故：git clean 误删源码）。
+        """
         repo_dir = str(self._repo_path(project_id))
-        # 先清理可能冲突的未跟踪文件（如 .pyc 缓存）
-        # 保留 openspec/、.env、node_modules/，以及尚未写入 .gitignore 的 UE 产物目录
-        await self._run_git(
-            repo_dir, "clean", "-fd",
-            "--exclude=.env", "--exclude=openspec", "--exclude=node_modules",
-            "--exclude=Binaries", "--exclude=Intermediate",
-            "--exclude=Saved", "--exclude=DerivedDataCache",
-        )
-        await self._run_git(repo_dir, "checkout", ".")
         rc, _, err = await self._run_git(repo_dir, "checkout", branch_name)
         if rc != 0:
             logger.error("switch branch '%s' failed: %s", branch_name, err)
@@ -1183,6 +1220,19 @@ Thumbs.db
             "__pycache__", "node_modules", "dist", "target", "Binaries",
             "Intermediate", "Saved", "DerivedDataCache", ".venv", "venv",
         }
+        _SKIP_MEDIA = {".mp4", ".mov", ".mkv", ".webm", ".wav"}
+
+        def _skip_item(item: Path, relative: str) -> bool:
+            if item.name in _SKIP_DIRS:
+                return True
+            rel_parts = relative.replace("\\", "/").split("/") if relative else []
+            parts = rel_parts + [item.name]
+            if "works" in parts:
+                if item.is_dir() and item.name in {"video", "archive"}:
+                    return True
+                if item.is_file() and item.suffix.lower() in _SKIP_MEDIA:
+                    return True
+            return False
 
         def _scan_dir(path: Path, relative: str = "", depth: int = 0) -> List[Dict]:
             children = []
@@ -1198,7 +1248,7 @@ Thumbs.db
             for item in items:
                 if item.name.startswith("."):
                     continue
-                if item.name in _SKIP_DIRS:
+                if _skip_item(item, relative):
                     continue
 
                 rel_path = f"{relative}/{item.name}" if relative else item.name
@@ -1480,6 +1530,7 @@ Thumbs.db
                 if existed:
                     rc, _, err = await self._run_git(
                         repo_dir, "checkout", base_ref, "--", rel,
+                        allow_destructive=True,
                     )
                     if rc != 0:
                         result["errors"].append(f"{rel}: checkout 失败 {err[:120]}")
@@ -1493,7 +1544,7 @@ Thumbs.db
                         else:
                             target.unlink()
                         # 从 index 移除（若已跟踪）
-                        await self._run_git(repo_dir, "rm", "-rf", "--ignore-unmatch", "--", rel)
+                        await self._run_git(repo_dir, "rm", "-rf", "--ignore-unmatch", "--", rel, allow_destructive=True)
                         result["deleted"].append(rel)
                     else:
                         result["skipped"].append(rel)

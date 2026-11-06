@@ -103,6 +103,33 @@ class SkillAgent(BaseAgent):
             requirement_id=requirement_id, repo_path=repo_path,
         )
         run_ctx.update(consume_ctx)
+        missing_req = consume_ctx.get("_artifacts_missing_required") or []
+        if missing_req:
+            kinds = "、".join(str(k) for k in missing_req)
+            logger.warning(
+                "SkillAgent 中止：skill %s 缺必需上游产物 %s", skill_id, kinds,
+            )
+            return {
+                "status": "error",
+                "skill_id": skill_id,
+                "skill_status": "error",
+                "outputs": [],
+                "success_status": sop.get("_success_status") or "",
+                "sop_config": sop,
+                "artifacts": [],
+                "message": (
+                    f"上游产物缺失，无法执行 `{skill_id}`：{kinds}。"
+                    "不能跳过人审或假装已生成。"
+                ),
+            }
+        if repo_path and not run_ctx.get("work_slug"):
+            try:
+                from plugins.director.work_package import find_existing_slug
+                slug = find_existing_slug(repo_path)
+                if slug:
+                    run_ctx["work_slug"] = slug
+            except Exception:
+                pass
 
         async def on_tool(ev):
             try:
@@ -123,6 +150,21 @@ class SkillAgent(BaseAgent):
             ticket_id=ticket_id, requirement_id=requirement_id,
             repo_path=repo_path, rounds=result.rounds,
         )
+
+        ready_status = sop.get("_ready_status") or ""
+        if result.status == "waiting_human":
+            return {
+                "status": "waiting_human",
+                "skill_id": skill_id,
+                "skill_status": "waiting_human",
+                "outputs": result.output_paths,
+                "success_status": ready_status or sop.get("_success_status") or "",
+                "sop_config": sop,
+                "artifacts": artifacts,
+                "waiting_human": result.waiting_human or {},
+                "rounds": result.rounds,
+                "message": result.message or f"skill {skill_id} 等待人工确认",
+            }
 
         return {
             "status": "success" if result.status in ("success", "partial") else result.status,
@@ -149,8 +191,8 @@ class SkillAgent(BaseAgent):
         组装器视为「已就绪」才没把以它为源的 skill 判缺源剔除。但**没人会
         自动创建它** —— 不在这里补，第一个 skill 的 consumes 就落空。
 
-        任何异常都降级为「不注入」：产物注入是增强，拿不到上游时 LLM 仍能
-        按 skill body 的指示工作（prompt 里会显示缺了什么）。
+        注入失败只降级为「不注入」。缺 **required** 产物由 `_run_skill`
+        直接报错停住 —— 否则 LLM 会 `done`，旧人审标记再把工单推到下一阶段。
         """
         consumes = sop.get("_consumes") or []
         if not consumes or not repo_path:

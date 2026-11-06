@@ -70,6 +70,39 @@ def _now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
+async def _resolve_pid(project_id: str) -> str:
+    """解析 project_id：显式传入 > 环境注入(ADS_PROJECT_ID) > 唯一激活项目"""
+    pid = (project_id or ADS_PROJECT_ID or "").strip()
+    if pid:
+        return pid
+    rows = await _db_fetch(
+        "SELECT id FROM projects WHERE status = 'active' AND id != '__global__' ORDER BY updated_at DESC LIMIT 1"
+    )
+    return rows[0]["id"] if rows else ""
+
+
+async def _post_mcp_action(pid: str, action: str, data: dict) -> str:
+    """POST 到 ADS 后端 /api/projects/{pid}/chat/mcp-action，由后端进程执行 Action。"""
+    import httpx as _httpx
+
+    if not pid:
+        return json.dumps({"status": "error", "message": "未找到激活项目，请提供 project_id"}, ensure_ascii=False)
+    try:
+        async with _httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                f"{ADS_BASE_URL}/api/projects/{pid}/chat/mcp-action",
+                json={"action": action, "data": data},
+            )
+        if resp.status_code == 200:
+            return resp.text
+        return json.dumps(
+            {"status": "error", "message": f"操作失败: HTTP {resp.status_code} {resp.text[:200]}"},
+            ensure_ascii=False,
+        )
+    except Exception as e:
+        return json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)
+
+
 # ── Tools：知识库搜索 ─────────────────────────────────────────────────────────
 @mcp.tool()
 async def search_knowledge(query: str, project_id: str = "", limit: int = 3) -> str:
@@ -421,9 +454,10 @@ async def confirm_requirement(
     在 ADS 前端弹出需求草稿确认卡片，用户点「确认创建」后才真正创建需求。
     不直接创建需求，只产出草稿供用户确认。
 
-    触发时机：用户说「帮我做…」「创建一个…」「新增…」「我需要…功能」「做一个系统/模块」
+    触发时机：用户说「帮我做…」「创建一个…」「新增…」「我需要…功能」「做一个系统/模块」「现在能开始了」
     不触发：用户在提问、报 Bug、描述现象、讨论方案
     !! 注意：用户明确说「创建工单」「建个工单」「加个工单」时，不要用此工具，改用 confirm_direct_ticket !!
+    AI 视频/漫剧项目必须出试片/简报/分镜，禁止网页 MVP、Next.js、首页/播放页。
     project_id 留空则自动查询当前唯一激活项目。
     """
     import httpx as _httpx
@@ -631,34 +665,45 @@ async def confirm_project(
       - 用户发送本地目录路径（填 local_path，其它字段可留空）
     不触发：闲聊、还在反问补齐 platform/category、用户只是问怎么建
 
-    traits 用逗号分隔，新建项目至少含 platform:* 与 category:*。
+    traits 用逗号分隔。软件/游戏项目至少含 platform:* 与 category:*。
+    AI 视频/漫剧用 category:video,pipeline:video，不要加 platform:web。
     网页 Phaser 游戏再加 engine:none, framework:phaser, lang:typescript。
     category:game 必须带 engine:*（ue5 / godot4 / unity / cocos / none）。
     """
     import httpx as _httpx
 
-    payload = {
-        "action": "confirm_project",
-        "session_id": ADS_SESSION_ID,
-        "data": {
-            "name": (name or "").strip(),
-            "traits": (traits or "").strip(),
-            "description": (description or "").strip(),
-            "git_remote_url": (git_remote_url or "").strip(),
-            "local_path": (local_path or "").strip(),
-            "mode": (mode or "auto").strip() or "auto",
-            "preset_id": (preset_id or "").strip(),
-            "tech_stack": (tech_stack or "").strip(),
-            "local_repo_path": (local_repo_path or "").strip(),
-        },
+    data = {
+        "name": (name or "").strip(),
+        "traits": (traits or "").strip(),
+        "description": (description or "").strip(),
+        "git_remote_url": (git_remote_url or "").strip(),
+        "local_path": (local_path or "").strip(),
+        "mode": (mode or "auto").strip() or "auto",
+        "preset_id": (preset_id or "").strip(),
+        "tech_stack": (tech_stack or "").strip(),
+        "local_repo_path": (local_repo_path or "").strip(),
     }
 
+    # 项目会话：走项目 mcp-action → SSE 推到当前聊天窗口。
+    # 全局会话：走 /api/chat/mcp-action 暂存，等全局流结束再补发卡。
+    # 旧逻辑一律打全局暂存，导致在项目 CLI 里调 confirm_project 时卡片永远不弹出。
+    pid = (ADS_PROJECT_ID or "").strip()
     try:
         async with _httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(
-                f"{ADS_BASE_URL}/api/chat/mcp-action",
-                json=payload,
-            )
+            if pid and pid != "__global__":
+                resp = await client.post(
+                    f"{ADS_BASE_URL}/api/projects/{pid}/chat/mcp-action",
+                    json={"action": "confirm_project", "data": data},
+                )
+            else:
+                resp = await client.post(
+                    f"{ADS_BASE_URL}/api/chat/mcp-action",
+                    json={
+                        "action": "confirm_project",
+                        "session_id": ADS_SESSION_ID,
+                        "data": data,
+                    },
+                )
         if resp.status_code == 200:
             return resp.text
         return json.dumps(
@@ -667,6 +712,68 @@ async def confirm_project(
         )
     except Exception as e:
         return json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False)
+
+
+@mcp.tool()
+async def pause_requirement(requirement_id: str, reason: str = "", project_id: str = "") -> str:
+    """
+    暂停某个进行中的需求（analyzing / decomposed / in_progress 状态可暂停）。
+    直接执行状态变更，不需要前端确认。
+    requirement_id 可为需求 ID 或标题关键词（自动模糊匹配）。
+    project_id 留空则自动使用当前项目。
+    """
+    pid = await _resolve_pid(project_id)
+    return await _post_mcp_action(pid, "pause_requirement", {
+        "requirement_id": (requirement_id or "").strip(),
+        "reason": (reason or "").strip(),
+    })
+
+
+@mcp.tool()
+async def pause_requirements_batch(
+    requirement_ids: list = [],
+    filter: str = "",
+    reason: str = "",
+    project_id: str = "",
+) -> str:
+    """
+    批量暂停多条需求及其工单的自动调度。
+    当用户说「暂停所有工单」「暂停全部需求」「先停下来」等时使用。
+    requirement_ids（列表）与 filter（all / in_progress / decomposed）二选一。
+    暂停后 Orchestrator 不再调度这些需求的工单，可随时 resume 恢复。
+    """
+    pid = await _resolve_pid(project_id)
+    return await _post_mcp_action(pid, "pause_requirements_batch", {
+        "requirement_ids": list(requirement_ids or []),
+        "filter": (filter or "").strip(),
+        "reason": (reason or "").strip(),
+    })
+
+
+@mcp.tool()
+async def resume_requirement(requirement_id: str, project_id: str = "") -> str:
+    """
+    恢复已暂停的需求（仅 paused 状态可恢复），恢复后自动继续处理该需求下未完成的工单。
+    requirement_id 可为需求 ID 或标题关键词。
+    """
+    pid = await _resolve_pid(project_id)
+    return await _post_mcp_action(pid, "resume_requirement", {
+        "requirement_id": (requirement_id or "").strip(),
+    })
+
+
+@mcp.tool()
+async def close_requirement(requirement_id: str, reason: str = "", project_id: str = "") -> str:
+    """
+    关闭/取消某个需求（已完成或已取消的需求不可再关闭）。
+    会先在前端弹出确认卡片，用户点「确认关闭」后才真正执行，并级联取消该需求下所有未完成工单。
+    requirement_id 可为需求 ID 或标题关键词。
+    """
+    pid = await _resolve_pid(project_id)
+    return await _post_mcp_action(pid, "close_requirement", {
+        "requirement_id": (requirement_id or "").strip(),
+        "reason": (reason or "").strip(),
+    })
 
 
 @mcp.tool()

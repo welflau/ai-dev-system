@@ -297,6 +297,7 @@ class DirectTicketCreate(BaseModel):
     auto_start: bool = Field(default=True)        # 创建后立即加入调度队列
     source_message_id: Optional[str] = Field(default=None)
     source_session_id: Optional[str] = Field(default=None)
+    material_ids: Optional[List[str]] = Field(default=None)
 
 
 def validate_requirement_transition(from_status: str, to_status: str) -> bool:
@@ -464,6 +465,36 @@ STATUS_LABELS = {
     "ue_content_in_progress": "UE 内容生成中",
     "ue_content_done": "UE 内容已生成",
     "ue_content_failed": "UE 内容生成失败",
+    # 工单状态 — Director 视频制片
+    "director_brief_in_progress": "视频简报中",
+    "director_brief_ready": "视频简报待确认",
+    "director_brief_done": "视频简报完成",
+    "director_brief_rejected": "视频简报被打回",
+    "director_brief_failed": "视频简报失败",
+    "director_script_in_progress": "讲稿拆解中",
+    "director_script_ready": "讲稿待确认",
+    "director_script_done": "讲稿完成",
+    "director_script_rejected": "讲稿被打回",
+    "director_script_failed": "讲稿失败",
+    "director_visual_in_progress": "视觉声音锁定中",
+    "director_visual_ready": "人物音色待确认",
+    "director_visual_done": "视觉声音已锁定",
+    "director_visual_rejected": "视觉声音被打回",
+    "director_visual_failed": "视觉声音失败",
+    "director_prompts_in_progress": "分镜 Prompt 编写中",
+    "director_prompts_done": "分镜 Prompt 完成",
+    "director_prompts_failed": "分镜 Prompt 失败",
+    "director_clip_trial_in_progress": "片段1 试生成中",
+    "director_clip_trial_ready": "片段1 待确认",
+    "director_clip_trial_done": "片段1 已确认",
+    "director_clip_trial_rejected": "片段1 被打回",
+    "director_clip_trial_failed": "片段1 生成失败",
+    "director_batch_gen_in_progress": "批量生成中",
+    "director_batch_gen_done": "全部片段已生成",
+    "director_batch_gen_failed": "批量生成失败",
+    "director_deliver_in_progress": "成片交付中",
+    "director_deliver_done": "素材包已交付",
+    "director_deliver_failed": "交付失败",
     # 工单状态 — 新 Agent 阶段
     "planning_in_progress": "策划中",
     "planning_done": "策划完成",

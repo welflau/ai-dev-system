@@ -1,0 +1,9 @@
+{
+  "id": "director",
+  "name": "Director 视频制片",
+  "version": "0.2.0",
+  "description": "AI 视频导演：Mode 路由、讲稿与分镜、人物与音色、片段生成与交付。流水线由 skill 链组装，人审节点推进。",
+  "required_traits": {
+    "any_of": ["category:video", "pipeline:video"]
+  }
+}

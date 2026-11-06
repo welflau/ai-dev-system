@@ -187,11 +187,7 @@ def test_prepare_inputs_text_mode_reads_content(tmp_path):
 
 
 def test_prepare_inputs_reports_missing_required(tmp_path):
-    """缺必需产物时不 abort，而是让 LLM 在 prompt 里看到缺了什么。
-
-    组装期的缺源检查已剔除无 producer 的 skill；运行期还缺通常意味着上游
-    skipped 或失败 —— 此时「告诉 LLM」比直接中断更有用。
-    """
+    """注入层列出缺失的 kind，执行层再决定停不停。"""
     async def body(db, repo):
         ctx = await SkillAgent()._prepare_inputs(
             sop_config("demo_draft", consumes=[
@@ -372,6 +368,45 @@ def test_skipped_result_carries_success_status():
     assert r["sop_config"]["_stage_id"] == "demo_draft"
 
 
+def test_run_skill_errors_when_required_consume_missing(tmp_path, monkeypatch):
+    """缺 shot_prompts 就开跑 clip-trial，会 done 空结果再被人审卡推到已部署。"""
+    async def body(db, repo):
+        from skills import runner as runner_mod
+        from skills.executable_loader import ExecutableSkill
+
+        called = []
+        monkeypatch.setattr(
+            runner_mod.SkillRunner, "is_available",
+            lambda self, ctx: _true(),
+        )
+
+        async def no_exec(_self, ctx, on_tool=None):
+            called.append(1)
+            raise AssertionError("缺必需上游时不得执行 skill")
+
+        monkeypatch.setattr(runner_mod.SkillRunner, "execute", no_exec)
+        monkeypatch.setattr(
+            "skills.executable_loader.load_executable_skill",
+            lambda sid, repo_path="": ExecutableSkill(
+                skill_id=sid, name=sid, description="", body="",
+                source_path=Path("SKILL.md"),
+            ),
+        )
+        res = await SkillAgent()._run_skill({
+            "project_id": PROJECT_ID, "ticket_id": TICKET_ID,
+            "requirement_id": REQ_ID, "repo_path": str(repo),
+            "sop_config": sop_config(
+                "director_clip_trial",
+                consumes=[{"kind": "shot_prompts"}],
+                produces=[{"kind": "clip_trial", "glob": "片段01.mp4"}],
+            ),
+        })
+        assert res["status"] == "error"
+        assert "shot_prompts" in res["message"]
+        assert called == []
+    _run(body, tmp_path)
+
+
 def test_execute_result_shape(tmp_path, monkeypatch):
     """走完整 _run_skill，检查回传字段齐全（orchestrator 分支的输入契约）。"""
     async def body(db, repo):
@@ -414,6 +449,56 @@ def test_execute_result_shape(tmp_path, monkeypatch):
         assert len(res["artifacts"]) == 1
         assert res["artifacts"][0]["kind"] == "draft_article"
         assert res["sop_config"]["_stage_id"] == "demo_draft"
+    _run(body, tmp_path)
+
+
+def test_waiting_human_result_includes_gate_payload(tmp_path, monkeypatch):
+    """人审回传必须带 waiting_human（确认卡 message_id / preview），orchestrator 才能写链接。"""
+    async def body(db, repo):
+        from skills import runner as runner_mod
+        from skills.executable_loader import ExecutableSkill
+
+        outs = fake_outputs(repo, ("video_brief", "video_brief.json", "{}"))
+        gate = {
+            "type": "confirm_video_gate",
+            "waiting_human": True,
+            "_message_id": "MSG-gate",
+            "session_id": "sess-9",
+            "preview_paths": ["works/slug/video_brief.json"],
+        }
+
+        monkeypatch.setattr(
+            runner_mod.SkillRunner, "is_available",
+            lambda self, ctx: _true(),
+        )
+
+        async def _wh(_self, ctx, on_tool=None):
+            return SkillRunResult(
+                status="waiting_human", outputs=outs, rounds=1,
+                message="等待确认", waiting_human=gate,
+            )
+
+        monkeypatch.setattr(runner_mod.SkillRunner, "execute", _wh)
+        monkeypatch.setattr(
+            "skills.executable_loader.load_executable_skill",
+            lambda sid, repo_path="": ExecutableSkill(
+                skill_id=sid, name=sid, description="", body="",
+                source_path=Path("SKILL.md"),
+            ),
+        )
+
+        sop = sop_config("director_brief", skill_id="director-brief")
+        sop["_ready_status"] = "director_brief_ready"
+        res = await SkillAgent()._run_skill({
+            "project_id": PROJECT_ID, "ticket_id": TICKET_ID,
+            "requirement_id": REQ_ID, "repo_path": str(repo),
+            "sop_config": sop,
+        })
+        assert res["status"] == "waiting_human"
+        assert res["skill_status"] == "waiting_human"
+        assert res["success_status"] == "director_brief_ready"
+        assert res["waiting_human"]["_message_id"] == "MSG-gate"
+        assert res["waiting_human"]["preview_paths"][0].endswith("video_brief.json")
     _run(body, tmp_path)
 
 

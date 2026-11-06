@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import mimetypes
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional
@@ -21,6 +22,20 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 from skills.executable_loader import ExecutableSkill
 
 logger = logging.getLogger("skills.runner")
+
+
+def _plugin_knowledge_roots(source_path: Optional[Path]) -> List[Path]:
+    """skill 位于 ``plugins/<id>/skills/<skill>/SKILL.md`` 时，附带该插件 ``knowledge/``。"""
+    if source_path is None:
+        return []
+    try:
+        plugin_root = source_path.resolve().parents[2]
+    except IndexError:
+        return []
+    knowledge = plugin_root / "knowledge"
+    if knowledge.is_dir() and (plugin_root / "plugin.json").is_file():
+        return [knowledge]
+    return []
 
 # 认定为「文本」的扩展名 —— 只有这些会被 text_outputs 兼容属性读进内存。
 # 其余（.png/.mp3/.mp4/...）一律只登记路径，绝不 read_text。
@@ -35,6 +50,8 @@ class SkillToolExecutorAdapter:
     def __init__(self, actions: Dict[str, Any], base_context: dict):
         self._actions = actions               # {name: ActionBase}
         self._base_context = base_context
+        self.waiting_human: Optional[Dict[str, Any]] = None
+        self.image_blocked: Optional[Dict[str, Any]] = None
 
     async def execute(self, tool_name: str, tool_input: dict, context: dict):
         import json
@@ -51,10 +68,26 @@ class SkillToolExecutorAdapter:
         action = self._actions.get(tool_name)
         if not action:
             return f"未知工具: {tool_name}", None
+        if self.image_blocked and tool_name == "gen_image":
+            from actions.gen_image import IMAGE_BLOCK_STOP
+            err = str(self.image_blocked.get("error") or IMAGE_BLOCK_STOP)
+            return json.dumps({"ok": False, "error": f"{IMAGE_BLOCK_STOP} {err}",
+                               "image_blocked": True}, ensure_ascii=False), None
+        if self.image_blocked and tool_name == "confirm_video_gate":
+            from actions.gen_image import IMAGE_BLOCK_STOP
+            return json.dumps({"ok": False, "error": IMAGE_BLOCK_STOP,
+                               "image_blocked": True}, ensure_ascii=False), None
         ctx = {**self._base_context, **context, **tool_input}
         try:
             result = await action.run(ctx)
-            text = result.message or json.dumps(result.data or {}, ensure_ascii=False)
+            data = result.data or {}
+            if data.get("waiting_human"):
+                self.waiting_human = data
+            if data.get("image_blocked"):
+                self.image_blocked = {**data, "error": result.error or ""}
+            text = result.message or json.dumps(data, ensure_ascii=False)
+            if not result.success:
+                text = result.error or text
             return text, None
         except Exception as e:
             logger.warning("SkillToolExecutorAdapter %s 失败: %s", tool_name, e)
@@ -86,10 +119,11 @@ class ArtifactOut:
 
 @dataclass
 class SkillRunResult:
-    status: str                                  # success | partial | budget_exceeded | error | skipped
+    status: str                                  # success | partial | budget_exceeded | error | skipped | waiting_human
     outputs: List[ArtifactOut] = field(default_factory=list)
     rounds: int = 0
     message: str = ""
+    waiting_human: Optional[Dict[str, Any]] = None
 
     @property
     def output_paths(self) -> List[str]:
@@ -198,9 +232,14 @@ class SkillRunner:
         if allowed_exts is not None and not isinstance(allowed_exts, list):
             allowed_exts = None
         skill_dir = self.skill.source_path.parent if self.skill.source_path else None
+        extra_roots = _plugin_knowledge_roots(self.skill.source_path)
         for bt in self.skill.builtin_tools:
             # mcp__ 声明在 executor 层处理，不建 Action
             if str(bt).startswith("mcp__"):
+                continue
+            if str(bt) == "read_file" and extra_roots:
+                from actions.read_repo_file import ReadRepoFileAction
+                actions["read_file"] = ReadRepoFileAction(extra_roots=extra_roots)
                 continue
             action = create_action(
                 bt,
@@ -215,6 +254,17 @@ class SkillRunner:
 
     def _build_system(self, context: dict) -> str:
         parts = [self.skill.body]
+        run_as = str(context.get("agent_type") or "").strip()
+        if run_as:
+            try:
+                from skills import skill_loader
+                extra = skill_loader.build_prompt_for_agent(
+                    run_as, traits=context.get("project_traits") or [],
+                )
+                if extra:
+                    parts.append(f"## 宿主 Role 知识（{run_as}）\n{extra}")
+            except Exception as e:
+                logger.warning("注入宿主 Role 知识失败（跳过）: %s", e)
         ctx_lines = []
         if context.get("ticket_title"):
             ctx_lines.append(f"- 工单标题：{context['ticket_title']}")
@@ -224,8 +274,59 @@ class SkillRunner:
             ctx_lines.append(f"- change_id：{context['change_id']}")
         if context.get("project_traits"):
             ctx_lines.append(f"- 项目 traits：{context['project_traits']}")
+        knowledge = _plugin_knowledge_roots(self.skill.source_path)
+        if knowledge:
+            ctx_lines.append(
+                f"- 导演知识目录：用 read_file / mcp__skill_io__read_repo_file 读取 "
+                f"`director-knowledge/<相对路径>`，例如 "
+                f"director-knowledge/modes/cinematic-drama/workflow.md"
+            )
+            ctx_lines.append(
+                "- **禁止**搜索或打开 `D:\\A_Works\\director`、"
+                "`~/.codebuddy/projects`、用户主目录里的 director 源仓。"
+                "知识已迁入本插件，只走 director-knowledge/ 前缀。"
+            )
         if ctx_lines:
             parts.append("## 当前上下文\n" + "\n".join(ctx_lines))
+
+        cli_map = []
+        builtins = [str(b).split(":", 1)[0] for b in (self.skill.builtin_tools or [])]
+        if "read_file" in builtins:
+            cli_map.append(
+                "- 读文件：`mcp__skill_io__read_repo_file`（导演知识 path 以 `director-knowledge/` 开头）"
+            )
+        if "write_file" in builtins:
+            if str((self.skill.outputs or {}).get("write_mode") or "") == "repo":
+                cli_map.append("- 写仓库文件：`mcp__skill_io__write_repo_file`（path 相对仓库根，如 works/<slug>/video_brief.json）")
+            else:
+                cli_map.append("- 写产出文件：`mcp__skill_io__write_output`（只传文件名，不要用原生 Write）")
+        if "init_work_package" in builtins:
+            cli_map.append("- 初始化工作包：`mcp__skill_io__init_work_package`")
+        if "confirm_video_gate" in builtins:
+            cli_map.append("- 发出人审卡：`mcp__skill_io__confirm_video_gate`")
+        if "probe_backend" in builtins:
+            cli_map.append("- 探测后端：`mcp__skill_io__probe_backend`")
+        if "gen_video" in builtins:
+            cli_map.append(
+                "- 生成单段视频：`mcp__skill_io__gen_video`（阻塞到下载完成，不要为同一段重复调用）"
+            )
+        if "gen_video_batch" in builtins:
+            cli_map.append(
+                "- 批量生成：`mcp__skill_io__gen_video_batch`（跳过片段 1，clips 为 JSON 数组）"
+            )
+        if "download_video" in builtins:
+            cli_map.append("- 补下载视频：`mcp__skill_io__download_video`")
+        if "gen_image" in builtins or any(str(b).startswith("gen_image:") for b in (self.skill.builtin_tools or [])):
+            cli_map.append(
+                "- 生图：`mcp__skill_io__gen_image`。"
+                "若返回后端失败/已停止：**禁止重试、禁止 confirm_video_gate**，立即 `done`，转人工。"
+            )
+        if cli_map:
+            parts.append(
+                "## CLI 工具（必须用这些 MCP 名）\n"
+                + "\n".join(cli_map)
+                + "\n完成后调用 `mcp__skill_io__done`。不要用原生 Write / Glob / Bash 满盘搜索。"
+            )
 
         # v0.20 产物总线：上游 skill 的产出（路径为主，让 LLM 用 read_file 自取）。
         # 没有 _artifacts 时返回空串 —— openspec-* 这类老 skill 走的还是
@@ -294,6 +395,7 @@ class SkillRunner:
         self._enter_skill_io_context(out_root, context)
 
         status, rounds, msg = "success", 0, ""
+        started_at = time.time()
         try:
             async for ev in engine.run(messages, system, tools, context):
                 if isinstance(ev, ToolDoneEvent):
@@ -318,10 +420,34 @@ class SkillRunner:
             self._exit_skill_io_context()
 
         outputs = self._collect_outputs(context, out_root)
+        if not executor.waiting_human:
+            marker = self._read_waiting_human_marker(
+                out_root,
+                work_slug=str(context.get("work_slug") or ""),
+                ticket_id=str(context.get("ticket_id") or ""),
+                started_at=started_at,
+            )
+            if marker:
+                executor.waiting_human = marker
+        image_blocked = executor.image_blocked or self._read_image_blocked_marker(out_root)
         expected = self.skill.expected_output_count
         if status == "success" and expected and len(outputs) < expected:
             status = "partial"
-        return SkillRunResult(status=status, outputs=outputs, rounds=rounds, message=msg)
+        if image_blocked:
+            # 生图后端挂了：不能走人审确认，也不能假装成功。工单 blocked 等人改 key/引擎。
+            status = "error"
+            msg = str(
+                image_blocked.get("error")
+                or image_blocked.get("message")
+                or "生图失败，需人工处理 LIGHTAI_API_KEY / 引擎"
+            )
+        elif executor.waiting_human and status in ("success", "partial"):
+            status = "waiting_human"
+            msg = str(executor.waiting_human.get("message") or msg or "等待人工确认")
+        return SkillRunResult(
+            status=status, outputs=outputs, rounds=rounds, message=msg,
+            waiting_human=executor.waiting_human if status == "waiting_human" else None,
+        )
 
     # ──────────── CLI 模式：skill_io MCP 上下文 ────────────
 
@@ -343,6 +469,7 @@ class SkillRunner:
             if bt.startswith("gen_image:"):
                 image_subdir = bt.split(":", 1)[1]
                 break
+        knowledge = _plugin_knowledge_roots(self.skill.source_path)
         try:
             from llm_client import set_skill_io_context
             set_skill_io_context(
@@ -351,9 +478,73 @@ class SkillRunner:
                 allowed_exts=exts,
                 image_subdir=image_subdir,
                 tools=list(self.skill.builtin_tools),
+                knowledge_root=str(knowledge[0]) if knowledge else "",
+                write_mode=str(outs.get("write_mode") or ""),
+                project_id=str(context.get("project_id") or ""),
+                ticket_id=str(context.get("ticket_id") or ""),
+                ticket_title=str(context.get("ticket_title") or ""),
+                requirement_id=str(context.get("requirement_id") or ""),
+                session_id=str(context.get("session_id") or ""),
+                skill_id=str(context.get("skill_id") or self.skill.skill_id or ""),
             )
         except Exception as e:
             logger.warning("设置 skill_io 上下文失败（CLI 模式下工具将不可用）: %s", e)
+
+    @staticmethod
+    def _read_image_blocked_marker(out_root: Optional[Path]) -> Optional[Dict[str, Any]]:
+        try:
+            from actions.gen_image import read_image_blocked_marker
+            return read_image_blocked_marker(out_root)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _read_waiting_human_marker(
+        out_root: Optional[Path],
+        *,
+        work_slug: str = "",
+        ticket_id: str = "",
+        started_at: float = 0.0,
+    ) -> Optional[Dict[str, Any]]:
+        """CLI 模式下 confirm_video_gate 跑在 MCP 子进程，waiting_human 回不来。
+        Action 会在 works/<slug>/.ads-waiting-human.json 落盘，这里回收。
+
+        只认当前 slug、当前工单、且本轮 skill 开始之后写入的标记。
+        否则会把上一阶段/另一部片子的旧确认卡当成这一步已经发出人审。
+        """
+        if out_root is None or not out_root.is_dir():
+            return None
+        slug = (work_slug or "").strip().replace("\\", "/").strip("/")
+        candidates = []
+        if slug:
+            candidates.append(out_root / slug / ".ads-waiting-human.json")
+            candidates.append(out_root / ".ads-waiting-human.json")
+        else:
+            candidates.extend(sorted(out_root.glob("*/.ads-waiting-human.json")))
+            candidates.append(out_root / ".ads-waiting-human.json")
+        try:
+            import json as _json
+            seen = set()
+            for p in candidates:
+                try:
+                    key = str(p.resolve())
+                except Exception:
+                    key = str(p)
+                if key in seen or not p.is_file():
+                    continue
+                seen.add(key)
+                if started_at and p.stat().st_mtime + 2 < started_at:
+                    continue
+                data = _json.loads(p.read_text(encoding="utf-8"))
+                if not isinstance(data, dict) or not data.get("waiting_human"):
+                    continue
+                marker_tid = str(data.get("ticket_id") or "")
+                if ticket_id and marker_tid and marker_tid != ticket_id:
+                    continue
+                return data
+        except Exception:
+            return None
+        return None
 
     @staticmethod
     def _exit_skill_io_context() -> None:

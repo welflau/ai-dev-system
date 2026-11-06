@@ -445,6 +445,7 @@ class QueryEngine:
                 _cli_output: int = 0
                 _cli_timed_out: bool = False   # 本轮是否被 CLI 超时掐断（区别于正常结束）
                 _cli_timeout_val: float = 0.0
+                _cli_timeout_reason: str = ""
 
                 # 把 system prompt 拼入 messages，_messages_to_prompt 会包裹为 <ads_context> 注入 stdin
                 cli_messages = current_messages
@@ -480,8 +481,10 @@ class QueryEngine:
                     elif etype == "cli_timeout":
                         # CLI 超时 ≠ 正常结束。产物可能已写完（MCP 工具调用成功），
                         # 但这一轮没走完，不能当 success —— 上抛预算超限。
+                        # reason=aborted：用户点了停止，同样不能当 success。
                         _cli_timed_out = True
                         _cli_timeout_val = float(ev.get("timeout") or 0)
+                        _cli_timeout_reason = ev.get("reason") or ""
                     elif etype == "cli_tool_start":
                         tid = ev["tool_use_id"]
                         if tid not in _cli_tool_started:
@@ -549,9 +552,12 @@ class QueryEngine:
                 # 让 SkillRunner 落到 budget_exceeded，而不是误判 success。
                 if _cli_timed_out:
                     await self._emit_session_end(context, 1, "budget_exceeded")
-                    yield BudgetExceededEvent(
-                        reason=f"CLI 调用超时（{_cli_timeout_val:.0f}s）"
+                    _to_reason = (
+                        "工单已停止"
+                        if _cli_timeout_reason == "aborted"
+                        else f"CLI 调用超时（{_cli_timeout_val:.0f}s）"
                     )
+                    yield BudgetExceededEvent(reason=_to_reason)
                     return
 
                 if full_cli_text:
@@ -665,7 +671,7 @@ class QueryEngine:
             round_stop_reason = "end_turn"
 
             try:
-                async for chunk in self.llm._call_anthropic_tools_stream(
+                async for chunk in self.llm._iter_tool_chunks(
                     current_messages, tools, system,
                     temperature=0.7, max_tokens=4000,
                     enable_thinking=self.enable_thinking,

@@ -27,7 +27,7 @@ def load_server(**env):
     """
     old = {k: os.environ.get(k) for k in (
         "SKILL_OUTPUT_ROOT", "SKILL_REPO", "SKILL_ALLOWED_EXTS",
-        "SKILL_IMAGE_SUBDIR", "SKILL_BACKEND_DIR",
+        "SKILL_IMAGE_SUBDIR", "SKILL_BACKEND_DIR", "SKILL_TOOLS",
     )}
     os.environ.update({k: v for k, v in env.items() if v is not None})
     for k in old:
@@ -277,6 +277,29 @@ def test_gen_image_delegates_to_action(tmp_path, monkeypatch):
     # 参数透传
     assert calls[0]["aspect_ratio"] == "1:1"
     assert calls[0]["image_size"] == "4K"
+
+
+def test_gen_image_backend_fail_forbids_retry(tmp_path, monkeypatch):
+    """API key / 引擎挂了：第一次失败后禁止再调 gen_image。"""
+    backend = str(Path(__file__).resolve().parents[2])
+    out = tmp_path / "out"
+    mod = load_server(
+        SKILL_OUTPUT_ROOT=str(out),
+        SKILL_BACKEND_DIR=backend,
+        SKILL_TOOLS="gen_image,confirm_video_gate",
+    )
+    from config import settings
+    monkeypatch.setattr(settings, "LIGHTAI_API_KEY", "", raising=False)
+    first = run(mod.gen_image("a cat", "cover.png"))
+    assert first["ok"] is False
+    assert first.get("image_blocked") is True
+    assert "禁止重试" in first["error"]
+    second = run(mod.gen_image("a dog", "cover2.png"))
+    assert second["ok"] is False
+    assert "禁止重试" in second["error"]
+    gate = run(mod.confirm_video_gate("确认视觉"))
+    assert gate["ok"] is False
+    assert "禁止" in gate["error"]
 
 
 def test_gen_image_without_backend_dir_reports_clearly(tmp_path):

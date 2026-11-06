@@ -75,3 +75,22 @@ def test_confirm_project_action_phaser_traits():
     assert result.success
     assert result.data["type"] == "confirm_project"
     assert "framework:phaser" in result.data["traits"]
+
+
+def test_confirm_project_video_does_not_need_platform():
+    from actions.chat.confirm_project import missing_create_traits
+    assert missing_create_traits(["category:video", "pipeline:video"]) == []
+    result = asyncio.run(ConfirmProjectAction().run({
+        "name": "TombRaiderComic",
+        "traits": ["category:video", "pipeline:video"],
+        "description": "AI 漫剧",
+        "preset_id": "ai-video",
+        "mode": "auto",
+    }))
+    assert result.success
+    assert "platform:web" not in result.data["traits"]
+
+
+def test_confirm_project_web_app_still_needs_platform():
+    from actions.chat.confirm_project import missing_create_traits
+    assert "platform:*" in missing_create_traits(["category:app"])

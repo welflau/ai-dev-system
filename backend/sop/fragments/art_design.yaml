@@ -13,6 +13,9 @@ required_traits:
     - platform:mobile
     - platform:desktop
     - category:game
+  none_of:
+    - pipeline:video
+    - category:video
 
 required_ticket_type:
   none_of:

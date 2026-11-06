@@ -12,6 +12,10 @@ global:
   max_retries: 5
   zombie_timeout_seconds: 120
 
+# 内容 / 视频 skill 链插在验收之前：先出产物，再让 ProductAgent 验收。
+skill_block_anchor:
+  insert_before: acceptance
+
 # 基础阶段。fragments 可通过 insert_after / insert_before 插入新阶段在这些之间。
 #
 # v0.20 裁剪：每个 stage 可声明 required_traits（复用 fragment 的 all_of/any_of/none_of
@@ -47,6 +51,7 @@ base_stages:
     required_traits:
       none_of:
         - pipeline:content
+        - pipeline:video
     config:
       read_existing_code: true
       max_code_chars: 1500
@@ -69,6 +74,7 @@ base_stages:
     required_traits:
       none_of:
         - pipeline:content
+        - pipeline:video
     config:
       read_existing_code: true
       max_code_chars: 2000
@@ -92,6 +98,7 @@ base_stages:
     required_traits:
       none_of:
         - pipeline:content
+        - pipeline:video
     config:
       max_code_chars: 12000
       per_file_code_chars: 6000
@@ -124,7 +131,7 @@ base_stages:
     # 内容类项目没有「部署」语义，但 deployed 是 _HARD_TERMINAL 里的流程终点，
     # 也是 _check_requirement_completion 的 DONE_STATUSES 之一。裁掉它会让工单
     # 停在 acceptance_passed —— 既不是终态、也没有后续规则，需求永远不会标完成。
-    # 所以保留，由 DeployAgent 对内容项目走空实现（后续 skill 链接入时再细化）。
+    # 所以保留。DeployAgent 对视频/内容跳过 HTTP 试玩和 Dockerfile，只把工单标成 deployed。
     config:
       target_env: test
 
@@ -149,6 +156,7 @@ base_stages:
     required_traits:
       none_of:
         - pipeline:content
+        - pipeline:video
     config:
       read_existing_code: true
       max_tokens: 16000
@@ -172,6 +180,7 @@ base_stages:
     required_traits:
       none_of:
         - pipeline:content
+        - pipeline:video
     config:
       read_existing_code: true
       max_tokens: 16000

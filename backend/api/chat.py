@@ -102,6 +102,53 @@ def _cli_task_finish(task_id: str, result: str, duration_ms: float, success: boo
         pass
 
 
+async def _cancel_cli_task_impl(task_id: str, project_id: str = "") -> dict:
+    """停止一条 CLI / 常驻后台命令。有托管进程就杀；没有也把 running 标成 cancelled。"""
+    killed = False
+    procs = globals().get("_BG_COMMAND_PROCS") or {}
+    proc = procs.get(task_id) if task_id else None
+    if proc is not None and getattr(proc, "returncode", None) is None:
+        try:
+            await _kill_process_on_port(project_id or "", 0, task_id)
+            killed = True
+        except Exception as e:
+            logger.debug("cancel cli task kill failed (%s): %s", task_id, e)
+
+    t = _CLI_TASKS.get(task_id)
+    if t and t.get("status") == "running":
+        out = t.get("output_lines") or []
+        text = "\n".join(out[-40:])
+        if text:
+            text += "\n"
+        text += "[已停止]"
+        started = t.get("created_at") or ""
+        dur = int(t.get("duration_ms") or 0)
+        _cli_task_finish(task_id, text, dur, False)
+        t["status"] = "cancelled"
+        try:
+            await _cli_task_db_upsert(
+                task_id, t.get("title") or "", t.get("tool") or "",
+                "cancelled", text, dur, started,
+                t.get("project_id") or project_id or "",
+                t.get("session_key") or "", t.get("session_label") or "",
+            )
+        except Exception:
+            pass
+        channel = f"project:{project_id}" if project_id else "global"
+        try:
+            await event_manager.publish(channel, "cli_task_done", {
+                "task_id": task_id, "status": "cancelled", "exit_code": -1,
+                "duration_s": round(dur / 1000, 1) if dur else 0,
+            })
+        except Exception:
+            pass
+        return {"ok": True, "killed": killed, "status": "cancelled"}
+
+    if killed:
+        return {"ok": True, "killed": True, "status": "cancelled"}
+    raise HTTPException(400, "任务不在运行或无法停止")
+
+
 async def _cli_task_db_upsert(task_id: str, title: str, tool: str, status: str,
                                output: str, duration_ms: int, created_at: str,
                                project_id: str = "", session_key: str = "",
@@ -1748,10 +1795,32 @@ async def _chat_stream_generator(
             elif etype == "budget_exceeded":
                 reason = ev.get("reason", "预算超限")
                 yield _sse("error", {"message": f"已达到对话限制：{reason}"})
+                _msg_saved = True
+                try:
+                    await _save_chat_message(project_id, "assistant", f"⚠️ 已达到对话限制：{reason}",
+                                             session_id=_sid, turn_id=_msg_group_key)
+                    await db.execute(
+                        "UPDATE chat_sessions SET last_status='error', last_active_at=? WHERE id=?",
+                        (now_iso(), _sid),
+                    )
+                except Exception as _be:
+                    logger.warning("限制消息保存失败: %s", _be)
                 return
 
             elif etype == "error":
-                yield _sse("error", {"message": ev.get("message", "未知错误")})
+                _err_text = ev.get("message", "未知错误")
+                yield _sse("error", {"message": _err_text})
+                # 出错也要落库，否则 finally 兜底会存成误导性的「操作已完成。」
+                _msg_saved = True
+                try:
+                    await _save_chat_message(project_id, "assistant", f"⚠️ {_err_text}",
+                                             session_id=_sid, turn_id=_msg_group_key)
+                    await db.execute(
+                        "UPDATE chat_sessions SET last_status='error', last_active_at=? WHERE id=?",
+                        (now_iso(), _sid),
+                    )
+                except Exception as _ee:
+                    logger.warning("错误消息保存失败: %s", _ee)
                 return
 
             elif etype == "message_done":
@@ -1927,6 +1996,7 @@ def _sse(event: str, data: dict) -> bytes:
 class SaveToRepoRequest(BaseModel):
     filename: str = Field(..., description="文件路径，如 docs/note.md")
     content: str = Field(..., description="文件内容")
+    session_id: Optional[str] = None
 
 
 async def _stream_mcp_status_events():
@@ -1971,6 +2041,7 @@ class ConfirmRequirementRequest(BaseModel):
     description: str = ""
     priority: str = "medium"
     images: Optional[List[str]] = None
+    material_ids: Optional[List[str]] = None
     paused: bool = False
     source_message_id: Optional[str] = None   # 创建该需求的 chat_messages.id
     source_session_id: Optional[str] = None   # 创建该需求的 chat_sessions.id
@@ -1990,6 +2061,7 @@ class ConfirmGenerateImageRequest(BaseModel):
     aspect_ratio: str = "1:1"
     image_size: str = "2K"
     message_id: Optional[str] = None
+    session_id: Optional[str] = None
 
 
 @router.post("/confirm-generate-image")
@@ -2005,6 +2077,8 @@ async def confirm_generate_image(project_id: str, req: ConfirmGenerateImageReque
         aspect_ratio=req.aspect_ratio,
         image_size=req.image_size,
         requester="chat",
+        session_id=req.session_id,
+        message_id=req.message_id,
     )
     if req.message_id:
         import json as _json
@@ -2091,6 +2165,13 @@ async def confirm_create_requirement(project_id: str, req: ConfirmRequirementReq
             f"![截图 {i+1}]({url})" for i, url in enumerate(req.images)
         )
         description = description + img_md
+    if req.material_ids:
+        try:
+            from materials.registry import material_registry
+            description = description + await material_registry.markdown_links(req.material_ids)
+            await material_registry.mark_promoted(req.material_ids, "requirement")
+        except Exception as _e:
+            logger.debug("附加会话素材失败: %s", _e)
 
     from actions.chat.create_requirement import CreateRequirementAction
     action_result = await CreateRequirementAction().run({
@@ -2156,6 +2237,23 @@ async def save_chat_to_repo(project_id: str, req: SaveToRepoRequest):
         )
         await git_manager.push(project_id)
         logger.info("💾 聊天内容已保存到仓库: %s (commit: %s)", safe_path, commit_hash)
+        if req.session_id:
+            try:
+                from materials.registry import material_registry
+                await material_registry.attach(
+                    session_id=req.session_id,
+                    project_id=project_id,
+                    name=Path(safe_path).name,
+                    origin="export",
+                    content=req.content.encode("utf-8"),
+                    mime="text/markdown",
+                    status="promoted",
+                    promoted_sink="repo",
+                    promoted_id=safe_path,
+                    metadata={"path": safe_path, "commit": commit_hash},
+                )
+            except Exception as _e:
+                logger.debug("登记导出文档失败: %s", _e)
         return {"status": "ok", "path": safe_path, "commit": commit_hash}
     except Exception as e:
         logger.error("保存到仓库失败: %s", e)
@@ -2329,6 +2427,7 @@ async def list_cli_tasks(project_id: str, session_id: str = ""):
                 "duration_ms": (mem.get("duration_ms") if mem else None) or r["duration_ms"],
                 "session_key": r["session_key"] or "",
                 "session_label": r["session_label"] or "",
+                "project_id": r["project_id"] or project_id or "",
             })
         # 补上内存中尚未落库的 running 任务
         db_ids = {t["id"] for t in tasks}
@@ -2370,6 +2469,12 @@ async def get_cli_task(project_id: str, task_id: str):
     raise HTTPException(status_code=404, detail="任务不存在")
 
 
+@router.post("/cli-tasks/{task_id}/cancel")
+async def cancel_cli_task(project_id: str, task_id: str):
+    """停止项目聊天里的 CLI / 常驻后台命令。"""
+    return await _cancel_cli_task_impl(task_id, project_id)
+
+
 @router.get("/sessions")
 async def list_sessions(project_id: str, limit: int = 50):
     """列出项目的会话列表（按最新活跃倒序）"""
@@ -2408,6 +2513,11 @@ async def delete_all_sessions(project_id: str):
     session_ids = [r["id"] for r in rows]
     deleted = 0
     for sid in session_ids:
+        try:
+            from materials.registry import material_registry
+            await material_registry.delete_session(sid)
+        except Exception:
+            pass
         await db.delete("chat_messages", "session_id = ? AND project_id = ?", (sid, project_id))
         await db.delete("chat_sessions", "id = ?", (sid,))
         deleted += 1
@@ -2420,6 +2530,11 @@ async def delete_session(project_id: str, session_id: str):
     row = await db.fetch_one("SELECT id FROM chat_sessions WHERE id = ? AND project_id = ?", (session_id, project_id))
     if not row:
         raise HTTPException(404, "会话不存在")
+    try:
+        from materials.registry import material_registry
+        await material_registry.delete_session(session_id)
+    except Exception:
+        pass
     await db.delete("chat_messages", "session_id = ? AND project_id = ?", (session_id, project_id))
     await db.delete("chat_sessions", "id = ?", (session_id,))
     return {"ok": True}
@@ -3230,6 +3345,10 @@ async def get_ticket_conversations(project_id: str, ticket_id: str):
 
 def _build_system_prompt(project: dict, context: dict) -> str:
     """构建系统提示词"""
+    from actions.chat.video_identity import (
+        is_video_traits, parse_traits, video_chat_routing_section,
+    )
+    video_routing = video_chat_routing_section() if is_video_traits(parse_traits(project.get("traits"))) else ""
     req_list = context.get("recent_requirements", [])
     req_summary = ""
     if req_list:
@@ -3247,6 +3366,7 @@ def _build_system_prompt(project: dict, context: dict) -> str:
     knowledge_content = context.get("knowledge_content", "")
 
     return f"""你是 AI 自动开发系统的智能助手，当前正在为项目「{project['name']}」提供服务。
+{video_routing}
 
 ## 项目信息
 - 名称：{project['name']}
@@ -3498,9 +3618,17 @@ async def _build_project_context(project_id: str, project: dict) -> dict:
             file_tree = "\n".join(all_files) if all_files else "（空仓库）"
 
             # 读取关键文档内容（README, docs/*.md, index.html 等，最多 8000 字符）
-            key_file_patterns = ["README.md", "docs/**/REPORT.md", "docs/**/PRD.md",
-                                 "docs/**/architecture.md", "docs/**/deploy.md",
-                                 "index.html", "docs/**/test-report.md"]
+            from actions.chat.video_identity import is_video_traits, parse_traits
+            video_project = is_video_traits(parse_traits(project.get("traits")))
+            if video_project:
+                key_file_patterns = [
+                    "README.md", "works/*.md", "works/**/*.md",
+                    "docs/**/brief*.md", "docs/**/分镜*.md",
+                ]
+            else:
+                key_file_patterns = ["README.md", "docs/**/REPORT.md", "docs/**/PRD.md",
+                                     "docs/**/architecture.md", "docs/**/deploy.md",
+                                     "index.html", "docs/**/test-report.md"]
             content_parts = []
             total_chars = 0
             max_chars = 8000
@@ -3510,6 +3638,10 @@ async def _build_project_context(project_id: str, project: dict) -> dict:
                     if fpath.is_file() and total_chars < max_chars:
                         try:
                             text = fpath.read_text(encoding="utf-8", errors="replace")
+                            if video_project and (
+                                "网页 MVP" in text[:500] or "Next.js" in text[:500]
+                            ):
+                                continue
                             remaining = max_chars - total_chars
                             if len(text) > remaining:
                                 text = text[:remaining] + "\n...(truncated)"
@@ -3690,6 +3822,9 @@ async def _parse_and_execute_action(project_id: str, project: dict, response: st
     # 统一用 ActionBase 协议调用：context 里注入 project_id + action_data
     ctx = {"project_id": project_id, **action_data}
     action_result = await action_cls().run(ctx)
+    if not action_result.success:
+        logger.warning("ACTION %s 失败: %s", action_type, action_result.error)
+        return None
     return action_result.data
 
 
@@ -3798,9 +3933,32 @@ async def _save_chat_message(
     })
     # 更新会话 updated_at + message_count
     await db.execute(
-        "UPDATE chat_sessions SET updated_at = ?, message_count = message_count + 1 WHERE id = ?",
-        (now_iso(), eff_session),
+        "UPDATE chat_sessions SET updated_at = ?, last_active_at = ?, message_count = message_count + 1 WHERE id = ?",
+        (now_iso(), now_iso(), eff_session),
     )
+    if image_urls:
+        try:
+            from materials.registry import material_registry
+            await material_registry.attach_urls(
+                session_id=eff_session,
+                project_id=session_project_id,
+                urls=image_urls,
+                origin="upload",
+                message_id=msg_id,
+            )
+        except Exception as e:
+            logger.debug("登记会话图片失败: %s", e)
+    if role == "user" and content and "【附件" in content:
+        try:
+            from materials.registry import material_registry
+            await material_registry.attach_inline_docs(
+                session_id=eff_session,
+                project_id=session_project_id,
+                content=content,
+                message_id=msg_id,
+            )
+        except Exception as e:
+            logger.debug("登记会话附件失败: %s", e)
     return msg_id
 
 
@@ -3851,6 +4009,7 @@ async def global_list_cli_tasks(session_id: str = ""):
                 "duration_ms": (mem.get("duration_ms") if mem else None) or r["duration_ms"],
                 "session_key": r["session_key"] or "",
                 "session_label": r["session_label"] or "",
+                "project_id": r["project_id"] or "",
             })
         db_ids = {t["id"] for t in tasks}
         for tid, t in _CLI_TASKS.items():
@@ -3885,6 +4044,12 @@ async def global_get_cli_task(task_id: str):
     except Exception:
         pass
     raise HTTPException(status_code=404, detail="任务不存在")
+
+
+@global_chat_router.post("/cli-tasks/{task_id}/cancel")
+async def global_cancel_cli_task(task_id: str):
+    """停止全局聊天里的 CLI / 常驻后台命令。"""
+    return await _cancel_cli_task_impl(task_id, "")
 
 
 @global_chat_router.post("/group", response_model=GroupChatResponse)
@@ -4174,10 +4339,22 @@ async def _global_chat_stream_generator(req: GlobalChatRequest):
             elif etype == "budget_exceeded":
                 reason = ev.get("reason", "预算超限")
                 yield _sse("error", {"message": f"已达到对话限制：{reason}"})
+                try:
+                    await _save_chat_message("__global__", "assistant", f"⚠️ 已达到对话限制：{reason}",
+                                             session_id=_sid, turn_id=_msg_group_key_g)
+                except Exception as _be:
+                    logger.warning("全局限制消息保存失败: %s", _be)
                 return
 
             elif etype == "error":
-                yield _sse("error", {"message": ev.get("message", "未知错误")})
+                _err_text = ev.get("message", "未知错误")
+                yield _sse("error", {"message": _err_text})
+                # 出错也落库：刷新后保留真实报错，而不是整轮消失
+                try:
+                    await _save_chat_message("__global__", "assistant", f"⚠️ {_err_text}",
+                                             session_id=_sid, turn_id=_msg_group_key_g)
+                except Exception as _ee:
+                    logger.warning("全局错误消息保存失败: %s", _ee)
                 return
 
             elif etype == "message_done":
@@ -4390,6 +4567,11 @@ async def delete_all_global_sessions():
     rows = await db.fetch_all("SELECT id FROM chat_sessions WHERE project_id IS NULL")
     deleted = 0
     for r in rows:
+        try:
+            from materials.registry import material_registry
+            await material_registry.delete_session(r["id"])
+        except Exception:
+            pass
         await db.delete("chat_messages", "session_id = ? AND project_id = '__global__'", (r["id"],))
         await db.delete("chat_sessions", "id = ?", (r["id"],))
         deleted += 1
@@ -4402,6 +4584,11 @@ async def delete_global_session(session_id: str):
     row = await db.fetch_one("SELECT id FROM chat_sessions WHERE id = ? AND project_id IS NULL", (session_id,))
     if not row:
         raise HTTPException(404, "会话不存在")
+    try:
+        from materials.registry import material_registry
+        await material_registry.delete_session(session_id)
+    except Exception:
+        pass
     await db.delete("chat_messages", "session_id = ? AND project_id = '__global__'", (session_id,))
     await db.delete("chat_sessions", "id = ?", (session_id,))
     return {"ok": True}
@@ -4822,6 +5009,30 @@ async def mcp_action_callback(project_id: str, req: _McpActionRequest):
     action_name = (req.action or "").lower().strip()
     data = req.data or {}
 
+    # ── 状态变更类（暂停/恢复/批量暂停）：直接执行 Action，动作内部已发 SSE ──
+    if action_name in ("pause_requirement", "pause_requirements_batch", "resume_requirement"):
+        from actions.chat.pause_requirement import (
+            PauseRequirementAction, PauseRequirementsBatchAction,
+        )
+        from actions.chat.resume_requirement import ResumeRequirementAction
+        _ctx: Dict[str, Any] = {"project_id": project_id}
+        if action_name == "pause_requirement":
+            _ctx["requirement_id"] = data.get("requirement_id") or ""
+            _ctx["reason"] = data.get("reason") or ""
+            _res = await PauseRequirementAction().run(_ctx)
+        elif action_name == "pause_requirements_batch":
+            _ctx["requirement_ids"] = data.get("requirement_ids") or []
+            _ctx["filter"] = data.get("filter") or ""
+            _ctx["reason"] = data.get("reason") or ""
+            _res = await PauseRequirementsBatchAction().run(_ctx)
+        else:
+            _ctx["requirement_id"] = data.get("requirement_id") or ""
+            _res = await ResumeRequirementAction().run(_ctx)
+        if _res.success:
+            return {"status": "ok", "result": _res.to_dict()}
+        _err = _res.error or (_res.data or {}).get("message") or "操作失败"
+        return {"status": "error", "message": _err}
+
     # 直接构建 action_result，不走 _parse_and_execute_action 避免解析链路异常
     if action_name == "confirm_requirement":
         title = (data.get("title") or "").strip()
@@ -4831,6 +5042,10 @@ async def mcp_action_callback(project_id: str, req: _McpActionRequest):
             priority = "medium"
         if not title:
             raise HTTPException(400, "需求标题不能为空")
+        from actions.chat.video_identity import reject_web_requirement_for_video
+        blocked = await reject_web_requirement_for_video(project_id, title, description)
+        if blocked:
+            return {"status": "error", "message": blocked}
         action_result = {
             "type": "confirm_requirement",
             "title": title,
@@ -4870,6 +5085,31 @@ async def mcp_action_callback(project_id: str, req: _McpActionRequest):
             "ticket_type": ticket_type,
             "start_from": start_from,
         }
+    elif action_name == "close_requirement":
+        # 关闭需求走确认卡片：run() 返回 confirm_close_requirement 卡片，前端点确认后调 /confirm-close-requirement
+        from actions.chat.close_requirement import CloseRequirementAction
+        _res = await CloseRequirementAction().run({
+            "project_id": project_id,
+            "requirement_id": (data.get("requirement_id") or "").strip(),
+            "reason": (data.get("reason") or "").strip(),
+        })
+        if not _res.success:
+            return {"status": "error", "message": _res.error or (_res.data or {}).get("message") or "关闭失败"}
+        action_result = _res.data
+    elif action_name == "confirm_project":
+        # 项目 CLI 里打开本地目录 / 新建另一项目：走项目 SSE，勿只打全局暂存
+        pdata = dict(data or {})
+        traits = pdata.get("traits") or []
+        if isinstance(traits, str):
+            pdata["traits"] = [t.strip() for t in traits.replace("，", ",").split(",") if t.strip()]
+        from actions.chat.confirm_project import ConfirmProjectAction
+        _res = await ConfirmProjectAction().run(pdata)
+        if not _res.success:
+            return {"status": "error", "message": _res.error or "确认卡片生成失败"}
+        action_result = _res.data
+        # switch_project 也推前端，由前端执行切换
+        if action_result.get("type") not in ("confirm_project", "switch_project"):
+            return {"status": "error", "message": "unexpected confirm_project result"}
     else:
         logger.warning("mcp_action_callback: 未知 action=%s", action_name)
         return {"status": "no_action", "reason": f"unknown action: {action_name}"}
@@ -4885,6 +5125,12 @@ async def mcp_action_callback(project_id: str, req: _McpActionRequest):
         atype = action_result.get("type", "")
         if atype == "confirm_direct_ticket":
             msg_text = f"工单草稿「{action_result.get('title', '')}」已生成，请在下方确认："
+        elif atype == "confirm_close_requirement":
+            msg_text = action_result.get("message") or f"确认关闭需求「{action_result.get('title', '')}」？"
+        elif atype == "confirm_project":
+            msg_text = f"项目草稿「{action_result.get('name', '')}」已生成，请在下方确认："
+        elif atype == "switch_project":
+            msg_text = action_result.get("message") or f"项目「{action_result.get('project_name', '')}」已存在"
         else:
             msg_text = f"需求草稿「{action_result.get('title', '')}」已生成，请在下方确认："
         _mcp_msg_id = await _save_chat_message(
@@ -4912,12 +5158,17 @@ async def mcp_action_callback(project_id: str, req: _McpActionRequest):
         await event_manager.publish_to_project(project_id, "chat_mcp_action_id", {
             "msg_id": _mcp_msg_id,
             "action_type": action_result.get("type", ""),
-            "title": action_result.get("title") or "",
+            "title": action_result.get("title") or action_result.get("name") or "",
         })
 
     logger.info("mcp_action_callback: 推送 %s 卡片到项目 %s msg=%s",
                 action_name, project_id, (_mcp_msg_id or "")[:12])
-    return {"status": "ok", "action_type": action_result["type"], "msg_id": _mcp_msg_id}
+    return {
+        "status": "ok",
+        "action_type": action_result.get("type"),
+        "msg_id": _mcp_msg_id,
+        "action": action_result,  # CLI 合成 ActionEvent 优先用完整扫描结果
+    }
 
 
 # ── 内部 API：MCP server 推 CLI 任务事件 ──────────────────────────────────────

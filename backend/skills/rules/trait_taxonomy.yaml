@@ -29,6 +29,7 @@ category:
     - service      # 后端服务（API、微服务）
     - library      # 第三方库
     - doc          # 纯文档站点
+    - video        # AI 视频 / 短片 / 漫剧 / 动画解说 / 故事动画
 
 engine:
   description: "游戏 / 客户端引擎（category=game 时必填）"
@@ -142,7 +143,8 @@ pipeline:
                 流程主要由 skill 链（x-workflow）承载
   values:
     - code
-    - content
+    - content        # 图文 / 社媒 / 幻灯片（保持原语义）
+    - video          # AI 视频制片；裁剪规则与 content 相同，skill 链不同
 
 
 # ==================== 约束规则 ====================
@@ -165,6 +167,10 @@ constraints:
     - condition: { any_of: ["category:service"] }
       recommend: ["framework:*", "lang:*"]
       reason: "后端服务需要 framework + lang 才能选对应 skill"
+
+    - condition: { any_of: ["category:video"] }
+      recommend: ["pipeline:video"]
+      reason: "视频项目必须走 pipeline:video，否则会装配文章 demo 链或内容/设计插件"
 
 
 # ==================== Skill traits_match 最佳实践（给 skill 作者的参考）====================

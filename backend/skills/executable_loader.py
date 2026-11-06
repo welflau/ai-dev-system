@@ -40,6 +40,28 @@ _BUILTIN_ROOT = Path(__file__).resolve().parent / "executable_skills"
 # 从 command_template 抠 {占位符}
 _SLOT_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
 
+# 插件不能定义 Agent 类。x-workflow.agent 只能点名宿主已有的工单 Role。
+# ChatAssistant 是会话 Role，不能接工单 stage。未知名字一律出局，
+# 禁止静默造一个新 Agent 或悄悄退回 SkillAgent。
+PIPELINE_HOST_AGENTS = frozenset({
+    "ProductAgent",
+    "PlannerAgent",
+    "UXAgent",
+    "ArtAgent",
+    "ArtistAgent",
+    "ArchitectAgent",
+    "DevAgent",
+    "TestAgent",
+    "ReviewAgent",
+    "DeployAgent",
+    "UEEditorAgent",
+    "SkillAgent",
+})
+
+
+def is_pipeline_host_agent(name: str) -> bool:
+    return bool(name) and name in PIPELINE_HOST_AGENTS
+
 
 @dataclass
 class CliToolSpec:
@@ -255,6 +277,10 @@ class WorkflowSkill:
     priority: int = 50
     fanout: bool = False                        # 预留：阶段内扁出子工单
     pipeline_view_contrib: Optional[Dict[str, Any]] = None
+    human_gate: bool = False
+    # 宿主 Role 名。默认 SkillAgent。只影响 SOP 归属 / LLM agent_type /
+    # inject_to 知识；执行引擎仍是 SkillRunner，见 orchestrator._execute_assigned_agent。
+    agent: str = "SkillAgent"
     source_path: Optional[Path] = None
 
     @property
@@ -349,6 +375,25 @@ def parse_workflow_skill(
         logger.warning("skill %s 的 pipeline_view_contrib 非映射，忽略", skill_id)
         pvc = None
 
+    raw_agent = wf.get("agent")
+    if raw_agent is None or (isinstance(raw_agent, str) and not str(raw_agent).strip()):
+        agent = "SkillAgent"
+    elif not isinstance(raw_agent, str):
+        logger.error(
+            "❌ skill %s 的 x-workflow.agent 必须是字符串（宿主 Role 名），实际 %s，出局",
+            skill_id, type(raw_agent).__name__,
+        )
+        return None
+    else:
+        agent = raw_agent.strip()
+        if not is_pipeline_host_agent(agent):
+            logger.error(
+                "❌ skill %s 的 x-workflow.agent='%s' 不是已注册的宿主工单 Role，"
+                "出局（允许：%s）。插件不能定义 Agent，未知名字也不会静默新建",
+                skill_id, agent, ", ".join(sorted(PIPELINE_HOST_AGENTS)),
+            )
+            return None
+
     return WorkflowSkill(
         skill_id=skill_id,
         stage_id=stage_id,
@@ -361,6 +406,8 @@ def parse_workflow_skill(
         priority=priority,
         fanout=bool(wf.get("fanout")),
         pipeline_view_contrib=pvc,
+        human_gate=bool(wf.get("human_gate")),
+        agent=agent,
         source_path=source_path,
     )
 

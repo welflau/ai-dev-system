@@ -1,17 +1,14 @@
-# 游戏引擎编译验证 —— UE5/Godot/Unity 项目开发后跑一次引擎编译
+# UE 编译验证。只属于本插件；Godot / Unity 各自的编译阶段放各自的 fragments。
 id: engine_compile
 name: 引擎编译验证
 insert_after: development
 priority: 95   # 比 code_review 更靠前：编译不过没必要审代码
-description: 在对应引擎里尝试编译 / 构建项目，发现语法级错误
+description: 用 UnrealBuildTool 编译 UE 项目，发现语法级错误
 
 required_traits:
   any_of:
     - engine:ue5
     - engine:ue4
-    - engine:godot4
-    - engine:godot3
-    - engine:unity
 
 stage:
   agent: DevAgent
@@ -20,6 +17,12 @@ stage:
   success_status: engine_compile_passed
   reject_status: engine_compile_failed
   reject_goto: development
+  # 宿主按这两个状态收尾，不再按 action 名写死。
+  # 手写的 trigger_on 会被 loader 重链覆盖，自愈回跳读的是组合后的值。
+  closeout: status
+  skip_when: noncode_ticket
+  on_success: [resolve_compile_bug]
+  on_failure: [create_compile_bug]
   config:
     max_retries: 3
     timeout_seconds: 600

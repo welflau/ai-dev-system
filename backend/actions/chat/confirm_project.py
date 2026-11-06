@@ -12,8 +12,30 @@ v1.1 新增：支持「打开本地目录」手动挡模式
 - local_path 有值时，自动调用 scan-directory 识别 VCS/traits
 - 新增 mode（auto/manual）、extra_paths 字段
 """
-from typing import Any, Dict
+from typing import Any, Dict, List
 from actions.base import ActionBase, ActionResult
+
+
+def missing_create_traits(traits: List[str]) -> List[str]:
+    """新建项目缺哪些必填维度。视频/内容管线不要求 platform:*。"""
+    cleaned = [str(t).strip() for t in (traits or []) if str(t).strip()]
+    has_platform = any(t.startswith("platform:") for t in cleaned)
+    has_category = any(t.startswith("category:") for t in cleaned)
+    is_video = "category:video" in cleaned or "pipeline:video" in cleaned
+    is_content = "category:content" in cleaned or "pipeline:content" in cleaned
+    missing: List[str] = []
+    if not cleaned:
+        if not is_video:
+            missing.append("platform:*")
+        missing.append("category:*")
+        return missing
+    if not has_category:
+        missing.append("category:*")
+    if not has_platform and not is_video and not is_content:
+        missing.append("platform:*")
+    if "category:game" in cleaned and not any(t.startswith("engine:") for t in cleaned):
+        missing.append("engine:*")
+    return missing
 
 
 class ConfirmProjectAction(ActionBase):
@@ -37,7 +59,8 @@ class ConfirmProjectAction(ActionBase):
                 "1. 用户发送本地路径（如 F:\\MyGame）→ 填 local_path，系统自动识别，"
                 "mode 设为 manual（手动挡），其他字段可留空\n"
                 "2. 用户想新建项目 → 填 name/traits 等，mode 设为 auto（自动挡）\n\n"
-                "⚠️ 新建项目时 traits 必填，至少含 platform:* 和 category:*。"
+                "⚠️ 新建软件/游戏项目时 traits 必填，至少含 platform:* 和 category:*。"
+                "AI 视频/漫剧用 category:video + pipeline:video 即可，不要加 platform:web。"
                 "打开本地路径时 traits 可留空（系统自动检测）。"
             ),
             "input_schema": {
@@ -73,7 +96,8 @@ class ConfirmProjectAction(ActionBase):
                         "items": {"type": "string"},
                         "description": (
                             "项目特征标签，从 trait_taxonomy 选。"
-                            "新建项目必填（至少 platform:* + category:*）；"
+                            "软件/游戏项目至少 platform:* + category:*；"
+                            "AI 视频/漫剧用 category:video + pipeline:video，不要加 platform:web；"
                             "打开本地路径时可留空。"
                         ),
                     },
@@ -170,26 +194,15 @@ class ConfirmProjectAction(ActionBase):
             return ActionResult(success=False, error="项目名称不能为空")
 
         traits = [str(t).strip() for t in traits_raw if str(t).strip()]
-        if not traits:
-            return ActionResult(success=False, error="必须提供 traits（至少含 platform:* 和 category:*）")
-
-        has_platform = any(t.startswith("platform:") for t in traits)
-        has_category = any(t.startswith("category:") for t in traits)
-        if not (has_platform and has_category):
-            missing = []
-            if not has_platform: missing.append("platform:*")
-            if not has_category: missing.append("category:*")
+        missing = missing_create_traits(traits)
+        if missing:
             return ActionResult(
                 success=False,
-                error=f"traits 缺必填维度：{', '.join(missing)}，请反问用户补齐后再调用",
-            )
-
-        has_game = "category:game" in traits
-        has_engine = any(t.startswith("engine:") for t in traits)
-        if has_game and not has_engine:
-            return ActionResult(
-                success=False,
-                error="traits 含 category:game 但缺 engine:*（ue5/godot4/unity/none 等），请反问用户",
+                error=(
+                    f"traits 缺必填维度：{', '.join(missing)}。"
+                    "软件/游戏项目需要 platform:* + category:*；"
+                    "AI 视频/漫剧用 category:video + pipeline:video 即可，不要加 platform:web。"
+                ),
             )
 
         return ActionResult(

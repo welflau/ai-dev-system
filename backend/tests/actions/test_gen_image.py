@@ -167,6 +167,15 @@ def test_accepts_common_image_names():
         assert f(ok) == ok
 
 
+def test_empty_prompt_is_not_image_blocked(tmp_path, fake_lightai):
+    """参数错误可以改了再调，不能把工单直接转人工。"""
+    import asyncio
+    res = asyncio.run(GenImageAction().run(ctx(tmp_path, prompt="")))
+    assert not res.success
+    assert not (res.data or {}).get("image_blocked")
+    assert not (tmp_path / "out" / ".ads-image-blocked.json").exists()
+
+
 def test_empty_prompt_rejected(tmp_path, fake_lightai):
     import asyncio
     res = asyncio.run(GenImageAction().run(ctx(tmp_path, prompt="   ")))
@@ -202,6 +211,8 @@ def test_missing_api_key_reports_config_error(tmp_path, fake_lightai, monkeypatc
     res = asyncio.run(GenImageAction().run(ctx(tmp_path)))
     assert not res.success
     assert "LIGHTAI_API_KEY" in res.error
+    assert res.data.get("image_blocked") is True
+    assert (tmp_path / "out" / ".ads-image-blocked.json").is_file()
     assert fake_lightai["create"] == []
 
 
@@ -218,6 +229,7 @@ def test_task_creation_failure(tmp_path, monkeypatch):
     res = asyncio.run(GenImageAction().run(ctx(tmp_path)))
     assert not res.success
     assert "创建失败" in res.error
+    assert res.data.get("image_blocked") is True
 
 
 def test_poll_returns_nothing(tmp_path, monkeypatch):
@@ -236,6 +248,7 @@ def test_poll_returns_nothing(tmp_path, monkeypatch):
     res = asyncio.run(GenImageAction().run(ctx(tmp_path)))
     assert not res.success
     assert "未产出图片" in res.error
+    assert res.data.get("image_blocked") is True
 
 
 def test_download_failure(tmp_path, monkeypatch):
@@ -257,6 +270,7 @@ def test_download_failure(tmp_path, monkeypatch):
     res = asyncio.run(GenImageAction().run(ctx(tmp_path)))
     assert not res.success
     assert "下载失败" in res.error
+    assert res.data.get("image_blocked") is True
 
 
 def test_zero_byte_download_is_failure(tmp_path, monkeypatch):

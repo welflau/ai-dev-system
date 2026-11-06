@@ -4,7 +4,7 @@ from plugins.registry import get_ads_plugin, list_ads_plugins
 
 def test_list_includes_ue5_and_content():
     plugins = {p["id"]: p for p in list_ads_plugins()}
-    assert {"ue5", "content", "h5"} <= set(plugins)
+    assert {"ue5", "content", "h5", "director"} <= set(plugins)
     assert plugins["ue5"]["counts"]["actions"] >= 15
     assert plugins["ue5"]["counts"]["skills"] >= 1
     assert plugins["content"]["counts"]["actions"] >= 6
@@ -26,6 +26,12 @@ def test_active_follows_project_traits():
     h5 = {p["id"]: p for p in list_ads_plugins(traits=["framework:phaser"])}
     assert h5["h5"]["active"] is True
     assert h5["ue5"]["active"] is False
+
+    video = {p["id"]: p for p in list_ads_plugins(traits=["category:video", "pipeline:video"])}
+    assert video["director"]["active"] is True
+    assert video["content"]["active"] is False
+    assert video["h5"]["active"] is False
+    assert video["ue5"]["active"] is False
 
 
 def test_detail_lists_actions_and_compile_skill():
@@ -57,7 +63,7 @@ def test_ads_http_endpoints():
     assert listed.status_code == 200
     body = listed.json()
     ids = {p["id"] for p in body["plugins"]}
-    assert {"ue5", "content", "h5"} <= ids
+    assert {"ue5", "content", "h5", "director"} <= ids
 
     detail = client.get("/api/plugins/ads/detail", params={"id": "ue5"})
     assert detail.status_code == 200

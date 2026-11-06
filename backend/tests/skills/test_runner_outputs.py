@@ -250,6 +250,38 @@ def test_expected_output_count_still_drives_partial(tmp_path):
     assert len(outs) == 2 < skill.expected_output_count
 
 
+def test_waiting_human_marker_ignores_other_slug_and_stale(tmp_path):
+    import json
+    import time
+    works = tmp_path / "works"
+    old = works / "old-slug"
+    old.mkdir(parents=True)
+    (old / ".ads-waiting-human.json").write_text(json.dumps({
+        "waiting_human": True, "ticket_id": "TK-old", "title": "stale",
+    }), encoding="utf-8")
+    runner = SkillRunner(_skill(["*.md"], root="works"))
+    assert runner._read_waiting_human_marker(
+        works, work_slug="new-slug", ticket_id="TK-new", started_at=time.time(),
+    ) is None
+
+
+def test_waiting_human_marker_accepts_fresh_same_ticket(tmp_path):
+    import json
+    import time
+    works = tmp_path / "works"
+    slug = works / "ep1"
+    slug.mkdir(parents=True)
+    started = time.time()
+    (slug / ".ads-waiting-human.json").write_text(json.dumps({
+        "waiting_human": True, "ticket_id": "TK-1",
+    }), encoding="utf-8")
+    runner = SkillRunner(_skill(["*.md"], root="works"))
+    hit = runner._read_waiting_human_marker(
+        works, work_slug="ep1", ticket_id="TK-1", started_at=started,
+    )
+    assert hit and hit.get("waiting_human") is True
+
+
 # ──────────────────── system prompt 里的上游产物 ────────────────────
 
 def test_build_system_renders_upstream_artifacts():
@@ -282,3 +314,23 @@ def test_build_system_without_artifacts_has_no_empty_section():
     system = runner._build_system({"ticket_title": "x"})
     assert "上游产物" not in system
     assert "缺失的上游产物" not in system
+
+
+def test_build_system_injects_host_role_knowledge(monkeypatch):
+    """x-workflow.agent 的实际收益：SkillRunner 吃到宿主 Role 的 inject_to 知识。
+
+    不注入的话 agent: PlannerAgent 只改了时间轴标签，LLM 仍看不到策划技能。
+    """
+    class FakeLoader:
+        def build_prompt_for_agent(self, agent_type, traits=None):
+            assert agent_type == "PlannerAgent"
+            return "PLANNER_KNOWLEDGE_MARKER"
+
+    monkeypatch.setattr("skills.skill_loader", FakeLoader())
+    system = SkillRunner(_skill(["draft.md"]))._build_system({
+        "agent_type": "PlannerAgent",
+        "ticket_title": "x",
+        "project_traits": ["pipeline:video"],
+    })
+    assert "PLANNER_KNOWLEDGE_MARKER" in system
+    assert "PlannerAgent" in system

@@ -69,6 +69,7 @@ def test_parse_minimal_declaration():
     assert wf.produce_kinds == ["draft_article"]
     assert wf.priority == 50
     assert wf.fanout is False
+    assert wf.agent == "SkillAgent"
 
 
 def test_parse_returns_none_without_x_workflow():
@@ -168,6 +169,58 @@ def test_parse_ignores_non_mapping_pipeline_view_contrib():
         "stage_id": "s", "pipeline_view_contrib": "testing",
     }})
     assert wf is not None and wf.pipeline_view_contrib is None
+
+
+def test_parse_defaults_agent_to_skill_agent():
+    wf = parse_workflow_skill("x", {"x-workflow": {"stage_id": "s"}})
+    assert wf is not None and wf.agent == "SkillAgent"
+    wf2 = parse_workflow_skill("x", {"x-workflow": {"stage_id": "s", "agent": "  "}})
+    assert wf2 is not None and wf2.agent == "SkillAgent"
+
+
+def test_parse_accepts_host_role_agent():
+    wf = parse_workflow_skill("x", {"x-workflow": {
+        "stage_id": "s", "agent": "  PlannerAgent  ",
+    }})
+    assert wf is not None and wf.agent == "PlannerAgent"
+
+
+@pytest.mark.parametrize("bad", [
+    "VideoDirectorAgent",
+    "ChatAssistant",
+    "skillagent",
+    "Dev",
+])
+def test_parse_rejects_unknown_or_non_pipeline_agent(bad):
+    """未知名字出局，禁止静默新建 Agent 或退回 SkillAgent。
+
+    ChatAssistant 是会话 Role，不能接工单 stage。大小写必须与注册表一致。
+    """
+    assert parse_workflow_skill("x", {"x-workflow": {
+        "stage_id": "s", "agent": bad,
+    }}) is None
+
+
+def test_parse_rejects_non_string_agent():
+    assert parse_workflow_skill("x", {"x-workflow": {
+        "stage_id": "s", "agent": ["PlannerAgent"],
+    }}) is None
+
+
+def test_pipeline_host_agents_are_registered_builtins():
+    """白名单必须是 agent_registry 里真实存在的工单 Role，且不含 ChatAssistant。
+
+    漏登一个内置 Role → skill 写了合法 agent 却出局。
+    多登一个不存在的名字 → SOP 会派到 orchestrator 的 missing-agent blocked。
+    """
+    from agent_registry import discover_agents, get_registry
+    from skills.executable_loader import PIPELINE_HOST_AGENTS
+
+    discover_agents()
+    names = set(get_registry())
+    assert PIPELINE_HOST_AGENTS <= names
+    assert "ChatAssistant" in names
+    assert "ChatAssistant" not in PIPELINE_HOST_AGENTS
 
 
 # ════════════════════ 目录扫描 ════════════════════
