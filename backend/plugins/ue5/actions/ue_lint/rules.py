@@ -1016,6 +1016,61 @@ def rule_R11_recursive_callback(
     return issues
 
 
+# ==================== R12: Timer 配对（SetTimer 应有 ClearTimer） ====================
+
+# SetTimer(TimerHandle, ...) / ClearTimer(TimerHandle)
+_RE_SET_TIMER = re.compile(r"SetTimer\s*\(\s*(\w+)")
+_RE_CLEAR_TIMER = re.compile(r"ClearTimer\s*\(\s*(\w+)")
+
+
+def rule_R12_timer_pairing(
+    content: str, file_path_rel: str, repo_path: Path, ctx: Dict[str, Any]
+) -> List[Issue]:
+    """SetTimer 应有配对 ClearTimer（Timer 泄漏 / 悬挂指针）。
+
+    循环 Timer 若不在析构 / EndPlay 里 ClearTimer，对象销毁后 Timer 仍会触发，
+    导致悬挂指针崩溃。保守策略：只报 warning——一次性 Timer 无需 Clear，
+    且跨文件 Clear 合法，所以按 TimerHandle 名粒度在文件内检查。
+    """
+    if not file_path_rel.endswith((".h", ".cpp")):
+        return []
+
+    set_handles: Dict[str, int] = {}   # handle 名 -> 首个行号
+    clear_handles: Set[str] = set()
+
+    for m in _RE_SET_TIMER.finditer(content):
+        handle = m.group(1)
+        line_no = content[:m.start()].count("\n") + 1
+        snippet = content[max(0, m.start() - 120):m.end() + 20]
+        if _is_skipped_by_escape(snippet, "R12"):
+            continue
+        set_handles.setdefault(handle, line_no)
+
+    for m in _RE_CLEAR_TIMER.finditer(content):
+        clear_handles.add(m.group(1))
+
+    issues: List[Issue] = []
+    for handle, line_no in set_handles.items():
+        if handle in clear_handles:
+            continue
+        issues.append({
+            "rule": "R12",
+            "file": file_path_rel,
+            "line": line_no,
+            "blocking": False,
+            "category": "timer-pairing",
+            "msg": (
+                f"SetTimer({handle}) 未见配对 ClearTimer({handle})，"
+                f"对象销毁后循环 Timer 可能悬挂触发导致崩溃"
+            ),
+            "suggest": (
+                f"在析构函数 / EndPlay 里 ClearTimer({handle})；"
+                f"若为一次性 Timer 或跨文件 Clear，可加 @ue-lint-skip R12 逃生注释"
+            ),
+        })
+    return issues
+
+
 _RULE_FUNCS = [
     rule_R8_ue_file_types,   # 最高优先：先拦退化行为
     rule_R1_uclass_genbody,
@@ -1028,6 +1083,7 @@ _RULE_FUNCS = [
     rule_R9_delegate_pairing,
     rule_R10_null_guard,
     rule_R11_recursive_callback,
+    rule_R12_timer_pairing,
 ]
 
 
