@@ -795,6 +795,66 @@ def rule_R8_ue_file_types(
     }]
 
 
+# ==================== R9: 委托配对（AddDynamic 应有 RemoveDynamic） ====================
+
+# AddDynamic(UserObject, &Class::Func) / RemoveDynamic(UserObject, &Class::Func)
+# 提取 (委托对象名, 回调函数名)。回调名兼容 &UClass::Func 与 Func 两种写法。
+_RE_ADD_DYNAMIC = re.compile(
+    r"(\w+)\s*\.\s*AddDynamic\s*\(\s*[^,]+,\s*(?:&\w+::)?(\w+)"
+)
+_RE_REMOVE_DYNAMIC = re.compile(
+    r"(\w+)\s*\.\s*RemoveDynamic\s*\(\s*[^,]+,\s*(?:&\w+::)?(\w+)"
+)
+
+
+def rule_R9_delegate_pairing(
+    content: str, file_path_rel: str, repo_path: Path, ctx: Dict[str, Any]
+) -> List[Issue]:
+    """AddDynamic 应有配对 RemoveDynamic（委托泄漏 / 悬挂指针）。
+
+    保守策略：只报 warning（非 blocking）——跨文件解绑合法，绑定到永久对象
+    （UI 按钮、单例）也无需解绑。按「委托对象 + 回调函数」粒度在文件内检查，
+    有 Add 无 Remove 的绑定对 → warning。
+    """
+    if not file_path_rel.endswith((".h", ".cpp")):
+        return []
+
+    add_pairs: Dict[Tuple[str, str], int] = {}   # (委托, 回调) -> 首个行号
+    remove_pairs: Set[Tuple[str, str]] = set()
+
+    for m in _RE_ADD_DYNAMIC.finditer(content):
+        line_no = content[:m.start()].count("\n") + 1
+        # 检查匹配点前 120 字符（含上一行的逃生注释），对齐 R2 的 snippet 做法
+        snippet = content[max(0, m.start() - 120):m.end() + 20]
+        if _is_skipped_by_escape(snippet, "R9"):
+            continue
+        add_pairs.setdefault((m.group(1), m.group(2)), line_no)
+
+    for m in _RE_REMOVE_DYNAMIC.finditer(content):
+        remove_pairs.add((m.group(1), m.group(2)))
+
+    issues: List[Issue] = []
+    for (delegate, callback), line_no in add_pairs.items():
+        if (delegate, callback) in remove_pairs:
+            continue
+        issues.append({
+            "rule": "R9",
+            "file": file_path_rel,
+            "line": line_no,
+            "blocking": False,
+            "category": "delegate-pairing",
+            "msg": (
+                f"{delegate}.AddDynamic 绑定了 {callback}，但文件内未见配对 RemoveDynamic。"
+                f"对象销毁后可能悬挂指针"
+            ),
+            "suggest": (
+                f"在析构函数 / EndPlay 里调用 {delegate}.RemoveDynamic 解绑；"
+                f"若绑定到永久对象可加 @ue-lint-skip R9 逃生注释"
+            ),
+        })
+    return issues
+
+
 _RULE_FUNCS = [
     rule_R8_ue_file_types,   # 最高优先：先拦退化行为
     rule_R1_uclass_genbody,
@@ -804,6 +864,7 @@ _RULE_FUNCS = [
     # R5 按"项目级"扫，在下面单独跑
     rule_R6_include_order,
     rule_R7_type_headers,
+    rule_R9_delegate_pairing,
 ]
 
 

@@ -498,7 +498,7 @@ class TestAgent(BaseAgent):
     async def _static_analysis_ue(self, project_id: str, context: Dict) -> Dict:
         """UE 静态分析：.uproject 存在性/可解析 + Source 模块声明 + C++ lint 规则。
 
-        复用 DevAgent 自测用的 actions.ue_lint 规则集（R1-R8），
+        复用 DevAgent 自测用的 actions.ue_lint 规则集（R1-R9），
         但这里扫的是**仓库里全部 C++**，而非 DevAgent 本次写的文件 —— TestAgent
         的职责是验收整体质量，不只是增量。
         """
