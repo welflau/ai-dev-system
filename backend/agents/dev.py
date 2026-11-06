@@ -82,8 +82,51 @@ class DevAgent(BaseAgent):
         if action is None:
             return {"status": "error", "error": "ue_compile_check 未注册（UE 插件未加载）"}
         result = await action.run(context)
+        d = result.to_dict()
+        # QA 日志闭环 Phase 2：持久化 compile_log，供 play_test 回溯整合编译表
+        await self._persist_compile_log(context, d)
         # ActionResult.to_dict() 已经把 status / errors / warnings / products 都平铺好
-        return result.to_dict()
+        return d
+
+    async def _persist_compile_log(self, context: Dict[str, Any], data: Dict[str, Any]) -> None:
+        """把编译结构化结果写入 compile_log artifact（file 存储）。
+
+        写入失败只 warning，不阻断编译流程本身（compile_log 是 play_test 报告
+        的可选增强，读不到时 play_test 报告降级为仅试玩表）。
+        """
+        project_id = context.get("project_id", "")
+        ticket_id = context.get("ticket_id", "")
+        if not project_id or not ticket_id:
+            logger.debug("compile_log 跳过：缺 project_id/ticket_id")
+            return
+        try:
+            from git_manager import git_manager
+            repo_path = git_manager._repo_path(project_id)
+            if not repo_path or not Path(repo_path).is_dir():
+                logger.debug("compile_log 跳过：仓库路径无效")
+                return
+            from artifacts.store import ArtifactStore
+            payload = {
+                "status": data.get("status"),
+                "exit_code": data.get("exit_code"),
+                "duration_ms": data.get("duration_ms"),
+                "command": data.get("command"),
+                "errors": data.get("errors") or [],
+                "warnings": data.get("warnings") or [],
+                "summary": data.get("summary") or {},
+            }
+            await ArtifactStore().put(
+                project_id=project_id,
+                ticket_id=ticket_id,
+                kind="compile_log",
+                repo_path=str(repo_path),
+                content=json.dumps(payload, ensure_ascii=False),
+                filename="compile_log.json",
+                name="引擎编译日志",
+                produced_by="DevAgent.run_engine_compile",
+            )
+        except Exception as e:
+            logger.warning("写 compile_log artifact 失败（忽略）: %s", e)
 
     async def _do_run_h5_typecheck(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """Phaser 仓库 tsc --noEmit。缺实现走 error（orchestrator 会 blocked）。"""

@@ -98,11 +98,12 @@ class TestAgent(BaseAgent):
         result = await action.run(ctx)
         d = result.to_dict() if hasattr(result, "to_dict") else (result.data or {})
 
-        # QA 引擎日志闭环：把结构化结果（引擎日志证据）表格化 + 评级，生成报告。
+        # QA 引擎日志闭环 Phase 2：回溯读 compile_log，合并编译表 + 试玩表。
         # 对齐 MagicAI：引擎日志为主要证据，报告强制表格化 + PASS/FAIL + A-F 评级。
         docs_prefix = context.get("docs_prefix", "docs/")
         try:
-            report_md = self._render_playtest_report(context, d)
+            compile_data = await self._load_compile_log(context)
+            report_md = self._render_playtest_report(context, d, compile_data)
             d["files"] = {f"{docs_prefix}playtest-report.md": report_md}
         except Exception as e:
             logger.warning("生成 Playtest 报告失败（忽略）: %s", e)
@@ -110,8 +111,40 @@ class TestAgent(BaseAgent):
         # orchestrator 按 status 分流：success → play_test_passed；其他 → play_test_failed / BLOCKED
         return d
 
-    def _render_playtest_report(self, context: Dict[str, Any], data: Dict[str, Any]) -> str:
-        """把 UE Playtest 结构化结果渲染成 QA 报告（表格化 + PASS/FAIL + A-F 评级）。"""
+    async def _load_compile_log(self, context: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """回溯读本工单的 compile_log artifact（file 存储的 JSON）。读不到返回 None。"""
+        ticket_id = context.get("ticket_id", "")
+        project_id = context.get("project_id", "")
+        if not ticket_id or not project_id:
+            return None
+        try:
+            from git_manager import git_manager
+            repo_path = git_manager._repo_path(project_id)
+            if not repo_path or not Path(repo_path).is_dir():
+                return None
+            from artifacts.store import ArtifactStore
+            store = ArtifactStore()
+            refs = await store.list(
+                ticket_id=ticket_id, kinds=["compile_log"],
+                latest_per_kind=True, repo_path=str(repo_path),
+            )
+            if not refs:
+                return None
+            text = await store.read_text(refs[0])
+            if not text:
+                return None
+            import json as _json
+            return _json.loads(text)
+        except Exception as e:
+            logger.debug("读 compile_log 失败（忽略，报告降级为仅试玩表）: %s", e)
+            return None
+
+    def _render_playtest_report(
+        self, context: Dict[str, Any], data: Dict[str, Any],
+        compile_data: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """把 UE Playtest 结构化结果渲染成 QA 报告（表格化 + PASS/FAIL + A-F 评级）。
+        Phase 2：compile_data 存在时追加「编译表」段，编译失败则整体 FAIL。"""
         title = context.get("ticket_title", "UE Playtest")
         summary = data.get("summary") or {}
         tests = data.get("tests") or []
@@ -122,21 +155,60 @@ class TestAgent(BaseAgent):
         engine = data.get("engine_used") or {}
         test_filter = data.get("test_filter", "Project.")
 
+        # Phase 2：编译数据（compile_log artifact，读不到为 None）
+        compile_errors = (compile_data or {}).get("errors") or []
+        compile_warnings = (compile_data or {}).get("warnings") or []
+        compile_status = (compile_data or {}).get("status")
+        compile_duration = (compile_data or {}).get("duration_ms") or 0
+        compile_failed = bool(compile_errors) or compile_status in ("error", "compile_failed")
+
         total = int(summary.get("total") or 0)
         passed = int(summary.get("passed") or 0)
         failed = int(summary.get("failed") or 0)
         skipped = int(summary.get("skipped") or 0)
 
         rate = round(passed / total * 100) if total > 0 else (100 if status == "success" else 0)
-        grade = _grade_playtest(rate)
-        verdict = "PASS" if status == "success" else ("FAIL" if status == "playtest_failed" else "ERROR")
+        if compile_failed:
+            # 编译不过直接判死，无需看测试
+            grade = "F"
+            verdict = "FAIL"
+        else:
+            grade = _grade_playtest(rate)
+            verdict = "PASS" if status == "success" else ("FAIL" if status == "playtest_failed" else "ERROR")
 
         lines = [
-            f"# UE Playtest 报告 — {title}",
+            f"# QA 报告 — {title}",
             "",
-            f"> 引擎：UE {engine.get('version', '?')} | 过滤器：`{test_filter}` | 耗时 {duration_ms // 1000}s",
+            f"> 引擎：UE {engine.get('version', '?')} | 过滤器：`{test_filter}`"
+            f" | 编译 {compile_duration // 1000}s | 试玩 {duration_ms // 1000}s",
             "",
             f"## 结论：{verdict}（评级 {grade}）",
+            "",
+        ]
+
+        # Phase 2：编译表
+        if compile_data is not None:
+            lines += [
+                "## 编译表",
+                "",
+                f"- 状态：{compile_status or '?'} | 错误 {len(compile_errors)} | "
+                f"警告 {len(compile_warnings)} | 耗时 {compile_duration // 1000}s",
+                "",
+            ]
+            if compile_errors:
+                lines += ["| 文件 | 行 | 错误码 | 分类 | 信息 |", "|---|---|---|---|---|"]
+                for e in compile_errors[:20]:
+                    lines.append(
+                        f"| `{e.get('file', '?')}` | {e.get('line', '-')} | "
+                        f"{e.get('code', '-')} | {e.get('category', '-')} | "
+                        f"{str(e.get('msg', ''))[:80]} |"
+                    )
+                lines.append("")
+            else:
+                lines += ["✅ 编译通过，无错误", ""]
+
+        lines += [
+            "## 试玩表",
             "",
             "| 总数 | 通过 | 失败 | 跳过 | 通过率 |",
             "|---|---|---|---|---|",
@@ -156,11 +228,16 @@ class TestAgent(BaseAgent):
             lines.append("")
 
         problems: List[str] = []
+        for e in compile_errors[:10]:
+            problems.append(
+                f"- [编译] `{e.get('file', '?')}`:{e.get('line', '-')} "
+                f"{e.get('code', '-')}: {str(e.get('msg', ''))[:100]}"
+            )
         for t in tests:
             if t.get("result") == "failed":
                 name = t.get("name", "?")
                 for e in (t.get("errors") or []):
-                    problems.append(f"- `{name}`: {str(e)[:120]}")
+                    problems.append(f"- [试玩] `{name}`: {str(e)[:120]}")
         if module_errors:
             problems.append(f"- 模块未加载: {', '.join(str(m) for m in module_errors[:5])}")
         if problems:
