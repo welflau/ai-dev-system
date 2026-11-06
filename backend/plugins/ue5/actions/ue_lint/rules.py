@@ -926,10 +926,11 @@ def _collect_interaction_callbacks(content: str, rule_id: str) -> Dict[str, int]
 def rule_R10_null_guard(
     content: str, file_path_rel: str, repo_path: Path, ctx: Dict[str, Any]
 ) -> List[Issue]:
-    """交互回调（AddDynamic / BindAction 绑定的函数）体内应有 IsValid 空引用守卫。
+    """交互回调（AddDynamic / BindAction 绑定的函数）访问其他对象指针时应有 IsValid 守卫。
 
-    保守策略：只报 warning。仅检查「回调函数体内是否含 IsValid」，不含则提示。
-    不深入分析访问了哪个对象（静态分析对象生命周期太复杂）。
+    保守策略：只报 warning。只关心「非 this 的对象指针访问」——回调只访问 this
+    成员（ClickCount++ 或 this->X）无空引用风险，跳过；访问其他对象指针
+    （X->Y，X 非 this）时若无 IsValid → warning。
     """
     if not file_path_rel.endswith((".h", ".cpp")):
         return []
@@ -943,6 +944,11 @@ def rule_R10_null_guard(
         body = _find_func_body(content, cb)
         if body is None:
             continue  # 回调定义不在本文件（跨文件），跳过
+        # 提取所有 X-> 指针访问，排除 this->（this 成员无空引用风险）
+        pointer_accesses = set(re.findall(r"(\w+)\s*->", body))
+        non_this = pointer_accesses - {"this"}
+        if not non_this:
+            continue  # 只访问 this 成员，无空引用风险
         if "IsValid" in body:
             continue
         issues.append({
