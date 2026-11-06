@@ -101,7 +101,9 @@ class GenerateAssetsAction(ActionBase):
         ticket_title = context.get("ticket_title", "")
         sop_cfg = context.get("sop_config") or {}
         allow_placeholder = bool(sop_cfg.get("fallback_to_placeholder", True))
+        allow_aigc = bool(sop_cfg.get("use_aigc", False))
         wanted_types = sop_cfg.get("asset_types") or []
+        project_id = context.get("project_id", "")
 
         manifest_items = await self._load_manifest(context)
         if not manifest_items:
@@ -128,7 +130,10 @@ class GenerateAssetsAction(ActionBase):
         media: Dict[str, bytes] = {}
 
         for item in manifest_items:
-            kind, payload = await self._resolve_one(item, allow_placeholder, docs_prefix)
+            kind, payload = await self._resolve_one(
+                item, allow_placeholder, docs_prefix,
+                project_id, ticket_id, allow_aigc,
+            )
             if kind == "sourced":
                 sourced.append(payload)
             elif kind == "placeholder":
@@ -205,6 +210,7 @@ class GenerateAssetsAction(ActionBase):
 
     async def _resolve_one(
         self, item: Dict, allow_placeholder: bool, docs_prefix: str,
+        project_id: str = "", ticket_id: str = "", allow_aigc: bool = False,
     ) -> Tuple[str, Dict]:
         aid = item.get("id") or "asset"
         atype = (item.get("type") or "icon").lower()
@@ -230,6 +236,22 @@ class GenerateAssetsAction(ActionBase):
                 "match_score": hit.get("_score"),
             }
 
+        # 未命中本地库 → 投递 AIGC 生图（异步，不阻塞流水线）。
+        # 占位图仍照出作为即刻可用兜底，生图完成后由 image_processor
+        # 自动入库 art_assets（requester=ArtAgent 走非 chat 分支）。
+        aigc_tag = ""
+        if allow_aigc and not needs_frames:
+            try:
+                from image_processor import request_image
+                aigc_tag = await request_image(
+                    prompt=f"{aid} {desc}".strip(),
+                    project_id=project_id,
+                    ticket_id=ticket_id,
+                    requester="ArtAgent",
+                )
+            except Exception as e:
+                logger.warning("投递 AIGC 生图失败（id=%s）: %s", aid, e)
+
         if not allow_placeholder:
             _why = ("需多帧动画序列，资产库无法满足" if needs_frames
                     else "资产库未命中")
@@ -243,7 +265,10 @@ class GenerateAssetsAction(ActionBase):
 
         rel = f"{docs_prefix}assets/placeholder/{_safe_name(aid)}.png"
         out = {**item, "status": "placeholder", "path": rel, "_bytes": png}
-        if needs_frames:
+        if aigc_tag:
+            out["aigc_tag"] = aigc_tag
+            out["note"] = "AIGC 已投递，完成后自动入库 art_assets（占位图暂用）"
+        elif needs_frames:
             out["note"] = "需多帧动画序列，须由美术制作"
         return "placeholder", out
 
@@ -498,6 +523,8 @@ def _render_manifest(items: List[Dict], title: str) -> str:
             lines.append(f"    asset_db_id: {a['asset_db_id']}")
         if a.get("match_score") is not None:
             lines.append(f"    match_score: {a['match_score']}")
+        if a.get("aigc_tag"):
+            lines.append(f"    aigc_tag: {a['aigc_tag']}")
         if a.get("note"):
             lines.append(f"    note: {a['note']}")
     return "\n".join(lines) + "\n"

@@ -296,6 +296,21 @@ async def _ue_import_asset_impl(
             return {"success": False, "message": "资产无本地文件路径，无法导入 UE（请配置 ART_ASSETS_LOCAL_PATH）"}
 
     abs_path = abs_path.replace("\\", "/")
+
+    # ── 1.5 路径归一化 + 越权拦截（对标 MagicAI fix_output_path）──
+    # 防止 file_path 越出资产库 / 会话素材目录，也避免路径被 f-string
+    # 拼进 UE Python 代码时注入非法字符。
+    from pathlib import Path as _P
+    from config import DATA_DIR
+    _resolved = _P(abs_path).resolve()
+    _allowed_roots = []
+    if settings.ART_ASSETS_LOCAL_PATH:
+        _allowed_roots.append(_P(settings.ART_ASSETS_LOCAL_PATH).resolve())
+    _allowed_roots.append((_P(DATA_DIR) / "session_materials").resolve())
+    if not any(str(_resolved).startswith(str(r)) for r in _allowed_roots):
+        return {"success": False, "message": "文件路径越出资产库/会话素材范围，拒绝导入"}
+    abs_path = str(_resolved).replace("\\", "/")
+
     if not pathlib.Path(abs_path).exists():
         return {"success": False, "message": f"本地文件不存在：{abs_path}"}
 

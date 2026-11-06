@@ -784,11 +784,20 @@ async def create_direct_ticket(project_id: str, req: DirectTicketCreate):
     if not project:
         raise HTTPException(404, "项目不存在")
 
-    start_status = req.start_from if req.start_from in _VALID_START_STATUSES else "pending"
-
     # 校验 type
     valid_types = {"feature", "bugfix", "refactor", "test", "doc"}
     ticket_type = req.type if req.type in valid_types else "feature"
+
+    # start_from：用户显式指定优先；默认 pending 时自动分类（对齐 MagicAI Phase -1）
+    if req.start_from == "pending":
+        try:
+            from ticket_classifier import classify_start_from
+            start_status = classify_start_from(req.title, req.description, ticket_type)
+        except Exception as _ce:
+            logger.warning("请求自动分类失败，回退 pending: %s", _ce)
+            start_status = "pending"
+    else:
+        start_status = req.start_from if req.start_from in _VALID_START_STATUSES else "pending"
 
     # 查询或创建独立工单桶
     standalone_req_id = await _get_or_create_standalone_req(project_id)

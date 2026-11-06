@@ -40,6 +40,19 @@ def _is_ue_project(context: Dict[str, Any]) -> bool:
     return any(str(t).startswith("engine:ue") for t in traits)
 
 
+def _grade_playtest(rate: int) -> str:
+    """通过率 → A-F 评级（对齐 MagicAI 的 QA 评级）。"""
+    if rate >= 100:
+        return "A"
+    if rate >= 80:
+        return "B"
+    if rate >= 60:
+        return "C"
+    if rate >= 40:
+        return "D"
+    return "F"
+
+
 class TestAgent(BaseAgent):
 
     from actions.code_review import CodeReviewAction as _CR
@@ -84,8 +97,81 @@ class TestAgent(BaseAgent):
         action = require_action("ue_playtest")
         result = await action.run(ctx)
         d = result.to_dict() if hasattr(result, "to_dict") else (result.data or {})
+
+        # QA 引擎日志闭环：把结构化结果（引擎日志证据）表格化 + 评级，生成报告。
+        # 对齐 MagicAI：引擎日志为主要证据，报告强制表格化 + PASS/FAIL + A-F 评级。
+        docs_prefix = context.get("docs_prefix", "docs/")
+        try:
+            report_md = self._render_playtest_report(context, d)
+            d["files"] = {f"{docs_prefix}playtest-report.md": report_md}
+        except Exception as e:
+            logger.warning("生成 Playtest 报告失败（忽略）: %s", e)
+
         # orchestrator 按 status 分流：success → play_test_passed；其他 → play_test_failed / BLOCKED
         return d
+
+    def _render_playtest_report(self, context: Dict[str, Any], data: Dict[str, Any]) -> str:
+        """把 UE Playtest 结构化结果渲染成 QA 报告（表格化 + PASS/FAIL + A-F 评级）。"""
+        title = context.get("ticket_title", "UE Playtest")
+        summary = data.get("summary") or {}
+        tests = data.get("tests") or []
+        screenshots = data.get("screenshots") or []
+        module_errors = data.get("module_load_errors") or []
+        status = data.get("status", "error")
+        duration_ms = data.get("duration_ms") or 0
+        engine = data.get("engine_used") or {}
+        test_filter = data.get("test_filter", "Project.")
+
+        total = int(summary.get("total") or 0)
+        passed = int(summary.get("passed") or 0)
+        failed = int(summary.get("failed") or 0)
+        skipped = int(summary.get("skipped") or 0)
+
+        rate = round(passed / total * 100) if total > 0 else (100 if status == "success" else 0)
+        grade = _grade_playtest(rate)
+        verdict = "PASS" if status == "success" else ("FAIL" if status == "playtest_failed" else "ERROR")
+
+        lines = [
+            f"# UE Playtest 报告 — {title}",
+            "",
+            f"> 引擎：UE {engine.get('version', '?')} | 过滤器：`{test_filter}` | 耗时 {duration_ms // 1000}s",
+            "",
+            f"## 结论：{verdict}（评级 {grade}）",
+            "",
+            "| 总数 | 通过 | 失败 | 跳过 | 通过率 |",
+            "|---|---|---|---|---|",
+            f"| {total} | {passed} | {failed} | {skipped} | {rate}% |",
+            "",
+        ]
+
+        if tests:
+            lines += ["## 测试结果", "", "| 测试名 | 结果 | 错误 |", "|---|---|---|"]
+            for t in tests:
+                name = t.get("name", "?")
+                result = t.get("result", "?")
+                errs = t.get("errors") or []
+                err_str = "<br>".join(str(e)[:80] for e in errs[:3]) if errs else "—"
+                icon = {"passed": "✅", "failed": "❌", "skipped": "⏭️"}.get(result, "❓")
+                lines.append(f"| `{name}` | {icon} {result} | {err_str} |")
+            lines.append("")
+
+        problems: List[str] = []
+        for t in tests:
+            if t.get("result") == "failed":
+                name = t.get("name", "?")
+                for e in (t.get("errors") or []):
+                    problems.append(f"- `{name}`: {str(e)[:120]}")
+        if module_errors:
+            problems.append(f"- 模块未加载: {', '.join(str(m) for m in module_errors[:5])}")
+        if problems:
+            lines += ["## 问题清单", "", *problems[:20], ""]
+
+        if screenshots:
+            lines += ["## 截图", ""]
+            lines += [f"- `{s}`" for s in screenshots[:10]]
+            lines.append("")
+
+        return "\n".join(lines)
 
     async def run_h5_playtest(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """对 Phaser 仓库 vite build + 无头浏览器收运行时错误。"""

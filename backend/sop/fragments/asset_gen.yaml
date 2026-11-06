@@ -30,6 +30,10 @@ stage:
     # 资产库未命中时产出洋红斜纹占位图，保证流水线不断。
     # 关掉则未命中资产标记为 not_found，交人工处理。
     fallback_to_placeholder: true
+    # 资产库未命中时是否投递 AIGC 生图（LightAI）。
+    # 默认关：生图有成本且异步；开启后未命中资产会投递生图请求，
+    # 同时仍产出占位图兜底，生图完成后自动入库 art_assets。
+    use_aigc: false
 
 # 美术资产是 dev 前的准备工作，给独立 UI 组展示（区别于测试组）
 pipeline_view_contrib:
