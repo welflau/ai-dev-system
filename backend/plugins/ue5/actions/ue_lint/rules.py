@@ -883,6 +883,24 @@ def _find_func_body(content: str, func_name: str) -> Optional[str]:
     return None
 
 
+def _collect_interaction_callbacks(content: str, rule_id: str) -> Dict[str, int]:
+    """收集 AddDynamic / BindAction 绑定的交互回调名 → 绑定处行号。"""
+    callbacks: Dict[str, int] = {}
+    for m in _RE_ADD_DYNAMIC.finditer(content):
+        line_no = content[:m.start()].count("\n") + 1
+        snippet = content[max(0, m.start() - 120):m.end() + 20]
+        if _is_skipped_by_escape(snippet, rule_id):
+            continue
+        callbacks.setdefault(m.group(2), line_no)
+    for m in _RE_BIND_ACTION.finditer(content):
+        line_no = content[:m.start()].count("\n") + 1
+        snippet = content[max(0, m.start() - 120):m.end() + 20]
+        if _is_skipped_by_escape(snippet, rule_id):
+            continue
+        callbacks.setdefault(m.group(1), line_no)
+    return callbacks
+
+
 def rule_R10_null_guard(
     content: str, file_path_rel: str, repo_path: Path, ctx: Dict[str, Any]
 ) -> List[Issue]:
@@ -894,22 +912,7 @@ def rule_R10_null_guard(
     if not file_path_rel.endswith((".h", ".cpp")):
         return []
 
-    callbacks: Dict[str, int] = {}  # 回调名 -> 绑定处行号
-
-    for m in _RE_ADD_DYNAMIC.finditer(content):
-        line_no = content[:m.start()].count("\n") + 1
-        snippet = content[max(0, m.start() - 120):m.end() + 20]
-        if _is_skipped_by_escape(snippet, "R10"):
-            continue
-        callbacks.setdefault(m.group(2), line_no)
-
-    for m in _RE_BIND_ACTION.finditer(content):
-        line_no = content[:m.start()].count("\n") + 1
-        snippet = content[max(0, m.start() - 120):m.end() + 20]
-        if _is_skipped_by_escape(snippet, "R10"):
-            continue
-        callbacks.setdefault(m.group(1), line_no)
-
+    callbacks = _collect_interaction_callbacks(content, "R10")
     if not callbacks:
         return []
 
@@ -938,6 +941,51 @@ def rule_R10_null_guard(
     return issues
 
 
+# ==================== R11: 交互回调递归（回调体内调用自身） ====================
+
+
+def rule_R11_recursive_callback(
+    content: str, file_path_rel: str, repo_path: Path, ctx: Dict[str, Any]
+) -> List[Issue]:
+    """交互回调（AddDynamic / BindAction 绑定）体内递归调用自身 → 无限递归风险。
+
+    典型场景：OnClicked 回调里又触发一次 OnClicked（如按钮点击里模拟再次点击），
+    可能导致无限递归 / 栈溢出。
+
+    保守策略：只报 warning。仅检查「回调函数体内是否调用同名函数」。
+    """
+    if not file_path_rel.endswith((".h", ".cpp")):
+        return []
+
+    callbacks = _collect_interaction_callbacks(content, "R11")
+    if not callbacks:
+        return []
+
+    issues: List[Issue] = []
+    for cb, line_no in sorted(callbacks.items(), key=lambda x: x[1]):
+        body = _find_func_body(content, cb)
+        if body is None:
+            continue  # 回调定义不在本文件，跳过
+        # body 从 { 开始不含函数签名，所以 body 里的 cb( 都是调用（含递归）
+        if re.search(r"\b" + re.escape(cb) + r"\s*\(", body):
+            issues.append({
+                "rule": "R11",
+                "file": file_path_rel,
+                "line": line_no,
+                "blocking": False,
+                "category": "recursive-callback",
+                "msg": (
+                    f"交互回调 {cb}() 体内递归调用了自身，"
+                    f"可能导致无限递归 / 栈溢出"
+                ),
+                "suggest": (
+                    f"检查 {cb}() 里是否无意间再次触发了 {cb}；"
+                    f"若为有意的有限递归可加 @ue-lint-skip R11 逃生注释"
+                ),
+            })
+    return issues
+
+
 _RULE_FUNCS = [
     rule_R8_ue_file_types,   # 最高优先：先拦退化行为
     rule_R1_uclass_genbody,
@@ -949,6 +997,7 @@ _RULE_FUNCS = [
     rule_R7_type_headers,
     rule_R9_delegate_pairing,
     rule_R10_null_guard,
+    rule_R11_recursive_callback,
 ]
 
 
