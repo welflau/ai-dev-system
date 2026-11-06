@@ -806,15 +806,34 @@ _RE_REMOVE_DYNAMIC = re.compile(
     r"(\w+)\s*\.\s*RemoveDynamic\s*\(\s*[^,]+,\s*(?:&\w+::)?(\w+)"
 )
 
+# 跨对象生命周期委托（需要 RemoveDynamic 解绑）。R9 只检查这些——
+# UI 组件委托（OnClicked/OnCheckStateChanged 等）随 owning widget 销毁，无需 Remove，
+# 一刀切检查会大量误报（UE UMG 最常见模式）。
+_LIFECYCLE_DELEGATES = {
+    "OnDestroyed",
+    "OnEndPlay",
+    "OnDeath",
+    "OnDied",
+    "OnActorBeginOverlap",
+    "OnActorEndOverlap",
+    "OnTakeAnyDamage",
+    "OnTakePointDamage",
+    "OnComponentBeginOverlap",
+    "OnComponentEndOverlap",
+    "OnComponentHit",
+    "OnHealthChanged",
+}
+
 
 def rule_R9_delegate_pairing(
     content: str, file_path_rel: str, repo_path: Path, ctx: Dict[str, Any]
 ) -> List[Issue]:
-    """AddDynamic 应有配对 RemoveDynamic（委托泄漏 / 悬挂指针）。
+    """跨生命周期委托的 AddDynamic 应有配对 RemoveDynamic（委托泄漏 / 悬挂指针）。
 
-    保守策略：只报 warning（非 blocking）——跨文件解绑合法，绑定到永久对象
-    （UI 按钮、单例）也无需解绑。按「委托对象 + 回调函数」粒度在文件内检查，
-    有 Add 无 Remove 的绑定对 → warning。
+    保守策略：只报 warning（非 blocking）。只检查「跨对象生命周期委托」
+    （OnDestroyed/OnActorBeginOverlap 等白名单），UI 组件委托（OnClicked 等）
+    随 owning widget 销毁无需解绑，跳过。按「委托对象 + 回调函数」粒度在
+    文件内检查，有 Add 无 Remove 的绑定对 → warning。
     """
     if not file_path_rel.endswith((".h", ".cpp")):
         return []
@@ -823,12 +842,15 @@ def rule_R9_delegate_pairing(
     remove_pairs: Set[Tuple[str, str]] = set()
 
     for m in _RE_ADD_DYNAMIC.finditer(content):
+        delegate = m.group(1)
+        if delegate not in _LIFECYCLE_DELEGATES:
+            continue  # 非跨生命周期委托（UI 组件等），跳过
         line_no = content[:m.start()].count("\n") + 1
         # 检查匹配点前 120 字符（含上一行的逃生注释），对齐 R2 的 snippet 做法
         snippet = content[max(0, m.start() - 120):m.end() + 20]
         if _is_skipped_by_escape(snippet, "R9"):
             continue
-        add_pairs.setdefault((m.group(1), m.group(2)), line_no)
+        add_pairs.setdefault((delegate, m.group(2)), line_no)
 
     for m in _RE_REMOVE_DYNAMIC.finditer(content):
         remove_pairs.add((m.group(1), m.group(2)))
@@ -952,7 +974,8 @@ def rule_R11_recursive_callback(
     典型场景：OnClicked 回调里又触发一次 OnClicked（如按钮点击里模拟再次点击），
     可能导致无限递归 / 栈溢出。
 
-    保守策略：只报 warning。仅检查「回调函数体内是否调用同名函数」。
+    保守策略：只报 warning。仅检查「回调函数体内是否无参调用同名函数」，
+    排除带参数的调用（函数重载）。
     """
     if not file_path_rel.endswith((".h", ".cpp")):
         return []
@@ -966,8 +989,9 @@ def rule_R11_recursive_callback(
         body = _find_func_body(content, cb)
         if body is None:
             continue  # 回调定义不在本文件，跳过
-        # body 从 { 开始不含函数签名，所以 body 里的 cb( 都是调用（含递归）
-        if re.search(r"\b" + re.escape(cb) + r"\s*\(", body):
+        # body 从 { 开始不含函数签名，所以 body 里的 cb() 都是调用（含递归）。
+        # 只匹配无参调用 \(\s*\)，排除带参数的同名调用（函数重载）。
+        if re.search(r"\b" + re.escape(cb) + r"\s*\(\s*\)", body):
             issues.append({
                 "rule": "R11",
                 "file": file_path_rel,
