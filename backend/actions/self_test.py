@@ -423,7 +423,7 @@ class SelfTestAction(ActionBase):
                 "self_test": {"passed": True, "total": 0, "summary": "repo 不存在，跳过"},
             })
 
-        # Layer 1 跑 12 条规则（R1-R14，缺 R5 项目级单独跑）
+        # Layer 1 跑 13 条规则（R1-R15，缺 R5 项目级单独跑）
         from actions.ue_lint import run_all_rules
         from actions.ue_lint.rules import summarize
 

@@ -1186,6 +1186,49 @@ def rule_R14_uproperty_missing(
     return issues
 
 
+# ==================== R15: Cast 结果未判空直接解引用 ====================
+
+# Cast<Type>(X)-> 直接解引用。CastChecked 的 'Checked' 使 \bCast\s*< 不命中，自动排除。
+_RE_CAST_DEREF = re.compile(r"\bCast\s*<\s*[^>]+\s*>\s*\([^)]*\)\s*->")
+
+
+def rule_R15_cast_null_guard(
+    content: str, file_path_rel: str, repo_path: Path, ctx: Dict[str, Any]
+) -> List[Issue]:
+    """Cast<T>(X) 结果未判空直接解引用（->）→ 空指针 / 类型不符崩溃。
+
+    Cast 类型不符时返回 nullptr，直接 -> 解引用会崩溃。安全写法是
+    `if (Type* P = Cast<Type>(X)) { P->... }` 判空后再用。
+
+    保守策略：只报 warning。正则只匹配 Cast 后紧跟 -> 的直接解引用，
+    `if (Type* P = Cast<Type>(X))` 判空写法里 Cast 后是 `)`，不命中。
+    """
+    if not file_path_rel.endswith((".h", ".cpp")):
+        return []
+
+    issues: List[Issue] = []
+    for m in _RE_CAST_DEREF.finditer(content):
+        line_no = content[:m.start()].count("\n") + 1
+        snippet = content[max(0, m.start() - 200):m.start()]
+        if _is_skipped_by_escape(snippet, "R15"):
+            continue
+        issues.append({
+            "rule": "R15",
+            "file": file_path_rel,
+            "line": line_no,
+            "blocking": False,
+            "category": "cast-null-guard",
+            "msg": (
+                "Cast 结果未判空直接解引用（->），类型不符或对象为空时崩溃"
+            ),
+            "suggest": (
+                "改用 if (Type* P = Cast<Type>(X)) 判空后解引用；"
+                "若确信类型匹配可用 CastChecked；或加 @ue-lint-skip R15 逃生注释"
+            ),
+        })
+    return issues
+
+
 _RULE_FUNCS = [
     rule_R8_ue_file_types,   # 最高优先：先拦退化行为
     rule_R1_uclass_genbody,
@@ -1201,6 +1244,7 @@ _RULE_FUNCS = [
     rule_R12_timer_pairing,
     rule_R13_weak_ptr_guard,
     rule_R14_uproperty_missing,
+    rule_R15_cast_null_guard,
 ]
 
 
