@@ -25,7 +25,20 @@ import json
 
 import pytest
 
-from sop.loader import compose_sop, sop_to_transition_rules
+from sop.loader import compose_sop, invalidate_sop_cache, sop_to_transition_rules
+
+
+@pytest.fixture(autouse=True)
+def _clear_sop_cache():
+    """compose_sop 有模块级缓存，测试间互相污染。
+
+    典型：test_dispatch_gate（skills 被 conftest 隔离）先缓存了 video traits
+    的「无 skill」结果，test_t11b2（标记 real_plugin_skills）复用同一 key 拿到
+    脏结果。每测试前后清缓存，保证隔离。
+    """
+    invalidate_sop_cache()
+    yield
+    invalidate_sop_cache()
 
 
 def ids_of(cfg) -> list:

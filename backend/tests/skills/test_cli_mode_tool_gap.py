@@ -130,16 +130,21 @@ def test_mcp_server_reads_root_from_env_not_from_llm():
 
 
 def test_mcp_server_is_standalone_process():
-    """MCP server 走 stdio 独立进程，不能 import backend 模块树。
+    """MCP server 走 stdio 独立进程，不能模块级 import backend 模块树。
 
-    唯一的例外是 gen_image —— 它在函数内部按 SKILL_BACKEND_DIR 延迟 import，
-    为的是复用 GenImageAction 的参数校验与零字节检测（不想写第二份）。
+    函数体内的惰性 import（gen_image / _image_block_err / _mark_image_blocked）
+    是允许的——它们按 SKILL_BACKEND_DIR 延迟 import，函数被调用时 sys.path
+    里已有 backend。这里只拦「模块级（无缩进）」的 import 语句。
     """
     src = MCP_SERVER.read_text(encoding="utf-8")
     module_level = src[: src.index("@mcp.tool()")]
     for forbidden in ("from actions", "from skills.", "from database",
                       "from config import"):
-        assert forbidden not in module_level, (
+        module_imports = [
+            line for line in module_level.splitlines()
+            if line == line.lstrip() and line.strip().startswith(forbidden)
+        ]
+        assert not module_imports, (
             f"模块级 import 了 backend 模块（{forbidden}）—— "
             f"MCP server 是独立进程，启动时 sys.path 里没有 backend"
         )
