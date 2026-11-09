@@ -1071,6 +1071,67 @@ def rule_R12_timer_pairing(
     return issues
 
 
+# ==================== R13: 弱引用解引用守卫（TWeakObjectPtr） ====================
+
+# TWeakObjectPtr<Type> VarName 声明
+_RE_WEAK_DECL = re.compile(r"TWeakObjectPtr\s*<\s*[^>]+\s*>\s*(\w+)")
+
+
+def rule_R13_weak_ptr_guard(
+    content: str, file_path_rel: str, repo_path: Path, ctx: Dict[str, Any]
+) -> List[Issue]:
+    """TWeakObjectPtr 解引用（-> 访问）前应有 IsValid / Get() 判空守卫。
+
+    TWeakObjectPtr 不阻止 GC，对象可能已被回收。直接 `WeakVar->` 解引用会崩溃，
+    必须先 `WeakVar.IsValid()` / `IsValid(WeakVar)` / `WeakVar.Get()` 判空。
+
+    保守策略：只报 warning。检查解引用点前 200 字符内是否有守卫。
+    """
+    if not file_path_rel.endswith((".h", ".cpp")):
+        return []
+
+    # 1. 收集 TWeakObjectPtr 变量名
+    weak_vars: Set[str] = set()
+    for m in _RE_WEAK_DECL.finditer(content):
+        weak_vars.add(m.group(1))
+
+    if not weak_vars:
+        return []
+
+    issues: List[Issue] = []
+    for var in sorted(weak_vars):
+        deref_re = re.compile(r"\b" + re.escape(var) + r"\s*->")
+        for m in deref_re.finditer(content):
+            line_no = content[:m.start()].count("\n") + 1
+            # 解引用点前 200 字符，看有没有判空守卫
+            snippet = content[max(0, m.start() - 200):m.start()]
+            if _is_skipped_by_escape(snippet, "R13"):
+                continue
+            # 守卫模式：IsValid(var) / var.IsValid() / var.Get()
+            if re.search(r"IsValid\s*\(\s*" + re.escape(var) + r"\s*\)", snippet):
+                continue
+            if re.search(re.escape(var) + r"\s*\.\s*IsValid\s*\(\s*\)", snippet):
+                continue
+            if re.search(re.escape(var) + r"\s*\.\s*Get\s*\(\s*\)", snippet):
+                continue
+            issues.append({
+                "rule": "R13",
+                "file": file_path_rel,
+                "line": line_no,
+                "blocking": False,
+                "category": "weak-ptr-guard",
+                "msg": (
+                    f"TWeakObjectPtr {var} 解引用（->）前未见 IsValid / Get() 判空守卫，"
+                    f"对象可能已被 GC 回收导致崩溃"
+                ),
+                "suggest": (
+                    f"解引用前加 if ({var}.IsValid()) 或 if ({var}.Get()) 判空；"
+                    f"若确认对象一定存活可加 @ue-lint-skip R13 逃生注释"
+                ),
+            })
+    return issues
+
+
 _RULE_FUNCS = [
     rule_R8_ue_file_types,   # 最高优先：先拦退化行为
     rule_R1_uclass_genbody,
@@ -1084,6 +1145,7 @@ _RULE_FUNCS = [
     rule_R10_null_guard,
     rule_R11_recursive_callback,
     rule_R12_timer_pairing,
+    rule_R13_weak_ptr_guard,
 ]
 
 
