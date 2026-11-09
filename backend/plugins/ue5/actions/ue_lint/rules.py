@@ -1297,6 +1297,48 @@ def rule_R16_range_for_mutation(
     return issues
 
 
+# ==================== R17: TSoftObjectPtr 同步加载（LoadSynchronous） ====================
+
+_RE_LOAD_SYNC = re.compile(r"(\w+)\s*\.\s*LoadSynchronous\s*\(")
+
+
+def rule_R17_soft_ptr_sync_load(
+    content: str, file_path_rel: str, repo_path: Path, ctx: Dict[str, Any]
+) -> List[Issue]:
+    """TSoftObjectPtr.LoadSynchronous 同步加载阻塞主线程（应改异步）。
+
+    LoadSynchronous 会同步从磁盘加载资源，阻塞主线程造成卡顿。UE 官方明确
+    建议运行时用 FStreamableManager.RequestAsyncLoad 异步加载 + 回调。
+
+    保守策略：只报 warning。加载资源可能有其他考量，但同步加载是明确反模式。
+    """
+    if not file_path_rel.endswith((".h", ".cpp")):
+        return []
+
+    issues: List[Issue] = []
+    for m in _RE_LOAD_SYNC.finditer(content):
+        var_name = m.group(1)
+        line_no = content[:m.start()].count("\n") + 1
+        snippet = content[max(0, m.start() - 120):m.start()]
+        if _is_skipped_by_escape(snippet, "R17"):
+            continue
+        issues.append({
+            "rule": "R17",
+            "file": file_path_rel,
+            "line": line_no,
+            "blocking": False,
+            "category": "sync-load",
+            "msg": (
+                f"{var_name}.LoadSynchronous() 同步加载资源，阻塞主线程导致卡顿"
+            ),
+            "suggest": (
+                f"改用 FStreamableManager.RequestAsyncLoad 异步加载 + 回调；"
+                f"若为启动阶段一次性加载可加 @ue-lint-skip R17 逃生注释"
+            ),
+        })
+    return issues
+
+
 _RULE_FUNCS = [
     rule_R8_ue_file_types,   # 最高优先：先拦退化行为
     rule_R1_uclass_genbody,
@@ -1314,6 +1356,7 @@ _RULE_FUNCS = [
     rule_R14_uproperty_missing,
     rule_R15_cast_null_guard,
     rule_R16_range_for_mutation,
+    rule_R17_soft_ptr_sync_load,
 ]
 
 
