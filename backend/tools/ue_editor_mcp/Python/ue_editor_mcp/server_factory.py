@@ -9,7 +9,7 @@ lines of duplicated scaffolding that previously lived in every server_*.py.
 import asyncio
 import json
 import logging
-from typing import Any
+from typing import Any, Callable
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server

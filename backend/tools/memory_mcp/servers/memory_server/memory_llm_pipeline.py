@@ -34,6 +34,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Iterable
 
 from .memory_llm import (
@@ -150,9 +151,7 @@ class SqliteDistillCache:
     )
 
     def __init__(self, path: "Path | str") -> None:
-        from pathlib import Path as _Path
-
-        self.path = _Path(path)
+        self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._init_schema()
 
