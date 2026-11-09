@@ -1229,6 +1229,74 @@ def rule_R15_cast_null_guard(
     return issues
 
 
+# ==================== R16: 范围 for 遍历中变更容器（迭代器失效） ====================
+
+# for (auto& X : Container) / for (Type* X : Container) → 提取容器名
+_RE_FOR_RANGE = re.compile(r"for\s*\([^;]*:\s*(\w+)\s*\)")
+
+
+def _find_brace_block(content: str, start: int) -> Optional[str]:
+    """从 start 之后第一个 { 开始，匹配到配对的 }。找不到返回 None。"""
+    brace_start = content.find("{", start)
+    if brace_start == -1:
+        return None
+    depth = 0
+    for i in range(brace_start, len(content)):
+        if content[i] == "{":
+            depth += 1
+        elif content[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return content[brace_start:i + 1]
+    return None
+
+
+def rule_R16_range_for_mutation(
+    content: str, file_path_rel: str, repo_path: Path, ctx: Dict[str, Any]
+) -> List[Issue]:
+    """范围 for 遍历中删除/添加容器元素 → 迭代器失效 / 未定义行为。
+
+    `for (X : Container)` 循环体内对 Container 调 Remove / Add 会令迭代器失效。
+    安全做法：标记待删元素、倒序 RemoveAt，或收集到临时数组后统一处理。
+
+    保守策略：只报 warning。仅检查循环体内对「同名容器」的变更操作。
+    """
+    if not file_path_rel.endswith((".h", ".cpp")):
+        return []
+
+    issues: List[Issue] = []
+    for m in _RE_FOR_RANGE.finditer(content):
+        container = m.group(1)
+        line_no = content[:m.start()].count("\n") + 1
+        snippet = content[max(0, m.start() - 120):m.start()]
+        if _is_skipped_by_escape(snippet, "R16"):
+            continue
+        body = _find_brace_block(content, m.end())
+        if body is None:
+            continue
+        mutate_re = re.compile(
+            r"\b" + re.escape(container)
+            + r"\s*\.\s*(?:Remove|RemoveAt|RemoveAll|RemoveSingle|RemoveSwap|Add|AddUnique|Empty)\s*\("
+        )
+        if mutate_re.search(body):
+            issues.append({
+                "rule": "R16",
+                "file": file_path_rel,
+                "line": line_no,
+                "blocking": False,
+                "category": "range-for-mutation",
+                "msg": (
+                    f"范围 for 遍历 {container} 时循环体内变更了该容器，"
+                    f"迭代器失效导致未定义行为"
+                ),
+                "suggest": (
+                    f"标记待删元素后倒序 RemoveAt，或收集到临时数组统一处理；"
+                    f"若确认安全可加 @ue-lint-skip R16 逃生注释"
+                ),
+            })
+    return issues
+
+
 _RULE_FUNCS = [
     rule_R8_ue_file_types,   # 最高优先：先拦退化行为
     rule_R1_uclass_genbody,
@@ -1245,6 +1313,7 @@ _RULE_FUNCS = [
     rule_R13_weak_ptr_guard,
     rule_R14_uproperty_missing,
     rule_R15_cast_null_guard,
+    rule_R16_range_for_mutation,
 ]
 
 
