@@ -1132,6 +1132,60 @@ def rule_R13_weak_ptr_guard(
     return issues
 
 
+# ==================== R14: UObject 指针成员缺 UPROPERTY ====================
+
+# UObject 指针成员声明：U/A 开头的类型 + 指针 + 变量名 + 分号
+_RE_UOBJECT_PTR_DECL = re.compile(r"\b([UA][A-Za-z0-9_]*)\s*\*\s*(\w+)\s*;")
+
+
+def rule_R14_uproperty_missing(
+    content: str, file_path_rel: str, repo_path: Path, ctx: Dict[str, Any]
+) -> List[Issue]:
+    """UObject 指针成员（Uxxx* / Axxx*）缺 UPROPERTY() 宏 → GC 悬挂指针。
+
+    UObject 裸指针成员没有 UPROPERTY() 时 GC 不知晓该引用，可能回收对象导致
+    悬挂指针。保守策略：只报 warning，且只检查头文件（成员声明通常在 .h，
+    .cpp 里的局部变量/参数不需要 UPROPERTY）。
+    """
+    if not file_path_rel.endswith(".h"):
+        return []
+
+    lines = content.splitlines()
+    issues: List[Issue] = []
+    for m in _RE_UOBJECT_PTR_DECL.finditer(content):
+        var_type = m.group(1)
+        var_name = m.group(2)
+        line_no = content[:m.start()].count("\n") + 1
+        snippet = content[max(0, m.start() - 300):m.start()]
+
+        if _is_skipped_by_escape(snippet, "R14"):
+            continue
+        if "UPROPERTY" in snippet:
+            continue
+        # 函数参数/声明：同一行内声明前有未闭合 '('（如 void Foo(AActor* X);）
+        line_text = lines[line_no - 1] if line_no - 1 < len(lines) else ""
+        before = line_text[:line_text.find(var_name)] if var_name in line_text else ""
+        if before.count("(") > before.count(")"):
+            continue
+
+        issues.append({
+            "rule": "R14",
+            "file": file_path_rel,
+            "line": line_no,
+            "blocking": False,
+            "category": "uproperty-missing",
+            "msg": (
+                f"UObject 指针成员 {var_type}* {var_name} 缺 UPROPERTY() 宏，"
+                f"GC 可能回收对象导致悬挂指针"
+            ),
+            "suggest": (
+                f"在声明上方加 UPROPERTY()；"
+                f"若确认无 GC 风险可加 @ue-lint-skip R14 逃生注释"
+            ),
+        })
+    return issues
+
+
 _RULE_FUNCS = [
     rule_R8_ue_file_types,   # 最高优先：先拦退化行为
     rule_R1_uclass_genbody,
@@ -1146,6 +1200,7 @@ _RULE_FUNCS = [
     rule_R11_recursive_callback,
     rule_R12_timer_pairing,
     rule_R13_weak_ptr_guard,
+    rule_R14_uproperty_missing,
 ]
 
 
