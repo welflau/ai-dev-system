@@ -1153,8 +1153,10 @@ class LLMClient:
         try:
             from config import settings as _settings
             _db_path = str(getattr(_settings, "DB_PATH", "") or (_backend_dir / "data" / "ai_dev_system.db"))
+            _ads_port = int(getattr(_settings, "PORT", 8000) or 8000)
         except Exception:
             _db_path = str(_backend_dir / "data" / "ai_dev_system.db")
+            _ads_port = 8000
         mcp_servers: dict = {
             "ads-data": {
                 "command": _python_exe,
@@ -1162,7 +1164,9 @@ class LLMClient:
                 "env": {
                     "ADS_DB_PATH": _db_path,
                     "DB_PATH": _db_path,
-                    "ADS_BASE_URL": "http://localhost:8000",
+                    # 跟随后端实际端口（.env PORT 可改），硬编码 8000 会在换端口后
+                    # 导致 CLI 的 MCP 回调全部打到旧端口而超时
+                    "ADS_BASE_URL": f"http://localhost:{_ads_port}",
                     "ADS_PROJECT_ID": _ctx_project_id,
                     "ADS_SESSION_ID": _llm_ctx.session_id or "",
                 },

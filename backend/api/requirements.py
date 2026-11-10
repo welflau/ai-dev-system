@@ -43,6 +43,7 @@ async def create_requirement(project_id: str, req: RequirementCreate, background
         "tags": json.dumps(req.tags) if req.tags else None,
         "estimated_hours": None,
         "actual_hours": None,
+        "use_aigc": 1 if req.use_aigc else 0,
         "created_at": now,
         "updated_at": now,
         "completed_at": None,

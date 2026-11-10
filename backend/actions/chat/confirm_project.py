@@ -142,12 +142,13 @@ class ConfirmProjectAction(ActionBase):
             if not os.path.isdir(local_path):
                 return ActionResult(success=False, error=f"路径不是目录: {local_path}")
 
-            # 调用 scan-directory 自动识别
+            # 调用 scan-directory 自动识别（自回调，端口跟随后端实际配置）
             try:
                 import httpx
+                from config import settings as _settings
                 async with httpx.AsyncClient(timeout=30) as client:
                     resp = await client.post(
-                        "http://localhost:8000/api/projects/scan-directory",
+                        f"http://localhost:{_settings.PORT}/api/projects/scan-directory",
                         json={"path": local_path},
                     )
                     scan = resp.json() if resp.status_code == 200 else {}

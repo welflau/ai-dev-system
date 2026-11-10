@@ -12235,6 +12235,7 @@ function showCreateRequirementModal() {
     document.getElementById('reqDescription').value = '';
     document.getElementById('reqPriority').value = 'medium';
     document.getElementById('reqModule').value = '';
+    document.getElementById('reqUseAigc').checked = false;
     openModal('createRequirementModal');
 }
 
@@ -12243,6 +12244,7 @@ async function submitRequirement() {
     const description = document.getElementById('reqDescription').value.trim();
     const priority = document.getElementById('reqPriority').value;
     const module = document.getElementById('reqModule').value.trim();
+    const useAigc = document.getElementById('reqUseAigc')?.checked ?? false;
 
     if (!title || !description) {
         showToast('请填写需求标题和描述', 'warning');
@@ -12253,7 +12255,7 @@ async function submitRequirement() {
         // 1. 创建需求
         const reqData = await api(`/projects/${currentProjectId}/requirements`, {
             method: 'POST',
-            body: { title, description, priority, module: module || null },
+            body: { title, description, priority, module: module || null, use_aigc: useAigc },
         });
         showToast(`需求「${title}」已提交`, 'success');
         closeModal('createRequirementModal');
@@ -15570,6 +15572,17 @@ function connectSSE(projectId) {
             const data = JSON.parse(e.data);
             showToast(`工单已解除 blocked → ${data.to}`, 'success');
             refreshBoard();
+        });
+
+        // LightAI 生图 Key 失效/未配置 → 弹更新 Key 面板
+        eventSource.addEventListener('lightai_auth_error', (e) => {
+            try {
+                const data = JSON.parse(e.data);
+                showToast(`⚠️ ${data.message || 'LightAI 生图 Key 失效'}`, 'error');
+                if (typeof showLLMConfigModal === 'function') {
+                    showLLMConfigModal().then(() => switchAICfgTab('lightai'));
+                }
+            } catch {}
         });
 
         // v0.18 模板实例化：启动 + 流式 log
@@ -31084,6 +31097,12 @@ function showCreateDirectTicketModal() {
                             <span>创建后立即加入执行队列</span>
                         </label>
                     </div>
+                    <div class="form-group" style="margin-bottom:0;">
+                        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                            <input type="checkbox" id="dtUseAigc">
+                            <span>AI 生图 <span style="color:var(--text-muted);font-size:12px;">资产库未命中时用 AI 生成（有成本）</span></span>
+                        </label>
+                    </div>
                 </div>
                 <div class="modal-footer" style="display:flex;gap:8px;justify-content:flex-end;">
                     <button class="btn" onclick="closeDirectTicketModal()">取消</button>
@@ -31112,6 +31131,7 @@ async function submitDirectTicket() {
         priority:     parseInt(document.getElementById('dtPriority')?.value || '3'),
         start_from:   startFrom,
         auto_start:   document.getElementById('dtAutoStart')?.checked ?? true,
+        use_aigc:     document.getElementById('dtUseAigc')?.checked ?? false,
         estimated_hours: 4.0,
     };
 

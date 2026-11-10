@@ -295,6 +295,7 @@ class DirectTicketCreate(BaseModel):
     estimated_hours: float = Field(default=4.0)
     start_from: str = Field(default="pending")    # pending/architecture_done/development_in_progress
     auto_start: bool = Field(default=True)        # 创建后立即加入调度队列
+    use_aigc: bool = Field(default=False)         # AI 生图开关（资产落地时未命中库则投递生图）
     source_message_id: Optional[str] = Field(default=None)
     source_session_id: Optional[str] = Field(default=None)
     material_ids: Optional[List[str]] = Field(default=None)
@@ -347,6 +348,7 @@ class RequirementCreate(BaseModel):
     module: Optional[str] = None
     tags: Optional[List[str]] = None
     branch_name: Optional[str] = None  # Git 分支名称
+    use_aigc: bool = Field(default=False)  # AI 生图开关（拆单后的工单继承）
 
 
 class RequirementUpdate(BaseModel):

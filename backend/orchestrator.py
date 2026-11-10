@@ -1734,6 +1734,16 @@ class TicketOrchestrator:
             created_tickets = []        # [ticket_id, ...]
             idx_to_id = {}              # 索引 → TK-ID 映射
 
+            # 需求级 AI 生图开关：拆出的工单统一继承
+            req_use_aigc = 0
+            try:
+                _req_row = await db.fetch_one(
+                    "SELECT use_aigc FROM requirements WHERE id = ?", (requirement_id,)
+                )
+                req_use_aigc = int((_req_row or {}).get("use_aigc") or 0)
+            except Exception:
+                pass
+
             # === 第一遍：创建所有父工单 ===
             for idx, tk in enumerate(tickets_data):
                 ticket_id = generate_id("TK")
@@ -1770,6 +1780,7 @@ class TicketOrchestrator:
                     "current_owner": "product",
                     "estimated_hours": tk.get("estimated_hours"),
                     "actual_hours": None,
+                    "use_aigc": req_use_aigc,  # 继承需求级开关
                     "estimated_completion": None,
                     "dependencies": "[]",  # 占位，第二遍回填
                     "result": None,

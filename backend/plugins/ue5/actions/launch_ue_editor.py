@@ -41,15 +41,18 @@ class LaunchUEEditorAction(ActionBase):
         import httpx
         from database import db
         from git_manager import git_manager
+        from config import settings as _settings
 
         project_id = params.get("project_id")
         if not project_id:
             return ActionResult(success=False, error="缺少 project_id，无法启动 Editor")
 
+        _base = f"http://localhost:{_settings.PORT}"
+
         # 1. 先检查 Editor 是否已在运行
         try:
             status_resp = await httpx.AsyncClient(timeout=5).get(
-                f"http://localhost:8000/api/projects/{project_id}/ue-framework/editor-status"
+                f"{_base}/api/projects/{project_id}/ue-framework/editor-status"
             )
             if status_resp.status_code == 200:
                 st = status_resp.json()
@@ -66,7 +69,7 @@ class LaunchUEEditorAction(ActionBase):
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 launch_resp = await client.post(
-                    f"http://localhost:8000/api/projects/{project_id}/ue-framework/editor-launch"
+                    f"{_base}/api/projects/{project_id}/ue-framework/editor-launch"
                 )
                 if launch_resp.status_code != 200:
                     return ActionResult(
@@ -83,7 +86,7 @@ class LaunchUEEditorAction(ActionBase):
             try:
                 async with httpx.AsyncClient(timeout=5) as client:
                     st_resp = await client.get(
-                        f"http://localhost:8000/api/projects/{project_id}/ue-framework/editor-status"
+                        f"{_base}/api/projects/{project_id}/ue-framework/editor-status"
                     )
                     if st_resp.status_code == 200:
                         st = st_resp.json()

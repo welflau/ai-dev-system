@@ -4782,12 +4782,13 @@ async def _detect_and_handle_path(message: str, projects: list) -> dict | None:
                 "message": f"项目「{p['name']}」已存在，正在切换…",
             }
 
-    # 调用 scan-directory 识别
+    # 调用 scan-directory 识别（自回调，端口跟随后端实际配置）
     try:
         import httpx
+        from config import settings as _settings
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
-                "http://localhost:8000/api/projects/scan-directory",
+                f"http://localhost:{_settings.PORT}/api/projects/scan-directory",
                 json={"path": abs_path},
             )
             scan = resp.json() if resp.status_code == 200 else {}
@@ -5051,6 +5052,7 @@ async def mcp_action_callback(project_id: str, req: _McpActionRequest):
             "title": title,
             "description": description,
             "priority": priority,
+            "use_aigc": bool(data.get("use_aigc")),
         }
     elif action_name == "confirm_bug":
         title = (data.get("title") or "").strip()
@@ -5084,6 +5086,7 @@ async def mcp_action_callback(project_id: str, req: _McpActionRequest):
             "description": description,
             "ticket_type": ticket_type,
             "start_from": start_from,
+            "use_aigc": bool(data.get("use_aigc")),
         }
     elif action_name == "close_requirement":
         # 关闭需求走确认卡片：run() 返回 confirm_close_requirement 卡片，前端点确认后调 /confirm-close-requirement

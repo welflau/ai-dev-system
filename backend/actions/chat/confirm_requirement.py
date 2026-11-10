@@ -49,6 +49,10 @@ class ConfirmRequirementAction(ActionBase):
                         "enum": list(_VALID_PRIORITIES),
                         "description": "优先级，默认 medium",
                     },
+                    "use_aigc": {
+                        "type": "boolean",
+                        "description": "是否在资产落地阶段启用 AI 生图（默认关，生图有成本）",
+                    },
                 },
                 "required": ["title", "description"],
             },
@@ -60,6 +64,7 @@ class ConfirmRequirementAction(ActionBase):
         priority = context.get("priority") or "medium"
         if priority not in _VALID_PRIORITIES:
             priority = "medium"
+        use_aigc = bool(context.get("use_aigc"))
 
         if not title:
             return ActionResult(success=False, error="需求标题不能为空")
@@ -79,6 +84,7 @@ class ConfirmRequirementAction(ActionBase):
                 "title": title,
                 "description": description,
                 "priority": priority,
+                "use_aigc": use_aigc,
             },
         )
 
@@ -204,6 +210,7 @@ class ConfirmDirectTicketAction(ActionBase):
         start_from = context.get("start_from") or "pending"
         if start_from not in _VALID_START_FROM:
             start_from = "pending"
+        use_aigc = bool(context.get("use_aigc"))
 
         if not title:
             return ActionResult(success=False, error="工单标题不能为空")
@@ -224,5 +231,6 @@ class ConfirmDirectTicketAction(ActionBase):
                 "description": description,
                 "ticket_type": ticket_type,
                 "start_from": start_from,
+                "use_aigc": use_aigc,
             },
         )

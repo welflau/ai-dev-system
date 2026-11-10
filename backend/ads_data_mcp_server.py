@@ -519,6 +519,7 @@ async def confirm_direct_ticket(
     description: str,
     type: str = "feature",
     start_from: str = "pending",
+    use_aigc: bool = False,
     project_id: str = "",
 ) -> str:
     """
@@ -569,6 +570,7 @@ async def confirm_direct_ticket(
             "description": description.strip(),
             "type": type,
             "start_from": start_from,
+            "use_aigc": bool(use_aigc),
         },
     }
 

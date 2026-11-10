@@ -1234,6 +1234,7 @@ async def create_direct_ticket(project_id: str, req: DirectTicketCreate):
         "priority": req.priority,
         "status": start_status,
         "estimated_hours": req.estimated_hours,
+        "use_aigc": 1 if req.use_aigc else 0,
         "created_at": now,
         "updated_at": now,
     }

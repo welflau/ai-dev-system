@@ -105,6 +105,19 @@ class GenerateAssetsAction(ActionBase):
         wanted_types = sop_cfg.get("asset_types") or []
         project_id = context.get("project_id", "")
 
+        # 工单级 AI 生图开关覆盖 SOP 默认：用户在创建工单/需求卡片上勾选后，
+        # tickets.use_aigc=1，这里优先于 SOP 的 use_aigc 默认值
+        if ticket_id:
+            try:
+                from database import db as _db
+                _row = await _db.fetch_one(
+                    "SELECT use_aigc FROM tickets WHERE id = ?", (ticket_id,)
+                )
+                if _row and int(_row.get("use_aigc") or 0):
+                    allow_aigc = True
+            except Exception as _e:
+                logger.debug("读工单 use_aigc 失败（忽略，跟随 SOP 默认）: %s", _e)
+
         manifest_items = await self._load_manifest(context)
         if not manifest_items:
             logger.info("🎨 无资产清单条目，ArtistAgent 跳过（ticket=%s）", ticket_id[:12])

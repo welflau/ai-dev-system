@@ -31,6 +31,15 @@ from utils import generate_id, now_iso
 
 logger = logging.getLogger("image_processor")
 
+
+class LightAIAuthError(Exception):
+    """LightAI 鉴权失败（401/403 = Key 无效或已过期）。"""
+
+
+# 鉴权失败提醒防抖：1 分钟内只推一次 SSE，避免连续失败刷屏
+_auth_notify_ts: float = 0.0
+_AUTH_NOTIFY_INTERVAL = 60.0
+
 # ── 生图并发控制 ──────────────────────────────────────────
 # LightAI 服务端同一 key 只允许 1 个任务同时在生成，超出返回 429。
 # 本地信号量把「create + poll 直到出图」整段串行化：超出并发上限的调用
@@ -240,6 +249,8 @@ async def _create_lightai_task(req: dict) -> Optional[str]:
                     )
                     await asyncio.sleep(_LIGHTAI_429_INTERVAL)
                     continue
+                if e.code in (401, 403):
+                    raise LightAIAuthError(f"LightAI 鉴权失败: HTTP {e.code}（Key 无效或已过期）")
                 logger.warning("LightAI 创建任务失败: HTTP %s", e.code)
                 return None
             except Exception as e:
@@ -333,6 +344,31 @@ async def _generate_ascii_fallback(prompt: str) -> str:
         return f"[ASCII Art: {prompt[:50]}]"
 
 
+async def _notify_auth_error(req: dict) -> None:
+    """LightAI 鉴权失败 / 未配置 Key → 推 SSE 让前端弹「更新 Key」面板（防抖）。"""
+    global _auth_notify_ts
+    now = time.time()
+    if now - _auth_notify_ts < _AUTH_NOTIFY_INTERVAL:
+        return  # 60s 内已提醒过，不重复打扰
+    _auth_notify_ts = now
+    try:
+        from events import event_manager
+        message = "LightAI 生图 Key 失效或未配置，图片生成失败。请更新 Key。"
+        project_id = (req or {}).get("project_id") or ""
+        if project_id:
+            await event_manager.publish_to_project(project_id, "lightai_auth_error", {
+                "message": message,
+                "request_id": (req or {}).get("id", ""),
+            })
+        else:
+            await event_manager.publish_to_project("__global__", "lightai_auth_error", {
+                "message": message,
+            })
+        logger.info("已推送 lightai_auth_error 提醒（project=%s）", project_id or "__global__")
+    except Exception as e:
+        logger.warning("推送 lightai_auth_error 失败: %s", e)
+
+
 async def process_image_request(req_id: str) -> None:
     """处理单个图片请求的完整流程"""
     req = await db.fetch_one("SELECT * FROM image_requests WHERE id = ?", (req_id,))
@@ -347,11 +383,18 @@ async def process_image_request(req_id: str) -> None:
     # 检查 API Key
     if not settings.LIGHTAI_API_KEY:
         logger.warning("LIGHTAI_API_KEY 未配置，使用 ASCII 兜底: %s", req_id)
+        await _notify_auth_error(req)
         await _finish_with_ascii(req)
         return
 
     # 提交任务 + 轮询（信号量串行化 + 429 等待重试）
-    task_id, image_url = await _create_and_poll(dict(req))
+    try:
+        task_id, image_url = await _create_and_poll(dict(req))
+    except LightAIAuthError as e:
+        logger.warning("LightAI 鉴权失败，提醒用户更新 Key: %s", e)
+        await _notify_auth_error(req)
+        await _finish_with_ascii(req)
+        return
     if not task_id:
         await _finish_with_ascii(req)
         return

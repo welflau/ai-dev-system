@@ -372,10 +372,12 @@ class DeployAgent(BaseAgent):
             if (Path(deploy_path) / "dist" / "index.html").is_file():
                 serve_cwd = str(Path(deploy_path) / "dist")
 
-            # 直接复用 ADS 后端主服务（8000 端口）内置静态预览路由，不再额外拉起 `python -m http.server <随机端口>` 子进程！
+            # 直接复用 ADS 后端主服务内置静态预览路由，不再额外拉起 `python -m http.server <随机端口>` 子进程！
             # 彻底杜绝：1) Cursor IDE 监听到新端口自动弹出多个内置浏览器 Tab；2) 每次重启 hash 端口漂移导致旧链接失效。
-            port = 8000
-            url = f"http://localhost:8000/api/projects/{project_id}/preview/{env_type}/index.html"
+            # 端口跟随后端实际配置（.env PORT 可改），不能硬编码
+            from config import settings as _settings
+            port = _settings.PORT
+            url = f"http://localhost:{port}/api/projects/{project_id}/preview/{env_type}/index.html"
             cls._preview_servers[key] = {
                 "port": port,
                 "process": None,

@@ -186,6 +186,9 @@ class Database:
             ("artifacts", "mime",        "TEXT"),
             ("artifacts", "size_bytes",  "INTEGER DEFAULT 0"),
             ("artifacts", "produced_by", "TEXT"),
+            # 工单/需求级 AI 生图开关：用户在创建卡片上勾选，覆盖 SOP 的 use_aigc 默认
+            ("tickets", "use_aigc", "INTEGER DEFAULT 0"),
+            ("requirements", "use_aigc", "INTEGER DEFAULT 0"),
         ]
         async with self._write_lock:
             for table, column, col_def in migrations:
