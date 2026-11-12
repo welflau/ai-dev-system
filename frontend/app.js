@@ -8409,12 +8409,8 @@ function boardDragEnd() {
 /** 判断某工单能否从当前状态拖到目标列（与 boardDrop 的转换规则保持一致） */
 function _canBoardDrop(status, targetCol) {
     if (targetCol === toDisplayStatus(status)) return false;  // 拖回原列，无意义
-    // 已完成类 → 进行中 = 打回重做
-    if (targetCol === 'in_progress'
-        && ['deployed', 'testing_done', 'done', 'completed'].includes(status)) return true;
-    // blocked → 进行中 = 解除阻塞
-    if (targetCol === 'in_progress' && status === 'blocked') return true;
-    return false;
+    // 只有「进行中」列是合法落点：拖到 = 触发执行/打回/解阻塞/恢复
+    return targetCol === 'in_progress';
 }
 
 function boardDragOver(event) {
@@ -8433,10 +8429,15 @@ async function boardDrop(event, targetCol) {
     const { ticketId, status } = _boardDrag;
     _boardDrag = null;
 
-    if (!_canBoardDrop(status, targetCol)) {
-        showToast('该转换请在工单抽屉或卡片状态下拉框中操作', 'info');
+    if (targetCol !== 'in_progress') {
+        showToast('拖拽仅支持落到「进行中」列（触发执行/打回）', 'info');
         return;
     }
+    if (targetCol === toDisplayStatus(status)) {
+        showToast('工单已在该列', 'info');
+        return;
+    }
+
     // 已完成类 → 进行中 = 打回重做（走 reworkTicket：级联确认 + reject）
     if (['deployed', 'testing_done', 'done', 'completed'].includes(status)) {
         reworkTicket(ticketId);
@@ -8447,6 +8448,23 @@ async function boardDrop(event, targetCol) {
         unblockTicket(ticketId);
         return;
     }
+    // cancelled → 进行中 = 恢复
+    if (status === 'cancelled') {
+        restoreCancelledTicket(ticketId);
+        return;
+    }
+    // pending/todo → 进行中 = 启动
+    if (status === 'pending' || status === 'todo') {
+        startTicket(ticketId);
+        return;
+    }
+    // 验收/测试打回（等返工）→ 已在返工队列，orchestrator 会自动派 rework
+    if (['acceptance_rejected', 'testing_failed'].includes(status)) {
+        showToast('该工单已打回，在返工队列中等待自动执行', 'info');
+        return;
+    }
+    // 其余（development_in_progress 等）→ 已在执行中
+    showToast('该工单已在执行中，无需拖拽', 'info');
 }
 
 // ==================== 工单详情抽屉 ====================
