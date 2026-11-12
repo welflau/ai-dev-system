@@ -8365,9 +8365,25 @@ function boardDragStart(event, ticketId, status) {
     event.dataTransfer.setData('text/plain', ticketId);
 }
 
+/** 判断某工单能否从当前状态拖到目标列（与 boardDrop 的转换规则保持一致） */
+function _canBoardDrop(status, targetCol) {
+    if (targetCol === toDisplayStatus(status)) return false;  // 拖回原列，无意义
+    // 已完成类 → 进行中 = 打回重做
+    if (targetCol === 'in_progress'
+        && ['deployed', 'testing_done', 'done', 'completed'].includes(status)) return true;
+    // blocked → 进行中 = 解除阻塞
+    if (targetCol === 'in_progress' && status === 'blocked') return true;
+    return false;
+}
+
 function boardDragOver(event) {
-    event.preventDefault();               // 允许 drop
-    event.dataTransfer.dropEffect = 'move';
+    // 拖动过程中就判断合法性：不合法则不 preventDefault，浏览器显示「禁止」光标
+    if (!_boardDrag) return;
+    const targetCol = event.currentTarget?.dataset?.status || '';
+    if (_canBoardDrop(_boardDrag.status, targetCol)) {
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'move';
+    }
 }
 
 async function boardDrop(event, targetCol) {
@@ -8375,20 +8391,21 @@ async function boardDrop(event, targetCol) {
     if (!_boardDrag) return;
     const { ticketId, status } = _boardDrag;
     _boardDrag = null;
-    if (targetCol === toDisplayStatus(status)) return;  // 拖回原列，忽略
 
+    if (!_canBoardDrop(status, targetCol)) {
+        showToast('该转换请在工单抽屉或卡片状态下拉框中操作', 'info');
+        return;
+    }
     // 已完成类 → 进行中 = 打回重做（走 reworkTicket：级联确认 + reject）
-    if (targetCol === 'in_progress'
-        && ['deployed', 'testing_done', 'done', 'completed'].includes(status)) {
+    if (['deployed', 'testing_done', 'done', 'completed'].includes(status)) {
         reworkTicket(ticketId);
         return;
     }
     // blocked → 进行中 = 解除阻塞恢复执行
-    if (targetCol === 'in_progress' && status === 'blocked') {
+    if (status === 'blocked') {
         unblockTicket(ticketId);
         return;
     }
-    showToast('该转换请在工单抽屉或卡片状态下拉框中操作', 'info');
 }
 
 // ==================== 工单详情抽屉 ====================
