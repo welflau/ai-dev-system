@@ -375,6 +375,7 @@ class SubtaskCreate(BaseModel):
 
 class TicketRejectRequest(BaseModel):
     reason: str = Field(..., min_length=1)
+    source: str = Field(default="agent")  # agent=验收/测试自动打回，human=人工复查打回
 
 
 class MilestoneCreate(BaseModel):

@@ -10137,6 +10137,10 @@ function renderTicketActions(ticket) {
     if (ticket.status === 'cancelled') {
         buttons += `<button class="btn btn-primary btn-sm" onclick="restoreCancelledTicket('${ticket.id}')">↪️ 恢复</button>`;
     }
+    // 已部署工单：人工复查不符合要求时可打回重做（走 rework 返工链）
+    if (ticket.status === 'deployed') {
+        buttons += `<button class="btn btn-sm" style="color:var(--warning);" onclick="reworkTicket('${ticket.id}')">↩️ 打回重做</button>`;
+    }
     // 查看 AI 对话按钮（保留属性面板打开，方便用户边看工单边对话）
     buttons += `<button class="btn btn-sm" onclick="selectTicketForChat('${ticket.id}', '${escHtml(ticket.title).replace(/'/g, "\\'")}')">💬 AI 对话</button>`;
     if (ticket.status !== 'deployed' && ticket.status !== 'cancelled') {
@@ -11368,6 +11372,26 @@ async function startTicket(ticketId) {
         setTimeout(refreshBoard, 1000);
     } catch (e) {
         showToast(`启动失败: ${e.message}`, 'error');
+    }
+}
+
+async function reworkTicket(ticketId) {
+    if (!currentProjectId) return;
+    const reason = prompt('请输入打回重做的原因（将触发返工修复，重新走 验收→部署）：');
+    if (!reason || !reason.trim()) return;
+    try {
+        const res = await api(`/projects/${currentProjectId}/tickets/${ticketId}/reject`, {
+            method: 'POST',
+            body: { reason: reason.trim(), source: 'human' },
+        });
+        showToast(`已打回重做：${res.message || res.new_status || ''}`, 'success');
+        if (typeof closeTicketDrawer === 'function') closeTicketDrawer();
+        refreshBoard();
+        if (typeof _currentTimelineTicketId !== 'undefined' && _currentTimelineTicketId === ticketId) {
+            refreshTimeline(ticketId);
+        }
+    } catch (e) {
+        showToast(`打回失败: ${e.message}`, 'error');
     }
 }
 

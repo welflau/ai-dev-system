@@ -1451,7 +1451,12 @@ async def start_ticket(project_id: str, ticket_id: str, background_tasks: Backgr
 
 @router.post("/api/projects/{project_id}/tickets/{ticket_id}/reject")
 async def reject_ticket(project_id: str, ticket_id: str, req: TicketRejectRequest):
-    """打回工单（验收/测试不通过时使用）"""
+    """打回工单
+
+    - development_done → acceptance_rejected（验收打回，触发 rework 返工）
+    - testing_in_progress → testing_failed（测试打回，触发 fix_issues）
+    - deployed → acceptance_rejected（人工复查打回，重新走 验收→部署）
+    """
     existing = await db.fetch_one(
         "SELECT * FROM tickets WHERE id = ? AND project_id = ?",
         (ticket_id, project_id),
@@ -1459,22 +1464,28 @@ async def reject_ticket(project_id: str, ticket_id: str, req: TicketRejectReques
     if not existing:
         raise HTTPException(404, "工单不存在")
 
-    # 只有 development_done 和 testing_in_progress 状态允许打回
     allowed_reject_from = [
         TicketStatus.DEVELOPMENT_DONE.value,
         TicketStatus.TESTING_IN_PROGRESS.value,
+        TicketStatus.DEPLOYED.value,
     ]
     if existing["status"] not in allowed_reject_from:
         raise HTTPException(400, f"当前状态「{existing['status']}」不允许打回")
 
     old_status = existing["status"]
+    is_human = req.source == "human" or old_status == TicketStatus.DEPLOYED.value
+    source = "human" if is_human else "agent"
 
-    if old_status == TicketStatus.DEVELOPMENT_DONE.value:
-        new_status = TicketStatus.ACCEPTANCE_REJECTED.value
-        message = f"验收不通过: {req.reason}"
-    else:
+    if old_status == TicketStatus.TESTING_IN_PROGRESS.value and not is_human:
+        # Agent 测试打回 → fix_issues
         new_status = TicketStatus.TESTING_FAILED.value
         message = f"测试不通过: {req.reason}"
+        agent_name = "TestAgent"
+    else:
+        # development_done（验收打回）或 deployed（人工复查打回）→ rework 返工链
+        new_status = TicketStatus.ACCEPTANCE_REJECTED.value
+        message = f"人工复查打回: {req.reason}" if is_human else f"验收不通过: {req.reason}"
+        agent_name = "ProductAgent"
 
     await db.update(
         "tickets",
@@ -1485,17 +1496,23 @@ async def reject_ticket(project_id: str, ticket_id: str, req: TicketRejectReques
 
     await _log_ticket(
         project_id, existing["requirement_id"], ticket_id,
-        "ProductAgent" if old_status == TicketStatus.DEVELOPMENT_DONE.value else "TestAgent",
+        agent_name,
         "reject", old_status, new_status, message,
     )
 
     await event_manager.publish_to_project(
         project_id,
         "ticket_rejected",
-        {"ticket_id": ticket_id, "from": old_status, "to": new_status, "reason": req.reason},
+        {
+            "ticket_id": ticket_id,
+            "from": old_status,
+            "to": new_status,
+            "reason": req.reason,
+            "source": source,
+        },
     )
 
-    return {"message": message, "new_status": new_status}
+    return {"message": message, "new_status": new_status, "source": source}
 
 
 @router.post("/api/projects/{project_id}/tickets/{ticket_id}/diagnose")
