@@ -8228,6 +8228,16 @@ async function refreshBoard() {
         if (board['waiting_subtasks']) {
             board['pending'] = [...(board['pending'] || []), ...board['waiting_subtasks']];
         }
+        // 构建依赖图（upstreamId → [直接下游 id]），供拖拽时同步高亮级联下游。
+        // board API 返回 SELECT * 全字段，dependencies 直接可用，无需异步查询。
+        _boardDownstreamMap = {};
+        columns.forEach(col => (board[col] || []).forEach(t => {
+            let deps = [];
+            try { deps = JSON.parse(t.dependencies || '[]'); } catch {}
+            (Array.isArray(deps) ? deps : []).forEach(dep => {
+                (_boardDownstreamMap[dep] = _boardDownstreamMap[dep] || []).push(t.id);
+            });
+        }));
         columns.forEach(col => {
             const tickets = board[col] || [];
             const body = document.getElementById(`col-${col}`);
@@ -8300,7 +8310,7 @@ function renderTicketCard(t) {
 
 
     return `
-        <div class="${cardClass}${t.type === 'bug' ? ' bug-ticket' : ''}${t.parent_ticket_id ? ' child-ticket' : ''}" style="cursor:pointer;" draggable="true" ondragstart="boardDragStart(event, '${t.id}', '${t.status}')" onclick="openTicketDrawer('${t.id}')">
+        <div class="${cardClass}${t.type === 'bug' ? ' bug-ticket' : ''}${t.parent_ticket_id ? ' child-ticket' : ''}" style="cursor:pointer;" draggable="true" data-ticket-card-id="${t.id}" ondragstart="boardDragStart(event, '${t.id}', '${t.status}')" ondragend="boardDragEnd()" onclick="openTicketDrawer('${t.id}')">
             <div class="ticket-title">${t.type === 'bug' ? '<span class="bug-label">BUG</span>' : ''}${escHtml(t.title)}${blockedBadge}${cancelledBadge}${waitingBadge}${subtaskBadge}${t.has_error ? ' <span class="ticket-status-badge error" title="测试失败或被拒绝">✗</span>' : t.has_warning ? ' <span class="ticket-status-badge warning" title="测试有警告">⚠</span>' : ''}</div>
             <div class="ticket-meta">
                 ${t.module ? `<span class="tag tag-module">${escHtml(t.module)}</span>` : ''}
@@ -8357,12 +8367,43 @@ async function updateTicketStatus(ticketId, newStatus, selectEl) {
 
 // ==================== 看板拖拽 ====================
 
-let _boardDrag = null;  // { ticketId, status }
+let _boardDrag = null;            // { ticketId, status }
+let _boardDownstreamMap = {};     // upstreamTicketId → [直接下游 id]，refreshBoard 时重建
+
+/** 从依赖图递归收集所有（直接+间接）下游工单 id */
+function _collectDownstreamIds(ticketId) {
+    const seen = new Set([ticketId]);
+    const queue = [ticketId];
+    const result = [];
+    while (queue.length) {
+        const cur = queue.shift();
+        for (const d of (_boardDownstreamMap[cur] || [])) {
+            if (!seen.has(d)) {
+                seen.add(d);
+                result.push(d);
+                queue.push(d);
+            }
+        }
+    }
+    return result;
+}
 
 function boardDragStart(event, ticketId, status) {
     _boardDrag = { ticketId, status };
     event.dataTransfer.effectAllowed = 'move';
     event.dataTransfer.setData('text/plain', ticketId);
+    // 高亮所有下游卡片：拖动过程中就直观看到「打回会级联哪些单」
+    _collectDownstreamIds(ticketId).forEach(id => {
+        document.querySelector(`[data-ticket-card-id="${id}"]`)
+            ?.classList.add('cascade-highlight');
+    });
+}
+
+/** 拖拽结束（drop / 取消 / ESC 均触发）——清除下游高亮 */
+function boardDragEnd() {
+    _boardDrag = null;
+    document.querySelectorAll('.cascade-highlight')
+        .forEach(el => el.classList.remove('cascade-highlight'));
 }
 
 /** 判断某工单能否从当前状态拖到目标列（与 boardDrop 的转换规则保持一致） */

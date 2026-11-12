@@ -1956,6 +1956,12 @@ body.shell-project .main-ws-tabbar,
     border-left: 3px solid var(--info);
     animation: pulse-border 2s ease-in-out infinite;
 }
+/* 拖拽打回时高亮级联下游卡片：直观看到「打回会级联哪些单」 */
+.ticket-card.cascade-highlight {
+    outline: 2px dashed #f97316;
+    outline-offset: 2px;
+    box-shadow: 0 0 10px rgba(249, 115, 22, 0.45);
+}
 .ticket-card.done {
     border-left: 3px solid var(--success);
 }
