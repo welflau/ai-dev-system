@@ -11520,7 +11520,7 @@ async function reworkTicket(ticketId) {
             body: { reason: reason.trim(), source: 'human', cascade: true },
         });
         const n = (res && res.cascaded && res.cascaded.length) || 0;
-        showToast(`已打回重做${n ? `，级联 ${n} 个下游工单` : ''}`, 'success');
+        showToast(`已打回重做${n ? `，${n} 个下游工单已回到待执行队列（等前置完成后自动开始）` : ''}`, 'success');
         if (typeof closeTicketDrawer === 'function') closeTicketDrawer();
         refreshBoard();
         if (typeof _currentTimelineTicketId !== 'undefined' && _currentTimelineTicketId === ticketId) {

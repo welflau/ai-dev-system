@@ -1567,6 +1567,11 @@ async def reject_ticket(project_id: str, ticket_id: str, req: TicketRejectReques
     # 打回前置工单后，依赖它的下游（已完成的）建立在前置产出之上，必须一起打回，
     # 否则出现「脚手架重做但下游仍标 deployed」的假完成。只打回已到终态的下游；
     # 还在 pending/processing 的下游不动（它们本来就等依赖，会自然卡住）。
+    #
+    # 下游转 pending（开始列表）而非 acceptance_rejected：
+    #   - pending 工单走 orchestrator 依赖检查，等前置重新完成后自动依次执行
+    #   - 若转 acceptance_rejected 会被立即派 rework——此时前置还在返工（产出半新半旧），
+    #     下游基于旧产出返工一遍，前置改完还得再返工一遍，白做
     cascaded: List[str] = []
     if req.cascade:
         downstream = await _collect_downstream(project_id, ticket_id)
@@ -1575,22 +1580,27 @@ async def reject_ticket(project_id: str, ticket_id: str, req: TicketRejectReques
                 continue
             await db.update(
                 "tickets",
-                {"status": TicketStatus.ACCEPTANCE_REJECTED.value, "updated_at": now_iso()},
+                {
+                    "status": TicketStatus.PENDING.value,
+                    "current_owner": None,
+                    "assigned_agent": None,
+                    "updated_at": now_iso(),
+                },
                 "id = ?",
                 (dt["id"],),
             )
             await _log_ticket(
                 project_id, existing["requirement_id"], dt["id"],
                 "ProductAgent", "reject",
-                dt["status"], TicketStatus.ACCEPTANCE_REJECTED.value,
-                f"级联打回（依赖 {ticket_id} 被打回）: {req.reason}",
+                dt["status"], TicketStatus.PENDING.value,
+                f"级联打回（依赖 {ticket_id} 被打回）→ 回到待执行队列，等前置完成后自动开始: {req.reason}",
             )
             await event_manager.publish_to_project(
                 project_id, "ticket_rejected",
                 {
                     "ticket_id": dt["id"],
                     "from": dt["status"],
-                    "to": TicketStatus.ACCEPTANCE_REJECTED.value,
+                    "to": TicketStatus.PENDING.value,
                     "reason": f"级联打回: {req.reason}",
                     "source": "human",
                     "cascade_of": ticket_id,
