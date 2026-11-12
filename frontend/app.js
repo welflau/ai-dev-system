@@ -8300,7 +8300,7 @@ function renderTicketCard(t) {
 
 
     return `
-        <div class="${cardClass}${t.type === 'bug' ? ' bug-ticket' : ''}${t.parent_ticket_id ? ' child-ticket' : ''}" style="cursor:pointer;" onclick="openTicketDrawer('${t.id}')">
+        <div class="${cardClass}${t.type === 'bug' ? ' bug-ticket' : ''}${t.parent_ticket_id ? ' child-ticket' : ''}" style="cursor:pointer;" draggable="true" ondragstart="boardDragStart(event, '${t.id}', '${t.status}')" onclick="openTicketDrawer('${t.id}')">
             <div class="ticket-title">${t.type === 'bug' ? '<span class="bug-label">BUG</span>' : ''}${escHtml(t.title)}${blockedBadge}${cancelledBadge}${waitingBadge}${subtaskBadge}${t.has_error ? ' <span class="ticket-status-badge error" title="测试失败或被拒绝">✗</span>' : t.has_warning ? ' <span class="ticket-status-badge warning" title="测试有警告">⚠</span>' : ''}</div>
             <div class="ticket-meta">
                 ${t.module ? `<span class="tag tag-module">${escHtml(t.module)}</span>` : ''}
@@ -8353,6 +8353,42 @@ async function updateTicketStatus(ticketId, newStatus, selectEl) {
         refreshBoard();
         loadTicketList();
     }
+}
+
+// ==================== 看板拖拽 ====================
+
+let _boardDrag = null;  // { ticketId, status }
+
+function boardDragStart(event, ticketId, status) {
+    _boardDrag = { ticketId, status };
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', ticketId);
+}
+
+function boardDragOver(event) {
+    event.preventDefault();               // 允许 drop
+    event.dataTransfer.dropEffect = 'move';
+}
+
+async function boardDrop(event, targetCol) {
+    event.preventDefault();
+    if (!_boardDrag) return;
+    const { ticketId, status } = _boardDrag;
+    _boardDrag = null;
+    if (targetCol === toDisplayStatus(status)) return;  // 拖回原列，忽略
+
+    // 已完成类 → 进行中 = 打回重做（走 reworkTicket：级联确认 + reject）
+    if (targetCol === 'in_progress'
+        && ['deployed', 'testing_done', 'done', 'completed'].includes(status)) {
+        reworkTicket(ticketId);
+        return;
+    }
+    // blocked → 进行中 = 解除阻塞恢复执行
+    if (targetCol === 'in_progress' && status === 'blocked') {
+        unblockTicket(ticketId);
+        return;
+    }
+    showToast('该转换请在工单抽屉或卡片状态下拉框中操作', 'info');
 }
 
 // ==================== 工单详情抽屉 ====================
@@ -17422,6 +17458,9 @@ const DISPLAY_STATUS_MAP = {
     testing_in_progress:        'in_progress',
     deploying:                  'in_progress',
     analyzing:                  'in_progress',
+    // 验收打回 = 等待返工（orchestrator 会自动派 rework），不是硬停，显示「进行中」
+    // 而非「已阻塞」——否则看起来像要人工介入，实际是自动流转
+    acceptance_rejected:        'in_progress',
     // 审核中：各阶段 done/passed 等待下一步确认
     planning_done:              'in_review',
     ux_design_done:             'in_review',

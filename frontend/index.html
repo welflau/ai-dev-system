@@ -495,7 +495,7 @@
                             </div>
                         </div>
                         <div class="board" id="kanbanBoard">
-                            <div class="board-column" data-status="pending">
+                            <div class="board-column" data-status="pending" ondragover="boardDragOver(event)" ondrop="boardDrop(event, 'pending')">
                                 <div class="column-header">
                                     <span class="column-status-dot" style="border:2px solid var(--text-muted);border-radius:50%;width:10px;height:10px;display:inline-block;"></span>
                                     <span class="column-title">待规划</span>
@@ -503,7 +503,7 @@
                                 </div>
                                 <div class="column-body" id="col-pending"></div>
                             </div>
-                            <div class="board-column" data-status="in_progress">
+                            <div class="board-column" data-status="in_progress" ondragover="boardDragOver(event)" ondrop="boardDrop(event, 'in_progress')">
                                 <div class="column-header">
                                     <span class="column-status-dot" style="background:var(--warning,#f97316);border-radius:50%;width:10px;height:10px;display:inline-block;"></span>
                                     <span class="column-title">进行中</span>
@@ -511,7 +511,7 @@
                                 </div>
                                 <div class="column-body" id="col-in_progress"></div>
                             </div>
-                            <div class="board-column" data-status="in_review">
+                            <div class="board-column" data-status="in_review" ondragover="boardDragOver(event)" ondrop="boardDrop(event, 'in_review')">
                                 <div class="column-header">
                                     <span class="column-status-dot" style="background:var(--success);border-radius:50%;width:10px;height:10px;display:inline-block;"></span>
                                     <span class="column-title">审核中</span>
@@ -519,7 +519,7 @@
                                 </div>
                                 <div class="column-body" id="col-in_review"></div>
                             </div>
-                            <div class="board-column" data-status="done">
+                            <div class="board-column" data-status="done" ondragover="boardDragOver(event)" ondrop="boardDrop(event, 'done')">
                                 <div class="column-header">
                                     <span class="column-status-dot" style="background:var(--primary);border-radius:50%;width:10px;height:10px;display:inline-block;"></span>
                                     <span class="column-title">已完成</span>
@@ -527,7 +527,7 @@
                                 </div>
                                 <div class="column-body" id="col-done"></div>
                             </div>
-                            <div class="board-column board-column-blocked" data-status="blocked">
+                            <div class="board-column board-column-blocked" data-status="blocked" ondragover="boardDragOver(event)" ondrop="boardDrop(event, 'blocked')">
                                 <div class="column-header">
                                     <span class="column-status-dot" style="background:var(--error);border-radius:50%;width:10px;height:10px;display:inline-block;"></span>
                                     <span class="column-title">已阻塞</span>
@@ -535,7 +535,7 @@
                                 </div>
                                 <div class="column-body" id="col-blocked"></div>
                             </div>
-                            <div class="board-column board-column-cancelled" data-status="cancelled">
+                            <div class="board-column board-column-cancelled" data-status="cancelled" ondragover="boardDragOver(event)" ondrop="boardDrop(event, 'cancelled')">
                                 <div class="column-header">
                                     <span class="column-status-dot" style="background:var(--text-muted);border-radius:50%;width:10px;height:10px;display:inline-block;"></span>
                                     <span class="column-title">已取消</span>
