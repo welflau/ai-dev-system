@@ -11377,14 +11377,38 @@ async function startTicket(ticketId) {
 
 async function reworkTicket(ticketId) {
     if (!currentProjectId) return;
+
+    // 1. 查下游依赖工单（打回前先知道级联范围）
+    let downstream = [];
+    try {
+        const res = await api(`/projects/${currentProjectId}/tickets/${ticketId}/downstream`);
+        downstream = (res && res.tickets) || [];
+    } catch (e) {
+        console.warn('查下游失败（不阻断打回）', e);
+    }
+
+    // 2. 填打回原因
     const reason = prompt('请输入打回重做的原因（将触发返工修复，重新走 验收→部署）：');
     if (!reason || !reason.trim()) return;
+
+    // 3. 有下游 → 弹确认框列出级联范围
+    if (downstream.length) {
+        const list = downstream.map(t =>
+            `  · ${t.title || ('#' + String(t.id || '').slice(-6))}（${t.status === 'deployed' ? '已部署' : t.status}）`
+        ).join('\n');
+        if (!confirm(
+            `打回将级联打回以下 ${downstream.length} 个下游依赖工单：\n\n${list}\n\n确定打回全部？`
+        )) return;
+    }
+
+    // 4. 级联打回
     try {
         const res = await api(`/projects/${currentProjectId}/tickets/${ticketId}/reject`, {
             method: 'POST',
-            body: { reason: reason.trim(), source: 'human' },
+            body: { reason: reason.trim(), source: 'human', cascade: true },
         });
-        showToast(`已打回重做：${res.message || res.new_status || ''}`, 'success');
+        const n = (res && res.cascaded && res.cascaded.length) || 0;
+        showToast(`已打回重做${n ? `，级联 ${n} 个下游工单` : ''}`, 'success');
         if (typeof closeTicketDrawer === 'function') closeTicketDrawer();
         refreshBoard();
         if (typeof _currentTimelineTicketId !== 'undefined' && _currentTimelineTicketId === ticketId) {

@@ -1449,6 +1449,57 @@ async def start_ticket(project_id: str, ticket_id: str, background_tasks: Backgr
     return {"message": "工单已启动", "ticket_id": ticket_id}
 
 
+async def _collect_downstream(project_id: str, ticket_id: str) -> List[dict]:
+    """递归收集所有（直接+间接）依赖 ticket_id 的下游工单。
+
+    依赖关系存在 tickets.dependencies（JSON 数组，元素是依赖的工单 ID）。
+    返回按 BFS 顺序排列的下游工单列表（不含 ticket_id 本身）。
+    """
+    all_tickets = await db.fetch_all(
+        "SELECT id, title, status, dependencies FROM tickets WHERE project_id = ?",
+        (project_id,),
+    )
+
+    def _deps_of(t: dict) -> List[str]:
+        raw = t.get("dependencies") or ""
+        try:
+            deps = json.loads(raw) if raw else []
+        except (json.JSONDecodeError, TypeError):
+            return []
+        return deps if isinstance(deps, list) else []
+
+    result: List[dict] = []
+    seen = {ticket_id}
+    queue = [ticket_id]
+    while queue:
+        cur = queue.pop(0)
+        for t in all_tickets:
+            if t["id"] in seen:
+                continue
+            if cur in _deps_of(t):
+                seen.add(t["id"])
+                result.append(dict(t))
+                queue.append(t["id"])
+    return result
+
+
+@router.get("/api/projects/{project_id}/tickets/{ticket_id}/downstream")
+async def ticket_downstream(project_id: str, ticket_id: str):
+    """查询某工单的下游依赖工单（供打回前弹确认框展示级联范围）。"""
+    exists = await db.fetch_one(
+        "SELECT id FROM tickets WHERE id = ? AND project_id = ?", (ticket_id, project_id)
+    )
+    if not exists:
+        raise HTTPException(404, "工单不存在")
+    downstream = await _collect_downstream(project_id, ticket_id)
+    return {
+        "tickets": [
+            {"id": t["id"], "title": t["title"], "status": t["status"]}
+            for t in downstream
+        ]
+    }
+
+
 @router.post("/api/projects/{project_id}/tickets/{ticket_id}/reject")
 async def reject_ticket(project_id: str, ticket_id: str, req: TicketRejectRequest):
     """打回工单
@@ -1512,7 +1563,47 @@ async def reject_ticket(project_id: str, ticket_id: str, req: TicketRejectReques
         },
     )
 
-    return {"message": message, "new_status": new_status, "source": source}
+    # === 级联打回下游依赖工单 ===
+    # 打回前置工单后，依赖它的下游（已完成的）建立在前置产出之上，必须一起打回，
+    # 否则出现「脚手架重做但下游仍标 deployed」的假完成。只打回已到终态的下游；
+    # 还在 pending/processing 的下游不动（它们本来就等依赖，会自然卡住）。
+    cascaded: List[str] = []
+    if req.cascade:
+        downstream = await _collect_downstream(project_id, ticket_id)
+        for dt in downstream:
+            if dt["status"] not in ("deployed", "testing_done", "done", "completed"):
+                continue
+            await db.update(
+                "tickets",
+                {"status": TicketStatus.ACCEPTANCE_REJECTED.value, "updated_at": now_iso()},
+                "id = ?",
+                (dt["id"],),
+            )
+            await _log_ticket(
+                project_id, existing["requirement_id"], dt["id"],
+                "ProductAgent", "reject",
+                dt["status"], TicketStatus.ACCEPTANCE_REJECTED.value,
+                f"级联打回（依赖 {ticket_id} 被打回）: {req.reason}",
+            )
+            await event_manager.publish_to_project(
+                project_id, "ticket_rejected",
+                {
+                    "ticket_id": dt["id"],
+                    "from": dt["status"],
+                    "to": TicketStatus.ACCEPTANCE_REJECTED.value,
+                    "reason": f"级联打回: {req.reason}",
+                    "source": "human",
+                    "cascade_of": ticket_id,
+                },
+            )
+            cascaded.append(dt["id"])
+
+    return {
+        "message": message,
+        "new_status": new_status,
+        "source": source,
+        "cascaded": cascaded,
+    }
 
 
 @router.post("/api/projects/{project_id}/tickets/{ticket_id}/diagnose")
