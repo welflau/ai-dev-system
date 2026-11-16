@@ -159,6 +159,30 @@ class DevAgent(BaseAgent):
             )
         return d
 
+    async def _run_scaffold(self, context: Dict[str, Any]) -> Dict[str, Any] | None:
+        """脚手架工单走确定性骨架，绕开 existing_code 增量误判。
+
+        仓库 clone 自带 README/.gitignore，加上第一轮降级留下的 index.html，
+        会让 existing_code 恒非空 → 脚手架工单被判增量 → PlanCodeChange
+        回退 WriteCode → _fallback「已有代码不许用降级模板」硬失败
+        → development_failed 死循环（TK-20261110-48b6af 实测 344 次 LLM 调用）。
+
+        识别命中则不经 LLM，直接产出真实可运行的 Vite+TS+Three.js 骨架；
+        判不准 / SOP 开关关闭 / 任何异常 → 返回 None，完全回退原有分支。
+        """
+        sop_cfg = context.get("sop_config") or {}
+        if sop_cfg.get("enable_scaffold_action") is False:
+            return None
+        try:
+            from actions.scaffold_utils import is_scaffold_ticket
+            if not await is_scaffold_ticket(context):
+                return None
+            from actions.scaffold_web import ScaffoldWebAction
+            return (await ScaffoldWebAction().run(context)).to_dict()
+        except Exception as e:
+            logger.warning("脚手架路由异常，回退原路径: %s", e)
+            return None
+
     async def _do_develop(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """开发：有 OpenSpec change/tasks 时强制走 Apply；否则 WriteCode / PlanCodeChange。"""
         existing_code = context.get("existing_code", {})
@@ -174,9 +198,13 @@ class DevAgent(BaseAgent):
         t0 = time.monotonic()
         await self.emit_step("代码生成", context, phase="start", step_index=1, step_total=step_total)
         apply_result = await self._run_openspec_apply(context)
+        scaffold_result = await self._run_scaffold(context)
         if apply_result is not None:
             code_result = apply_result
             logger.info("📐 开发走 OpenSpec Apply（files=%d）", len(code_result.get("files") or {}))
+        elif scaffold_result is not None:
+            code_result = scaffold_result
+            logger.info("🧩 开发走确定性脚手架（files=%d）", len(code_result.get("files") or {}))
         elif existing_code:
             logger.info("📋 检测到已有代码，使用 PlanCodeChange 精准增量")
             code_result = await self.run_action("plan_code_change", context)
@@ -196,7 +224,13 @@ class DevAgent(BaseAgent):
             fail_reason = code_result.get("message") or code_result.get("error") or "代码生成失败"
         elif not code_files:
             fail_reason = "未产出任何代码文件"
-        elif "[降级]" in dev_notes:
+        # 只有 WriteCodeAction 的降级模板产物才以 "[降级]" 开头、且最多 1 个文件
+        # （见 write_code.py 的 _fallback：仅生成 index.html / main.py）。
+        # 不能用子串判断：TK-20261110-48b6af 的 PlanAndChange 明明产出 7 个真实骨架文件，
+        # 只因 LLM 摘要写了「禁止降级占位」就被判「仅产出降级模板」→ development_failed
+        # → fix_issues 反思重开发，而反思 prompt 反复强调别造空壳，下一轮摘要又写「降级」，
+        # 于是同一误判逐轮复现。降级判定必须看「标记位置 + 实际产出」，不看措辞。
+        elif dev_notes.startswith("[降级]") and len(code_files) <= 1:
             fail_reason = f"仅产出降级模板，非真实实现（{dev_notes[:80]}）"
 
         if fail_reason:
@@ -207,7 +241,8 @@ class DevAgent(BaseAgent):
             # 保持 status=error 让 orchestrator 转 blocked 等人工。
             # 其余（LLM 超时 / 零产出 / 降级模板）走 development_failed → fix_issues
             # 带反思重开发，累计超过 MAX_RETRIES 才 blocked 止损。
-            hard_fail = bool(code_result.get("_openspec_apply_failed"))
+            hard_fail = bool(code_result.get("_openspec_apply_failed")
+                             or code_result.get("_scaffold_failed"))
             return {
                 "status": "error" if hard_fail else "development_failed",
                 "message": fail_reason,

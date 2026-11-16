@@ -5,9 +5,17 @@ insert_after: development
 priority: 94   # 低于 engine_compile(95)，高于 play_test(85)
 description: 对 Phaser + TypeScript 仓库跑 tsc --noEmit，拦住类型级错误
 
+# H5 类型检查对任意「Web + TS/Phaser 前端」都适用，不只 Phaser 项目。
+# 收窄到纯前端（排除桌面/服务端），避免给 UE5 C++、Python 服务挂 tsc 门禁。
 required_traits:
+  all_of:
+    - platform:web
   any_of:
     - framework:phaser
+    - lang:typescript
+  none_of:
+    - platform:desktop
+    - category:service
 
 stage:
   agent: DevAgent

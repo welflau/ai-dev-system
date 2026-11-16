@@ -2014,17 +2014,27 @@ class TicketOrchestrator:
         原先直接 `COUNT(*) ... action='reject'` 数的是全部历史，从不清零：
         撞上限 blocked → 人工点「解除 blocked」→ 下一轮派单又数出同样的次数 →
         秒回 blocked，按钮等于无效。人工介入的语义就是「问题已排查，重新给机会」，
-        所以以 unblock 日志为界重新计数。
+        所以以 unblock 日志为界重新计数；但同一工单最多允许 2 次清零，防止无限续命。
 
         to_status 非空时只数打回到该状态的（供按阶段止损的 max_retries 用）。
         """
-        reset_row = await db.fetch_one(
+        # 只允许前 N 次人工解除阻塞清零计数。超过后 unblock 仍能解除 blocked、
+        # 但不再刷新重试额度 —— 否则「blocked → 人工 unblock → 再 5 次」可无限续命。
+        # TK-20261110-48b6af 实测 4 轮 unblock / 25 reject / 344 次 LLM 调用即由此而来。
+        MAX_UNBLOCK_RESETS = 2
+        reset_rows = await db.fetch_all(
             """SELECT created_at FROM ticket_logs
                WHERE ticket_id = ? AND action IN ('unblock', 'reject_reset')
-               ORDER BY created_at DESC LIMIT 1""",
+               ORDER BY created_at ASC""",
             (ticket_id,),
         )
-        since = (reset_row or {}).get("created_at")
+        if len(reset_rows) > MAX_UNBLOCK_RESETS:
+            # 只认前 N 次清零；之后的 unblock 不再成为新的计数起点
+            since = reset_rows[MAX_UNBLOCK_RESETS - 1].get("created_at")
+        elif reset_rows:
+            since = reset_rows[-1].get("created_at")
+        else:
+            since = None
 
         sql = "SELECT COUNT(*) AS c FROM ticket_logs WHERE ticket_id = ? AND action = 'reject'"
         params: list = [ticket_id]
@@ -2035,6 +2045,82 @@ class TicketOrchestrator:
             sql += " AND created_at > ?"
             params.append(since)
 
+        row = await db.fetch_one(sql, tuple(params))
+        return (row or {}).get("c", 0) or 0
+
+    @staticmethod
+    def _failure_fingerprint(detail: str) -> str:
+        """把 reject 原因归一化成稳定指纹：去掉动态数字、截长度。无原因返回空串。
+
+        同一失败反复出现时 reason 完全一致（如「LLM 输出无效。项目已有代码…」），
+        只是耗时/文件数会变，去数字即可对齐；空原因（验收打回）不参与熔断判定。
+        """
+        try:
+            d = json.loads(detail)
+            reason = str(d.get("reason") or d.get("message") or "")
+        except (ValueError, TypeError):
+            reason = str(detail or "")
+        # 连续数字压缩成单个 #：耗时 12345ms 与 999ms 归一化后必须一致
+        out, in_digit = [], False
+        for ch in reason:
+            if ch.isdigit():
+                if not in_digit:
+                    out.append("#")
+                in_digit = True
+            else:
+                out.append(ch)
+                in_digit = False
+        return "".join(out).strip()[:120]
+
+    async def _consecutive_same_failure(self, ticket_id: str) -> tuple:
+        """最近连续出现同一失败原因的 reject 次数（跳过无原因的验收打回）。
+
+        与 unblock 清零无关：人工解除阻塞后又以同样原因失败，说明问题没解决，
+        连续计数应当继续累加，否则每次 unblock 都能把熔断额度刷满。
+        """
+        rows = await db.fetch_all(
+            """SELECT detail, to_status FROM ticket_logs
+               WHERE ticket_id = ? AND action = 'reject'
+               ORDER BY created_at DESC LIMIT 20""",
+            (ticket_id,),
+        )
+        count, fingerprint = 0, ""
+        for row in rows:
+            # 验收打回与 development_failed 交替出现，若计入会把连续链切断
+            # （TK-20261110-48b6af 实测：10+ 次同一句「LLM 输出无效…」中间夹着验收打回）。
+            # 验收环节的止损由全局 MAX_RETRIES 与阶段级 max_retries 兜底，此处只盯开发失败。
+            if (row.get("to_status") or "") == "acceptance_rejected":
+                continue
+            fp = self._failure_fingerprint(str(row.get("detail") or ""))
+            if not fp:
+                continue
+            if not fingerprint:
+                fingerprint = fp
+            if fp != fingerprint:
+                break
+            count += 1
+        return count, fingerprint
+
+    async def _acceptance_retry_count(self, ticket_id: str) -> int:
+        """本工单因「验收 LLM 降级」已重派验收的次数（自最近一次 unblock 起）。
+
+        与 _reject_count_since_reset 口径一致，但统计的是独立的
+        `acceptance_retry` 日志动作 —— 它不是 `reject`，因此不进全局
+        MAX_RETRIES / 同因熔断 / Failure Library，也不触发返工链。
+        """
+        reset = await db.fetch_one(
+            """SELECT created_at FROM ticket_logs
+               WHERE ticket_id = ? AND action IN ('unblock', 'reject_reset')
+               ORDER BY created_at DESC LIMIT 1""",
+            (ticket_id,),
+        )
+        since = (reset or {}).get("created_at")
+        sql = ("SELECT COUNT(*) AS c FROM ticket_logs "
+               "WHERE ticket_id = ? AND action = 'acceptance_retry'")
+        params: list = [ticket_id]
+        if since:
+            sql += " AND created_at > ?"
+            params.append(since)
         row = await db.fetch_one(sql, tuple(params))
         return (row or {}).get("c", 0) or 0
 
@@ -2108,17 +2194,33 @@ class TicketOrchestrator:
                 )
                 return
 
-            # === 全局 reject 上限：硬停 blocked（不再伪装成 testing_done）===
+            # === 全局 reject 上限 + 同因连续失败熔断：硬停 blocked ===
             # 旧 force_pass→testing_done 会把「编译环空转」标成已完成，跳过 Test/Deploy，
             # 前端显示「已完成」但 OpenSpec/验收实际未跑。正确语义：转人工介入。
+            # 追加：同一失败原因连续出现即确定性失败，不必陪跑满 5 次烧 token ——
+            # TK-20261110-48b6af 实测连续 10+ 次同一句「LLM 输出无效…」仍每轮重派。
             MAX_RETRIES = 5
+            CONSECUTIVE_FAILURE_LIMIT = 3
             reject_cnt_global = await self._reject_count_since_reset(ticket_id)
-            if reject_cnt_global >= MAX_RETRIES:
+            same_cnt, fingerprint = await self._consecutive_same_failure(ticket_id)
+            hit_global = reject_cnt_global >= MAX_RETRIES
+            hit_repeated = same_cnt >= CONSECUTIVE_FAILURE_LIMIT
+            if hit_global or hit_repeated:
+                block_reason = "repeated_failure_fingerprint" if hit_repeated else "global_reject_limit"
+                if hit_repeated:
+                    block_msg = (
+                        f"同一失败原因连续出现 {same_cnt} 次（≥{CONSECUTIVE_FAILURE_LIMIT}），"
+                        f"判定为确定性失败，停止自动重试并标记 blocked。"
+                        f"原因：{fingerprint[:80]}"
+                    )
+                else:
+                    block_msg = (
+                        f"工单已被打回 {reject_cnt_global} 次，超过上限 {MAX_RETRIES} 次，"
+                        f"停止自动流转并标记 blocked（不再强制标记完成）。"
+                        f"请人工排查环境/编译/需求后解除阻塞。"
+                    )
                 from_status = ticket["status"]
-                logger.warning(
-                    "🛑 工单 %s 已被打回 %d 次，标记 blocked（停止自动流转，转人工）",
-                    ticket_id[:12], reject_cnt_global,
-                )
+                logger.warning("🛑 工单 %s 止损 blocked：%s", ticket_id[:12], block_msg[:120])
                 await db.update("tickets", {
                     "status": TicketStatus.BLOCKED.value,
                     "updated_at": now_iso(),
@@ -2126,14 +2228,15 @@ class TicketOrchestrator:
                 await self._log(
                     project_id, ticket.get("requirement_id"), ticket_id, "Orchestrator",
                     "blocked", from_status, TicketStatus.BLOCKED.value,
-                    f"工单已被打回 {reject_cnt_global} 次，超过上限 {MAX_RETRIES} 次，"
-                    f"停止自动流转并标记 blocked（不再强制标记完成）。"
-                    f"请人工排查环境/编译/需求后解除阻塞。",
+                    block_msg,
                     "warning",
                     detail_data={
                         "reject_count": reject_cnt_global,
                         "max_retries": MAX_RETRIES,
-                        "reason": "global_reject_limit",
+                        "consecutive_same_failure": same_cnt,
+                        "consecutive_failure_limit": CONSECUTIVE_FAILURE_LIMIT,
+                        "failure_fingerprint": fingerprint[:120],
+                        "reason": block_reason,
                         "legacy_action": "force_pass",
                     },
                 )
@@ -2143,7 +2246,7 @@ class TicketOrchestrator:
                         "ticket_id": ticket_id,
                         "from": from_status,
                         "to": TicketStatus.BLOCKED.value,
-                        "reason": "global_reject_limit",
+                        "reason": block_reason,
                     },
                 )
                 asyncio.create_task(self._diagnose_blocked_ticket(
@@ -2151,8 +2254,8 @@ class TicketOrchestrator:
                     ticket_id=ticket_id,
                     current_ticket=dict(ticket),
                     agent_name="Orchestrator",
-                    action="global_reject_limit",
-                    error_msg=f"工单已被打回 {reject_cnt_global} 次（最后状态: {from_status}），超过上限 {MAX_RETRIES} 次",
+                    action=block_reason,
+                    error_msg=f"{block_msg}（最后状态: {from_status}）",
                     blocked_from_status=from_status,
                 ))
                 return
@@ -3403,6 +3506,40 @@ class TicketOrchestrator:
             })
 
         elif agent_name == "ProductAgent" and action == "acceptance_review":
+            # LLM 降级 ≠ 代码有问题：验收根本没执行，不该当成「验收不通过」打回开发。
+            # 保持「降级 ≠ 通过」（永不产生 acceptance_passed）：有限次直接重派验收，
+            # 耗尽后 blocked 转人工；全程不记 reject，不占全局 MAX_RETRIES / 同因熔断额度，
+            # 也不触发 DevAgent.fix_issues 反思重开发（TK-20261110-48b6af 实测
+            # result.degraded=true 且 reject 原因恒为 []，白打回 8 次）。
+            if result.get("degraded"):
+                degrade_reason = str(result.get("degrade_reason") or "LLM 降级")
+                retry_cnt = await self._acceptance_retry_count(ticket_id)
+                if retry_cnt >= 2:
+                    new_status = TicketStatus.BLOCKED.value
+                    log_action, level = "blocked", "warning"
+                    msg = (f"验收连续降级 {retry_cnt + 1} 次，停止自动重派，转人工排查 LLM/CLI 环境。"
+                           f"原因: {degrade_reason[:120]}")
+                else:
+                    stage = await self._sop_stage_for(
+                        project_id, "acceptance_review", ticket.get("type")
+                    )
+                    new_status = (stage or {}).get("trigger_on") or "review_passed"
+                    log_action, level = "acceptance_retry", "warning"
+                    msg = (f"验收未执行（LLM 降级），不打回开发，直接重派验收（第 {retry_cnt + 1} 次）。"
+                           f"原因: {degrade_reason[:120]}")
+                await db.update("tickets", {
+                    "status": new_status,
+                    "result": result_json,
+                    "updated_at": now_iso(),
+                }, "id = ?", (ticket_id,))
+                await self._log(
+                    project_id, requirement_id, ticket_id, agent_name,
+                    log_action, current_status, new_status, msg, level,
+                    detail_data={"degraded": True, "degrade_reason": degrade_reason,
+                                 "issues": result.get("issues") or []},
+                )
+                return
+
             # 验收结果（只接受合法状态，防止 Agent 返回 "success" 等非标值）
             review_status = result.get("status", "acceptance_passed")
             if review_status not in (TicketStatus.ACCEPTANCE_PASSED.value, TicketStatus.ACCEPTANCE_REJECTED.value):
@@ -3438,7 +3575,7 @@ class TicketOrchestrator:
                 await self._log(
                     project_id, requirement_id, ticket_id, agent_name,
                     "reject", current_status, new_status,
-                    f"验收不通过，打回开发。原因: {json.dumps(result.get('review', {}).get('issues', []), ensure_ascii=False)}"
+                    f"验收不通过，打回开发。原因: {json.dumps(result.get('review', {}).get('issues') or result.get('issues') or [], ensure_ascii=False)}"
                 )
 
         elif agent_name == "TestAgent":

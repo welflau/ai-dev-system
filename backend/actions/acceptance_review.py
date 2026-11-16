@@ -196,12 +196,16 @@ class AcceptanceReviewAction(ActionBase):
         # （passed=True, score=6），而 pass_score 默认也是 6 —— 不拦就等于
         # 「验收超时自动通过」。TK-20260920-ce79a9 正是这么放行了一个只有
         # console.log 空壳的工单。降级一律判不通过，让 SOP 走 reject_goto 返工。
+        degrade_issues = []
         if node.degraded:
             logger.error("🚫 验收降级判不通过: %s | %s", ticket_title[:20], node.degrade_reason)
             score = 0
             passed = False
             status = "acceptance_rejected"
             degrade_note = node.degrade_reason
+            # 降级时 review 是 schema 默认模型（issues=[]），不填真实原因的话
+            # orchestrator 的 reject 日志只会打印「原因: []」（照抄 code_review.py:131）。
+            degrade_issues = [f"验收未执行（LLM 降级）: {degrade_note}"]
         else:
             score = review.score if review else 7
             passed = score >= pass_score
@@ -254,11 +258,15 @@ class AcceptanceReviewAction(ActionBase):
                 )
             )
 
+        review_data = review.model_dump() if review else {}
+        if degrade_note:
+            review_data["issues"] = degrade_issues
         return ActionResult(
             success=True,
             data={
                 "status": status,
-                "review": review.model_dump() if review else {},
+                "review": review_data,
+                "issues": degrade_issues,
                 "degraded": bool(degrade_note),
                 "degrade_reason": degrade_note,
                 "screenshot_path": screenshot_path,
