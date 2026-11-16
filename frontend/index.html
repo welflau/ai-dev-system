@@ -4,7 +4,16 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI 自动开发系统</title>
-    <link rel="stylesheet" href="/static/styles.css?v=20261103g">
+    <!-- UI 主题引导：在样式表之前尽早应用，避免刷新时先渲染默认配色再跳变 -->
+    <script>
+    (function () {
+        try {
+            var t = localStorage.getItem('ads_theme');
+            if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+        } catch (e) {}
+    })();
+    </script>
+    <link rel="stylesheet" href="/static/styles.css?v=20261116h">
     <!-- highlight.js 语法高亮 -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
@@ -414,7 +423,7 @@
                             </div>
                         </div>
                     </div>
-                    <div class="sidebar-footer">
+                    <div class="sidebar-footer" style="display:none;">
                         <button class="btn btn-accent btn-block" onclick="showCreateRequirementModal()">
                             + 提交需求
                         </button>
@@ -550,7 +559,7 @@
                     <div id="tab-requirements" class="tab-content">
                         <div class="page-header">
                             <h2>需求列表</h2>
-                            <button class="btn btn-primary" onclick="showCreateRequirementModal()">+ 提交需求</button>
+                            <button class="btn btn-primary" style="display:none;" onclick="showCreateRequirementModal()">+ 提交需求</button>
                         </div>
                         <div class="requirement-list" id="requirementList"></div>
                     </div>
@@ -2642,7 +2651,7 @@
     <!-- ==================== Toast 通知 ==================== -->
     <div class="toast-container" id="toastContainer"></div>
 
-    <script src="/static/app.js?v=20261103g"></script>
+    <script src="/static/app.js?v=20261116h"></script>
 </body>
 </html>
 

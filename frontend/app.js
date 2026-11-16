@@ -1474,7 +1474,7 @@ const adsShell = (() => {
                 </div>
                 <div class="main-ws-web-hint">部分站点（如工蜂）通过 X-Frame-Options 禁止内嵌，若下方白屏或提示"拒绝连接"，请点右上 ↗ 在系统浏览器打开</div>
                 <div class="main-ws-web" style="flex:1;min-height:0;">
-                    <iframe id="mainWsWebFrame" src="${u}" style="width:100%;height:100%;border:0;background:#fff;"
+                    <iframe id="mainWsWebFrame" src="${u}" style="width:100%;height:100%;border:0;background:var(--ads-c-fff);"
                         referrerpolicy="no-referrer"></iframe>
                 </div>`;
             return;
@@ -2583,13 +2583,13 @@ async function refreshCliModels() {
             _fillCliModelSelect(cliType, current);
         }
         if (hint) {
-            hint.style.color = data.ok ? 'var(--success, #22c55e)' : 'var(--warning, #f59e0b)';
+            hint.style.color = data.ok ? 'var(--success)' : 'var(--warning)';
             hint.textContent = data.message || (data.ok ? `已刷新 ${models.length} 个模型` : '刷新失败');
         }
     } catch (e) {
         if (hint) {
             hint.style.display = 'block';
-            hint.style.color = 'var(--danger, #ef4444)';
+            hint.style.color = 'var(--danger, var(--ads-c-ef4444))';
             hint.textContent = `刷新失败: ${e.message || e}`;
         }
     } finally {
@@ -3827,7 +3827,7 @@ function _renderAdsPluginList(container, data) {
     const summary = document.getElementById('adsPluginListSummary');
     if (summary) {
         const projectHint = data.project_id
-            ? `当前项目会启用 <strong style="color:#22c55e;">${c.active || 0}</strong> / ${c.shown || 0}`
+            ? `当前项目会启用 <strong style="color:var(--ads-c-22c55e);">${c.active || 0}</strong> / ${c.shown || 0}`
             : `已加载 <strong style="color:var(--text-primary);">${c.shown || 0}</strong> 个（打开项目后按 traits 标启用）`;
         summary.innerHTML = `
             <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:11px;color:var(--text-muted);
@@ -3965,7 +3965,7 @@ function _renderAdsPluginDetailBody(d) {
 
     const note = `
         <div style="font-size:11px;padding:6px 10px;border-radius:6px;margin-top:12px;
-                    background:rgba(56,189,248,.08);color:#38bdf8;">
+                    background:rgba(56,189,248,.08);color:var(--ads-c-38bdf8);">
             ℹ️ 这是 ADS 进程内的套件，不是 IDE Client 插件。启停看项目 traits，没有单独开关。
         </div>`;
 
@@ -4001,7 +4001,7 @@ function _renderPluginList(container, data, showAll) {
         summary.innerHTML = `
             <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:11px;color:var(--text-muted);
                         padding:8px 10px;background:var(--bg-elevated);border-radius:6px;">
-                <span title="enabledPlugins 里登记过、且开关是开的">已启用 <strong style="color:#22c55e;">${c.enabled || 0}</strong></span>
+                <span title="enabledPlugins 里登记过、且开关是开的">已启用 <strong style="color:var(--ads-c-22c55e);">${c.enabled || 0}</strong></span>
                 <span title="enabledPlugins 里登记过（含已禁用的）">已安装 <strong style="color:var(--text-primary);">${c.installed || 0}</strong></span>
                 <span title="市场目录里扫到的全部，绝大多数你并没有安装">市场可见 <strong>${c.scanned || 0}</strong></span>
                 ${showAll ? '' : `<span style="opacity:.8;">（仅显示已安装的 ${c.shown || 0} 个）</span>`}
@@ -4058,7 +4058,7 @@ function _renderPluginList(container, data, showAll) {
                 <span style="font-size:10px;transition:transform .15s;" class="src-grp-chevron">▾</span>
                 <span style="font-size:13px;font-weight:600;">${escapeHtml(g.cli_label)}</span>
                 <code style="font-size:11px;color:var(--text-muted);">${escapeHtml(g.marketplace)}</code>
-                <span style="font-size:11px;padding:1px 6px;border-radius:10px;background:rgba(234,179,8,.12);color:#eab308;"
+                <span style="font-size:11px;padding:1px 6px;border-radius:10px;background:rgba(234,179,8,.12);color:var(--ads-c-eab308);"
                       title="已启用 / 本组总数">${g.enabled_count} / ${g.count}</span>
             </div>
             <div class="src-grp-items">${rows}</div>
@@ -4131,7 +4131,7 @@ function _renderPluginDetailBody(d) {
             ${d.mcp_servers.map(m => `<div style="font-size:11px;padding:2px 0 2px 8px;">
                 ${escapeHtml(m.name)}
                 <code style="color:var(--text-muted);">${escapeHtml(m.transport)}</code>
-                ${m.needs_auth ? `<span style="color:#f59e0b;" title="凭证在宿主 Client 的保险库里，ADS 未持有该授权">🔒 需在 Client 侧授权</span>` : ''}
+                ${m.needs_auth ? `<span style="color:var(--ads-c-f59e0b);" title="凭证在宿主 Client 的保险库里，ADS 未持有该授权">🔒 需在 Client 侧授权</span>` : ''}
             </div>`).join('')}
         </div>` : '';
 
@@ -4145,7 +4145,7 @@ function _renderPluginDetailBody(d) {
 
     const readonlyNote = `
         <div style="font-size:11px;padding:6px 10px;border-radius:6px;margin-top:12px;
-                    background:rgba(234,179,8,.08);color:#eab308;">
+                    background:rgba(234,179,8,.08);color:var(--ads-c-eab308);">
             ℹ️ ADS 只读取插件内容，不改动它。启停请在 ${escapeHtml(d.cli_label || d.cli)} 里操作。
         </div>`;
 
@@ -4204,7 +4204,7 @@ function _renderMcpView(container, data, source) {
                 ? `<span class="mcp-server-status mcp-badge-${srv.enabled?'success':'muted'}" style="font-size:11px;">${srv.enabled?'✅ 已启用':'⚪ 未启用'}</span>`
                 : '');
         const sniffedBadge = srv.sniffed
-            ? `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:rgba(16,185,129,.14);color:#10b981;" title="ADS 通过本机端口 /mcp 协议握手自动嗅探发现">🛰️ 自动嗅探</span>`
+            ? `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:rgba(16,185,129,.14);color:var(--ads-c-10b981);" title="ADS 通过本机端口 /mcp 协议握手自动嗅探发现">🛰️ 自动嗅探</span>`
             : '';
         const transportBadge = srv.transport
             ? `<span style="font-size:10px;color:var(--text-muted);">${escapeHtml(srv.transport)}</span>` : '';
@@ -4331,7 +4331,7 @@ function _renderPacksView() {
         const shown = installed.length + available.length;
         const total = allInstalled.length + allAvailable.length;
         hint.textContent = q ? `匹配 ${shown} / ${total}（已装 ${installed.length} · 可装 ${available.length}）` : '';
-        hint.style.color = (q && shown === 0) ? 'var(--warning, #f97316)' : 'var(--text-muted)';
+        hint.style.color = (q && shown === 0) ? 'var(--warning)' : 'var(--text-muted)';
     }
 
     // 已安装列表
@@ -4340,7 +4340,7 @@ function _renderPacksView() {
             ? `<div class="empty-state-sm">已安装的 Pack 里没有匹配「${escapeHtml(q)}」的</div>`
             : '<div class="empty-state-sm">未安装任何 ConfigPack</div>';
     } else {
-            const migrationHint = `<div style="font-size:11px;padding:6px 10px;border-radius:6px;background:rgba(249,115,22,.08);color:#f97316;margin-bottom:8px;">
+            const migrationHint = `<div style="font-size:11px;padding:6px 10px;border-radius:6px;background:rgba(249,115,22,.08);color:var(--ads-c-f97316);margin-bottom:8px;">
                 ⚠️ 套件文件现在安装到 <code>.codebuddy/packs/{pack名}/</code> 子目录。点击 <strong>↩ 重装</strong> 可将已有套件迁移到新路径。
             </div>`;
             installedEl.innerHTML = migrationHint + installed.map(p => {
@@ -4351,7 +4351,7 @@ function _renderPacksView() {
                     const parts = [];
                     if (ruleIds.length) parts.push(`rules: ${ruleIds.join(', ')}`);
                     if (skillIds.length) parts.push(`skills: ${skillIds.length}个`);
-                    gatingBadge = `<span style="font-size:10px;padding:1px 6px;border-radius:3px;background:rgba(34,197,94,.12);color:#22c55e;font-weight:500;" title="${escapeHtml(parts.join(' | '))}" >🎓 已激活</span>`;
+                    gatingBadge = `<span style="font-size:10px;padding:1px 6px;border-radius:3px;background:rgba(34,197,94,.12);color:var(--ads-c-22c55e);font-weight:500;" title="${escapeHtml(parts.join(' | '))}" >🎓 已激活</span>`;
                 }
                 return `
                 <div class="skill-row pack-row-clickable" onclick="showPackDetail('${escapeHtml(p.pack_name)}', '${escapeHtml(p.display_name || p.pack_name)}')" style="cursor:pointer;" title="点击查看详情">
@@ -4389,7 +4389,7 @@ function _renderPacksView() {
                     // 颜色：100%=绿 ≥50%=橙 >0%=黄 0=灰
                     const barColor = pct === 100 ? '#22c55e' : pct >= 50 ? '#f97316' : pct > 0 ? '#eab308' : 'var(--border-color)';
                     const recBadge = isRec
-                        ? `<span style="font-size:10px;padding:1px 6px;border-radius:3px;background:rgba(34,197,94,.15);color:#22c55e;font-weight:600;">推荐</span>`
+                        ? `<span style="font-size:10px;padding:1px 6px;border-radius:3px;background:rgba(34,197,94,.15);color:var(--ads-c-22c55e);font-weight:600;">推荐</span>`
                         : '';
 
                     const matchBar = `
@@ -4519,7 +4519,7 @@ async function showPackDetail(packName, displayName) {
         const tagsBadges = (meta.tags || []).map(t =>
             `<code class="mcp-tool-tag" style="font-size:10px;">${escapeHtml(t)}</code>`).join('');
         const targetsBadges = (meta.targets || []).map(t =>
-            `<span style="font-size:10px;padding:1px 6px;border-radius:3px;background:rgba(99,102,241,.15);color:#818cf8;">${escapeHtml(t)}</span>`).join('');
+            `<span style="font-size:10px;padding:1px 6px;border-radius:3px;background:rgba(99,102,241,.15);color:var(--ads-c-818cf8);">${escapeHtml(t)}</span>`).join('');
         document.getElementById('packDetailMeta').innerHTML = `
             ${meta.description ? `<p style="margin:0 0 6px;font-size:13px;color:var(--text-secondary);">${escapeHtml(meta.description)}</p>` : ''}
             <div style="display:flex;flex-wrap:wrap;gap:5px;align-items:center;">
@@ -4604,7 +4604,7 @@ function selectPackItem(idx) {
 
     const cm = PACK_CATEGORY_META[catKey] || { label: catKey, icon: '📄' };
     const scopeBadge = item.scope && item.scope !== 'shared'
-        ? `<span style="font-size:10px;padding:1px 6px;border-radius:3px;background:rgba(234,179,8,.12);color:#ca8a04;margin-left:6px;">${escapeHtml(SCOPE_LABEL[item.scope] || item.scope)}</span>`
+        ? `<span style="font-size:10px;padding:1px 6px;border-radius:3px;background:rgba(234,179,8,.12);color:var(--ads-c-ca8a04);margin-left:6px;">${escapeHtml(SCOPE_LABEL[item.scope] || item.scope)}</span>`
         : '';
     const accentColor = COLOR_MAP[item.color] || 'var(--border-color)';
     const emojiHtml = item.emoji ? `${escapeHtml(item.emoji)} ` : '';
@@ -4762,7 +4762,7 @@ function _manualOnlyBadge(item, size) {
               + '只有你在消息里明确点名时才会用到它';
     return `<span title="${escapeHtml(tip)}"
         style="font-size:${fs}px;padding:${pad};border-radius:3px;background:rgba(100,116,139,.14);
-               color:#94a3b8;margin-left:4px;white-space:nowrap;">👆 仅显式调用</span>`;
+               color:var(--ads-c-94a3b8);margin-left:4px;white-space:nowrap;">👆 仅显式调用</span>`;
 }
 
 // ==================== 扩展面板关键词搜索 ====================
@@ -4885,7 +4885,7 @@ function _updateSearchHint(containerId, shown, total) {
     if (!el) return;
     const q = (_extSearchQuery[containerId] || '').trim();
     el.textContent = q ? `匹配 ${shown} / ${total}` : '';
-    el.style.color = (q && shown === 0) ? 'var(--warning, #f97316)' : 'var(--text-muted)';
+    el.style.color = (q && shown === 0) ? 'var(--warning)' : 'var(--text-muted)';
 }
 
 /** 无匹配时的提示（区分「本来就没有」和「被关键词滤空了」） */
@@ -4926,7 +4926,7 @@ function _injectSourceFilter(wrapper, containerId, counts, switchFn) {
                 onclick="${switchFn}('${c.key}')"
                 style="font-size:11px;padding:3px 10px;border-radius:12px;border:1px solid var(--border-color);cursor:pointer;
                        background:${c.key==='all'?'var(--primary)':'var(--bg-elevated)'};
-                       color:${c.key==='all'?'#fff':'var(--text-secondary)'};">
+                       color:${c.key==='all'?'var(--ads-c-fff)':'var(--text-secondary)'};">
             ${escapeHtml(`${c.label} ${c.n || 0}`)}
         </button>`).join('');
 }
@@ -4947,7 +4947,7 @@ function _setSourceFilter(containerId, source) {
     document.querySelectorAll(`.src-filter-chip[data-panel="${containerId}"]`).forEach(el => {
         const active = el.dataset.source === source;
         el.style.background = active ? 'var(--primary)' : 'var(--bg-elevated)';
-        el.style.color = active ? '#fff' : 'var(--text-secondary)';
+        el.style.color = active ? 'var(--ads-c-fff)' : 'var(--text-secondary)';
     });
 }
 
@@ -5178,7 +5178,7 @@ function _renderCommandView(container, data, source) {
         const sm = _SOURCE_META[cmd.source] || _SOURCE_META.builtin;
         const srcBadge = `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:${sm.bg};color:${sm.color};margin-left:4px;">${sm.label}${_srcSuffix(cmd)}</span>`;
         const overrideBadge = cmd.is_active === false
-            ? `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:rgba(239,68,68,.12);color:#ef4444;margin-left:4px;">被覆盖</span>` : '';
+            ? `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:rgba(239,68,68,.12);color:var(--ads-c-ef4444);margin-left:4px;">被覆盖</span>` : '';
         const opacity = cmd.is_active === false ? ' style="opacity:0.4;cursor:pointer;"' : ' style="cursor:pointer;"';
         const clickData = escapeHtml(JSON.stringify({name:cmd.name, description:cmd.description||'', source:cmd.source, pack_name:cmd.pack_name||null, plugin_name:cmd.plugin_name||null, marketplace:cmd.marketplace||'', file:(cmd.file||cmd.name+'.md'), type:'Command', emoji:'⚡', preview:cmd.preview||'', content:cmd.content||cmd.preview||''}));
         return `<div class="skill-row"${opacity} onclick='showExtensionDetail(${clickData})'>
@@ -5538,7 +5538,7 @@ function _renderExtDetailPane(item, activeIdx) {
     if (item.manual_only) {
         compatBlock += `
         <div style="margin:10px 0;padding:7px 11px;border-radius:6px;background:rgba(100,116,139,.1);
-                    border-left:3px solid #94a3b8;font-size:12px;color:var(--text-secondary);">
+                    border-left:3px solid var(--ads-c-94a3b8);font-size:12px;color:var(--text-secondary);">
             👆 仅显式调用 — 声明了 <code style="font-size:10.5px;">disable-model-invocation</code>，
             AI 不会主动加载，只有你在消息里明确点名时才会用到
         </div>`;
@@ -5653,7 +5653,7 @@ async function loadOpenSpecDashboard() {
         el.innerHTML = `
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">
             <div style="padding:8px 10px;background:rgba(168,85,247,.08);border:1px solid rgba(168,85,247,.2);border-radius:6px;">
-                <div style="font-weight:600;color:#a855f7;margin-bottom:5px;">📐 规范层</div>
+                <div style="font-weight:600;color:var(--ads-c-a855f7);margin-bottom:5px;">📐 规范层</div>
                 ${bar(os.coverage_pct, '#a855f7')}
                 <div style="margin-top:5px;opacity:.8;">
                     覆盖 <b>${os.coverage_pct}%</b>（${os.proposed + os.verified + os.archived}/${total}）<br>
@@ -5661,7 +5661,7 @@ async function loadOpenSpecDashboard() {
                 </div>
             </div>
             <div style="padding:8px 10px;background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.2);border-radius:6px;">
-                <div style="font-weight:600;color:#f59e0b;margin-bottom:5px;">⚡ 纪律层</div>
+                <div style="font-weight:600;color:var(--ads-c-f59e0b);margin-bottom:5px;">⚡ 纪律层</div>
                 ${bar(sp.coverage_pct, '#f59e0b')}
                 <div style="margin-top:5px;opacity:.8;">
                     激活 <b>${sp.coverage_pct}%</b>（${sp.activated}/${total}）<br>
@@ -5669,7 +5669,7 @@ async function loadOpenSpecDashboard() {
                 </div>
             </div>
             <div style="padding:8px 10px;background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.2);border-radius:6px;">
-                <div style="font-weight:600;color:#3b82f6;margin-bottom:5px;">🔧 编排层</div>
+                <div style="font-weight:600;color:var(--ads-c-3b82f6);margin-bottom:5px;">🔧 编排层</div>
                 ${bar(h.done_pct, '#3b82f6')}
                 <div style="margin-top:5px;opacity:.8;">
                     完成 <b>${h.done_pct}%</b>（${h.done}/${total}）<br>
@@ -5780,7 +5780,7 @@ function _renderOpenSpecInstalled() {
         const shown = rules.length + skills.length;
         const total = allRules.length + allSkills.length;
         hintEl.textContent = q ? `匹配 ${shown} / ${total}` : '';
-        hintEl.style.color = (q && shown === 0) ? 'var(--warning, #f97316)' : 'var(--text-muted)';
+        hintEl.style.color = (q && shown === 0) ? 'var(--warning)' : 'var(--text-muted)';
     }
 
     const chip = (s) => `<code style="font-size:11px;padding:1px 6px;border-radius:3px;background:var(--bg-tertiary);">${escapeHtml(s)}</code>`;
@@ -5952,7 +5952,7 @@ async function loadTraitsView() {
                 ${data.presets.length} 个 preset，${data.conflict_rules.length} 条冲突规则
             </div>
             ${data.presets.map(p => `
-                <div class="mcp-server-card" style="border-left-color:var(--accent, #a371f7);">
+                <div class="mcp-server-card" style="border-left-color:var(--accent);">
                     <div class="mcp-server-header">
                         <span class="mcp-server-name">📦 ${escapeHtml(p.label)}</span>
                         <code style="font-size:11px; color:var(--text-muted);">${escapeHtml(p.preset_id)}</code>
@@ -6018,7 +6018,7 @@ async function runTraitMatch() {
                             ✅ 命中: ${m.matched_keywords.map(k => escapeHtml(k)).join(' · ')}
                         </div>` : ''}
                     ${m.conflict_penalties.length > 0 ? `
-                        <div style="margin-top:4px; font-size:11px; color:var(--danger, #ea4a5a);">
+                        <div style="margin-top:4px; font-size:11px; color:var(--danger, var(--ads-c-ea4a5a));">
                             ⚠️ 扣分: ${m.conflict_penalties.map(c => escapeHtml(c)).join(' · ')}
                         </div>` : ''}
                 </div>
@@ -6209,7 +6209,7 @@ async function refreshProjectTraitsPreview() {
                 ? `<div><strong>Skill 注入</strong>：${skillsFlat.map(s => `<code style="font-size:10px;background:var(--bg-elevated);padding:1px 5px;border-radius:3px;margin-right:3px;">${escapeHtml(s)}</code>`).join('')}</div>`
                 : '<div style="color:var(--text-muted); font-size:12px;">Skill：无匹配</div>'}
             ${warnings.length
-                ? `<div style="margin-top:6px; color:var(--warning, #f59e0b); font-size:12px;">⚠️ ${warnings.map(w => escapeHtml(w)).join('; ')}</div>` : ''}
+                ? `<div style="margin-top:6px; color:var(--warning); font-size:12px;">⚠️ ${warnings.map(w => escapeHtml(w)).join('; ')}</div>` : ''}
             ${suggestions.length
                 ? `<div style="margin-top:4px; color:var(--text-muted); font-size:11px;">💡 ${suggestions.map(s => escapeHtml(s.hint)).join(' / ')}</div>` : ''}
         `;
@@ -6620,7 +6620,7 @@ function _markWorkingPathsDirty() {
     area.className = 'wp-add-area';
     area.style.cssText = 'justify-content:flex-end;';
     area.innerHTML = `
-        <span style="font-size:11px;color:var(--warning,#f59e0b);">⚠ 路径有变更，请保存</span>
+        <span style="font-size:11px;color:var(--warning);">⚠ 路径有变更，请保存</span>
         <button class="btn btn-sm btn-primary" onclick="saveAllExtraPaths()">💾 保存全部</button>`;
     el.appendChild(area);
 }
@@ -7038,7 +7038,7 @@ async function loadSOPFlow() {
                 <td><span style="color:${color};font-weight:500;">${escapeHtml(s.agent)}</span></td>
                 <td><code>${escapeHtml(s.trigger_on)}</code></td>
                 <td><code>${escapeHtml(s.success_status || '-')}</code></td>
-                <td>${s.reject_goto ? `<span style="color:#ef4444;">→ ${escapeHtml(s.reject_goto)}</span>` : '-'}</td>
+                <td>${s.reject_goto ? `<span style="color:var(--ads-c-ef4444);">→ ${escapeHtml(s.reject_goto)}</span>` : '-'}</td>
                 <td style="color:var(--text-muted);font-size:12px;">${escapeHtml(s.description || '')}</td>
                 ${opCell}
             </tr>`;
@@ -7298,7 +7298,7 @@ async function refreshRepoStatus() {
             statusEl.style.color = 'var(--success)';
         } else {
             statusEl.textContent = '❌ 未初始化';
-            statusEl.style.color = 'var(--danger, #ef4444)';
+            statusEl.style.color = 'var(--danger, var(--ads-c-ef4444))';
         }
 
         // 最近提交
@@ -8047,7 +8047,7 @@ async function detectLocalProjectInfo() {
 
         if (warningsArr.length) {
             html += `
-                <div style="margin-top:10px; color:var(--warning, #f59e0b); font-size:11px;">
+                <div style="margin-top:10px; color:var(--warning); font-size:11px;">
                     ⚠️ ${warningsArr.map(w => escapeHtml(w)).join('；')}
                 </div>
             `;
@@ -8574,7 +8574,7 @@ async function _loadTicketOpenSpec(ticketId) {
         if (!hasCore) {
             if (data.openspec_stage || hasFiles) {
                 if (badgeEl) badgeEl.innerHTML =
-                    `<span style="font-size:11px;font-weight:700;padding:2px 8px;border:1.5px solid #a855f760;border-radius:4px;color:#a855f7;">📐 ${escHtml(data.openspec_stage || 'proposed')}</span>`;
+                    `<span style="font-size:11px;font-weight:700;padding:2px 8px;border:1.5px solid #a855f760;border-radius:4px;color:var(--ads-c-a855f7);">📐 ${escHtml(data.openspec_stage || 'proposed')}</span>`;
                 tabsEl.innerHTML = '';
                 contentEl.innerHTML =
                     `<div style="color:var(--text-muted);font-size:12px;padding:10px;line-height:1.7;">
@@ -8809,9 +8809,9 @@ function _buildThreeLayerBar(hasSP, hasOS, ticketData) {
             active = i === hIdx;
         }
         const extraStyle = (active && isBlocked)
-            ? 'border-color:rgba(239,68,68,.5);color:#ef4444;'
+            ? 'border-color:rgba(239,68,68,.5);color:var(--ads-c-ef4444);'
             : (active && isCancelled)
-                ? 'border-color:rgba(139,148,158,.4);color:#8b949e;'
+                ? 'border-color:rgba(139,148,158,.4);color:var(--ads-c-8b949e);'
                 : '';
         const cls = done ? 'tlb-done' : 'tlb-pending';
         const label = (active && isBlocked) ? `${escHtml(p.label)} ⚠` : escHtml(p.label);
@@ -10629,7 +10629,7 @@ function renderActionStateSummary(action) {
     const result = action._result || {};
     const isExec = state === 'executed';
     const title = isExec ? '✅ 已执行' : '✗ 已取消';
-    const borderColor = isExec ? 'var(--success, #34d058)' : 'var(--text-muted, #8b949e)';
+    const borderColor = isExec ? 'var(--success)' : 'var(--text-muted)';
     const opacity = isExec ? '1' : '0.6';
 
     // 根据卡片类型给一个简短的执行摘要
@@ -10748,7 +10748,7 @@ function renderGenerateImageCard(action) {
     return `
     <div class="chat-action-card chat-confirm-card" id="${safeId}"
          data-message-id="${escapeHtml(action._message_id || '')}"
-         style="border-left-color: var(--accent, #a371f7);">
+         style="border-left-color: var(--accent);">
         <div class="action-title">🖼️ 生图参数确认</div>
         <div class="action-detail">
             <div class="confirm-req-meta" style="margin-bottom:6px;">Prompt</div>
@@ -10817,7 +10817,7 @@ function renderCIBuildDiagnosisCard(action) {
     const errors = action.errors || [];
     const errCount = action.error_count || 0;
     const warnCount = action.warning_count || 0;
-    const borderColor = hasErrors ? 'var(--danger, #ea4a5a)' : 'var(--warning, #f0a020)';
+    const borderColor = hasErrors ? 'var(--danger, var(--ads-c-ea4a5a))' : 'var(--warning)';
     const statusIcon = hasErrors ? '❌' : '⚠️';
     const typeLabel = {'ubt_compile':'UBT 编译','playtest':'Automation 测试','package_client':'RunUAT 打包'}[buildType] || buildType;
 
@@ -11361,7 +11361,7 @@ async function doInstantiateUEFramework(cardId) {
         // 把 onclick 的参数先存到 data-* 避免引号嵌套导致 HTML 断裂
         const resultId = `uefwres_${Date.now()}`;
         card.innerHTML = `
-            <div class="action-title" style="color:var(--success, #22c55e);">✓ UE 框架已生成</div>
+            <div class="action-title" style="color:var(--success);">✓ UE 框架已生成</div>
             <div class="action-detail">
                 <div class="ue-fw-row"><span class="ue-fw-label">模板</span><code class="ue-fw-code">${escapeHtml(d.template)}</code></div>
                 <div class="ue-fw-row"><span class="ue-fw-label">项目名</span><code class="ue-fw-code">${escapeHtml(d.project_name)}</code></div>
@@ -11970,8 +11970,8 @@ function openTicketLiveChat() {
 
 const _PROGRESS_HEALTH_MAP = {
     active:   { icon: '🟢', label: '运行中',   color: 'var(--success)' },
-    silent:   { icon: '🟡', label: '静默中',   color: 'var(--warning, #f0a020)' },
-    zombie:   { icon: '🔴', label: '疑似挂起', color: 'var(--danger, #ea4a5a)' },
+    silent:   { icon: '🟡', label: '静默中',   color: 'var(--warning)' },
+    zombie:   { icon: '🔴', label: '疑似挂起', color: 'var(--danger, var(--ads-c-ea4a5a))' },
     starting: { icon: '⚪', label: '刚启动',   color: 'var(--text-muted)' },
 };
 
@@ -12513,7 +12513,7 @@ async function loadRequirements() {
                     </td>
                     <td class="col-status">
                         ${isStandalone
-                            ? `<span class="req-status-tag" style="background:rgba(99,102,241,0.15);color:#a78bfa;border:1px solid rgba(99,102,241,0.3);">独立工单桶</span>`
+                            ? `<span class="req-status-tag" style="background:rgba(99,102,241,0.15);color:var(--ads-c-a78bfa);border:1px solid rgba(99,102,241,0.3);">独立工单桶</span>`
                             : `<span class="req-status-tag ${r.status}">${getStatusLabel(r.status)}</span>`}
                     </td>
                     <td class="col-priority"><span class="req-priority-tag ${pInfo.cls}">${escHtml(pInfo.label)}</span></td>
@@ -14638,8 +14638,8 @@ async function _loadEfficiencyStats(grid) {
                         </div>
                     </td>
                     <td style="color:var(--text-muted);">${a.avg_seconds}s</td>
-                    <td style="color:var(--primary-light,#a5b4fc);">${fmtK(a.input_tokens || 0)}</td>
-                    <td style="color:var(--success,#34d058);">${fmtK(a.output_tokens || 0)}</td>
+                    <td style="color:var(--primary-light);">${fmtK(a.input_tokens || 0)}</td>
+                    <td style="color:var(--success);">${fmtK(a.output_tokens || 0)}</td>
                 </tr>`;
             }
             html += `</tbody></table></div>`;
@@ -15800,12 +15800,12 @@ function connectSSE(projectId) {
                 toast.id = 'ue-editor-offline-toast';
                 toast.style.cssText = `
                     position:fixed; bottom:80px; right:20px; z-index:9999;
-                    background:var(--bg-secondary, #1e2030); border:1px solid var(--warning, #f0a020);
+                    background:var(--bg-secondary, var(--ads-c-1e2030)); border:1px solid var(--warning);
                     border-radius:10px; padding:14px 18px; max-width:280px;
                     box-shadow:0 4px 20px rgba(0,0,0,0.4); animation:fadeIn .2s ease;
                 `;
                 toast.innerHTML = `
-                    <div style="font-weight:600;color:var(--warning,#f0a020);margin-bottom:6px;">⚠️ UE Editor 未运行</div>
+                    <div style="font-weight:600;color:var(--warning);margin-bottom:6px;">⚠️ UE Editor 未运行</div>
                     <div style="font-size:13px;color:var(--text-muted);margin-bottom:10px;">当前操作需要 UE Editor 在线，是否现在启动？</div>
                     <div style="display:flex;gap:8px;">
                         <button class="btn btn-sm btn-primary" onclick="launchUEEditor();document.getElementById('ue-editor-offline-toast')?.remove()">
@@ -16457,7 +16457,7 @@ function connectSSE(projectId) {
             const card = document.querySelector(`.bug-card[data-bug-id="${data.bug_id}"]`);
             if (card) {
                 const badge = card.querySelector('.bug-status-badge');
-                const statusColors = { open:'var(--danger,#ea4a5a)', in_dev:'var(--warning,#f0a500)', in_test:'var(--primary)', fixed:'var(--success,#34d058)' };
+                const statusColors = { open:'var(--danger, var(--ads-c-ea4a5a))', in_dev:'var(--warning)', in_test:'var(--primary)', fixed:'var(--success)' };
                 const color = statusColors[data.status] || 'var(--text-muted)';
                 if (badge) {
                     badge.textContent = label;
@@ -16675,7 +16675,7 @@ async function loadAgentList() {
             <button class="agent-source-chip ${c.key === 'all' ? 'active' : ''}"
                     data-source="${c.key}" data-base-label="${escHtml(c.label)}"
                     onclick="switchAgentSourceFilter('${c.key}')"
-                    style="font-size:11px;padding:3px 10px;border-radius:12px;border:1px solid var(--border-color);background:${c.key==='all'?'var(--primary)':'var(--bg-elevated)'};color:${c.key==='all'?'#fff':'var(--text-secondary)'};cursor:pointer;">
+                    style="font-size:11px;padding:3px 10px;border-radius:12px;border:1px solid var(--border-color);background:${c.key==='all'?'var(--primary)':'var(--bg-elevated)'};color:${c.key==='all'?'var(--ads-c-fff)':'var(--text-secondary)'};cursor:pointer;">
                 ${escHtml(`${c.label} ${c.n || 0}`)}
             </button>`).join('');
 
@@ -16703,7 +16703,7 @@ function switchAgentSourceFilter(source) {
     document.querySelectorAll('.agent-source-chip').forEach(el => {
         const isActive = el.dataset.source === source;
         el.style.background = isActive ? 'var(--primary)' : 'var(--bg-elevated)';
-        el.style.color = isActive ? '#fff' : 'var(--text-secondary)';
+        el.style.color = isActive ? 'var(--ads-c-fff)' : 'var(--text-secondary)';
     });
     const container = document.getElementById('agentListSettings');
     if (container && container._agentData) {
@@ -16739,7 +16739,7 @@ function _renderAgentView(container, allData, source) {
         const sm = SOURCE_META[ag.source] || SOURCE_META.builtin;
         const sourceBadge = `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:${sm.bg};color:${sm.color};margin-left:4px;">${sm.label}${ag.pack_name ? ' · '+escHtml(ag.pack_name) : ''}</span>`;
         const overrideBadge = ag.is_active === false
-            ? `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:rgba(239,68,68,.12);color:#ef4444;margin-left:4px;">被覆盖</span>`
+            ? `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:rgba(239,68,68,.12);color:var(--ads-c-ef4444);margin-left:4px;">被覆盖</span>`
             : (ag.override_by === null && ag.source !== 'builtin' ? '' : '');
         const actionsHtml = (ag.actions || []).map(a =>
             `<code style="font-size:10px;background:var(--bg);padding:1px 4px;border-radius:3px;color:var(--primary);">${escHtml(typeof a === 'string' ? a : a.name)}</code>`
@@ -18603,7 +18603,7 @@ function _renderMdDocument(content) {
             marked.setOptions({ gfm: true, breaks: false, highlight: null });
             html += marked.parse(stashed.text);
         } catch (e) {
-            html += `<p style="color:#f87171">Markdown 渲染失败: ${escapeHtml(e.message)}</p>`;
+            html += `<p style="color:var(--ads-c-f87171)">Markdown 渲染失败: ${escapeHtml(e.message)}</p>`;
         }
     }
     html = html.replace(/MATHTOKEN(\d+)END/g, (_, i) => {
@@ -18659,7 +18659,7 @@ function _ensureMermaid() {
             if (!window.mermaid) throw new Error('mermaid');
             window.mermaid.initialize({
                 startOnLoad: false,
-                theme: 'dark',
+                theme: getMermaidTheme(),
                 securityLevel: 'strict',
                 fontFamily: 'Segoe UI, PingFang SC, Microsoft YaHei, sans-serif',
             });
@@ -18702,6 +18702,7 @@ function _renderMdMermaid(root) {
         const host = document.createElement('div');
         host.className = 'mermaid';
         host.textContent = code.textContent || '';
+        host.dataset.mermaidSource = host.textContent;  // 供切换主题时重绘
         if (pre && pre.tagName === 'PRE') pre.replaceWith(host);
         return host;
     });
@@ -20382,7 +20383,7 @@ async function _sendChatStreamingToContainer(url, body, msgContainer, thinkingCt
                 finalAction = { ...data };
             } else if (curEvent === 'error' || curEvent === 'budget_exceeded') {
                 const errMsg = data.message || data.reason || '未知错误';
-                bubble.innerHTML = `<span style="color:var(--warning,#ed8936);">⚠️ ${escapeHtml(errMsg)}</span>`;
+                bubble.innerHTML = `<span style="color:var(--warning);">⚠️ ${escapeHtml(errMsg)}</span>`;
                 bubbleWrapper.style.display = '';
                 bubbleWrapper.classList.remove('_streaming');
                 thinkingCtx?.finish();
@@ -20876,7 +20877,7 @@ function _refreshHistoryRunningState() {
             if (!badge) {
                 badge = document.createElement('span');
                 badge.className = 'hi-running';
-                badge.style.cssText = 'font-size:10px;color:#34d058;margin-left:4px;white-space:nowrap;';
+                badge.style.cssText = 'font-size:10px;color:var(--ads-c-34d058);margin-left:4px;white-space:nowrap;';
                 badge.textContent = '● Running';
                 el.querySelector('.hi-title')?.after(badge);
             }
@@ -21100,7 +21101,7 @@ async function loadMemoryPanel(query = '', typeFilter = null) {
             project_context:'Project', external_ref:'External'
         }[t]);
         if (btn) btn.style.background = (t === _memoryFilter) ? 'var(--primary)' : '';
-        if (btn) btn.style.color = (t === _memoryFilter) ? '#fff' : '';
+        if (btn) btn.style.color = (t === _memoryFilter) ? 'var(--ads-c-fff)' : '';
     });
 
     list.innerHTML = '<div style="padding:12px;color:var(--text-muted);font-size:12px;">加载中…</div>';
@@ -21240,7 +21241,7 @@ async function loadChatSessions() {
                            white-space:nowrap;">当前对话</span>`
                     : '';
                 const runningBadge = (isCurrent && chatSending)
-                    ? `<span style="font-size:10px;color:#34d058;margin-left:4px;white-space:nowrap;">
+                    ? `<span style="font-size:10px;color:var(--ads-c-34d058);margin-left:4px;white-space:nowrap;">
                            ● Running</span>`
                     : '';
                 html += `<div class="chat-history-item${active}" data-session-id="${escHtml(s.id)}" onclick="switchChatSession('${escHtml(s.id)}')">
@@ -21560,7 +21561,7 @@ async function _sendChatStreaming(url, body) {
                     const failed = (data.failed || []);
                     let tags = '';
                     conn.forEach(n  => { tags += `<span style="color:var(--text-muted);opacity:.7">⏳ ${escapeHtml(n)}</span>`; });
-                    ready.forEach(n => { tags += `<span style="color:#3fb950">✓ ${escapeHtml(n)}</span>`; });
+                    ready.forEach(n => { tags += `<span style="color:var(--ads-c-3fb950)">✓ ${escapeHtml(n)}</span>`; });
                     failed.forEach(n=> { tags += `<span style="color:var(--text-muted);opacity:.5;text-decoration:line-through">${escapeHtml(n)}</span>`; });
                     const label = conn.length > 0 ? '🔌 MCP 连接中…' : '🔌 MCP';
                     mcpBar.innerHTML = `<span style="color:rgba(163,113,247,0.8);font-weight:600;">${label}</span>${tags}`;
@@ -21824,7 +21825,7 @@ async function _sendChatStreaming(url, body) {
                     finalAction = data;
 
                 } else if (eventName === 'error') {
-                    bubbleEl.innerHTML = `<span style="color:var(--warning,#ed8936);">⚠️ ${escapeHtml(data.message)}</span>`;
+                    bubbleEl.innerHTML = `<span style="color:var(--warning);">⚠️ ${escapeHtml(data.message)}</span>`;
                     bubbleWrapper.style.display = '';
                     bubbleWrapper.classList.remove('_streaming');
                     _finalizeRoundsPanel(' · 已中断');
@@ -22468,9 +22469,9 @@ function _renderGroupWelcome() {
                 <small>输入 @DevAgent、@TestAgent、@OrchestratorAgent 可直接呼叫指定 Agent</small>
             </div>
             <div class="group-chat-agent-tags" style="display:flex;gap:8px;justify-content:center;margin-top:12px;flex-wrap:wrap;">
-                <span class="group-agent-tag" onclick="insertMention('@DevAgent ')" style="background:#58a6ff20;color:#58a6ff;border:1px solid #58a6ff40;">👨‍💻 @DevAgent</span>
-                <span class="group-agent-tag" onclick="insertMention('@TestAgent ')" style="background:#3fb95020;color:#3fb950;border:1px solid #3fb95040;">🧪 @TestAgent</span>
-                <span class="group-agent-tag" onclick="insertMention('@OrchestratorAgent ')" style="background:#d2a8ff20;color:#d2a8ff;border:1px solid #d2a8ff40;">🎯 @OrchestratorAgent</span>
+                <span class="group-agent-tag" onclick="insertMention('@DevAgent ')" style="background:#58a6ff20;color:var(--ads-c-58a6ff);border:1px solid #58a6ff40;">👨‍💻 @DevAgent</span>
+                <span class="group-agent-tag" onclick="insertMention('@TestAgent ')" style="background:#3fb95020;color:var(--ads-c-3fb950);border:1px solid #3fb95040;">🧪 @TestAgent</span>
+                <span class="group-agent-tag" onclick="insertMention('@OrchestratorAgent ')" style="background:#d2a8ff20;color:var(--ads-c-d2a8ff);border:1px solid #d2a8ff40;">🎯 @OrchestratorAgent</span>
             </div>
             <div style="display:flex;justify-content:center;gap:8px;margin-top:10px;flex-wrap:wrap;">
                 <button class="group-agent-tag" onclick="startNewGroupChat()"
@@ -22520,7 +22521,7 @@ async function _restoreGroupChat() {
                 // 收敛结论卡
                 const c = document.createElement('div');
                 c.className = 'group-board-converge';
-                c.innerHTML = `<div class="group-board-title" style="color:#d2a8ff;">🎯 收敛结论</div><div>${formatChatContent(msg.content)}</div>`;
+                c.innerHTML = `<div class="group-board-title" style="color:var(--ads-c-d2a8ff);">🎯 收敛结论</div><div>${formatChatContent(msg.content)}</div>`;
                 container.appendChild(c);
             } else if (msg.kind === 'utterance' || (actionObj && actionObj.type === 'group_agent_reply')) {
                 const _name = msg.speaker || (actionObj && actionObj.agent) || '';
@@ -22678,7 +22679,7 @@ function _renderBoardSummary(board) {
     // 目标区块：当前讨论目标 + 验收点（带完成度标记）
     const goal = board.goal;
     if (goal && goal.goal) {
-        html += `<div class="board-sec" style="color:#d2a8ff;">🎯 当前话题</div>`;
+        html += `<div class="board-sec" style="color:var(--ads-c-d2a8ff);">🎯 当前话题</div>`;
         html += `<div class="board-item" style="font-weight:600;">${escapeHtml(goal.goal)}</div>`;
         const ac = goal.acceptance_criteria || [];
         if (ac.length) {
@@ -22686,8 +22687,8 @@ function _renderBoardSummary(board) {
             const _proposals = [...(board.proposals || []), ...(board.facts || [])].map(d => (d && d.content) || '');
             html += ac.map(c => {
                 let mark;
-                if (_criterionCovered(c, _decisions)) mark = '<span style="color:#3fb950;">✅</span>';
-                else if (_criterionCovered(c, _proposals)) mark = '<span style="color:#e6a817;">🔶</span>';
+                if (_criterionCovered(c, _decisions)) mark = '<span style="color:var(--ads-c-3fb950);">✅</span>';
+                else if (_criterionCovered(c, _proposals)) mark = '<span style="color:var(--ads-c-e6a817);">🔶</span>';
                 else mark = '<span style="opacity:.4;">⬜</span>';
                 return `<div class="board-item">${mark} ${escapeHtml(c)}</div>`;
             }).join('');
@@ -22871,7 +22872,7 @@ async function _sendGroupBoardStreaming(url, body) {
                     const ac = (g.acceptance_criteria || []).map(c => `<div class="board-item">· ${escapeHtml(c)}</div>`).join('');
                     const gc = document.createElement('div');
                     gc.className = 'group-board-goal';
-                    gc.innerHTML = `<div class="group-board-title" style="color:#d2a8ff;">🎯 讨论目标</div>
+                    gc.innerHTML = `<div class="group-board-title" style="color:var(--ads-c-d2a8ff);">🎯 讨论目标</div>
                         <div class="group-board-goal-text">${escapeHtml(g.goal || '')}</div>
                         ${ac ? `<div class="board-sec">验收点</div>${ac}` : ''}`;
                     groupContainer.appendChild(gc);
@@ -22903,7 +22904,7 @@ async function _sendGroupBoardStreaming(url, body) {
                     // 讨论小结卡（追加）
                     const sc = document.createElement('div');
                     sc.className = 'group-board-summary';
-                    sc.innerHTML = `<div class="group-board-title" style="color:#e6a817;">📝 纪要</div><div>${formatChatContent(data.summary)}</div>`;
+                    sc.innerHTML = `<div class="group-board-title" style="color:var(--ads-c-e6a817);">📝 纪要</div><div>${formatChatContent(data.summary)}</div>`;
                     groupContainer.appendChild(sc);
                     scrollChatToBottom();
                 } else if (eventName === 'round_begin') {
@@ -22920,7 +22921,7 @@ async function _sendGroupBoardStreaming(url, body) {
                     _showPmThinking('正在收敛');
                     const st = document.createElement('div');
                     st.className = 'group-board-stage';
-                    st.innerHTML = `<span class="gbs-badge" style="background:#d2a8ff22;color:#d2a8ff;border-color:#d2a8ff55;">🎯 收敛</span><span class="gbs-line"></span>`;
+                    st.innerHTML = `<span class="gbs-badge" style="background:#d2a8ff22;color:var(--ads-c-d2a8ff);border-color:#d2a8ff55;">🎯 收敛</span><span class="gbs-line"></span>`;
                     groupContainer.appendChild(st);
                     scrollChatToBottom();
                 } else if (eventName === 'agent_stream') {
@@ -22944,21 +22945,21 @@ async function _sendGroupBoardStreaming(url, body) {
                     _converged = true;
                     const c = document.createElement('div');
                     c.className = 'group-board-converge';
-                    c.innerHTML = `<div class="group-board-title" style="color:#d2a8ff;">🎯 收敛结论</div><div>${formatChatContent(data.content)}</div>`;
+                    c.innerHTML = `<div class="group-board-title" style="color:var(--ads-c-d2a8ff);">🎯 收敛结论</div><div>${formatChatContent(data.content)}</div>`;
                     groupContainer.appendChild(c);
                     chatHistory.push({ role: 'assistant', content: data.content });
                 } else if (eventName === 'message_done') {
                     if (!_converged && data.full_text) {
                         const c = document.createElement('div');
                         c.className = 'group-board-converge';
-                        c.innerHTML = `<div class="group-board-title" style="color:#d2a8ff;">🎯 收敛结论</div><div>${formatChatContent(data.full_text)}</div>`;
+                        c.innerHTML = `<div class="group-board-title" style="color:var(--ads-c-d2a8ff);">🎯 收敛结论</div><div>${formatChatContent(data.full_text)}</div>`;
                         groupContainer.appendChild(c);
                     }
                 } else if (eventName === 'error') {
                     _hidePmThinking();
                     const e = document.createElement('div');
                     e.className = 'group-board-thought';
-                    e.style.color = '#ef4444';
+                    e.style.color = 'var(--ads-c-ef4444)';
                     e.textContent = `⚠️ ${data.message || '群聊出错'}`;
                     groupContainer.appendChild(e);
                 }
@@ -22968,7 +22969,7 @@ async function _sendGroupBoardStreaming(url, body) {
         if (err.name !== 'AbortError') {
             const e = document.createElement('div');
             e.className = 'group-board-thought';
-            e.style.color = '#ef4444';
+            e.style.color = 'var(--ads-c-ef4444)';
             e.textContent = `⚠️ ${err.message || err}`;
             groupContainer.appendChild(e);
         }
@@ -23006,7 +23007,7 @@ function appendToTicketFeed(logData) {
     const drillId = hasDrill ? `feed-drill-${Math.random().toString(36).slice(2)}` : '';
     const drillHtml = hasDrill ? `
         <div id="${drillId}" style="display:none;margin-top:4px;padding:6px 8px;background:var(--bg);border-radius:4px;font-size:10px;color:var(--text-muted);">
-            ${errorsRaw ? (() => { try { return JSON.parse(errorsRaw).slice(0,5).map(e => `<div style="color:#ef4444;">${escapeHtml(e.file||'')}${e.line?':'+e.line:''} ${escapeHtml(e.msg||'')}</div>`).join(''); } catch { return ''; } })() : ''}
+            ${errorsRaw ? (() => { try { return JSON.parse(errorsRaw).slice(0,5).map(e => `<div style="color:var(--ads-c-ef4444);">${escapeHtml(e.file||'')}${e.line?':'+e.line:''} ${escapeHtml(e.msg||'')}</div>`).join(''); } catch { return ''; } })() : ''}
             ${outputSummary ? `<pre style="margin:4px 0 0;white-space:pre-wrap;max-height:160px;overflow-y:auto;">${escapeHtml(outputSummary.slice(-800))}</pre>` : ''}
         </div>` : '';
 
@@ -23168,7 +23169,7 @@ function _buildTicketEventEl(msg) {
         try {
             const errs = JSON.parse(msg.errors_summary);
             errHtml = errs.slice(0,5).map(e =>
-                `<div style="color:#ef4444;font-size:10px;">${_linkifyErrors(`${e.file||''}${e.line?':'+e.line:''} ${e.msg||''}`)}</div>`
+                `<div style="color:var(--ads-c-ef4444);font-size:10px;">${_linkifyErrors(`${e.file||''}${e.line?':'+e.line:''} ${e.msg||''}`)}</div>`
             ).join('');
         } catch {}
     }
@@ -23390,7 +23391,7 @@ function _formatAicrIssues(issues, suggestions) {
         rows.push(`<div class="ctp-aicr-issue"><span style="color:${color}">[${escapeHtml(i.rule)}]</span> ${escapeHtml(i.message)}</div>`);
     });
     (suggestions || []).forEach(s => {
-        rows.push(`<div class="ctp-aicr-issue" style="opacity:.8"><span style="color:#68d391">[${escapeHtml(s.rule)}]</span> ${escapeHtml(s.message)}</div>`);
+        rows.push(`<div class="ctp-aicr-issue" style="opacity:.8"><span style="color:var(--ads-c-68d391)">[${escapeHtml(s.rule)}]</span> ${escapeHtml(s.message)}</div>`);
     });
     return rows.join('') || '（无内容）';
 }
@@ -25131,7 +25132,7 @@ async function _refreshTasksPanelInner() {
             const isActive = el.dataset.taskId === _cliActiveTaskId;
             el.addEventListener('mouseenter', () => {
                 if (el.dataset.taskId !== _cliActiveTaskId)
-                    el.style.background = 'var(--bg-hover,rgba(255,255,255,.05))';
+                    el.style.background = 'var(--bg-hover)';
             });
             el.addEventListener('mouseleave', () => {
                 if (el.dataset.taskId !== _cliActiveTaskId) el.style.background = '';
@@ -25227,7 +25228,7 @@ function _tasksPanelResizeStart(e) {
 
     const startX   = e.clientX;
     const startW   = listEl.offsetWidth;
-    resizerEl.style.background = 'var(--primary, #7c6af7)';
+    resizerEl.style.background = 'var(--primary)';
 
     const onMove = (ev) => {
         const newW = Math.max(120, Math.min(360, startW + ev.clientX - startX));
@@ -25390,7 +25391,7 @@ function showToolOutputModal(resultRaw, toolName) {
     modal.id = 'toolOutputModal';
     modal.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;';
     modal.innerHTML = `
-        <div style="background:var(--bg-secondary,#1e1e2e);border:1px solid var(--border);border-radius:10px;
+        <div style="background:var(--bg-secondary, var(--ads-c-1e1e2e));border:1px solid var(--border);border-radius:10px;
                     width:90vw;max-width:1000px;height:85vh;display:flex;flex-direction:column;overflow:hidden;">
             <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;
                         border-bottom:1px solid var(--border);flex-shrink:0;">
@@ -25776,7 +25777,7 @@ async function sendChatMessage() {
     // 群聊模式用群聊头像（👥）+ 文字提示（正在干什么），避免只有三个点不知道在等什么
     const _isGroupTyping = chatMode === 'group';
     const _typingAvatar = _isGroupTyping
-        ? `<div class="chat-msg-avatar" style="background:#d2a8ff20;border:1.5px solid #d2a8ff40;color:#d2a8ff;font-size:16px;">👥</div>`
+        ? `<div class="chat-msg-avatar" style="background:#d2a8ff20;border:1.5px solid #d2a8ff40;color:var(--ads-c-d2a8ff);font-size:16px;">👥</div>`
         : _buildAssistantAvatar();
     const _typingBody = _isGroupTyping
         ? `<div class="chat-msg-bubble" style="display:inline-flex;align-items:center;gap:8px;">
@@ -26283,7 +26284,7 @@ function _buildConfirmProjectTraitsRowHtml(cardId, traitsArr, detectedTraits) {
     }
     return `<div id="traitsRow_${cardId}" class="confirm-req-meta" style="margin-top:6px;">
         <div style="display:flex; flex-wrap:wrap; align-items:center; gap:6px;">
-            <span style="color:var(--warning, #f59e0b); font-size:11px;">⚠️ 未识别到 traits</span>
+            <span style="color:var(--warning); font-size:11px;">⚠️ 未识别到 traits</span>
             ${refreshBtn}
         </div>
         ${hint}
@@ -26458,7 +26459,7 @@ function _renderConfirmProjectCard(action) {
              data-preset-id="${escHtml(action.preset_id || '')}"
              data-mode="${escHtml(mode)}"
              data-message-id="${escHtml(action._message_id || '')}"
-             style="border-left-color: ${isManual ? 'var(--warning, #f59e0b)' : 'var(--accent, #a371f7)'};">
+             style="border-left-color: ${isManual ? 'var(--warning)' : 'var(--accent)'};">
             <div class="action-title">${isManual ? '📂 检测到本地项目，是否创建？' : '📦 识别到新建项目意图，是否创建？'}</div>
             <div class="action-detail">
                 <div class="confirm-proj-name-row">
@@ -26650,7 +26651,7 @@ function _buildConfirmVideoGateCardHtml(action) {
              data-work-slug="${escapeHtml(action.work_slug || '')}"
              data-preview-paths="${escapeHtml(JSON.stringify(paths))}"
              data-message-id="${escapeHtml(action._message_id || '')}"
-             style="border-left-color: var(--accent, #a371f7);">
+             style="border-left-color: var(--accent);">
             <div class="action-title">🎬 ${escapeHtml(action.title || '确认视频产物')}</div>
             <div class="action-detail">
                 ${action.summary ? `<div class="confirm-req-desc">${escapeHtml(action.summary)}</div>` : ''}
@@ -26726,7 +26727,7 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
         `;
     } else if (action && action.type === 'open_project') {
         actionHtml = `
-            <div class="chat-action-card" style="border-left-color: var(--accent, #7c6af7);">
+            <div class="chat-action-card" style="border-left-color: var(--accent);">
                 <div class="action-title">📂 打开项目</div>
                 <div class="action-detail"><strong>${escapeHtml(action.name || '')}</strong></div>
                 ${action.project_id ? `<span class="action-link" onclick="showProjectDetail('${escapeHtml(action.project_id)}')">进入项目 →</span>` : ''}
@@ -26734,7 +26735,7 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
         `;
     } else if (action && action.type === 'project_created') {
         actionHtml = `
-            <div class="chat-action-card" style="border-left-color: var(--success, #34d058);">
+            <div class="chat-action-card" style="border-left-color: var(--success);">
                 <div class="action-title">🎉 项目已创建</div>
                 <div class="action-detail">
                     <strong>${escapeHtml(action.name || '')}</strong><br>
@@ -26746,7 +26747,7 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
         `;
     } else if (action && action.type === 'requirement_paused') {
         actionHtml = `
-            <div class="chat-action-card" style="border-left-color: var(--warning, #f0a020);">
+            <div class="chat-action-card" style="border-left-color: var(--warning);">
                 <div class="action-title">⏸️ 需求已暂停</div>
                 <div class="action-detail">
                     <strong>${escapeHtml(action.title)}</strong><br>
@@ -26757,7 +26758,7 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
         `;
     } else if (action && action.type === 'requirement_resumed') {
         actionHtml = `
-            <div class="chat-action-card" style="border-left-color: var(--success, #34d058);">
+            <div class="chat-action-card" style="border-left-color: var(--success);">
                 <div class="action-title">▶️ 需求已恢复</div>
                 <div class="action-detail">
                     <strong>${escapeHtml(action.title)}</strong><br>
@@ -26774,7 +26775,7 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
                  data-req-id="${escapeHtml(action.requirement_id || '')}"
                  data-reason="${escapeHtml(action.reason || '')}"
                  data-message-id="${escapeHtml(action._message_id || '')}"
-                 style="border-left-color: var(--danger, #ea4a5a);">
+                 style="border-left-color: var(--danger, var(--ads-c-ea4a5a));">
                 <div class="action-title">⚠️ 确认关闭需求？</div>
                 <div class="action-detail">
                     <div class="confirm-req-title">${escapeHtml(action.title || '')}</div>
@@ -26790,7 +26791,7 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
             </div>`;
     } else if (action && action.type === 'requirement_closed') {
         actionHtml = `
-            <div class="chat-action-card" style="border-left-color: var(--danger, #ea4a5a);">
+            <div class="chat-action-card" style="border-left-color: var(--danger, var(--ads-c-ea4a5a));">
                 <div class="action-title">🚫 需求已关闭</div>
                 <div class="action-detail">
                     <strong>${escapeHtml(action.title)}</strong><br>
@@ -26802,7 +26803,7 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
         `;
     } else if (action && action.type === 'document_generated') {
         actionHtml = `
-            <div class="chat-action-card" style="border-left-color: var(--info, #58a6ff);">
+            <div class="chat-action-card" style="border-left-color: var(--info);">
                 <div class="action-title">📄 文档已生成</div>
                 <div class="action-detail">
                     <strong>${escapeHtml(action.title || action.path || '')}</strong><br>
@@ -26822,7 +26823,7 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
                 ? `<span class="action-link" draggable="true" data-file-path="${escapeHtml(gitFilePath)}" onclick="openRepoFileFromChat('${escapeHtml(gitFilePath)}')">查看文件 →</span>`
                 : '';
         actionHtml = `
-            <div class="chat-action-card" style="border-left-color: var(--info, #58a6ff);">
+            <div class="chat-action-card" style="border-left-color: var(--info);">
                 <div class="action-title">${gitIcons[action.action] || '🔧'} Git: ${escapeHtml(action.action || '')}</div>
                 <div class="action-detail">${formatChatContent(action.message || '')}</div>
                 ${gitLinkHtml}
@@ -26839,7 +26840,7 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
         window._pendingDocSaves[safeId] = { filename: destPath, text: action.text };
         actionHtml = `
             <div class="chat-action-card chat-confirm-card" id="${safeId}"
-                 style="border-left-color: var(--info, #58a6ff);">
+                 style="border-left-color: var(--info);">
                 <div class="action-title">📁 是否保存到项目文档？</div>
                 <div class="action-detail">
                     <div class="confirm-req-title">${escapeHtml(action.filename)}</div>
@@ -26852,7 +26853,7 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
             </div>`;
     } else if (action && action.type === 'error') {
         actionHtml = `
-            <div class="chat-action-card" style="border-left-color: var(--danger, #ea4a5a);">
+            <div class="chat-action-card" style="border-left-color: var(--danger, var(--ads-c-ea4a5a));">
                 <div class="action-title">⚠️ 操作失败</div>
                 <div class="action-detail">${escapeHtml(action.message || '未知错误')}</div>
             </div>
@@ -26906,7 +26907,7 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
                  data-traits="${traitsJsonAttr}"
                  data-preset-id="${escapeHtml(action.preset_id || '')}"
                  data-message-id="${escapeHtml(action._message_id || '')}"
-                 style="border-left-color: var(--accent, #a371f7);">
+                 style="border-left-color: var(--accent);">
                 <div class="action-title">📦 识别到新建项目意图，是否创建？</div>
                 <div class="action-detail">
                     <div class="confirm-proj-name-row">
@@ -27026,7 +27027,7 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
                  data-project-id="${escapeHtml(action.project_id || '')}"
                  data-filename="${escapeHtml(action.filename || '')}"
                  data-content="${escapeHtml(action.content || '')}"
-                 style="border-left-color: var(--success, #34d058);">
+                 style="border-left-color: var(--success);">
                 <div class="action-title">💾 保存为项目文档</div>
                 <div class="action-detail">
                     <div class="confirm-req-title">${escapeHtml(action.title || action.filename || '')}</div>
@@ -27057,7 +27058,7 @@ function appendChatBubble(role, content, timestamp = null, action = null, images
                  data-requirement-id="${escapeHtml(action.requirement_id || '')}"
                  data-images="${imagesJson}"
                  data-message-id="${escapeHtml(action._message_id || '')}"
-                 style="border-left-color: var(--danger, #ea4a5a);">
+                 style="border-left-color: var(--danger, var(--ads-c-ea4a5a));">
                 <div class="action-title">🐛 识别到 BUG，是否上报？</div>
                 <div class="action-detail">
                     <div class="confirm-req-title">${escapeHtml(action.title)}</div>
@@ -27298,7 +27299,7 @@ async function doSaveDocToRepo(cardId) {
                     ${resp.commit ? ` · commit <code>${escapeHtml(resp.commit.slice(0, 7))}</code>` : ''}
                 </div>
                 <span class="action-link" onclick="switchTab('repo')">查看仓库文件 →</span>`;
-            card.style.borderLeftColor = 'var(--success, #34d058)';
+            card.style.borderLeftColor = 'var(--success)';
         }
         delete window._pendingDocSaves[cardId];
         refreshSessionMaterials();
@@ -27408,7 +27409,7 @@ async function doConfirmRequirement(cardId) {
                     source_message_id: msgId || null,
                     source_session_id: _currentChatSessionId || null },
         });
-        card.style.borderLeftColor = 'var(--success, #34d058)';
+        card.style.borderLeftColor = 'var(--success)';
         card.querySelector('.action-title').textContent = '✅ 需求已创建';
         if (btns) btns.innerHTML = `<span class="action-link" onclick="switchTab('requirements')">查看需求列表 →</span>`;
         showToast(`需求「${title}」已创建`, 'success');
@@ -27419,7 +27420,7 @@ async function doConfirmRequirement(cardId) {
         }, 500);
     } catch (e) {
         card.dataset.confirming = '0';
-        card.style.borderLeftColor = 'var(--danger, #ea4a5a)';
+        card.style.borderLeftColor = 'var(--danger, var(--ads-c-ea4a5a))';
         card.querySelector('.action-title').textContent = '⚠️ 创建失败';
         if (btns) btns.innerHTML = `<span style="color:var(--danger);font-size:12px">${escapeHtml(e.message)}</span>
             <button class="btn btn-sm btn-primary" onclick="doConfirmRequirement('${cardId}')">重试</button>`;
@@ -27446,7 +27447,7 @@ async function doConfirmDirectTicket(cardId) {
                     source_message_id: card.dataset.messageId || null,
                     source_session_id: _currentChatSessionId || null },
         });
-        card.style.borderLeftColor = 'var(--success, #34d058)';
+        card.style.borderLeftColor = 'var(--success)';
         card.querySelector('.action-title').textContent = '✅ 工单已创建';
         const tid = result.ticket_id || '';
         if (btns) btns.innerHTML = tid
@@ -27459,7 +27460,7 @@ async function doConfirmDirectTicket(cardId) {
         setTimeout(() => { if (typeof refreshBoard === 'function') refreshBoard(); }, 500);
     } catch (e) {
         card.dataset.confirming = '0';
-        card.style.borderLeftColor = 'var(--danger, #ea4a5a)';
+        card.style.borderLeftColor = 'var(--danger, var(--ads-c-ea4a5a))';
         card.querySelector('.action-title').textContent = '⚠️ 创建失败';
         if (btns) btns.innerHTML = `<span style="color:var(--danger);font-size:12px">${escapeHtml(e.message)}</span>`;
     }
@@ -27500,7 +27501,7 @@ async function doConfirmRequirementsBatch(cardId) {
         }
     }
 
-    card.style.borderLeftColor = failed > 0 ? 'var(--warning)' : 'var(--success, #34d058)';
+    card.style.borderLeftColor = failed > 0 ? 'var(--warning)' : 'var(--success)';
     card.querySelector('.action-title').textContent = failed > 0
         ? `⚠️ 已创建 ${created} 条，${failed} 条失败`
         : `✅ 已创建 ${created} 条需求`;
@@ -27557,7 +27558,7 @@ async function loadProjectAssemblyPreview(cardId, traits) {
             ${mcps.length
                 ? `<div style="margin-top:4px;"><strong>MCP</strong>: ${mcps.map(m => escapeHtml(m.name)).join(', ')}</div>` : ''}
             ${warnings.length
-                ? `<div style="color:var(--warning, #f59e0b); margin-top:4px;">⚠️ ${warnings.map(w => escapeHtml(w)).join('; ')}</div>` : ''}
+                ? `<div style="color:var(--warning); margin-top:4px;">⚠️ ${warnings.map(w => escapeHtml(w)).join('; ')}</div>` : ''}
             ${suggestions.length
                 ? `<div style="color:var(--text-muted); margin-top:4px; font-size:11px;">💡 ${suggestions.map(s => escapeHtml(s.hint)).join(' / ')}</div>` : ''}
         `;
@@ -27596,7 +27597,7 @@ async function doConfirmProject(cardId) {
             method: 'POST',
             body: { name, description, tech_stack, git_remote_url, local_repo_path, traits, preset_id: preset_id || null, mode, extra_paths, selected_packs: selectedPacks },
         });
-        card.style.borderLeftColor = 'var(--success, #34d058)';
+        card.style.borderLeftColor = 'var(--success)';
         card.querySelector('.action-title').textContent = '✅ 项目已创建';
         const ucp = result.ucp_deploy;
         const ucpHint = ucp?.installed
@@ -27628,7 +27629,7 @@ async function doConfirmProject(cardId) {
         }, 1200);
     } catch (e) {
         card.dataset.confirming = '0';
-        card.style.borderLeftColor = 'var(--danger, #ea4a5a)';
+        card.style.borderLeftColor = 'var(--danger, var(--ads-c-ea4a5a))';
         card.querySelector('.action-title').textContent = '⚠️ 创建失败';
         if (btns) btns.innerHTML = `<span style="color:var(--danger);font-size:12px">${escHtml(e.message)}</span>`;
     }
@@ -27668,7 +27669,7 @@ function copyChatBubble(btn) {
     navigator.clipboard.writeText(text.trim()).then(() => {
         const orig = btn.innerHTML;
         btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg> 已复制';
-        btn.style.color = 'var(--success, #34d058)';
+        btn.style.color = 'var(--success)';
         setTimeout(() => { btn.innerHTML = orig; btn.style.color = ''; }, 2000);
     }).catch(() => showToast('复制失败', 'error'));
 }
@@ -27800,7 +27801,7 @@ function saveChatBubbleToFile(btn) {
 
     const orig = btn.innerHTML;
     btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg> 已下载';
-    btn.style.color = 'var(--success, #34d058)';
+    btn.style.color = 'var(--success)';
     setTimeout(() => { btn.innerHTML = orig; btn.style.color = ''; }, 2000);
 }
 
@@ -27833,7 +27834,7 @@ async function saveChatBubbleToRepo(btn) {
         const result = await resp.json();
         btn.innerHTML = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg> 已保存';
         refreshSessionMaterials();
-        btn.style.color = 'var(--success, #34d058)';
+        btn.style.color = 'var(--success)';
         showToast(`已保存到 ${result.path || filename}`, 'success');
         setTimeout(() => { btn.innerHTML = orig; btn.style.color = ''; btn.disabled = false; }, 3000);
     } catch (e) {
@@ -27879,10 +27880,10 @@ async function doConfirmSaveDoc(cardId) {
             const errBubble = document.createElement('div');
             errBubble.className = 'chat-msg assistant';
             errBubble.innerHTML = `
-                <div class="chat-msg-avatar" style="background:var(--error,#ef4444);color:#fff;font-size:14px;">⚠</div>
+                <div class="chat-msg-avatar" style="background:var(--error);color:var(--ads-c-fff);font-size:14px;">⚠</div>
                 <div class="chat-msg-content">
                     <div class="chat-msg-bubble" style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.3);">
-                        <div style="font-weight:600;color:var(--error,#ef4444);margin-bottom:4px;">⚠️ Git Commit 失败</div>
+                        <div style="font-weight:600;color:var(--error);margin-bottom:4px;">⚠️ Git Commit 失败</div>
                         <div style="font-size:13px;color:var(--text-secondary);">文件写入失败，代码未提交。<br>原因：${escHtml(errMsg)}</div>
                         <div style="margin-top:8px;font-size:12px;color:var(--text-muted);">你可以告诉 AI 助手这个错误，让它帮你排查。</div>
                     </div>
@@ -29952,7 +29953,7 @@ function getStatusColor(status) {
     const colors = {
         'pending': 'var(--text-muted)',
         'submitted': 'var(--info)',
-        'analyzing': 'var(--warning, #f0a020)',
+        'analyzing': 'var(--warning)',
         'decomposed': 'var(--accent)',
         'in_progress': 'var(--primary-light)',
         'paused': '#e67e22',
@@ -30067,7 +30068,7 @@ function renderRoadmapSummary(data, el) {
                 <div class="roadmap-stat-label">已完成</div>
             </div>
             ${msDelayed > 0 ? `<div class="roadmap-stat-card" style="border-color:rgba(239,68,68,0.3);">
-                <div class="roadmap-stat-value" style="color:#ef4444;">${msDelayed}</div>
+                <div class="roadmap-stat-value" style="color:var(--ads-c-ef4444);">${msDelayed}</div>
                 <div class="roadmap-stat-label">已延期</div>
             </div>` : ''}
             <div class="roadmap-stat-card">
@@ -30223,28 +30224,28 @@ function renderRoadmapGantt(data) {
     let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${SVG_WIDTH}" height="${TOTAL_HEIGHT}" class="roadmap-gantt-svg">`;
 
     svg += `<style>
-        .gantt-label { font-size: 12px; fill: var(--text-primary, #e0e0e0); cursor: pointer; }
-        .gantt-label:hover { fill: var(--accent, #60a5fa); }
-        .gantt-label-ticket { font-size: 11px; fill: var(--text-secondary, #a0a0a0); cursor: pointer; }
-        .gantt-label-ticket:hover { fill: var(--accent, #60a5fa); }
-        .gantt-header-text { font-size: 11px; fill: var(--text-muted, #888); font-weight: 500; }
-        .gantt-month-text { font-size: 10px; fill: var(--text-muted, #666); font-weight: 600; }
-        .gantt-grid-line { stroke: var(--border-subtle, rgba(255,255,255,0.06)); stroke-width: 1; }
-        .gantt-today-line { stroke: var(--accent, #60a5fa); stroke-width: 1.5; stroke-dasharray: 4 3; opacity: 0.7; }
+        .gantt-label { font-size: 12px; fill: var(--text-primary, var(--ads-c-e0e0e0)); cursor: pointer; }
+        .gantt-label:hover { fill: var(--accent); }
+        .gantt-label-ticket { font-size: 11px; fill: var(--text-secondary); cursor: pointer; }
+        .gantt-label-ticket:hover { fill: var(--accent); }
+        .gantt-header-text { font-size: 11px; fill: var(--text-muted); font-weight: 500; }
+        .gantt-month-text { font-size: 10px; fill: var(--text-muted); font-weight: 600; }
+        .gantt-grid-line { stroke: var(--border-subtle, var(--ads-fb-255-255-255-0006)); stroke-width: 1; }
+        .gantt-today-line { stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 4 3; opacity: 0.7; }
         .gantt-progress-bg { rx: 4; ry: 4; fill: rgba(255,255,255,0.1); }
         .gantt-progress-fill { rx: 4; ry: 4; }
         .gantt-bar-ticket { rx: 3; ry: 3; cursor: pointer; opacity: 0.8; }
         .gantt-bar-ticket:hover { opacity: 1; filter: brightness(1.2); }
-        .gantt-expand-icon { font-size: 11px; fill: var(--text-muted, #888); cursor: pointer; }
-        .gantt-expand-icon:hover { fill: var(--text-primary, #fff); }
+        .gantt-expand-icon { font-size: 11px; fill: var(--text-muted); cursor: pointer; }
+        .gantt-expand-icon:hover { fill: var(--text-primary, var(--ads-c-fff)); }
         .gantt-pct { font-size: 10px; fill: #fff; font-weight: 500; }
         .gantt-row-bg:hover { fill: rgba(255,255,255,0.03); }
         .gantt-ms-row-bg { fill: rgba(245,158,11,0.03); }
         .gantt-ms-row-bg:hover { fill: rgba(245,158,11,0.06); }
-        .gantt-separator-text { font-size: 11px; fill: var(--text-muted, #888); font-weight: 500; }
+        .gantt-separator-text { font-size: 11px; fill: var(--text-muted); font-weight: 500; }
     </style>`;
 
-    svg += `<rect width="${SVG_WIDTH}" height="${TOTAL_HEIGHT}" fill="var(--bg-primary, #1a1a2e)" rx="8"/>`;
+    svg += `<rect width="${SVG_WIDTH}" height="${TOTAL_HEIGHT}" fill="var(--bg-primary, var(--ads-c-1a1a2e))" rx="8"/>`;
 
     // 时间表头 - 月份
     let prevMonth = '';
@@ -30277,7 +30278,7 @@ function renderRoadmapGantt(data) {
     if (nowMs >= rangeStart.getTime() && nowMs <= rangeEnd.getTime()) {
         const todayX = LABEL_WIDTH + ((nowMs - rangeStart.getTime()) / totalMs) * CHART_WIDTH;
         svg += `<line x1="${todayX}" y1="${HEADER_HEIGHT}" x2="${todayX}" y2="${TOTAL_HEIGHT}" class="gantt-today-line"/>`;
-        svg += `<text x="${todayX}" y="${HEADER_HEIGHT - 4}" text-anchor="middle" style="font-size:9px;fill:var(--accent,#60a5fa);">Today</text>`;
+        svg += `<text x="${todayX}" y="${HEADER_HEIGHT - 4}" text-anchor="middle" style="font-size:9px;fill:var(--accent);">Today</text>`;
     }
 
     // 行渲染
@@ -30340,7 +30341,7 @@ function renderRoadmapGantt(data) {
             const reqCount = (reqByMs[ms.id] || []).length;
             if (reqCount > 0) {
                 const endX = ms.planned_end ? xPos(ms.planned_end) + 14 : LABEL_WIDTH + 10;
-                svg += `<text x="${endX}" y="${barY + 16}" style="font-size:10px;fill:var(--text-muted,#888);">${reqCount} 需求</text>`;
+                svg += `<text x="${endX}" y="${barY + 16}" style="font-size:10px;fill:var(--text-muted);">${reqCount} 需求</text>`;
             }
 
         } else if (row.type === 'req') {
@@ -30378,7 +30379,7 @@ function renderRoadmapGantt(data) {
                 svg += `<text x="${x1 + barW / 2}" y="${barY + barH / 2 + 4}" text-anchor="middle" class="gantt-pct">${req.progress}%</text>`;
             }
             if (req.ticket_count > 0) {
-                svg += `<text x="${x1 + barW + 6}" y="${barY + barH / 2 + 4}" style="font-size:10px;fill:var(--text-muted,#888);">${req.ticket_count} 工单</text>`;
+                svg += `<text x="${x1 + barW + 6}" y="${barY + barH / 2 + 4}" style="font-size:10px;fill:var(--text-muted);">${req.ticket_count} 工单</text>`;
             }
 
         } else if (row.type === 'ticket') {
@@ -30401,7 +30402,7 @@ function renderRoadmapGantt(data) {
             svg += `<title>${ticket.title} [${ticket.status}]</title></rect>`;
 
             if (ticket.assigned_agent && barW > 50) {
-                svg += `<text x="${x1 + 4}" y="${barY + barH / 2 + 5}" style="font-size:9px;fill:#fff;opacity:0.8;">${ticket.assigned_agent.replace('Agent', '')}</text>`;
+                svg += `<text x="${x1 + 4}" y="${barY + barH / 2 + 5}" style="font-size:9px;fill:var(--ads-c-fff);opacity:0.8;">${ticket.assigned_agent.replace('Agent', '')}</text>`;
             }
         }
     });
@@ -31118,7 +31119,7 @@ async function openCIBuildDetail(buildId, buildType, buildStatus) {
             logBtn.href = `${API}/projects/${currentProjectId}/ci/builds/${buildId}/log`;
             logBtn.target = '_blank';
             logBtn.textContent = '📄 完整日志';
-            logBtn.style.cssText = 'display:block;margin:6px 0 2px;font-size:12px;color:var(--primary-light,#a5b4fc);';
+            logBtn.style.cssText = 'display:block;margin:6px 0 2px;font-size:12px;color:var(--primary-light);';
             body.parentElement?.appendChild(logBtn);
         }
     };
@@ -31321,7 +31322,7 @@ async function submitDirectTicket() {
 
 const BUG_STATUS_LABELS = { open:'待处理', in_dev:'修复中', in_test:'测试中', fixed:'已修复' };
 const BUG_PRIORITY_LABELS = { critical:'🔴 紧急', high:'🟠 高', medium:'🟡 中', low:'🟢 低' };
-const BUG_STATUS_COLORS  = { open:'var(--danger,#ea4a5a)', in_dev:'var(--warning,#f0a500)', in_test:'var(--primary)', fixed:'var(--success,#34d058)' };
+const BUG_STATUS_COLORS  = { open:'var(--danger, var(--ads-c-ea4a5a))', in_dev:'var(--warning)', in_test:'var(--primary)', fixed:'var(--success)' };
 
 /** 加载 BUG 列表 */
 async function loadBugs() {
@@ -31423,7 +31424,7 @@ async function showFileDiff(ticketId, filePath, fileName) {
                         <button class="btn-icon" onclick="document.getElementById('fileDiffModal').remove()">✕</button>
                     </div>
                 </div>
-                <div style="flex:1;overflow:auto;background:var(--surface-code,#1e1e2e);border-radius:0 0 8px 8px;">
+                <div style="flex:1;overflow:auto;background:var(--surface-code, var(--ads-c-1e1e2e));border-radius:0 0 8px 8px;">
                     ${body}
                 </div>
             </div>
@@ -31434,11 +31435,11 @@ async function showFileDiff(ticketId, filePath, fileName) {
 function _colorDiff(html) {
     return html.split('\n').map(line => {
         if (line.startsWith('+') && !line.startsWith('+++'))
-            return `<span style="color:#a8ff78;background:rgba(40,167,69,0.15);display:block;">${line}</span>`;
+            return `<span style="color:var(--ads-c-a8ff78);background:rgba(40,167,69,0.15);display:block;">${line}</span>`;
         if (line.startsWith('-') && !line.startsWith('---'))
-            return `<span style="color:#ff7b7b;background:rgba(220,53,69,0.12);display:block;">${line}</span>`;
+            return `<span style="color:var(--ads-c-ff7b7b);background:rgba(220,53,69,0.12);display:block;">${line}</span>`;
         if (line.startsWith('@@'))
-            return `<span style="color:#79c0ff;display:block;">${line}</span>`;
+            return `<span style="color:var(--ads-c-79c0ff);display:block;">${line}</span>`;
         return `<span style="display:block;">${line}</span>`;
     }).join('');
 }
@@ -31562,7 +31563,7 @@ async function doConfirmBug(cardId) {
             method: 'POST',
             body: { title, description, priority, requirement_id: requirementId || null, images },
         });
-        card.style.borderLeftColor = 'var(--success, #34d058)';
+        card.style.borderLeftColor = 'var(--success)';
         card.querySelector('.action-title').textContent = '✅ BUG 已上报';
         if (btns) btns.innerHTML = `<span class="action-link" onclick="switchTab('bugs')">查看 BUG 列表 →</span>`;
         showToast(`BUG「${title}」已上报`, 'success');
@@ -31571,9 +31572,60 @@ async function doConfirmBug(cardId) {
         if (msgId) patchActionState(msgId, 'executed', { title, at: new Date().toISOString() });
         setTimeout(() => { if (typeof loadBugs === 'function') loadBugs(); }, 500);
     } catch (e) {
-        card.style.borderLeftColor = 'var(--danger, #ea4a5a)';
+        card.style.borderLeftColor = 'var(--danger, var(--ads-c-ea4a5a))';
         card.querySelector('.action-title').textContent = '⚠️ 上报失败';
         if (btns) btns.innerHTML = `<span style="color:var(--danger);font-size:12px">${escapeHtml(e.message)}</span>`;
+    }
+}
+
+// ==================== UI 主题（仅配色，不改布局 / 内容） ====================
+const ADS_THEME_KEY = 'ads_theme';
+const ADS_THEMES = ['normal', 'light', 'dark'];
+
+function getTheme() {
+    try {
+        const t = localStorage.getItem(ADS_THEME_KEY);
+        return ADS_THEMES.includes(t) ? t : 'normal';
+    } catch (e) { return 'normal'; }
+}
+
+function getMermaidTheme() {
+    return getTheme() === 'light' ? 'default' : 'dark';
+}
+
+function setTheme(name) {
+    if (!ADS_THEMES.includes(name)) return;
+    const root = document.documentElement;
+    // Normal 不设置属性，回落 :root 原始配色 —— 保证现有视觉零改动
+    if (name === 'normal') root.removeAttribute('data-theme');
+    else root.setAttribute('data-theme', name);
+    try { localStorage.setItem(ADS_THEME_KEY, name); } catch (e) {}
+
+    document.querySelectorAll('#themeSelectWrap [data-theme-value]').forEach(btn => {
+        btn.classList.toggle('btn-primary', btn.dataset.themeValue === name);
+    });
+    refreshMermaidTheme();
+}
+
+// 已渲染的 mermaid 图随主题重绘（仅配色，失败不影响主题切换）
+async function refreshMermaidTheme() {
+    if (!window.mermaid) return;
+    try {
+        window.mermaid.initialize({
+            startOnLoad: false,
+            theme: getMermaidTheme(),
+            securityLevel: 'strict',
+            fontFamily: 'Segoe UI, PingFang SC, Microsoft YaHei, sans-serif',
+        });
+        const nodes = [...document.querySelectorAll('.mermaid[data-mermaid-source]')];
+        nodes.forEach(el => {
+            el.removeAttribute('data-processed');
+            el.textContent = el.dataset.mermaidSource || '';
+        });
+        const live = nodes.filter(el => el.isConnected);
+        if (live.length) await window.mermaid.run({ nodes: live });
+    } catch (e) {
+        console.warn('切换 mermaid 主题失败:', e);
     }
 }
 
@@ -31642,6 +31694,20 @@ async function showSystemSettingsModal(initialTab = 'knowledge') {
                             <div style="margin-top:12px;">
                                 <button class="btn btn-primary btn-sm" onclick="saveGeneralSettings()">保存</button>
                                 <span id="sysGeneralSaveStatus" style="margin-left:8px;font-size:12px;color:var(--success);"></span>
+                            </div>
+                        </div>
+                        <div class="sys-setting-group">
+                            <h4 class="sys-setting-group-title">🎨 界面主题</h4>
+                            <div class="sys-setting-row">
+                                <label class="sys-setting-label">
+                                    配色方案
+                                    <span class="sys-setting-hint">仅改变界面配色，不影响布局与内容；切换后立即生效并记住选择</span>
+                                </label>
+                                <div class="sys-setting-ctrl" id="themeSelectWrap" style="display:flex;gap:8px;flex-wrap:wrap;">
+                                    <button type="button" class="btn btn-sm" data-theme-value="normal" onclick="setTheme('normal')">Normal（默认）</button>
+                                    <button type="button" class="btn btn-sm" data-theme-value="light" onclick="setTheme('light')">Light 浅色</button>
+                                    <button type="button" class="btn btn-sm" data-theme-value="dark" onclick="setTheme('dark')">Dark 深色</button>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -31749,6 +31815,10 @@ function switchSysSettingsTab(tab) {
 }
 
 async function loadGeneralSettings() {
+    // 主题选中态来自 localStorage，不依赖后端接口
+    document.querySelectorAll('#themeSelectWrap [data-theme-value]').forEach(btn => {
+        btn.classList.toggle('btn-primary', btn.dataset.themeValue === getTheme());
+    });
     try {
         const data = await api('/system/settings');
         const s = data.settings || {};
@@ -31802,7 +31872,7 @@ async function loadGlobalSkills() {
                 ? `<span style="font-size:10px;color:var(--text-muted);margin-left:6px;">${JSON.stringify(sk.traits_match)}</span>`
                 : '';
             const overrideBadge = sk.overridden
-                ? `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:rgba(99,102,241,.15);color:#818cf8;margin-left:6px;">已覆盖</span>`
+                ? `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:rgba(99,102,241,.15);color:var(--ads-c-818cf8);margin-left:6px;">已覆盖</span>`
                 : '';
             const resetBtn = sk.overridden
                 ? `<button class="btn btn-xs btn-ghost" onclick="resetGlobalSkill('${sk.id}')" title="恢复 skills.json 默认值" style="font-size:11px;padding:2px 6px;">↩ 重置</button>`
@@ -31832,7 +31902,7 @@ async function loadGlobalSkills() {
             // 已安装的 marketplace skill：显示 Toggle + 卸载按钮
             const renderMarketRow = (sk) => {
                 const overrideBadge = sk.overridden
-                    ? `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:rgba(99,102,241,.15);color:#818cf8;margin-left:6px;">已覆盖</span>`
+                    ? `<span style="font-size:10px;padding:1px 5px;border-radius:3px;background:rgba(99,102,241,.15);color:var(--ads-c-818cf8);margin-left:6px;">已覆盖</span>`
                     : '';
                 const resetBtn = sk.overridden
                     ? `<button class="btn btn-xs btn-ghost" onclick="resetGlobalSkill('${sk.id}')" style="font-size:11px;padding:2px 6px;">↩</button>`
@@ -32023,7 +32093,7 @@ function _renderMarketplace() {
                 style="padding:5px 16px;border-radius:20px;font-size:12px;cursor:pointer;white-space:nowrap;flex-shrink:0;
                        border:1px solid ${active ? 'var(--primary)' : 'var(--border)'};
                        background:${active ? 'var(--primary)' : 'var(--bg-elevated)'};
-                       color:${active ? '#fff' : 'var(--text-muted)'};">
+                       color:${active ? 'var(--ads-c-fff)' : 'var(--text-muted)'};">
                 ${escapeHtml(c)}<span style="margin-left:4px;opacity:.7;font-size:10px;">${cnt}</span>
             </button>`;
         }).join('');
@@ -32088,7 +32158,7 @@ function _renderMarketplace() {
         const tagHtml = `<span onclick="_setMarketplaceTag('${escapeHtml(tag)}')" style="font-size:10px;padding:1px 7px;border-radius:10px;cursor:pointer;background:var(--bg-elevated);color:var(--text-muted);border:1px solid var(--border);" title="按此 Tag 筛选">${escapeHtml(tag)}</span>`;
         const actionBtn = sk.installed
             ? `<div style="display:flex;align-items:center;gap:6px;">
-                 <span style="font-size:12px;padding:4px 12px;border-radius:6px;background:rgba(52,211,88,.12);color:#34d058;border:1px solid rgba(52,211,88,.3);white-space:nowrap;font-weight:500;">✓ 已安装</span>
+                 <span style="font-size:12px;padding:4px 12px;border-radius:6px;background:rgba(52,211,88,.12);color:var(--ads-c-34d058);border:1px solid rgba(52,211,88,.3);white-space:nowrap;font-weight:500;">✓ 已安装</span>
                  <button class="btn btn-xs btn-ghost" onclick="_mktUninstall('${escapeHtml(sk.dir_name)}')" style="color:var(--text-muted);font-size:11px;" title="从系统移除">移除</button>
                </div>`
             : `<button class="btn btn-sm btn-primary" onclick="_mktInstall('${escapeHtml(sk.dir_name)}', this)" style="font-size:12px;white-space:nowrap;">+ ${installLabel}</button>`;
@@ -33284,8 +33354,8 @@ function renderErrorAlertCard(action) {
                }).join(' · ')}
            </div>`
         : '';
-    return `<div class="chat-action-card git-alert-card" style="border-left-color:var(--error,#ef4444);background:rgba(239,68,68,0.08);">
-        <div class="action-title" style="color:var(--error,#ef4444);">${escapeHtml(action.title || '⚠️ 错误')}</div>
+    return `<div class="chat-action-card git-alert-card" style="border-left-color:var(--error);background:rgba(239,68,68,0.08);">
+        <div class="action-title" style="color:var(--error);">${escapeHtml(action.title || '⚠️ 错误')}</div>
         <div class="action-detail" style="font-size:12px;color:var(--text-secondary);">${bodyHtml}</div>
         ${kbRow}
         ${btnRow}
@@ -33355,7 +33425,7 @@ function _onAgentAlert(data) {
     const bubble = document.createElement('div');
     bubble.className = 'chat-msg assistant';
     bubble.innerHTML = `
-        <div class="chat-msg-avatar" style="background:var(--error,#ef4444);color:#fff;font-size:14px;">⚠</div>
+        <div class="chat-msg-avatar" style="background:var(--error);color:var(--ads-c-fff);font-size:14px;">⚠</div>
         <div class="chat-msg-content">
             ${renderErrorAlertCard(data)}
             <div class="chat-msg-time">${time}</div>
@@ -34610,7 +34680,7 @@ function _esImportToChat() {
     overlay.id = 'esImportModal';
     overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;';
     overlay.innerHTML = `
-        <div style="background:var(--bg, #1e1e2e);border:1px solid var(--border);border-radius:8px;padding:16px 18px;min-width:280px;box-shadow:0 8px 30px rgba(0,0,0,.4);">
+        <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:16px 18px;min-width:280px;box-shadow:0 8px 30px rgba(0,0,0,.4);">
             <div style="font-size:13px;font-weight:600;margin-bottom:4px;">导入外部会话到 AI 助手</div>
             <div style="font-size:11px;color:var(--text-muted);margin-bottom:12px;">选择导入范围（文字 + 图片都会导入）</div>
             <div style="display:flex;flex-direction:column;gap:8px;">
@@ -35136,7 +35206,7 @@ function _esPanelResizeStart(e) {
 
     const startX = e.clientX;
     const startW = listEl.offsetWidth;
-    resizerEl.style.background = 'var(--primary, #7c6af7)';
+    resizerEl.style.background = 'var(--primary)';
 
     const onMove = (ev) => {
         const newW = Math.max(180, Math.min(500, startW + ev.clientX - startX));
