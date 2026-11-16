@@ -73,6 +73,8 @@ async def test_2_aigc_dispatched():
     assert mock_req.called, "request_image 应被调用"
     assert mock_req.await_args.kwargs.get("requester") == "ArtAgent", \
         f"requester 应为 ArtAgent，实际: {mock_req.await_args}"
+    assert mock_req.await_args.kwargs.get("callback_media_path") == payload["path"], \
+        f"应带上占位图路径供生图回填，实际: {mock_req.await_args}"
     print("✅ 第 2 项（AIGC 投递）通过: aigc_tag =", payload["aigc_tag"])
 
 
@@ -119,13 +121,45 @@ async def test_2_sourced_no_aigc():
     print("✅ 第 2 项（命中库不投递 AIGC）通过: status =", payload.get("status"))
 
 
+async def test_3_backfill_media():
+    """第 3 项：生图完成后真图字节覆盖占位图（同路径，manifest 不用改）"""
+    import image_processor
+
+    with tempfile.TemporaryDirectory() as repo:
+        rel = "docs/Reqs/x/assets/placeholder/hero_bg.png"
+        dest = Path(repo) / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"PLACEHOLDER")
+
+        src = Path(repo) / "generated.png"
+        src.write_bytes(b"\x89PNG-REAL")
+
+        mock_gm = MagicMock()
+        mock_gm.repo_exists = MagicMock(return_value=True)
+        mock_gm._repo_path = MagicMock(return_value=Path(repo))
+        mock_gm.commit = AsyncMock(return_value="abc123")
+
+        with patch("git_manager.git_manager", mock_gm), \
+             patch("checkpoint.push_checkpoint_context", return_value=None), \
+             patch("checkpoint.pop_checkpoint_context"):
+            await image_processor._backfill_media(
+                {"id": "IMG-1", "project_id": "p1", "callback_media_path": rel},
+                str(src), "",
+            )
+
+        assert dest.read_bytes() == b"\x89PNG-REAL", f"占位图应被真图覆盖，实际: {dest.read_bytes()}"
+        assert mock_gm.commit.called, "覆盖后应提交到项目仓库"
+    print("✅ 第 3 项（占位图二进制回填）通过")
+
+
 async def main():
     await test_1_path_guard_rejected()
     await test_1_legal_path_allowed()
     await test_2_aigc_dispatched()
     await test_2_aigc_off()
     await test_2_sourced_no_aigc()
-    print("\n🎉 全部 5 项验证通过")
+    await test_3_backfill_media()
+    print("\n🎉 全部 6 项验证通过")
 
 
 if __name__ == "__main__":

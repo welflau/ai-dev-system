@@ -5,10 +5,11 @@ Position in SOP: art_design_done → asset_gen (fragment) → assets_ready → d
 
 与 ArtAgent 的分工：
   ArtAgent    ：产出"需要什么资产"（视觉规范 + asset_manifest 清单）
-  ArtistAgent ：解决"资产从哪来"（检索资产库 → 命中即用，未命中给占位图）
+  ArtistAgent ：解决"资产从哪来"（检索资产库 → 命中即用；未命中则投递
+                AIGC 异步生图 + 占位图兜底，生图完成后自动回填覆盖占位图）
 
-不做 AI 图像生成 —— 系统尚未接入图像模型。真实 AIGC 落地后，
-在 GenerateAssetsAction._resolve_one 里加一条来源分支即可，Agent 不用动。
+AIGC 的具体投递与回写在 GenerateAssetsAction._resolve_one /
+image_processor._backfill_media，Agent 本身只负责调度。
 """
 from typing import Any, Dict
 

@@ -51,7 +51,7 @@ class ConfirmRequirementAction(ActionBase):
                     },
                     "use_aigc": {
                         "type": "boolean",
-                        "description": "是否在资产落地阶段启用 AI 生图（默认关，生图有成本）",
+                        "description": "是否在资产落地阶段启用 AI 生图（SOP 默认开，生图有成本；本项仅用于强制开启）",
                     },
                 },
                 "required": ["title", "description"],

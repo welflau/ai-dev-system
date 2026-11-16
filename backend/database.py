@@ -189,6 +189,8 @@ class Database:
             # 工单/需求级 AI 生图开关：用户在创建卡片上勾选，覆盖 SOP 的 use_aigc 默认
             ("tickets", "use_aigc", "INTEGER DEFAULT 0"),
             ("requirements", "use_aigc", "INTEGER DEFAULT 0"),
+            # 生图回填：AIGC 完成后把真图覆盖到 ArtistAgent 的占位图路径
+            ("image_requests", "callback_media_path", "TEXT"),
         ]
         async with self._write_lock:
             for table, column, col_def in migrations:
@@ -924,6 +926,7 @@ CREATE TABLE IF NOT EXISTS image_requests (
     image_size      TEXT DEFAULT '2K',
     callback_doc    TEXT,                       -- 需要替换占位符的文档路径（相对仓库根）
     callback_tag    TEXT,                       -- [IMG_PENDING:id] 占位符
+    callback_media_path TEXT,                  -- 生图完成后回填覆盖的二进制文件（仓库相对路径）
     status          TEXT DEFAULT 'pending',     -- pending / processing / done / failed / ascii_fallback
     lightai_task_id TEXT,                       -- LightAI 异步任务 ID
     result_url      TEXT,                       -- 生成图片的 URL（临时）

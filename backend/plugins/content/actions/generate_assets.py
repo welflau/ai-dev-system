@@ -3,12 +3,12 @@
 消费 ArtAgent 产出的 asset_manifest.yaml，把 `status: pending` 的条目逐个落地：
 
   1. 检索本地资产库（art_assets 表，33000+ 条）→ 命中则登记为 sourced
-  2. 未命中 → 生成占位图（PIL）→ 登记为 placeholder
+  2. 未命中 → 投递 AIGC 生图（LightAI，异步）→ 生成占位图（PIL）兜底
   3. 回写 asset_manifest.yaml（状态 + 实际路径）
 
-不做 AI 图像生成 —— 系统当前没有接入图像模型，硬写一个"假装生成"的分支
-只会产出空文件并让下游误以为资产已就绪。需要真实 AIGC 时在
-`_resolve_one` 里加一个来源分支即可。
+AIGC 走异步投递：request_image 只入队就返回，占位图立即产出保证流水线不断；
+生图完成后 image_processor 把真图覆盖回同名占位图文件（callback_media_path），
+并自动入库 art_assets。真图与占位图共用 path，manifest / 前端都不用改。
 
 写入：
   {docs_prefix}asset_manifest.yaml   （覆盖，带落地状态）
@@ -249,22 +249,6 @@ class GenerateAssetsAction(ActionBase):
                 "match_score": hit.get("_score"),
             }
 
-        # 未命中本地库 → 投递 AIGC 生图（异步，不阻塞流水线）。
-        # 占位图仍照出作为即刻可用兜底，生图完成后由 image_processor
-        # 自动入库 art_assets（requester=ArtAgent 走非 chat 分支）。
-        aigc_tag = ""
-        if allow_aigc and not needs_frames:
-            try:
-                from image_processor import request_image
-                aigc_tag = await request_image(
-                    prompt=f"{aid} {desc}".strip(),
-                    project_id=project_id,
-                    ticket_id=ticket_id,
-                    requester="ArtAgent",
-                )
-            except Exception as e:
-                logger.warning("投递 AIGC 生图失败（id=%s）: %s", aid, e)
-
         if not allow_placeholder:
             _why = ("需多帧动画序列，资产库无法满足" if needs_frames
                     else "资产库未命中")
@@ -277,10 +261,28 @@ class GenerateAssetsAction(ActionBase):
                                "note": "资产库未命中，占位图生成失败（PIL 不可用）"}
 
         rel = f"{docs_prefix}assets/placeholder/{_safe_name(aid)}.png"
+
+        # 未命中本地库 → 投递 AIGC 生图（异步，不阻塞流水线）。
+        # 占位图仍照出作为即刻可用兜底；带上 rel 让 image_processor 在
+        # 生图完成后把真图覆盖回这个路径，前端缩略图随即变成真图。
+        aigc_tag = ""
+        if allow_aigc and not needs_frames:
+            try:
+                from image_processor import request_image
+                aigc_tag = await request_image(
+                    prompt=f"{aid} {desc}".strip(),
+                    project_id=project_id,
+                    ticket_id=ticket_id,
+                    requester="ArtAgent",
+                    callback_media_path=rel,
+                )
+            except Exception as e:
+                logger.warning("投递 AIGC 生图失败（id=%s）: %s", aid, e)
+
         out = {**item, "status": "placeholder", "path": rel, "_bytes": png}
         if aigc_tag:
             out["aigc_tag"] = aigc_tag
-            out["note"] = "AIGC 已投递，完成后自动入库 art_assets（占位图暂用）"
+            out["note"] = "AIGC 已投递，生成完成后自动回填覆盖占位图"
         elif needs_frames:
             out["note"] = "需多帧动画序列，须由美术制作"
         return "placeholder", out
@@ -547,10 +549,12 @@ def _render_report(
     title: str, sourced: List[Dict], placeholders: List[Dict], skipped: List[Dict],
 ) -> str:
     total = len(sourced) + len(placeholders) + len(skipped)
+    aigc = [a for a in placeholders if a.get("aigc_tag")]
+    plain = [a for a in placeholders if not a.get("aigc_tag")]
     md = [
         f"# 资产落地报告 — {title}", "",
-        f"共 {total} 项：命中资产库 {len(sourced)}，占位图 {len(placeholders)}，"
-        f"待人工处理 {len(skipped)}", "",
+        f"共 {total} 项：命中资产库 {len(sourced)}，占位图 {len(placeholders)}"
+        f"（其中 {len(aigc)} 项已投递 AIGC 生图），待人工处理 {len(skipped)}", "",
     ]
     if sourced:
         md += ["## 命中资产库", "", "| id | 类型 | 匹配资产 | 匹配度 | 路径 |",
@@ -558,12 +562,20 @@ def _render_report(
         md += [f"| {a.get('id')} | {a.get('type')} | {a.get('matched_name', '')} "
                f"| {a.get('match_score', '')} | `{a.get('path', '')}` |" for a in sourced]
         md.append("")
-    if placeholders:
+    if aigc:
+        md += ["## AIGC 生图（占位图待自动回填）", "",
+               "> 生图请求已异步投递；生成完成后真图会覆盖同名占位图文件，"
+               "在此期间为洋红斜纹兜底图。", "",
+               "| id | 类型 | 路径 | 生图任务 |", "|---|---|---|---|"]
+        md += [f"| {a.get('id')} | {a.get('type')} | `{a.get('path', '')}` "
+               f"| `{a.get('aigc_tag', '')}` |" for a in aigc]
+        md.append("")
+    if plain:
         md += ["## 占位图（需美术替换）", "",
                "> 洋红斜纹图，仅用于打通流程，**不可用于交付**。", "",
                "| id | 类型 | 路径 |", "|---|---|---|"]
         md += [f"| {a.get('id')} | {a.get('type')} | `{a.get('path', '')}` |"
-               for a in placeholders]
+               for a in plain]
         md.append("")
     if skipped:
         md += ["## 待人工处理", "", "| id | 类型 | 原因 |", "|---|---|---|"]

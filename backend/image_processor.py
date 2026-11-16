@@ -5,7 +5,7 @@ ImageProcessor — LightAI 图片生成后台处理器
 1. 轮询 image_requests 表中 pending 的请求
 2. 调用 LightAI API（create_async_task → poll task_status）
 3. 下载生成的图片 → 保存到 G_ArtRes 资产库
-4. 替换项目文档中的 [IMG_PENDING:id] 占位符
+4. 替换项目文档中的 [IMG_PENDING:id] 占位符 / 回填覆盖 ArtistAgent 占位图
 5. 推送 SSE 事件通知前端刷新
 
 支持的引擎（来自 LightAI 公开技能）：
@@ -442,6 +442,10 @@ async def process_image_request(req_id: str) -> None:
     if req.get("callback_doc") and req.get("callback_tag") and req.get("project_id"):
         await _replace_placeholder(req, result_path or image_url)
 
+    # 回填 ArtistAgent 的占位图（二进制覆盖）
+    if req.get("callback_media_path"):
+        await _backfill_media(dict(req), result_path or "", image_url or "")
+
     # 更新状态
     await db.update("image_requests", {
         "status": "done",
@@ -567,6 +571,51 @@ async def _replace_placeholder(req: dict, content: str, is_ascii: bool = False) 
             pop_checkpoint_context(tok)
 
 
+async def _backfill_media(req: dict, result_path: str, image_url: str) -> None:
+    """生图完成后，把真图覆盖到 ArtistAgent 预先写出的占位图文件。
+
+    占位图路径在投递时由 generate_assets 写入 callback_media_path。覆盖后
+    asset_manifest.yaml 里的 path 不用改，前端按同一路径渲染的缩略图即为真图。
+    这里不能用 _replace_placeholder：那是往文档里塞 markdown 文本标签，
+    YAML 会被撑坏，而占位图是二进制文件。
+    """
+    rel = req.get("callback_media_path") or ""
+    project_id = req.get("project_id") or ""
+    if not rel or not project_id:
+        return
+    tok = None
+    try:
+        from git_manager import git_manager
+        from checkpoint import push_checkpoint_context, pop_checkpoint_context
+        if not git_manager.repo_exists(project_id):
+            return
+
+        src = result_path
+        if not src and image_url:
+            # 未配置资产库目录时 process_image_request 不会落盘，这里临时下载一份
+            from config import DATA_DIR
+            src = await _download_image(image_url, DATA_DIR / "image_backfill",
+                                        f"{req.get('id', 'img')}.png")
+        if not src or not Path(src).is_file():
+            logger.warning("回填跳过：无可用本地图片 (req=%s)", req.get("id"))
+            return
+
+        tok = push_checkpoint_context(project_id=project_id, agent_type="ImageProcessor",
+                                     action="backfill_media")
+        dest = git_manager._repo_path(project_id) / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(Path(src).read_bytes())
+        await git_manager.commit(project_id, f"[ImageAgent] AI 生图回填: {rel}",
+                                 author="ImageAgent")
+        logger.info("占位图已回填为真图: %s (%d bytes)", rel, dest.stat().st_size)
+    except Exception as e:
+        logger.warning("回填占位图失败: %s", e)
+    finally:
+        if tok is not None:
+            from checkpoint import pop_checkpoint_context
+            pop_checkpoint_context(tok)
+
+
 # ── 后台轮询调度器 ─────────────────────────────────────────
 
 async def image_processor_loop(interval: int = 10) -> None:
@@ -639,6 +688,7 @@ async def request_image(
     image_size: str = "2K",
     callback_doc: str = "",
     callback_tag: str = "",
+    callback_media_path: str = "",
     session_id: str = "",
     message_id: str = "",
 ) -> str:
@@ -658,6 +708,7 @@ async def request_image(
         "image_size": image_size,
         "callback_doc": callback_doc,
         "callback_tag": tag,
+        "callback_media_path": callback_media_path,
         "status": "pending",
         "session_id": session_id or None,
         "message_id": message_id or None,

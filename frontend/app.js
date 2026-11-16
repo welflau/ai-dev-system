@@ -8469,6 +8469,16 @@ async function boardDrop(event, targetCol) {
 
 // ==================== 工单详情抽屉 ====================
 
+/** 工单顶部「已开启 AI 生图」印章（仅 use_aigc=1，即显式勾选过的工单） */
+function _buildAigcStamp(data) {
+    if (!data || !Number(data.use_aigc || 0)) return '';
+    return `<div class="aigc-stamp-row">
+        <span class="aigc-stamp" title="该工单显式开启了 AI 生图：资产落地未命中资产库时自动投递 LightAI 生图，生成完成后回填覆盖占位图">
+            🖼 AI 生图 已开启
+        </span>
+    </div>`;
+}
+
 /** 构建三层能力提示横幅：告知用户当前缺哪层、走哪条路径 */
 /** 工单卡片上的 OpenSpec 印章小标签 */
 function _buildOpenSpecStampMini(stage) {
@@ -8926,6 +8936,7 @@ async function openTicketDrawer(ticketId) {
             _hasOS = !!(_osStatus.initialized);
         } catch { _hasOS = false; }
         const _capBanner = _buildCapabilityBanner(_hasSP, _hasOS);
+        const _aigcStamp = _buildAigcStamp(data);
         const _layerBar  = _buildThreeLayerBar(_hasSP, _hasOS, data);
 
         if (data.pending_gate) {
@@ -8989,6 +9000,7 @@ async function openTicketDrawer(ticketId) {
             ${data.status === 'blocked' ? `<div class="ticket-sticky-gate-slot">${_renderTicketBlockedCard(data)}</div>` : ''}
             ${data.pending_gate ? `<div class="ticket-sticky-gate-slot">${_renderTicketPendingGate(data.pending_gate)}</div>` : ''}
         </div>
+        ${_aigcStamp}
         ${_capBanner}
         ${_layerBar}
         <div class="drawer-section" id="drawerSectionInfo">
