@@ -2006,35 +2006,36 @@ class TicketOrchestrator:
 
     # ==================== 工单流转 ====================
 
+    async def _last_reset_at(self, ticket_id: str) -> Optional[str]:
+        """最近一次人工解除 blocked / 重置计数的时间点，作为所有止损计数的共同起点。
+
+        人工解除是显式的「问题已排查，重新给机会」信号。全局 reject 计数、
+        连续同因失败计数、验收重派计数都以此清零，保证解除后工单能真正重跑，
+        而不是被历史计数秒回 blocked（TK-20261110-48b6af 曾因此连点 4 次都解不开）。
+
+        防无限续命不靠「限制清零次数」，而靠解除后重新累计的止损闸门：
+        连续 3 次同因失败 / 5 次 reject 会再次熔断，自动循环最多烧 3 次 LLM 即停。
+        """
+        row = await db.fetch_one(
+            """SELECT created_at FROM ticket_logs
+               WHERE ticket_id = ? AND action IN ('unblock', 'reject_reset')
+               ORDER BY created_at DESC LIMIT 1""",
+            (ticket_id,),
+        )
+        return (row or {}).get("created_at")
+
     async def _reject_count_since_reset(
         self, ticket_id: str, to_status: Optional[str] = None,
     ) -> int:
         """工单被打回的次数，**只数最近一次人工解除 blocked 之后的**。
 
-        原先直接 `COUNT(*) ... action='reject'` 数的是全部历史，从不清零：
-        撞上限 blocked → 人工点「解除 blocked」→ 下一轮派单又数出同样的次数 →
-        秒回 blocked，按钮等于无效。人工介入的语义就是「问题已排查，重新给机会」，
-        所以以 unblock 日志为界重新计数；但同一工单最多允许 2 次清零，防止无限续命。
+        原先 `MAX_UNBLOCK_RESETS=2` 会把计数起点钉死在第 2 次 unblock：工单
+        解除过 2 次后，之后所有 unblock 都不再生效、历史 reject 全数计入 →
+        永久锁死 blocked。现改为始终以最近一次 unblock 为界。
 
         to_status 非空时只数打回到该状态的（供按阶段止损的 max_retries 用）。
         """
-        # 只允许前 N 次人工解除阻塞清零计数。超过后 unblock 仍能解除 blocked、
-        # 但不再刷新重试额度 —— 否则「blocked → 人工 unblock → 再 5 次」可无限续命。
-        # TK-20261110-48b6af 实测 4 轮 unblock / 25 reject / 344 次 LLM 调用即由此而来。
-        MAX_UNBLOCK_RESETS = 2
-        reset_rows = await db.fetch_all(
-            """SELECT created_at FROM ticket_logs
-               WHERE ticket_id = ? AND action IN ('unblock', 'reject_reset')
-               ORDER BY created_at ASC""",
-            (ticket_id,),
-        )
-        if len(reset_rows) > MAX_UNBLOCK_RESETS:
-            # 只认前 N 次清零；之后的 unblock 不再成为新的计数起点
-            since = reset_rows[MAX_UNBLOCK_RESETS - 1].get("created_at")
-        elif reset_rows:
-            since = reset_rows[-1].get("created_at")
-        else:
-            since = None
+        since = await self._last_reset_at(ticket_id)
 
         sql = "SELECT COUNT(*) AS c FROM ticket_logs WHERE ticket_id = ? AND action = 'reject'"
         params: list = [ticket_id]
@@ -2075,15 +2076,18 @@ class TicketOrchestrator:
     async def _consecutive_same_failure(self, ticket_id: str) -> tuple:
         """最近连续出现同一失败原因的 reject 次数（跳过无原因的验收打回）。
 
-        与 unblock 清零无关：人工解除阻塞后又以同样原因失败，说明问题没解决，
-        连续计数应当继续累加，否则每次 unblock 都能把熔断额度刷满。
+        以最近一次 unblock 为界：解除后历史同因失败清零，工单能真正重跑；
+        解除后若又连续出现同一原因失败，重新累计到 3 次即再次熔断（防烧 token）。
         """
-        rows = await db.fetch_all(
-            """SELECT detail, to_status FROM ticket_logs
-               WHERE ticket_id = ? AND action = 'reject'
-               ORDER BY created_at DESC LIMIT 20""",
-            (ticket_id,),
-        )
+        since = await self._last_reset_at(ticket_id)
+        sql = """SELECT detail, to_status FROM ticket_logs
+                 WHERE ticket_id = ? AND action = 'reject'"""
+        params: list = [ticket_id]
+        if since:
+            sql += " AND created_at > ?"
+            params.append(since)
+        sql += " ORDER BY created_at DESC LIMIT 20"
+        rows = await db.fetch_all(sql, tuple(params))
         count, fingerprint = 0, ""
         for row in rows:
             # 验收打回与 development_failed 交替出现，若计入会把连续链切断
@@ -2108,13 +2112,7 @@ class TicketOrchestrator:
         `acceptance_retry` 日志动作 —— 它不是 `reject`，因此不进全局
         MAX_RETRIES / 同因熔断 / Failure Library，也不触发返工链。
         """
-        reset = await db.fetch_one(
-            """SELECT created_at FROM ticket_logs
-               WHERE ticket_id = ? AND action IN ('unblock', 'reject_reset')
-               ORDER BY created_at DESC LIMIT 1""",
-            (ticket_id,),
-        )
-        since = (reset or {}).get("created_at")
+        since = await self._last_reset_at(ticket_id)
         sql = ("SELECT COUNT(*) AS c FROM ticket_logs "
                "WHERE ticket_id = ? AND action = 'acceptance_retry'")
         params: list = [ticket_id]
