@@ -4800,6 +4800,64 @@ class TicketOrchestrator:
                 # 互斥由 process_ticket claim 保证，不会与轮询双开同一张单。
                 asyncio.create_task(self.process_ticket(project_id, pt["id"]))
 
+    async def _inject_rejection_context(self, context: Dict, ticket: Dict) -> None:
+        """把「本轮被打回的真实原因」注入 context，供 ReflectionAction 使用。
+
+        断链背景：actions/reflection.py:170-171 与 agents/dev.py:696,711,809 都读
+        context["rejection_reason"] / ["test_issues"]，但此前全仓库没有任何运行时
+        代码给这两个键赋值（只在 _test_reflection*.py 里手工塞过）。结果验收打回的
+        真实原因（tickets.result.review.issues / reject 日志 message）进不了反思
+        prompt，反思只看到空信号，下一轮重复同样的错误（TK-20261110-48b6af
+        20:30:00 的 reject 里明明写着「package.json 未声明 three 依赖」，
+        却因断链始终没传给 DevAgent）。
+
+        双源提取，兼容新旧数据结构：
+        - tickets.result：review.issues / issues / degrade_reason
+        - 最近一条 reject 日志 detail：issues / reason / message
+        仅在本轮结果确实是「被打回」类状态时注入，避免把历史成功结果带进新工单。
+        """
+        try:
+            raw_result = ticket.get("result")
+            result_obj = (json.loads(raw_result) if isinstance(raw_result, str) and raw_result
+                          else (raw_result or {}))
+            if not isinstance(result_obj, dict):
+                result_obj = {}
+            result_status = str(result_obj.get("status") or "")
+
+            review = result_obj.get("review") or {}
+            issues = [str(i) for i in (review.get("issues") or result_obj.get("issues") or []) if i]
+            reason = str(result_obj.get("degrade_reason") or "")
+
+            reject_row = await db.fetch_one(
+                """SELECT detail FROM ticket_logs
+                   WHERE ticket_id = ? AND action = 'reject'
+                   ORDER BY created_at DESC LIMIT 1""",
+                (ticket["id"],),
+            )
+            if reject_row and reject_row.get("detail"):
+                try:
+                    det = json.loads(reject_row["detail"])
+                except (ValueError, TypeError):
+                    det = {}
+                if not isinstance(det, dict):
+                    det = {}
+                if not issues:
+                    issues = [str(i) for i in (det.get("issues") or []) if i]
+                if not reason:
+                    reason = str(det.get("reason") or det.get("message") or "")
+
+            if result_status in ("acceptance_rejected", "testing_failed",
+                                 "development_failed", "error"):
+                context["rejection_reason"] = "; ".join(issues[:10]) or reason[:500]
+                context["test_issues"] = issues[:10]
+            else:
+                context["rejection_reason"] = ""
+                context["test_issues"] = []
+        except Exception as e:
+            logger.debug("注入返工失败信号失败（非致命）: %s", e)
+            context.setdefault("rejection_reason", "")
+            context.setdefault("test_issues", [])
+
     async def _build_context(self, ticket: Dict, agent_name: str = "") -> Dict:
         """构建 Agent 执行上下文"""
         requirement = await db.fetch_one(
@@ -4842,6 +4900,9 @@ class TicketOrchestrator:
             "tests_prefix": f"tests/{req_short}/",
             "_ticket_progress_cb": self._make_ticket_progress_callback(project_id, ticket["id"]),
         }
+
+        # 返工失败信号（rejection_reason / test_issues）注入，供反思 Action 读取
+        await self._inject_rejection_context(context, ticket)
 
         # 若为 BUG ticket，附加 BUG 原始信息
         if ticket.get("type") == "bug":
