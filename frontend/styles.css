@@ -5688,6 +5688,51 @@ input[readonly]:focus {
 .artifact-icon {
     font-size: 16px;
 }
+
+/* 产出分类折叠组（默认全部折叠，点击分类头展开该分类最新版本） */
+.artifact-group {
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    margin-bottom: 8px;
+    overflow: hidden;
+    background: var(--bg-elevated);
+}
+.artifact-group-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 12px;
+    cursor: pointer;
+    font-size: 13px;
+    transition: background 0.15s;
+}
+.artifact-group-head:hover {
+    background: var(--bg-hover);
+}
+.artifact-group-arrow {
+    color: var(--text-muted);
+    font-size: 12px;
+    width: 12px;
+    flex-shrink: 0;
+}
+.artifact-history-btn {
+    font-size: 11px !important;
+    padding: 2px 9px;
+    white-space: nowrap;
+}
+.artifact-group-body {
+    padding: 4px 10px 10px;
+    border-top: 1px solid var(--border);
+}
+.artifact-group-body .artifact-card {
+    margin-bottom: 0;
+    border: none;
+    background: transparent;
+    cursor: default;
+}
+.artifact-group-body .artifact-card:hover {
+    border-color: transparent;
+}
 .artifact-name {
     font-weight: 500;
     color: var(--text);

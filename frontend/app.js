@@ -9273,29 +9273,47 @@ async function openTicketDrawer(ticketId) {
                 </div>`;
             };
 
+            // 每次渲染抽屉重置历史缓存，避免跨工单串数据
+            window._artifactHistoryCache = {};
+
             const groupsHtml = [...groups.values()].map(group => {
                 const latest = group[group.length - 1];
                 const older = group.slice(0, -1);
-                const histId = 'ahist-' + latest.id;
+                const bodyId = 'agrpbody-' + latest.id;
+                const groupKey = 'agrp-' + latest.id;
 
-                const historyHtml = older.length > 0
-                    ? `<div style="margin-top:4px;">
-                           <button class="btn-text-sm" style="font-size:11px;" onclick="event.stopPropagation();toggleBlock('${histId}')">
-                               ${older.length} 个历史版本 ▼
-                           </button>
-                           <div id="${histId}" style="display:none;">
-                               ${[...older].reverse().map(a => renderOneArtifact(a, true)).join('')}
-                           </div>
-                       </div>`
+                // 预渲染该分类的历史版本 HTML 存入缓存，点「历史(N)」时弹面板
+                window._artifactHistoryCache[groupKey] = {
+                    title: latest.name || latest.type,
+                    html: [...older].reverse().map(a => renderOneArtifact(a, true)).join('')
+                          || '<div class="log-panel-empty">该分类暂无历史版本</div>'
+                };
+
+                const historyBtn = older.length > 0
+                    ? `<button class="btn btn-sm artifact-history-btn" onclick="event.stopPropagation();openArtifactHistory('${groupKey}')">🕘 历史 (${older.length})</button>`
                     : '';
 
-                return renderOneArtifact(latest) + historyHtml;
+                // 分类头（默认全部折叠，点击展开该分类最新版本详情）
+                return `
+                <div class="artifact-group">
+                    <div class="artifact-group-head" onclick="toggleArtifactGroup('${bodyId}', this)">
+                        <span class="artifact-group-arrow">▸</span>
+                        <span>${getArtifactIcon(latest.type)}</span>
+                        <span style="font-weight:500;">${escHtml(latest.name || latest.type)}</span>
+                        <span class="tag tag-module" style="font-size:11px;">${escHtml(latest.type)}</span>
+                        ${historyBtn}
+                        <span style="font-size:11px;color:var(--text-muted);margin-left:auto;">${formatDate(latest.created_at)}</span>
+                    </div>
+                    <div class="artifact-group-body" id="${bodyId}" style="display:none;">
+                        ${renderOneArtifact(latest)}
+                    </div>
+                </div>`;
             }).join('');
 
-            // 计算去重后的组数
             const uniqueCount = groups.size;
             const totalCount = artifacts.length;
-            const dupNote = totalCount > uniqueCount ? ` <span style="font-size:11px;color:var(--text-muted);font-weight:normal;">(${totalCount - uniqueCount} 个历史版本已折叠)</span>` : '';
+            const histTotal = totalCount - uniqueCount;
+            const dupNote = histTotal > 0 ? ` <span style="font-size:11px;color:var(--text-muted);font-weight:normal;">(${uniqueCount} 类 · ${histTotal} 个历史版本，点击分类展开)</span>` : '';
 
             html += `
             <div class="drawer-section" id="drawerSectionArtifacts">
@@ -17123,6 +17141,27 @@ function toggleBlock(id) {
         ? el.previousElementSibling
         : el.closest('div')?.querySelector('.prompt-toggle-btn');
     if (btn) btn.textContent = btn.textContent.replace(isHidden ? '▾' : '▴', isHidden ? '▴' : '▾');
+}
+
+/** 展开/折叠产出分类（默认全部折叠），翻转分类头箭头 */
+function toggleArtifactGroup(bodyId, headEl) {
+    const body = document.getElementById(bodyId);
+    if (!body) return;
+    const isHidden = body.style.display === 'none';
+    body.style.display = isHidden ? 'block' : 'none';
+    const arrow = headEl?.querySelector('.artifact-group-arrow');
+    if (arrow) arrow.textContent = isHidden ? '▾' : '▸';
+}
+
+/** 打开产出分类的历史版本面板（内容在渲染产出区时预生成到 window._artifactHistoryCache） */
+function openArtifactHistory(groupKey) {
+    const data = (window._artifactHistoryCache || {})[groupKey];
+    if (!data) { showToast('未找到该分类的历史版本', 'warning'); return; }
+    const titleEl = document.getElementById('artifactHistoryTitle');
+    const bodyEl = document.getElementById('artifactHistoryBody');
+    if (titleEl) titleEl.textContent = `🕘 ${data.title} · 历史版本`;
+    if (bodyEl) bodyEl.innerHTML = data.html;
+    openModal('artifactHistoryModal');
 }
 
 /** 切换提示词展开/折叠 */

@@ -13,7 +13,7 @@
         } catch (e) {}
     })();
     </script>
-    <link rel="stylesheet" href="/static/styles.css?v=20261116h">
+    <link rel="stylesheet" href="/static/styles.css?v=20261117a">
     <!-- highlight.js 语法高亮 -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
@@ -2648,10 +2648,21 @@
         </div>
     </div>
 
+    <!-- ==================== 产出历史版本面板 ==================== -->
+    <div class="modal-overlay" id="artifactHistoryModal">
+        <div class="modal modal-lg" style="max-width:680px;width:92vw;max-height:82vh;display:flex;flex-direction:column;">
+            <div class="modal-header">
+                <h3 id="artifactHistoryTitle" style="margin:0;font-size:15px;">🕘 历史版本</h3>
+                <button class="btn-icon" onclick="closeModal('artifactHistoryModal')">&times;</button>
+            </div>
+            <div id="artifactHistoryBody" style="flex:1;overflow-y:auto;padding:14px 18px;"></div>
+        </div>
+    </div>
+
     <!-- ==================== Toast 通知 ==================== -->
     <div class="toast-container" id="toastContainer"></div>
 
-    <script src="/static/app.js?v=20261116h"></script>
+    <script src="/static/app.js?v=20261117a"></script>
 </body>
 </html>
 
