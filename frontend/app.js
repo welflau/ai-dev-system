@@ -9123,35 +9123,10 @@ async function openTicketDrawer(ticketId) {
             </div>`;
         }
 
-        // 子任务（subtasks — 轻量任务项，关联到子工单）
-        const subtasks = data.subtasks || [];
-        if (subtasks.length > 0) {
-            // 建立子任务标题到子工单的映射（模糊匹配）
-            const childTicketByTitle = {};
-            childTickets.forEach(ct => {
-                childTicketByTitle[ct.title.toLowerCase().trim()] = ct;
-            });
-
-            html += `
-            <div class="drawer-section">
-                <h4>子任务 (${subtasks.length})</h4>
-                <div class="subtask-list">
-                    ${subtasks.map(st => {
-                        // 尝试匹配子工单
-                        const matchedTicket = childTicketByTitle[st.title.toLowerCase().trim()];
-                        const clickAttr = matchedTicket
-                            ? `onclick="event.stopPropagation(); openTicketDrawer('${matchedTicket.id}');" class="subtask-item child-ticket-link ${st.status === 'completed' ? 'completed' : ''}" title="点击查看关联工单 #${(matchedTicket.id || '').slice(-6)}"`
-                            : `class="subtask-item ${st.status === 'completed' ? 'completed' : ''}"`;
-                        const linkIcon = matchedTicket ? ' 🔗' : '';
-                        return `
-                        <div ${clickAttr}>
-                            <span class="subtask-icon">${st.status === 'completed' ? '✅' : st.status === 'in_progress' ? '🔄' : '⬜'}</span>
-                            <span class="subtask-title">${escHtml(st.title)}${linkIcon}</span>
-                        </div>`;
-                    }).join('')}
-                </div>
-            </div>`;
-        }
+        // 「子任务」区块已隐藏：subtasks 表是拆单时 AI 生成的文字清单，
+        // 全库恒为 pending、无 Agent 消费、无勾选交互、不影响流转（纯展示且误导）。
+        // 真正驱动执行的是子工单 childTickets（下方「子工单」区块）。数据保留在后端，需要时再启用。
+        // const subtasks = data.subtasks || []; if (subtasks.length > 0) { ... 原渲染逻辑见 git 历史 ... }
 
         // 产物
         // Smart Probe 评分（策划阶段产出）
