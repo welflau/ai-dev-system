@@ -3673,22 +3673,24 @@ body.chat-open .drawer.docked {
     vertical-align: middle;
 }
 
-/* 工单详情 AI 生图开关行（始终显示，可随时开/关） */
-.aigc-ctrl-row {
-    display: flex;
+/* AI 生图开关：单个紧凑小按钮，跟 OpenSpec 印章同排 */
+.aigc-mini-btn {
+    display: inline-flex;
     align-items: center;
-    gap: 10px;
-    margin: 0 0 12px;
-    padding: 8px 12px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--bg-card);
+    font-size: 10px;
+    font-weight: 700;
+    padding: 1px 7px;
+    border: 1px solid;
+    border-radius: 3px;
+    cursor: pointer;
+    white-space: nowrap;
+    vertical-align: middle;
+    background: transparent;
+    letter-spacing: 0.03em;
 }
-.aigc-ctrl-label { font-size: 12px; font-weight: 700; }
-.aigc-ctrl-state { font-size: 11px; padding: 2px 8px; border-radius: 10px; }
-.aigc-ctrl-state.on  { color: var(--success); background: color-mix(in srgb, var(--success) 15%, transparent); }
-.aigc-ctrl-state.off { color: var(--text-muted); background: var(--bg-elevated); }
-.aigc-ctrl-btn { margin-left: auto; }
+.aigc-mini-btn.on  { color: var(--success); border-color: color-mix(in srgb, var(--success) 60%, transparent); }
+.aigc-mini-btn.off { color: var(--text-muted); border-color: var(--border); }
+.aigc-mini-btn:hover { filter: brightness(1.2); }
 
 /* OpenSpec 内容面板 */
 .openspec-tabs {

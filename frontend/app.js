@@ -8469,16 +8469,14 @@ async function boardDrop(event, targetCol) {
 
 // ==================== 工单详情抽屉 ====================
 
-/** 工单「AI 生图」开关行：始终显示，详情页可随时开/关 */
+/** AI 生图开关：单个紧凑按钮（跟 OpenSpec 印章同排显示），点击即切换 */
 function _buildAigcStamp(data) {
     if (!data) return '';
     const on = Number(data.use_aigc || 0) === 1;
     const tid = escHtml(data.id || '');
-    return `<div class="aigc-ctrl-row">
-        <span class="aigc-ctrl-label" title="资产落地未命中资产库时，用 LightAI 生图并回填覆盖占位图（生图有成本）">🖼 AI 生图</span>
-        <span class="aigc-ctrl-state ${on ? 'on' : 'off'}">${on ? '已开启' : '已关闭'}</span>
-        <button class="btn btn-sm aigc-ctrl-btn ${on ? '' : 'btn-primary'}" onclick="toggleTicketAigc('${tid}', ${on})">${on ? '关闭' : '开启'}</button>
-    </div>`;
+    return `<button class="aigc-mini-btn ${on ? 'on' : 'off'}"
+        title="资产落地未命中资产库时，用 LightAI 生图并回填覆盖占位图（生图有成本）；点击切换"
+        onclick="toggleTicketAigc('${tid}', ${on})">🖼 AI 生图 ${on ? '开' : '关'}</button>`;
 }
 
 /** 切换工单 AI 生图开关（PUT 更新 use_aigc，重开抽屉刷新状态） */
@@ -9018,7 +9016,6 @@ async function openTicketDrawer(ticketId) {
             ${data.status === 'blocked' ? `<div class="ticket-sticky-gate-slot">${_renderTicketBlockedCard(data)}</div>` : ''}
             ${data.pending_gate ? `<div class="ticket-sticky-gate-slot">${_renderTicketPendingGate(data.pending_gate)}</div>` : ''}
         </div>
-        ${_aigcStamp}
         ${_capBanner}
         ${_layerBar}
         <div class="drawer-section" id="drawerSectionInfo">
@@ -9042,7 +9039,11 @@ async function openTicketDrawer(ticketId) {
                 ${data.completed_at ? `<span class="detail-label">完成时间</span><span class="detail-value">${formatDateTime(data.completed_at)}</span>` : ''}
                 ${data.source_ticket_id ? `<span class="detail-label">衍生自</span><span class="detail-value"><a class="action-link" onclick="openTicketDrawer('${escHtml(data.source_ticket_id)}')" title="查看原工单" style="cursor:pointer;">#${escHtml(data.source_ticket_id.slice(-6))} →</a></span>` : ''}
                 ${data.change_count > 0 ? `<span class="detail-label">变更次数</span><span class="detail-value"><span style="color:var(--warning);font-size:11px;">🔄 ${data.change_count} 次</span></span>` : ''}
-                ${data.openspec_stage ? `<span class="detail-label">OpenSpec</span><span class="detail-value">${_buildOpenSpecStampMini(data.openspec_stage)}</span>` : ''}
+                <span class="detail-label">标记</span>
+                <span class="detail-value" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                    ${data.openspec_stage ? _buildOpenSpecStampMini(data.openspec_stage) : ''}
+                    ${_aigcStamp}
+                </span>
             </div>
         </div>`;
 
