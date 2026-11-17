@@ -325,6 +325,26 @@ def clear_llm_context():
     _llm_ctx.session_id = None
 
 
+def cli_needs_repo_cwd(agent_type: str, action: str, has_skill_io: bool) -> bool:
+    """CLI 子进程是否应使用项目真实仓库作为工作目录。
+
+    验收/审查类调用（acceptance_review / code_review）的 prompt 要求核对
+    「产出文件是否存在」，若被放进隔离空目录，codebuddy 用自带工具一查
+    「0 个文件」就幻觉判定「交付物全部缺失」并反复打回
+    （TK-20261110-48b6af 死循环）。这类调用必须给真实仓库 cwd。
+
+    用后缀精确匹配 _review / 全等 review，避免 "preview" 之类误命中。
+    """
+    act = (action or "").lower()
+    is_review = act.endswith("_review") or act == "review"
+    return (
+        agent_type == "ChatAssistant"
+        or bool(has_skill_io)
+        or "chat" in act
+        or is_review
+    )
+
+
 def _truncate(text: str, max_len: int = 200) -> str:
     """截断文本用于日志显示"""
     if not text:
@@ -1134,8 +1154,9 @@ class LLMClient:
             and "chat" not in _act
         )
         if _is_pure_generation:
-            # 纯文本/JSON 生成不挂载 ads-data MCP，也不给仓库 cwd（调用方将 cwd 切到临时空目录），
-            # 防止 CLI 代理自主扫描仓库或调 MCP 工具空转
+            # 纯文本/JSON 生成不挂载 ads-data MCP，防止 CLI 代理调 MCP 工具空转。
+            # 注意：cwd 由调用方独立决定（cli_needs_repo_cwd），验收/审查类会用
+            # 真实仓库 cwd 让 CLI 自带工具能核到真实文件；其余纯生成走隔离空目录。
             return [], None
 
         import json as _json
@@ -1443,11 +1464,10 @@ class LLMClient:
         stdin_data = self._messages_to_stdin(messages) if use_stdin else None
 
         cwd = None
-        _act_for_cwd = (_llm_ctx.action or "").lower()
-        _needs_repo_cwd = (
-            _llm_ctx.agent_type == "ChatAssistant"
-            or bool(_llm_ctx.skill_io)
-            or "chat" in _act_for_cwd
+        # 验收/审查类调用必须给真实仓库 cwd，否则被丢进隔离空目录会幻觉
+        # 「0 个文件/交付物全部缺失」（见 cli_needs_repo_cwd 注释）
+        _needs_repo_cwd = cli_needs_repo_cwd(
+            _llm_ctx.agent_type or "", _llm_ctx.action or "", bool(_llm_ctx.skill_io)
         )
         if _llm_ctx.project_id and _needs_repo_cwd:
             try:
@@ -1463,7 +1483,9 @@ class LLMClient:
                         logger.info("🖥️  CLI cwd → %s", cwd)
             except Exception as _e:
                 logger.debug("CLI cwd 查询失败（忽略）: %s", _e)
-        elif not _needs_repo_cwd:
+        if cwd is None:
+            # 没拿到真实仓库路径一律回退隔离空目录，避免子进程继承 backend
+            # 默认 cwd 误读后端代码；纯文本生成类也走这里
             import tempfile as _tf, os as _os2
             _isolated_dir = _os2.path.join(_tf.gettempdir(), "ads_cli_pure_gen")
             _os2.makedirs(_isolated_dir, exist_ok=True)
@@ -1746,14 +1768,11 @@ class LLMClient:
 
         stdin_data = self._messages_to_stdin(messages) if use_stdin else None
 
-        # CLI 模式：聊天/SkillRunner 才以项目 git_repo_path 作为工作目录；
-        # 纯生成（ActionNode / _modify_file / reflect）切到隔离空目录，防止 CLI 自主跑 git/Bash 慢 10 倍
+        # CLI 模式：聊天/SkillRunner/验收审查 以项目 git_repo_path 为工作目录；
+        # 其余纯生成（_modify_file / reflect）切隔离空目录，防止 CLI 自主跑 git/Bash
         cwd = None
-        _act_for_cwd = (_llm_ctx.action or "").lower()
-        _needs_repo_cwd = (
-            _llm_ctx.agent_type == "ChatAssistant"
-            or bool(_llm_ctx.skill_io)
-            or "chat" in _act_for_cwd
+        _needs_repo_cwd = cli_needs_repo_cwd(
+            _llm_ctx.agent_type or "", _llm_ctx.action or "", bool(_llm_ctx.skill_io)
         )
         if _llm_ctx.project_id and _needs_repo_cwd:
             try:
@@ -1768,7 +1787,7 @@ class LLMClient:
                         cwd = proj["git_repo_path"]
             except Exception as _e:
                 logger.debug("CLI cwd 查询失败（忽略）: %s", _e)
-        elif not _needs_repo_cwd:
+        if cwd is None:
             import tempfile as _tf, os as _os2
             _isolated_dir = _os2.path.join(_tf.gettempdir(), "ads_cli_pure_gen")
             _os2.makedirs(_isolated_dir, exist_ok=True)
