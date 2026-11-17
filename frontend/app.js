@@ -8469,14 +8469,32 @@ async function boardDrop(event, targetCol) {
 
 // ==================== 工单详情抽屉 ====================
 
-/** 工单顶部「已开启 AI 生图」印章（仅 use_aigc=1，即显式勾选过的工单） */
+/** 工单「AI 生图」开关行：始终显示，详情页可随时开/关 */
 function _buildAigcStamp(data) {
-    if (!data || !Number(data.use_aigc || 0)) return '';
-    return `<div class="aigc-stamp-row">
-        <span class="aigc-stamp" title="该工单显式开启了 AI 生图：资产落地未命中资产库时自动投递 LightAI 生图，生成完成后回填覆盖占位图">
-            🖼 AI 生图 已开启
-        </span>
+    if (!data) return '';
+    const on = Number(data.use_aigc || 0) === 1;
+    const tid = escHtml(data.id || '');
+    return `<div class="aigc-ctrl-row">
+        <span class="aigc-ctrl-label" title="资产落地未命中资产库时，用 LightAI 生图并回填覆盖占位图（生图有成本）">🖼 AI 生图</span>
+        <span class="aigc-ctrl-state ${on ? 'on' : 'off'}">${on ? '已开启' : '已关闭'}</span>
+        <button class="btn btn-sm aigc-ctrl-btn ${on ? '' : 'btn-primary'}" onclick="toggleTicketAigc('${tid}', ${on})">${on ? '关闭' : '开启'}</button>
     </div>`;
+}
+
+/** 切换工单 AI 生图开关（PUT 更新 use_aigc，重开抽屉刷新状态） */
+async function toggleTicketAigc(ticketId, currentlyOn) {
+    if (!currentProjectId || !ticketId) return;
+    const next = !currentlyOn;
+    try {
+        await api(`/projects/${currentProjectId}/tickets/${ticketId}`, {
+            method: 'PUT', body: { use_aigc: next },
+        });
+        showToast(next ? '已开启 AI 生图：后续资产落地会投递生图' : '已关闭 AI 生图', 'success');
+        openTicketDrawer(ticketId);
+        refreshBoard();
+    } catch (e) {
+        showToast(`切换失败: ${e.message}`, 'error');
+    }
 }
 
 /** 构建三层能力提示横幅：告知用户当前缺哪层、走哪条路径 */

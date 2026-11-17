@@ -105,16 +105,17 @@ class GenerateAssetsAction(ActionBase):
         wanted_types = sop_cfg.get("asset_types") or []
         project_id = context.get("project_id", "")
 
-        # 工单级 AI 生图开关覆盖 SOP 默认：用户在创建工单/需求卡片上勾选后，
-        # tickets.use_aigc=1，这里优先于 SOP 的 use_aigc 默认值
+        # 工单级 AI 生图开关优先于 SOP 默认：
+        # tickets.use_aigc 由「创建工单/需求时勾选」或「工单详情页开关」写入（0/1）。
+        # 只要有明确值就覆盖 SOP——既能强制开，也能强制关（详情页可随时改）。
         if ticket_id:
             try:
                 from database import db as _db
                 _row = await _db.fetch_one(
                     "SELECT use_aigc FROM tickets WHERE id = ?", (ticket_id,)
                 )
-                if _row and int(_row.get("use_aigc") or 0):
-                    allow_aigc = True
+                if _row is not None and _row.get("use_aigc") is not None:
+                    allow_aigc = bool(int(_row["use_aigc"]))
             except Exception as _e:
                 logger.debug("读工单 use_aigc 失败（忽略，跟随 SOP 默认）: %s", _e)
 

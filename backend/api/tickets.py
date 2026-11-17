@@ -681,6 +681,9 @@ async def update_ticket(project_id: str, ticket_id: str, req: TicketUpdate):
         raise HTTPException(404, "工单不存在")
 
     update_data = {k: v for k, v in req.dict(exclude_unset=True).items() if v is not None}
+    # use_aigc 是 bool，显式转 int 存 SQLite（0/1），避免驱动差异
+    if "use_aigc" in update_data:
+        update_data["use_aigc"] = 1 if update_data["use_aigc"] else 0
     if update_data:
         update_data["updated_at"] = now_iso()
         await db.update("tickets", update_data, "id = ?", (ticket_id,))

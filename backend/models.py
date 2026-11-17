@@ -366,6 +366,7 @@ class TicketUpdate(BaseModel):
     module: Optional[str] = None
     estimated_hours: Optional[float] = None
     estimated_completion: Optional[str] = None
+    use_aigc: Optional[bool] = None  # AI 生图开关（详情页随时开/关）
 
 
 class SubtaskCreate(BaseModel):
