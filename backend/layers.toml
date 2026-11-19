@@ -1,0 +1,72 @@
+# ADS 六层架构层级声明 —— P0 守卫基线（方案 §6.1 + §11 拍板结论）
+#
+# 模块名规则（见 scripts/check_layers.py）：backend/ 不是包，而是 sys.path 根；
+# 导入一律扁平、无 `backend.` 前缀。文件路径相对 backend/ 去 .py、/ 换 . 得模块名，
+# __init__.py → 包名。[levels] 按最长前缀匹配；未匹配记为 UNCLASSIFIED，
+# P0 阶段只统计、不算违规（避免基线被未归层模块淹没）。
+#
+# 方向律用 [rules.can_import] 矩阵实现（方案 §3.1 允许依赖表），而非按 L 编号比较：
+# §3.1 的 L1 允许依赖 L2，但 §3.2 的 `layer(src) >= layer(dst)` 会把 L1→L2 判为违规，
+# 二者编号语义不一致。取 §3.1 语义为准；矩阵同时表达跨层律（L1↔L3 不直连）。
+# 同层一律放行（§11 #4：同层单向允许、成环禁止由无环律负责）。
+
+[scan]
+root = "backend"
+# 排除数据/测试/第三方目录。注意不排除 tools/ —— §2.2 的 memory_mcp 环在 tools/memory_mcp/ 下。
+exclude_dirs = [
+  "__pycache__",
+  ".venv",
+  "node_modules",
+  "tests",
+  "artifacts",
+  "projects",
+  "config_packs",
+  "skills/marketplace",
+  "skills/packs",
+  "skills/use_skills",
+  "tools/ue_editor_mcp",
+]
+# 口径说明：本排除集是 P0 自定义的可复现口径。方案 §2 的
+# 948/1429/6966/29.4% 全仓无脚本或快照佐证、不可复现，
+# 故以 backend/layers_baseline.json 为权威基线，不强行凑 §2 数值。
+
+[levels]
+L0 = ["actions.base", "plugins.registry", "contracts", "models.dto"]
+L1 = ["orchestrator", "sop.loader", "sop.workflow_composer", "llm_client", "api"]
+L2 = ["config", "database", "utils", "events", "event_bus", "session_logger",
+      "git_manager", "memory", "tool_catalog"]
+L3 = ["actions", "agents", "plugins", "skills", "config_packs", "pack_installer"]
+# L4 / L5 不在 backend 依赖图内（独立进程），由分界律保证。
+
+[rules.can_import]
+L0 = ["L0"]
+L1 = ["L0", "L1", "L2"]
+L2 = ["L0", "L2"]
+L3 = ["L0", "L2", "L3"]
+
+[boundaries]
+# 分界律：分发层模块不得出现在 backend 依赖图内（方案 §3.2 #4）
+distribution_modules = ["desktop", "start_server", "ads_cli", "ads_ui"]
+
+[exceptions]
+phase = "P0"
+# §11 #5：每条豁免必须带 owner + until + reason；到期未清零 CI 直接红。
+# 允许经评审把 until 顺延一次并留痕 —— 用 extended_to 字段，检查器记入 extension_used。
+# owner 待 P1 前认领，不填虚构人名。
+[[exceptions.allowed_cycles]]
+modules = ["checkpoint", "checkpoint.service", "git_manager"]
+until = "P1"
+owner = "待认领"
+reason = "P0 基线登记的既有 checkpoint 环，P1 清零"
+
+[[exceptions.allowed_cycles]]
+modules = ["memory_record_index", "memory_record_io"]
+until = "P1"
+owner = "待认领"
+reason = "P0 基线登记的既有 memory_mcp 环，P1 清零"
+
+[[exceptions.allowed_cycles]]
+modules = ["plugins.registry", "skills.loader"]
+until = "P2"
+owner = "待认领"
+reason = "§2.3 双向对（含在主环 SCC 内，非独立 SCC）；检查器按 SCC 匹配，本条为 P2 主环拆分后的预留"
