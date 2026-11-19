@@ -13,7 +13,10 @@ logger = logging.getLogger("plugins.director.gen_video")
 
 _SAFE_NAME = re.compile(r"^(片段\d{2}|clip\d{2}|[A-Za-z0-9_.-]+)\.mp4$")
 _ASPECT = ("16:9", "9:16", "1:1")
-_BACKENDS = ("lightai", "libtv", "dreamina", "jimeng")
+# 后端真源只有一份：plugins/director/backends.py::ALLOWED_BACKENDS
+# （由系统公共层 cloud_video.ALLOWED_PROVIDERS + 本插件 CLI 后端组成）。
+# 此前本文件另定义过一份重复的后端字面量（含 jimeng），现已消除。
+from plugins.director.backends import ALLOWED_BACKENDS as _BACKENDS
 _ENGINES = ("kling", "jimeng", "keling")
 
 
@@ -217,6 +220,101 @@ class GenVideoAction(ActionBase):
         data["bytes"] = dest.stat().st_size
         return ActionResult(success=True, data=data, message=f"已生成 {filename}（{dest.stat().st_size} bytes）")
 
+    async def _run_cloud_provider(
+        self,
+        context: Dict[str, Any],
+        *,
+        dest: Path,
+        out_dir: Path,
+        filename: str,
+        prompt: str,
+        duration: int,
+        ratio: str,
+        resolution: str,
+        backend: str,
+        command: str,
+        probe,
+    ) -> ActionResult:
+        """系统公共云端 provider（minimax_h3 等）：经 cloud_video 统一入口调用。
+
+        公共层只抛分层异常，env_missing / command / task_id 分流仍由本 Action 负责
+        （准入规范约束 2/3）。原有 lightai / libtv / dreamina 分支完全不动。
+        """
+        if not probe.available:
+            task_id = await self._trace(context, probe.command or command, str(out_dir), "error")
+            return ActionResult(
+                success=False,
+                error=probe.hint or f"云端后端 {backend} 不可用",
+                data={
+                    "env_missing": True,
+                    "backend": backend,
+                    "command": probe.command or command,
+                    "task_id": task_id,
+                },
+            )
+
+        from cloud_video import CloudVideoError, CloudVideoUnavailable
+        from cloud_video import client as cloud_client
+
+        # director 的 ratio/resolution 是 "16:9"/"720p"，鼠鼠要整串与三档编码
+        _RATIO_MAP = {
+            "16:9": "16:9 (Widescreen)", "9:16": "9:16 (Portrait Widescreen)",
+            "1:1": "1:1 (Square)", "4:3": "4:3 (Standard)",
+            "3:4": "3:4 (Portrait Standard)", "21:9": "21:9 (Ultrawide)",
+        }
+        _RES_MAP = {"480p": "0.4", "768p": "1", "720p": "1", "1080p": "2"}
+        aspect = _RATIO_MAP.get(ratio, "16:9 (Widescreen)")
+        res = _RES_MAP.get(resolution.lower(), "1")
+
+        try:
+            result = await cloud_client.generate_video_with_provider(
+                backend,
+                prompt=prompt,
+                dest=dest,
+                duration=min(duration, 15),
+                aspect_ratio=aspect,
+                resolution=res,
+            )
+        except CloudVideoUnavailable as e:
+            task_id = await self._trace(context, command, str(out_dir), "error")
+            return ActionResult(
+                success=False, error=str(e),
+                data={"env_missing": True, "backend": backend,
+                      "command": command, "task_id": task_id},
+            )
+        except CloudVideoError as e:
+            task_id = await self._trace(context, command, str(out_dir), "error")
+            return ActionResult(
+                success=False, error=str(e),
+                data={"env_missing": False, "backend": backend,
+                      "command": command, "task_id": task_id},
+            )
+
+        task_id = await self._trace(context, command, str(out_dir), "success")
+        repo = str(context.get("repo_path") or "")
+        rel = ""
+        try:
+            rel = str(dest.relative_to(Path(repo))) if repo else str(dest)
+        except ValueError:
+            rel = str(dest)
+        return ActionResult(
+            success=True,
+            data={
+                "path": str(dest),
+                "rel_path": rel.replace("\\", "/"),
+                "filename": filename,
+                "task_id": task_id,
+                "backend": backend,
+                "provider": result.get("provider", backend),
+                "vc_task_id": result.get("task_id", ""),
+                "command": command,
+                "url": result.get("url", ""),
+                "bytes": result.get("bytes") or dest.stat().st_size,
+                "downloaded": bool(result.get("downloaded")),
+            },
+            message=f"已生成 {filename}（云端 {backend}）",
+        )
+
     async def run(self, context: Dict[str, Any]) -> ActionResult:
         prompt = str(context.get("prompt") or "").strip()
         if not prompt:
@@ -270,6 +368,17 @@ class GenVideoAction(ActionBase):
             f"duration={duration} ratio={ratio} resolution={resolution}"
         )
         probe = probe_backend(backend)
+
+        # 系统公共云端 provider（minimax_h3 等）：新增的可选后端分支，
+        # 走 cloud_video 统一入口。原有 lightai / libtv / dreamina 分支不变。
+        from cloud_video import ALLOWED_PROVIDERS as _CLOUD_PROVIDERS
+        if backend in _CLOUD_PROVIDERS and backend != "lightai":
+            return await self._run_cloud_provider(
+                context, dest=dest, out_dir=out_dir, filename=filename,
+                prompt=prompt, duration=duration, ratio=ratio,
+                resolution=resolution, backend=backend, command=command,
+                probe=probe,
+            )
 
         if backend != "lightai":
             return await self._run_cli_backend(

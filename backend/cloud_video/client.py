@@ -58,9 +58,17 @@ class CloudVideoFile:
         return cls(field=field, filename=p.name, mime=mime, data=p.read_bytes())
 
 
-# provider 注册表：后续加官方 MiniMax / Ark / LibTV 时在此登记，配置仍走系统配置。
-# 目前只接「鼠鼠工具」卡密中转承载的 MiniMax H3。
+# provider 注册表 —— 系统公共云端生视频的**单一真源**。
+# Plugin 层（director / videoclaw）从这里取后端名，不再各自维护一份。
+# 后续加官方 MiniMax / Ark / LibTV 时在此登记，配置仍走系统配置。
 PROVIDERS: Dict[str, Dict[str, str]] = {
+    "lightai": {
+        "label": "LightAI 云端（Kling / 即梦）",
+        "base_setting": "LIGHTAI_API_BASE",
+        "key_setting": "LIGHTAI_API_KEY",
+        "auth_header": "Authorization: Bearer",
+        "note": "复用 image_processor 的公共 HTTP/信号量；实现见 cloud_video/lightai.py",
+    },
     "minimax_h3": {
         "label": "MiniMax H3 云端（鼠鼠工具卡密中转）",
         "base_setting": "MINIMAX_H3_BASE_URL",
@@ -69,6 +77,46 @@ PROVIDERS: Dict[str, Dict[str, str]] = {
         "note": "第三方卡密中转，非 MiniMax 官方 API；无 Bearer / 无 GroupID",
     },
 }
+
+# 公共层支持的云端 provider（Plugin 的 CLI 后端 libtv/dreamina 不在此列，
+# 那些是 director 私有业务，留在 plugin 内）。
+ALLOWED_PROVIDERS = tuple(PROVIDERS.keys())
+
+_PROVIDER_ALIASES = {
+    "lightai": "lightai", "kling": "lightai", "可灵": "lightai",
+    "minimax_h3": "minimax_h3", "minimax": "minimax_h3", "h3": "minimax_h3",
+    "mnmx": "minimax_h3", "鼠鼠": "minimax_h3",
+}
+
+
+def normalize_provider(raw: Any) -> str:
+    key = str(raw or "").strip().lower()
+    return _PROVIDER_ALIASES.get(key, key)
+
+
+def probe_provider(provider: str) -> Dict[str, Any]:
+    """轻量配置探活（不联网）：返回 {provider, available, hint, command}。"""
+    name = normalize_provider(provider)
+    if name not in PROVIDERS:
+        return {
+            "provider": name or "", "available": False,
+            "hint": f"未知云端 provider {provider!r}，允许：{', '.join(ALLOWED_PROVIDERS)}。",
+            "command": f"cloud_video probe={provider}",
+        }
+    meta = PROVIDERS[name]
+    key = str(getattr(settings, meta["key_setting"], "") or "").strip()
+    enabled = True
+    if name == "minimax_h3":
+        enabled = bool(getattr(settings, "MINIMAX_H3_ENABLED", False))
+    ok = bool(key) and enabled
+    if not ok:
+        extra = "，且需 MINIMAX_H3_ENABLED=true" if name == "minimax_h3" else ""
+        return {
+            "provider": name, "available": False,
+            "hint": f"系统配置 {meta['key_setting']} 未设置{extra}，无法用 {meta['label']}。",
+            "command": f"cloud_video provider={name}",
+        }
+    return {"provider": name, "available": True, "hint": "", "command": f"cloud_video provider={name}"}
 
 TASK_T2V = "minimax_h3_v2"           # 文生 / 首帧 / 首尾帧
 TASK_MULTI_REF = "minimax_h3_multi_ref"  # 多参考（最多 6 图 + 3 音频）
@@ -389,3 +437,47 @@ async def generate_video(
         size = await download(link["url"], dest)
         result.update({"downloaded": True, "path": str(dest), "bytes": size})
     return result
+
+
+# ── 统一 dispatch（供 Plugin 适配调用）──────────────────────────────────────
+# 参数用各 provider 原生命名，调用方只传自己关心的字段；未知的由各实现忽略。
+# 通过 provider 分流到 lightai / minimax_h3，返回结构统一：
+#   {provider, task_id, status, url, filename, downloaded, path?, bytes?}
+
+async def generate_video_with_provider(
+    provider: str,
+    *,
+    prompt: str,
+    dest: Optional[Path] = None,
+    # minimax_h3 参数
+    task_name: str = TASK_T2V,
+    resolution: Optional[str] = "1",
+    duration: Optional[float] = 5,
+    aspect_ratio: Optional[str] = "16:9 (Widescreen)",
+    files: Optional[Sequence[CloudVideoFile]] = None,
+    # lightai 参数
+    lightai_req: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """按 provider 分流的统一入口。Plugin 只需 `from cloud_video import generate_video_with_provider`。
+
+    先做轻量配置探活（不联网）：缺 key → CloudVideoUnavailable（调用方转 blocked）。
+    """
+    name = normalize_provider(provider)
+    probe = probe_provider(name)
+    if not probe["available"]:
+        raise CloudVideoUnavailable(probe["hint"])
+
+    if name == "lightai":
+        from cloud_video import lightai
+        req = dict(lightai_req or {})
+        req.setdefault("prompt", prompt)
+        return await lightai.generate(req, dest)
+
+    if name == "minimax_h3":
+        result = await generate_video(
+            prompt=prompt, task_name=task_name, resolution=resolution,
+            duration=duration, aspect_ratio=aspect_ratio, files=files, dest=dest,
+        )
+        return {"provider": "minimax_h3", **result}
+
+    raise CloudVideoError(f"未实现的 provider: {name}")

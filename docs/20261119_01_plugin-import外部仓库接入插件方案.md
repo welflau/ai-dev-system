@@ -470,10 +470,82 @@ except CloudVideoError as e:
 ### 14.7 待办
 
 1. 现有 plugin 适配到公共层（director 的 `lightai_video.py` / `gen_video.py`、videoclaw 的
-   `vc_gen_video`），消除两份后端真源 —— 用户明确本轮不做。
+   `vc_gen_video`），消除两份后端真源 —— **已于 §15 落地**。
 2. 若要接 MiniMax **官方** API / 火山 Ark / LibTV / LiblibAI，在 `cloud_video/PROVIDERS`
    登记，配置仍走系统配置；不要塞进 plugin。
 3. 可选：参照 `api/image_gen.py:200-215` 做「设置面板热更新 key + 回写 .env」。
 4. 签名直链内网 IP 问题：必要时在 ADS 侧做一层代下代理。
+
+---
+
+## 十五、追加落地：director / videoclaw 适配公共层（2026-11-19）
+
+用户拍板（AskUserQuestion）：改造深度 = **新增可选后端**（原有 lightai / libtv /
+dreamina / VC sandbox 完全不动）；同时**补上 LightAI provider、统一后端真源**。
+
+### 15.1 依赖方向（公共层零 plugins import，已硬核对）
+
+```
+plugins/director/*  ─┐
+plugins/videoclaw/* ─┼──▶ backend/cloud_video/ ──▶ config.py + 标准库
+                     │        └─(函数内延迟)─▶ image_processor（公共模块，非 plugin）
+                     └──▶ plugins/director/work_package.py（CLI/brief 私有业务，留 plugin）
+```
+
+`cloud_video/lightai.py` 顶层只 import `config` + 标准库；`image_processor` 的
+HTTP/信号量工具保持**函数内延迟 import**（沿用原实现），避免公共层顶层继承
+`database`/`events` 等业务依赖。
+
+### 15.2 公共层改动
+
+| 文件 | 内容 |
+|---|---|
+| `cloud_video/lightai.py`（新增） | 从 `plugins/director/lightai_video.py` 逐行上提 LightAI 实现；新增 `generate(req, dest)` 统一结果结构 |
+| `plugins/director/lightai_video.py` | 改为**兼容 shim**，re-export 公共层函数。保留 `gen_video.py:148,291` / `download_video.py:51,66` 的 import 路径与测试 monkeypatch 目标，行为零变化 |
+| `cloud_video/client.py` | `PROVIDERS` 补 `lightai`；新增 `ALLOWED_PROVIDERS`（单一真源）、`normalize_provider`、`probe_provider`、`generate_video_with_provider(provider, ...)` 统一 dispatch |
+| `cloud_video/__init__.py` | 导出上述新 API |
+
+### 15.3 后端真源统一
+
+- 公共层 `ALLOWED_PROVIDERS = ("lightai", "minimax_h3")` 是**唯一真源**。
+- `plugins/director/backends.py`：`ALLOWED_BACKENDS = tuple(ALLOWED_PROVIDERS) + ("libtv","dreamina")`，
+  CLI 后端仍是 director 私有业务；`_ALIASES` 补 `minimax/h3/mnmx/鼠鼠 → minimax_h3`；
+  `probe_backend` 的云端探活委托 `probe_provider()`。
+- `gen_video.py` 删除此前重复的 `_BACKENDS = ("lightai","libtv","dreamina","jimeng")` 字面量，
+  改为 `from plugins.director.backends import ALLOWED_BACKENDS as _BACKENDS`（实测两者是同一对象）。
+- `video_brief.json` 读取、成本锁、CLI 探活等 plugin 私有业务**未上提**。
+
+### 15.4 两个 Plugin 的新增可选分支（原有路径完全不动）
+
+| Plugin | 触发 | 走法 |
+|---|---|---|
+| director `gen_video` | `backend=minimax_h3`（或别名 minimax/h3/mnmx/鼠鼠） | `_run_cloud_provider()` → `cloud_client.generate_video_with_provider()`；做 ratio `16:9`→`16:9 (Widescreen)`、resolution `720p`→`1` 映射；`env_missing`/`command`/`task_id` 分流留 Action 层 |
+| videoclaw `vc_gen_video` | `provider=minimax_h3` | `_run_cloud_provider()` → 同上；**不要求 VC sidecar 可用**（VC 未启用时也能用云端）。留空则走原 VC sandbox 路径 |
+
+lightai 分支：实现已上提到公共层，但 director 仍通过 shim 调用，**参数/产物/失败分流零变化**，
+`test_director_plugin.py` 的 monkeypatch 目标不变、105 项回归全通过。
+
+### 15.5 一个实现坑（已修）
+
+包级 re-export 是**静态绑定**：`__init__.py` 里 `from cloud_video.client import generate_video_with_provider`
+会让 monkeypatch `cloud_video.client.generate_video_with_provider` 失效（首次尝试时测试真的打到了
+runlive.top 拿到 401）。改为 Plugin 内 `from cloud_video import client as cloud_client` 再调
+`cloud_client.generate_video_with_provider(...)`，即 patch **源模块**（与
+`test_gen_image.py:26-28` 的教训一致）。修复后适配测试全程无网络痕迹。
+
+### 15.6 验收
+
+- 新增 `tests/plugins/test_cloud_video_adapters.py` **18 项** + 全量 **123 项回归全通过**。
+- 覆盖：单一真源、别名归一化、双 provider 探活、lightai shim 等价性、dispatch 两路分流、
+  director 新后端（成功 / 缺 key blocked / 未知后端仍拒 / lightai 分支行为不变）、
+  videoclaw 新 provider（成功 / 不需 VC sidecar / 缺 key blocked / 默认仍走 VC sandbox）。
+- 硬核对：`cloud_video/*.py` 零 `plugins.*` import；三个 `vc_*` Action 与 `gen_video`/`gen_image` 均无重名。
+
+### 15.7 待办
+
+1. 真实卡密钥下的端到端验收（填 `backend/.env` → 跑 `gen_video backend=minimax_h3` /
+   `vc_gen_video provider=minimax_h3`）。
+2. 若要接 MiniMax 官方 API / Ark / LibTV / LiblibAI，在 `PROVIDERS` 登记即可，Plugin 无需再改后端枚举。
+
 
 

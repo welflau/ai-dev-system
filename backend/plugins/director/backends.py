@@ -1,4 +1,9 @@
-"""视频生成后端选择。用户指定优先；缺省 LightAI；失败不静默换后端。"""
+"""视频生成后端选择。用户指定优先；缺省 LightAI；失败不静默换后端。
+
+后端真源只有一份：云端 provider 来自系统公共层 `cloud_video.ALLOWED_PROVIDERS`
+（单一真源，见 docs/20261119_01_...方案.md §15），CLI 后端是本插件私有业务。
+此前 gen_video.py:_BACKENDS 与这里的 ALLOWED_BACKENDS 是两份不一致的真源，已消除。
+"""
 from __future__ import annotations
 
 import json
@@ -6,9 +11,13 @@ import shutil
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 
+from cloud_video import ALLOWED_PROVIDERS, probe_provider
 from plugins.director.work_package import find_existing_slug, package_dir
 
-ALLOWED_BACKENDS = ("lightai", "libtv", "dreamina")
+# CLI 后端（需要本机装 libtv/dreamina 可执行），不属于系统公共云端 provider
+_CLI_BACKENDS = ("libtv", "dreamina")
+ALLOWED_BACKENDS = tuple(ALLOWED_PROVIDERS) + _CLI_BACKENDS
+
 _ALIASES = {
     "lightai": "lightai",
     "kling": "lightai",
@@ -16,6 +25,11 @@ _ALIASES = {
     "dreamina": "dreamina",
     "jimeng": "dreamina",
     "即梦": "dreamina",
+    "minimax_h3": "minimax_h3",
+    "minimax": "minimax_h3",
+    "h3": "minimax_h3",
+    "mnmx": "minimax_h3",
+    "鼠鼠": "minimax_h3",
 }
 DRAMA_MODES = frozenset({"cinematic-drama", "drama"})
 _BINARIES = {
@@ -75,7 +89,16 @@ def probe_backend(backend: str) -> ProbeResult:
             hint="" if ok else "配置 LIGHTAI_API_KEY 后才能用 LightAI 生视频。",
             command="gen_video backend=lightai",
         )
-    if name not in ("libtv", "dreamina"):
+    # 系统公共云端 provider（minimax_h3 等）：探活委托给公共层，保持单一真源
+    if name in ALLOWED_PROVIDERS and name != "lightai":
+        pr = probe_provider(name)
+        return ProbeResult(
+            backend=name,
+            available=bool(pr["available"]),
+            hint=pr["hint"],
+            command=pr["command"],
+        )
+    if name not in _CLI_BACKENDS:
         return ProbeResult(
             backend=name or "",
             available=False,

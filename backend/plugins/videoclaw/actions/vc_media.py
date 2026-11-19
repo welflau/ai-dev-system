@@ -246,10 +246,93 @@ class VCGenVideoAction(ActionBase):
                     "resolution": {"type": "string", "description": "默认 720P"},
                     "duration": {"type": "integer", "description": "秒，默认 5"},
                     "filename": {"type": "string", "description": "如 clip01.mp4"},
+                    "provider": {"type": "string", "description": "留空走 VC sandbox；minimax_h3 走系统公共云端层"},
                 },
                 "required": ["prompt"],
             },
         }
+
+    async def _run_cloud_provider(
+        self,
+        context: Dict[str, Any],
+        *,
+        tool: str,
+        command: str,
+        prompt: str,
+        image: str,
+        ratio: str,
+        resolution: str,
+        duration: int,
+        filename: str,
+        provider: str,
+    ) -> ActionResult:
+        """可选后端：走系统公共层 cloud_video，VC sandbox 路径完全不动。"""
+        from cloud_video import (
+            CloudVideoError,
+            CloudVideoUnavailable,
+            CloudVideoFile,
+            normalize_provider,
+            probe_provider,
+        )
+        from cloud_video import client as cloud_client
+
+        name = normalize_provider(provider)
+        pr = probe_provider(name)
+        if not pr["available"]:
+            tid = await _trace(context, tool, command, "error")
+            return _blocked(tool, command, tid, pr["hint"])
+
+        _RATIO_MAP = {
+            "16:9": "16:9 (Widescreen)", "9:16": "9:16 (Portrait Widescreen)",
+            "1:1": "1:1 (Square)", "4:3": "4:3 (Standard)",
+            "3:4": "3:4 (Portrait Standard)",
+        }
+        _RES_MAP = {"480P": "0.4", "768P": "1", "720P": "1", "1080P": "2"}
+        files = []
+        if image:
+            try:
+                files.append(CloudVideoFile.from_path("first_frame", image))
+            except CloudVideoError as e:
+                # 远端/VC /code/ URL 不作本地文件处理，交给调用方自行转字节
+                logger.debug("首帧非本地文件，跳过本地转码: %s", e)
+        out_dir = _out_dir(context, "video")
+        dest = out_dir / filename if out_dir is not None else None
+
+        try:
+            result = await cloud_client.generate_video_with_provider(
+                name,
+                prompt=prompt,
+                dest=dest,
+                duration=duration,
+                aspect_ratio=_RATIO_MAP.get(ratio, "16:9 (Widescreen)"),
+                resolution=_RES_MAP.get(resolution.upper(), "1"),
+                files=files or None,
+            )
+        except CloudVideoUnavailable as e:
+            tid = await _trace(context, tool, command, "error")
+            return _blocked(tool, command, tid, str(e))
+        except CloudVideoError as e:
+            tid = await _trace(context, tool, command, "error")
+            return _failed(tool, command, tid, str(e))
+
+        tid = await _trace(context, tool, command, "success")
+        return ActionResult(
+            success=True,
+            data={
+                "env_missing": False,
+                "command": command,
+                "task_id": tid,
+                "tool": tool,
+                "provider": result.get("provider", name),
+                "vc_task_id": result.get("task_id", ""),
+                "url": result.get("url", ""),
+                "downloaded": bool(result.get("downloaded")),
+                "path": result.get("path", ""),
+                "bytes": result.get("bytes", 0),
+            },
+            message=f"已生成 {filename}（云端 {name}）" if result.get("downloaded")
+                    else f"已生成（云端 {name}，未提供 repo_path 仅返回 URL）",
+        )
 
     async def run(self, context: Dict[str, Any]) -> ActionResult:
         tool = "vc_gen_video"
@@ -271,6 +354,16 @@ class VCGenVideoAction(ActionBase):
         )
         if not prompt:
             return _failed(tool, command, "", "prompt 不能为空")
+
+        # 可选后端：provider 指定系统公共云端 provider 时走 cloud_video，
+        # 不要求 VC sidecar 可用；留空则保持原来的 VC sandbox 路径。
+        provider = str(context.get("provider") or "").strip()
+        if provider:
+            return await self._run_cloud_provider(
+                context, tool=tool, command=command, prompt=prompt,
+                image=image, ratio=ratio, resolution=resolution,
+                duration=duration, filename=filename, provider=provider,
+            )
 
         cfg, models, task_id, blocked = await _prepare(context, tool, command)
         if blocked is not None:

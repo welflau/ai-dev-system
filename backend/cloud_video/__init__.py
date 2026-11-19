@@ -18,13 +18,17 @@
 官方 key 需另接 provider，不能复用本实现。
 """
 from cloud_video.client import (
+    ALLOWED_PROVIDERS,
     CloudVideoError,
     CloudVideoUnavailable,
     CloudVideoFile,
     PROVIDERS,
     file_url,
     generate_video,
+    generate_video_with_provider,
+    normalize_provider,
     ping,
+    probe_provider,
     query,
     submit,
 )
@@ -34,9 +38,13 @@ __all__ = [
     "CloudVideoUnavailable",
     "CloudVideoFile",
     "PROVIDERS",
+    "ALLOWED_PROVIDERS",
+    "normalize_provider",
+    "probe_provider",
     "submit",
     "query",
     "file_url",
     "ping",
     "generate_video",
+    "generate_video_with_provider",
 ]
