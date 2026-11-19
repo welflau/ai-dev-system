@@ -494,8 +494,13 @@ Thumbs.db
     async def write_file(self, project_id: str, file_path: str, content: str) -> str:
         """写入单个文件到仓库（相对路径）"""
         try:
-            from checkpoint.service import checkpoint_service
-            await checkpoint_service.capture_from_active_context([file_path])
+            # P1 拆环：不再反向 import checkpoint.service，改经叶子模块
+            # checkpoint.context 取同步钩子（注册见 checkpoint/service.py 末尾）。
+            # 仍是写盘前同步 await，快照时序不变。
+            from checkpoint.context import get_before_write_capture
+            capture = get_before_write_capture()
+            if capture is not None:
+                await capture([file_path])
         except Exception:
             pass
         repo_dir = self._repo_path(project_id)
@@ -523,8 +528,11 @@ Thumbs.db
             logger.warning("落盘净化跳过: %s", e)
 
         try:
-            from checkpoint.service import checkpoint_service
-            await checkpoint_service.capture_from_active_context(list(files.keys()))
+            # P1 拆环：同 write_file，经叶子模块取同步钩子，时序不变。
+            from checkpoint.context import get_before_write_capture
+            capture = get_before_write_capture()
+            if capture is not None:
+                await capture(list(files.keys()))
         except Exception:
             pass
         written = []

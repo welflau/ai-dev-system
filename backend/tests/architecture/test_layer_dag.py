@@ -12,7 +12,6 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
 CHECKER = REPO / "scripts" / "check_layers.py"
-CONFIG = REPO / "backend" / "layers.toml"
 BASELINE = REPO / "backend" / "layers_baseline.json"
 
 
@@ -62,13 +61,54 @@ def test_structural_metrics_not_regressed():
 
 
 def test_expired_exception_fails_gate(tmp_path):
-    """§11 #5：豁免到期未清零必须让门禁非 0 退出。"""
-    cfg_text = CONFIG.read_text(encoding="utf-8").replace(
-        'until = "P1"', 'until = "P0"', 1
-    )
+    """§11 #5：豁免到期未清零必须让门禁非 0 退出。
+
+    用自包含的合成项目验证，不依赖仓库里是否还有真实环 —— P1 拆完两组
+    小环后已无 until=P1 豁免，后续 P2/P3 也不该让本测试失效。
+    """
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / "a.py").write_text("import b\n", encoding="utf-8")
+    (proj / "b.py").write_text("import a\n", encoding="utf-8")
+
     cfg = tmp_path / "layers.toml"
-    cfg.write_text(cfg_text, encoding="utf-8")
-    code, result = run("--config", str(cfg), "--phase", "P0")
+    cfg.write_text(
+        '\n'.join([
+            "[scan]",
+            f'root = "{proj.as_posix()}"',
+            "exclude_dirs = []",
+            "",
+            "[levels]",
+            'L0 = ["a"]',
+            "L1 = []",
+            "L2 = []",
+            "L3 = []",
+            "",
+            "[rules.can_import]",
+            'L0 = ["L0"]',
+            'L1 = ["L0", "L1", "L2"]',
+            'L2 = ["L0", "L2"]',
+            'L3 = ["L0", "L2", "L3"]',
+            "",
+            "[boundaries]",
+            "distribution_modules = []",
+            "",
+            "[exceptions]",
+            'phase = "P1"',
+            "",
+            "[[exceptions.allowed_cycles]]",
+            'modules = ["a", "b"]',
+            'until = "P1"',
+            'owner = "test"',
+            'reason = "合成环：验证到期未清零"',
+            "",
+        ]),
+        encoding="utf-8",
+    )
+    baseline = tmp_path / "no_baseline.json"
+    code, result = run("--config", str(cfg), "--phase", "P1",
+                       "--baseline-path", str(baseline))
+    assert result["stats"]["scc_groups"] == 1, "合成项目应形成 1 个 SCC"
     expired = [v for v in result["violations"] if v["type"] == "EXPIRED_EXCEPTION"]
-    assert expired, "到期豁免应产生 EXPIRED_EXCEPTION"
-    assert code != 0, "到期未清零时门禁必须失败"
+    assert expired, "到期未清零的豁免应产生 EXPIRED_EXCEPTION"
+    assert code != 0, "到期未清零时门禁必须非 0 退出"

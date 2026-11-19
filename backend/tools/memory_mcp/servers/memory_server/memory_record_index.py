@@ -8,7 +8,8 @@ from typing import Any
 
 from .memory_config import MemoryConfig
 from .memory_paths import PathManager, PathSecurityError
-from .memory_record_io import safe_read_text
+# P1 拆环：从叶子模块取 safe_read_text，不再反向依赖 memory_record_io。
+from .memory_text_io import safe_read_text
 from .memory_frontmatter import parse_record_pack_entries
 from .memory_result import error_result, ok_result
 from .memory_task_context import get_task_ids_for_user

@@ -12,8 +12,14 @@ from typing import Any, Dict, List, Optional, Set
 from database import db
 from utils import generate_id, now_iso
 
-from checkpoint import store as blob_store
-from checkpoint.context import get_checkpoint_context, set_checkpoint_context
+# P1 拆环：直接引用子模块，避免 `from checkpoint import store` 造成
+# service → checkpoint 包 → service 的自环（__init__.py:9 仍 re-export service）
+import checkpoint.store as blob_store
+from checkpoint.context import (
+    get_checkpoint_context,
+    set_checkpoint_context,
+    set_before_write_capture,
+)
 
 logger = logging.getLogger("checkpoint.service")
 
@@ -613,3 +619,9 @@ class CheckpointService:
 
 
 checkpoint_service = CheckpointService()
+
+# P1 拆环：把「写盘前快照」注册到叶子模块 checkpoint.context，
+# 供 git_manager 同步 await 调用。checkpoint/__init__.py 会 import 本模块，
+# 因此 git_manager 首次 `from checkpoint.context import ...` 时钩子已就绪，
+# 调用时序与原先直接 import service 完全一致（仍是写盘前同步执行）。
+set_before_write_capture(checkpoint_service.capture_from_active_context)

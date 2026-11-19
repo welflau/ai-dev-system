@@ -24,6 +24,8 @@ from .memory_paths import PathManager, PathSecurityError
 from .memory_frontmatter import parse_record_pack_entries, replace_record_pack_entry
 from .memory_records import parse_record_markdown, render_record_markdown, target_path_for_record
 from .memory_result import error_result, ok_result
+# P1 拆环：safe_read_text 移到叶子模块，这里 re-export 保持下游导入方不变。
+from .memory_text_io import safe_read_text
 
 
 # errno values that mean "the underlying volume can no longer accept writes".
@@ -49,41 +51,6 @@ class DiskFullError(OSError):
 
 def _is_disk_full(exc: OSError) -> bool:
     return exc.errno is not None and exc.errno in _DISK_FULL_ERRNOS
-
-
-def safe_read_text(
-    path: Path,
-    *,
-    encoding: str = "utf-8",
-    errors: str = "strict",
-    max_attempts: int = 20,
-    delay_seconds: float = 0.005,
-) -> str:
-    """Read ``path`` tolerating brief writer-replace contention.
-
-    On Windows, when a writer is in the middle of ``os.replace`` of an
-    atomic-write tmp file onto ``path``, a concurrent reader can observe:
-
-    * ``PermissionError`` -- the writer holds the destination handle without
-      ``FILE_SHARE_DELETE`` for the duration of the replace syscall.
-    * ``FileNotFoundError`` -- the source tmp was renamed but, in rare
-      cases (junctions, antivirus filters), the destination momentarily
-      lacks a directory entry.
-
-    Both windows are tiny (sub-millisecond on a healthy filesystem). This
-    helper bounded-retries the read so callers never spuriously see
-    "file vanished" / "access denied" in normal multi-agent operation.
-    Other ``OSError`` subclasses propagate unchanged.
-    """
-    last_exc: OSError | None = None
-    for _ in range(max(1, max_attempts)):
-        try:
-            return path.read_text(encoding=encoding, errors=errors)
-        except (PermissionError, FileNotFoundError) as exc:
-            last_exc = exc
-            time.sleep(delay_seconds)
-    assert last_exc is not None
-    raise last_exc
 
 
 def _fsync_parent_dir(target: Path) -> None:

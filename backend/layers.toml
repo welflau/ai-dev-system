@@ -49,22 +49,14 @@ L3 = ["L0", "L2", "L3"]
 distribution_modules = ["desktop", "start_server", "ads_cli", "ads_ui"]
 
 [exceptions]
-phase = "P0"
+phase = "P1"
 # §11 #5：每条豁免必须带 owner + until + reason；到期未清零 CI 直接红。
 # 允许经评审把 until 顺延一次并留痕 —— 用 extended_to 字段，检查器记入 extension_used。
-# owner 待 P1 前认领，不填虚构人名。
-[[exceptions.allowed_cycles]]
-modules = ["checkpoint", "checkpoint.service", "git_manager"]
-until = "P1"
-owner = "待认领"
-reason = "P0 基线登记的既有 checkpoint 环，P1 清零"
-
-[[exceptions.allowed_cycles]]
-modules = ["memory_record_index", "memory_record_io"]
-until = "P1"
-owner = "待认领"
-reason = "P0 基线登记的既有 memory_mcp 环，P1 清零"
-
+# owner 待 P2 前认领，不填虚构人名。
+#
+# P1 已完成：checkpoint 环（checkpoint ↔ checkpoint.service ↔ git_manager）
+# 与 memory_mcp 环（memory_record_index ↔ memory_record_io）均已拆掉，
+# 对应的两条 until=P1 豁免随之删除（P0 基线快照保留为权威参照，不重新生成）。
 [[exceptions.allowed_cycles]]
 modules = ["plugins.registry", "skills.loader"]
 until = "P2"

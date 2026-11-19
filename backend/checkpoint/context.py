@@ -69,3 +69,21 @@ def clear_checkpoint_context() -> None:
 
 def get_checkpoint_context() -> Dict[str, Any]:
     return dict(_CTX.get() or {})
+
+
+# ── 写盘前快照钩子（P1 拆环）──────────────────────────────────────────
+# git_manager 需要「写盘前拍照」，但直接 import checkpoint.service 会形成
+# service ↔ git_manager 双向环。改为由 service 在模块加载时把回调注册到本
+# 叶子模块，git_manager 只依赖 context（同步 await，调用时序不变）。
+_BEFORE_WRITE_CAPTURE = None
+
+
+def set_before_write_capture(fn) -> None:
+    """注册 async capture(paths) 回调；由 checkpoint.service 初始化时调用。"""
+    global _BEFORE_WRITE_CAPTURE
+    _BEFORE_WRITE_CAPTURE = fn
+
+
+def get_before_write_capture():
+    """返回写盘前快照回调，未注册时为 None。"""
+    return _BEFORE_WRITE_CAPTURE
