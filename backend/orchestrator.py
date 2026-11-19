@@ -6661,6 +6661,12 @@ class TicketOrchestrator:
 # 全局 Orchestrator
 orchestrator = TicketOrchestrator()
 
+# P2 拆主环：把自己注册到 L0 叶子门面。agents/actions 不再
+# `from orchestrator import orchestrator`，改从 runtime_facade 按名字取，
+# 消除 7 条反向回边；注册发生在模块加载末尾，运行时取用时序不变。
+import runtime_facade as _runtime_facade
+_runtime_facade.register("orchestrator", orchestrator)
+
 
 def _fire_knowledge_distill(project_id: str, ticket_id: str):
     """验收通过后，后台尝试将修复经验蒸馏到知识库（fire-and-forget）"""

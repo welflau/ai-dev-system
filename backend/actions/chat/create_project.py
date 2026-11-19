@@ -321,7 +321,9 @@ class CreateProjectAction(ActionBase):
             if is_ue_project:
                 try:
                     from plugins.registry import require_action
-                    from api.chat import _save_chat_message
+                    # P2 拆主环：经 L0 叶子门面动态取 api.chat 属性，
+                    # 兼容 monkeypatch（_test_turn_id.py 替换 _save_chat_message）。
+                    from runtime_facade import chat_api
 
                     propose_result = await require_action("propose_ue_framework").run({
                         "project_id": project_id,
@@ -331,7 +333,7 @@ class CreateProjectAction(ActionBase):
                             "✨ 检测到这是 UE 项目，已自动为你生成了框架方案。"
                             "请在下方卡片里确认引擎和模板后点「确认生成」。"
                         )
-                        await _save_chat_message(
+                        await chat_api()._save_chat_message(
                             project_id=project_id,
                             role="assistant",
                             content=intro,

@@ -284,7 +284,8 @@ def _plugin_skill_items(plugin_dir: Path) -> List[Dict[str, Any]]:
         return []
     items: List[Dict[str, Any]] = []
     try:
-        from skills.loader import _parse_frontmatter
+        # P2 拆环：从叶子模块取纯函数，不再 import skills.loader（消除双向环）。
+        from skills.frontmatter import _parse_frontmatter
     except Exception:
         _parse_frontmatter = None
     try:

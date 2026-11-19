@@ -99,7 +99,8 @@ def _matches(
     把 WorkflowSkill 包成 frag 形状喂给 `_fragment_matches` —— 同一套
     all_of/any_of/none_of 语义，不建第二份解析。
     """
-    from sop.loader import _fragment_matches
+    # P2 拆环：从叶子模块取纯函数，不再 import sop.loader（消除双向环）。
+    from sop.matching import _fragment_matches
     return _fragment_matches(
         {
             "required_traits": skill.required_traits,

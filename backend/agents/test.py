@@ -405,7 +405,9 @@ class TestAgent(BaseAgent):
         # 测试阶段，没有 run_tests）也要能触发同一件事，两处各写一遍必然走样。
         if all_passed:
             try:
-                from orchestrator import orchestrator as _orch
+                # P2 拆主环：经 L0 叶子门面取单例，不再反向 import orchestrator。
+                from runtime_facade import get_orchestrator
+                _orch = get_orchestrator()
                 await _orch._maybe_openspec_verify(
                     context.get("project_id", ""), context.get("ticket_id", ""),
                     stage_label="run_tests",
@@ -1230,7 +1232,9 @@ def test_no_syntax_errors():
                 output = "(超时)"
                 rc = -1
 
-            from orchestrator import orchestrator as orch
+            # P2 拆主环：经 L0 叶子门面取单例，不再反向 import orchestrator。
+            from runtime_facade import get_orchestrator
+            orch = get_orchestrator()
             from database import db
             from utils import now_iso
 

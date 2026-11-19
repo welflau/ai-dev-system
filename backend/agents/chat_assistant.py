@@ -585,8 +585,9 @@ class _ChatToolExecutor:
                 if self.project_id:
                     await event_manager.publish_to_project(self.project_id, "chat_thinking_log", payload)
                 elif self.session_id:
-                    from api.chat import get_thinking_queue
-                    await get_thinking_queue(self.session_id).put(payload)
+                    # P2 拆主环：经 L0 叶子门面取 api.chat，不再反向 import。
+                    from runtime_facade import chat_api
+                    await chat_api().get_thinking_queue(self.session_id).put(payload)
         except Exception as e:
             logger.warning("_emit_thinking failed: %s", e)
 
@@ -847,7 +848,9 @@ class ChatAssistantAgent(BaseAgent):
         )
         # @mention Agent：在 system_prompt 前注入 Agent persona，限制不触发写操作工具
         if agent_override:
-            from api.chat import _AGENT_CONFIG as _AC
+            # P2 拆主环：经 L0 叶子门面取 api.chat 配置，不再反向 import。
+            from runtime_facade import chat_api
+            _AC = chat_api()._AGENT_CONFIG
             _persona = _AC.get(agent_override, {}).get("persona", "")
             if _persona:
                 system_prompt = (
@@ -1169,7 +1172,9 @@ class ChatAssistantAgent(BaseAgent):
         system_prompt = self._build_global_system_prompt(projects_brief, preset_suggestions)
         # @mention Agent：注入 persona
         if agent_override:
-            from api.chat import _AGENT_CONFIG as _AC
+            # P2 拆主环：经 L0 叶子门面取 api.chat 配置，不再反向 import。
+            from runtime_facade import chat_api
+            _AC = chat_api()._AGENT_CONFIG
             _persona = _AC.get(agent_override, {}).get("persona", "")
             if _persona:
                 system_prompt = (

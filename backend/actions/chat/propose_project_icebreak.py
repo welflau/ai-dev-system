@@ -564,7 +564,8 @@ async def persist_project_icebreak(
     repo_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """把破冰消息写入项目会话，刷新后能直接看到。"""
-    from api.chat import _save_chat_message
+    # P2 拆主环：经 L0 叶子门面动态取 api.chat 属性，兼容 monkeypatch。
+    from runtime_facade import chat_api
     from database import db
     from utils import generate_id, now_iso
 
@@ -608,7 +609,7 @@ async def persist_project_icebreak(
             "请选一个起步方向，我会据此创建第一个需求。"
         )
         sess_title = f"破冰 · {payload['project_name']}"
-    await _save_chat_message(
+    await chat_api()._save_chat_message(
         project_id=project_id,
         role="assistant",
         content=intro,

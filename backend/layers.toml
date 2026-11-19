@@ -31,7 +31,11 @@ exclude_dirs = [
 # 故以 backend/layers_baseline.json 为权威基线，不强行凑 §2 数值。
 
 [levels]
-L0 = ["actions.base", "plugins.registry", "contracts", "models.dto"]
+# P2 新增三个 L0 叶子：runtime_facade 是运行时契约门面，
+# skills.frontmatter / sop.matching 是抽出的纯函数模块。它们零项目内 import，
+# 显式列在 L0 可避免被 L3 的 "skills" / L1 的 "sop..." 前缀误归层。
+L0 = ["actions.base", "plugins.registry", "contracts", "models.dto",
+      "runtime_facade", "skills.frontmatter", "sop.matching"]
 L1 = ["orchestrator", "sop.loader", "sop.workflow_composer", "llm_client", "api"]
 L2 = ["config", "database", "utils", "events", "event_bus", "session_logger",
       "git_manager", "memory", "tool_catalog"]
@@ -49,16 +53,13 @@ L3 = ["L0", "L2", "L3"]
 distribution_modules = ["desktop", "start_server", "ads_cli", "ads_ui"]
 
 [exceptions]
-phase = "P1"
+phase = "P2"
 # §11 #5：每条豁免必须带 owner + until + reason；到期未清零 CI 直接红。
 # 允许经评审把 until 顺延一次并留痕 —— 用 extended_to 字段，检查器记入 extension_used。
-# owner 待 P2 前认领，不填虚构人名。
 #
-# P1 已完成：checkpoint 环（checkpoint ↔ checkpoint.service ↔ git_manager）
-# 与 memory_mcp 环（memory_record_index ↔ memory_record_io）均已拆掉，
-# 对应的两条 until=P1 豁免随之删除（P0 基线快照保留为权威参照，不重新生成）。
-[[exceptions.allowed_cycles]]
-modules = ["plugins.registry", "skills.loader"]
-until = "P2"
-owner = "待认领"
-reason = "§2.3 双向对（含在主环 SCC 内，非独立 SCC）；检查器按 SCC 匹配，本条为 P2 主环拆分后的预留"
+# P1：checkpoint 环、memory_mcp 环已拆掉，两条 until=P1 豁免删除。
+# P2：主环 62 模块已打散（SCC 3→1→0、双向对 10→7→0），
+#     plugins.registry ↔ skills.loader 双向对也已随 P2 抽取纯函数消失，
+#     最后一条 until=P2 豁免随之删除。当前 allowed_cycles 为空。
+# P0 基线快照保留为权威参照，不重新生成（§6.2 只许减少不许增加）。
+allowed_cycles = []

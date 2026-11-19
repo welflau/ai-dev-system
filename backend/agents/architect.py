@@ -53,7 +53,9 @@ class ArchitectAgent(BaseAgent):
             project_id = context.get("project_id", "")
             if not ticket_id or not project_id:
                 return
-            from orchestrator import orchestrator as orch
+            # P2 拆主环：经 L0 叶子门面取单例，不再反向 import orchestrator。
+            from runtime_facade import get_orchestrator
+            orch = get_orchestrator()
             # 从产出文件里找架构文档路径
             artifacts = result.get("artifacts") or []
             arch_file = next(
@@ -154,7 +156,9 @@ class ArchitectAgent(BaseAgent):
             except Exception:
                 pass
 
-            from orchestrator import orchestrator as orch
+            # P2 拆主环：经 L0 叶子门面取单例，不再反向 import orchestrator。
+            from runtime_facade import get_orchestrator
+            orch = get_orchestrator()
             # started 记录（不依赖 LLM，先落，保证可见）
             await db.execute(
                 "UPDATE tickets SET openspec_stage='proposed', updated_at=? WHERE id=?",

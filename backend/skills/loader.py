@@ -746,7 +746,9 @@ def _match_paths(current_file: str, patterns: List[str]) -> bool:
     return False
 
 
-_FM_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n(.*)$", re.DOTALL)
+# P2 拆环：_parse_frontmatter 抽到叶子模块 skills.frontmatter，
+# 这里 re-export 保持本文件 5 处调用不变（下游 plugins.registry 改指向叶子）。
+from skills.frontmatter import _parse_frontmatter  # noqa: E402,F401
 
 
 async def get_enabled_packs(project_id: str) -> Set[str]:
@@ -767,19 +769,3 @@ async def get_enabled_packs(project_id: str) -> Set[str]:
     except Exception as e:
         logger.warning("get_enabled_packs 查询失败 project_id=%s: %s", project_id, e)
         return set()
-
-
-
-
-def _parse_frontmatter(text: str) -> Tuple[dict, str]:
-    """解析 YAML frontmatter + body。没有 frontmatter 时 body 是全文，frontmatter 为 {}。"""
-    m = _FM_RE.match(text)
-    if not m:
-        return {}, text
-    fm_text, body = m.group(1), m.group(2)
-    try:
-        import yaml
-        return yaml.safe_load(fm_text) or {}, body
-    except Exception as e:
-        logger.warning("frontmatter 解析失败: %s", e)
-        return {}, body

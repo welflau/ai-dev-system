@@ -241,7 +241,9 @@ class PauseRequirementsBatchAction(ActionBase):
 
         # 同步清理 Orchestrator 活跃集合
         try:
-            from orchestrator import orchestrator
+            # P2 拆主环：经 L0 叶子门面取单例（同一个对象，原地读写语义不变）。
+            from runtime_facade import get_orchestrator
+            orchestrator = get_orchestrator()
             orchestrator._project_active.pop(project_id, None)
             # 清理与这些需求关联的正在处理工单
             req_ids = {r["id"] for r in reqs if r["title"] in paused}

@@ -154,7 +154,9 @@ class CreateRequirementAction(ActionBase):
         )
 
         # 后台执行拆单（Orchestrator 调度）
-        from orchestrator import orchestrator
+        # P2 拆主环：经 L0 叶子门面取单例，不再反向 import orchestrator。
+        from runtime_facade import get_orchestrator
+        orchestrator = get_orchestrator()
         asyncio.create_task(orchestrator.handle_requirement(project_id, req_id))
         logger.info("自动触发需求拆单: %s", req_id)
 

@@ -113,7 +113,9 @@ class ResumeRequirementAction(ActionBase):
 
         # 恢复需求后，自动继续处理未完成的工单
         try:
-            from orchestrator import orchestrator
+            # P2 拆主环：经 L0 叶子门面取单例，不再反向 import orchestrator。
+            from runtime_facade import get_orchestrator
+            orchestrator = get_orchestrator()
             pending_tickets = await db.fetch_all(
                 "SELECT id FROM tickets WHERE requirement_id = ? AND status NOT IN ('deployed', 'cancelled')",
                 (requirement_id,),

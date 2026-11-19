@@ -450,40 +450,9 @@ def _skill_view_contribs(skill_stages: List[Dict]) -> List[Dict]:
     return out
 
 
-def _fragment_matches(
-    frag: Dict,
-    traits_set: Set[str],
-    ticket_type: Optional[str],
-) -> bool:
-    """单个 fragment 是否适用当前 (traits, ticket_type)"""
-    rt = frag.get("required_traits")
-    if rt:
-        all_of = rt.get("all_of") or []
-        any_of = rt.get("any_of") or []
-        none_of = rt.get("none_of") or []
-        if all_of and not all(t in traits_set for t in all_of):
-            return False
-        if any_of and not any(t in traits_set for t in any_of):
-            return False
-        if none_of and any(t in traits_set for t in none_of):
-            return False
-
-    rtt = frag.get("required_ticket_type")
-    if rtt:
-        if ticket_type is None:
-            return False
-        # 兼容两种格式：字符串 "feature" 或对象 {any_of: [...]}
-        if isinstance(rtt, str):
-            if ticket_type != rtt:
-                return False
-        else:
-            any_of = rtt.get("any_of") or []
-            none_of = rtt.get("none_of") or []
-            if any_of and ticket_type not in any_of:
-                return False
-            if none_of and ticket_type in none_of:
-                return False
-    return True
+# P2 拆环：_fragment_matches 抽到叶子模块 sop.matching，这里 re-export
+# 保持本文件 2 处调用不变（下游 workflow_composer 改指向叶子）。
+from sop.matching import _fragment_matches  # noqa: E402,F401
 
 
 def _find_stage_idx(stages: List[Dict], stage_id: str) -> Optional[int]:

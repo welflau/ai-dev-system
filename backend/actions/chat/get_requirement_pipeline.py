@@ -28,8 +28,12 @@ def _get_pipeline_cfg():
     global _pipeline_cfg_cache
     if _pipeline_cfg_cache is None:
         from sop.loader import build_pipeline_stages
-        from orchestrator import orchestrator
-        _pipeline_cfg_cache = build_pipeline_stages(orchestrator._sop_config or {})
+        # P2 拆主环：经 L0 叶子门面取单例，不再反向 import orchestrator。
+        from runtime_facade import get_orchestrator
+        _orch = get_orchestrator()
+        _pipeline_cfg_cache = build_pipeline_stages(
+            (_orch._sop_config if _orch is not None else None) or {}
+        )
     return _pipeline_cfg_cache
 
 

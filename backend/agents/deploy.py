@@ -208,7 +208,9 @@ class DeployAgent(BaseAgent):
 
             from database import db
             from utils import now_iso
-            from orchestrator import orchestrator as orch
+            # P2 拆主环：经 L0 叶子门面取单例，不再反向 import orchestrator。
+            from runtime_facade import get_orchestrator
+            orch = get_orchestrator()
             if rc == 0:
                 await db.execute(
                     "UPDATE tickets SET openspec_stage='archived', updated_at=? WHERE id=?",

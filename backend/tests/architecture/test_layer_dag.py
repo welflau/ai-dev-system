@@ -60,6 +60,18 @@ def test_structural_metrics_not_regressed():
     assert s["bidirectional_pairs"] <= baseline["bidirectional_pairs"], "双向对数只许减少"
 
 
+def test_main_ring_eliminated():
+    """P2 验收（§7/§10）：62 模块主环已打散，依赖图必须无环、无双向 import 对。
+
+    单独锁死成果 —— test_structural_metrics_not_regressed 只断言「<= P0 基线
+    3 组」，若主环重新长回 1 组（哪怕 62 模块）仍会通过那条宽松断言。
+    """
+    _, result = run()
+    s = result["stats"]
+    assert s["scc_groups"] == 0, f"主环未清零，仍有 {s['scc_groups']} 个 SCC（最大 {s['scc_max']}）"
+    assert s["bidirectional_pairs"] == 0, f"仍有 {s['bidirectional_pairs']} 对双向 import"
+
+
 def test_expired_exception_fails_gate(tmp_path):
     """§11 #5：豁免到期未清零必须让门禁非 0 退出。
 
