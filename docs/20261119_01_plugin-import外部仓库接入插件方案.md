@@ -261,3 +261,55 @@ VC 已有 8 个 router（`/api/health`、`/api/config`、`/api/project/*`、`/ap
 2. **各 CLI 是否读自己的用户级 skills 目录是各 CLI 原生行为**：ADS 不改 HOME，只能按约定写文件，不能保证某 CLI 一定加载。Cursor 另有 `~/.cursor/skills-cursor`（`api/projects.py:2836-2838`），当前未单独处理。
 3. **用户级安装会写全局配置**：`shared/rules.md` 对 claude 追加到 `~/.claude/CLAUDE.md`，`mcps/*.json` / `hooks/*.json` 合并到 `~/.claude/settings.json`。前端已加 confirm 明确提示，但这是真实副作用，需在 UI 文案与文档中持续标注。
 4. **本项目级 Pack 的 13 个 targets 扩到 4 CLI** 会让新建项目自动安装时也创建 `.cursor/` / `.workbuddy/` 目录（`.gitignore:93,112` 忽略 `.workbuddy/` / `.claude/`，`.cursor/` 未忽略）。这是覆盖多 CLI 的预期代价。
+
+---
+
+## 十二、追加落地：路径 1 把 VideoClaw 接成 ADS 插件（2026-11-19）
+
+前几轮都在做「接入能力基建」，主线（VC 本体接进 ADS）一度是 0%。本节记录按 §7 清单
+A→E 阶段落地的结果，详见 `dev-notes/2026-11-19_04_VideoClaw接入路径1落地.md`。
+
+### 12.1 各阶段
+
+| 阶段 | 结果 |
+|---|---|
+| A 独立 sidecar | VC 侧新建 `backend/config.yaml`（仅 `server.port: 8000→8100`，host `127.0.0.1`）；被 VC `.gitignore:17` 忽略，**未改 VC 源码与结构**；Key 留空待人填 |
+| B ADS 配置 | `config.py` Settings 加 `VIDEOCLAW_BASE_URL` / `VIDEOCLAW_TIMEOUT=600` / `VIDEOCLAW_ENABLED=false`；`.env.example` 补注释；未写真实 `.env` |
+| C 平级插件 | 新建 `backend/plugins/videoclaw/`：`plugin.json` + `videoclaw_client.py` + `actions/vc_project.py`（`vc_run_project`） |
+| D trait 决策 | **复用 `category:video` / `pipeline:video`，不新增词表条目**（见 §12.2） |
+| E 验收 | 静态项全过、60 项回归通过；动态 7 项待人完成 |
+
+### 12.2 trait 决策（偏离 §7 清单建议）
+
+清单 D1 建议「独立 `engine:videoclaw` 并登记词表让二者互斥」。**实际采用复用现有
+`category:video` / `pipeline:video`**，理由：
+
+1. `registry.py:149-166` 全量加载 Action，**不看 trait**；`vc_` 前缀已保证命名唯一。
+2. 路径 1 骨架不建 `skills/`、不声明 `x-workflow`，「两套 Skill/SOP 同时注入」这个
+   D1 担心的冲突层在本阶段根本不存在。
+3. `trait_taxonomy.yaml` 明确「扩 trait 需改本文件 + review + 部署，不开放 UI 自由输入」，
+   且 `engine` 维度语义是「游戏/客户端引擎」，塞 `videoclaw` 语义不对。
+4. YAML 解析严格核对：`category:video` / `pipeline:video` 均已在词表 `values` 内。
+
+**可回退点**：若做路径 2 并引入 `skills/` / `x-workflow`，届时再新增独立维度做互斥。
+
+### 12.3 关键实现约束
+
+- 模型名从 `GET /api/config` 动态取，不写死（VC `workflow.py:44-52` 是 400 硬校验）。
+- 环境缺失（未启用 / 服务没起）→ `success=False` + `env_missing=True`，**绝不 `*_failed`**。
+- `data["command"]` 用 `shlex.quote` 拼单个 `str`；`data["task_id"]` 带 `TCMD-*`。
+- 长超时 600s，不复用 `LLM_TIMEOUT=120`。
+- 不建 `reflection.py` / `acceptance.py`（无门禁打回、无门禁报告，按约束 1/6 属条件必选）。
+
+### 12.4 一个真实 bug（已修）
+
+`actions/base.py:38-49` 的 `ActionResult.to_dict()` 会把 `data` 展开到顶层，
+初版把 VC 状态快照放 `data["status"]` 会**覆盖**结果自身的 `status`，成功被误读成
+`in_progress`。测试当场抓到，已改名 `data["vc_status"]`。
+**后续写 Action 都要注意：`status` 是保留字段，不能塞进 `data`。**
+
+### 12.5 验收状态
+
+- 静态全过：plugin.json / trait 词表 / Action 自动注册且无重名 / command 为 str / 准入 Checklist / 9 项 VC 单测 + 60 项全量回归。
+- **动态未做**：填 Key、起 sidecar、`VIDEOCLAW_ENABLED=true`、跑最小闭环、停服验证 blocked、director 回归。这 7 项需要真实环境与付费 Key，必须由人完成。
+

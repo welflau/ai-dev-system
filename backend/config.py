@@ -104,6 +104,13 @@ class Settings:
     # 超出返回 429。本地用信号量串行化，其余任务在队列里等待而非立即失败。
     LIGHTAI_MAX_CONCURRENT: int = int(os.getenv("LIGHTAI_MAX_CONCURRENT", "1"))
 
+    # VideoClaw sidecar（独立进程，REST + SSE；见 plugins/videoclaw/）
+    # 8100 避开 ADS 自身的 8000；ENABLED=false 时插件直接判 env_missing → blocked。
+    # 视频生成是分钟级长任务，超时不能复用 LLM_TIMEOUT(120s)。
+    VIDEOCLAW_BASE_URL: str = os.getenv("VIDEOCLAW_BASE_URL", "http://127.0.0.1:8100")
+    VIDEOCLAW_TIMEOUT: int = int(os.getenv("VIDEOCLAW_TIMEOUT", "600"))
+    VIDEOCLAW_ENABLED: bool = os.getenv("VIDEOCLAW_ENABLED", "false").lower() in ("1", "true", "yes")
+
     # ── Phase 1B：预算/配额约束（.env 可覆盖）──────────────────────────
     # 工单 Agent：单次执行预算
     AGENT_MAX_TOKENS:  int   = int(os.getenv("AGENT_MAX_TOKENS",  "200000"))

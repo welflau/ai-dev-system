@@ -1,0 +1,9 @@
+{
+  "id": "videoclaw",
+  "name": "VideoClaw 视频制片",
+  "version": "0.1.0",
+  "description": "独立 VideoClaw sidecar 的最小闭环接入：探活、动态取模型、创建项目、推进工作流、查状态。与 director 平级独立，通过 REST 调用，不改外部仓库代码。",
+  "required_traits": {
+    "any_of": ["category:video", "pipeline:video"]
+  }
+}
