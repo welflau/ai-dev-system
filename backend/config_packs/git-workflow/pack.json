@@ -6,5 +6,5 @@
   "tags": ["git", "workflow", "pr", "review"],
   "auto_traits": ["vcs:git", "category:game", "category:app"],
   "contains": ["commands", "rules"],
-  "targets": ["claude", "codebuddy"]
+  "targets": ["claude", "codebuddy", "cursor", "workbuddy"]
 }

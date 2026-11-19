@@ -19,8 +19,5 @@
     "commands",
     "rules"
   ],
-  "targets": [
-    "claude",
-    "codebuddy"
-  ]
+  "targets": ["claude", "codebuddy", "cursor", "workbuddy"]
 }

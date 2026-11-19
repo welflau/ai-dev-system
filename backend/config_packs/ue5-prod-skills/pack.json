@@ -6,5 +6,5 @@
   "tags": ["ue5", "unreal", "gamedev", "cpp", "blueprint", "niagara", "material", "mcp", "python", "production"],
   "auto_traits": ["engine:ue5", "engine:ue4"],
   "contains": ["rules", "skills"],
-  "targets": ["codebuddy"]
+  "targets": ["claude", "codebuddy", "cursor", "workbuddy"]
 }

@@ -1657,19 +1657,46 @@
                                 <div class="settings-card">
                                     <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:4px;">
                                         <h3 class="settings-card-title" style="margin:0;">
-                                            已安装 ConfigPack
+                                            已安装 ConfigPack（项目级）
                                             <span class="bundle-scope-badge bundle-scope-project">项目级 · 可装可卸</span>
                                         </h3>
                                         <button class="btn btn-sm btn-ghost" onclick="loadProjectPacks()">🔄 刷新</button>
                                     </div>
                                     <p class="settings-description" style="margin-bottom:12px;">
-                                        ConfigPack 将 CLI 工具配置（rules、agents、commands 等）安装到项目的 <code>.claude/</code> 或 <code>.codebuddy/</code> 目录。
+                                        项目级安装写入当前项目 <code>.{cli}/packs/&lt;pack&gt;/</code>，只对该项目生效。
                                     </p>
                                     <div id="installedPacksList"><div class="empty-state-sm">加载中...</div></div>
                                 </div>
+
+                                <!-- 用户级：一次安装对本机所有项目、所有 CLI 后端生效 -->
+                                <div class="settings-card" style="margin-top:16px;">
+                                    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:4px;">
+                                        <h3 class="settings-card-title" style="margin:0;">
+                                            用户级安装
+                                            <span class="bundle-scope-badge bundle-scope-process">跨项目 · 多 CLI</span>
+                                        </h3>
+                                        <button class="btn btn-sm btn-ghost" onclick="loadUserPacks()">🔄 刷新</button>
+                                    </div>
+                                    <p class="settings-description" style="margin-bottom:12px;">
+                                        写入用户主目录的 <code>~/.claude/</code>、<code>~/.codebuddy/</code>、<code>~/.cursor/</code>、<code>~/.workbuddy/</code>
+                                        原生目录（如 <code>~/.codebuddy/skills/&lt;id&gt;/SKILL.md</code>）。一次安装对本机<strong>所有项目</strong>生效，
+                                        ADS 无论用哪个 CLI 后端都能原生扫到。用户目录 <code id="userPacksHome">~</code>。
+                                    </p>
+                                    <div id="userPacksList"><div class="empty-state-sm">加载中...</div></div>
+                                </div>
+
                                 <div class="settings-card" style="margin-top:16px;">
                                     <h3 class="settings-card-title" style="margin-bottom:8px;">安装更多 Pack</h3>
-                                    <p class="settings-description" style="margin-bottom:12px;">从内置 Pack 库中选择并安装到当前项目。</p>
+                                    <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:10px; padding:8px 10px; border:1px solid var(--border-color); border-radius:8px;">
+                                        <label for="packInstallScope" style="font-size:12px; font-weight:600; white-space:nowrap;">安装范围</label>
+                                        <select id="packInstallScope" class="form-select" style="font-size:12px; padding:4px 8px; max-width:280px;" onchange="onPackScopeChange()">
+                                            <option value="project">当前项目（项目级，只对该项目生效）</option>
+                                            <option value="user">用户目录（跨项目 · 4 个 CLI 通用）</option>
+                                        </select>
+                                        <span class="settings-description" style="margin:0; flex:1; min-width:180px;">
+                                            选择「用户目录」后，下方安装按钮会把 Pack 写到各 CLI 的用户级原生目录。
+                                        </span>
+                                    </div>
                                     <div id="availablePacksList"><div class="empty-state-sm">加载中...</div></div>
                                 </div>
                             </div>

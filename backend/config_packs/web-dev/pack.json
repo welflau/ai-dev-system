@@ -6,5 +6,5 @@
   "tags": ["web", "react", "frontend", "api", "nextjs", "backend", "mcp"],
   "auto_traits": ["platform:web", "framework:react"],
   "contains": ["rules", "commands", "skills"],
-  "targets": ["claude", "codebuddy"]
+  "targets": ["claude", "codebuddy", "cursor", "workbuddy"]
 }

@@ -6,5 +6,5 @@
   "tags": ["quality", "git", "comments", "simplicity", "tdd", "security", "testing", "best-practices"],
   "auto_traits": ["vcs:git"],
   "contains": ["rules", "skills"],
-  "targets": ["claude", "codebuddy"]
+  "targets": ["claude", "codebuddy", "cursor", "workbuddy"]
 }

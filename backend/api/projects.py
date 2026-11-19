@@ -2439,6 +2439,89 @@ async def get_pack_detail(pack_name: str):
     }
 
 
+# ── 用户级 ConfigPack（~/.{cli}/，无 project_id）────────────────────────────
+# 静态路径声明在 /{project_id}/packs 之前，避免被动态参数吃掉。
+# 用户级安装不写 ticket_logs（该表 project_id NOT NULL），只记 user_packs。
+
+@router.get("/packs/user")
+async def get_user_packs():
+    """获取已安装到用户主目录的 ConfigPack 列表。"""
+    from pack_installer import list_packs
+    rows = await db.fetch_all("SELECT * FROM user_packs ORDER BY installed_at DESC")
+    all_packs = {p["name"]: p for p in list_packs()}
+    result = []
+    for row in rows:
+        meta = all_packs.get(row["pack_name"], {})
+        result.append({
+            "id": row["id"],
+            "pack_name": row["pack_name"],
+            "display_name": meta.get("display_name", row["pack_name"]),
+            "description": meta.get("description", ""),
+            "tags": meta.get("tags", []),
+            "contains": meta.get("contains", []),
+            "targets": json.loads(row.get("targets") or "[]"),
+            "install_root": row.get("install_root") or "",
+            "installed_at": row["installed_at"],
+        })
+    return {"packs": result, "home": str(Path.home())}
+
+
+@router.get("/packs/user/available")
+async def get_user_available_packs():
+    """获取可安装到用户目录的 Pack 列表（排除已安装的）。"""
+    from pack_installer import list_packs
+    installed_rows = await db.fetch_all("SELECT pack_name FROM user_packs")
+    installed_names = {r["pack_name"] for r in installed_rows}
+    available = [p for p in list_packs() if p["name"] not in installed_names]
+    return {"packs": available}
+
+
+@router.post("/packs/user/{pack_name}/install")
+async def install_pack_for_user(pack_name: str):
+    """把 Pack 安装到用户主目录 ~/.{cli}/，一次安装覆盖本机所有项目与 4 个 CLI。"""
+    from pack_installer import install_pack
+    result = install_pack(pack_name, project_path="", project_ctx={}, scope="user")
+    if not result["success"]:
+        err_msg = "; ".join(result.get("errors", ["安装失败"]))
+        raise HTTPException(400, err_msg)
+
+    now = now_iso()
+    targets = json.dumps(result.get("installed_targets", []), ensure_ascii=False)
+    existing = await db.fetch_one("SELECT id FROM user_packs WHERE pack_name = ?", (pack_name,))
+    if existing:
+        await db.update(
+            "user_packs",
+            {"installed_at": now, "targets": targets, "install_root": result.get("install_root", "")},
+            "pack_name = ?", (pack_name,),
+        )
+    else:
+        await db.insert("user_packs", {
+            "id": generate_id("UPK"),
+            "pack_name": pack_name,
+            "installed_at": now,
+            "targets": targets,
+            "install_root": result.get("install_root", ""),
+        })
+
+    return {
+        "success": True,
+        "pack_name": pack_name,
+        "scope": "user",
+        "install_root": result.get("install_root", ""),
+        "installed_targets": result.get("installed_targets", []),
+        "copied_files": result.get("copied_files", []),
+        "skipped": result.get("skipped", []),
+        "errors": result.get("errors", []),
+    }
+
+
+@router.delete("/packs/user/{pack_name}")
+async def uninstall_user_pack_record(pack_name: str):
+    """移除用户级安装记录（不删除 ~/.{cli}/ 下已 copy 的文件，文件归用户所有）。"""
+    await db.delete("user_packs", "pack_name = ?", (pack_name,))
+    return {"success": True, "note": "记录已移除，用户目录下的文件不受影响"}
+
+
 @router.get("/{project_id}/packs")
 async def get_project_packs(project_id: str):
     """获取项目已安装的 ConfigPack 列表。"""

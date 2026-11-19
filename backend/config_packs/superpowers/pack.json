@@ -6,7 +6,7 @@
   "tags": ["tdd", "discipline", "quality", "debugging", "code-review", "git", "superpowers", "bdd", "engineering"],
   "auto_traits": ["vcs:git"],
   "contains": ["skills"],
-  "targets": ["claude", "codebuddy"],
+  "targets": ["claude", "codebuddy", "cursor", "workbuddy"],
   "homepage": "https://github.com/fission-ai/superpowers",
   "skills": [
     "using-superpowers",

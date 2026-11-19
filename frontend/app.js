@@ -3794,7 +3794,10 @@ let _bundleTab = 'packs';
 function switchBundleTab(inner) {
     _bundleTab = inner;
     _switchInnerTab('tab-bundles', 'bundle-panel-', inner);
-    if (inner === 'packs') loadProjectPacks();
+    if (inner === 'packs') {
+        _restorePackScope();
+        loadProjectPacks();
+    }
     if (inner === 'ads') loadAdsPluginList();
     if (inner === 'plugins') loadPluginList();
 }
@@ -4263,11 +4266,37 @@ function _renderLegacyMcp(container, servers) {
 // 两个列表装的是同一种东西，所以给整个 Tab 一个搜索框、同时过滤两边 ——
 // 用户搜「ue5」时想知道的正是「装了没有」，拆成两个框反而要输两遍。
 let _packsCache = null;
+let _userPacksCache = [];
+
+// 安装范围由面板里的 <select id="packInstallScope"> 决定；缺省仍是项目级，行为不变。
+function _packInstallScope() {
+    const sel = document.getElementById('packInstallScope');
+    return sel ? sel.value : 'project';
+}
+
+// 切换范围时刷新两块列表的按钮文案，并记住选择（同一台机器下次打开仍是上次范围）
+function onPackScopeChange() {
+    const sel = document.getElementById('packInstallScope');
+    if (!sel) return;
+    try { localStorage.setItem('ads.packInstallScope', sel.value); } catch (e) { /* 隐私模式忽略 */ }
+    if (_packsCache) _renderPacksView();
+    if (_userPacksCache.length || document.getElementById('userPacksList')) loadUserPacks();
+}
+
+function _restorePackScope() {
+    const sel = document.getElementById('packInstallScope');
+    if (!sel) return;
+    try {
+        const saved = localStorage.getItem('ads.packInstallScope');
+        if (saved === 'user' || saved === 'project') sel.value = saved;
+    } catch (e) { /* 隐私模式忽略 */ }
+}
 
 async function loadProjectPacks() {
+    // 用户级列表与项目无关，即使没选项目也要能加载
+    loadUserPacks();
     if (!currentProjectId) return;
     const installedEl = document.getElementById('installedPacksList');
-    const availableEl = document.getElementById('availablePacksList');
     if (!installedEl) return;
 
     installedEl.innerHTML = '<div class="empty-state-sm">加载中...</div>';
@@ -4287,6 +4316,66 @@ async function loadProjectPacks() {
     } catch (e) {
         installedEl.innerHTML = `<div class="empty-state-sm">加载失败: ${escapeHtml(e.message)}</div>`;
     }
+}
+
+// ── 用户级 ConfigPack（~/.{cli}/，跨项目 / 多 CLI）──────────────────────────
+async function loadUserPacks() {
+    const el = document.getElementById('userPacksList');
+    if (!el) return;
+    try {
+        const [installedData, availableData] = await Promise.all([
+            api('/projects/packs/user'),
+            api('/projects/packs/user/available'),
+        ]);
+        _userPacksCache = installedData.packs || [];
+        const homeEl = document.getElementById('userPacksHome');
+        if (homeEl && installedData.home) homeEl.textContent = installedData.home;
+        _renderUserPacksView(_userPacksCache, availableData.packs || []);
+    } catch (e) {
+        el.innerHTML = `<div class="empty-state-sm">加载失败: ${escapeHtml(e.message)}</div>`;
+    }
+}
+
+function _renderUserPacksView(installed, available) {
+    const el = document.getElementById('userPacksList');
+    if (!el) return;
+    const installedNames = new Set(installed.map(p => p.pack_name));
+
+    const installedHtml = installed.length === 0
+        ? '<div class="empty-state-sm" style="margin-bottom:10px;">尚未安装用户级 Pack</div>'
+        : installed.map(p => `
+            <div class="skill-row" style="margin-bottom:6px;">
+                <div class="skill-row-info">
+                    <span class="skill-row-name">📦 ${escapeHtml(p.display_name || p.pack_name)}</span>
+                    <span class="skill-row-id">${escapeHtml(p.pack_name)}</span>
+                    <span style="font-size:10px;color:var(--text-muted);">目标: ${escapeHtml((p.targets || []).join(', ') || '—')} · 安装于 ${escapeHtml((p.installed_at || '').slice(0, 16).replace('T', ' '))}</span>
+                </div>
+                <div class="skill-row-actions">
+                    <button class="btn btn-xs btn-secondary" onclick="installPack('${escapeHtml(p.pack_name)}', 'user')" title="重新写入用户目录">↩ 重装</button>
+                    <button class="btn btn-xs btn-ghost" onclick="removeUserPack('${escapeHtml(p.pack_name)}', '${escapeHtml(p.display_name || p.pack_name)}')" title="移除记录（不删用户目录文件）">✕</button>
+                </div>
+            </div>`).join('');
+
+    const scopeSel = document.getElementById('packInstallScope');
+    const scope = scopeSel ? scopeSel.value : 'project';
+    const btnLabel = scope === 'user' ? '⬇ 装到用户目录' : '⬇ 安装';
+    const availableHtml = available.length === 0
+        ? ''
+        : `<div style="margin-top:12px; border-top:1px solid var(--border-color); padding-top:10px;">
+            <div style="font-size:11px; color:var(--text-muted); margin-bottom:6px;">可安装到用户目录（${available.length}）</div>
+            ${available.map(p => `
+                <div class="skill-row" style="margin-bottom:4px;">
+                    <div class="skill-row-info">
+                        <span class="skill-row-name">📦 ${escapeHtml(p.display_name || p.name)}</span>
+                        ${p.description ? `<span class="skill-row-desc">${escapeHtml(p.description)}</span>` : ''}
+                    </div>
+                    <div class="skill-row-actions">
+                        <button class="btn btn-xs btn-primary" onclick="installPack('${escapeHtml(p.name)}', 'user')">${btnLabel}</button>
+                    </div>
+                </div>`).join('')}
+          </div>`;
+
+    el.innerHTML = installedHtml + availableHtml;
 }
 
 function _injectPackSearchBox() {
@@ -4325,6 +4414,10 @@ function _renderPacksView() {
 
     const tabCount = document.getElementById('bundleCountPacks');
     if (tabCount) tabCount.textContent = allInstalled.length ? ` ${allInstalled.length}` : '';
+
+    // 安装按钮文案随「安装范围」变化；installPack 不带 forcedScope 时会读该选择器
+    const _scope = _packInstallScope();
+    const _installLabel = _scope === 'user' ? '⬇ 装到用户目录' : '⬇ 安装';
 
     const hint = document.getElementById('packSearchHint');
     if (hint) {
@@ -4413,7 +4506,7 @@ function _renderPacksView() {
                             ${matchBar}
                         </div>
                         <div class="skill-row-actions" onclick="event.stopPropagation()" style="flex-shrink:0;">
-                            <button class="btn btn-xs btn-primary" onclick="installPack('${escapeHtml(p.name)}')">⬇ 安装</button>
+                            <button class="btn btn-xs btn-primary" onclick="installPack('${escapeHtml(p.name)}')">${_installLabel}</button>
                         </div>
                     </div>`;
                 }).join('');
@@ -4421,11 +4514,28 @@ function _renderPacksView() {
         }
 }
 
-async function installPack(packName) {
-    if (!currentProjectId) return;
+async function installPack(packName, forcedScope) {
+    const scope = forcedScope || _packInstallScope();
+    // 用户级安装与当前项目无关，写 ~/.{cli}/，本机所有项目 / 4 个 CLI 通用
+    const url = scope === 'user'
+        ? `/projects/packs/user/${encodeURIComponent(packName)}/install`
+        : `/projects/${currentProjectId}/packs/${encodeURIComponent(packName)}/install`;
+    if (scope === 'project' && !currentProjectId) {
+        showToast('请先选择项目，或把安装范围切换为「用户目录」', 'error');
+        return;
+    }
+    if (scope === 'user' && !confirm(
+        `把「${packName}」安装到用户目录？\n\n`
+        + '会写入 ~/.claude/、~/.codebuddy/、~/.cursor/、~/.workbuddy/ 的原生目录，'
+        + '对本机所有项目生效（部分 Pack 会追加到 ~/.claude/CLAUDE.md、合并 settings.json）。\n'
+        + '已存在的同名文件会被覆盖。'
+    )) return;
     try {
-        await api(`/projects/${currentProjectId}/packs/${encodeURIComponent(packName)}/install`, { method: 'POST' });
-        showToast(`Pack「${packName}」已安装`, 'success');
+        const r = await api(url, { method: 'POST' });
+        const targets = (r.installed_targets || []).join(', ');
+        showToast(scope === 'user'
+            ? `Pack「${packName}」已装到用户目录 [${targets}]，共 ${(r.copied_files || []).length} 个文件`
+            : `Pack「${packName}」已安装`, 'success');
         loadProjectPacks();
     } catch (e) {
         showToast(`安装失败: ${e.message}`, 'error');
@@ -4451,6 +4561,17 @@ async function removePack(packName, displayName) {
         await api(`/projects/${currentProjectId}/packs/${encodeURIComponent(packName)}`, { method: 'DELETE' });
         showToast('记录已移除', 'success');
         loadProjectPacks();
+    } catch (e) {
+        showToast(`操作失败: ${e.message}`, 'error');
+    }
+}
+
+async function removeUserPack(packName, displayName) {
+    if (!confirm(`移除「${displayName}」的用户级安装记录？\n（~/.{cli}/ 下已 copy 的文件不会被删除）`)) return;
+    try {
+        await api(`/projects/packs/user/${encodeURIComponent(packName)}`, { method: 'DELETE' });
+        showToast('用户级记录已移除', 'success');
+        loadUserPacks();
     } catch (e) {
         showToast(`操作失败: ${e.message}`, 'error');
     }

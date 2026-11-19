@@ -972,6 +972,18 @@ CREATE TABLE IF NOT EXISTS project_packs (
 CREATE INDEX IF NOT EXISTS idx_project_packs_project ON project_packs(project_id);
 
 -- ============================================================
+-- ConfigPack 用户级安装记录（装到 ~/.{cli}/，本机所有项目/CLI 通用）
+-- 与 project_packs 分离：无 project_id，重装按 pack_name upsert。
+-- ============================================================
+CREATE TABLE IF NOT EXISTS user_packs (
+    id           TEXT PRIMARY KEY,
+    pack_name    TEXT NOT NULL UNIQUE,
+    installed_at TEXT NOT NULL,
+    targets      TEXT DEFAULT '[]',  -- JSON: ["claude", "codebuddy", "cursor", "workbuddy"]
+    install_root TEXT DEFAULT ''     -- 安装时的用户主目录，便于排查/迁移
+);
+
+-- ============================================================
 -- 系统全局设置（key-value）
 -- ============================================================
 CREATE TABLE IF NOT EXISTS system_settings (

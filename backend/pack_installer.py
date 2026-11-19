@@ -1,16 +1,21 @@
 """
-ConfigPack Installer — 把 CLI 配置 Pack 安装到项目目录
+ConfigPack Installer — 把 CLI 配置 Pack 安装到项目目录或用户主目录
+
+安装范围（scope）：
+  project（默认）→ <project_path>/.{cli}/packs/<pack_name>/...  项目级，与用户自己的文件隔离
+  user           → Path.home()/.{cli}/...                       用户级，写入各 CLI 原生自扫的顶层目录
+                    （如 ~/.codebuddy/skills/<id>/SKILL.md），一次安装对本机所有项目/所有 CLI 后端生效
 
 Pack 目录约定：
-  shared/          → 同时安装到所有检测到的 CLI
-    rules.md       → claude: 追加到 CLAUDE.md；codebuddy: rules/{pack}.md（自动补 frontmatter）
-    rules/*.md     → 两端: rules/ 目录直接 copy
-    commands/*.md  → 两端: commands/ 目录直接 copy
-    skills/*.md    → 两端: skills/ 目录直接 copy
-    agents/*.md    → 两端: agents/ 目录直接 copy
-    scripts/       → 两端: scripts/ 目录直接 copy
-    mcps/*.json    → claude: merge 到 settings.json mcpServers；codebuddy: mcps/ 直接 copy
-    hooks/*.json   → claude: merge 到 settings.json hooks；codebuddy: hooks/ 直接 copy
+  shared/          → 同时安装到 pack.json 声明的所有 CLI
+    rules.md       → claude: 追加到 CLAUDE.md；其余: rules/{pack}.md（自动补 frontmatter）
+    rules/*.md     → 各 CLI: rules/ 目录直接 copy
+    commands/*.md  → 各 CLI: commands/ 目录直接 copy
+    skills/*.md    → 各 CLI: skills/ 目录直接 copy
+    agents/*.md    → 各 CLI: agents/ 目录直接 copy
+    scripts/       → 各 CLI: scripts/ 目录直接 copy
+    mcps/*.json    → claude: merge 到 settings.json mcpServers；其余: mcps/ 直接 copy
+    hooks/*.json   → claude: merge 到 settings.json hooks；其余: hooks/ 直接 copy
   claude/          → 仅安装到 .claude/（Claude Code 专有格式）
   codebuddy/       → 仅安装到 .codebuddy/（Codebuddy 专有格式）
 """
@@ -22,6 +27,10 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger("pack_installer")
 
 _PACKS_DIR = Path(__file__).parent / "config_packs"
+
+# 支持的 CLI 目标白名单。用户级安装会写入这些 CLI 各自的用户目录，
+# 使 ADS 无论用哪个 CLI 后端都能原生扫到同一份 skill。
+ALL_CLI_TARGETS = ("claude", "codebuddy", "cursor", "workbuddy")
 
 # 模板变量白名单，只替换这些占位符
 _TEMPLATE_VARS = {"project_name", "repo_path", "tech_stack", "git_remote"}
@@ -109,8 +118,12 @@ def _render_template(content: str, ctx: Dict[str, str]) -> str:
 
 
 def _detect_cli_targets(project_path: str, pack_targets: List[str]) -> List[str]:
-    """始终按 pack.json targets 字段安装，目录不存在时自动创建。"""
-    return [t for t in pack_targets if t in ("claude", "codebuddy")]
+    """按 pack.json targets 字段过滤到受支持的 CLI，目录不存在时自动创建。
+
+    project_path 保留在签名里以兼容既有调用方；目标集合由 pack.json 声明，
+    不再按「本机是否存在该 CLI 目录」做探测（用户级安装时目录本来就不存在）。
+    """
+    return [t for t in pack_targets if t in ALL_CLI_TARGETS]
 
 
 def _append_to_main_md(dst: Path, pack_name: str, content: str) -> None:
@@ -154,11 +167,16 @@ def _merge_json(dst: Path, new_data: Dict) -> None:
 
 def install_pack(
     pack_name: str,
-    project_path: str,
+    project_path: str = "",
     project_ctx: Optional[Dict[str, str]] = None,
+    scope: str = "project",
 ) -> Dict[str, Any]:
     """
-    将指定 Pack 安装到 project_path 下的 .claude/ 和/或 .codebuddy/。
+    将指定 Pack 安装到项目目录（scope="project"）或用户主目录（scope="user"）。
+
+    scope="project"：写到 <project_path>/.{cli}/packs/<pack_name>/...，与用户自己的文件隔离。
+    scope="user"   ：写到 Path.home()/.{cli}/... 的顶层目录（CLI 原生自扫位置），
+                     一次安装对本机所有项目、所有 CLI 后端生效；此时 project_path 被忽略。
 
     project_ctx 示例：
         {
@@ -172,11 +190,19 @@ def install_pack(
         {
             "success": bool,
             "pack_name": str,
-            "installed_targets": ["claude", "codebuddy"],
+            "scope": "project" | "user",
+            "install_root": str,
+            "installed_targets": ["claude", "codebuddy", "cursor", "workbuddy"],
+            "copied_files": [...],
             "skipped": [...],
             "errors": [...],
         }
     """
+    if scope not in ("project", "user"):
+        return {"success": False, "errors": [f"未知安装范围 scope={scope!r}，允许 project / user"]}
+    if scope == "project" and not project_path:
+        return {"success": False, "errors": ["项目级安装缺少 project_path"]}
+
     ctx = project_ctx or {}
     pack_dir = _PACKS_DIR / pack_name
 
@@ -192,8 +218,13 @@ def install_pack(
     except Exception as e:
         return {"success": False, "errors": [f"pack.json 解析失败: {e}"]}
 
-    declared_targets = meta.get("targets", ["claude", "codebuddy"])
+    declared_targets = meta.get("targets", list(ALL_CLI_TARGETS))
+    # 用户级安装的目的是「一次装好、任意 CLI 后端都能用」，因此强制覆盖全部 4 个 CLI，
+    # 不受某个 Pack 自身声明不足（如旧 pack.json 只写了 claude/codebuddy）的限制。
+    if scope == "user":
+        declared_targets = list(ALL_CLI_TARGETS)
     targets = _detect_cli_targets(project_path, declared_targets)
+    install_root = str(Path.home()) if scope == "user" else str(Path(project_path))
 
     installed_targets: List[str] = []
     skipped: List[str] = []
@@ -227,16 +258,20 @@ def install_pack(
                 errors.append(f"{src_file.name}: 读取失败 ({e})")
                 continue
 
-            content = _render_template(content, ctx)
+            # 模板变量（{{project_name}} 等）是项目上下文；用户级安装没有项目，
+            # 不做替换以免把占位符静默抹成空串，保留原文更可追溯。
+            if scope == "project":
+                content = _render_template(content, ctx)
             rel = src_file.relative_to(src_dir)
             parts = rel.parts  # e.g. ('mcps', 'ue-mcp.json') or ('rules.md',)
 
             # ── shared/rules.md（单文件规则） ──────────────────────────
+            _prefix = "~/" if scope == "user" else ""
             if is_shared and src_file.name == "rules.md" and len(parts) == 1:
                 if target == "claude":
                     dst = dst_root / "CLAUDE.md"
                     _append_to_main_md(dst, pack_name, content)
-                    copied_files.append(f".claude/CLAUDE.md [追加]")
+                    copied_files.append(f"{_prefix}.claude/CLAUDE.md [追加]")
                 else:
                     dst = dst_root / "rules" / f"{pack_name}.md"
                     dst.parent.mkdir(parents=True, exist_ok=True)
@@ -247,7 +282,7 @@ def install_pack(
                             f"type: always\n---\n\n"
                         ) + content
                     dst.write_text(content, encoding="utf-8")
-                    copied_files.append(f".codebuddy/rules/{pack_name}.md")
+                    copied_files.append(f"{_prefix}.{target}/rules/{pack_name}.md")
                 continue
 
             # ── shared/mcps/*.json ─────────────────────────────────────
@@ -258,14 +293,14 @@ def install_pack(
                     try:
                         mcp_data = json.loads(content)
                         _merge_json(settings_dst, {"mcpServers": mcp_data})
-                        copied_files.append(f".claude/settings.json [merge mcpServers.{src_file.stem}]")
+                        copied_files.append(f"{_prefix}.claude/settings.json [merge mcpServers.{src_file.stem}]")
                     except Exception as e:
                         errors.append(f"mcps/{src_file.name}: JSON 解析失败 ({e})")
                 else:
                     dst = dst_root / rel
                     dst.parent.mkdir(parents=True, exist_ok=True)
                     dst.write_text(content, encoding="utf-8")
-                    copied_files.append(f".codebuddy/{rel}")
+                    copied_files.append(f"{_prefix}.{target}/{rel}")
                 continue
 
             # ── shared/hooks/*.json ────────────────────────────────────
@@ -276,20 +311,26 @@ def install_pack(
                     try:
                         hook_data = json.loads(content)
                         _merge_json(settings_dst, {"hooks": hook_data})
-                        copied_files.append(f".claude/settings.json [merge hooks]")
+                        copied_files.append(f"{_prefix}.claude/settings.json [merge hooks]")
                     except Exception as e:
                         errors.append(f"hooks/{src_file.name}: JSON 解析失败 ({e})")
                 else:
                     dst = dst_root / rel
                     dst.parent.mkdir(parents=True, exist_ok=True)
                     dst.write_text(content, encoding="utf-8")
-                    copied_files.append(f".codebuddy/{rel}")
+                    copied_files.append(f"{_prefix}.{target}/{rel}")
                 continue
 
             # ── 其余文件（commands / skills / agents / scripts / rules/子目录）
-            # 安装到 .{target}/packs/{pack_name}/ 子目录，与用户自己的文件分开
-            dst = dst_root / "packs" / pack_name / rel
-            display = f".{target}/packs/{pack_name}/{rel}"
+            # project：装到 .{target}/packs/{pack_name}/ 子目录，与用户自己的文件分开
+            # user   ：装到 .{target}/ 顶层原生目录（skills/、commands/ ...），
+            #          这样 CodeBuddy / Claude / Cursor / WorkBuddy 才会原生自扫到
+            if scope == "user":
+                dst = dst_root / rel
+                display = f"~/.{target}/{rel}"
+            else:
+                dst = dst_root / "packs" / pack_name / rel
+                display = f".{target}/packs/{pack_name}/{rel}"
 
             if src_file.name in ("CLAUDE.md", "CODEBUDDY.md"):
                 _append_to_main_md(dst, pack_name, content)
@@ -305,23 +346,25 @@ def install_pack(
                 except Exception as e:
                     errors.append(f"{display}: 写入失败 ({e})")
 
+    base_root = Path(install_root)
+
     # 1. 安装 shared/（安装到所有目标 CLI）
     shared_dir = pack_dir / "shared"
     if shared_dir.exists():
         for target in targets:
-            dst_root = Path(project_path) / f".{target}"
+            dst_root = base_root / f".{target}"
             _install_files(shared_dir, dst_root, target, is_shared=True)
             if target not in installed_targets:
                 installed_targets.append(target)
 
-    # 2. 安装 CLI 特有目录（claude/ codebuddy/）
+    # 2. 安装 CLI 特有目录（claude/ codebuddy/ cursor/ workbuddy/）
     for target in targets:
         src_dir = pack_dir / target
         if not src_dir.exists():
             if not shared_dir.exists():
                 skipped.append(f"{target}: Pack 未提供该 CLI 的配置")
             continue
-        dst_root = Path(project_path) / f".{target}"
+        dst_root = base_root / f".{target}"
         _install_files(src_dir, dst_root, target)
         if target not in installed_targets:
             installed_targets.append(target)
@@ -330,11 +373,13 @@ def install_pack(
     if errors:
         logger.warning("pack install %s partial errors: %s", pack_name, errors)
     if success:
-        logger.info("pack '%s' -> %s  targets=%s", pack_name, project_path, installed_targets)
+        logger.info("pack '%s' -> %s  scope=%s targets=%s", pack_name, install_root, scope, installed_targets)
 
     return {
         "success": success,
         "pack_name": pack_name,
+        "scope": scope,
+        "install_root": install_root,
         "installed_targets": installed_targets,
         "copied_files": copied_files,
         "skipped": skipped,
@@ -344,8 +389,9 @@ def install_pack(
 
 def install_packs(
     pack_names: List[str],
-    project_path: str,
+    project_path: str = "",
     project_ctx: Optional[Dict[str, str]] = None,
+    scope: str = "project",
 ) -> List[Dict[str, Any]]:
     """批量安装多个 Pack，返回每个 Pack 的安装结果列表。"""
-    return [install_pack(name, project_path, project_ctx) for name in pack_names]
+    return [install_pack(name, project_path, project_ctx, scope) for name in pack_names]
