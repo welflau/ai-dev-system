@@ -5,17 +5,42 @@ import json
 import logging
 import os
 from pathlib import Path
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, HTTPException, UploadFile, File, Request
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any
 from database import db
 from models import ProjectCreate, ProjectUpdate, RepoPathUpdate
 from utils import generate_id, now_iso
 from git_manager import git_manager
+from config import settings
 
 logger = logging.getLogger("api.projects")
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
+
+# 用户级 ConfigPack 端点涉及写 ~/.claude/ 等用户主目录，仅允许本机访问。
+# ADS 服务 bind 0.0.0.0 且 CORS 全开，若不加限制，局域网/恶意网页可借此
+# 改写用户全局 CLI 配置。localhost 的常见写法一并列入。
+_LOCAL_HOSTS = frozenset({"127.0.0.1", "::1", "localhost", "::ffff:127.0.0.1"})
+
+
+def _require_user_pack_access(request: Request) -> None:
+    """用户级 ConfigPack 端点守卫：功能开关（默认关闭）+ 仅本机可访问。
+
+    两层防护缺一不可：开关避免「不知情就启用高权限端点」，本机限制避免
+    服务暴露在 0.0.0.0 时被远程/跨站调用。
+    """
+    if not settings.USER_PACK_INSTALL_ENABLED:
+        raise HTTPException(
+            status_code=403,
+            detail="用户级 ConfigPack 安装未启用（USER_PACK_INSTALL_ENABLED=false）",
+        )
+    host = (request.client.host if request.client else "") or ""
+    if host not in _LOCAL_HOSTS:
+        raise HTTPException(
+            status_code=403,
+            detail=f"用户级 ConfigPack 端点仅允许本机访问（来源 {host!r}）",
+        )
 
 
 def _ensure_git_path(project: dict):
@@ -2442,10 +2467,21 @@ async def get_pack_detail(pack_name: str):
 # ── 用户级 ConfigPack（~/.{cli}/，无 project_id）────────────────────────────
 # 静态路径声明在 /{project_id}/packs 之前，避免被动态参数吃掉。
 # 用户级安装不写 ticket_logs（该表 project_id NOT NULL），只记 user_packs。
+#
+# 安全：4 个端点统一经 _require_user_pack_access（默认关闭 + 仅本机），
+# pack_name 统一经 _validate_pack_name（禁止路径穿越/越界目录）。
+
+def _validate_pack_name(pack_name: str) -> None:
+    """只允许 config_packs 下的简单目录名，拒绝 .. / 绝对路径 / 分隔符。"""
+    from pack_installer import is_valid_pack_name
+    if not is_valid_pack_name(pack_name):
+        raise HTTPException(400, f"非法 Pack 名称: {pack_name!r}")
+
 
 @router.get("/packs/user")
-async def get_user_packs():
+async def get_user_packs(request: Request):
     """获取已安装到用户主目录的 ConfigPack 列表。"""
+    _require_user_pack_access(request)
     from pack_installer import list_packs
     rows = await db.fetch_all("SELECT * FROM user_packs ORDER BY installed_at DESC")
     all_packs = {p["name"]: p for p in list_packs()}
@@ -2467,8 +2503,9 @@ async def get_user_packs():
 
 
 @router.get("/packs/user/available")
-async def get_user_available_packs():
+async def get_user_available_packs(request: Request):
     """获取可安装到用户目录的 Pack 列表（排除已安装的）。"""
+    _require_user_pack_access(request)
     from pack_installer import list_packs
     installed_rows = await db.fetch_all("SELECT pack_name FROM user_packs")
     installed_names = {r["pack_name"] for r in installed_rows}
@@ -2477,8 +2514,10 @@ async def get_user_available_packs():
 
 
 @router.post("/packs/user/{pack_name}/install")
-async def install_pack_for_user(pack_name: str):
+async def install_pack_for_user(pack_name: str, request: Request):
     """把 Pack 安装到用户主目录 ~/.{cli}/，一次安装覆盖本机所有项目与 4 个 CLI。"""
+    _require_user_pack_access(request)
+    _validate_pack_name(pack_name)
     from pack_installer import install_pack
     result = install_pack(pack_name, project_path="", project_ctx={}, scope="user")
     if not result["success"]:
@@ -2516,8 +2555,10 @@ async def install_pack_for_user(pack_name: str):
 
 
 @router.delete("/packs/user/{pack_name}")
-async def uninstall_user_pack_record(pack_name: str):
+async def uninstall_user_pack_record(pack_name: str, request: Request):
     """移除用户级安装记录（不删除 ~/.{cli}/ 下已 copy 的文件，文件归用户所有）。"""
+    _require_user_pack_access(request)
+    _validate_pack_name(pack_name)
     await db.delete("user_packs", "pack_name = ?", (pack_name,))
     return {"success": True, "note": "记录已移除，用户目录下的文件不受影响"}
 

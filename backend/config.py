@@ -48,6 +48,10 @@ class Settings:
     PORT: int = int(os.getenv("PORT", "8000"))
     DEBUG: bool = os.getenv("DEBUG", "true").lower() == "true"
 
+    # 用户级 ConfigPack 安装：会写 ~/.claude/ 等用户主目录，属高权限操作。
+    # 默认关闭；开启后 API 仍仅接受本机（127.0.0.1/::1）请求。见 api/projects.py
+    USER_PACK_INSTALL_ENABLED: bool = os.getenv("USER_PACK_INSTALL_ENABLED", "false").lower() in ("1", "true", "yes")
+
     # Database
     DB_PATH: str = os.getenv("DB_PATH", str(DATA_DIR / "ai_dev_system.db"))
 

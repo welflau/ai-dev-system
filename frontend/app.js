@@ -4332,7 +4332,13 @@ async function loadUserPacks() {
         if (homeEl && installedData.home) homeEl.textContent = installedData.home;
         _renderUserPacksView(_userPacksCache, availableData.packs || []);
     } catch (e) {
-        el.innerHTML = `<div class="empty-state-sm">加载失败: ${escapeHtml(e.message)}</div>`;
+        // 403 = 用户级端点默认关闭（USER_PACK_INSTALL_ENABLED=false）或非本机访问，
+        // 给出可操作的提示而不是笼统的「加载失败」。
+        if (e.message && (e.message.includes('未启用') || e.message.includes('仅允许本机'))) {
+            el.innerHTML = `<div class="empty-state-sm">用户级安装未启用：需在服务端设置 USER_PACK_INSTALL_ENABLED=true 并仅从本机访问。</div>`;
+        } else {
+            el.innerHTML = `<div class="empty-state-sm">加载失败: ${escapeHtml(e.message)}</div>`;
+        }
     }
 }
 
@@ -4351,8 +4357,8 @@ function _renderUserPacksView(installed, available) {
                     <span style="font-size:10px;color:var(--text-muted);">目标: ${escapeHtml((p.targets || []).join(', ') || '—')} · 安装于 ${escapeHtml((p.installed_at || '').slice(0, 16).replace('T', ' '))}</span>
                 </div>
                 <div class="skill-row-actions">
-                    <button class="btn btn-xs btn-secondary" onclick="installPack('${escapeHtml(p.pack_name)}', 'user')" title="重新写入用户目录">↩ 重装</button>
-                    <button class="btn btn-xs btn-ghost" onclick="removeUserPack('${escapeHtml(p.pack_name)}', '${escapeHtml(p.display_name || p.pack_name)}')" title="移除记录（不删用户目录文件）">✕</button>
+                    <button class="btn btn-xs btn-secondary" onclick="installPack(${escapeJsArg(p.pack_name)}, 'user')" title="重新写入用户目录">↩ 重装</button>
+                    <button class="btn btn-xs btn-ghost" onclick="removeUserPack(${escapeJsArg(p.pack_name)}, ${escapeJsArg(p.display_name || p.pack_name)})" title="移除记录（不删用户目录文件）">✕</button>
                 </div>
             </div>`).join('');
 
@@ -4370,7 +4376,7 @@ function _renderUserPacksView(installed, available) {
                         ${p.description ? `<span class="skill-row-desc">${escapeHtml(p.description)}</span>` : ''}
                     </div>
                     <div class="skill-row-actions">
-                        <button class="btn btn-xs btn-primary" onclick="installPack('${escapeHtml(p.name)}', 'user')">${btnLabel}</button>
+                        <button class="btn btn-xs btn-primary" onclick="installPack(${escapeJsArg(p.name)}, 'user')">${btnLabel}</button>
                     </div>
                 </div>`).join('')}
           </div>`;
@@ -4447,7 +4453,7 @@ function _renderPacksView() {
                     gatingBadge = `<span style="font-size:10px;padding:1px 6px;border-radius:3px;background:rgba(34,197,94,.12);color:var(--ads-c-22c55e);font-weight:500;" title="${escapeHtml(parts.join(' | '))}" >🎓 已激活</span>`;
                 }
                 return `
-                <div class="skill-row pack-row-clickable" onclick="showPackDetail('${escapeHtml(p.pack_name)}', '${escapeHtml(p.display_name || p.pack_name)}')" style="cursor:pointer;" title="点击查看详情">
+                <div class="skill-row pack-row-clickable" onclick="showPackDetail(${escapeJsArg(p.pack_name)}, ${escapeJsArg(p.display_name || p.pack_name)})" style="cursor:pointer;" title="点击查看详情">
                     <div class="skill-row-info">
                         <div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;">
                             <span class="skill-row-name">📦 ${escapeHtml(p.display_name || p.name)}</span>
@@ -4459,8 +4465,8 @@ function _renderPacksView() {
                         <span style="font-size:10px;color:var(--text-muted);">安装于 ${escapeHtml((p.installed_at||'').slice(0,16).replace('T',' '))} · 目标: ${escapeHtml((p.targets||[]).join(', ') || '—')} · 路径: <code>.codebuddy/packs/${escapeHtml(p.pack_name)}/</code></span>
                     </div>
                     <div class="skill-row-actions" onclick="event.stopPropagation()">
-                        <button class="btn btn-xs btn-secondary" onclick="reinstallPack('${escapeHtml(p.pack_name)}')" title="重新安装（覆盖）">↩ 重装</button>
-                        <button class="btn btn-xs btn-ghost" onclick="removePack('${escapeHtml(p.pack_name)}', '${escapeHtml(p.display_name || p.pack_name)}')" title="移除记录（不删文件）">✕</button>
+                        <button class="btn btn-xs btn-secondary" onclick="reinstallPack(${escapeJsArg(p.pack_name)})" title="重新安装（覆盖）">↩ 重装</button>
+                        <button class="btn btn-xs btn-ghost" onclick="removePack(${escapeJsArg(p.pack_name)}, ${escapeJsArg(p.display_name || p.pack_name)})" title="移除记录（不删文件）">✕</button>
                     </div>
                 </div>`;
             }).join('');
@@ -4495,7 +4501,7 @@ function _renderPacksView() {
                         </div>`;
 
                     return `
-                    <div class="skill-row pack-row-clickable" data-pack-name="${escapeHtml(p.name)}" onclick="showPackDetail('${escapeHtml(p.name)}', '${escapeHtml(p.display_name || p.name)}')" style="cursor:pointer;${isRec ? 'border-left:3px solid '+barColor+';' : ''}" title="点击查看详情">
+                    <div class="skill-row pack-row-clickable" data-pack-name="${escapeHtml(p.name)}" onclick="showPackDetail(${escapeJsArg(p.name)}, ${escapeJsArg(p.display_name || p.name)})" style="cursor:pointer;${isRec ? 'border-left:3px solid '+barColor+';' : ''}" title="点击查看详情">
                         <div class="skill-row-info" style="flex:1;min-width:0;">
                             <div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;">
                                 <span class="skill-row-name">📦 ${escapeHtml(p.display_name || p.name)}</span>
@@ -4506,7 +4512,7 @@ function _renderPacksView() {
                             ${matchBar}
                         </div>
                         <div class="skill-row-actions" onclick="event.stopPropagation()" style="flex-shrink:0;">
-                            <button class="btn btn-xs btn-primary" onclick="installPack('${escapeHtml(p.name)}')">${_installLabel}</button>
+                            <button class="btn btn-xs btn-primary" onclick="installPack(${escapeJsArg(p.name)})">${_installLabel}</button>
                         </div>
                     </div>`;
                 }).join('');
@@ -19254,7 +19260,22 @@ function formatTime(dateStr) {
 function escapeHtml(str) {
     if (str === null || str === undefined || str === '') return '';
     const s = Array.isArray(str) ? str.join(' ') : String(str);
-    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    // 单引号也要转义：置入单引号包裹的 HTML 属性 / 内联 onclick 参数时，
+    // 未转义的 ' 会闭合字符串并注入代码。&#39; 在 HTML 属性上下文中安全。
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+// 生成可安全嵌入内联 onclick="fn(<arg>)" 的 JS 字符串字面量。
+// 关键：HTML 属性会先做实体解码，所以 &#39; 在 onclick 里会还原成 ' 并闭合
+// JS 字符串 —— escapeHtml 挡不住这种上下文。这里用 JSON.stringify 得到双引号
+// JS 字面量（内部 " \ 换行已被转义），再把 " < > & 做 HTML 转义，属性解码后
+// 仍是合法 JS 字符串，且不会提前闭合外层 " 包裹的 HTML 属性。
+function escapeJsArg(value) {
+    const s = String(value === null || value === undefined ? '' : value);
+    return JSON.stringify(s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
 }
 
 /** 渲染文件路径 badge + 打开目录按钮（共三处详情面板复用） */

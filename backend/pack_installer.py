@@ -21,12 +21,26 @@ Pack 目录约定：
 """
 import json
 import logging
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("pack_installer")
 
 _PACKS_DIR = Path(__file__).parent / "config_packs"
+
+# Pack 名称白名单：只允许 config_packs 下的简单目录名。
+# install_pack 会把 pack_name 直接拼进 _PACKS_DIR / pack_name，若不校验，
+# 传入 "../.." 或绝对路径可读到仓库外的 pack.json 并写用户主目录。
+_PACK_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def is_valid_pack_name(pack_name: str) -> bool:
+    """Pack 名称是否合法（仅简单目录名，无路径分隔符、无 ..、无绝对路径）。"""
+    if not isinstance(pack_name, str) or not pack_name or len(pack_name) > 64:
+        return False
+    return bool(_PACK_NAME_RE.match(pack_name))
+
 
 # 支持的 CLI 目标白名单。用户级安装会写入这些 CLI 各自的用户目录，
 # 使 ADS 无论用哪个 CLI 后端都能原生扫到同一份 skill。
@@ -202,6 +216,9 @@ def install_pack(
         return {"success": False, "errors": [f"未知安装范围 scope={scope!r}，允许 project / user"]}
     if scope == "project" and not project_path:
         return {"success": False, "errors": ["项目级安装缺少 project_path"]}
+    # 白名单校验（防御纵深）：即便绕过 API 直接调用本函数，也拒绝路径穿越。
+    if not is_valid_pack_name(pack_name):
+        return {"success": False, "errors": [f"非法 Pack 名称: {pack_name!r}"]}
 
     ctx = project_ctx or {}
     pack_dir = _PACKS_DIR / pack_name
