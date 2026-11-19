@@ -313,3 +313,167 @@ A→E 阶段落地的结果，详见 `dev-notes/2026-11-19_04_VideoClaw接入路
 - 静态全过：plugin.json / trait 词表 / Action 自动注册且无重名 / command 为 str / 准入 Checklist / 9 项 VC 单测 + 60 项全量回归。
 - **动态未做**：填 Key、起 sidecar、`VIDEOCLAW_ENABLED=true`、跑最小闭环、停服验证 blocked、director 回归。这 7 项需要真实环境与付费 Key，必须由人完成。
 
+---
+
+## 十三、追加落地：生图 / 生视频接 VC 现成 sandbox 接口（2026-11-19）
+
+用户要求「生图、生视频先接上现有接口」——即直接调 VC 已有的单次能力接口，
+不走 6 阶段项目流程。详见 `dev-notes/2026-11-19_05_生图生视频接VC_sandbox落地.md`。
+
+### 13.1 选型：sandbox 同步接口，不用 pipelines
+
+| | sandbox（采用） | pipelines（未采用） |
+|---|---|---|
+| 语义 | 5 个同步 POST，一次调用直接返回产物 | 异步多阶段短片流水线（LLM 分镜 → 多图 → TTS → 多段视频 → ffmpeg 拼接） |
+| 生图 | `POST /api/sandbox/t2i`、`/i2i` | 无纯生图接口 |
+| 生视频 | `POST /api/sandbox/video` | 生成"成片"，还需 LLM key / edge-tts / ffmpeg / 可能 Playwright |
+| 客户端成本 | 1 POST + 1 次 `/code/` 下载 | POST → 轮询/SSE → 解析 artifacts → 下载 |
+
+做「单次生图/生视频」用 pipelines 属于杀鸡用牛刀，故只接 sandbox。
+
+### 13.2 契约要点（VC 源码实读）
+
+- `api/schemas/sandbox.py:19-39`：`t2i{model,prompt,style,ratio}`、`i2i{...,image}`、
+  `video{model,prompt,image,ratio,resolution,duration}`。`style` 实际不生效（`sandbox.py:299` 只写历史）。
+- **成功/失败都是 HTTP 200**：`{success:true,...}` 或 `{success:false,error}`（`sandbox.py:331-333` 等）
+  → 客户端必须查 `success` 字段，不能只看状态码。
+- 生图取 `result[]`（相对 `result/...` 路径列表）；**生视频取 `video_path` 而非 `result`** ——
+  `result` 是会过期的远端 URL（`models/video_dashscope.py:379`）。
+- 静态挂载 `app.mount("/code", StaticFiles(directory=CODE_DIR))`（`api/app.py:52-53`），
+  下载规则 = `GET {BASE}/code/<相对于 code/ 的路径>`。
+- **VC 没有纯文生视频**：默认 `wan2.7-i2v` 及所有 provider 都要求首帧图
+  （`models/video_dashscope.py:257`）。故 `vc_gen_video` 在缺 `image` 时自动先 `t2i` 出首帧，
+  并把归一化后的路径拼回 VC 自己可访问的 `/code/` URL 传回（**两次付费调用**，已在 description 标注）。
+- **Windows 路径 bug**：VC `_normalize_path`（`sandbox.py:56-73`）用 `path.startswith('/')` 判绝对路径，
+  是 POSIX 假设；Windows 下返回 `result/G:\\...\\code\\result\\sandbox\\...`，直接拼 `/code/` 必然 404。
+  → ADS 侧 `normalize_media_rel()` 统一兜底（反斜杠转正、取最后一个 `code/` 之后补成 `result/...`）。
+
+### 13.3 改动
+
+| 文件 | 内容 |
+|---|---|
+| `plugins/videoclaw/videoclaw_client.py` | 加 `get_models` / `resolve_sandbox_models` / `sandbox_t2i` / `sandbox_i2i` / `sandbox_video` / `media_url` / `normalize_media_rel` / `_require_success`；`_request` 支持自定义 timeout；`download_product` 支持远端 URL |
+| `plugins/videoclaw/actions/vc_media.py` | `vc_gen_image`（t2i / 有参考图走 i2i）、`vc_gen_video`（缺首帧自动 t2i）；产物落 `works/<slug>/videoclaw/{image,video}/` |
+| `backend/config.py` / `.env.example` | 加 `VIDEOCLAW_VIDEO_TIMEOUT=900`（生视频分钟级，Kling 最坏 600s + 下载，`VIDEOCLAW_TIMEOUT=600` 边界会先超时而 VC 后台仍在跑） |
+| `backend/tests/plugins/test_videoclaw_media.py` | 17 项，全部 mock |
+
+### 13.4 准入约束落实
+
+- Action 名 `vc_gen_image` / `vc_gen_video` 加前缀，**不撞** ADS 公共 `gen_image` 与 director 的 `gen_video`；
+  实测三个 `vc_*` Action 注册齐全、两个既有 Action 未受影响。
+- `env_missing → blocked`（未启用 / 服务不可达），绝不 `*_failed`；VC 业务失败是 `env_missing=False`。
+- `data["command"]` 为 `str`（`shlex.quote`），`task_id` 带 `TCMD-*`；文件名白名单 + 路径穿越回退。
+- 模型名从 `GET /api/config` 动态取，不写死；长超时单独配置。
+
+### 13.5 验收
+
+- 17 项 VC media 单测 + 全量 77 项回归通过；Windows 坏路径归一化、HTTP 200 失败、
+  `video_path` 优先、自动首帧、长超时、路径穿越、产物落 `works/` 均有覆盖。
+- **动态仍未做**（需真实 Key 与起服务）：填 Key、`uv sync`、起 sidecar、`VIDEOCLAW_ENABLED=true`、
+  跑 `vc_gen_image` / `vc_gen_video`、确认产物非空、停服验证 blocked。
+- 修掉了测试自身的一个副作用：`repo_path=str(Path("."))` 会在 `backend/works/` 留残留文件，
+  已改用 `tmp_path` 并清理。
+
+---
+
+## 十四、追加落地：MiniMax H3 云端生视频上提到系统公共层（2026-11-19）
+
+用户要求「参考 `F:\A_Works\ComicAI` 的生视频接口，把 Minimax 云端也加进去」，
+并明确「**这些接口 ADS 共用的，配置到系统配置中，不属于 Plugin，Plugin 可以直接适配调用接口**」。
+经拍板：卡密钥为鼠鼠工具 `sk_...`、只接 MiniMax H3、**先不改现有 plugin，只建公共层**。
+
+### 14.1 关键定性（避免误接）
+
+ComicAI 里的「MiniMax 云端」**不是 MiniMax 官方 API**，而是第三方「鼠鼠工具」卡密中转：
+- Base `https://www.runlive.top/mnmx`，鉴权头 `X-Card-Key: sk_...`，白名单放行制
+  （`backend/app/api/v1/endpoints/video_mnmx.py:89`、`Docs/鼠鼠工具-视频生成API文档.md:11-14`）
+- 无 `Authorization: Bearer`、无 GroupID、无 `file_id` retrieval（全项目零匹配）
+- 任务名 `minimax_h3_v2` / `minimax_h3_multi_ref`，**不是** `T2V-01` / `MiniMax-Hailuo-*`
+- 异步：提交 → 轮询（5s×180）→ `file-url` 取带时效签名直链
+- 已知坑：签名直链可能是内网 IP（`Docs/DevLog/2026-11-05_10:45`），公共层照实抛错由调用方决定
+
+**用户手上的官方 MiniMax API key 不能填在这里**。若将来要接官方 `/v1/video_generation`，
+需在 `backend/cloud_video/` 另登记 provider，配置仍走系统配置。
+
+### 14.2 架构：公共层，不属于任何 Plugin
+
+依据 `docs/20261019_01_Action成套插件与公共工具边界方案.md:89`「任何项目的工单循环或聊天
+都要用的留在公共模块」，以及 ADS 现状（`backend/image_processor.py` 是公共生图 client，
+被 6+ 上层模块复用；`plugins/director/lightai_video.py` 反向依赖它）。
+
+```
+依赖方向（单向 DAG，公共层零 plugins.* import）：
+  plugins/director/* ─┐
+  plugins/videoclaw/* ─┼──▶ backend/cloud_video/ ──▶ backend/config.py (settings) + 标准库
+  未来 Plugin ─────────┘         ✗ 不 import plugins / actions / database / events / git_manager
+```
+
+公共层**只做 transport + 协议编排**，抛分层异常（`CloudVideoUnavailable` 环境缺失 /
+`CloudVideoError` 上游失败）；**不返回 `ActionResult`、不写时间轴、不判 `env_missing`** ——
+这些是 Action/Plugin 层职责（准入规范约束 2/3，`docs/20261023_01_...:90-109`）。
+
+### 14.3 改动
+
+| 文件 | 内容 |
+|---|---|
+| `backend/config.py` | 新增系统配置分节 `MINIMAX_H3_BASE_URL` / `CARD_KEY` / `ENABLED` / `TIMEOUT` / `POLL_INTERVAL` / `MAX_POLLS`，注释标明是第三方卡密中转 |
+| `backend/.env.example` | 补注释块（key 留空模板），标明真实 key 只写 `backend/.env`、不入库 |
+| `backend/cloud_video/__init__.py` | 公开 API 与分层异常：`submit` / `query` / `file_url` / `ping` / `generate_video` / `CloudVideoFile` / `PROVIDERS` |
+| `backend/cloud_video/client.py` | 纯 urllib + `asyncio.to_thread`；手搓 multipart；参数归一化；429/502/503/504 退避；轮询终止条件；`PROVIDERS` 注册表留扩展位 |
+| `backend/tests/test_cloud_video.py` | 28 项，全部 mock HTTP |
+
+**未改动** `plugins/director/*`、`plugins/videoclaw/*`（按用户选择「先不改，只建公共层」）；
+未写入任何真实 key。
+
+### 14.4 参数归一化（照鼠鼠文档 :33-83，避免上游 400 拒单）
+
+- `resolution`：`0.4`/`1`/`2` = 480P/768P/1080P，`multi_ref` 强制降到 `1`
+- `duration`：clamp 到 4–15s；首尾帧 + 1080P 最长 10s
+- `aspect_ratio`：必须整串（如 `16:9 (Widescreen)`），非法值回退默认
+- `task_name`：无参考图 → `minimax_h3_v2`；多参考 → `minimax_h3_multi_ref`
+- 文件字段：`first_frame` / `last_frame` / `ref_0..5` / `ref_audio_0..2`
+
+### 14.5 Plugin 适配调用范例（本轮只给范例，不改 plugin）
+
+```python
+from cloud_video import generate_video, CloudVideoUnavailable, CloudVideoError
+from pathlib import Path
+
+try:
+    r = await generate_video(prompt="一只猫在草地上奔跑", duration=5,
+                             dest=Path("works/my-slug/videoclaw/video/clip01.mp4"))
+    # r = {task_id, status, credit_cost, url, filename, downloaded, path, bytes}
+except CloudVideoUnavailable as e:
+    # ← 调用方 Action 转成 env_missing=True / blocked，绝不 *_failed
+    return ActionResult(success=False, error=str(e),
+                        data={"env_missing": True, "command": command, "task_id": task_id})
+except CloudVideoError as e:
+    # ← 普通业务失败，env_missing=False
+    return ActionResult(success=False, error=str(e),
+                        data={"env_missing": False, "command": command, "task_id": task_id})
+```
+
+`data["command"]` 仍须是 `str`、外部调用走 `record_traced_command` 落时间轴 —— 都由
+调用方 Action 负责，公共层不越界。
+
+### 14.6 验收
+
+- **28 项 `test_cloud_video.py` + 全量 105 项回归通过**：配置分流、参数归一化、multipart、
+  403→Unavailable / 400→Error / 200+success:false→Error、429 退避重试、failed 状态、
+  轮询超时保留 task_id、ping 403/404、一站式编排均有覆盖。
+- 硬核对：`cloud_video/*.py` 除注释外**零** `plugins` / `actions` / `database` / `events` /
+  `ActionResult` / `record_traced` 引用。
+- **动态未做**（需真实卡密钥）：`backend/.env` 填 `MINIMAX_H3_CARD_KEY=sk_...` +
+  `MINIMAX_H3_ENABLED=true` → `ping()` → 跑一次 `generate_video`。因白名单制，
+  卡必须先被管理员放行，否则 403。
+
+### 14.7 待办
+
+1. 现有 plugin 适配到公共层（director 的 `lightai_video.py` / `gen_video.py`、videoclaw 的
+   `vc_gen_video`），消除两份后端真源 —— 用户明确本轮不做。
+2. 若要接 MiniMax **官方** API / 火山 Ark / LibTV / LiblibAI，在 `cloud_video/PROVIDERS`
+   登记，配置仍走系统配置；不要塞进 plugin。
+3. 可选：参照 `api/image_gen.py:200-215` 做「设置面板热更新 key + 回写 .env」。
+4. 签名直链内网 IP 问题：必要时在 ADS 侧做一层代下代理。
+
+
