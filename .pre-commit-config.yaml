@@ -1,0 +1,25 @@
+# ADS 六层严格 DAG 门禁（方案 §6.3）
+#
+# 启用（每位开发者本地一次）：
+#   pip install pre-commit
+#   pre-commit install
+#
+# 手动全量跑：pre-commit run layer-dag --all-files
+# 跳过（不推荐）：git commit --no-verify
+#
+# 说明：
+# - 用 local + language: system，不引入任何第三方 hook 仓库（外网/版本漂移风险）。
+# - 检查器只用标准库（ast + tomllib，Python 3.11+），无需在项目里加依赖。
+# - pass_filenames: false —— 检查器扫整张依赖图并自带 argparse，不接收文件名。
+# - 相对 P0 基线（backend/layers_baseline.json）只许减少不许增加；
+#   退出码非 0 = 新增违规 / 豁免到期未清零 / 分界律违规 → 提交被拦。
+repos:
+  - repo: local
+    hooks:
+      - id: layer-dag
+        name: 六层 DAG 守卫（check_layers.py）
+        entry: python scripts/check_layers.py
+        language: system
+        pass_filenames: false
+        # 只在这些文件变更时触发；检查器仍会扫整张图
+        files: ^(backend/.*\.py|backend/layers\.toml|backend/layers_baseline\.json|scripts/check_layers\.py)$

@@ -55,3 +55,29 @@ jobs:
           --exclude=skills/marketplace,skills/packs,skills/use_skills
         flake8 . --count --max-complexity=15 --max-line-length=120 --statistics --exit-zero \
           --exclude=skills/marketplace,skills/packs,skills/use_skills
+
+  # 六层严格 DAG 架构门禁（方案 §6.3 / §10）
+  layer-dag-guard:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        # 检查器用标准库 tomllib，3.11+ 即可，无需 pip install 任何依赖
+        python-version: '3.12'
+
+    - name: Layer DAG guard
+      # 相对 P0 基线（backend/layers_baseline.json，已入库）只许减少不许增加。
+      # 退出码非 0 = 出现新增违规 / 豁免到期未清零 / 分界律违规 → CI 红。
+      # 检查器以 __file__ 定位仓库根，与 cwd 无关；输出在 stdout，
+      # ast.parse 对个别历史源码的 SyntaxWarning 走 stderr，不影响判定。
+      run: |
+        # 先显式断言基线存在：若不慎删除，检查器会当「无基线」静默放行，
+        # 「只减不增」的参照就丢了，必须让 CI 立刻红。
+        test -f backend/layers_baseline.json || {
+          echo "::error::backend/layers_baseline.json 缺失，P0 基线不可丢"; exit 1;
+        }
+        python scripts/check_layers.py
