@@ -29,8 +29,32 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from config import settings
+from cloud_video.queue import CloudVideoQueue, QueueStats, build_queue_from_settings
 
 logger = logging.getLogger("cloud_video.client")
+
+# 系统公共云端生视频的全局生成任务队列（模块级单例，进程内有效）。
+# 单 uvicorn worker 部署；多 worker 需换成 Redis 等跨进程队列（见方案 §16）。
+_queue: Optional[CloudVideoQueue] = None
+
+
+def get_queue() -> CloudVideoQueue:
+    """懒构造全局队列（避免 import 时读配置的时序问题，也便于测试替换）。"""
+    global _queue
+    if _queue is None:
+        _queue = build_queue_from_settings()
+    return _queue
+
+
+def set_queue(q: CloudVideoQueue) -> None:
+    """测试/运维注入用：替换全局队列实例。"""
+    global _queue
+    _queue = q
+
+
+def queue_stats() -> QueueStats:
+    """队列可观测性：当前活跃数、等待数、上限、是否闲时、时区。"""
+    return get_queue().stats()
 
 
 class CloudVideoUnavailable(RuntimeError):
@@ -467,17 +491,21 @@ async def generate_video_with_provider(
     if not probe["available"]:
         raise CloudVideoUnavailable(probe["hint"])
 
-    if name == "lightai":
-        from cloud_video import lightai
-        req = dict(lightai_req or {})
-        req.setdefault("prompt", prompt)
-        return await lightai.generate(req, dest)
+    # 生成任务排队：时段感知 FIFO 信号量，一个名额覆盖「提交 + 429 退避 + 轮询 + 下载」全程。
+    # 放在统一 dispatch 层（Plugin 唯一入口），两个 provider 共用同一队列，避免底层
+    # generate_video/lightai.generate 各占一次造成双重占用。
+    async with get_queue().slot():
+        if name == "lightai":
+            from cloud_video import lightai
+            req = dict(lightai_req or {})
+            req.setdefault("prompt", prompt)
+            return await lightai.generate(req, dest)
 
-    if name == "minimax_h3":
-        result = await generate_video(
-            prompt=prompt, task_name=task_name, resolution=resolution,
-            duration=duration, aspect_ratio=aspect_ratio, files=files, dest=dest,
-        )
-        return {"provider": "minimax_h3", **result}
+        if name == "minimax_h3":
+            result = await generate_video(
+                prompt=prompt, task_name=task_name, resolution=resolution,
+                duration=duration, aspect_ratio=aspect_ratio, files=files, dest=dest,
+            )
+            return {"provider": "minimax_h3", **result}
 
     raise CloudVideoError(f"未实现的 provider: {name}")

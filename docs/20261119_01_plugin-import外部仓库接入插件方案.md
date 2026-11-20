@@ -547,5 +547,73 @@ runlive.top 拿到 401）。改为 Plugin 内 `from cloud_video import client as
    `vc_gen_video provider=minimax_h3`）。
 2. 若要接 MiniMax 官方 API / Ark / LibTV / LiblibAI，在 `PROVIDERS` 登记即可，Plugin 无需再改后端枚举。
 
+---
+
+## 十六、追加落地：生成任务排队机制（2026-11-20）
+
+用户要求「生成任务有个排队机制，参考 ComicAI 实现一下」。三个拍板（AskUserQuestion）：
+范围 = **只给 `cloud_video` 加信号量**；并发规则 = **照搬但时区可配**；名额粒度 =
+**照搬全程占用**（提交+429 退避+轮询+下载一个名额到底）。
+
+### 16.1 ComicAI 参考调研结论（只读，逐行核对）
+
+- ComicAI 的排队**只有一块**：`frontend/src/api/index.ts:2551-2582` 的模块级手写信号量
+  （`_h3cloudActive` 计数 + `_h3cloudWaiters` FIFO 数组 + `acquire/release`）。
+  **后端没有任何通用调度器**——`video_mnmx.py:5` 明写「只做代发+透传，不缓存任务状态」，
+  `generation.py` / `libtv.py` / `liblib.py` 是三份各自独立的内存结果表 + `create_task`，
+  全仓 `asyncio.Queue` 零命中。
+- 规则：闲时（`0<=h<8`）每账号 5 并发、白天 `Infinity`；一个名额从 acquire（`:2720`，try 之前）
+  到 release（`:2791-2792`，finally）覆盖提交+429 重试+轮询+取直链全程。
+- 三处**缺陷**（本次移植时修正，不照抄）：
+  1. `new Date().getHours()` 用**浏览器本地时区**（`:2558`），服务端多机/多用户不一致；
+  2. acquire 排队期间**不监听 abort**，只在被唤醒时才检查 `signal.aborted`（延迟取消）；
+  3. 等待**无超时上限**，名额被慢任务占住时后来者永久挂起。
+- 上游规则原文 `Docs/鼠鼠工具-视频生成API文档.md:22`，查询/下载各 1 次/秒限速见 `:18`。
+- 行号提示：ADS `cloud_video/client.py` 头部注释里引用的 `index.ts:2504-2747` 是**旧行号**
+  （ComicAI 该文件后续改动过），以本次调研的实际行号为准。
+
+### 16.2 实现
+
+| 文件 | 内容 |
+|---|---|
+| `A backend/cloud_video/queue.py` | `CloudVideoQueue`：时段感知 FIFO 信号量；`QueueStats` 可观测；`async with slot()` 全程占用 |
+| `M backend/cloud_video/client.py` | 模块级队列单例 + `get_queue/set_queue/queue_stats`；`generate_video_with_provider()` 用 `async with get_queue().slot():` 包住两路 provider |
+| `M backend/cloud_video/__init__.py` | 导出队列 API |
+| `M backend/config.py` / `.env.example` | `MINIMAX_H3_QUEUE_ENABLED` / `IDLE_LIMIT=5` / `IDLE_START=0` / `IDLE_END=8` / `TZ=Asia/Shanghai` / `TZ_OFFSET=8` / `WAIT_TIMEOUT=900` |
+| `A backend/tests/test_cloud_video_queue.py` | 18 项 |
+
+**放在统一 dispatch 层**而非底层 `generate_video` / `lightai.generate`：
+两个 provider 共用同一队列，且避免一次调用占两次名额（双重占用）。
+
+### 16.3 与 ComicAI 的差异（有意为之）
+
+| 项 | ComicAI | ADS |
+|---|---|---|
+| 时区 | 浏览器本地时区 | IANA 名显式配置（`ZoneInfo`），不可用时回退固定 UTC 偏移，绝不用服务器本地时区 |
+| 取消 | 延迟取消（排队中不响应 abort） | `asyncio.Future` + `wait_for`，`task.cancel()` 即时唤醒并清理 waiter、归还名额 |
+| 等待超时 | 无 | `WAIT_TIMEOUT=900`，到点抛 `CloudVideoUnavailable` → 调用方 `blocked`，文案明确「未提交，不会改打别的后端」 |
+| 上限动态性 | 每次 acquire 读当前小时 | `limit_now()` 按配置时段动态返回，`0-8`/跨午夜（如 22-6）都支持 |
+| 可观测 | 只显示计数，无排队位置/上限 | `QueueStats{active, waiting, limit, unlimited, idle_window, tz}` + `queue_stats()` 公开 API |
+| 并发安全 | 单标签页闭包 | 所有状态读写在**无 await 的同步段**内，asyncio 单线程天然原子，无需 Lock（也避免跨 loop 绑定） |
+
+### 16.4 验收
+
+- 新增 **18 项**排队单测 + 全量 **141 项回归通过**。
+- 覆盖：闲时 5 并发上限、白天不限、`0-8` 与跨午夜时段、显式时区（UTC16:00=上海00:00）、
+  ZoneInfo 回退、FIFO 顺序、异常路径名额不泄漏、慢任务全程占用、取消即时唤醒无泄漏、
+  等待超时与「未提交/不改打」文案、配置构造、dispatch 两路共用同一队列且各占一次名额。
+- 修复测试自身一处 Python 3.14 兼容问题：`asyncio.run` 之外不能先建 `gather` 协程，
+  改为 loop 内 `_gather()`。
+
+### 16.5 边界与待办
+
+1. 队列是**单进程内存态**（单 uvicorn worker 有效）。多 worker 需换 Redis 等跨进程队列 ——
+   与 ComicAI `video_service.py:24` 的注释同一约束。
+2. 排队粒度是「全程占用」：一个慢任务（最长 15min 轮询 + 429 重试）会占住名额，
+   与 ComicAI 一致。若将来要更细，可拆「提交并发限流」与「查询 1 次/秒限速」两个限流器。
+3. 真实卡密钥下的排队压测（闲时并发 6 个任务，确认第 6 个排队等待）。
+4. 可选：把 `queue_stats()` 接到运维 API / 前端面板（ComicAI 的 TaskDrawer 只显示计数，
+   这里已有完整 stats，接 UI 是纯展示工作）。
+
 
 

@@ -120,6 +120,17 @@ class Settings:
     MINIMAX_H3_POLL_INTERVAL: int = int(os.getenv("MINIMAX_H3_POLL_INTERVAL", "5"))  # 查询限速 1 次/秒，留余量
     MINIMAX_H3_MAX_POLLS: int = int(os.getenv("MINIMAX_H3_MAX_POLLS", "180"))    # 5s × 180 = 15min 上限
 
+    # ── 生成任务排队（时段感知 FIFO 信号量，参考 ComicAI index.ts:2551-2582）──
+    # 上游规则：闲时每账号最多 5 个任务在排队/生成，白天不限。
+    # 时区显式配置（ComicAI 用浏览器本地时区，服务端不能照抄）；一个名额覆盖提交+轮询全程。
+    MINIMAX_H3_QUEUE_ENABLED: bool = os.getenv("MINIMAX_H3_QUEUE_ENABLED", "true").lower() in ("1", "true", "yes")
+    MINIMAX_H3_QUEUE_IDLE_LIMIT: int = int(os.getenv("MINIMAX_H3_QUEUE_IDLE_LIMIT", "5"))
+    MINIMAX_H3_QUEUE_IDLE_START: int = int(os.getenv("MINIMAX_H3_QUEUE_IDLE_START", "0"))
+    MINIMAX_H3_QUEUE_IDLE_END: int = int(os.getenv("MINIMAX_H3_QUEUE_IDLE_END", "8"))
+    MINIMAX_H3_QUEUE_TZ: str = os.getenv("MINIMAX_H3_QUEUE_TZ", "Asia/Shanghai")  # IANA 名
+    MINIMAX_H3_QUEUE_TZ_OFFSET: float = float(os.getenv("MINIMAX_H3_QUEUE_TZ_OFFSET", "8"))  # ZoneInfo 不可用时回退
+    MINIMAX_H3_QUEUE_WAIT_TIMEOUT: float = float(os.getenv("MINIMAX_H3_QUEUE_WAIT_TIMEOUT", "900"))  # 排队超时→blocked
+
     # VideoClaw sidecar（独立进程，REST + SSE；见 plugins/videoclaw/）
     # 8100 避开 ADS 自身的 8000；ENABLED=false 时插件直接判 env_missing → blocked。
     # 视频生成是分钟级长任务，超时不能复用 LLM_TIMEOUT(120s)。

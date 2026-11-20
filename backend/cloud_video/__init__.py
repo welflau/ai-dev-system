@@ -26,12 +26,16 @@ from cloud_video.client import (
     file_url,
     generate_video,
     generate_video_with_provider,
+    get_queue,
     normalize_provider,
     ping,
     probe_provider,
     query,
+    queue_stats,
+    set_queue,
     submit,
 )
+from cloud_video.queue import CloudVideoQueue, QueueStats, build_queue_from_settings
 
 __all__ = [
     "CloudVideoError",
@@ -47,4 +51,11 @@ __all__ = [
     "ping",
     "generate_video",
     "generate_video_with_provider",
+    # 生成任务排队
+    "CloudVideoQueue",
+    "QueueStats",
+    "build_queue_from_settings",
+    "get_queue",
+    "set_queue",
+    "queue_stats",
 ]
