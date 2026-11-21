@@ -691,5 +691,70 @@ runlive.top 拿到 401）。改为 Plugin 内 `from cloud_video import client as
 3. 可选：SSE 生视频 auth_error → 自动弹配置面板并切到 `video` Tab
    （照 `app.js:15888-15897` 的 lightai 范式）。
 
+---
+
+## 十八、追加落地：修复顶栏 LLM 模型显示（hy4 幽灵，2026-11-20）
+
+用户反馈：配置的是 CLI 模式 CodeBuddy + `deepseek-v4-pro-ioa`，但顶栏徽标
+「有时显示 hy4」，问是否缓存。诊断为**非缓存，三个原因叠加**（用户拍板 4 项全修）。
+
+### 18.1 根因（逐条实证）
+
+1. **两套 JS 抢同一个 `#llmStatus` DOM**：
+   - `checkLLMStatus()` `app.js:2427`（DOMContentLoaded、保存配置、切模型时）写 `LLM: ${data.model}`；
+   - `checkServerHealth()` `app.js:19449` → `updateLLMStatusIndicator('available')` `app.js:19590`
+     （`initLogPanel` 启动 + `setInterval` 每 30s）写「可用」。
+   谁后写谁显示 → 时而是 `LLM: hy4`、时而是「可用」，看起来像缓存。
+   前端**无任何 localStorage/sessionStorage 缓存** LLM 状态，`window._llmConfig` 只是
+   每次实时 `GET /api/llm/status` 的内存变量。
+2. **`/api/llm/status` 的 `model` 字段错配**：`main.py:574` 无条件返回 `llm_client.model`。
+   CLI 模式下 `model` 是 API 模式遗留的主模型名（`.env:4` `LLM_MODEL=hy4`），
+   **并不参与实际调用** —— 后端其它地方（`llm_client.py:2328`/`:2371`、
+   `api/chat.py:_snapshot_llm_meta`）都做了 `is_cli ? cli_model : model` 区分，唯独 status 端点没做。
+3. **保存链路把 hy4 一遍遍固化**：`saveLLMConfig()` `app.js:2807` 无条件把隐藏的
+   `llmModel` 输入框（回填自 `data.model` = hy4）作为 `payload.model` 发回；
+   `main.py:631` 写回 `llm_client.model`，`main.py:675` 再写回 `.env` 的 `LLM_MODEL=hy4`。
+   这是最像「缓存」的一环，其实是配置回写循环。
+
+### 18.2 四项修复
+
+| # | 改动 | 文件 |
+|---|---|---|
+| 1 | `/api/llm/status` 新增 `display_model`：CLI 取 `cli_model or model`，API 取 `model`；`model` 保留原语义供 API 输入框回填。`_public_llm_fields()`（`/api/llm/agents`）同步加 | `backend/main.py` |
+| 2 | 顶栏**单一数据源**：`checkLLMStatus()` 用 `display_model` 写文字与 `connected/disconnected`；`updateLLMStatusIndicator()` 降级为**只改点色**、绝不碰 `.text`；`checkLLMStatus` 包装器的日志判断从「读 DOM 文字」改为「读 `window._llmConfig.configured`」 | `frontend/app.js` |
+| 3 | 保存链路：前端 CLI 模式**不发 `model`**；后端 CLI 模式**忽略 body.model**、**不写 `LLM_MODEL` 到 .env**；`.env` 残留 `LLM_MODEL=hy4` 改为 `deepseek-v4-pro-ioa`（字节级最小替换，其余 44 行原样保留） | `frontend/app.js` / `backend/main.py` / `backend/.env`（本地，不入库） |
+| 4 | 历史聊天消息的 `llm_model` 快照**保持不动**：`api/chat.py:_snapshot_llm_meta` 记录的是当时真实用的模型，老消息里的 hy4 是历史事实，不回填改写 | 不改代码，仅测试确认 |
+
+### 18.3 边界
+
+- `model` 字段**不改名、不改语义**（API 模式弹窗回填依赖它）；新增 `display_model` 是纯增量。
+- `.env` 被 `.gitignore:39` 忽略，**不会进提交**；第 3 项的本地清理只对当前机器有效，
+  代码层修复（不写回 + display_model）才是跨机器生效的部分。
+- API 模式保存行为完全不变（测试覆盖 `model` 正常更新 + 写回 .env）。
+- CLI 模式 `llm_client.cli_model = body.cli_model or llm_client.model` 的回退逻辑未动
+  （`cli_model` 始终有值，不会回退到 model）。
+- 顶栏点色仍由健康检查反映「后端可达性」，文字由 `checkLLMStatus` 反映「LLM 配置」——
+  两者语义分离且不再互相覆盖。
+
+### 18.4 验收
+
+- 新增 `tests/api/test_llm_status_display.py` **6 项** + 全量 **159 项回归通过**；
+  `node --check app.js` 通过。
+- 覆盖：CLI/API 两模式 `display_model`、`_public_llm_fields`、
+  CLI 保存忽略 model 且不写 `LLM_MODEL`、API 模式保存行为不变、历史消息快照语义。
+- 重启服务端到端验证：真实 `GET /api/llm/status` →
+  `display_model=deepseek-v4-pro-ioa`（不再是 hy4）、`/api/llm/agents` 的 effective 同步、
+  `/static/app.js` 含 4 处 `display_model` 引用。
+- 顶栏文字从此恒为 `LLM: deepseek-v4-pro-ioa`（切回 API 模式才变），
+  不再随 30s 健康检查跳动。
+
+### 18.5 待办
+
+1. 可选：`updateLLMStatusIndicator` 的 `available/error/unconfigured` class 现已不再设置
+   （只改点色），若别处依赖这些 class 需复查；本轮 grep 未发现消费者。
+2. 可选：`llm_config()` 的 .env 写入仍是 dict 重建（丢注释），与 §17 提到的另三处同问题，
+   可统一换成逐行替换写法。
+
+
 
 

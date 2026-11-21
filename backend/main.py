@@ -569,14 +569,24 @@ async def get_preview_url(project_id: str):
 
 @app.get("/api/llm/status")
 async def llm_status():
-    """LLM 状态"""
+    """LLM 状态。
+
+    display_model = 当前**实际生效**的模型名：CLI 模式用 cli_model，API 模式用 model。
+    顶栏徽标、聊天头像等「展示当前模型」的位置一律用它，不要用 model —— CLI 模式下
+    model 只是 API 模式遗留的主模型名（例如切到 CLI 前留下的 hy4），并不参与实际调用，
+    直接展示会误导用户以为在用 hy4。model 字段保留原语义供 API 模式输入框回填。
+    """
     from llm_client import llm_client, get_cli_model_options, _CLI_ADAPTERS
     is_cli = llm_client.api_format == "cli"
+    display_model = (
+        (llm_client.cli_model or llm_client.model) if is_cli else llm_client.model
+    )
     return {
         "configured":  llm_client.is_configured,
         "api_format":  llm_client.api_format,
         "base_url":    llm_client.base_url if not is_cli else None,
         "model":       llm_client.model,
+        "display_model": display_model,
         "timeout":     llm_client.timeout,
         "max_retries": llm_client.max_retries,
         # CLI 专属字段（非 CLI 模式时为 None）
@@ -614,11 +624,14 @@ async def llm_config(body: dict):
     # 更新运行时
     if "api_format" in body:
         llm_client.api_format = body["api_format"] or "anthropic"
+    # CLI 模式下 model 是 API 模式遗留字段（可能是切换前残留的 hy4），
+    # 实际调用只用 cli_model。此时忽略前端提交的 model，避免把陈旧主模型名固化回来。
+    is_cli = llm_client.api_format == "cli"
     if "base_url" in body:
         llm_client.base_url = (body["base_url"] or "").rstrip("/")
     if "api_key" in body:
         llm_client.api_key = body["api_key"] or ""
-    if "model" in body:
+    if "model" in body and not is_cli:
         llm_client.model = body["model"] or "gpt-4"
     if "timeout" in body:
         llm_client.timeout = int(body.get("timeout", 60))
@@ -659,7 +672,10 @@ async def llm_config(body: dict):
     env_lines["LLM_API_FORMAT"]  = llm_client.api_format
     env_lines["LLM_BASE_URL"]    = llm_client.base_url
     env_lines["LLM_API_KEY"]     = llm_client.api_key
-    env_lines["LLM_MODEL"]       = llm_client.model
+    # CLI 模式不写 LLM_MODEL：保留 .env 里已有的值（或让用户手动清），
+    # 避免把切换前残留的 hy4 一遍遍写回。cli_model 才是实际生效的字段。
+    if not is_cli:
+        env_lines["LLM_MODEL"] = llm_client.model
     env_lines["LLM_TIMEOUT"]     = str(llm_client.timeout)
     env_lines["LLM_MAX_RETRIES"] = str(llm_client.max_retries)
     env_lines["LLM_CLI_TYPE"]    = llm_client.cli_type
@@ -765,13 +781,18 @@ async def llm_test():
 
 def _public_llm_fields(client, has_api_key: bool = False) -> dict:
     """暴露给前端的 LLM 配置字段（api_key 不外泄，只给 has_api_key 标记）"""
+    api_format = getattr(client, "api_format", None)
+    model = getattr(client, "model", None)
+    cli_model = getattr(client, "cli_model", None)
+    display_model = (cli_model or model) if api_format == "cli" else model
     return {
-        "api_format": getattr(client, "api_format", None),
+        "api_format": api_format,
         "base_url": getattr(client, "base_url", None),
-        "model": getattr(client, "model", None),
+        "model": model,
+        "display_model": display_model,
         "cli_type": getattr(client, "cli_type", None),
         "cli_cmd": getattr(client, "cli_cmd", None),
-        "cli_model": getattr(client, "cli_model", None),
+        "cli_model": cli_model,
         "cli_timeout": getattr(client, "cli_timeout", None),
         "has_api_key": has_api_key,
     }

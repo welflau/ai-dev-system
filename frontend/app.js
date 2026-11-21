@@ -2431,13 +2431,16 @@ async function checkLLMStatus() {
         if (data.configured) {
             el.classList.add('connected');
             el.classList.remove('disconnected');
-            el.querySelector('.text').textContent = `LLM: ${data.model || '已配置'}`;
+            // display_model = 当前实际生效的模型（CLI 模式是 cli_model，API 模式是 model）。
+            // 不能用 data.model：CLI 模式下那是切换前残留的 API 主模型名（如 hy4），
+            // 并不参与实际调用，直接展示会误导「明明配了 deepseek 却显示 hy4」。
+            el.querySelector('.text').textContent = `LLM: ${data.display_model || data.model || '已配置'}`;
         } else {
             el.classList.add('disconnected');
             el.classList.remove('connected');
             el.querySelector('.text').textContent = 'LLM: 规则引擎模式';
         }
-        // 缓存当前配置用于弹窗回填
+        // 缓存当前配置用于弹窗回填 / 聊天头像（display_model 也在里面）
         window._llmConfig = data;
         window._currentCliType = data.cli_type || 'claude';
     } catch {
@@ -2814,7 +2817,10 @@ async function saveLLMConfig() {
         if (!model || model === 'gpt-4') model = HY_DEFAULT_MODEL;
     }
 
-    const payload = { api_format: format, model, timeout, max_retries };
+    const payload = { api_format: format, timeout, max_retries };
+    // CLI 模式不发 model：那是 API 模式遗留的主模型名（回填的是 hy4 之类陈旧值），
+    // 发回后端会被写进 .env 让 hy4 复活。实际生效的模型是下面的 cli_model。
+    if (format !== 'cli') payload.model = model;
     if (base_url) payload.base_url = base_url;
     if (api_key)  payload.api_key  = api_key;
 
@@ -19542,14 +19548,13 @@ checkLLMStatus = async function() {
     addLog('info', '检查 LLM 配置状态...');
     try {
         await originalCheckLLMStatus();
-        const el = document.getElementById('llmStatus');
-        const text = el.querySelector('.text').textContent;
-        if (text === '可用') {
-            addLog('success', 'LLM 配置正常');
-        } else if (text === '未配置') {
+        // 用数据源判断，不要再读 #llmStatus 的 .text —— 文字由 checkLLMStatus 单一维护，
+        // 且健康检查（updateLLMStatusIndicator）不再写文字，读 DOM 判断状态已不可靠。
+        const cfg = window._llmConfig || {};
+        if (cfg.configured) {
+            addLog('success', `LLM 配置正常（${cfg.display_model || cfg.model || '已配置'}）`);
+        } else {
             addLog('warning', 'LLM 未配置，请点击右上角配置');
-        } else if (text === '不可用') {
-            addLog('error', 'LLM 连接失败，请检查配置');
         }
     } catch (e) {
         addLog('error', `检查 LLM 状态失败: ${e.message}`);
@@ -19585,24 +19590,21 @@ api = async function(path, options = {}) {
 };
 
 function updateLLMStatusIndicator(status) {
+    // 后端服务健康检查（每 30s）只更新「点色」表示服务可达性。
+    // 文字与 connected/disconnected class 一律由 checkLLMStatus() 单一负责，
+    // 这里绝不碰 .text —— 之前两套逻辑抢同一个 #llmStatus，健康检查把文字覆盖成
+    // 「可用」，与 checkLLMStatus 的「LLM: xxx」互相覆盖，导致顶栏时而是 hy4、时而是可用。
     const el = document.getElementById('llmStatus');
+    if (!el) return;
     const dot = el.querySelector('.dot');
-    const text = el.querySelector('.text');
-
-    el.classList.remove('available', 'error', 'unconfigured');
-    el.classList.add(status);
-
+    if (!dot) return;
     if (status === 'available') {
-        text.textContent = '可用';
         dot.style.background = 'var(--success)';
     } else if (status === 'error') {
-        text.textContent = '不可用';
         dot.style.background = 'var(--error)';
     } else if (status === 'unconfigured') {
-        text.textContent = '未配置';
         dot.style.background = 'var(--warning)';
     } else {
-        text.textContent = '检测中';
         dot.style.background = 'var(--text-muted)';
     }
 }
