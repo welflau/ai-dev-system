@@ -260,14 +260,24 @@ def test_timeout_does_not_submit_or_fallback():
 # ── 配置构造 ────────────────────────────────────────────────────────────────
 
 def test_build_queue_from_settings(monkeypatch):
-    monkeypatch.setenv("MINIMAX_H3_QUEUE_IDLE_LIMIT", "3")
-    monkeypatch.setenv("MINIMAX_H3_QUEUE_IDLE_START", "1")
-    monkeypatch.setenv("MINIMAX_H3_QUEUE_IDLE_END", "7")
-    monkeypatch.setenv("MINIMAX_H3_QUEUE_TZ", "UTC")
-    monkeypatch.setenv("MINIMAX_H3_QUEUE_WAIT_TIMEOUT", "42")
-    q = build_queue_from_settings()
-    assert q.idle_limit == 3 and q.idle_start == 1 and q.idle_end == 7
-    assert q.wait_timeout == 42 and q.tz_name == "UTC"
+    # 读 settings.*（AI 配置面板热更新的是 settings，不是 os.environ）
+    from config import settings
+    saved = {k: getattr(settings, k) for k in (
+        "MINIMAX_H3_QUEUE_IDLE_LIMIT", "MINIMAX_H3_QUEUE_IDLE_START",
+        "MINIMAX_H3_QUEUE_IDLE_END", "MINIMAX_H3_QUEUE_TZ", "MINIMAX_H3_QUEUE_WAIT_TIMEOUT",
+    )}
+    try:
+        monkeypatch.setattr(settings, "MINIMAX_H3_QUEUE_IDLE_LIMIT", 3)
+        monkeypatch.setattr(settings, "MINIMAX_H3_QUEUE_IDLE_START", 1)
+        monkeypatch.setattr(settings, "MINIMAX_H3_QUEUE_IDLE_END", 7)
+        monkeypatch.setattr(settings, "MINIMAX_H3_QUEUE_TZ", "UTC")
+        monkeypatch.setattr(settings, "MINIMAX_H3_QUEUE_WAIT_TIMEOUT", 42)
+        q = build_queue_from_settings()
+        assert q.idle_limit == 3 and q.idle_start == 1 and q.idle_end == 7
+        assert q.wait_timeout == 42 and q.tz_name == "UTC"
+    finally:
+        for k, v in saved.items():
+            setattr(settings, k, v)
 
 
 # ── 统一 dispatch 接入（两 provider 共用，无双重占用）────────────────────────

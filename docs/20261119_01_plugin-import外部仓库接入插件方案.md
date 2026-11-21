@@ -612,8 +612,84 @@ runlive.top 拿到 401）。改为 Plugin 内 `from cloud_video import client as
 2. 排队粒度是「全程占用」：一个慢任务（最长 15min 轮询 + 429 重试）会占住名额，
    与 ComicAI 一致。若将来要更细，可拆「提交并发限流」与「查询 1 次/秒限速」两个限流器。
 3. 真实卡密钥下的排队压测（闲时并发 6 个任务，确认第 6 个排队等待）。
-4. 可选：把 `queue_stats()` 接到运维 API / 前端面板（ComicAI 的 TaskDrawer 只显示计数，
-   这里已有完整 stats，接 UI 是纯展示工作）。
+4. **已于 §17 落地**：把 `queue_stats()` 接到 AI 配置面板「生视频」Tab。
+
+---
+
+## 十七、追加落地：AI 配置面板新增「生视频」Tab（2026-11-20）
+
+用户给出截图（现有「AI 配置」弹窗只有 LLM / 图片生成 / 资产搜索三个 Tab），要求
+「公共配置 Key 的地方，需要添加生视频的项目配置」。三个拍板（AskUserQuestion）：
+范围 = **三项全放**（MiniMax H3 全字段 + 排队参数 + VideoClaw sidecar + LightAI 提示）；
+保存 = **新建独立 router**（不污染已 145 行的 `llm_config()`）；测试连接 = **两个都要**
+（status 用不联网 `probe_provider`，测试按钮用联网 `ping`）。
+
+### 17.1 现状调研结论
+
+- 「图片生成」不是独立组件，而是 `llmConfigModal` 里的一个 Tab；三个 Tab **共用一个**
+  `POST /api/llm/config`（`frontend/app.js:2676-2727` / `backend/main.py:606-751`）。
+- `backend/cloud_video/` 之前**没有任何 HTTP 配置端点**，`main.py` 的 router 列表里没有它。
+- `.env` 回写有两套写法：`main.py:648-690` 的 dict 重建（**丢注释/空行**）与
+  `main.py:989-1003` 的逐行替换（**保真**）。现有三处回写互相**无锁**，并发保存会丢更新。
+- GET 端点只回传 `configured` 布尔、不回传 key（`api/image_gen.py:70-80`）；前端一律
+  `value=''` + `placeholder="sk-..."`，截图里看到的 `sk-...` 是占位符不是掩码值。
+- 字段归口：`cloud_video.PROVIDERS`（`client.py:88-103`）是单一真源；
+  `MINIMAX_H3_*` / `VIDEOCLAW_*` 已在 `config.py` 齐全，`.env.example` 也已列全。
+
+### 17.2 改动
+
+| 文件 | 内容 |
+|---|---|
+| `A backend/api/cloud_video_config.py` | 独立 router `prefix=/api/cloud-video`：`GET /config/status`、`POST /config`、`POST /config/test` |
+| `M backend/main.py` | import + `include_router` |
+| `M frontend/index.html` | 第 4 个 Tab 按钮与面板（22 个 `video*` 元素 id）；弹窗高度 480→600；app.js 版本号 bump |
+| `M frontend/app.js` | Tab 数组加 `video`；`loadVideoConfig/saveVideoConfig/testVideoConnection/_collectVideoPayload`；`showLLMConfigModal` 回填；`saveLLMConfig` 追加独立端点保存 |
+| `M backend/cloud_video/queue.py` | `build_queue_from_settings()` 改读 `settings.*`（原读 `os.getenv`，会导致面板热更新后重建队列拿不到新值） |
+| `M backend/tests/test_cloud_video_queue.py` | 对应测试改 patch `settings` |
+| `A backend/tests/api/test_cloud_video_config.py` | 13 项 |
+
+### 17.3 三个端点契约
+
+- **`GET /config/status`**：返回 `{configured, minimax_h3{card_key_configured 只布尔, base_url, enabled, timeout, poll_interval, max_polls}, queue{... , stats{active,waiting,limit,unlimited,idle_window,tz}}, videoclaw{...}, lightai{configured,hint}, providers{lightai,minimax_h3}, warning}`，**密钥绝不回传**。
+- **`POST /config`**：17 个可选字段（H3 6 + 排队 8 + VideoClaw 4，减重叠）。逐字段 `if in raw` 才更新 `settings.*`；密钥空串跳过（保留旧值）；bool 显式取 `.checked` 并回写 `"true"/"false"`（不写 Python 字面量）；`.env` 用**逐行替换**保真写回（保留注释/空行/其它节），`asyncio.Lock` 串行化；排队字段变更后 `set_queue(build_queue_from_settings())` 重建全局队列。
+- **`POST /config/test`**：先 `probe_provider`（不联网配置检查），通过则 `await ping()`（联网验卡，12s）；支持表单里**未保存的 key** 临时注入 `settings` 并 `try/finally` 还原；测试时强制 `ENABLED=true`（验卡不是验开关）。
+
+### 17.4 实现坑（已修）
+
+1. **包级 re-export 静态绑定**：router 初版 `from cloud_video import ping` 让测试
+   monkeypatch `cloud_video.client.ping` 失效（与 §15.5 同一个坑）。改为
+   `from cloud_video import client as cloud_client` + `cloud_client.ping()`。
+2. **`build_queue_from_settings` 读 `os.getenv`**：面板热更新改的是 `settings.*`，
+   重建队列拿不到新值（测试 `idle_limit` 期望 3 实得 5）。改读 `settings`，并清理 `os` import。
+3. **测试连接被表单 `enabled=false` 挡住**：probe 判 unavailable → `not_configured`。
+   改为测试时无条件强制启用、finally 还原。
+4. **一处 CSS 笔误**：`var(--text-muted;` 缺右括号，已修。
+
+### 17.5 边界（严格遵守）
+
+- `.env` **绝不整文件覆盖**（会清空 LLM/LIGHTAI/PEXELS 等其它节）；保留注释与空行。
+- 密钥空输入 = 不覆盖旧值；bool `false` 不能被 `||` 兜底吃掉。
+- GET 不回传密钥；UI 明确标注「第三方鼠鼠卡密中转，不是 MiniMax 官方 API，官方 key 不能填这里」。
+- LightAI Key 只在「图片生成」Tab 配，新 Tab 只显示是否已配置，避免两处重复输入互相覆盖。
+- VideoClaw sidecar 自身无密钥（dashscope/ark Key 在 VC 仓库 `config.yaml`）。
+
+### 17.6 验收
+
+- 新增 **13 项**配置端点测试 + 全量 **153 项回归通过**（含 §16 的 18 项排队测试）。
+- 重启服务后端到端验证：`GET /config/status` 返回完整结构且无密钥、
+  `POST /config/test`（无 key）返回 `not_configured` 且不联网、
+  `/app` 页面含 `aiTab-video` 与 `app.js?v=20261120a`、
+  `/static/app.js` 含三个新函数。
+- 测试覆盖：脱敏、只更新传入字段、`.env` 注释/其它节保真、空 key 不覆盖、
+  bool false 不被丢弃（回写 true/false）、排队字段变更重建队列、三项分组一起提交、
+  非法数字跳过、未保存表单 key 临时注入与 finally 还原、异常路径还原、ping false→error。
+
+### 17.7 待办
+
+1. 真实卡密钥下：面板填 key → 保存 → 测试连接（联网验卡）→ 跑一次生视频。
+2. 可选：`POST /api/llm/config` / `image_gen.refresh-key` 也补 `asyncio.Lock`（现有三处仍无锁）。
+3. 可选：SSE 生视频 auth_error → 自动弹配置面板并切到 `video` Tab
+   （照 `app.js:15888-15897` 的 lightai 范式）。
 
 
 

@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from collections import deque
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -168,13 +167,18 @@ class CloudVideoQueue:
 
 
 def build_queue_from_settings() -> "CloudVideoQueue":
-    """从系统配置构造队列（模块级单例在 client.py 里持有）。"""
+    """从系统配置构造队列（模块级单例在 client.py 里持有）。
+
+    读 `settings.*` 而非 `os.getenv`：AI 配置面板保存时会热更新 `settings`，
+    若这里仍读环境变量，重建队列就拿不到刚改的值（曾导致配置保存不生效）。
+    """
+    from config import settings
     return CloudVideoQueue(
-        idle_limit=int(os.getenv("MINIMAX_H3_QUEUE_IDLE_LIMIT", "5")),
-        idle_start_hour=int(os.getenv("MINIMAX_H3_QUEUE_IDLE_START", "0")),
-        idle_end_hour=int(os.getenv("MINIMAX_H3_QUEUE_IDLE_END", "8")),
-        tz_name=os.getenv("MINIMAX_H3_QUEUE_TZ", "Asia/Shanghai"),
-        tz_offset_hours=float(os.getenv("MINIMAX_H3_QUEUE_TZ_OFFSET", "8")),
-        wait_timeout=float(os.getenv("MINIMAX_H3_QUEUE_WAIT_TIMEOUT", "900")),
-        enabled=os.getenv("MINIMAX_H3_QUEUE_ENABLED", "true").lower() in ("1", "true", "yes"),
+        idle_limit=int(settings.MINIMAX_H3_QUEUE_IDLE_LIMIT),
+        idle_start_hour=int(settings.MINIMAX_H3_QUEUE_IDLE_START),
+        idle_end_hour=int(settings.MINIMAX_H3_QUEUE_IDLE_END),
+        tz_name=str(settings.MINIMAX_H3_QUEUE_TZ),
+        tz_offset_hours=float(settings.MINIMAX_H3_QUEUE_TZ_OFFSET),
+        wait_timeout=float(settings.MINIMAX_H3_QUEUE_WAIT_TIMEOUT),
+        enabled=bool(settings.MINIMAX_H3_QUEUE_ENABLED),
     )

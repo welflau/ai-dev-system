@@ -2467,7 +2467,7 @@
                 <h3>⚙️ AI 配置</h3>
                 <button class="btn-icon" onclick="closeModal('llmConfigModal')">&times;</button>
             </div>
-            <div style="display:flex; height:480px; overflow:hidden;">
+            <div style="display:flex; height:600px; overflow:hidden;">
                 <!-- 左侧 Tab 导航 -->
                 <div style="width:140px; flex-shrink:0; border-right:1px solid var(--border); padding:8px 0; display:flex; flex-direction:column; gap:2px;">
                     <button class="ai-cfg-tab active" id="aiTab-llm" onclick="switchAICfgTab('llm')">
@@ -2475,6 +2475,9 @@
                     </button>
                     <button class="ai-cfg-tab" id="aiTab-lightai" onclick="switchAICfgTab('lightai')">
                         🖼️ 图片生成
+                    </button>
+                    <button class="ai-cfg-tab" id="aiTab-video" onclick="switchAICfgTab('video')">
+                        🎬 生视频
                     </button>
                     <button class="ai-cfg-tab" id="aiTab-assets" onclick="switchAICfgTab('assets')">
                         🔍 资产搜索
@@ -2625,6 +2628,132 @@
                         <button class="btn" onclick="testLightAIConnection()" id="lightaiTestBtn" style="width:100%;">🖼️ 测试 LightAI 连接</button>
                     </div>
 
+                    <!-- ===== Tab: 生视频（系统公共云端层 cloud_video/）===== -->
+                    <div id="aiPanel-video" style="display:none;">
+                        <div style="margin-bottom:12px; padding:10px 12px; background:rgba(251,191,36,0.06); border:1px solid rgba(251,191,36,0.25); border-radius:var(--radius-sm); font-size:11px; color:var(--text-muted); line-height:1.6;">
+                            ⚠️ MiniMax H3 是第三方「鼠鼠工具」卡密中转（runlive.top，<code>X-Card-Key</code>），
+                            <strong>不是 MiniMax 官方 API</strong>；官方 api_key + GroupID 不能填在这里。
+                            真实卡密钥只写 <code>backend/.env</code>，不入库、不回显。
+                        </div>
+                        <div style="display:flex; align-items:center; gap:8px; margin-bottom:12px;">
+                            <span id="videoConfigBadge" style="font-size:11px; padding:2px 8px; border-radius:10px;">状态检查中…</span>
+                            <span id="videoQueueStats" style="font-size:11px; color:var(--text-muted);"></span>
+                        </div>
+
+                        <div class="form-group">
+                            <label>卡密钥（X-Card-Key）</label>
+                            <div style="position:relative;">
+                                <input type="password" id="videoCardKey" placeholder="sk-...（留空保留已保存的值）" style="padding-right:40px;">
+                                <button class="btn-icon" onclick="togglePasswordVisibility('videoCardKey', this)" style="position:absolute;right:8px;top:50%;transform:translateY(-50%);font-size:14px;" title="显示/隐藏">👁</button>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>API Base URL</label>
+                                <input type="text" id="videoBaseUrl" placeholder="https://www.runlive.top/mnmx">
+                            </div>
+                            <div class="form-group">
+                                <label>启用云端生视频</label>
+                                <label style="display:flex;align-items:center;gap:6px;font-weight:400;padding-top:6px;">
+                                    <input type="checkbox" id="videoEnabled"> 启用
+                                </label>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>单次 HTTP 超时（秒）</label>
+                                <input type="number" id="videoTimeout" min="10" max="600" placeholder="120">
+                            </div>
+                            <div class="form-group">
+                                <label>轮询间隔（秒）</label>
+                                <input type="number" id="videoPollInterval" min="1" max="60" placeholder="5">
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>最大轮询次数</label>
+                            <input type="number" id="videoMaxPolls" min="1" max="1000" placeholder="180">
+                        </div>
+
+                        <!-- 排队参数（折叠） -->
+                        <details style="margin:14px 0 10px; border:1px solid var(--border); border-radius:var(--radius-sm); padding:8px 10px;">
+                            <summary style="cursor:pointer; font-size:12px; font-weight:600;">生成任务排队（时段感知 FIFO 信号量）</summary>
+                            <div style="margin-top:10px;">
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label>启用排队</label>
+                                        <label style="display:flex;align-items:center;gap:6px;font-weight:400;padding-top:6px;">
+                                            <input type="checkbox" id="videoQueueEnabled"> 启用
+                                        </label>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>闲时并发上限</label>
+                                        <input type="number" id="videoQueueIdleLimit" min="1" max="50" placeholder="5">
+                                    </div>
+                                </div>
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label>闲时开始（小时）</label>
+                                        <input type="number" id="videoQueueIdleStart" min="0" max="23" placeholder="0">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>闲时结束（小时）</label>
+                                        <input type="number" id="videoQueueIdleEnd" min="0" max="23" placeholder="8">
+                                    </div>
+                                </div>
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label>时区（IANA）</label>
+                                        <input type="text" id="videoQueueTz" placeholder="Asia/Shanghai">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>UTC 偏移（回退用）</label>
+                                        <input type="number" id="videoQueueTzOffset" step="0.5" placeholder="8">
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label>排队等待超时（秒）</label>
+                                    <input type="number" id="videoQueueWaitTimeout" min="1" max="7200" placeholder="900">
+                                </div>
+                            </div>
+                        </details>
+
+                        <!-- VideoClaw sidecar -->
+                        <details style="margin:10px 0; border:1px solid var(--border); border-radius:var(--radius-sm); padding:8px 10px;">
+                            <summary style="cursor:pointer; font-size:12px; font-weight:600;">VideoClaw sidecar（独立进程，无密钥）</summary>
+                            <div style="margin-top:10px;">
+                                <p style="font-size:11px; color:var(--text-muted); margin:0 0 10px;">
+                                    sidecar 自己的 dashscope / ark Key 在 VC 仓库 <code>backend/config.yaml</code>，不在这里配置。
+                                </p>
+                                <div class="form-group">
+                                    <label>Base URL</label>
+                                    <input type="text" id="videoClawBaseUrl" placeholder="http://127.0.0.1:8100">
+                                </div>
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label>通用超时（秒）</label>
+                                        <input type="number" id="videoClawTimeout" placeholder="600">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>生视频超时（秒）</label>
+                                        <input type="number" id="videoClawVideoTimeout" placeholder="900">
+                                    </div>
+                                </div>
+                                <label style="display:flex;align-items:center;gap:6px;font-weight:400;">
+                                    <input type="checkbox" id="videoClawEnabled"> 启用 sidecar
+                                </label>
+                            </div>
+                        </details>
+
+                        <!-- LightAI provider 提示 -->
+                        <div id="videoLightaiHint" style="margin:10px 0; padding:10px; background:var(--bg-elevated, rgba(255,255,255,0.03)); border-radius:var(--radius-sm); font-size:11px; color:var(--text-muted); line-height:1.6;">
+                            lightai provider 与「图片生成」共用 <code>LIGHTAI_API_KEY</code>，
+                            请在该 Tab 配置；这里不重复输入。
+                        </div>
+
+                        <div id="videoTestResult" style="display:none; padding:10px; border-radius:var(--radius-sm); font-size:13px; margin-top:4px; margin-bottom:8px;"></div>
+                        <button class="btn" onclick="testVideoConnection()" id="videoTestBtn" style="width:100%;">🎬 测试生视频连接（联网验卡）</button>
+                    </div>
+
                     <!-- ===== Tab: 资产搜索 ===== -->
                     <div id="aiPanel-assets" style="display:none;">
                         <p style="font-size:12px; color:var(--text-muted); margin-bottom:14px;">
@@ -2689,7 +2818,7 @@
     <!-- ==================== Toast 通知 ==================== -->
     <div class="toast-container" id="toastContainer"></div>
 
-    <script src="/static/app.js?v=20261117b"></script>
+    <script src="/static/app.js?v=20261120a"></script>
 </body>
 </html>
 

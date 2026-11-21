@@ -2451,7 +2451,7 @@ async function checkLLMStatus() {
 // ==================== AI 配置弹窗 Tab 切换 ====================
 
 function switchAICfgTab(tab) {
-    ['llm', 'lightai', 'assets'].forEach(t => {
+    ['llm', 'lightai', 'video', 'assets'].forEach(t => {
         document.getElementById(`aiTab-${t}`)?.classList.toggle('active', t === tab);
         const panel = document.getElementById(`aiPanel-${t}`);
         if (panel) panel.style.display = t === tab ? 'block' : 'none';
@@ -2663,14 +2663,140 @@ async function showLLMConfigModal() {
         document.getElementById('lightaiEngine').value = 'gemini';
         document.getElementById('lightaiTimeout').value = 300;
     }
+    // 加载系统公共云端生视频配置（独立端点）
+    await loadVideoConfig();
     // 清除测试结果
-    ['llmTestResult', 'lightaiTestResult'].forEach(id => {
+    ['llmTestResult', 'lightaiTestResult', 'videoTestResult'].forEach(id => {
         const el = document.getElementById(id);
         if (el) { el.style.display = 'none'; el.textContent = ''; }
     });
     // 回到 LLM Tab
     switchAICfgTab('llm');
     openModal('llmConfigModal');
+}
+
+
+// ==================== 生视频配置（系统公共层 cloud_video/）====================
+
+const _VIDEO_TEXT_FIELDS = {
+    videoBaseUrl: 'base_url', videoTimeout: 'timeout',
+    videoPollInterval: 'poll_interval', videoMaxPolls: 'max_polls',
+};
+const _VIDEO_QUEUE_FIELDS = {
+    videoQueueIdleLimit: 'idle_limit', videoQueueIdleStart: 'idle_start',
+    videoQueueIdleEnd: 'idle_end', videoQueueTz: 'tz',
+    videoQueueTzOffset: 'tz_offset', videoQueueWaitTimeout: 'wait_timeout',
+};
+const _VIDEO_CLAW_FIELDS = {
+    videoClawBaseUrl: 'base_url', videoClawTimeout: 'timeout',
+    videoClawVideoTimeout: 'video_timeout',
+};
+
+function _setVal(id, v) {
+    const el = document.getElementById(id);
+    if (el && v !== undefined && v !== null) el.value = v;
+}
+function _setChk(id, v) {
+    const el = document.getElementById(id);
+    if (el) el.checked = !!v;
+}
+
+async function loadVideoConfig() {
+    const badge = document.getElementById('videoConfigBadge');
+    try {
+        const s = await api('/cloud-video/config/status');
+        const h3 = s.minimax_h3 || {}, q = s.queue || {}, vc = s.videoclaw || {};
+        // 卡密钥绝不回填（服务端也不回传）
+        _setVal('videoCardKey', '');
+        for (const [id, key] of Object.entries(_VIDEO_TEXT_FIELDS)) _setVal(id, h3[key]);
+        _setChk('videoEnabled', h3.enabled);
+        for (const [id, key] of Object.entries(_VIDEO_QUEUE_FIELDS)) _setVal(id, q[key]);
+        _setChk('videoQueueEnabled', q.enabled);
+        for (const [id, key] of Object.entries(_VIDEO_CLAW_FIELDS)) _setVal(id, vc[key]);
+        _setChk('videoClawEnabled', vc.enabled);
+
+        const st = q.stats || {};
+        const qsEl = document.getElementById('videoQueueStats');
+        if (qsEl) qsEl.textContent = `队列：活跃 ${st.active ?? 0} / 等待 ${st.waiting ?? 0} / 上限 ${st.unlimited ? '不限' : (st.limit ?? '-')}（${st.idle_window ? '闲时' : '白天'}）`;
+        if (badge) {
+            const ok = s.configured && h3.enabled;
+            badge.textContent = ok ? '✅ 已配置并启用' : (s.configured ? '⚠️ 有卡密钥但未启用' : '⚪ 未配置');
+            badge.style.background = ok ? 'rgba(34,197,94,.12)' : 'rgba(251,191,36,.12)';
+            badge.style.color = ok ? 'var(--ads-c-22c55e, #22c55e)' : 'var(--text-muted)';
+        }
+        const hint = document.getElementById('videoLightaiHint');
+        if (hint && s.lightai) {
+            hint.innerHTML = s.lightai.configured
+                ? '✅ lightai provider 已配置（与「图片生成」共用 <code>LIGHTAI_API_KEY</code>），无需在此重复输入。'
+                : '⚪ lightai provider 未配置：请在「图片生成」Tab 填 <code>LIGHTAI_API_KEY</code>（两处共用同一个 Key）。';
+        }
+    } catch (e) {
+        if (badge) { badge.textContent = '⚠️ 状态读取失败'; badge.style.color = 'var(--text-muted)'; }
+    }
+}
+
+function _collectVideoPayload() {
+    const p = {};
+    const key = document.getElementById('videoCardKey')?.value.trim();
+    if (key) p.minimax_h3_card_key = key;          // 留空 = 不覆盖旧值
+    const base = document.getElementById('videoBaseUrl')?.value.trim();
+    if (base) p.minimax_h3_base_url = base;
+    // bool 必须显式取 .checked，不能用 || 兜底（否则 false 关不掉）
+    p.minimax_h3_enabled = !!document.getElementById('videoEnabled')?.checked;
+
+    const num = (id, k) => {
+        const el = document.getElementById(id);
+        if (el && el.value !== '') { const n = Number(el.value); if (Number.isFinite(n)) p[k] = n; }
+    };
+    num('videoTimeout', 'minimax_h3_timeout');
+    num('videoPollInterval', 'minimax_h3_poll_interval');
+    num('videoMaxPolls', 'minimax_h3_max_polls');
+
+    p.minimax_h3_queue_enabled = !!document.getElementById('videoQueueEnabled')?.checked;
+    num('videoQueueIdleLimit', 'minimax_h3_queue_idle_limit');
+    num('videoQueueIdleStart', 'minimax_h3_queue_idle_start');
+    num('videoQueueIdleEnd', 'minimax_h3_queue_idle_end');
+    const tz = document.getElementById('videoQueueTz')?.value.trim();
+    if (tz) p.minimax_h3_queue_tz = tz;
+    num('videoQueueTzOffset', 'minimax_h3_queue_tz_offset');
+    num('videoQueueWaitTimeout', 'minimax_h3_queue_wait_timeout');
+
+    const cb = document.getElementById('videoClawBaseUrl')?.value.trim();
+    if (cb) p.videoclaw_base_url = cb;
+    num('videoClawTimeout', 'videoclaw_timeout');
+    num('videoClawVideoTimeout', 'videoclaw_video_timeout');
+    p.videoclaw_enabled = !!document.getElementById('videoClawEnabled')?.checked;
+    return p;
+}
+
+async function saveVideoConfig() {
+    return api('/cloud-video/config', { method: 'POST', body: _collectVideoPayload() });
+}
+
+async function testVideoConnection() {
+    const btn = document.getElementById('videoTestBtn');
+    const el = document.getElementById('videoTestResult');
+    const body = {};
+    const key = document.getElementById('videoCardKey')?.value.trim();
+    const base = document.getElementById('videoBaseUrl')?.value.trim();
+    if (key) body.minimax_h3_card_key = key;       // 未保存的表单值也能测
+    if (base) body.minimax_h3_base_url = base;
+    body.minimax_h3_enabled = !!document.getElementById('videoEnabled')?.checked;
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ 正在联网验卡…'; }
+    if (el) { el.style.display = 'block'; el.textContent = '正在检查配置并联网校验卡密钥…'; el.style.background = 'var(--bg-elevated, rgba(255,255,255,0.03))'; el.style.color = 'var(--text-muted)'; }
+    try {
+        const r = await api('/cloud-video/config/test', { method: 'POST', body });
+        const ok = r.status === 'ok';
+        if (el) {
+            el.textContent = `${ok ? '✅' : r.status === 'not_configured' ? '⚪' : '❌'} ${r.message || ''}`;
+            el.style.background = ok ? 'rgba(34,197,94,.10)' : 'rgba(239,68,68,.10)';
+            el.style.color = ok ? '#22c55e' : '#ef4444';
+        }
+    } catch (e) {
+        if (el) { el.textContent = `❌ 测试失败: ${e.message}`; el.style.background = 'rgba(239,68,68,.10)'; el.style.color = '#ef4444'; }
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = '🎬 测试生视频连接（联网验卡）'; }
+    }
 }
 
 async function saveLLMConfig() {
@@ -2718,6 +2844,8 @@ async function saveLLMConfig() {
 
     try {
         await api('/llm/config', { method: 'POST', body: payload });
+        // 生视频配置走独立端点（系统公共层 cloud_video/），与 /llm/config 分开保存
+        await saveVideoConfig();
         showToast('配置已保存', 'success');
         closeModal('llmConfigModal');
         await checkLLMStatus();
