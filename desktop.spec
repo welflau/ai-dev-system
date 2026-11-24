@@ -74,6 +74,7 @@ hiddenimports = [
     "orchestration.requirement_pipeline",
     "orchestration.rewind",
     "orchestration.sop_rules",
+    "orchestration.change_flows",
     "orchestration.ticket_pipeline",
     "llm_client",
     "agent_registry",

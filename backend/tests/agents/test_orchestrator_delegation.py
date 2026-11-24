@@ -50,6 +50,12 @@ DELEGATES = [
     ("invalidate_project_rules", "sop_rules", "invalidate_project_rules", "sync", False),
     ("_get_all_actionable_statuses", "sop_rules", "get_all_actionable_statuses", "async", True),
     ("_status_is_executing", "sop_rules", "status_is_executing", "static", False),
+    ("reply_to_comment", "change_flows", "reply_to_comment", "async", True),
+    ("_handle_change_impact", "change_flows", "handle_change_impact", "async", True),
+    ("_tweak_flow", "change_flows", "tweak_flow", "async", True),
+    ("_partial_flow", "change_flows", "partial_flow", "async", True),
+    ("_breaking_flow", "change_flows", "breaking_flow", "async", True),
+    ("_extract_title_from_comment", "change_flows", "extract_title_from_comment", "async", False),
 ]
 # (类属性, 模块, 模块里的名字)
 CONSTANTS = [

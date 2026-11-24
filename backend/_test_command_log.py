@@ -128,7 +128,8 @@ async def main():
                   ("agents/chat_assistant.py", "chat_stream")):
         src = pathlib.Path(f).read_text(encoding="utf-8")
         check(f"{f} 用 pop 而不是 clear", "pop_checkpoint_context" in src)
-    orch = pathlib.Path("orchestrator.py").read_text(encoding="utf-8")
+    # process_ticket 的步骤已搬到 ticket_pipeline，set_checkpoint_context 的注入点跟着过去了。
+    orch = pathlib.Path("orchestration/ticket_pipeline.py").read_text(encoding="utf-8")
     check("orchestrator 注入 requirement_id", "requirement_id=ticket.get" in orch)
 
     # ═══ 6. git 噪音分类（表驱动）══════════════════════════════════════
