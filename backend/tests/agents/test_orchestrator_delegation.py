@@ -72,6 +72,13 @@ DELEGATES = [
     ("_resume_stuck_analyses", "polling", "resume_stuck_analyses", "async", True),
     ("_resume_parent_ticket", "polling", "resume_parent_ticket", "async", True),
     ("_poll_process", "polling", "poll_process", "async", False),
+    ("_create_compile_bug", "bug_flow", "create_compile_bug", "async", True),
+    ("_resolve_compile_bug", "bug_flow", "resolve_compile_bug", "async", True),
+    ("_poll_open_bugs", "bug_flow", "poll_open_bugs", "async", True),
+    ("run_bug_fix", "bug_flow", "run_bug_fix", "async", True),
+    ("_run_bug_ticket", "bug_flow", "run_bug_ticket", "async", False),
+    ("_sync_bug_status_from_ticket", "bug_flow", "sync_bug_status_from_ticket", "async", True),
+    ("_find_current_version", "bug_flow", "find_current_version", "async", True),
 ]
 # (类属性, 模块, 模块里的名字)
 CONSTANTS = [
