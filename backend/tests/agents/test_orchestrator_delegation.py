@@ -97,6 +97,11 @@ DELEGATES = [
     ("_write_phase_comment", "ticket_log", "write_phase_comment", "async", True),
     ("post_milestone_comment", "ticket_log", "post_milestone_comment", "async", True),
     ("_add_layer_log", "ticket_log", "add_layer_log", "async", True),
+    ("_inject_rejection_context", "context_builder", "inject_rejection_context", "async", True),
+    ("_fetch_prior_insights", "context_builder", "fetch_prior_insights", "async", True),
+    ("_load_knowledge_docs", "context_builder", "load_knowledge_docs", "sync", False),
+    ("_collect_existing_code", "context_builder", "collect_existing_code", "async", False),
+    ("_agent_to_owner", "context_builder", "agent_to_owner", "sync", False),
 ]
 # (类属性, 模块, 模块里的名字)
 CONSTANTS = [
