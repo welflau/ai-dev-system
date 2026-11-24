@@ -23,6 +23,8 @@ import database as database_module
 import orchestrator as orch_module
 from database import Database
 from models import TicketStatus
+from orchestration import result_handlers
+from orchestration.result_handlers import ResultContext
 from orchestrator import TicketOrchestrator, is_skill_run_result
 
 PROJECT_ID = "P1"
@@ -157,19 +159,24 @@ def _run(body, tmp_path, monkeypatch, **kw):
 async def _call(orch, result, *, current_status="pending"):
     ticket = {"id": TICKET_ID, "requirement_id": REQ_ID, "title": "写技术博客",
               "type": "feature", "status": current_status}
-    await orch._handle_skill_agent_result(
+    # skill 处理器已搬到 result_handlers。入参和 `_handle_agent_result` 里组装的一样。
+    await result_handlers.handle_skill(ResultContext(
+        orch=orch, db=orch_module.db,
         project_id=PROJECT_ID, ticket_id=TICKET_ID, ticket=ticket,
-        requirement_id=REQ_ID, action=ACTION, result=result,
-        result_json=json.dumps(result, ensure_ascii=False),
-        current_status=current_status,
-    )
+        agent_name="SkillAgent", action=ACTION,
+        result=result, result_json=json.dumps(result, ensure_ascii=False),
+        current_status=current_status, requirement_id=REQ_ID,
+        git_result=None,
+        fire_knowledge_distill=orch_module._fire_knowledge_distill,
+        synthesize_blocked_diagnosis=orch_module._synthesize_blocked_diagnosis,
+    ))
 
 
 async def _call_via_dispatcher(orch, result, *, current_status="pending",
                                agent_name="SkillAgent"):
     """走 `_handle_agent_result` 这个**真实入口**，而不是直接调分支函数。
 
-    为什么必须有这条路径：直接调 `_handle_skill_agent_result` 测不出
+    为什么必须有这条路径：直接调 `handle_skill` 测不出
     「`_handle_agent_result` 里到底有没有那条分发语句」。实测删掉整个
     skill 分发后，上面所有直调的测试**依然全绿**
     —— 而生产环境会落进 `else: new_status = current_status` 死循环。
@@ -220,7 +227,7 @@ def test_dispatcher_routes_skill_agent_to_branch(tmp_path, monkeypatch):
     命中 → skill 被无限重跑烧 token。ArtistAgent 和 UEEditorAgent 的注释
     都记着同一个坑，它们都是踩了才补的。
 
-    **必须走真实入口**：本文件其余用例直调 `_handle_skill_agent_result`，
+    **必须走真实入口**：本文件其余用例直调 `handle_skill`，
     测不出分发语句是否存在（实测删掉分支后那些用例全绿）。
     """
     async def body(orch, db, sse, dispatched):
@@ -269,6 +276,19 @@ def test_dispatcher_blocked_path(tmp_path, monkeypatch):
     _run(body, tmp_path, monkeypatch)
 
 
+def test_dispatcher_publishes_status_event_once(tmp_path, monkeypatch):
+    """经 `_handle_agent_result` 进 skill 处理器时，状态事件只发一次，只派一次单。
+
+    skill 处理器自己收尾。它要是把状态交还给调用方，尾部会再发一次事件、再派一次单。
+    """
+    async def body(orch, db, sse, dispatched):
+        await _call_via_dispatcher(orch, skill_result("success"))
+        events = [p for e, p in sse if e == "ticket_status_changed"]
+        assert len(events) == 1
+        assert dispatched == [TICKET_ID]
+    _run(body, tmp_path, monkeypatch)
+
+
 def test_status_advances_not_stuck(tmp_path, monkeypatch):
     """分支内部：状态从 current 推进到 success_status。"""
     async def body(orch, db, sse, dispatched):
@@ -279,7 +299,7 @@ def test_status_advances_not_stuck(tmp_path, monkeypatch):
 
 def test_skill_gate_file_paths_prefers_preview():
     """人审评论/时间轴要给仓库相对路径，优先确认卡 preview。"""
-    f = TicketOrchestrator._skill_gate_file_paths
+    f = result_handlers.skill_gate_file_paths
     paths = f({
         "waiting_human": {
             "preview_paths": ["works/slug/video_brief.json"],
@@ -581,7 +601,7 @@ def test_produces_satisfied_requires_declaration():
 
     无从判断是否齐全，宁可按失败处理交人工。
     """
-    f = TicketOrchestrator._skill_produces_satisfied
+    f = result_handlers.skill_produces_satisfied
     assert f({"_produces": [{"kind": "a"}]}, [{"kind": "a"}]) is True
     assert f({"_produces": [{"kind": "a"}, {"kind": "b"}]}, [{"kind": "a"}]) is False
     assert f({}, [{"kind": "a"}]) is False
@@ -721,7 +741,190 @@ def test_execute_non_skill_stage_keeps_host_role(tmp_path, monkeypatch):
 def test_process_ticket_calls_execute_assigned_agent():
     """锁调用点。改回 `agent.execute(action, context)` 会让宿主 Role 的
     skill stage 落到「未知任务」。"""
-    src = Path(__file__).resolve().parents[2] / "orchestrator.py"
-    text = src.read_text(encoding="utf-8")
-    assert "await self._execute_assigned_agent(" in text
-    assert "result = await agent.execute(action, context)" not in text
+    backend = Path(__file__).resolve().parents[2]
+    # process_ticket 的步骤已搬到 ticket_pipeline，调用点跟着过去了。
+    pipeline = (backend / "orchestration" / "ticket_pipeline.py").read_text(encoding="utf-8")
+    assert "await orch._execute_assigned_agent(" in pipeline
+    for name in ("orchestrator.py", "orchestration/ticket_pipeline.py"):
+        text = (backend / name).read_text(encoding="utf-8")
+        assert "result = await agent.execute(action, context)" not in text, name
+
+
+# ════════════════════ 边角：搬到 result_handlers 之前补的 ════════════════════
+#
+# 这几条在搬移前写成，先在原实现上跑通，再用来核对搬移后的行为。
+# 补的是覆盖率报告里漏掉的分支：人审信息不是 dict、没有可列的产物、
+# 查产物表出错、推进后查不到工单，以及产物路径整理的各个来源。
+
+def test_skill_gate_file_paths_all_sources():
+    """四个来源按顺序合并：确认卡路径、确认卡预览、产物总线、skill 输出。"""
+    f = result_handlers.skill_gate_file_paths
+    paths = f({
+        "waiting_human": {
+            "preview_paths": ["./works/a/brief.json", "works\\a\\brief.json", ""],
+            "preview_urls": [{"path": "works/a/shot.png"}, "not-a-dict", {"path": None}],
+        },
+        "artifacts": [{"path": "artifacts/x/a.json"}, "bad", {"kind": "no_path"}],
+        "outputs": [
+            "", "docs/readme.md", "a/clip.mp4", "cover.png",
+            "x/.ads-waiting-human.json",
+        ],
+    })
+    assert paths == [
+        "works/a/brief.json",      # 去掉 ./，反斜杠归一后与第二条重复，只留一条
+        "works/a/shot.png",
+        "artifacts/x/a.json",
+        "docs/readme.md",          # 已带 works/ artifacts/ docs/ 前缀的原样保留
+        "works/a/clip.mp4",        # 带目录的相对路径补 works/
+        "cover.png",               # 不带目录的原样保留
+    ]
+
+
+def test_skill_gate_file_paths_tolerates_bad_shapes():
+    f = result_handlers.skill_gate_file_paths
+    assert f({}) == []
+    assert f({"waiting_human": "yes", "outputs": ["a.md"]}) == ["a.md"]
+    assert f({"waiting_human": None, "artifacts": None, "outputs": None}) == []
+    many = [f"f{i}.md" for i in range(30)]
+    assert f({"outputs": many}) == many[:20], "最多列 20 条"
+
+
+def test_skill_gate_file_paths_strips_leading_dots():
+    """现状：开头的点和斜杠被整段去掉，点开头的目录名会丢掉那个点。
+
+    `lstrip("./")` 去的是字符集合，不是前缀。这里只记录现状，没有改。
+    """
+    f = result_handlers.skill_gate_file_paths
+    assert f({"outputs": [".ads/notes.md"]}) == ["works/ads/notes.md"]
+    assert f({"waiting_human": {"preview_paths": ["../up/a.md"]}}) == ["up/a.md"]
+
+
+def test_waiting_human_non_dict_and_no_files(tmp_path, monkeypatch):
+    """人审信息不是 dict、也没有任何产物路径：照样进待确认，评论只有一行。"""
+    async def body(orch, db, sse, dispatched):
+        await _call(orch, skill_result(
+            "waiting_human", success_status="demo_draft_ready", waiting_human="yes",
+        ))
+        assert await _status(db) == "demo_draft_ready"
+        assert dispatched == []
+        logs = await _logs(db)
+        detail = json.loads(logs[0]["detail"])
+        assert detail["files"] == []
+        assert detail["file_paths"] == []
+        assert detail["gate_message_id"] == ""
+        assert detail["gate_session_id"] == ""
+        comments = await db.fetch_all(
+            "SELECT content FROM ticket_comments WHERE ticket_id = ?", (TICKET_ID,)
+        )
+        assert [c["content"] for c in comments] == [
+            f"⏸ skill `{SKILL_ID}` 已产出，等待确认。"
+        ]
+        events = [p for e, p in sse if e == "ticket_status_changed"]
+        assert events == [{
+            "ticket_id": TICKET_ID, "from": "pending",
+            "to": "demo_draft_ready", "agent": "SkillAgent",
+        }]
+    _run(body, tmp_path, monkeypatch)
+
+
+def test_waiting_human_ready_status_fallbacks(tmp_path, monkeypatch):
+    """待确认状态的三级来源：_ready_status → 回传的 success_status → `{stage}_ready`。"""
+    async def body(orch, db, sse, dispatched):
+        await _call(orch, skill_result(
+            "waiting_human", success_status=None, waiting_human={},
+        ))
+        assert await _status(db) == f"{STAGE_ID}_ready"
+
+        cfg = sop_config()
+        cfg.pop("_stage_id")
+        await _call(orch, skill_result(
+            "waiting_human", success_status=None, sop_cfg=cfg, waiting_human={},
+        ), current_status=f"{STAGE_ID}_ready")
+        assert await _status(db) == f"{SKILL_ID}_ready", "没有 stage id 时用 skill id"
+        assert dispatched == []
+    _run(body, tmp_path, monkeypatch)
+
+
+def test_blocked_survives_artifact_query_failure(tmp_path, monkeypatch):
+    """查产物表出错不能挡住 blocked 收尾：诊断照写，只是少了补充文件。"""
+    async def body(orch, db, sse, dispatched):
+        original = db.fetch_all
+
+        async def flaky(sql, params=()):
+            if "FROM artifacts" in sql:
+                raise RuntimeError("artifacts 表查不了")
+            return await original(sql, params)
+        monkeypatch.setattr(db, "fetch_all", flaky)
+
+        await _call(orch, skill_result("budget_exceeded", message="超时了"))
+        assert await _status(db) == TicketStatus.BLOCKED.value
+        row = await db.fetch_one(
+            "SELECT diagnosis FROM tickets WHERE id = ?", (TICKET_ID,)
+        )
+        assert json.loads(row["diagnosis"]).get("suggested_actions")
+        wanted = ("ticket_blocked", "ticket_diagnosed", "ticket_status_changed")
+        assert [e for e, _ in sse if e in wanted] == list(wanted)
+    _run(body, tmp_path, monkeypatch)
+
+
+def test_no_dispatch_when_ticket_vanishes(tmp_path, monkeypatch):
+    """状态推进后重新查不到工单（期间被删）：不派单，也不报错。"""
+    async def body(orch, db, sse, dispatched):
+        original = db.fetch_one
+        hidden = {"on": True}
+
+        async def vanishing(sql, params=()):
+            if hidden["on"] and sql.startswith("SELECT status FROM tickets"):
+                return None
+            return await original(sql, params)
+        monkeypatch.setattr(db, "fetch_one", vanishing)
+
+        await _call(orch, skill_result("success"))
+        hidden["on"] = False
+        assert await _status(db) == SUCCESS_STATUS
+        assert dispatched == []
+    _run(body, tmp_path, monkeypatch)
+
+
+def test_success_status_result_beats_sop_config(tmp_path, monkeypatch):
+    """回传值和 sop_config 都有成功态且不一致时，用回传值；只有 sop_config 有时用它。
+
+    改坏检查发现这条优先级没有用例钉住：把两个来源对调，原有用例全部照过。
+    """
+    async def body(orch, db, sse, dispatched):
+        called = []
+
+        async def spy_stage(pid, act, tt=None):
+            called.append(act)
+            return {"success_status": "SHOULD_NOT_BE_USED"}
+        orch._sop_stage_for = spy_stage
+
+        await _call(orch, skill_result("success", success_status="from_result_done"))
+        assert await _status(db) == "from_result_done"
+
+        await _call(
+            orch, skill_result("success", success_status=None),
+            current_status="from_result_done",
+        )
+        assert await _status(db) == SUCCESS_STATUS, "回传缺失时取 sop_config._success_status"
+        assert called == [], "两个零成本来源都没用上就去查 SOP"
+    _run(body, tmp_path, monkeypatch)
+
+
+def test_waiting_human_ready_status_prefers_sop_config(tmp_path, monkeypatch):
+    """待确认状态：sop_config._ready_status 压过回传的 success_status；没有它才用回传值。"""
+    async def body(orch, db, sse, dispatched):
+        cfg = sop_config()
+        cfg["_ready_status"] = "cfg_ready"
+        await _call(orch, skill_result(
+            "waiting_human", success_status="result_ready", sop_cfg=cfg,
+            waiting_human={},
+        ))
+        assert await _status(db) == "cfg_ready"
+
+        await _call(orch, skill_result(
+            "waiting_human", success_status="result_ready", waiting_human={},
+        ), current_status="cfg_ready")
+        assert await _status(db) == "result_ready"
+        assert dispatched == []
+    _run(body, tmp_path, monkeypatch)

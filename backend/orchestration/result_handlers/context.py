@@ -1,0 +1,46 @@
+"""结果处理器的入参和返回约定。"""
+from dataclasses import dataclass
+from typing import Any, Awaitable, Callable, Dict, Optional
+
+# 处理器的返回值有两种含义，对应拆分前 `_handle_agent_result` 的两种出口：
+#
+# - 返回 HANDLED：已在处理器内收尾。调用方直接结束，不发 `ticket_status_changed`，
+#   也不在这里继续派单。对应原来分支里的 `return`。
+# - 返回状态字符串：调用方发 `ticket_status_changed`，并按规则表继续流转。
+#   对应原来落到函数尾部的路径。
+HANDLED = None
+
+
+@dataclass
+class ResultContext:
+    """一次 Agent 结果处理的全部输入。
+
+    业务字段和 `_handle_agent_result` 拆分前的局部变量一一对应。
+
+    `db`、`fire_knowledge_distill` 和 `synthesize_blocked_diagnosis` 由 orchestrator
+    在调用时传入，处理器模块不自己导入：
+
+    - 测试用 `monkeypatch.setattr(orchestrator, "db", test_db)` 换库，处理器必须
+      拿到同一个对象，否则会写到真实库里。
+    - `_fire_knowledge_distill` 和 `_synthesize_blocked_diagnosis` 内部导入了 L3 模块，
+      留在 orchestrator.py。由调用方传进来，分层守卫登记的违规不会换到新模块名下。
+      这只是没有让违规变多，orchestrator 对 L3 的依赖还在，要到 R4 才解开。
+    """
+
+    orch: Any                               # TicketOrchestrator：写日志、评论、记忆，查 SOP
+    db: Any
+    project_id: str
+    ticket_id: str
+    ticket: Dict[str, Any]
+    agent_name: str
+    action: str
+    result: Dict[str, Any]
+    result_json: str
+    current_status: str
+    requirement_id: str
+    git_result: Optional[Dict[str, Any]]
+    fire_knowledge_distill: Callable[[str, str], None]
+    synthesize_blocked_diagnosis: Callable[..., Dict[str, Any]]   # 只有 skill 处理器用
+
+
+ResultHandler = Callable[[ResultContext], Awaitable[Optional[str]]]

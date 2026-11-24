@@ -111,7 +111,10 @@ def test_poll_once_skips_held_tickets_before_zombie():
     src = inspect.getsource(TicketOrchestrator._poll_once)
     assert "_ticket_held_by_this_process" in src
     assert "本轮不再立刻派单" in src
-    hb = inspect.getsource(TicketOrchestrator.process_ticket)
+    # 心跳在 process_ticket 的「执行 Agent」这一步里起，步骤已搬到 ticket_pipeline。
+    from orchestration import ticket_pipeline
+    assert ticket_pipeline.run_agent in ticket_pipeline.STEPS
+    hb = inspect.getsource(ticket_pipeline.run_agent)
     assert "_ticket_heartbeat" in hb
 
 

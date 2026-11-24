@@ -159,7 +159,9 @@ check("回退优先读 assign 日志的 from_status", "action = 'assign'" in zsr
 check("有无限重跑止损（MAX_ZOMBIE_REWIND）", "MAX_ZOMBIE_REWIND" in zsrc)
 check("超限转 blocked", "TicketStatus.BLOCKED.value" in zsrc)
 
-upd_src = inspect.getsource(Orch._handle_agent_result)
+# DevAgent 的结果分支已从 _handle_agent_result 搬到 orchestration/result_handlers/dev.py
+from orchestration.result_handlers.dev import handle_dev
+upd_src = inspect.getsource(handle_dev)
 check("orchestrator 处理 development_failed 并记 reject",
       'result.get("status") == "development_failed"' in upd_src and '"reject"' in upd_src)
 check("development_failed 不落代码产物", "不落代码产物" in upd_src)

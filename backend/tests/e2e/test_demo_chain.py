@@ -25,6 +25,8 @@ import database as database_module
 import orchestrator as orch_module
 from database import Database
 from models import TicketStatus
+from orchestration import result_handlers
+from orchestration.result_handlers import ResultContext
 from orchestrator import TicketOrchestrator
 from skills.runner import ArtifactOut, SkillRunResult
 
@@ -141,7 +143,7 @@ async def _drive_chain(db, repo, monkeypatch, trace, max_steps=10) -> list:
 
     不用 `orchestrator.process_ticket`（它要跑真 Agent 调度、并发池、
     事件总线）。这里只做 orchestrator 做的三件事：查规则 → 跑 SkillAgent
-    → 调 `_handle_skill_agent_result`。**规则表来自真实的 compose_sop。**
+    → 调 `result_handlers.handle_skill`。**规则表来自真实的 compose_sop。**
     """
     from agents.skill_agent import SkillAgent
     from skills import runner as runner_mod
@@ -207,12 +209,16 @@ async def _drive_chain(db, repo, monkeypatch, trace, max_steps=10) -> list:
             "sop_config": rule.get("config") or {},
         }
         result = await agent.execute(rule["action"], ctx)
-        await orch._handle_skill_agent_result(
+        await result_handlers.handle_skill(ResultContext(
+            orch=orch, db=orch_module.db,
             project_id=PROJECT_ID, ticket_id=TICKET_ID, ticket=dict(row),
-            requirement_id=REQ_ID, action=rule["action"], result=result,
-            result_json=json.dumps(result, ensure_ascii=False),
-            current_status=status,
-        )
+            agent_name="SkillAgent", action=rule["action"],
+            result=result, result_json=json.dumps(result, ensure_ascii=False),
+            current_status=status, requirement_id=REQ_ID,
+            git_result=None,
+            fire_knowledge_distill=orch_module._fire_knowledge_distill,
+            synthesize_blocked_diagnosis=orch_module._synthesize_blocked_diagnosis,
+        ))
     return history
 
 
