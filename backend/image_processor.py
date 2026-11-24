@@ -379,6 +379,11 @@ async def process_image_request(req_id: str) -> None:
 
     # 标记处理中
     await db.update("image_requests", {"status": "processing", "updated_at": now_iso()}, "id = ?", (req_id,))
+    try:
+        from ai_gen_tasks import update_by_external
+        await update_by_external(req_id, status="running")
+    except Exception:
+        pass
 
     # 检查 API Key
     if not settings.LIGHTAI_API_KEY:
@@ -453,6 +458,12 @@ async def process_image_request(req_id: str) -> None:
         "result_path": result_path or "",
         "updated_at": now_iso(),
     }, "id = ?", (req_id,))
+    try:
+        from ai_gen_tasks import update_by_external
+        await update_by_external(req_id, status="done",
+                                 result_url=image_url, result_path=result_path or "")
+    except Exception:
+        pass
 
     # 推送 SSE
     try:
@@ -529,6 +540,12 @@ async def _finish_with_ascii(req: dict) -> None:
         "result_path": "(ascii)",
         "updated_at": now_iso(),
     }, "id = ?", (req["id"],))
+    try:
+        from ai_gen_tasks import update_by_external
+        await update_by_external(req["id"], status="failed", error="ascii_fallback 兜底",
+                                 result_path="(ascii)")
+    except Exception:
+        pass
 
 
 async def _replace_placeholder(req: dict, content: str, is_ascii: bool = False) -> None:
@@ -715,6 +732,19 @@ async def request_image(
         "created_at": now_iso(),
         "updated_at": now_iso(),
     })
+
+    # 统一 AI 任务记录（waiting）；失败静默降级，不影响入队
+    try:
+        from ai_gen_tasks import record_task
+        await record_task(
+            kind="image", provider="lightai", status="waiting",
+            prompt=prompt, engine=engine or settings.LIGHTAI_IMAGE_ENGINE,
+            project_id=project_id, ticket_id=ticket_id,
+            session_id=session_id, message_id=message_id,
+            source="image_requests", external_task_id=req_id,
+        )
+    except Exception:
+        pass
 
     logger.info("图片请求已入队: %s (%s...)", req_id, prompt[:30])
     return tag

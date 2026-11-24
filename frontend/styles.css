@@ -689,6 +689,10 @@ body {
 }
 .hooks-panel-close:hover { color: var(--text); }
 .hooks-panel-body { padding: 10px 14px 14px; }
+/* 顶栏「处理中 / 异步任务 / AI 任务」明细面板：比 hooks 面板略宽，容纳任务表格 */
+#processingPanel.hooks-panel,
+#asyncTasksPanel.hooks-panel,
+#aiGenTasksPanel.hooks-panel { width: 480px; max-height: 560px; }
 .hooks-section-title {
     font-size: 11px; font-weight: 700;
     color: var(--text-muted); text-transform: uppercase;

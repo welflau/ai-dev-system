@@ -755,6 +755,145 @@ runlive.top 拿到 401）。改为 Plugin 内 `from cloud_video import client as
 2. 可选：`llm_config()` 的 .env 写入仍是 dict 重建（丢注释），与 §17 提到的另三处同问题，
    可统一换成逐行替换写法。
 
+---
+
+## 十九、追加落地：顶栏「处理中 / 异步任务」点击弹出明细列表（2026-11-20）
+
+用户截图：顶栏指标条有「⚙️ 处理中 0」「🔄 异步任务 48」两个按钮，要求
+「点击这两个按钮，弹出各自处理的列表」。三个拍板（AskUserQuestion）：
+面板 = **下拉面板**（照 hooksPanel）、异步任务 = **新增端点展示真实协程明细**、
+刷新 = **打开时 + 跟随 5s 轮询**。
+
+### 19.1 调研结论
+
+- 两个按钮此前**不可点**（无 onclick / 无 `metric-item-clickable`），纯展示。
+- 「处理中 N」= `len(orchestrator._processing)`（内存工单 ID 集合），**不是** DB `status='in_progress'`；
+  明细有现成端点 `GET /api/agents/orchestrator`（`active_agents` / `processing_tickets` /
+  `queue_preview` / `queue_count` / `max_concurrent`），前端 `loadAgentMonitor()` 已在用。
+- 「异步任务 N」= `asyncio.all_tasks(loop)` 中未完成 Task 数（进程内**全部协程**，含 HTTP/SSE/
+  MCP/后台轮询），**不是** image_processor 队列 / automation_tasks / CI pipeline；
+  `generation_tasks` 表不存在，**无任何明细 API**。
+- 现成范式：`hooksPanel`（`index.html:151-159` + `app.js` `toggleHooksPanel()`/`_loadHooksPanel()`）
+  就是「点击顶栏徽标 → 锚定下拉列表面板」，完全同构；CSS `.hooks-panel` 系可复用。
+- `.modal-overlay` 默认 `opacity:0; pointer-events:none`，范式靠 inline `display:none` + JS 打开，
+  照抄时要带 inline style（本轮用 hooksPanel 故无此问题）。
+
+### 19.2 改动
+
+| 文件 | 内容 |
+|---|---|
+| `M backend/main.py` | 新增 `_asyncio_task_details(loop, current)` 与 `GET /api/metrics/asyncio-tasks`（`{count, tasks[{name,coro,done,cancelling,stack,self}], summary[]}`）；`/api/metrics` 保持轻量计数、口径一致 |
+| `M frontend/index.html` | 两个 metric 加 `metric-item-clickable` + `onclick`；新增 `processingPanel` / `asyncTasksPanel` 两个下拉容器（照 hooksPanel，含 ↻ 刷新按钮）；bump `app.js?v=20261120b` |
+| `M frontend/app.js` | `toggleProcessingPanel` / `toggleAsyncTasksPanel` / `_closeOtherMetricPanels` / `_anchorMetricPanel` / `_load*Panel` / `_render*Panel`；`refreshMetrics()` 末尾加面板打开时跟随 5s 重渲染 |
+| `M frontend/styles.css` | 复用 `.hooks-panel` 系，仅给两个新面板加 `width:480px; max-height:560px` |
+| `A backend/tests/api/test_metrics_asyncio_tasks.py` | 7 项 |
+
+### 19.3 关键设计
+
+- **口径一致**：`/api/metrics` 的 `asyncio_tasks` 与明细端点都是「all_tasks 里所有未完成 task，
+  含当前请求自身」。明细端点**不排除**当前请求 task，只用 `self:true` 标记 —— 否则列表会比数字少 1。
+- **不泄漏**：`get_stack()` 只取栈帧的 `文件名:函数名:行号`，**不读局部变量**。
+- **三个面板互斥**：`_closeOtherMetricPanels(keep)` 打开一个会收起 hooksPanel 与另一个，
+  避免叠在一起；点色仍由健康检查反映服务可达性。
+- **状态变量前置**：`_processingPanelOpen` / `_asyncTasksPanelOpen` 的 `let` 声明放在
+  `refreshMetrics()` **之前**，避免 async 首次调用时的 TDZ（`refreshMetrics()` 在脚本加载末尾
+  就会执行，若声明在后面会因暂时性死区抛 ReferenceError）。
+- **列表截断**：异步任务明细最多显示 50 行（真实 count 仍显示），处理中队列只显示前 5 条
+  （端点 `queue_preview` 上限），都有「仅显示前 N 条，共 M 条」提示。
+
+### 19.4 验收
+
+- 新增 **7 项**端点测试 + 全量 **166 项回归通过**；`node --check app.js` 通过；
+  HTML/JS 6 个面板 id、7 个函数、4 个 onclick 一一对应。
+- 覆盖：字段完整、`count == len(tasks)`、summary 按 coro 聚合、self 标记恰好 1 个、
+  done task 被过滤、多个 pending task 都能列出、`/api/metrics` 同口径。
+- 重启服务端到端验证（PID 76232，8001）：
+  `GET /api/metrics/asyncio-tasks` → `count=13 / tasks=13 / summary 5 项`，
+  `GET /api/metrics` → `asyncio_tasks=13`（与列表条数一致）；
+  `/app` 页面含两个面板容器与 `app.js?v=20261120b`，`/static/app.js` 含全部新函数，
+  `/static/styles.css` 含两条面板宽度规则。
+
+### 19.5 边界与待办
+
+1. 明细是**进程内即时快照**，两次请求间数字会自然变化（后台轮询、HTTP 请求进出），
+   面板 5s 刷新时数字与列表可能差 1~2，属正常。
+2. `get_stack()` 对已完成/Cancelled 的 task 可能抛异常，已逐字段 try/except 兜底。
+3. 可选：面板里加「点击工单行 → 打开工单抽屉」（复用 `_openTicketByShortId()`，
+   本轮为保证最小改动未做）。
+4. 可选：把三个面板的互斥逻辑抽成统一的 `metricPanelManager`（当前是 3 个布尔量 +
+   一个 `_closeOtherMetricPanels`，够用但略重复）。
+
+---
+
+## 二十、追加落地：顶栏「AI 任务」指标 + 生成任务统一记录层（2026-11-21）
+
+用户截图：顶栏指标条（处理中 / 异步任务 / LLM 并发 / 内存 / DB / WAL / 今日 / Hooks），
+要求「添加一个 AI 任务的个数，统计提交的生图生视频等任务，页面显示列表、进行/等待/完成的个数」。
+三个拍板（AskUserQuestion）：埋点 = **全覆盖**、徽标 = **总任务数**、保留 = **全量 + 列表限 50 条**。
+
+### 20.1 调研结论（为什么必须新建统一层）
+
+- 现有**唯一**生成任务表 `image_requests` 只覆盖生图 3 个 `request_image()` 入口；
+  `actions/gen_image.py` 的 skill 链生图明确「不碰 image_requests」。
+- **生视频 4 类入口全部零落库**：`cloud_video/`（MiniMax H3 / LightAI）、videoclaw 的
+  VC sandbox、director 的 lightai 直连与 CLI 后端，状态只在上游 HTTP 响应 / 内存队列里。
+- 无 `generation_tasks` / `video_tasks` / `ai_tasks` / 通用 `tasks` 表可复用；
+  `cli_task_log`（聊天后台任务）、`ticket_command_log`（命令日志）、
+  `automation_runs`（FK 强绑定定时调度）语义都不匹配。
+- 结论：**不改入口做不出「完成数 + 明细列表」**，必须新建 `ai_gen_tasks` 表 + 公共
+  `record_task()` 并在各入口埋点。
+
+### 20.2 改动
+
+| 文件 | 内容 |
+|---|---|
+| `M backend/database.py` | SCHEMA_SQL 新增 `ai_gen_tasks` 表（20 列，`AIGEN-*` 主键，4 态 status，3 索引） |
+| `A backend/ai_gen_tasks.py` | `record_task` / `update_task` / `update_by_external` / `counts` / `total` / `recent`；**记录失败静默降级** |
+| `M backend/image_processor.py` | 生图 4 处：入队 waiting / processing→running / done / ascii_fallback→failed，用 `external_task_id=IMG-*` 关联（零改动原表） |
+| `M backend/actions/gen_image.py` | skill 链生图埋点，各失败/成功分支显式 await 状态更新 |
+| `M backend/cloud_video/client.py` | `generate_video_with_provider` 单点收口：waiting（排队）→running→done/failed，自动覆盖 director/videoclaw 云端分支；函数内延迟 import 保持公共层零业务依赖 |
+| `M backend/plugins/videoclaw/actions/vc_media.py` | 两个 VC sandbox Action 埋点（云端分支不重复记） |
+| `M backend/plugins/director/actions/gen_video.py` | CLI 后端（libtv/dreamina）+ lightai 直连埋点（云端分支不重复记） |
+| `A backend/api/ai_gen_tasks.py` | `GET /api/ai-gen-tasks`（counts + total + 最近 50 条）、`GET /summary`（轻量计数） |
+| `M backend/main.py` | 注册 router；`/api/metrics` 加 `ai_gen_tasks` 总数字段 |
+| `M frontend/index.html` | 第 9 个 metric `metric-aigen`（🎬 AI 任务）+ `aiGenTasksPanel`；bump `app.js?v=20261120d` |
+| `M frontend/app.js` | 状态变量前置 / `_closeOtherMetricPanels` / `resize` / `refreshMetrics` 四处接线；`toggle/load/renderAiGenTasksPanel` |
+| `M frontend/styles.css` | 面板宽度规则追加 `#aiGenTasksPanel` |
+| `A backend/tests/api/test_ai_gen_tasks.py` | 8 项 |
+
+### 20.3 关键设计
+
+- **4 态 status**：`waiting`（排队/待处理）/ `running`（执行中）/ `done` / `failed`。
+  面板映射「等待=waiting、进行中=running、完成=done」，另显示失败数。
+- **不重复计数**：云端 dispatch 单点埋点后，director / videoclaw 的 `_run_cloud_provider`
+  **不再**各自埋（都调 `generate_video_with_provider`）；只有不走 dispatch 的
+  VC sandbox / director lightai 直连 / CLI 后端单独埋。
+- **记录失败绝不影响生成**：所有 `ai_gen_tasks` 函数全程 try/except，埋点处也包 try/except，
+  与 `command_log.py:134-137` 同一原则。公共层用**函数内延迟 import** 避免顶层依赖 database。
+- **零改动 `image_requests` 表**：用 `external_task_id` 关联 IMG-*，`update_by_external` 更新。
+- **计数口径**：`counts` 全表 GROUP BY，不随列表 limit 变化；徽标显示累计总数。
+- **列表限 50**：DB 全量保留（用户选择），API 只取 `created_at DESC LIMIT 50`。
+
+### 20.4 验收
+
+- 新增 **8 项**测试（record/update/external/时间戳/counts/recent/静默降级/API/metrics 字段）
+  + 全量 **174 项回归通过**；`node --check app.js` 通过；HTML/JS id、函数、onclick、
+  互斥、锚定一一对应。
+- 测试风格与项目一致（同步 test + 单 loop `asyncio.run` 包裹整个场景）—— 初版用
+  `@pytest.mark.asyncio` 与其它 `asyncio.run` 测试组合跑会因 `Database._write_lock`
+  跨 event loop 死锁挂住，改同步单 loop 后组合跑 4s 内完成。
+- 重启服务端到端验证（见 DevLog）：新表自动建出、`/api/metrics` 含 `ai_gen_tasks`、
+  `GET /api/ai-gen-tasks` 返回三态计数与明细、面板与徽标资源就位。
+
+### 20.5 待办
+
+1. 历史数据不回填：新表只记录接入后提交的任务。
+2. 可选：面板任务行点击跳转产物 / 工单（当前只展示列表）。
+3. 可选：任务表增长后加归档/清理（用户本轮选择全量保留）。
+4. `image_requests` 的 `failed`/`error_msg` 列代码从不写入（都落 `ascii_fallback`），
+   本层在 ASCII 兜底时统一记 `failed`，语义更准但两者不自动同步。
+
+
 
 
 

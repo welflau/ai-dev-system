@@ -1183,6 +1183,34 @@ CREATE TABLE IF NOT EXISTS session_materials (
 CREATE INDEX IF NOT EXISTS idx_sm_session ON session_materials(session_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_sm_project ON session_materials(project_id, status);
 CREATE INDEX IF NOT EXISTS idx_sm_status  ON session_materials(status, expires_at);
+
+-- AI 生成任务统一记录（生图 / 生视频；供顶栏「AI 任务」指标统计）。
+-- 全新增表，一次写全字段；老库 CREATE TABLE IF NOT EXISTS 会正常建出，无需 _auto_migrate。
+CREATE TABLE IF NOT EXISTS ai_gen_tasks (
+    id               TEXT PRIMARY KEY,           -- AIGEN-YYYYMMDD-xxxxxx
+    kind             TEXT NOT NULL,              -- image / video
+    provider         TEXT NOT NULL,              -- lightai / minimax_h3 / vc_sandbox / libtv / dreamina
+    engine           TEXT DEFAULT '',           -- gemini / kling / jimeng / seedance2.0fast ...
+    status           TEXT NOT NULL DEFAULT 'waiting',  -- waiting / running / done / failed
+    prompt           TEXT,
+    project_id       TEXT,
+    ticket_id        TEXT,
+    session_id       TEXT,
+    message_id       TEXT,
+    source           TEXT,                      -- 入口：image_requests / gen_image / cloud_video / vc_media / director
+    external_task_id TEXT,                      -- 上游 task_id
+    result_url       TEXT,
+    result_path      TEXT,
+    error            TEXT,
+    queued_at        TEXT,
+    started_at       TEXT,
+    finished_at      TEXT,
+    created_at       TEXT NOT NULL,
+    updated_at       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_aigen_status  ON ai_gen_tasks(status);
+CREATE INDEX IF NOT EXISTS idx_aigen_kind    ON ai_gen_tasks(kind);
+CREATE INDEX IF NOT EXISTS idx_aigen_created ON ai_gen_tasks(created_at DESC);
 """
 
 

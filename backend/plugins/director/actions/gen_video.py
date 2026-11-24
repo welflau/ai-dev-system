@@ -20,6 +20,34 @@ from plugins.director.backends import ALLOWED_BACKENDS as _BACKENDS
 _ENGINES = ("kling", "jimeng", "keling")
 
 
+async def _dir_record(provider: str, prompt: str, context: Dict[str, Any], engine: str = "") -> str:
+    """记一条 director 私有生视频任务（CLI 后端 / LightAI 直连）为 running。
+
+    云端分支（_run_cloud_provider → cloud_video.generate_video_with_provider）已统一记录，
+    这里只覆盖不走 dispatch 的两条路径，避免双重计数。
+    """
+    try:
+        from ai_gen_tasks import record_task
+        return await record_task(
+            kind="video", provider=provider, status="running",
+            prompt=prompt, engine=engine, source="director",
+            project_id=str(context.get("project_id") or ""),
+            ticket_id=str(context.get("ticket_id") or ""),
+        )
+    except Exception:
+        return ""
+
+
+async def _dir_finish(aigen_id: str, status: str, **fields) -> None:
+    if not aigen_id:
+        return
+    try:
+        from ai_gen_tasks import update_task
+        await update_task(aigen_id, status=status, **fields)
+    except Exception:
+        pass
+
+
 class GenVideoAction(ActionBase):
     available_for_traits = {"any_of": ["category:video", "pipeline:video"]}
 
@@ -176,6 +204,7 @@ class GenVideoAction(ActionBase):
                 data={"backend": backend, "command": command, "task_id": task_id},
             )
 
+        aigen_id = await _dir_record(backend, prompt, context)
         if backend == "libtv":
             from plugins.director.cli_video import generate_libtv
             ok, data, err = await generate_libtv(
@@ -198,6 +227,9 @@ class GenVideoAction(ActionBase):
                 session=str(context.get("session") or ""),
                 model=str(context.get("model") or "seedance2.0fast"),
             )
+        await _dir_finish(aigen_id, "done" if ok else "failed",
+                          error="" if ok else str(err or "CLI 生成失败")[:400],
+                          result_path=str(dest) if ok else "")
 
         data = dict(data or {})
         data.setdefault("command", command)
@@ -431,8 +463,10 @@ class GenVideoAction(ActionBase):
             "sound": bool(sound),
         }
         logger.info("🎬 gen_video 开始 engine=%s file=%s prompt=%.60s", engine, filename, prompt)
+        aigen_id = await _dir_record("lightai", prompt, context, engine=engine)
         task_id, url, err = await create_and_poll_video(req)
         if not task_id or not url:
+            await _dir_finish(aigen_id, "failed", error=str(err or "LightAI 视频生成失败")[:400])
             traced = await self._trace(context, command, str(out_dir), "error")
             return ActionResult(
                 success=False,
@@ -449,6 +483,8 @@ class GenVideoAction(ActionBase):
 
         ok, dl_err = await download_url(url, dest)
         if not ok:
+            await _dir_finish(aigen_id, "failed", error=str(dl_err or "下载失败")[:400],
+                              result_url=url)
             traced = await self._trace(context, command, str(out_dir), "error")
             return ActionResult(
                 success=False,
@@ -463,6 +499,8 @@ class GenVideoAction(ActionBase):
                 },
             )
 
+        await _dir_finish(aigen_id, "done", external_task_id=str(task_id or ""),
+                          result_url=url, result_path=str(dest))
         traced = await self._trace(context, command, str(out_dir), "success")
         rel = ""
         try:

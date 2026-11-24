@@ -33272,6 +33272,10 @@ async function toggleAgentTools(enabled) {
 }
 
 // ==================== 系统指标条 ====================
+let _processingPanelOpen = false;
+let _asyncTasksPanelOpen = false;
+let _aiGenTasksPanelOpen = false;
+
 
 function _setMetric(id, value, level) {
     const el = document.getElementById('metric-' + id);
@@ -33326,6 +33330,15 @@ async function refreshMetrics() {
             cost >= 1 ? `$${cost.toFixed(2)}` : cost >= 0.01 ? `$${cost.toFixed(3)}` : `$${cost.toFixed(4)}`,
             cost >= 5 ? 'danger' : cost >= 1 ? 'warn' : cost > 0 ? 'ok' : null
         );
+
+        // AI 任务总数徽标
+        _setMetric('aigen', d.ai_gen_tasks ?? 0,
+            (d.ai_gen_tasks ?? 0) > 0 ? 'ok' : null);
+
+        // 三个明细面板打开时跟随 5s 轮询重新渲染（与 hooksPanel 同频）
+        if (_processingPanelOpen) _loadProcessingPanel();
+        if (_asyncTasksPanelOpen) _loadAsyncTasksPanel();
+        if (_aiGenTasksPanelOpen) _loadAiGenTasksPanel();
     } catch (_) {}
 }
 
@@ -33631,6 +33644,280 @@ function _renderHooksPanel(status, stats) {
         html += `<div class="hooks-empty" style="margin-top:8px;">近 1 小时暂无工具调用记录</div>`;
     }
 
+    body.innerHTML = html;
+}
+
+
+// ==================== 顶栏「处理中 / 异步任务」下拉明细 ====================
+// 照 hooksPanel 范式：点击顶栏指标块 → 锚定到按钮下方的下拉面板。
+// 三个面板（hooks / processing / asyncTasks）互斥，避免叠在一起。
+
+function _closeOtherMetricPanels(keep) {
+    if (keep !== 'processing' && _processingPanelOpen) {
+        _processingPanelOpen = false;
+        const p = document.getElementById('processingPanel');
+        if (p) p.style.display = 'none';
+    }
+    if (keep !== 'async' && _asyncTasksPanelOpen) {
+        _asyncTasksPanelOpen = false;
+        const p = document.getElementById('asyncTasksPanel');
+        if (p) p.style.display = 'none';
+    }
+    if (keep !== 'aigen' && _aiGenTasksPanelOpen) {
+        _aiGenTasksPanelOpen = false;
+        const p = document.getElementById('aiGenTasksPanel');
+        if (p) p.style.display = 'none';
+    }
+    if (typeof _hooksPanelOpen !== 'undefined' && _hooksPanelOpen) {
+        _hooksPanelOpen = false;
+        const hp = document.getElementById('hooksPanel');
+        if (hp) hp.style.display = 'none';
+    }
+}
+
+function _anchorMetricPanel(panel, anchorId) {
+    const anchor = document.getElementById(anchorId);
+    if (!anchor) return;
+    const rect = anchor.getBoundingClientRect();
+    const margin = 8;
+    const vw = window.innerWidth, vh = window.innerHeight;
+
+    // 宽度夹到视口内（小屏时不溢出）。用常量而非 offsetWidth：后者在窗口
+    // 由窄变宽后会保留上次被压窄的值，面板无法恢复 480px。
+    const width = Math.min(480, vw - margin * 2);
+    panel.style.width = width + 'px';
+
+    // 用 left 定位：面板左边缘对齐按钮左边缘，再向右 clamp 保证完整可见。
+    // 之前用 right 定位会把面板右边缘对齐按钮右边缘，而这两个按钮在顶栏靠左，
+    // 480px 宽的面板会向左延伸出视口，标题与表格左列被裁掉（截图「显示不全」）。
+    let left = rect.left;
+    if (left + width > vw - margin) left = vw - width - margin;
+    if (left < margin) left = margin;
+    panel.style.left = left + 'px';
+    panel.style.right = 'auto';   // 必须清掉，否则 left+right+width 过约束
+
+    // 垂直：按钮下方，且不超出视口底部（CSS 的 max-height 会被这里覆盖）
+    let top = rect.bottom + 4;
+    if (top < margin) top = margin;
+    panel.style.top = top + 'px';
+    panel.style.maxHeight = Math.max(160, vh - top - margin) + 'px';
+}
+
+// 窗口尺寸变化时重新锚定已打开的面板，避免 resize 后再次被裁
+window.addEventListener('resize', () => {
+    if (_processingPanelOpen) {
+        const p = document.getElementById('processingPanel');
+        if (p) _anchorMetricPanel(p, 'metric-processing');
+    }
+    if (_asyncTasksPanelOpen) {
+        const p = document.getElementById('asyncTasksPanel');
+        if (p) _anchorMetricPanel(p, 'metric-tasks');
+    }
+    if (_aiGenTasksPanelOpen) {
+        const p = document.getElementById('aiGenTasksPanel');
+        if (p) _anchorMetricPanel(p, 'metric-aigen');
+    }
+});
+
+function toggleProcessingPanel() {
+    _processingPanelOpen = !_processingPanelOpen;
+    const panel = document.getElementById('processingPanel');
+    if (!panel) return;
+    panel.style.display = _processingPanelOpen ? '' : 'none';
+    if (_processingPanelOpen) {
+        _closeOtherMetricPanels('processing');
+        _anchorMetricPanel(panel, 'metric-processing');
+        _loadProcessingPanel();
+    }
+}
+
+function toggleAsyncTasksPanel() {
+    _asyncTasksPanelOpen = !_asyncTasksPanelOpen;
+    const panel = document.getElementById('asyncTasksPanel');
+    if (!panel) return;
+    panel.style.display = _asyncTasksPanelOpen ? '' : 'none';
+    if (_asyncTasksPanelOpen) {
+        _closeOtherMetricPanels('async');
+        _anchorMetricPanel(panel, 'metric-tasks');
+        _loadAsyncTasksPanel();
+    }
+}
+
+async function _loadProcessingPanel() {
+    const body = document.getElementById('processingPanelBody');
+    if (!body) return;
+    try {
+        const d = await fetch('/api/agents/orchestrator').then(r => r.json());
+        _renderProcessingPanel(d);
+    } catch (e) {
+        body.innerHTML = '<div class="hooks-empty" style="color:var(--error);">加载失败: ' + escHtml(e.message) + '</div>';
+    }
+}
+
+function _renderProcessingPanel(d) {
+    const body = document.getElementById('processingPanelBody');
+    if (!body) return;
+    const active = d.active_agents || [];
+    const queue = d.queue_preview || [];
+    const procCount = d.processing_count ?? 0;
+    const queueCount = d.queue_count ?? 0;
+
+    let html = '<div class="hooks-section-title">⚡ 正在执行（' + active.length
+        + ' 个 Agent / 并发上限 ' + (d.max_concurrent ?? '-') + '）</div>';
+    if (!active.length) {
+        html += '<div class="hooks-empty">当前没有正在执行的 Agent（处理中工单 ' + procCount + '）</div>';
+    } else {
+        html += '<table class="hooks-table"><thead><tr><th>Agent</th><th>动作</th><th>工单</th><th>耗时</th></tr></thead><tbody>';
+        active.forEach(a => {
+            const short = String(a.ticket_id || '').slice(-6);
+            html += '<tr>'
+                + '<td><code>' + escHtml(a.agent || '') + '</code></td>'
+                + '<td>' + escHtml(a.action || '—') + '</td>'
+                + '<td title="' + escHtml(a.ticket_title || '') + '">' + (short ? '#' + escHtml(short) : '—') + '</td>'
+                + '<td>' + (a.elapsed_s != null ? a.elapsed_s + 's' : '—') + '</td>'
+                + '</tr>';
+        });
+        html += '</tbody></table>';
+    }
+
+    html += '<div class="hooks-section-title" style="margin-top:12px;">📋 待处理队列（' + queueCount + '）</div>';
+    if (!queue.length) {
+        html += '<div class="hooks-empty">暂无待处理工单</div>';
+    } else {
+        html += '<table class="hooks-table"><thead><tr><th>工单</th><th>标题</th><th>状态</th></tr></thead><tbody>';
+        queue.forEach(q => {
+            html += '<tr>'
+                + '<td>#' + escHtml(String(q.id || '').slice(-6)) + '</td>'
+                + '<td title="' + escHtml(q.title || '') + '">' + escHtml((q.title || '').slice(0, 22)) + '</td>'
+                + '<td>' + escHtml(q.status || '') + '</td>'
+                + '</tr>';
+        });
+        html += '</tbody></table>';
+        if (queueCount > queue.length) {
+            html += '<div class="hooks-empty" style="margin-top:4px;">仅显示前 ' + queue.length + ' 条，共 ' + queueCount + ' 条</div>';
+        }
+    }
+    body.innerHTML = html;
+}
+
+
+// ==================== 顶栏「AI 任务」明细 ====================
+// 数据源：/api/ai-gen-tasks（生图/生视频统一任务表）
+
+function toggleAiGenTasksPanel() {
+    _aiGenTasksPanelOpen = !_aiGenTasksPanelOpen;
+    const panel = document.getElementById('aiGenTasksPanel');
+    if (!panel) return;
+    panel.style.display = _aiGenTasksPanelOpen ? '' : 'none';
+    if (_aiGenTasksPanelOpen) {
+        _closeOtherMetricPanels('aigen');
+        _anchorMetricPanel(panel, 'metric-aigen');
+        _loadAiGenTasksPanel();
+    }
+}
+
+async function _loadAiGenTasksPanel() {
+    const body = document.getElementById('aiGenTasksPanelBody');
+    if (!body) return;
+    try {
+        const d = await fetch('/api/ai-gen-tasks').then(r => r.json());
+        _renderAiGenTasksPanel(d);
+    } catch (e) {
+        body.innerHTML = '<div class="hooks-empty" style="color:var(--error);">加载失败: ' + escHtml(e.message) + '</div>';
+    }
+}
+
+function _renderAiGenTasksPanel(d) {
+    const body = document.getElementById('aiGenTasksPanelBody');
+    if (!body) return;
+    const c = d.counts || {};
+    const tasks = d.tasks || [];
+
+    // 三态计数 + 失败数
+    let html = '<div style="display:flex;gap:6px;margin-bottom:10px;">';
+    const stats = [
+        ['⏳ 等待', c.waiting || 0, 'var(--warning)'],
+        ['⚙️ 进行中', c.running || 0, 'var(--primary-light, #7aa2f7)'],
+        ['✅ 完成', c.done || 0, 'var(--success)'],
+        ['❌ 失败', c.failed || 0, 'var(--error)'],
+    ];
+    stats.forEach(s => {
+        html += '<div style="flex:1;text-align:center;padding:6px 2px;border:1px solid var(--border);border-radius:6px;">'
+            + '<div style="font-size:16px;font-weight:700;color:' + s[2] + ';">' + s[1] + '</div>'
+            + '<div style="font-size:10px;color:var(--text-muted);">' + s[0] + '</div>'
+            + '</div>';
+    });
+    html += '</div>';
+    html += '<div class="hooks-empty" style="margin-bottom:8px;">累计提交 ' + (d.total ?? 0)
+        + ' 个任务（下面显示最近 ' + tasks.length + ' 条）</div>';
+
+    html += '<div class="hooks-section-title">明细</div>';
+    if (!tasks.length) {
+        html += '<div class="hooks-empty">暂无 AI 生成任务记录。提交一次生图或生视频后这里会有数据。</div>';
+        body.innerHTML = html;
+        return;
+    }
+    const statusMeta = { waiting: ['⏳', 'var(--warning)'], running: ['⚙️', 'var(--primary-light, #7aa2f7)'],
+                         done: ['✅', 'var(--success)'], failed: ['❌', 'var(--error)'] };
+    html += '<table class="hooks-table"><thead><tr><th>状态</th><th>类型</th><th>来源</th><th>任务 / 描述</th></tr></thead><tbody>';
+    tasks.forEach(t => {
+        const sm = statusMeta[t.status] || ['•', 'var(--text-muted)'];
+        const label = (t.prompt || t.id || '').slice(0, 24);
+        html += '<tr>'
+            + '<td style="color:' + sm[1] + ';" title="' + escHtml(t.status || '') + '">' + sm[0] + '</td>'
+            + '<td>' + (t.kind === 'image' ? '🖼️ 图' : '🎬 视频') + '</td>'
+            + '<td><code>' + escHtml((t.provider || t.source || '—').slice(0, 14)) + '</code></td>'
+            + '<td title="' + escHtml(t.prompt || t.id || '') + '">' + escHtml(label) + '</td>'
+            + '</tr>';
+    });
+    html += '</tbody></table>';
+    body.innerHTML = html;
+}
+
+async function _loadAsyncTasksPanel() {
+    const body = document.getElementById('asyncTasksPanelBody');
+    if (!body) return;
+    try {
+        const d = await fetch('/api/metrics/asyncio-tasks').then(r => r.json());
+        _renderAsyncTasksPanel(d);
+    } catch (e) {
+        body.innerHTML = '<div class="hooks-empty" style="color:var(--error);">加载失败: ' + escHtml(e.message) + '</div>';
+    }
+}
+
+function _renderAsyncTasksPanel(d) {
+    const body = document.getElementById('asyncTasksPanelBody');
+    if (!body) return;
+    const tasks = d.tasks || [];
+    const summary = d.summary || [];
+
+    let html = '<div class="hooks-section-title">🧵 活跃协程（' + (d.count ?? tasks.length) + ' 个，进程内 asyncio Task）</div>';
+    if (!summary.length) {
+        html += '<div class="hooks-empty">暂无活跃协程</div>';
+    } else {
+        html += '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:10px;">';
+        summary.forEach(g => {
+            html += '<span style="font-size:10px;padding:2px 6px;border:1px solid var(--border);border-radius:10px;white-space:nowrap;"'
+                + ' title="' + escHtml(g.coro) + '"><code>' + escHtml(g.coro) + '</code> ×' + g.count + '</span>';
+        });
+        html += '</div>';
+    }
+
+    html += '<div class="hooks-section-title" style="margin-top:6px;">明细</div>';
+    html += '<table class="hooks-table"><thead><tr><th>Task</th><th>协程</th><th>当前位置</th></tr></thead><tbody>';
+    tasks.slice(0, 50).forEach(t => {
+        const badge = t.self ? ' <span style="color:var(--text-muted);">(本次请求)</span>' : '';
+        const canc = t.cancelling ? ' <span style="color:var(--warning);">取消中</span>' : '';
+        html += '<tr>'
+            + '<td><code>' + escHtml(t.name || '—') + '</code>' + badge + canc + '</td>'
+            + '<td title="' + escHtml(t.coro || '') + '">' + escHtml((t.coro || '—').slice(0, 28)) + '</td>'
+            + '<td title="' + escHtml(t.stack || '') + '" style="color:var(--text-muted);">' + escHtml((t.stack || '—').slice(0, 30)) + '</td>'
+            + '</tr>';
+    });
+    html += '</tbody></table>';
+    if (tasks.length > 50) {
+        html += '<div class="hooks-empty" style="margin-top:4px;">仅显示前 50 条，共 ' + tasks.length + ' 条</div>';
+    }
     body.innerHTML = html;
 }
 

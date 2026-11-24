@@ -20,7 +20,7 @@ REACT 循环是单线程顺序推理。返回 request_id 会逼 LLM 自己写「
 代价是占 skill 的 `budget.max_seconds` —— 用 gen_image 的 skill 要把预算调到
 600+。Budget.check() 只在轮与轮之间生效（query_engine/budget.py:39），所以
 一次生图跑完回来下一轮开头就可能触发超时；orchestrator 的 SkillAgent 分支对
-「超预算但 produces 齐全」做了豁免，见 `_skill_produces_satisfied`。
+「超预算但 produces 齐全」做了豁免，见 `orchestration/result_handlers/skill.py` 的 `skill_produces_satisfied`。
 
 方案文档：docs/20261015_01_能力自描述与动态组装框架方案.md §3.7
 """
@@ -258,9 +258,34 @@ class GenImageAction(ActionBase):
         logger.info("🎨 gen_image 开始 engine=%s file=%s prompt=%.60s",
                     engine, filename, prompt)
 
-        task_id, url = await _create_and_poll(req)
+        # 统一 AI 任务记录（skill 链生图不经过 image_requests 表）
+        try:
+            from ai_gen_tasks import record_task as _record, update_task as _update
+            _aigen_id = await _record(
+                kind="image", provider="lightai", status="running",
+                prompt=prompt, engine=engine,
+                project_id=str(context.get("project_id") or ""),
+                ticket_id=str(context.get("ticket_id") or ""),
+                source="gen_image",
+            )
+        except Exception:
+            _aigen_id = ""
+            async def _update(*_a, **_kw):
+                return False
+
+        async def _ai_fail(reason):
+            if _aigen_id:
+                await _update(_aigen_id, status="failed", error=str(reason)[:400])
+
+        async def _ai_done(**fields):
+            if _aigen_id:
+                await _update(_aigen_id, status="done", **fields)
+
         extra = {"engine": engine, "filename": filename}
+
+        task_id, url = await _create_and_poll(req)
         if not task_id:
+            await _ai_fail("LightAI 任务创建失败")
             # `_create_lightai_task` 把异常吞成 None，真实原因只在它的
             # logger.warning 里。给出可自查的方向 —— 常见的是 401（key 过期）
             # 或 429 重试耗尽（并发任务超时）。
@@ -273,6 +298,7 @@ class GenImageAction(ActionBase):
                 extra,
             )
         if not url:
+            await _ai_fail(f"LightAI 任务未产出图片 (task={task_id})")
             # 区分「超时」与「任务失败」对排查很重要，但 _poll_lightai_task
             # 两种情况都返回 None，只能在这里统一描述
             return self._fail_blocked(
@@ -284,6 +310,7 @@ class GenImageAction(ActionBase):
 
         saved = await _download_image(url, out_dir, filename)
         if not saved:
+            await _ai_fail(f"图片下载失败: {url[:120]}")
             return self._fail_blocked(
                 out_dir, f"图片下载失败: {url[:120]}", extra,
             )
@@ -293,9 +320,12 @@ class GenImageAction(ActionBase):
         if size == 0:
             # 下载成功但零字节 —— 让它失败，否则 _collect_outputs 会回收一个
             # 空文件当成功产出，下游 consumes 拿到坏图
+            await _ai_fail(f"下载的图片为空文件: {filename}")
             return self._fail_blocked(
                 out_dir, f"下载的图片为空文件: {filename}", extra,
             )
+
+        await _ai_done(result_url=url, result_path=str(path))
 
         logger.info("🎨 gen_image 完成 %s (%d bytes)", filename, size)
         return ActionResult(

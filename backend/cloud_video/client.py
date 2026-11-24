@@ -491,21 +491,42 @@ async def generate_video_with_provider(
     if not probe["available"]:
         raise CloudVideoUnavailable(probe["hint"])
 
+    # 统一 AI 任务记录（函数内延迟 import：公共层顶层不依赖 database）。
+    # waiting = 排队等名额，running = 抢到名额开始提交/轮询，done/failed = 终态。
+    from ai_gen_tasks import record_task, update_task
+    aigen_id = await record_task(
+        kind="video", provider=name, status="waiting",
+        prompt=prompt, source="cloud_video",
+    )
+
     # 生成任务排队：时段感知 FIFO 信号量，一个名额覆盖「提交 + 429 退避 + 轮询 + 下载」全程。
     # 放在统一 dispatch 层（Plugin 唯一入口），两个 provider 共用同一队列，避免底层
     # generate_video/lightai.generate 各占一次造成双重占用。
-    async with get_queue().slot():
-        if name == "lightai":
-            from cloud_video import lightai
-            req = dict(lightai_req or {})
-            req.setdefault("prompt", prompt)
-            return await lightai.generate(req, dest)
-
-        if name == "minimax_h3":
-            result = await generate_video(
-                prompt=prompt, task_name=task_name, resolution=resolution,
-                duration=duration, aspect_ratio=aspect_ratio, files=files, dest=dest,
+    try:
+        async with get_queue().slot():
+            await update_task(aigen_id, status="running")
+            if name == "lightai":
+                # 直接导入子模块：`from cloud_video import lightai` 会让 client 依赖
+                # 包本身（包的 __init__ 又导入 client），在依赖图上成环。
+                import cloud_video.lightai as lightai
+                req = dict(lightai_req or {})
+                req.setdefault("prompt", prompt)
+                result = await lightai.generate(req, dest)
+            elif name == "minimax_h3":
+                result = await generate_video(
+                    prompt=prompt, task_name=task_name, resolution=resolution,
+                    duration=duration, aspect_ratio=aspect_ratio, files=files, dest=dest,
+                )
+                result = {"provider": "minimax_h3", **result}
+            else:
+                raise CloudVideoError(f"未实现的 provider: {name}")
+            await update_task(
+                aigen_id, status="done",
+                external_task_id=str(result.get("task_id") or ""),
+                result_url=str(result.get("url") or ""),
+                result_path=str(result.get("path") or ""),
             )
-            return {"provider": "minimax_h3", **result}
-
-    raise CloudVideoError(f"未实现的 provider: {name}")
+            return result
+    except Exception as e:
+        await update_task(aigen_id, status="failed", error=str(e)[:400])
+        raise

@@ -29,6 +29,32 @@ _SAFE_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
 _RATIOS = ("16:9", "9:16", "1:1", "4:3", "3:4")
 
 
+async def _vc_record(kind: str, prompt: str, context: Dict[str, Any]) -> str:
+    """记一条 VC sandbox 生成任务（running）。云端分支不调用这里 ——
+    cloud_video.generate_video_with_provider 已统一记录，避免双重计数。"""
+    try:
+        from ai_gen_tasks import record_task
+        return await record_task(
+            kind=kind, provider="vc_sandbox", status="running",
+            prompt=prompt,
+            project_id=str(context.get("project_id") or ""),
+            ticket_id=str(context.get("ticket_id") or ""),
+            source="vc_media",
+        )
+    except Exception:
+        return ""
+
+
+async def _vc_finish(aigen_id: str, status: str, **fields) -> None:
+    if not aigen_id:
+        return
+    try:
+        from ai_gen_tasks import update_task
+        await update_task(aigen_id, status=status, **fields)
+    except Exception:
+        pass
+
+
 def _safe_filename(raw: str, default_ext: str) -> str:
     s = str(raw or "").strip()
     if not s or "/" in s or "\\" in s or ".." in s:
@@ -182,6 +208,8 @@ class VCGenImageAction(ActionBase):
             return _failed(tool, command, task_id, "VC config 缺 image_it2i 模型，无法图生图")
 
         out_dir = _out_dir(context, "image")
+        # 统一 AI 任务记录：只记 VC sandbox 路径（云端分支在 cloud_video 已记）
+        aigen_id = await _vc_record("image", prompt, context)
         try:
             if ref:
                 data = await vc.sandbox_i2i(
@@ -195,13 +223,20 @@ class VCGenImageAction(ActionBase):
                 raise vc.VideoClawError("VC 生图未返回产物路径（result 为空）")
             saved = await _save(str(paths[0]), out_dir, filename)
         except vc.VideoClawUnavailable as e:
+            await _vc_finish(aigen_id, "failed", error=str(e)[:400])
             tid = await _trace(context, tool, command, "error")
             return _blocked(tool, command, tid, str(e))
         except vc.VideoClawError as e:
+            await _vc_finish(aigen_id, "failed", error=str(e)[:400])
             tid = await _trace(context, tool, command, "error")
             return _failed(tool, command, tid, str(e))
+        except Exception as e:
+            await _vc_finish(aigen_id, "failed", error=str(e)[:400])
+            raise
 
         tid = await _trace(context, tool, command, "success")
+        await _vc_finish(aigen_id, "done", result_url=str(data.get("result") or ""),
+                         result_path=str(saved.get("path") or ""))
         return ActionResult(
             success=True,
             data={
@@ -371,6 +406,7 @@ class VCGenVideoAction(ActionBase):
         model = str(context.get("model") or models["video"])
         out_dir = _out_dir(context, "video")
         auto_frame = ""
+        aigen_id = await _vc_record("video", prompt, context)
 
         try:
             # VC 的 video provider 全部要求首帧图（models/video_dashscope.py:257）。
@@ -395,13 +431,20 @@ class VCGenVideoAction(ActionBase):
                 raise vc.VideoClawError("VC 生视频未返回 video_path / result")
             saved = await _save(str(rel), out_dir, filename)
         except vc.VideoClawUnavailable as e:
+            await _vc_finish(aigen_id, "failed", error=str(e)[:400])
             tid = await _trace(context, tool, command, "error")
             return _blocked(tool, command, tid, str(e))
         except vc.VideoClawError as e:
+            await _vc_finish(aigen_id, "failed", error=str(e)[:400])
             tid = await _trace(context, tool, command, "error")
             return _failed(tool, command, tid, str(e), auto_frame=auto_frame)
+        except Exception as e:
+            await _vc_finish(aigen_id, "failed", error=str(e)[:400])
+            raise
 
         tid = await _trace(context, tool, command, "success")
+        await _vc_finish(aigen_id, "done", result_url=str(rel or ""),
+                         result_path=str(saved.get("path") or ""))
         return ActionResult(
             success=True,
             data={

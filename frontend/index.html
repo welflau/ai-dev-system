@@ -99,16 +99,25 @@
 
     <!-- ==================== 系统指标条 ==================== -->
     <div class="metrics-bar" id="metricsBar">
-        <div class="metric-item" id="metric-processing" title="Orchestrator 正在处理的工单数">
+        <div class="metric-item metric-item-clickable" id="metric-processing"
+             onclick="toggleProcessingPanel()" title="Orchestrator 正在处理的工单数（点击展开明细）">
             <span class="metric-icon">⚙️</span>
             <span class="metric-label">处理中</span>
             <span class="metric-value" id="mv-processing">—</span>
         </div>
         <div class="metric-sep"></div>
-        <div class="metric-item" id="metric-tasks" title="asyncio 活跃任务数（>50 表示负载高）">
+        <div class="metric-item metric-item-clickable" id="metric-tasks"
+             onclick="toggleAsyncTasksPanel()" title="asyncio 活跃任务数（点击展开明细，>50 表示负载高）">
             <span class="metric-icon">🔄</span>
             <span class="metric-label">异步任务</span>
             <span class="metric-value" id="mv-tasks">—</span>
+        </div>
+        <div class="metric-sep"></div>
+        <div class="metric-item metric-item-clickable" id="metric-aigen"
+             onclick="toggleAiGenTasksPanel()" title="累计提交的 AI 生成任务数（生图/生视频，点击展开明细）">
+            <span class="metric-icon">🎬</span>
+            <span class="metric-label">AI 任务</span>
+            <span class="metric-value" id="mv-aigen">—</span>
         </div>
         <div class="metric-sep"></div>
         <div class="metric-item" id="metric-llm" title="当前在途 LLM 请求数">
@@ -154,6 +163,48 @@
             <button class="hooks-panel-close" onclick="toggleHooksPanel()">✕</button>
         </div>
         <div class="hooks-panel-body" id="hooksPanelBody">
+            <div style="color:var(--text-muted);font-size:12px;padding:8px;">加载中...</div>
+        </div>
+    </div>
+    <!-- 顶栏「处理中」明细：Orchestrator 正在执行的工单 + 待处理队列 -->
+    <div id="processingPanel" class="hooks-panel" style="display:none;">
+        <div class="hooks-panel-header">
+            <span class="hooks-panel-title">⚙️ 处理中工单</span>
+            <span style="display:flex;align-items:center;gap:6px;">
+                <button class="hooks-panel-close" style="position:static;font-size:11px;padding:2px 6px;"
+                        onclick="_loadProcessingPanel()" title="立即刷新">↻</button>
+                <button class="hooks-panel-close" onclick="toggleProcessingPanel()">✕</button>
+            </span>
+        </div>
+        <div class="hooks-panel-body" id="processingPanelBody">
+            <div style="color:var(--text-muted);font-size:12px;padding:8px;">加载中...</div>
+        </div>
+    </div>
+    <!-- 顶栏「异步任务」明细：进程内 asyncio 协程 -->
+    <div id="asyncTasksPanel" class="hooks-panel" style="display:none;">
+        <div class="hooks-panel-header">
+            <span class="hooks-panel-title">🔄 异步任务明细</span>
+            <span style="display:flex;align-items:center;gap:6px;">
+                <button class="hooks-panel-close" style="position:static;font-size:11px;padding:2px 6px;"
+                        onclick="_loadAsyncTasksPanel()" title="立即刷新">↻</button>
+                <button class="hooks-panel-close" onclick="toggleAsyncTasksPanel()">✕</button>
+            </span>
+        </div>
+        <div class="hooks-panel-body" id="asyncTasksPanelBody">
+            <div style="color:var(--text-muted);font-size:12px;padding:8px;">加载中...</div>
+        </div>
+    </div>
+    <!-- 顶栏「AI 任务」明细：生图/生视频累计任务 + 三态计数 -->
+    <div id="aiGenTasksPanel" class="hooks-panel" style="display:none;">
+        <div class="hooks-panel-header">
+            <span class="hooks-panel-title">🎬 AI 任务（生图 / 生视频）</span>
+            <span style="display:flex;align-items:center;gap:6px;">
+                <button class="hooks-panel-close" style="position:static;font-size:11px;padding:2px 6px;"
+                        onclick="_loadAiGenTasksPanel()" title="立即刷新">↻</button>
+                <button class="hooks-panel-close" onclick="toggleAiGenTasksPanel()">✕</button>
+            </span>
+        </div>
+        <div class="hooks-panel-body" id="aiGenTasksPanelBody">
             <div style="color:var(--text-muted);font-size:12px;padding:8px;">加载中...</div>
         </div>
     </div>
@@ -2818,7 +2869,7 @@
     <!-- ==================== Toast 通知 ==================== -->
     <div class="toast-container" id="toastContainer"></div>
 
-    <script src="/static/app.js?v=20261120a"></script>
+    <script src="/static/app.js?v=20261120d"></script>
 </body>
 </html>
 

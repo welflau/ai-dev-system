@@ -367,6 +367,7 @@ from api.commands import router as commands_router
 from api.ue_framework import router as ue_framework_router
 from api.image_gen import router as image_gen_router
 from api.cloud_video_config import router as cloud_video_config_router
+from api.ai_gen_tasks import router as ai_gen_tasks_router
 from api.art_assets import router as art_assets_router
 from api.efficiency import router as efficiency_router
 from api.competitor import router as competitor_router
@@ -403,6 +404,7 @@ app.include_router(ue_engines_router)
 app.include_router(ue_framework_router)
 app.include_router(image_gen_router)
 app.include_router(cloud_video_config_router)
+app.include_router(ai_gen_tasks_router)
 app.include_router(art_assets_router)
 app.include_router(commands_router)
 app.include_router(efficiency_router)
@@ -904,6 +906,75 @@ async def llm_agent_config_delete(agent_type: str):
     return {"status": "ok", "agent_type": agent_type}
 
 
+def _asyncio_task_details(loop, current=None):
+    """枚举未完成的 asyncio Task 明细。
+
+    /api/metrics 的 asyncio_tasks 计数与 /api/metrics/asyncio-tasks 的列表共用此函数，
+    保证「数字 ↔ 列表条数」口径严格一致。current 仅用于标记当前请求自身的 task，
+    **不排除**（它确实是活跃协程之一，排除会让列表比数字少 1）。
+
+    只取 stack 帧的文件名/函数名/行号，不读取局部变量，避免泄漏敏感信息。
+    """
+    import asyncio as _asyncio
+
+    out = []
+    for t in _asyncio.all_tasks(loop):
+        if t.done():
+            continue
+        try:
+            name = t.get_name()
+        except Exception:
+            name = ""
+        try:
+            coro = t.get_coro()
+            coro_name = getattr(coro, "__qualname__", None) or type(coro).__name__
+        except Exception:
+            coro_name = ""
+        frame = ""
+        try:
+            stack = t.get_stack()
+            if stack:
+                f = stack[-1]
+                fname = str(f.f_code.co_filename).replace("\\", "/").rsplit("/", 1)[-1]
+                frame = f"{fname}:{f.f_code.co_name}:{f.f_lineno}"
+        except Exception:
+            pass
+        try:
+            cancelling = t.cancelling()
+        except Exception:
+            cancelling = 0
+        out.append({
+            "name": name or "",
+            "coro": coro_name or "",
+            "done": False,
+            "cancelling": cancelling,
+            "stack": frame,
+            "self": t is current,
+        })
+    return out
+
+
+@app.get("/api/metrics/asyncio-tasks")
+async def get_asyncio_tasks_detail():
+    """顶栏「异步任务」明细：进程内未完成的 asyncio 协程列表。
+
+    与 /api/metrics 的 asyncio_tasks 同一枚举口径；按 coro 聚合出 summary 便于阅读。
+    """
+    import asyncio as _asyncio
+    from collections import Counter
+
+    loop = _asyncio.get_event_loop()
+    tasks = _asyncio_task_details(loop, current=_asyncio.current_task())
+    grouped = Counter(t["coro"] or "(unknown)" for t in tasks)
+    return {
+        "count": len(tasks),
+        "tasks": tasks,
+        "summary": [
+            {"coro": k, "count": v} for k, v in grouped.most_common()
+        ],
+    }
+
+
 @app.get("/api/metrics")
 async def get_system_metrics():
     """系统性能指标：用于顶栏实时监控"""
@@ -911,7 +982,8 @@ async def get_system_metrics():
     import os as _os
     from pathlib import Path as _Path
 
-    # asyncio 活跃任务数
+    # asyncio 活跃任务数（轻量计数，每 5s 调一次；明细走 /api/metrics/asyncio-tasks）
+    # 口径：all_tasks 里所有未完成 task，含当前请求自身 —— 与明细端点严格一致。
     loop = _asyncio.get_event_loop()
     active_tasks = sum(1 for t in _asyncio.all_tasks(loop) if not t.done())
 
@@ -976,6 +1048,14 @@ async def get_system_metrics():
     except Exception:
         pass
 
+    # AI 生成任务总数（顶栏「AI 任务」徽标；轻量计数，明细走 /api/ai-gen-tasks）
+    ai_gen_tasks_total = 0
+    try:
+        from ai_gen_tasks import total as _ai_total
+        ai_gen_tasks_total = await _ai_total()
+    except Exception:
+        pass
+
     return {
         "processing": processing,
         "asyncio_tasks": active_tasks,
@@ -984,6 +1064,7 @@ async def get_system_metrics():
         "llm_pending": llm_pending,
         "db_ms": db_ms,
         "cost_today_usd": cost_today,
+        "ai_gen_tasks": ai_gen_tasks_total,
     }
 
 
