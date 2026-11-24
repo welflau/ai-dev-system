@@ -56,6 +56,9 @@ DELEGATES = [
     ("_partial_flow", "change_flows", "partial_flow", "async", True),
     ("_breaking_flow", "change_flows", "breaking_flow", "async", True),
     ("_extract_title_from_comment", "change_flows", "extract_title_from_comment", "async", False),
+    ("_check_requirement_completion", "reporting", "check_requirement_completion", "async", True),
+    ("_generate_requirement_report", "reporting", "generate_requirement_report", "async", True),
+    ("_trigger_dependents", "reporting", "trigger_dependents", "async", True),
 ]
 # (类属性, 模块, 模块里的名字)
 CONSTANTS = [
