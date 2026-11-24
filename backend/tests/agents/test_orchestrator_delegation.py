@@ -90,6 +90,13 @@ DELEGATES = [
     ("_failure_fingerprint", "failure_counters", "failure_fingerprint", "static", False),
     ("_consecutive_same_failure", "failure_counters", "consecutive_same_failure", "async", True),
     ("_acceptance_retry_count", "failure_counters", "acceptance_retry_count", "async", True),
+    ("_record_command", "ticket_log", "record_command", "async", True),
+    ("_write_memory", "ticket_log", "write_memory", "async", True),
+    ("_log_agent_thought", "ticket_log", "log_agent_thought", "async", False),
+    ("_log", "ticket_log", "log", "async", True),
+    ("_write_phase_comment", "ticket_log", "write_phase_comment", "async", True),
+    ("post_milestone_comment", "ticket_log", "post_milestone_comment", "async", True),
+    ("_add_layer_log", "ticket_log", "add_layer_log", "async", True),
 ]
 # (类属性, 模块, 模块里的名字)
 CONSTANTS = [
@@ -103,6 +110,7 @@ CONSTANTS = [
     ("_WORD_RE", "sop_rules", "WORD_RE"),
     ("_NON_UI_MODULES", "sop_rules", "NON_UI_MODULES"),
     ("_TERMINAL_STATUSES", "sop_rules", "TERMINAL_STATUSES"),
+    ("LOCAL_TOOL_ACTIONS", "ticket_log", "LOCAL_TOOL_ACTIONS"),
 ]
 # (从 orchestrator 导入的名字, 模块)
 REEXPORTS = [
