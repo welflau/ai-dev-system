@@ -72,6 +72,7 @@ hiddenimports = [
     "orchestration.result_handlers.ue_editor",
     "orchestration.result_handlers.ux",
     "orchestration.requirement_pipeline",
+    "orchestration.rewind",
     "orchestration.ticket_pipeline",
     "llm_client",
     "agent_registry",
