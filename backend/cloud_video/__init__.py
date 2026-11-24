@@ -17,10 +17,9 @@
 承载 MiniMax H3 模型，**不是 MiniMax 官方 API**（无 Bearer / 无 GroupID）。
 官方 key 需另接 provider，不能复用本实现。
 """
+from cloud_video.errors import CloudVideoError, CloudVideoUnavailable
 from cloud_video.client import (
     ALLOWED_PROVIDERS,
-    CloudVideoError,
-    CloudVideoUnavailable,
     CloudVideoFile,
     PROVIDERS,
     file_url,

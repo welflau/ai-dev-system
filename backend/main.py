@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 
-from config import settings
+from config import APP_VERSION, settings
 from database import db
 
 # ==================== 统一日志配置 ====================
@@ -58,9 +58,18 @@ logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
 logger = logging.getLogger("main")
 
-# Windows 上需要使用 WindowsProactorEventLoopPolicy 来支持 asyncio subprocess (Python 3.14)
+# Windows 上需要 Proactor 事件循环来支持 asyncio subprocess。
+# Proactor 从 3.8 起就是 Windows 默认，这里显式设置是为了盖掉外部先行设置的
+# Selector 策略（旧版 uvicorn 在 --reload / 多 worker 模式下会这么做）。
+# 策略 API 自 3.14 起弃用、计划 3.16 移除：读取类名和调用都会报 DeprecationWarning，
+# 所以放进 catch_warnings 里，并用 getattr 兜住类被移除后的 AttributeError。
 if sys.platform == "win32":
-    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+    import warnings as _warnings
+    with _warnings.catch_warnings():
+        _warnings.simplefilter("ignore", DeprecationWarning)
+        _proactor_policy = getattr(asyncio, "WindowsProactorEventLoopPolicy", None)
+        if _proactor_policy is not None and hasattr(asyncio, "set_event_loop_policy"):
+            asyncio.set_event_loop_policy(_proactor_policy())
 
 
 @asynccontextmanager
@@ -68,7 +77,7 @@ async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     # 启动时
     logger.info("=" * 60)
-    logger.info("  AI 自动开发系统 v0.10.0")
+    logger.info("  AI 自动开发系统 v%s", APP_VERSION)
     logger.info("  工单管理 + Git 仓库集成 + AI 聊天面板 + 智能 Roadmap")
     logger.info("=" * 60)
 
@@ -325,25 +334,51 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="AI 自动开发系统",
-    version="0.10.0",
+    version=APP_VERSION,
     description="工单驱动的 AI 自动开发管理平台 + Git 仓库集成 + AI 聊天面板 + 智能 Roadmap",
     lifespan=lifespan,
 )
 
-# CORS
+# CORS：只放行本机来源（任意端口）+ CORS_ALLOW_ORIGINS 显式列出的来源。
+# 前端由本服务同源托管（/app），同源请求不受 CORS 约束；此前的 allow_origins=["*"]
+# 让用户浏览器里打开的任意网页都能跨域调用并读取本机 API 的返回。
+# 注意 CORS 只管「浏览器里的跨域读取」，不是鉴权：非浏览器客户端不受它限制。
+CORS_LOCAL_ORIGIN_REGEX = r"^https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$"
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=list(settings.CORS_ALLOW_ORIGINS),
+    allow_origin_regex=CORS_LOCAL_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # 全局异常处理
+_LOOPBACK_CLIENTS = frozenset({"127.0.0.1", "::1", "localhost", "::ffff:127.0.0.1"})
+
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
-    logging.getLogger("main").error("Unhandled exception: %s %s -> %s", request.method, request.url.path, exc, exc_info=True)
-    return JSONResponse(status_code=500, content={"detail": str(exc)})
+    """兜底 500。
+
+    异常文本里可能带本机路径、SQL 片段或上游返回内容：
+    - 本机调用方（回环地址）照旧拿到 str(exc)，方便在界面上直接看到原因；
+    - 其他来源只拿到通用提示 + error_id，凭 error_id 到 server.log 里查详情。
+    注意：前面若挂了同机反向代理，所有请求的来源都会是回环地址。
+    """
+    import uuid
+    error_id = uuid.uuid4().hex[:12]
+    logging.getLogger("main").error(
+        "Unhandled exception [error_id=%s]: %s %s -> %s",
+        error_id, request.method, request.url.path, exc, exc_info=exc,
+    )
+    client_host = (request.client.host if request.client else "") or ""
+    if client_host in _LOOPBACK_CLIENTS:
+        detail = str(exc)
+    else:
+        detail = f"服务器内部错误（error_id={error_id}），详情见服务端日志"
+    return JSONResponse(status_code=500, content={"detail": detail, "error_id": error_id})
 
 # 注册 API 路由
 from api.projects import router as projects_router
@@ -467,7 +502,7 @@ async def open_path_in_explorer(body: dict):
 @app.get("/api/health")
 async def health_check():
     """健康检查"""
-    return {"status": "ok", "version": "0.13.0"}
+    return {"status": "ok", "version": APP_VERSION}
 
 
 @app.get("/api/sop")

@@ -23,12 +23,43 @@ logger = logging.getLogger("actions.chat.shell_exec")
 TIMEOUT_SECONDS = 30
 MAX_OUTPUT_CHARS = 5000
 
-# 危险命令黑名单（检测命令起始词）
+# ── 危险命令黑名单 ───────────────────────────────────────────────────────────
+# 这是兜底手段，不是安全边界：命令串可以用变量拼接、.NET API、脚本文件等方式绕过，
+# 主要防线仍是 Tier 1 的用户确认和权限审批。这里只负责拦住「一眼就能认出来」的
+# 删除 / 格式化 / 关机写法，覆盖 bash、cmd 和 PowerShell 三种风格
+# （Windows 上命令经 `powershell -Command` 执行，rm / del / rd / ri / erase / rmdir
+# 全是 Remove-Item 的别名）。
+#
+# 历史问题：旧正则把所有分支包在 `\b( ... )\b` 里，结尾的 `\b` 要求匹配末尾必须落在
+# 单词边界上，于是 `rm -rf /`（-r 后面紧跟 f）和 `format c:`（冒号后不是单词字符）
+# 反而匹配不上，只有 `rm -r dir` 这种写法能拦住。现在每条规则自带收尾断言。
+_SAME_CMD = r"[^|;&\r\n]*?"      # 停在同一条命令内，不跨管道 / 分隔符
+_END = r"(?![\w-])"              # 收尾：后面不能再接单词字符或连字符
+
+_DANGEROUS_RULES = (
+    # 删除（带递归或强制开关）：rm -rf / rm -fr / rm --recursive，
+    # 以及 PowerShell 的 -Recurse / -Force 及其缩写（-r、-rec、-fo、-for ...）
+    r"(?:rm|ri|rd|del|erase|rmdir|remove-item)\b" + _SAME_CMD
+    + r"\s-(?:-recursive|-force|(?=[a-z]*[rf])[rfdiv]+|rec?u?r?s?e?|forc?e?)" + _END,
+    # cmd 风格开关：del /f /s /q，rd /s /q
+    r"(?:del|erase)\b" + _SAME_CMD + r"\s/[fsq]" + _END,
+    r"(?:rd|rmdir)\b" + _SAME_CMD + r"\s/[sq]" + _END,
+    # 磁盘 / 分区
+    r"format(?:\.com)?\s+[a-z]:",
+    r"(?:format-volume|clear-disk|initialize-disk|remove-partition|diskpart)" + _END,
+    r"mkfs" + _END,
+    r"dd\s+if=",
+    # SQL 破坏性语句
+    r"drop\s+(?:table|database)" + _END,
+    r"truncate\s+table" + _END,
+    # 关机 / 重启
+    r"(?:shutdown|reboot|halt|poweroff|stop-computer|restart-computer)" + _END,
+    # Base64 编码命令：内容对确认界面和本黑名单都不可见
+    r"(?:powershell|pwsh)(?:\.exe)?\b" + _SAME_CMD + r"\s-e(?:c|n[a-z]*)?\s",
+)
+
 _DANGEROUS_PATTERNS = re.compile(
-    r'\b(rm\s+-[rRf]|rmdir\s+/[sS]|format\s+[a-zA-Z]:|mkfs|dd\s+if=|'
-    r'DROP\s+TABLE|DROP\s+DATABASE|TRUNCATE\s+TABLE|'
-    r'shutdown|reboot|halt|poweroff|'
-    r'del\s+/[fsFS]|rd\s+/[sS])\b',
+    r"(?<![\w-])(?:" + "|".join(_DANGEROUS_RULES) + r")",
     re.IGNORECASE,
 )
 

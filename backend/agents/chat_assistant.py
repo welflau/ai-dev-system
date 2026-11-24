@@ -1806,11 +1806,17 @@ class ChatAssistantAgent(BaseAgent):
         ue_routing = ""
         if is_ue_project:
             _repo_for_ucp = (project.get("git_repo_path") or "").replace("\\", "/")
-            _ucp_script = "F:/A_Works/ai-dev-system/backend/config_packs/ue5-prod-skills/shared/scripts/deploy_ucp.py"
+            # 脚本路径按实际安装位置推导（与 pack_installer._PACKS_DIR 同一目录），
+            # 不能写死某台开发机的盘符；路径可能带空格，命令里加引号。
+            from pathlib import Path as _Path
+            _ucp_script = (
+                _Path(__file__).resolve().parent.parent
+                / "config_packs" / "ue5-prod-skills" / "shared" / "scripts" / "deploy_ucp.py"
+            ).as_posix()
             _ucp_bash = (
-                f'python {_ucp_script} --project-path "{_repo_for_ucp}"'
+                f'python "{_ucp_script}" --project-path "{_repo_for_ucp}"'
                 if _repo_for_ucp
-                else f"python {_ucp_script} --project-path ."
+                else f'python "{_ucp_script}" --project-path .'
             )
             ue_routing = f"""
 
@@ -2112,14 +2118,14 @@ name: 项目名
 
 ## ⚠️ 最高优先级规则（必须在任何其他判断之前执行）
 
-**如果用户发送的消息看起来是一个本地文件路径**（包含反斜杠 `\` 或以盘符开头如 `F:`、`C:`、`D:`，或是 Unix 路径 `/home/...`）：
+**如果用户发送的消息看起来是一个本地文件路径**（包含反斜杠 `\\` 或以盘符开头如 `F:`、`C:`、`D:`，或是 Unix 路径 `/home/...`）：
 - **立即且只调用 `confirm_project(local_path=该路径)`**
 - **禁止**用 Glob、Bash、Read 等工具去探索目录
 - **禁止**询问用户想做什么
 - **禁止**自行分析目录内容
 - 系统会自动扫描识别项目信息，生成确认卡片
 
-示例：用户发送 `F:\A_Works\BigShot` → 立刻调 `confirm_project(local_path="F:\\A_Works\\BigShot")`
+示例：用户发送 `F:\\A_Works\\BigShot` → 立刻调 `confirm_project(local_path="F:\\A_Works\\BigShot")`
 
 ---
 

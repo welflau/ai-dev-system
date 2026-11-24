@@ -35,13 +35,22 @@ DiagnoseTicketAction — 卡壳工单自动诊断 Action
 """
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 from actions.base import ActionBase, ActionResult
 from llm_client import llm_client
 
 logger = logging.getLogger("actions.diagnose")
+
+
+def _utc_now_z() -> str:
+    """UTC 当前时间，格式与原先的 `datetime.utcnow().isoformat() + "Z"` 完全一致。
+
+    utcnow() 自 3.12 起弃用；改用带时区的 now() 再去掉 tzinfo，
+    避免 isoformat() 多出 `+00:00` 改变落库 / 前端展示的字符串格式。
+    """
+    return datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z"
 
 
 _SYSTEM_PROMPT = """你是资深 DevOps 运维工程师，正在诊断一条自动化流水线工单卡住的原因。
@@ -106,7 +115,7 @@ def _minimal_diagnosis(error_msg: str, note: str = "") -> Dict[str, Any]:
         "confidence": 0.2,
         "related_files": [],
         "note": note or "LLM 诊断未执行（降级回显 error）",
-        "created_at": datetime.utcnow().isoformat() + "Z",
+        "created_at": _utc_now_z(),
     }
 
 
@@ -182,7 +191,7 @@ def synthesize_blocked_diagnosis(
             "confidence": 0.86,
             "related_files": files[:12],
             "note": "本地规则诊断（超时/预算），未再调模型",
-            "created_at": datetime.utcnow().isoformat() + "Z",
+            "created_at": _utc_now_z(),
         }
     return {
         "symptom": f"{label} 失败，工单已阻塞",
@@ -195,7 +204,7 @@ def synthesize_blocked_diagnosis(
         "confidence": 0.55,
         "related_files": files[:12],
         "note": "本地规则诊断，未再调模型",
-        "created_at": datetime.utcnow().isoformat() + "Z",
+        "created_at": _utc_now_z(),
     }
 
 
@@ -320,7 +329,7 @@ class DiagnoseTicketAction(ActionBase):
                 diag["confidence"] = max(0.0, min(1.0, float(diag.get("confidence", 0.5))))
             except (TypeError, ValueError):
                 diag["confidence"] = 0.5
-            diag["created_at"] = datetime.utcnow().isoformat() + "Z"
+            diag["created_at"] = _utc_now_z()
             if kb_hits:
                 from actions.chat.search_knowledge import compact_knowledge_hits
                 diag["knowledge_hits"] = compact_knowledge_hits(kb_hits)

@@ -90,14 +90,14 @@ cp .env.example .env
 ```bash
 cd backend
 python main.py
-# 或
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
+
+不要用 `uvicorn main:app --reload`：reload 模式在 Windows 下有路径污染问题，代码改动可能不生效（见 README「启动」一节）。服务默认只监听 `127.0.0.1`，需要对外时在 `backend/.env` 里设置 `HOST=0.0.0.0`。
 
 ### 访问系统
 - 前端界面：http://localhost:8000/app
 - API 文档：http://localhost:8000/docs
-- 健康检查：http://localhost:8000/health
+- 健康检查：http://localhost:8000/api/health
 
 ### 运行测试
 ```bash
@@ -198,7 +198,7 @@ DeployAgent → 部署配置（Dockerfile + docker-compose + CI/CD + Nginx）
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | /health | 健康检查 + 系统状态 |
+| GET | /api/health | 健康检查（返回 status 与版本号） |
 | POST | /api/process | 提交需求，触发任务分解 |
 | GET | /api/projects | 获取所有项目列表 |
 | GET | /api/projects/{id}/state | 获取项目详情 + 任务列表 |

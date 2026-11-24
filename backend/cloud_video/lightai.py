@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from config import settings
-from cloud_video.client import CloudVideoError
+from cloud_video.errors import CloudVideoError
 
 logger = logging.getLogger("cloud_video.lightai")
 

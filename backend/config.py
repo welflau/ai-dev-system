@@ -39,14 +39,28 @@ except Exception:
 DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
+# 应用版本号的唯一来源：启动日志、FastAPI 文档、/api/health 都读这里。
+# 发版时只改这一处，并同步 README 顶部徽章与「版本历史」表。
+APP_VERSION = "0.22.0"
+
 
 class Settings:
     """应用配置"""
 
     # Server
-    HOST: str = os.getenv("HOST", "0.0.0.0")
+    # 默认只监听本机回环：全部 API 没有鉴权，监听 0.0.0.0 等于把读写本机文件、
+    # 驱动 Agent 跑 shell 的接口开放给整个局域网。确实要给其他机器访问时，
+    # 在 backend/.env 里显式写 HOST=0.0.0.0（并自行保证网络环境可信）。
+    HOST: str = os.getenv("HOST", "127.0.0.1")
     PORT: int = int(os.getenv("PORT", "8000"))
     DEBUG: bool = os.getenv("DEBUG", "true").lower() == "true"
+
+    # 额外允许的跨域来源，逗号分隔，如 http://192.168.1.10:5173。
+    # 本机来源（localhost / 127.0.0.1 / [::1]，任意端口）始终允许，无需配置；
+    # 前端与后端同源部署，正常使用不需要填这一项。
+    CORS_ALLOW_ORIGINS: list = [
+        _o.strip() for _o in os.getenv("CORS_ALLOW_ORIGINS", "").split(",") if _o.strip()
+    ]
 
     # 用户级 ConfigPack 安装：会写 ~/.claude/ 等用户主目录，属高权限操作。
     # 默认关闭；开启后 API 仍仅接受本机（127.0.0.1/::1）请求。见 api/projects.py

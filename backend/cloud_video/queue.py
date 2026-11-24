@@ -30,6 +30,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Deque, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from cloud_video.errors import CloudVideoUnavailable
+
 logger = logging.getLogger("cloud_video.queue")
 
 _UNLIMITED = 0  # limit<=0 表示不限
@@ -117,8 +119,6 @@ class CloudVideoQueue:
         wait_for 在超时/取消时会 cancel 这个 fut，_wake() 通过 fut.done() 跳过已取消的
         waiter，因此不会把名额授予一个已经放弃的任务（无名额泄漏）。
         """
-        from cloud_video.client import CloudVideoUnavailable
-
         limit = self.limit_now()
         if limit == _UNLIMITED or self._active < limit:
             self._active += 1

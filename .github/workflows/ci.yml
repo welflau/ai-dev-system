@@ -32,6 +32,15 @@ jobs:
       run: |
         python -c "from models import TicketStatus; print('Import OK')"
 
+    - name: Run tests
+      # 全量 pytest（本地约 5 分半）。此前这个 job 只验证一条 import，
+      # 路由挂错函数、包内循环导入这类问题都要等到运行时才暴露。
+      # 收集范围由 backend/pytest.ini 决定（testpaths = tests）。
+      working-directory: backend
+      timeout-minutes: 20
+      run: |
+        python -m pytest
+
   # 代码质量检查
   lint:
     runs-on: ubuntu-latest

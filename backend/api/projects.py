@@ -54,7 +54,6 @@ def _ensure_git_path(project: dict):
             logger.debug("恢复项目 %s 的仓库路径: %s", project["id"], repo_path)
 
 
-@router.post("")
 def _auto_init_ads_dir(repo_path: str, project_name: str, traits: list) -> None:
     """新建项目时自动创建 .ads/ 目录结构（不覆盖已有文件）。"""
     import json as _json
@@ -96,6 +95,7 @@ def _load_ads_config(repo_path: str) -> dict:
         return {}
 
 
+@router.post("")
 async def create_project(req: ProjectCreate):
     """创建项目"""
     import os

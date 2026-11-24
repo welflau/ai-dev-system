@@ -4,6 +4,7 @@ AI 自动开发系统 - 工单 API
 import json
 import logging
 from datetime import datetime
+from typing import List
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Body
 from database import db
 from models import (

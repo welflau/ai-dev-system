@@ -29,6 +29,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from config import settings
+# 异常类定义在叶子模块 errors（拆环）；这里重导出，保持
+# `cloud_video.client.CloudVideoError` 这条既有路径可用。
+from cloud_video.errors import CloudVideoError, CloudVideoUnavailable
 from cloud_video.queue import CloudVideoQueue, QueueStats, build_queue_from_settings
 
 logger = logging.getLogger("cloud_video.client")
@@ -55,14 +58,6 @@ def set_queue(q: CloudVideoQueue) -> None:
 def queue_stats() -> QueueStats:
     """队列可观测性：当前活跃数、等待数、上限、是否闲时、时区。"""
     return get_queue().stats()
-
-
-class CloudVideoUnavailable(RuntimeError):
-    """未启用 / 缺卡密钥 / 网络不通 / 超时。调用方应转成 env_missing → blocked。"""
-
-
-class CloudVideoError(RuntimeError):
-    """上游返回失败、参数错误或协议异常。调用方按普通失败处理。"""
 
 
 @dataclass

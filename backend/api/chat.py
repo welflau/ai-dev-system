@@ -3365,6 +3365,11 @@ def _build_system_prompt(project: dict, context: dict) -> str:
     artifacts_summary = context.get("artifacts_summary", "暂无产物")
     knowledge_content = context.get("knowledge_content", "")
 
+    # 生图输出目录按实际安装位置插值，与 main.py 挂载 /generated-images 用的是同一个目录。
+    # 此前写死了某台开发机的绝对路径，换机器即失效，且其中的 \A 是非法转义（SyntaxWarning）。
+    from config import BASE_DIR as _PROMPT_BASE_DIR
+    _gen_images_dir = _PROMPT_BASE_DIR / "generated-images"
+
     return f"""你是 AI 自动开发系统的智能助手，当前正在为项目「{project['name']}」提供服务。
 {video_routing}
 
@@ -3507,7 +3512,7 @@ priority 可选值：critical, high, medium, low
 当你使用 lightai-skill 脚本（generate_image.py 等）直接生图时，**必须**将 `--output-dir` 设置为系统统一图片目录：
 
 ```
-F:\A_Works\ai-dev-system\backend\generated-images
+{_gen_images_dir}
 ```
 
 - 禁止输出到 Desktop 或其他用户目录，否则图片无法在会话中预览

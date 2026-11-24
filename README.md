@@ -1,7 +1,7 @@
 # AI 自动开发系统 (AI Dev System)
 
 [![Version](https://img.shields.io/badge/version-v0.22-blue.svg)](docs/)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 > 多 Agent 自动化软件开发平台 + 对标 Claude Code 的强大 AI 开发助手  
@@ -218,13 +218,15 @@ Get-Content desktop-backend-stdout.log -Wait -Tail 50
 
 ### 配置 LLM
 
-复制配置模板并编辑：
+复制配置模板并编辑（在项目根目录执行）：
 
 ```bash
-cp .env.example .env
+cp backend/.env.example backend/.env
 ```
 
-`.env` 核心配置：
+`backend/.env` 是权威配置源，其中的非空值会覆盖根目录 `.env` 的同名变量。根目录的 `.env.example` 只是精简版，字段不全。
+
+`backend/.env` 核心配置：
 
 ```ini
 # API 模式（Anthropic / OpenAI 兼容，二选一）
@@ -250,6 +252,8 @@ python main.py
 
 访问 **http://localhost:8000**
 
+> 服务默认只监听 `127.0.0.1`。接口没有鉴权，需要让局域网内其他机器访问时，在 `backend/.env` 里显式设置 `HOST=0.0.0.0`，并确认所在网络可信。
+
 > ⚠️ 不要使用 `python -m uvicorn main:app --reload`，reload 模式在 Windows 下有路径污染问题，会导致代码改动不生效。  
 > 代码更新后直接 Ctrl+C 重启即可。
 
@@ -270,7 +274,7 @@ python main.py
 
 | 层级 | 技术 |
 |---|---|
-| 后端 | Python 3.10+ / FastAPI / Uvicorn |
+| 后端 | Python 3.11+ / FastAPI / Uvicorn（CI 使用 3.12）|
 | 数据库 | SQLite + aiosqlite（WAL 模式，FTS5 全文搜索）|
 | LLM | Anthropic Claude 4.x（Extended Thinking）/ OpenAI 兼容 |
 | 实时通信 | SSE（流式输出 + 思考面板 + 工具调用）|
