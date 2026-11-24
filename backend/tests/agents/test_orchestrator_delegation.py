@@ -59,6 +59,19 @@ DELEGATES = [
     ("_check_requirement_completion", "reporting", "check_requirement_completion", "async", True),
     ("_generate_requirement_report", "reporting", "generate_requirement_report", "async", True),
     ("_trigger_dependents", "reporting", "trigger_dependents", "async", True),
+    ("_try_claim_ticket", "polling", "try_claim_ticket", "sync", False),
+    ("_release_ticket", "polling", "release_ticket", "sync", False),
+    ("_ticket_held_by_this_process", "polling", "ticket_held_by_this_process", "sync", False),
+    ("_ticket_heartbeat", "polling", "ticket_heartbeat", "async", True),
+    ("_enqueue_ticket", "polling", "enqueue_ticket", "sync", False),
+    ("start_event_bus", "polling", "start_event_bus", "async", False),
+    ("_publish_ticket_ready", "polling", "publish_ticket_ready", "async", False),
+    ("poll_loop", "polling", "poll_loop", "async", False),
+    ("_repair_status_outside_sop", "polling", "repair_status_outside_sop", "async", True),
+    ("_zombie_rewind_status", "polling", "zombie_rewind_status", "async", True),
+    ("_resume_stuck_analyses", "polling", "resume_stuck_analyses", "async", True),
+    ("_resume_parent_ticket", "polling", "resume_parent_ticket", "async", True),
+    ("_poll_process", "polling", "poll_process", "async", False),
 ]
 # (类属性, 模块, 模块里的名字)
 CONSTANTS = [

@@ -154,7 +154,9 @@ check("已删除 fast-forward 的 reset_map（不再把 in_progress 推成 done�
       "reset_map" not in poll_src)
 check("_poll_once 调用 _zombie_rewind_status", "_zombie_rewind_status" in poll_src)
 check("存在 _zombie_rewind_status 方法", hasattr(Orch, "_zombie_rewind_status"))
-zsrc = inspect.getsource(Orch._zombie_rewind_status)
+# _zombie_rewind_status 的函数体已搬到 orchestration/polling.py，类上的同名方法只做转发
+from orchestration.polling import zombie_rewind_status
+zsrc = inspect.getsource(zombie_rewind_status)
 check("回退优先读 assign 日志的 from_status", "action = 'assign'" in zsrc)
 check("有无限重跑止损（MAX_ZOMBIE_REWIND）", "MAX_ZOMBIE_REWIND" in zsrc)
 check("超限转 blocked", "TicketStatus.BLOCKED.value" in zsrc)
