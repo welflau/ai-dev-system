@@ -37,6 +37,19 @@ DELEGATES = [
     ("_seq_index", "rewind", "seq_index", "static", False),
     ("_rewind_ticket_status", "rewind", "rewind_ticket_status", "async", True),
     ("_apply_status_rewind", "rewind", "apply_status_rewind", "async", True),
+    ("_load_transition_rules", "sop_rules", "load_transition_rules", "sync", False),
+    ("reload_sop", "sop_rules", "reload_sop", "sync", False),
+    ("_is_noncode_ticket", "sop_rules", "is_noncode_ticket", "sync", False),
+    ("_needs_design_stage", "sop_rules", "needs_design_stage", "sync", False),
+    ("_get_rules_for_project", "sop_rules", "get_rules_for_project", "async", True),
+    ("_sop_stage_for", "sop_rules", "sop_stage_for", "async", False),
+    ("_sop_stages_for", "sop_rules", "sop_stages_for", "async", True),
+    ("_sop_success_status_for", "sop_rules", "sop_success_status_for", "async", False),
+    ("_invoke_stage_hook", "sop_rules", "invoke_stage_hook", "async", False),
+    ("_apply_fragment_closeout", "sop_rules", "apply_fragment_closeout", "async", True),
+    ("invalidate_project_rules", "sop_rules", "invalidate_project_rules", "sync", False),
+    ("_get_all_actionable_statuses", "sop_rules", "get_all_actionable_statuses", "async", True),
+    ("_status_is_executing", "sop_rules", "status_is_executing", "static", False),
 ]
 # (类属性, 模块, 模块里的名字)
 CONSTANTS = [
@@ -44,9 +57,20 @@ CONSTANTS = [
     ("MAX_RESET_COUNT", "rewind", "MAX_RESET_COUNT"),
     ("_PHASE_ENTRY_STATUS", "rewind", "PHASE_ENTRY_STATUS"),
     ("_STATUS_SUFFIXES", "rewind", "STATUS_SUFFIXES"),
+    ("_NONCODE_TICKET_KEYWORDS", "sop_rules", "NONCODE_TICKET_KEYWORDS"),
+    ("_UI_KEYWORDS_CN", "sop_rules", "UI_KEYWORDS_CN"),
+    ("_UI_KEYWORDS_EN", "sop_rules", "UI_KEYWORDS_EN"),
+    ("_WORD_RE", "sop_rules", "WORD_RE"),
+    ("_NON_UI_MODULES", "sop_rules", "NON_UI_MODULES"),
+    ("_TERMINAL_STATUSES", "sop_rules", "TERMINAL_STATUSES"),
 ]
 # (从 orchestrator 导入的名字, 模块)
 REEXPORTS = [
+    ("stage_hook_names", "sop_rules"),
+    ("rewind_trigger", "sop_rules"),
+    ("closeout_log_level", "sop_rules"),
+    ("closeout_message", "sop_rules"),
+    ("closeout_detail", "sop_rules"),
 ]
 # --- table end ---
 

@@ -22,10 +22,18 @@ from utils import generate_id, now_iso
 from events import event_manager
 from llm_client import llm_client
 from git_manager import git_manager
-from orchestration import requirement_pipeline, result_handlers, rewind, ticket_pipeline
+from orchestration import requirement_pipeline, result_handlers, rewind, sop_rules, ticket_pipeline
 from orchestration.result_handlers import HANDLED, ResultContext
 # 心跳文案跟着需求分析的步骤搬到了 requirement_pipeline，原来的导入路径继续可用。
 from orchestration.requirement_pipeline import analysis_progress_message  # noqa: F401
+# 片段收尾用的纯函数搬到了 orchestration/sop_rules，tests/plugins/test_ue5_closeout.py 从这里导入
+from orchestration.sop_rules import (  # noqa: F401
+    stage_hook_names,
+    rewind_trigger,
+    closeout_log_level,
+    closeout_message,
+    closeout_detail,
+)
 
 
 logger = logging.getLogger("orchestrator")
@@ -46,16 +54,6 @@ _MEDIA_COMMIT_LABELS = {
 from agent_registry import instantiate_agents
 
 
-def stage_hook_names(stage: Dict, key: str) -> List[str]:
-    """片段 stage 上的 on_success / on_failure。只认字符串名字。"""
-    raw = (stage or {}).get(key) or []
-    if isinstance(raw, str):
-        raw = [raw]
-    if not isinstance(raw, list):
-        return []
-    return [item.strip() for item in raw if isinstance(item, str) and item.strip()]
-
-
 def is_skill_run_result(agent_name: str, result: Any) -> bool:
     """skill 阶段的结果必须走 `result_handlers.handle_skill`。
 
@@ -69,117 +67,6 @@ def is_skill_run_result(agent_name: str, result: Any) -> bool:
     if not isinstance(result, dict):
         return False
     return bool(result.get("skill_id") or result.get("skill_status"))
-
-
-def rewind_trigger(stages: List[Dict], stage_id: str) -> Optional[str]:
-    """回跳目标是组合后该阶段的 trigger_on，不是 YAML 里手写的那个，也不是阶段 id。"""
-    for stage in stages or []:
-        if stage.get("id") == stage_id:
-            trigger = stage.get("trigger_on")
-            return str(trigger) if trigger else None
-    return None
-
-
-def closeout_log_level(result: Dict, ok: bool) -> str:
-    if not ok:
-        return "warning"
-    warnings = result.get("warnings") or []
-    nested = result.get("ue_test_gen")
-    if isinstance(nested, dict) and nested.get("warnings"):
-        warnings = nested.get("warnings") or []
-    return "warning" if warnings else "info"
-
-
-def closeout_message(
-    stage: Dict, result: Dict, ok: bool, notes: Optional[List[str]] = None,
-) -> str:
-    extra = "".join(str(item) for item in (notes or []) if item)
-    name = str(stage.get("name") or stage.get("id") or "阶段")
-    nested = result.get("ue_test_gen")
-    if isinstance(nested, dict) and nested.get("summary"):
-        return f"{nested['summary']}{extra}"
-    summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
-    try:
-        secs = int(result.get("duration_ms") or 0) // 1000
-    except (TypeError, ValueError):
-        secs = 0
-    goto = stage.get("reject_goto")
-    tail = f"，打回 {goto}" if (not ok and goto) else ""
-    if ok:
-        if "total" in summary:
-            return (
-                f"{name} 通过（{summary.get('passed', 0)}/{summary.get('total', 0)}，{secs}s）{extra}"
-            )
-        target = result.get("target_name")
-        bits: List[str] = []
-        if result.get("duration_ms") is not None:
-            bits.append(f"{secs}s")
-        if target:
-            bits.append(f"target={target}")
-        if bits:
-            return f"{name} 通过（{'，'.join(bits)}）{extra}"
-        return f"{name} 通过{extra}"
-    errors = result.get("errors") or []
-    if errors:
-        return f"{name} 失败 · {len(errors)} 个错误{tail}{extra}"
-    if "total" in summary:
-        return (
-            f"{name} 失败 · {summary.get('failed', 0)}/{summary.get('total', 0)} failed{tail}{extra}"
-        )
-    return f"{name} 失败{tail}{extra}"
-
-
-def closeout_detail(result: Dict) -> Dict[str, Any]:
-    """收尾日志要带上反思和验收还在读的字段。"""
-    detail: Dict[str, Any] = {}
-    if not isinstance(result, dict):
-        return detail
-    errors = [item for item in (result.get("errors") or []) if isinstance(item, dict)]
-    if errors:
-        detail["errors"] = errors[:10]
-        parts = []
-        for item in errors[:3]:
-            fname = str(item.get("file") or "?").replace("\\", "/").split("/")[-1]
-            parts.append(
-                f"{fname}:{item.get('line', '?')} {item.get('code', '')} "
-                f"{str(item.get('msg') or '')[:80]}"
-            )
-        detail["err_brief"] = "; ".join(parts)
-    warnings = result.get("warnings") or []
-    if warnings:
-        detail["warnings"] = list(warnings)[:5]
-    for key, limit in (("hints", 5), ("screenshots", 5)):
-        value = result.get(key)
-        if isinstance(value, list) and value:
-            detail[key] = value[:limit]
-    products = result.get("products")
-    if products:
-        detail["products"] = products
-    for key in ("exit_code", "duration_ms", "command", "task_id", "summary", "target_name"):
-        value = result.get(key)
-        if value not in (None, "", [], {}):
-            detail[key] = value
-    raw_tail = result.get("raw_tail")
-    if raw_tail:
-        detail["raw_tail"] = str(raw_tail)[-4000:]
-    tests = result.get("tests") or []
-    failed = [item for item in tests if isinstance(item, dict) and item.get("result") == "failed"]
-    if failed:
-        detail["tests"] = failed[:10]
-        briefs = []
-        for item in failed[:3]:
-            first = (item.get("errors") or ["?"])[:1]
-            briefs.append(f"{item.get('name', '?')}: {str(first[0])[:60]}")
-        detail["fail_brief"] = "; ".join(briefs)
-    module_errors = result.get("module_load_errors") or []
-    if module_errors:
-        detail["module_load_errors"] = module_errors
-    nested = result.get("ue_test_gen")
-    if isinstance(nested, dict):
-        detail["generated"] = nested.get("generated") or []
-        if nested.get("warnings"):
-            detail["warnings"] = list(nested.get("warnings") or [])[:10]
-    return detail
 
 
 class TicketOrchestrator:
@@ -239,144 +126,29 @@ class TicketOrchestrator:
 
     def _load_transition_rules(self) -> Dict:
         """从 SOP YAML 加载状态转换规则（默认 web 项目）"""
-        try:
-            from sop.loader import load_sop, sop_to_transition_rules
-            self._sop_config = load_sop("default_sop")
-            rules = sop_to_transition_rules(self._sop_config)
-            if rules:
-                logger.info("📋 SOP 配置已加载: %s (%d 条规则)",
-                            self._sop_config.get("name", "?"), len(rules))
-                return rules
-        except Exception as e:
-            logger.warning("SOP 配置加载失败，使用内置规则: %s", e)
-
-        # 兜底：内置硬编码规则
-        logger.info("📋 使用内置状态转换规则")
-        return {
-            TicketStatus.PENDING.value: {
-                "agent": "PlannerAgent",
-                "action": "write_prd",
-                "next_status": TicketStatus.PLANNING_IN_PROGRESS.value,
-            },
-            TicketStatus.PLANNING_DONE.value: {
-                "agent": "ArchitectAgent",
-                "action": "design_architecture",
-                "next_status": TicketStatus.ARCHITECTURE_IN_PROGRESS.value,
-            },
-            TicketStatus.ARCHITECTURE_DONE.value: {
-                "agent": "DevAgent",
-                "action": "develop",
-                "next_status": TicketStatus.DEVELOPMENT_IN_PROGRESS.value,
-            },
-            TicketStatus.DEVELOPMENT_DONE.value: {
-                "agent": "ProductAgent",
-                "action": "acceptance_review",
-                "next_status": None,
-            },
-            TicketStatus.ACCEPTANCE_PASSED.value: {
-                "agent": "TestAgent",
-                "action": "run_tests",
-                "next_status": TicketStatus.TESTING_IN_PROGRESS.value,
-            },
-            TicketStatus.ACCEPTANCE_REJECTED.value: {
-                "agent": "DevAgent",
-                "action": "rework",
-                "next_status": TicketStatus.DEVELOPMENT_IN_PROGRESS.value,
-            },
-            TicketStatus.TESTING_FAILED.value: {
-                "agent": "DevAgent",
-                "action": "fix_issues",
-                "next_status": TicketStatus.DEVELOPMENT_IN_PROGRESS.value,
-            },
-        }
+        return sop_rules.load_transition_rules(self)
 
     def reload_sop(self):
         """热重载 SOP 配置（供 API 调用）"""
-        self.transition_rules = self._load_transition_rules()
-        # v0.17 清掉项目级缓存，下次 dispatch 时按最新 default + traits 重算
-        self._project_rules_cache.clear()
-        # v0.20 compose_sop 自己也带缓存（单次组装 53ms）。只清 rules 不清它
-        # 等于热重载无效 —— 派生 rules 的输入还是旧 config。
-        try:
-            from sop.loader import invalidate_sop_cache
-            invalidate_sop_cache()
-        except Exception as e:
-            logger.warning("清 SOP 组装缓存失败（忽略）: %s", e)
-        return self._sop_config
+        return sop_rules.reload_sop(self)
 
     # ==================== v0.17 Phase C''：项目级 SOP 规则 ====================
 
-    # 非代码工单关键词：命中则跳过 UE 引擎编译（无可编译 C++）
-    _NONCODE_TICKET_KEYWORDS = (
-        "验证 openspec", "openspec 流程", "验证流程", "跑通流程", "流程验证",
-        "测试流程", "件套", "冒烟", "验证钩子", "钩子验证", "端到端",
-        "验证 propose", "propose 流程", "流程测试", "验收流程",
-    )
+    _NONCODE_TICKET_KEYWORDS = sop_rules.NONCODE_TICKET_KEYWORDS
 
     def _is_noncode_ticket(self, ticket: Dict) -> bool:
-        """启发式判断工单是否为"非代码验证/流程类"（无可编译产物）。
+        """启发式判断工单是否为"非代码验证/流程类"（无可编译产物）。"""
+        return sop_rules.is_noncode_ticket(self, ticket)
 
-        用于让 engine_compile fragment 对这类工单跳过——它们描述的是"验证某流程
-        跑通"而非"实现某功能"，硬跑 UBT 编译只会空转报错。
-        仅按标题+描述关键词匹配，宁可漏跳（真实代码工单照常编译）也不误跳。
-        """
-        text = f"{ticket.get('title', '')} {ticket.get('description', '')}".lower()
-        return any(kw in text for kw in self._NONCODE_TICKET_KEYWORDS)
+    _UI_KEYWORDS_CN = sop_rules.UI_KEYWORDS_CN
+    _UI_KEYWORDS_EN = sop_rules.UI_KEYWORDS_EN
+    _WORD_RE = sop_rules.WORD_RE
 
-    # ── 界面/视觉相关信号 ──────────────────────────────────────────
-    # ux_design / art_design fragment 的 trait 条件是 platform:* / category:game，
-    # 任何桌面或游戏项目都必然命中，跟工单本身是否涉及界面无关。
-    # 实测：给 UE 项目加一个纯 C++ 的 SprintComponent，也会跑完整 UX 设计 +
-    # 视觉规范 + design_tokens.json，空转 153s。
-    #
-    # 判定策略与 _is_noncode_ticket 相反：这里要的是"确定不需要 UI"才跳过，
-    # 所以采用白名单（命中任一 UI 信号 → 正常走设计阶段），宁可多跑不可漏跑。
-    #
-    # 中文按子串匹配（无词边界概念）；英文必须按**单词**匹配 ——
-    # 子串匹配会让 "ui" 命中 build/guide/require/suite，"form" 命中
-    # format/performance/platform，"icon" 命中 silicon，几乎全部工单都会误判为需要设计。
-    _UI_KEYWORDS_CN = (
-        "界面", "页面", "视图", "布局", "样式", "主题", "配色", "图标", "字体",
-        "按钮", "弹窗", "对话框", "菜单", "表单", "列表页", "面板", "控件",
-        "交互", "动效", "动画", "过渡", "美术", "视觉",
-        "素材", "贴图", "材质", "特效", "蓝图界面", "响应式", "适配",
-        "前端", "原型", "线框", "设计稿", "可视化", "图表", "渲染",
-    )
-    _UI_KEYWORDS_EN = frozenset({
-        "ui", "ux", "hud", "gui", "interface", "layout", "style", "styles",
-        "styling", "theme", "themes", "palette", "icon", "icons", "button",
-        "buttons", "dialog", "modal", "menu", "menus", "form", "forms",
-        "panel", "widget", "widgets", "screen", "screens", "animation",
-        "animations", "transition", "frontend", "front-end", "responsive",
-        "chart", "charts", "visual", "visuals", "texture", "textures",
-        "material", "materials", "shader", "shaders", "sprite", "sprites",
-        "css", "scss", "wireframe", "mockup", "render", "rendering",
-    })
-    _WORD_RE = __import__("re").compile(r"[a-z][a-z\-]*")
-
-    # 明确不涉及界面的模块类型（module 字段）
-    _NON_UI_MODULES = frozenset({"backend", "api", "database", "test"})
+    _NON_UI_MODULES = sop_rules.NON_UI_MODULES
 
     def _needs_design_stage(self, ticket: Dict) -> bool:
-        """工单是否真的需要 UX / 美术设计阶段。
-
-        任一成立即认为需要：
-          1. module 是界面相关类型（frontend / design / character 等）
-          2. 标题或描述命中 UI 信号（中文子串 / 英文整词）
-
-        module ∈ {backend, api, database, test} 或 other，且无任何 UI 信号
-        → 跳过设计阶段。判不准时一律走（宁可多跑 153s，不可漏做设计）。
-        """
-        module = (ticket.get("module") or "").lower()
-        # 非 "other" 的界面相关 module 直接放行
-        if module and module not in self._NON_UI_MODULES and module != "other":
-            return True
-
-        text = f"{ticket.get('title', '')} {ticket.get('description', '')}".lower()
-        if any(kw in text for kw in self._UI_KEYWORDS_CN):
-            return True
-        # 英文按整词匹配，避免 build→ui / platform→form 之类的子串误命中
-        return bool(self._UI_KEYWORDS_EN & set(self._WORD_RE.findall(text)))
+        """工单是否真的需要 UX / 美术设计阶段。"""
+        return sop_rules.needs_design_stage(self, ticket)
 
     async def _get_rules_for_project(
         self,
@@ -384,117 +156,31 @@ class TicketOrchestrator:
         traits_json: Optional[str] = None,
         ticket_type: Optional[str] = None,
     ) -> Dict:
-        """按项目 traits + 工单 type 派生 transition_rules。
-
-        无 traits（老 web 项目 / 未迁移）→ 用 default `self.transition_rules`。
-        有 traits → 调 compose_sop + sop_to_transition_rules，cache 一份。
-
-        ticket_type 参与 compose：fragment 可声明 required_ticket_type
-        （如 ue_content_gen 只对 type=ue_content 工单生效）。不传则该类
-        fragment 不会被组装进来 —— 所以扫状态/续跑时务必带上工单自己的 type，
-        否则派生出的规则集和实际派单用的规则集会不一致。
-
-        cache key 是 (project_id, traits_tuple, ticket_type)；任一变动自然 miss。
-        """
-        if traits_json is None:
-            row = await db.fetch_one(
-                "SELECT traits FROM projects WHERE id = ?", (project_id,)
-            )
-            traits_json = row["traits"] if row else "[]"
-
-        try:
-            import json as _json
-            traits = _json.loads(traits_json) if traits_json else []
-            if not isinstance(traits, list):
-                traits = []
-        except Exception:
-            traits = []
-
-        # 空 traits → 回退到 default（向后兼容所有老项目）
-        if not traits:
-            return self.transition_rules
-
-        traits_tuple = tuple(sorted(traits))
-        cache_key = (project_id, traits_tuple, ticket_type)
-
-        if cache_key in self._project_rules_cache:
-            return self._project_rules_cache[cache_key]
-
-        try:
-            from sop.loader import compose_sop, sop_to_transition_rules
-            sop_config = compose_sop(traits=traits, ticket_type=ticket_type)
-            rules = sop_to_transition_rules(sop_config)
-            self._project_rules_cache[cache_key] = rules
-            logger.info(
-                "📋 项目 %s traits=%s type=%s → SOP %d 条规则",
-                project_id[:12], traits, ticket_type or "(无)", len(rules),
-            )
-            return rules
-        except Exception as e:
-            logger.warning(
-                "为项目 %s compose SOP 失败，回退到 default: %s",
-                project_id[:12], e,
-            )
-            return self.transition_rules
+        """按项目 traits + 工单 type 派生 transition_rules。"""
+        return await sop_rules.get_rules_for_project(self, db, project_id, traits_json, ticket_type)
 
     async def _sop_stage_for(
         self, project_id: str, action: str, ticket_type: Optional[str] = None,
     ) -> Optional[Dict]:
-        """查该项目 SOP 里执行 `action` 的 stage 定义。
-
-        同一个 action 会被多个 fragment 复用但状态语义不同 —— 例如
-        run_ci_deploy 在 deploy_ue 产出 packaged（中间态）、在 deploy_web 产出
-        deployed（终态）；run_tests 在 smoke_test 产出 smoke_test_passed、
-        在基础 testing 阶段产出 testing_done。硬编码任一个都会弄坏另一类项目，
-        所以按项目 traits + 工单 type 读 SOP 声明。
-
-        找不到（无 traits / compose 失败 / action 不在 SOP 里）→ None，调用方兜底。
-
-        同一个 action 出现多次时返回组合结果里的第一个。`run_ci_deploy` 因此不能
-        打 `closeout: status`，否则先出现的那个阶段会把另一个的状态语义吃掉。
-        """
-        for stage in await self._sop_stages_for(project_id, ticket_type):
-            if stage.get("action") == action:
-                return stage
-        return None
+        """查该项目 SOP 里执行 `action` 的 stage 定义。"""
+        return await sop_rules.sop_stage_for(self, project_id, action, ticket_type)
 
     async def _sop_stages_for(
         self, project_id: str, ticket_type: Optional[str] = None,
     ) -> List[Dict]:
-        try:
-            row = await db.fetch_one(
-                "SELECT traits FROM projects WHERE id = ?", (project_id,)
-            )
-            traits = json.loads((row or {}).get("traits") or "[]")
-            if not isinstance(traits, list) or not traits:
-                return []
-            from sop.loader import compose_sop
-            stages = compose_sop(traits=traits, ticket_type=ticket_type).get("stages") or []
-            return [stage for stage in stages if isinstance(stage, dict)]
-        except Exception as e:
-            logger.warning("读取 SOP stages 失败: %s", e)
-            return []
+        return await sop_rules.sop_stages_for(self, db, project_id, ticket_type)
 
     async def _sop_success_status_for(
         self, project_id: str, action: str, *, default: str,
         ticket_type: Optional[str] = None,
     ) -> str:
         """该项目 SOP 里 `action` 阶段声明的 success_status，找不到返回 default。"""
-        stage = await self._sop_stage_for(project_id, action, ticket_type)
-        return (stage or {}).get("success_status") or default
+        return await sop_rules.sop_success_status_for(
+            self, project_id, action, default=default, ticket_type=ticket_type,
+        )
 
     async def _invoke_stage_hook(self, name: str, ctx: Dict) -> Optional[Dict]:
-        from plugins.registry import stage_hook
-        fn = stage_hook(name)
-        if fn is None:
-            logger.warning("阶段钩子未注册: %s", name)
-            return None
-        try:
-            outcome = await fn(self, ctx)
-        except Exception as e:
-            logger.warning("阶段钩子 %s 失败（忽略）: %s", name, e)
-            return None
-        return outcome if isinstance(outcome, dict) else None
+        return await sop_rules.invoke_stage_hook(self, name, ctx)
 
     async def _apply_fragment_closeout(
         self,
@@ -508,168 +194,23 @@ class TicketOrchestrator:
         current_status: str,
         requirement_id: Optional[str],
     ) -> bool:
-        """阶段声明了 closeout: status 时，按片段写状态并跑钩子。
-
-        返回 True 表示这次结果已经收尾，调用方必须 return，不能再落到
-        develop 的产物落库。没有这个标记时返回 False，原路径继续。
-        """
-        stages = await self._sop_stages_for(project_id, ticket.get("type"))
-        stage = next((item for item in stages if item.get("action") == action), None)
-        if not stage or stage.get("closeout") != "status":
-            return False
-
-        ctx = {
-            "project_id": project_id,
-            "ticket_id": ticket_id,
-            "requirement_id": requirement_id,
-            "agent_name": agent_name,
-            "action": action,
-            "result": result,
-            "stage": stage,
-            "stages": stages,
-            "current_status": current_status,
-        }
-        ok = result.get("status") == "success"
-        if ok:
-            new_status = stage.get("success_status") or ""
-            if not new_status:
-                logger.error("阶段 %s 声明了 closeout 但没有 success_status", stage.get("id"))
-                return True
-            await db.update("tickets", {
-                "status": new_status,
-                "result": result_json,
-                "updated_at": now_iso(),
-            }, "id = ?", (ticket_id,))
-            await self._log(
-                project_id, requirement_id, ticket_id, agent_name,
-                "complete", current_status, new_status,
-                closeout_message(stage, result, True),
-                level=closeout_log_level(result, True),
-                detail_data=closeout_detail(result),
-            )
-            for name in stage_hook_names(stage, "on_success"):
-                await self._invoke_stage_hook(name, ctx)
-            return True
-
-        notes: List[str] = []
-        for name in stage_hook_names(stage, "on_failure"):
-            outcome = await self._invoke_stage_hook(name, ctx)
-            if not outcome:
-                continue
-            rewind_id = outcome.get("rewind_to_stage")
-            if rewind_id:
-                trigger = rewind_trigger(stages, str(rewind_id))
-                if not trigger:
-                    logger.warning(
-                        "钩子 %s 要求回到阶段 %s，组合后的 SOP 里没有它的 trigger_on",
-                        name, rewind_id,
-                    )
-                    if outcome.get("log_note"):
-                        notes.append(str(outcome["log_note"]))
-                    continue
-                await self._log(
-                    project_id, requirement_id, ticket_id, agent_name,
-                    "action", current_status, trigger,
-                    str(outcome.get("log_message") or f"回到阶段 {rewind_id}"),
-                    detail_data=outcome.get("detail") if isinstance(outcome.get("detail"), dict) else {},
-                )
-                await db.update("tickets", {
-                    "status": trigger,
-                    "updated_at": now_iso(),
-                }, "id = ?", (ticket_id,))
-                return True
-            if outcome.get("log_note"):
-                notes.append(str(outcome["log_note"]))
-
-        new_status = stage.get("reject_status") or ""
-        if not new_status:
-            logger.error("阶段 %s 声明了 closeout 但没有 reject_status", stage.get("id"))
-            return True
-        await db.update("tickets", {
-            "status": new_status,
-            "result": result_json,
-            "updated_at": now_iso(),
-        }, "id = ?", (ticket_id,))
-        await self._log(
-            project_id, requirement_id, ticket_id, agent_name,
-            "reject", current_status, new_status,
-            closeout_message(stage, result, False, notes),
-            "warning",
-            detail_data=closeout_detail(result),
+        """阶段声明了 closeout: status 时，按片段写状态并跑钩子。"""
+        return await sop_rules.apply_fragment_closeout(
+            self, db, project_id, ticket_id, ticket, agent_name, action, result, result_json,
+            current_status, requirement_id,
         )
-        return True
 
     def invalidate_project_rules(self, project_id: str):
         """清除指定项目的 rules 缓存（当 traits 变动时调用）"""
-        to_remove = [k for k in self._project_rules_cache if k[0] == project_id]
-        for k in to_remove:
-            del self._project_rules_cache[k]
-        if to_remove:
-            logger.info("清除项目 %s 的 SOP 规则缓存（%d 条）", project_id[:12], len(to_remove))
-        # compose_sop 的缓存 key 不含 project_id（只有 traits/ticket_type/repo_path），
-        # 没法按项目精确清 —— 但 traits 变动恰恰意味着旧 key 不会再被命中，
-        # 全清一次代价只是下次组装 53ms，比留着脏数据安全。
-        try:
-            from sop.loader import invalidate_sop_cache
-            invalidate_sop_cache()
-        except Exception as e:
-            logger.warning("清 SOP 组装缓存失败（忽略）: %s", e)
+        return sop_rules.invalidate_project_rules(self, project_id)
 
-    # 真正的终态，无论 SOP 如何配置都不应再触发新动作
-    _TERMINAL_STATUSES = frozenset({
-        TicketStatus.DEPLOYED.value,       # 已部署 = 流程终点
-        TicketStatus.CANCELLED.value,      # 已取消
-        "acceptance_complete",             # 未来扩展用
-    })
+    _TERMINAL_STATUSES = sop_rules.TERMINAL_STATUSES
 
     async def _get_all_actionable_statuses(self) -> List[str]:
-        """轮询扫 ticket 用的 WHERE IN (...) 集合。
+        """轮询扫 ticket 用的 WHERE IN (...) 集合。"""
+        return await sop_rules.get_all_actionable_statuses(self, db)
 
-        = default rules keys ∪ 所有活跃项目 × 其在用的工单 type compose 出来的
-        rules keys（union，不重复），再排除硬编码的终态。
-
-        必须按 type 展开：type 相关的 fragment（如 ue_content_gen 的
-        ue_content_pending）只在传对 ticket_type 时才会出现在规则里。
-        漏掉就会导致这些状态的工单永远扫不到、卡死不动。
-        """
-        all_statuses = set(self.transition_rules.keys())
-
-        try:
-            projects = await db.fetch_all(
-                "SELECT id, traits FROM projects WHERE status = 'active'"
-            )
-            for p in projects:
-                # 该项目现存工单用到的 type（None 代表"无 type 限定"的基础流程）
-                type_rows = await db.fetch_all(
-                    "SELECT DISTINCT type FROM tickets WHERE project_id = ?", (p["id"],)
-                )
-                ticket_types = {r["type"] for r in type_rows if r.get("type")}
-                ticket_types.add(None)
-                for tt in ticket_types:
-                    rules = await self._get_rules_for_project(
-                        p["id"], p.get("traits"), ticket_type=tt,
-                    )
-                    all_statuses.update(rules.keys())
-        except Exception as e:
-            logger.warning("汇总 actionable_statuses 异常（只用 default）: %s", e)
-
-        # 强制排除终态，防止 SOP 配置错误（如 deployed → deploy）导致无限循环
-        all_statuses -= self._TERMINAL_STATUSES
-        return list(all_statuses)
-
-    @staticmethod
-    def _status_is_executing(status: str) -> bool:
-        """执行中、进程一死就会变成僵尸的状态。
-
-        不能只认软件 SOP 那几个枚举：视频链的 director_visual_in_progress
-        不在 transition_rules 的 trigger 里，硬编码名单一漏，重启后永远扫不到。
-        """
-        s = (status or "").strip()
-        if not s:
-            return False
-        if s.endswith("_in_progress") or s == TicketStatus.DEPLOYING.value:
-            return True
-        return False
+    _status_is_executing = staticmethod(sop_rules.status_is_executing)
 
     def get_agent_status(self) -> Dict:
         """获取所有 Agent 的实时状态"""
