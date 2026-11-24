@@ -85,6 +85,11 @@ DELEGATES = [
     ("_set_ticket_current_action", "agent_state", "set_ticket_current_action", "async", True),
     ("_clear_ticket_current_action", "agent_state", "clear_ticket_current_action", "async", True),
     ("_make_ticket_progress_callback", "agent_state", "make_ticket_progress_callback", "sync", True),
+    ("_last_reset_at", "failure_counters", "last_reset_at", "async", True),
+    ("_reject_count_since_reset", "failure_counters", "reject_count_since_reset", "async", True),
+    ("_failure_fingerprint", "failure_counters", "failure_fingerprint", "static", False),
+    ("_consecutive_same_failure", "failure_counters", "consecutive_same_failure", "async", True),
+    ("_acceptance_retry_count", "failure_counters", "acceptance_retry_count", "async", True),
 ]
 # (类属性, 模块, 模块里的名字)
 CONSTANTS = [
