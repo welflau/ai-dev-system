@@ -79,6 +79,12 @@ DELEGATES = [
     ("_run_bug_ticket", "bug_flow", "run_bug_ticket", "async", False),
     ("_sync_bug_status_from_ticket", "bug_flow", "sync_bug_status_from_ticket", "async", True),
     ("_find_current_version", "bug_flow", "find_current_version", "async", True),
+    ("get_agent_status", "agent_state", "get_agent_status", "sync", False),
+    ("_set_agent_busy", "agent_state", "set_agent_busy", "sync", False),
+    ("_set_agent_idle", "agent_state", "set_agent_idle", "sync", False),
+    ("_set_ticket_current_action", "agent_state", "set_ticket_current_action", "async", True),
+    ("_clear_ticket_current_action", "agent_state", "clear_ticket_current_action", "async", True),
+    ("_make_ticket_progress_callback", "agent_state", "make_ticket_progress_callback", "sync", True),
 ]
 # (类属性, 模块, 模块里的名字)
 CONSTANTS = [

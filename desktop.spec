@@ -78,6 +78,7 @@ hiddenimports = [
     "orchestration.reporting",
     "orchestration.polling",
     "orchestration.bug_flow",
+    "orchestration.agent_state",
     "orchestration.ticket_pipeline",
     "llm_client",
     "agent_registry",

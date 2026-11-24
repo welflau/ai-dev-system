@@ -23,6 +23,7 @@ from events import event_manager
 from llm_client import llm_client
 from git_manager import git_manager
 from orchestration import (
+    agent_state,
     bug_flow,
     change_flows,
     polling,
@@ -224,36 +225,15 @@ class TicketOrchestrator:
 
     def get_agent_status(self) -> Dict:
         """获取所有 Agent 的实时状态"""
-        return {
-            "agents": self._agent_status,
-            "processing_tickets": list(self._processing),
-            "processing_count": len(self._processing),
-        }
+        return agent_state.get_agent_status(self)
 
     def _set_agent_busy(self, agent_name: str, ticket_id: str, ticket_title: str, action: str):
         """标记 Agent 为忙碌"""
-        self._agent_status[agent_name] = {
-            **self._agent_status.get(agent_name, {}),
-            "status": "working",
-            "ticket_id": ticket_id,
-            "ticket_title": ticket_title,
-            "action": action,
-            "started_at": now_iso(),
-        }
+        return agent_state.set_agent_busy(self, agent_name, ticket_id, ticket_title, action)
 
     def _set_agent_idle(self, agent_name: str, success: bool = True):
         """标记 Agent 为空闲"""
-        prev = self._agent_status.get(agent_name, {})
-        key = "completed_count" if success else "error_count"
-        self._agent_status[agent_name] = {
-            **prev,
-            "status": "idle",
-            "ticket_id": None,
-            "ticket_title": None,
-            "action": None,
-            "started_at": None,
-            key: prev.get(key, 0) + 1,
-        }
+        return agent_state.set_agent_idle(self, agent_name, success)
 
     # ==================== 工单级"当前进度"字段（v0.19.x） ====================
     #
@@ -263,33 +243,11 @@ class TicketOrchestrator:
 
     async def _set_ticket_current_action(self, ticket_id: str, action_label: str):
         """Action 开始：写 current_action + started_at，清空 latest_log"""
-        if not ticket_id:
-            return
-        try:
-            ts = now_iso()
-            await db.update("tickets", {
-                "current_action": action_label,
-                "current_action_started_at": ts,
-                "current_action_latest_log": None,
-                "current_action_updated_at": ts,
-                "updated_at": ts,
-            }, "id = ?", (ticket_id,))
-        except Exception as e:
-            logger.debug("set_ticket_current_action 失败（忽略）: %s", e)
+        return await agent_state.set_ticket_current_action(self, db, ticket_id, action_label)
 
     async def _clear_ticket_current_action(self, ticket_id: str):
         """Action 结束（无论成败）：清 4 列"""
-        if not ticket_id:
-            return
-        try:
-            await db.update("tickets", {
-                "current_action": None,
-                "current_action_started_at": None,
-                "current_action_latest_log": None,
-                "current_action_updated_at": None,
-            }, "id = ?", (ticket_id,))
-        except Exception as e:
-            logger.debug("clear_ticket_current_action 失败（忽略）: %s", e)
+        return await agent_state.clear_ticket_current_action(self, db, ticket_id)
 
     async def _create_compile_bug(
         self,
@@ -309,61 +267,8 @@ class TicketOrchestrator:
         return await bug_flow.resolve_compile_bug(self, db, ticket_id, project_id)
 
     def _make_ticket_progress_callback(self, project_id: str, ticket_id: str):
-        """生产 log 心跳 callback：关键字过滤 + 5s throttle + 去重 + 写 DB + 推 SSE
-
-        返回 async callable(line: str) → None；闭包维护 state（上次时间 / 上次 line）。
-        UE actions 把它接入自己的 stdout 流式 pump 即可，不改变原有 log_callback 契约。
-        """
-        import re as _re
-        import time as _time
-
-        # 命中这些关键字才写进度（避免 UBT 200 行/秒打爆 SQLite）
-        important_re = _re.compile(
-            r"(error|warning|fatal|"
-            r"\[ubt\]|\[playtest\]|\[package\]|\[engine\]|\[uat\]|"
-            r"compiling|linking|cooking|staging|packaging|"
-            r"running|completed|result=)",
-            _re.IGNORECASE,
-        )
-        state = {"last_t": 0.0, "last_line": ""}
-        THROTTLE_SEC = 5.0
-
-        async def _cb(line: str):
-            if not ticket_id or not line:
-                return
-            if not important_re.search(line):
-                return
-            line = line[:200]
-            if line == state["last_line"]:
-                return
-            now = _time.time()
-            if now - state["last_t"] < THROTTLE_SEC:
-                return
-            state["last_t"] = now
-            state["last_line"] = line
-            ts = now_iso()
-            try:
-                await db.update("tickets", {
-                    "current_action_latest_log": line,
-                    "current_action_updated_at": ts,
-                    "updated_at": ts,
-                }, "id = ?", (ticket_id,))
-            except Exception:
-                pass
-            # 推 SSE 给前端 drawer 订阅
-            try:
-                from events import event_manager
-                await event_manager.publish_to_project(
-                    project_id, "ticket_action_progress", {
-                        "ticket_id": ticket_id,
-                        "latest_log": line,
-                        "latest_log_at": ts,
-                    },
-                )
-            except Exception:
-                pass
-
-        return _cb
+        """生产 log 心跳 callback：关键字过滤 + 5s throttle + 去重 + 写 DB + 推 SSE"""
+        return agent_state.make_ticket_progress_callback(self, db, project_id, ticket_id)
 
     # ==================== 轮询调度 ====================
 
