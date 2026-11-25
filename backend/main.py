@@ -404,6 +404,11 @@ from api.image_gen import router as image_gen_router
 from api.cloud_video_config import router as cloud_video_config_router
 from api.ai_gen_tasks import router as ai_gen_tasks_router
 from api.metrics import router as metrics_router
+from api.system import (
+    router as system_router,
+    health_check as health_check,
+    get_available_paths as get_available_paths,
+)
 from api.sop_config import (
     router as sop_config_router,
     get_sop as get_sop,
@@ -509,12 +514,7 @@ async def open_path_in_explorer(body: dict):
         raise HTTPException(500, f"打开失败: {e}")
 
 
-@app.get("/api/health")
-async def health_check():
-    """健康检查"""
-    return {"status": "ok", "version": APP_VERSION}
-
-
+app.include_router(system_router)
 app.include_router(sop_config_router)
 
 
@@ -907,45 +907,6 @@ async def set_agent_tools_status(body: dict):
         env_path.write_text(f"{key}={value}\n", encoding="utf-8")
 
     return {"enabled": enabled, "message": f"Agent Tool Use {'已开启' if enabled else '已关闭'}"}
-
-
-@app.get("/api/filesystem/available-paths")
-async def get_available_paths():
-    """获取常用的本地路径列表"""
-    import os
-    from pathlib import Path
-
-    # 定义常用的项目路径
-    common_paths = [
-        "D:/Projects/",
-        "D:/AIProjects/",
-        "D:/MyProjects/",
-        "D:/A_Works/",
-        "D:/Works/",
-        "C:/Projects/",
-        "C:/Users/admin/Documents/Projects/",
-        "C:/Users/admin/Documents/",
-    ]
-
-    available_paths = []
-
-    for path_str in common_paths:
-        path = Path(path_str)
-        if path.exists() and path.is_dir():
-            available_paths.append({
-                "path": str(path),
-                "label": path.name,
-                "exists": True
-            })
-        else:
-            # 路径不存在，但可以作为建议
-            available_paths.append({
-                "path": str(path),
-                "label": path.name,
-                "exists": False
-            })
-
-    return {"paths": available_paths}
 
 
 # ==================== 前端静态文件 ====================
