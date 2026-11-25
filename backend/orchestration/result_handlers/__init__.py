@@ -100,3 +100,8 @@ def select_handler(agent_name: str, action: str, result: Any) -> Optional[Result
     if is_skill_run_result(agent_name, result):
         return handle_skill
     return agent_handler(agent_name, action)
+
+
+def requires_assigned_status(agent_name: str, action: str, result: Any) -> bool:
+    """原生开发结果须仍处于本次派单状态；以开发角色运行的 skill 有独立处理流程。"""
+    return select_handler(agent_name, action, result) in (handle_dev, handle_html_prototype)

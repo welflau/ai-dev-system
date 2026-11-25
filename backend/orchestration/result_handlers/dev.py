@@ -1,14 +1,11 @@
 """DevAgent 的结果处理：HTML 原型、H5 类型检查和开发工单。"""
 import json
-import logging
 from typing import Optional
 
 from models import TicketStatus
+from orchestration.result_flow import update_current_ticket
 from orchestration.result_handlers.context import HANDLED, ResultContext
 from utils import generate_id, now_iso
-
-# 沿用拆分前的 logger 名，现有的日志过滤和采集规则不受影响。
-logger = logging.getLogger("orchestrator")
 
 
 async def handle_html_prototype(ctx: ResultContext) -> Optional[str]:
@@ -29,9 +26,7 @@ async def handle_html_prototype(ctx: ResultContext) -> Optional[str]:
     requirement_id = ctx.requirement_id
 
     new_status = TicketStatus.HTML_PROTOTYPE_DONE.value
-    await db.update("tickets", {
-        "status": new_status, "result": result_json, "updated_at": now_iso(),
-    }, "id = ?", (ticket_id,))
+    await _save_result(ctx, new_status)
     await db.insert("artifacts", {
         "id": generate_id("ART"),
         "project_id": project_id, "requirement_id": requirement_id,
@@ -69,8 +64,6 @@ async def handle_dev(ctx: ResultContext) -> Optional[str]:
         await _reject_self_test(ctx, self_test, blocking)
         return HANDLED
 
-    if await _development_already_closed(ctx):
-        return HANDLED
     new_status = TicketStatus.DEVELOPMENT_DONE.value
     await _save_result(ctx, new_status)
     await _log_completion(ctx, new_status, self_test, summary)
@@ -80,9 +73,9 @@ async def handle_dev(ctx: ResultContext) -> Optional[str]:
 
 
 async def _save_result(ctx: ResultContext, status: str) -> None:
-    await ctx.db.update("tickets", {
+    await update_current_ticket(ctx.db, ctx.ticket_id, ctx.current_status, {
         "status": status, "result": ctx.result_json, "updated_at": now_iso(),
-    }, "id = ?", (ctx.ticket_id,))
+    })
 
 
 async def _record_typecheck(ctx: ResultContext) -> None:
@@ -157,20 +150,6 @@ async def _reject_self_test(ctx: ResultContext, self_test: dict, blocking: list)
             "issues": blocking[:10], "summary": self_test.get("ue_lint_summary"), "err_brief": err_brief,
         },
     )
-
-
-async def _development_already_closed(ctx: ResultContext) -> bool:
-    latest = await ctx.db.fetch_one("SELECT status FROM tickets WHERE id = ?", (ctx.ticket_id,))
-    status = (latest or {}).get("status", ctx.current_status)
-    if status in ctx.orch._HARD_TERMINAL or status in {
-        TicketStatus.TESTING_DONE.value, TicketStatus.DEPLOYED.value,
-    }:
-        logger.info(
-            "⏭ 工单 %s 当前状态 %s，跳过写入 development_done（终态/已越过开发）",
-            ctx.ticket_id[:12], status,
-        )
-        return True
-    return False
 
 
 async def _log_completion(ctx: ResultContext, status: str, self_test: dict, summary: str) -> None:

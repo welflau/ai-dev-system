@@ -737,6 +737,102 @@ def test_dev_agent_drops_result_when_ticket_moved_on(tmp_path, monkeypatch, race
     _run(body, tmp_path, monkeypatch, initial_status="architecture_done")
 
 
+@pytest.mark.parametrize("action,result,winner", [
+    ("develop", {"status": "success"}, "review_passed"),
+    ("fix_issues", {"status": "development_failed"}, "deployed"),
+    ("rework", {"self_test": {"ue_blocking_issues": [{"rule": "R1"}]}}, "deployed"),
+    ("run_h5_typecheck", {"status": "success"}, "deployed"),
+    ("run_h5_typecheck", {"status": "failed"}, "paused"),
+    ("write_html_prototype", {"status": "success"}, "review_passed"),
+    ("develop", {"status": "error"}, "review_passed"),
+    ("develop", {"status": "success"}, None),
+], ids=["success", "generation", "self-test", "h5-pass", "h5-fail", "html", "error", "deleted"])
+def test_stale_dev_result_loses_at_write(tmp_path, monkeypatch, action, result, winner):
+    """在真正的 UPDATE 之前让另一操作先赢：单独 SELECT 再无条件写也必须变红。"""
+    async def body(env):
+        update = env.db.update
+        raced = []
+
+        async def concurrent_write(table, data, where, params=()):
+            if table == "tickets" and "result" in data and not raced:
+                raced.append(True)
+                if winner is None:
+                    await env.db.delete("tickets", "id = ?", (TICKET_ID,))
+                else:
+                    await update("tickets", {"status": winner, "result": "newer", "updated_at": TS},
+                                 "id = ?", (TICKET_ID,))
+            return await update(table, data, where, params)
+
+        monkeypatch.setattr(env.db, "update", concurrent_write)
+        await _call(env, "DevAgent", action, result)
+        assert raced
+        row = await _ticket(env)
+        if winner is None:
+            assert row is None
+        else:
+            assert (row["status"], row["result"], row["updated_at"]) == (winner, "newer", TS)
+        assert await _logs(env) == await _artifacts(env) == await _comments(env) == []
+        assert env.sse == env.dispatched == env.calls["hook"] == env.calls["diagnose"] == []
+    _run(body, tmp_path, monkeypatch, initial_status="custom_building")
+
+
+@pytest.mark.parametrize("path", ["success", "reject", "before-hook", "during-hook"])
+def test_stale_fragment_closeout_keeps_newer_result(tmp_path, monkeypatch, path):
+    async def body(env):
+        called = []
+
+        async def advance():
+            await env.db.update("tickets", {"status": "deployed", "result": "newer"},
+                                "id = ?", (TICKET_ID,))
+
+        async def stages(*args):
+            return [{"id": "build", "action": "build", "closeout": "status", "trigger_on": "pending",
+                     "success_status": "built", "reject_status": "failed", "on_success": "notify",
+                     "on_failure": "fix" if path.endswith("hook") else []}]
+
+        async def hook(name, context):
+            called.append(name)
+            if path == "during-hook":
+                await advance()
+            return {"rewind_to_stage": "build"}
+
+        env.orch._sop_stages_for = stages
+        env.orch._invoke_stage_hook = hook
+        if path != "during-hook":
+            env.on_git = advance
+        await _call(env, "DevAgent", "build", {"status": "success" if path == "success" else "failed"})
+        row = await _ticket(env)
+        assert (row["status"], row["result"]) == ("deployed", "newer")
+        assert called == (["fix"] if path == "during-hook" else [])
+        assert await _logs(env) == []
+        assert env.sse == env.dispatched == []
+    _run(body, tmp_path, monkeypatch, initial_status="building")
+
+
+def test_current_fragment_can_rewind_after_failure_hook(tmp_path, monkeypatch):
+    async def body(env):
+        async def stages(*args):
+            return [{"id": "build", "trigger_on": "custom_pending", "action": "build",
+                     "closeout": "status", "on_failure": "fix"}]
+
+        async def hook(name, context):
+            assert name == "fix"
+            return {"rewind_to_stage": "build"}
+
+        observed = []
+
+        async def observe(pid, event, payload):
+            observed.append((event, (await _ticket(env))["status"]))
+
+        env.orch._sop_stages_for = stages
+        env.orch._invoke_stage_hook = hook
+        monkeypatch.setattr(orch_module.event_manager, "publish_to_project", observe)
+        await _call(env, "DevAgent", "build", {"status": "failed"})
+        assert observed == [("log_added", "custom_pending")]
+        assert _keys(await _logs(env)) == [("action", "info", "building", "custom_pending")]
+    _run(body, tmp_path, monkeypatch, initial_status="building")
+
+
 # ════════════════ ReviewAgent ════════════════
 
 @pytest.mark.parametrize("score, sop_cfg, level", [

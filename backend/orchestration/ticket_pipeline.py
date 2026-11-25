@@ -799,7 +799,12 @@ async def handle_result(run: TicketRun) -> Optional[str]:
     action = run.action
     result = run.result
     # 处理结果
-    await orch._handle_agent_result(project_id, ticket_id, ticket, agent_name, action, result)
+    applied = await orch._handle_agent_result(
+        project_id, ticket_id, ticket, agent_name, action, result,
+        assigned_status=run.next_status or run.current_status,
+    )
+    if not applied:
+        return "stale_result"
 
     # Checkpoint：成功跑完一轮后打阶段边界（可供时间轴「还原到此」）
     try:

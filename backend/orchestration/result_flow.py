@@ -10,6 +10,17 @@ from utils import now_iso
 logger = logging.getLogger("orchestrator")
 
 
+class StaleAgentResult(Exception):
+    """在途结果已失去写入权；由编排入口结束本轮，不走错误处理。"""
+
+
+async def update_current_ticket(db, ticket_id: str, expected_status: str, changes: dict) -> None:
+    """用同一条 UPDATE 比较来源状态并写入；0 行也包括工单已删除。"""
+    count = await db.update("tickets", changes, "id = ? AND status = ?", (ticket_id, expected_status))
+    if count == 0:
+        raise StaleAgentResult
+
+
 def serialize_result(result: dict) -> str:
     """生成可落库的 JSON；非空二进制产物仍留给稍后的 Git 写入。"""
     media_files_temp = result.pop("_media_files", None)  # 暂存，稍后写入 Git
@@ -28,11 +39,11 @@ async def block_agent_error(
     """先落库并发布阻塞事件，再尝试错误 Hook，最后启动后台诊断。"""
     err_msg = str(result.get("message") or result.get("error") or "Agent 返回 error")
     blocked_status = TicketStatus.BLOCKED.value
-    await db.update("tickets", {
+    await update_current_ticket(db, ticket_id, current_status, {
         "status": blocked_status,
         "result": json.dumps(result, ensure_ascii=False),
         "updated_at": now_iso(),
-    }, "id = ?", (ticket_id,))
+    })
     await orch._log(
         project_id, requirement_id, ticket_id, agent_name,
         "blocked", current_status, blocked_status,

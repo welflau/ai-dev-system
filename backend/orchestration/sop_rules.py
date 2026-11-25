@@ -31,6 +31,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from models import TicketStatus
+from orchestration.result_flow import StaleAgentResult, update_current_ticket
 from utils import now_iso
 
 logger = logging.getLogger("orchestrator")
@@ -464,11 +465,11 @@ async def apply_fragment_closeout(
         if not new_status:
             logger.error("阶段 %s 声明了 closeout 但没有 success_status", stage.get("id"))
             return True
-        await db.update("tickets", {
+        await update_current_ticket(db, ticket_id, current_status, {
             "status": new_status,
             "result": result_json,
             "updated_at": now_iso(),
-        }, "id = ?", (ticket_id,))
+        })
         await orch._log(
             project_id, requirement_id, ticket_id, agent_name,
             "complete", current_status, new_status,
@@ -482,6 +483,10 @@ async def apply_fragment_closeout(
 
     notes: List[str] = []
     for name in stage_hook_names(stage, "on_failure"):
+        # 钩子决定是否回退，必须先执行；之后的条件更新仍负责裁决写入权。
+        row = await db.fetch_one("SELECT status FROM tickets WHERE id = ?", (ticket_id,))
+        if row is None or row["status"] != current_status:
+            raise StaleAgentResult
         outcome = await orch._invoke_stage_hook(name, ctx)
         if not outcome:
             continue
@@ -496,16 +501,15 @@ async def apply_fragment_closeout(
                 if outcome.get("log_note"):
                     notes.append(str(outcome["log_note"]))
                 continue
+            await update_current_ticket(db, ticket_id, current_status, {
+                "status": trigger, "updated_at": now_iso(),
+            })
             await orch._log(
                 project_id, requirement_id, ticket_id, agent_name,
                 "action", current_status, trigger,
                 str(outcome.get("log_message") or f"回到阶段 {rewind_id}"),
                 detail_data=outcome.get("detail") if isinstance(outcome.get("detail"), dict) else {},
             )
-            await db.update("tickets", {
-                "status": trigger,
-                "updated_at": now_iso(),
-            }, "id = ?", (ticket_id,))
             return True
         if outcome.get("log_note"):
             notes.append(str(outcome["log_note"]))
@@ -514,11 +518,11 @@ async def apply_fragment_closeout(
     if not new_status:
         logger.error("阶段 %s 声明了 closeout 但没有 reject_status", stage.get("id"))
         return True
-    await db.update("tickets", {
+    await update_current_ticket(db, ticket_id, current_status, {
         "status": new_status,
         "result": result_json,
         "updated_at": now_iso(),
-    }, "id = ?", (ticket_id,))
+    })
     await orch._log(
         project_id, requirement_id, ticket_id, agent_name,
         "reject", current_status, new_status,

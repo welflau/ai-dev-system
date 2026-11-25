@@ -531,11 +531,14 @@ class TicketOrchestrator:
         agent_name: str,
         action: str,
         result: Dict,
-    ):
-        """根据 Agent 执行结果更新工单状态 + 写入 Git 仓库"""
+        *, assigned_status: Optional[str] = None,
+    ) -> bool:
+        """返回 False 表示工单已删除或结果已过期，管线应跳过本轮收尾。"""
         requirement_id = ticket["requirement_id"]
         current_ticket = await db.fetch_one("SELECT * FROM tickets WHERE id = ?", (ticket_id,))
-        current_status = current_ticket["status"] if current_ticket else ticket["status"]
+        if current_ticket is None:
+            return False
+        current_status = current_ticket["status"]
 
         # === 终态门闩：丢弃迟到的在途结果（blocked 后仍跑完的 fix_issues 等）===
         if current_status in self._HARD_TERMINAL:
@@ -554,16 +557,34 @@ class TicketOrchestrator:
                     "result_status": (result or {}).get("status") if isinstance(result, dict) else None,
                 },
             )
-            return
+            return False
 
-        if isinstance(result, dict) and result.get("status") == "error":
-            await result_flow.block_agent_error(
-                self, db, project_id=project_id, ticket_id=ticket_id, requirement_id=requirement_id,
-                ticket_snapshot=current_ticket or ticket, agent_name=agent_name, action=action,
-                result=result, current_status=current_status,
-            )
-            return
+        if (assigned_status is not None and current_status != assigned_status
+                and result_handlers.requires_assigned_status(agent_name, action, result)):
+            logger.info("忽略迟到的 %s.%s：工单 %s 已离开派单状态 %s（当前 %s）",
+                        agent_name, action, ticket_id, assigned_status, current_status)
+            return False
 
+        try:
+            if isinstance(result, dict) and result.get("status") == "error":
+                await result_flow.block_agent_error(
+                    self, db, project_id=project_id, ticket_id=ticket_id, requirement_id=requirement_id,
+                    ticket_snapshot=current_ticket, agent_name=agent_name, action=action,
+                    result=result, current_status=current_status,
+                )
+            else:
+                await self._route_agent_result(
+                    project_id, ticket_id, ticket, agent_name, action, result, current_status,
+                )
+        except result_flow.StaleAgentResult:
+            logger.info("忽略迟到的 %s.%s：工单 %s 已删除或已离开 %s",
+                        agent_name, action, ticket_id, current_status)
+            return False
+        return True
+
+    async def _route_agent_result(self, project_id, ticket_id, ticket, agent_name, action,
+                                  result, current_status):
+        requirement_id = ticket["requirement_id"]
         result_json = result_flow.serialize_result(result)
 
         # === 通用：处理 Agent 返回的 files，写入 Git 仓库 ===

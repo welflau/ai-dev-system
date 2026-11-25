@@ -238,7 +238,7 @@ async def _env(tmp_path, monkeypatch, *, status="pending", ticket_extra=None):
             raise
     orch._ticket_heartbeat = fake_heartbeat
 
-    async def fake_handle_result(pid, tid, ticket, agent_name, action, result):
+    async def fake_handle_result(pid, tid, ticket, agent_name, action, result, *, assigned_status):
         env.calls["result"].append({
             "ticket_status": ticket["status"], "agent": agent_name,
             "action": action, "result": result,
@@ -246,6 +246,7 @@ async def _env(tmp_path, monkeypatch, *, status="pending", ticket_extra=None):
         if env.result_status:
             await test_db.update("tickets", {"status": env.result_status},
                                  "id = ?", (tid,))
+        return True
     orch._handle_agent_result = fake_handle_result
 
     async def fake_forward_jump(pid, cur, target, ticket_type=None):
@@ -800,6 +801,48 @@ def test_skill_stage_is_executed_by_skill_agent(tmp_path, monkeypatch):
         assert call["llm"][3] == "DevAgent"
         assert call["row"]["assigned_agent"] == "DevAgent"
         assert env.calls["result"][0]["agent"] == "DevAgent"
+    _run(body, tmp_path, monkeypatch)
+
+
+@pytest.mark.parametrize("timing", ["during-agent", "during-git", "current"])
+def test_dev_completion_respects_assigned_status(tmp_path, monkeypatch, timing):
+    """从真正派单一路走到收尾；自定义进行态有效，过期结果不再触发外层管线。"""
+    async def body(env):
+        del env.orch._handle_agent_result  # 使用真实处理入口
+        env.rules = {"pending": _rule(next_status="custom_building"), "review_passed": _rule()}
+        execute = env.orch.agents["DevAgent"].execute
+        git_calls = []
+
+        async def advance():
+            await env.db.update("tickets", {"status": "review_passed", "result": "newer"},
+                                "id = ?", (TICKET_ID,))
+
+        async def run_agent(action, context):
+            result = await execute(action, context)
+            if timing == "during-agent":
+                await advance()
+            return result
+
+        async def git(*args):
+            git_calls.append(True)
+            if timing == "during-git":
+                await advance()
+
+        env.orch.agents["DevAgent"].execute = run_agent
+        env.orch._handle_git_files = git
+        await _process(env)
+        row = await _ticket(env)
+        if timing == "current":
+            assert row["status"] == "development_done"
+            assert json.loads(row["result"]) == env.agent_result
+            assert len(env.calls["cp_boundary"]) == 1
+        else:
+            assert (row["status"], row["result"]) == ("review_passed", "newer")
+            assert env.calls["cp_boundary"] == env.calls["ready"] == []
+            assert [p["to"] for _, p in _sse(env, "ticket_status_changed")] == ["custom_building"]
+        assert len(git_calls) == (0 if timing == "during-agent" else 1)
+        assert _sse(env, "ticket_error") == []
+        _assert_released(env)
     _run(body, tmp_path, monkeypatch)
 
 
