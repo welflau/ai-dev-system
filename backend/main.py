@@ -408,6 +408,8 @@ from api.llm_config import (
     router as llm_config_router,
     llm_status as llm_status,
     llm_agents as llm_agents,
+    llm_cli_models_refresh as llm_cli_models_refresh,
+    llm_test as llm_test,
 )
 from services.llm_config import public_llm_fields as _public_llm_fields
 from api.system import (
@@ -535,21 +537,6 @@ async def get_preview_url(project_id: str):
 
 
 app.include_router(llm_config_router)
-
-
-@app.post("/api/llm/cli-models/refresh")
-async def llm_cli_models_refresh(body: dict = None):
-    """从本地 CLI 实时查询模型列表（刷新下拉）"""
-    from llm_client import llm_client, fetch_cli_models
-    body = body or {}
-    cli_type = body.get("cli_type") or llm_client.cli_type or "claude"
-    cli_cmd = body.get("cli_cmd") or llm_client.cli_cmd or ""
-    result = await fetch_cli_models(cli_type, cli_cmd)
-    return {
-        "cli_type": cli_type,
-        "cli_cmd": cli_cmd,
-        **result,
-    }
 
 
 @app.post("/api/llm/config")
@@ -704,14 +691,6 @@ async def llm_config(body: dict):
         "model":              llm_client.model,
         "lightai_configured": bool(settings.LIGHTAI_API_KEY),
     }
-
-
-@app.post("/api/llm/test")
-async def llm_test():
-    """测试 LLM 连接"""
-    from llm_client import llm_client
-    result = await llm_client.test_connection()
-    return result
 
 
 # ==================== Agent 级 LLM 配置 ====================

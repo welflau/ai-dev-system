@@ -1,4 +1,4 @@
-"""LLM 状态与各 Agent 生效配置的只读接口。"""
+"""LLM 配置展示、CLI 模型刷新与连接测试接口。"""
 from fastapi import APIRouter
 
 from services import llm_config
@@ -22,3 +22,23 @@ async def llm_status():
 async def llm_agents():
     """枚举所有 Agent + 各自 LLM 生效配置（覆盖 or 继承全局）"""
     return await llm_config.agent_config_view()
+
+
+@router.post("/cli-models/refresh")
+async def llm_cli_models_refresh(body: dict = None):
+    """从本地 CLI 实时查询模型列表（刷新下拉）"""
+    from llm_client import fetch_cli_models, llm_client
+
+    body = body or {}
+    cli_type = body.get("cli_type") or llm_client.cli_type or "claude"
+    cli_cmd = body.get("cli_cmd") or llm_client.cli_cmd or ""
+    result = await fetch_cli_models(cli_type, cli_cmd)
+    return {"cli_type": cli_type, "cli_cmd": cli_cmd, **result}
+
+
+@router.post("/test")
+async def llm_test():
+    """测试 LLM 连接"""
+    from llm_client import llm_client
+
+    return await llm_client.test_connection()
