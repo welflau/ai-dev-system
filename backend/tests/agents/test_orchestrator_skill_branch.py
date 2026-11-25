@@ -289,6 +289,71 @@ def test_dispatcher_publishes_status_event_once(tmp_path, monkeypatch):
     _run(body, tmp_path, monkeypatch)
 
 
+@pytest.mark.parametrize("skill_status,ready_status,expected,sequence", [
+    ("success", None, SUCCESS_STATUS,
+     ["log_added", "comment_added", "ticket_status_changed", "dispatch"]),
+    ("skipped", None, SUCCESS_STATUS,
+     ["log_added", "ticket_status_changed", "dispatch"]),
+    ("waiting_human", "demo_ready", "demo_ready",
+     ["log_added", "comment_added", "ticket_status_changed"]),
+    ("waiting_human", None, SUCCESS_STATUS,
+     ["log_added", "comment_added", "ticket_status_changed", "dispatch"]),
+    ("budget_exceeded", None, "blocked",
+     ["log_added", "comment_added", "ticket_blocked", "ticket_diagnosed", "ticket_status_changed"]),
+], ids=["success", "skip", "review", "review-fallback", "blocked"])
+def test_skill_observers_see_persisted_state_in_order(
+    tmp_path, monkeypatch, skill_status, ready_status, expected, sequence,
+):
+    """订阅者收到首条通知时即可读到最终工单；派单发生在最后。"""
+    async def body(orch, db, sse, dispatched):
+        observed = []
+
+        async def observe(pid, event, payload):
+            row = await db.fetch_one("SELECT status, diagnosis FROM tickets WHERE id = ?", (TICKET_ID,))
+            observed.append((event, row["status"]))
+            if expected == "blocked":
+                diagnosis = json.loads(row["diagnosis"])
+                assert diagnosis["suggested_actions"]
+                if event in ("ticket_blocked", "ticket_diagnosed"):
+                    assert payload["diagnosis"] == diagnosis
+
+        async def dispatch(pid, tid):
+            assert (pid, tid) == (PROJECT_ID, TICKET_ID)
+            observed.append(("dispatch", await _status(db)))
+
+        async def rules(pid, traits_json=None, ticket_type=None):
+            assert (pid, ticket_type) == (PROJECT_ID, "feature")
+            # 即使配置了规则，blocked 和 _ready 也不能派单。
+            return {expected: {"agent": "SkillAgent", "action": "next"}}
+
+        monkeypatch.setattr(orch_module.event_manager, "publish_to_project", observe)
+        orch._get_rules_for_project = rules
+        orch.process_ticket = dispatch
+        cfg = sop_config()
+        if ready_status:
+            cfg["_ready_status"] = ready_status
+        await _call_via_dispatcher(orch, skill_result(skill_status, sop_cfg=cfg))
+        assert observed == [(step, expected) for step in sequence]
+
+    _run(body, tmp_path, monkeypatch)
+
+
+def test_skill_rechecks_status_after_notification(tmp_path, monkeypatch):
+    """状态通知发出后别处暂停了工单，成功态的规则不应再触发。"""
+    async def body(orch, db, sse, dispatched):
+        async def pause_on_change(pid, event, payload):
+            if event == "ticket_status_changed":
+                assert payload["to"] == SUCCESS_STATUS
+                await db.update("tickets", {"status": "paused"}, "id = ?", (TICKET_ID,))
+
+        monkeypatch.setattr(orch_module.event_manager, "publish_to_project", pause_on_change)
+        await _call_via_dispatcher(orch, skill_result())
+        assert await _status(db) == "paused"
+        assert dispatched == []
+
+    _run(body, tmp_path, monkeypatch)
+
+
 def test_status_advances_not_stuck(tmp_path, monkeypatch):
     """分支内部：状态从 current 推进到 success_status。"""
     async def body(orch, db, sse, dispatched):
