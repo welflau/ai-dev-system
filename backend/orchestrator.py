@@ -52,18 +52,6 @@ from orchestration.sop_rules import (  # noqa: F401
 
 logger = logging.getLogger("orchestrator")
 
-# 二进制媒体文件的 commit 消息标签。key 可以是 (agent, action) 或仅 agent。
-# 这条通道被多个 Agent 复用（TestAgent 截图 / ArtistAgent 占位图），
-# 不按来源区分会产出「[ArtistAgent] 测试截图」这种自相矛盾的提交记录。
-_MEDIA_COMMIT_LABELS = {
-    ("TestAgent", "run_tests"):          "测试截图",
-    ("TestAgent", "run_playtest"):       "Playtest 截图",
-    ("ArtistAgent", "generate_assets"):  "资产占位图",
-    "TestAgent":    "测试截图",
-    "ArtistAgent":  "美术资产",
-    "UEEditorAgent": "UE 编辑器截图",
-}
-
 # Agent 注册中心（自动发现 + 自定义 Agent）
 from agent_registry import instantiate_agents
 
@@ -220,6 +208,18 @@ class TicketOrchestrator:
 
     _TERMINAL_STATUSES = sop_rules.TERMINAL_STATUSES
 
+    # 二进制媒体文件的 commit 消息标签。key 可以是 (agent, action) 或仅 agent。
+    # 这条通道被多个 Agent 复用（TestAgent 截图 / ArtistAgent 占位图），
+    # 不按来源区分会产出「[ArtistAgent] 测试截图」这种自相矛盾的提交记录。
+    _MEDIA_COMMIT_LABELS = {
+        ("TestAgent", "run_tests"):          "测试截图",
+        ("TestAgent", "run_playtest"):       "Playtest 截图",
+        ("ArtistAgent", "generate_assets"):  "资产占位图",
+        "TestAgent":    "测试截图",
+        "ArtistAgent":  "美术资产",
+        "UEEditorAgent": "UE 编辑器截图",
+    }
+
     async def _get_all_actionable_statuses(self) -> List[str]:
         """轮询扫 ticket 用的 WHERE IN (...) 集合。"""
         return await sop_rules.get_all_actionable_statuses(self, db)
@@ -329,7 +329,7 @@ class TicketOrchestrator:
         #    硬编码软件阶段会漏掉 director_visual_in_progress，重启后轮询看不见，
         #    界面一直「正在干什么」其实进程已经死了。用 GLOB 扫全部 *_in_progress。
         # 3. Phase 4: 也扫 waiting_subtasks，用于检测子 Ticket 是否全部完成
-        from actions.chat.dispatch_subtask import WAITING_SUBTASKS_STATUS
+        from contracts import WAITING_SUBTASKS_STATUS
         waiting_statuses = [WAITING_SUBTASKS_STATUS]
 
         all_statuses = list(set(actionable_statuses + waiting_statuses))
@@ -475,7 +475,7 @@ class TicketOrchestrator:
         """Phase 4：检查父 Ticket 的所有子 Ticket 是否全部完成。
         全部完成 → 父 Ticket 恢复到 PENDING（让轮询器继续执行下一阶段）。
         """
-        from actions.chat.dispatch_subtask import WAITING_SUBTASKS_STATUS
+        from contracts import WAITING_SUBTASKS_STATUS
         DONE_STATUSES = {TicketStatus.TESTING_DONE.value, TicketStatus.DEPLOYED.value}
 
         sub_tickets = await db.fetch_all(
@@ -975,8 +975,8 @@ class TicketOrchestrator:
                     # 这条通道最早只给 TestAgent 的截图用，消息写死了「测试截图」。
                     # 现在 ArtistAgent 的占位图也走这里，硬编码会产出
                     # 「[ArtistAgent] 测试截图: ...」这种驴唇不对马嘴的 commit。
-                    media_label = _MEDIA_COMMIT_LABELS.get(
-                        (agent_name, action), _MEDIA_COMMIT_LABELS.get(agent_name, "媒体文件"),
+                    media_label = self._MEDIA_COMMIT_LABELS.get(
+                        (agent_name, action), self._MEDIA_COMMIT_LABELS.get(agent_name, "媒体文件"),
                     )
                     media_commit = await git_manager.commit(
                         project_id,
@@ -1031,8 +1031,8 @@ class TicketOrchestrator:
             # 自动部署 dev 环境（Agent 完成文件提交后）
             if agent_name in ("DevAgent", "ArchitectAgent"):
                 try:
-                    from agents.deploy import DeployAgent
-                    await DeployAgent.deploy_env(project_id, "dev")
+                    import runtime_facade
+                    await runtime_facade.agents_deploy().DeployAgent.deploy_env(project_id, "dev")
                 except Exception as de:
                     logger.warning("Dev 环境自动部署失败: %s", de)
 
@@ -1241,8 +1241,8 @@ class TicketOrchestrator:
         is_ue_project = any(t in traits for t in ("engine:ue5", "engine:ue4"))
         if is_ue_project:
             try:
-                from actions.ue_editor_control import probe_ucp
-                context["ucp_available"] = await probe_ucp(timeout=1.0)
+                import runtime_facade
+                context["ucp_available"] = await runtime_facade.actions_ue_editor_control().probe_ucp(timeout=1.0)
             except Exception:
                 context["ucp_available"] = False
         else:
@@ -1353,13 +1353,10 @@ class TicketOrchestrator:
             except Exception:
                 extra_files = []
 
-            from actions.diagnose_ticket import (
-                DiagnoseTicketAction,
-                _is_timeout_block,
-                synthesize_blocked_diagnosis,
-            )
-            if _is_timeout_block(skill_status, error_msg):
-                diagnosis = synthesize_blocked_diagnosis(
+            import runtime_facade
+            diag_mod = runtime_facade.actions_diagnose_ticket()
+            if diag_mod._is_timeout_block(skill_status, error_msg):
+                diagnosis = diag_mod.synthesize_blocked_diagnosis(
                     skill_id=skill_id,
                     skill_status=skill_status,
                     error_msg=error_msg,
@@ -1369,7 +1366,7 @@ class TicketOrchestrator:
                     extra_files=extra_files,
                 )
             else:
-                action_obj = DiagnoseTicketAction()
+                action_obj = diag_mod.DiagnoseTicketAction()
                 result = await action_obj.run(context)
                 diagnosis = (result.data or {}).get("diagnosis") or {}
 
@@ -1587,9 +1584,9 @@ class TicketOrchestrator:
             if stage in ("verified", "archived"):
                 return True
 
-            from agents.test import TestAgent
+            import runtime_facade
             ctx = {"project_id": project_id, "ticket_id": ticket_id}
-            ok = await TestAgent()._run_openspec_verify(ctx)
+            ok = await runtime_facade.agents_test().TestAgent()._run_openspec_verify(ctx)
             if ok and stage_label:
                 logger.info(
                     "📐 OpenSpec Verify 由 %s 阶段触发并通过（ticket=%s）",
@@ -1621,8 +1618,8 @@ class TicketOrchestrator:
 
         ctx = {"project_id": project_id, "ticket_id": ticket_id}
         if stage in ("proposed", "applied"):
-            from agents.test import TestAgent
-            ok = await TestAgent()._run_openspec_verify(ctx, block_on_fail=False)
+            import runtime_facade
+            ok = await runtime_facade.agents_test().TestAgent()._run_openspec_verify(ctx, block_on_fail=False)
             if not ok:
                 logger.info(
                     "📐 OpenSpec 终态收尾：Verify 未通过，跳过 Archive（ticket=%s）",
@@ -1635,8 +1632,8 @@ class TicketOrchestrator:
             stage = ((row or {}).get("openspec_stage") or "").strip()
 
         if stage == "verified":
-            from agents.deploy import DeployAgent
-            await DeployAgent()._run_openspec_archive(ctx)
+            import runtime_facade
+            await runtime_facade.agents_deploy().DeployAgent()._run_openspec_archive(ctx)
             # archive 成功时 DeployAgent 会写 openspec_stage=archived；补一条 layer 日志便于时间轴跳转
             row2 = await db.fetch_one(
                 "SELECT openspec_stage FROM tickets WHERE id = ?", (ticket_id,),
@@ -1785,11 +1782,10 @@ _runtime_facade.register("orchestrator", orchestrator)
 def _synthesize_blocked_diagnosis(**kwargs) -> Dict[str, Any]:
     """skill 失败时的本地诊断说明，不调 LLM。
 
-    留在这里是因为它要导入 L3 模块；结果处理器经 `ResultContext` 拿到它。
-    导入放在函数里，和搬出去之前一样只在真的要诊断时才发生。
+    留在这里是因为测试按模块全局名给它打桩，构造 `ResultContext` 时也按模块全局名取。
+    L3 的 `actions.diagnose_ticket` 经 `runtime_facade` 在调用时才解析，只在真的要诊断时才加载。
     """
-    from actions.diagnose_ticket import synthesize_blocked_diagnosis
-    return synthesize_blocked_diagnosis(**kwargs)
+    return _runtime_facade.actions_diagnose_ticket().synthesize_blocked_diagnosis(**kwargs)
 
 
 def _fire_knowledge_distill(project_id: str, ticket_id: str):
@@ -1805,8 +1801,8 @@ def _fire_knowledge_distill(project_id: str, ticket_id: str):
             )
             if not cycle_count or cycle_count["n"] == 0:
                 return  # 无失败-修复循环，无需蒸馏
-            from actions.knowledge_distill import KnowledgeDistillAction
-            await KnowledgeDistillAction().run({"ticket_id": ticket_id, "project_id": project_id})
+            distill_mod = _runtime_facade.actions_knowledge_distill()
+            await distill_mod.KnowledgeDistillAction().run({"ticket_id": ticket_id, "project_id": project_id})
         except Exception as e:
             logger.warning("[知识蒸馏] 失败（忽略）: %s", e)
 

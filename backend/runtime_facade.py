@@ -15,6 +15,16 @@ L1 只认 L0 契约，L3 单向注册，运行时按名字解析。
     await orch.post_milestone_comment(...)          # 同步 await，时序不变
     await chat_api()._save_chat_message(...)        # 动态取模块属性，patch 兼容
 
+L1 的 orchestrator 用到 L3 的 Agent / action 时也走这里，取回的是模块对象，
+调用处再从模块上取类或函数（测试打在源模块上的桩照样生效）：
+
+    runtime_facade.agents_test().TestAgent()
+    runtime_facade.actions_diagnose_ticket().synthesize_blocked_diagnosis(...)
+
+取用函数有 `agents_test()`、`agents_deploy()`、`actions_diagnose_ticket()`、
+`actions_knowledge_distill()`、`actions_ue_editor_control()`。模块名放在模块级常量里，
+本文件仍然没有任何项目内的 import 语句。
+
 为什么用 sys.modules / importlib 兜底
 ------------------------------------
 提供方在模块加载末尾把自己注册进来；解析发生在运行时。若某进程只加载了
@@ -39,6 +49,11 @@ from typing import Any, Dict
 
 _ORCHESTRATOR_MODULE = "orchestrator"
 _CHAT_API_MODULE = "api.chat"
+_AGENTS_TEST_MODULE = "agents.test"
+_AGENTS_DEPLOY_MODULE = "agents.deploy"
+_ACTIONS_DIAGNOSE_TICKET_MODULE = "actions.diagnose_ticket"
+_ACTIONS_KNOWLEDGE_DISTILL_MODULE = "actions.knowledge_distill"
+_ACTIONS_UE_EDITOR_CONTROL_MODULE = "actions.ue_editor_control"
 
 _handlers: Dict[str, Any] = {}
 
@@ -71,3 +86,28 @@ def get_orchestrator():
 def chat_api():
     """返回 api.chat 模块对象；调用方动态取属性（兼容 monkeypatch）。"""
     return _resolve("api.chat", _CHAT_API_MODULE)
+
+
+def agents_test():
+    """返回 agents.test 模块对象（TestAgent 所在）；调用方动态取属性。"""
+    return _resolve(_AGENTS_TEST_MODULE, _AGENTS_TEST_MODULE)
+
+
+def agents_deploy():
+    """返回 agents.deploy 模块对象（DeployAgent 所在）；调用方动态取属性。"""
+    return _resolve(_AGENTS_DEPLOY_MODULE, _AGENTS_DEPLOY_MODULE)
+
+
+def actions_diagnose_ticket():
+    """返回 actions.diagnose_ticket 模块对象；调用方动态取属性。"""
+    return _resolve(_ACTIONS_DIAGNOSE_TICKET_MODULE, _ACTIONS_DIAGNOSE_TICKET_MODULE)
+
+
+def actions_knowledge_distill():
+    """返回 actions.knowledge_distill 模块对象；调用方动态取属性。"""
+    return _resolve(_ACTIONS_KNOWLEDGE_DISTILL_MODULE, _ACTIONS_KNOWLEDGE_DISTILL_MODULE)
+
+
+def actions_ue_editor_control():
+    """返回 actions.ue_editor_control 模块对象；调用方动态取属性。"""
+    return _resolve(_ACTIONS_UE_EDITOR_CONTROL_MODULE, _ACTIONS_UE_EDITOR_CONTROL_MODULE)

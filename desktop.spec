@@ -88,6 +88,12 @@ hiddenimports = [
     "agents",
     "agents.chat_assistant",
     "agents.base",
+    # orchestrator 经 runtime_facade 按名字取这些模块，没有静态导入，要手动列出
+    "agents.test",
+    "agents.deploy",
+    "actions.diagnose_ticket",
+    "actions.knowledge_distill",
+    "actions.ue_editor_control",
     "query_engine",
     "query_engine.engine",
     "query_engine.events",

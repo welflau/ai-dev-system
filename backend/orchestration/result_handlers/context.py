@@ -22,9 +22,9 @@ class ResultContext:
 
     - 测试用 `monkeypatch.setattr(orchestrator, "db", test_db)` 换库，处理器必须
       拿到同一个对象，否则会写到真实库里。
-    - `_fire_knowledge_distill` 和 `_synthesize_blocked_diagnosis` 内部导入了 L3 模块，
-      留在 orchestrator.py。由调用方传进来，分层守卫登记的违规不会换到新模块名下。
-      这只是没有让违规变多，orchestrator 对 L3 的依赖还在，要到 R4 才解开。
+    - `_fire_knowledge_distill` 和 `_synthesize_blocked_diagnosis` 留在 orchestrator.py，由调用方传进来。
+      测试按 orchestrator 的模块全局名给它们打桩，orchestrator 构造 `ResultContext` 时
+      也按模块全局名取。它们用到的 L3 模块经 `runtime_facade` 在调用时才解析，没有静态导入。
     """
 
     orch: Any                               # TicketOrchestrator：写日志、评论、记忆，查 SOP

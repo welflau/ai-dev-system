@@ -16,6 +16,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from actions.base import ActionBase, ActionResult
+from contracts import WAITING_SUBTASKS_STATUS
 from database import db
 from utils import generate_id, now_iso
 
@@ -24,8 +25,8 @@ logger = logging.getLogger("actions.dispatch_subtask")
 # 子 Ticket 最大嵌套深度
 MAX_SUBTASK_DEPTH = 3
 
-# 父 Ticket 等待子 Ticket 的中间状态（写入 tickets.status）
-WAITING_SUBTASKS_STATUS = "waiting_subtasks"
+# 父 Ticket 等待子 Ticket 的中间状态 WAITING_SUBTASKS_STATUS 定义在 contracts（L0）。
+# 上面的导入让旧路径 actions.chat.dispatch_subtask.WAITING_SUBTASKS_STATUS 继续可用。
 
 
 async def _get_ancestor_ids(ticket_id: str) -> List[str]:
