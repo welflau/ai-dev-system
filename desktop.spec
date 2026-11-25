@@ -116,6 +116,7 @@ hiddenimports = [
     "api.event_streams",
     "api.system",
     "services.agent_tools_settings",
+    "services.file_manager",
     "api.llm_config",
     "services.llm_config",
     "services.global_llm_config",

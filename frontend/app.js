@@ -4888,7 +4888,7 @@ function selectPackItem(idx) {
             <span style="opacity:.6;">${cm.icon} ${escapeHtml(cm.label)}</span>
             <span style="opacity:.4;">·</span>
             <code style="font-size:10px;background:var(--bg-elevated);padding:2px 6px;border-radius:3px;color:var(--text-secondary);">config_packs/${escapeHtml(fullPath)}</code>
-            ${item.path ? `<button onclick="openPathInExplorer('${escapeHtml(item.path).replace(/'/g, '&#39;')}')" title="在文件管理器中打开" style="padding:2px 6px;font-size:10px;border:1px solid var(--border-color);border-radius:3px;background:var(--bg-elevated);color:var(--text-muted);cursor:pointer;line-height:1;">📂</button>` : ''}
+            ${item.path ? `<button data-filepath="${escapeHtml(item.path)}" onclick="openPathInExplorer(this.dataset.filepath)" title="在文件管理器中打开" style="padding:2px 6px;font-size:10px;border:1px solid var(--border-color);border-radius:3px;background:var(--bg-elevated);color:var(--text-muted);cursor:pointer;line-height:1;">📂</button>` : ''}
         </div>
         <div id="packDetailMdBody" class="md-preview md-compact"></div>`;
 
@@ -19417,7 +19417,7 @@ function _renderFileBadge(rawPath, displayText) {
     if (!rawPath) return '';
     const safeRaw  = escapeHtml(rawPath);
     const safeDisp = escapeHtml(displayText || rawPath);
-    const openBtn  = `<button onclick="openPathInExplorer('${safeRaw.replace(/'/g, '&#39;')}')"
+    const openBtn  = `<button data-filepath="${safeRaw}" onclick="openPathInExplorer(this.dataset.filepath)"
         title="在文件管理器中打开"
         style="margin-left:4px;padding:2px 6px;font-size:10px;border:1px solid var(--border-color);
                border-radius:3px;background:var(--bg-elevated);color:var(--text-muted);
@@ -19426,15 +19426,19 @@ function _renderFileBadge(rawPath, displayText) {
             color:var(--text-secondary);" title="${safeRaw}">${safeDisp}</code>${openBtn}`;
 }
 
-async function openPathInExplorer(path) {
+async function openPathInExplorer(path, copyOnNetworkError = false) {
     try {
-        await fetch('/api/system/open_path', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ path }),
-        });
-    } catch(e) {
-        showToast('打开失败: ' + e.message, 'error');
+        await api('/system/open_path', { method: 'POST', body: { path } });
+        showToast('已请求在文件管理器中打开', 'success');
+    } catch (e) {
+        if (copyOnNetworkError && e instanceof TypeError && navigator.clipboard) {
+            try {
+                await navigator.clipboard.writeText(path);
+                showToast('未能连接服务，路径已复制', 'warning');
+                return;
+            } catch { /* 复制未成功，继续显示原始错误。 */ }
+        }
+        showToast('无法打开：' + e.message, 'error');
     }
 }
 
@@ -25474,20 +25478,19 @@ async function _refreshTasksPanelInner() {
     }
 }
 
-function _openLocalImageFile(filePath) {
+async function _openLocalImageFile(filePath) {
     if (!filePath) return;
     // 本地路径：用 /api/system/open_path 在 Explorer 中选中文件
     // 远端 URL：复制到剪贴板
     if (/^[a-zA-Z]:[\\\/]/.test(filePath) || filePath.startsWith('/')) {
-        fetch('/api/system/open_path', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({path: filePath}),
-        }).then(() => showToast('已在文件管理器中打开', 'success'))
-          .catch(() => { navigator.clipboard?.writeText(filePath); showToast('路径已复制', 'success'); });
+        return openPathInExplorer(filePath, true);
     } else {
-        navigator.clipboard?.writeText(filePath);
-        showToast('URL 已复制', 'success');
+        try {
+            await navigator.clipboard.writeText(filePath);
+            showToast('URL 已复制', 'success');
+        } catch {
+            showToast('无法复制 URL', 'error');
+        }
     }
 }
 

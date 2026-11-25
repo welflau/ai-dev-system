@@ -421,6 +421,7 @@ from api.system import (
     router as system_router,
     health_check as health_check,
     get_available_paths as get_available_paths,
+    open_path_in_explorer as open_path_in_explorer,
     get_agent_tools_status as get_agent_tools_status,
     set_agent_tools_status as set_agent_tools_status,
 )
@@ -487,39 +488,6 @@ app.include_router(external_sessions_router)
 app.include_router(session_materials_project_router)
 app.include_router(session_materials_global_router)
 app.include_router(global_events_router)
-
-
-# ==================== 系统端点 ====================
-
-
-@app.post("/api/system/open_path")
-async def open_path_in_explorer(body: dict):
-    """在系统文件管理器中打开指定路径。"""
-    import os, sys, subprocess
-    from pathlib import Path
-    raw = (body.get("path") or "").strip()
-    if not raw:
-        from fastapi import HTTPException
-        raise HTTPException(400, "path 不能为空")
-    p = Path(raw)
-    target = p.parent if p.is_file() else p
-    if not target.exists():
-        from fastapi import HTTPException
-        raise HTTPException(404, f"路径不存在: {target}")
-    try:
-        if sys.platform == "win32":
-            if p.is_file():
-                subprocess.Popen(["explorer", "/select,", str(p)])
-            else:
-                os.startfile(str(target))
-        elif sys.platform == "darwin":
-            subprocess.Popen(["open", "-R" if p.is_file() else "", str(p if p.is_file() else target)])
-        else:
-            subprocess.Popen(["xdg-open", str(target)])
-        return {"ok": True, "opened": str(target)}
-    except Exception as e:
-        from fastapi import HTTPException
-        raise HTTPException(500, f"打开失败: {e}")
 
 
 app.include_router(system_router)
