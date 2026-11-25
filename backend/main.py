@@ -404,6 +404,13 @@ from api.image_gen import router as image_gen_router
 from api.cloud_video_config import router as cloud_video_config_router
 from api.ai_gen_tasks import router as ai_gen_tasks_router
 from api.metrics import router as metrics_router
+from api.sop_config import (
+    router as sop_config_router,
+    get_sop as get_sop,
+    get_sop_config_full as get_sop_config_full,
+    update_sop_config as update_sop_config,
+    reload_sop as reload_sop,
+)
 # 保留这两个原有的 Python 调用入口。
 from api.metrics import get_asyncio_tasks_detail as get_asyncio_tasks_detail, get_system_metrics as get_system_metrics
 from api.art_assets import router as art_assets_router
@@ -508,93 +515,7 @@ async def health_check():
     return {"status": "ok", "version": APP_VERSION}
 
 
-@app.get("/api/sop")
-async def get_sop():
-    """获取当前 SOP 配置（流程定义）"""
-    from sop.loader import get_sop_stages, get_sop_metadata
-    from orchestrator import orchestrator
-    config = orchestrator._sop_config
-    if not config:
-        return {"metadata": {"name": "内置默认", "version": "1.0"}, "stages": [], "rules": orchestrator.transition_rules}
-    return {
-        "metadata": get_sop_metadata(config),
-        "stages": get_sop_stages(config),
-        "rules": orchestrator.transition_rules,
-    }
-
-
-@app.get("/api/sop/config")
-async def get_sop_config_full():
-    """获取 SOP 的完整原始配置（含 pipeline_view / global / 每个 stage 的 config 嵌套）
-
-    供 SOP 编辑器使用，返回可直接回传 PUT 的完整结构。
-    """
-    from orchestrator import orchestrator
-    return orchestrator._sop_config or {}
-
-
-@app.put("/api/sop/config")
-async def update_sop_config(body: dict):
-    """更新 SOP 配置（SOP 编辑器用）
-
-    流程：
-    1. 校验入参（字段齐全、id 唯一、reject_goto / pipeline_view 引用合法）
-    2. 备份当前 yaml 到 sop/backups/default_sop_YYYYMMDD-HHMMSS.yaml
-    3. 写入新 yaml
-    4. 热重载 orchestrator
-    """
-    from sop.loader import SOP_DIR
-    from sop.validator import validate_sop_config
-    from orchestrator import orchestrator
-    from datetime import datetime
-
-    # 1. 校验
-    errors = validate_sop_config(body)
-    if errors:
-        raise HTTPException(400, {"detail": "SOP 配置校验失败", "errors": errors})
-
-    # 2. 备份
-    backup_dir = SOP_DIR / "backups"
-    backup_dir.mkdir(parents=True, exist_ok=True)
-    sop_file = SOP_DIR / "default_sop.yaml"
-    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-    backup_path = backup_dir / f"default_sop_{ts}.yaml"
-
-    if sop_file.exists():
-        backup_path.write_text(sop_file.read_text(encoding="utf-8"), encoding="utf-8")
-
-    # 3. 写新 yaml
-    try:
-        import yaml
-        new_yaml = yaml.safe_dump(body, allow_unicode=True, sort_keys=False, indent=2)
-        sop_file.write_text(new_yaml, encoding="utf-8")
-    except Exception as e:
-        raise HTTPException(500, f"写入 yaml 失败: {e}")
-
-    # 4. 热重载
-    try:
-        orchestrator.reload_sop()
-    except Exception as e:
-        # reload 失败则还原备份
-        if backup_path.exists():
-            sop_file.write_text(backup_path.read_text(encoding="utf-8"), encoding="utf-8")
-            orchestrator.reload_sop()
-        raise HTTPException(500, f"热重载失败（已自动回滚）：{e}")
-
-    return {
-        "status": "ok",
-        "backup": backup_path.name,
-        "name": body.get("name", "?"),
-        "stages_count": len(body.get("stages") or []),
-    }
-
-
-@app.post("/api/sop/reload")
-async def reload_sop():
-    """热重载 SOP 配置"""
-    from orchestrator import orchestrator
-    config = orchestrator.reload_sop()
-    return {"status": "ok", "message": "SOP 已重载", "name": config.get("name", "?") if config else "内置默认"}
+app.include_router(sop_config_router)
 
 
 @app.get("/api/projects/{project_id}/preview")
