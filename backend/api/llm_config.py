@@ -1,7 +1,7 @@
 """LLM 配置展示与 Agent 覆盖、CLI 模型刷新及连接测试接口。"""
 from fastapi import APIRouter, HTTPException
 
-from services import llm_config
+from services import global_llm_config, llm_config as agent_config
 
 router = APIRouter(prefix="/api/llm")
 
@@ -15,13 +15,13 @@ async def llm_status():
     model 只是 API 模式遗留的主模型名（例如切到 CLI 前留下的 hy4），并不参与实际调用，
     直接展示会误导用户以为在用 hy4。model 字段保留原语义供 API 模式输入框回填。
     """
-    return llm_config.status_view()
+    return agent_config.status_view()
 
 
 @router.get("/agents")
 async def llm_agents():
     """枚举所有 Agent + 各自 LLM 生效配置（覆盖 or 继承全局）"""
-    return await llm_config.agent_config_view()
+    return await agent_config.agent_config_view()
 
 
 @router.post("/cli-models/refresh")
@@ -56,7 +56,7 @@ async def llm_agent_config(agent_type: str, body: dict):
     """写/更新某 Agent 的 LLM 覆盖（upsert）。空 body 各字段为空串 = 显式继承全局语义不再适用，
     调用方要"恢复继承"请用 DELETE。"""
     name = _agent_name(agent_type)
-    await llm_config.save_agent_override(name, body)
+    await agent_config.save_agent_override(name, body)
     return {"status": "ok", "agent_type": name}
 
 
@@ -64,5 +64,11 @@ async def llm_agent_config(agent_type: str, body: dict):
 async def llm_agent_config_delete(agent_type: str):
     """删除某 Agent 的覆盖 = 恢复继承全局配置"""
     name = _agent_name(agent_type)
-    await llm_config.delete_agent_override(name)
+    await agent_config.delete_agent_override(name)
     return {"status": "ok", "agent_type": name}
+
+
+@router.post("/config")
+async def llm_config(body: dict):
+    """动态更新 LLM 配置并持久化到 .env"""
+    return await global_llm_config.save_global_config(body)

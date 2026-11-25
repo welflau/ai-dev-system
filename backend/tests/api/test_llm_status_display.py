@@ -9,21 +9,22 @@
 用 TestClient 打真实端点，但 .env 用 tmp_path 替换；绝不碰真实 backend/.env。
 """
 import asyncio
-from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from config import settings
 from llm_client import llm_client
 import main as main_mod
 
 
 @pytest.fixture
 def app_client(monkeypatch, tmp_path):
-    # 重定向 .env 到临时目录；llm_config 内部 `from config import BASE_DIR`
+    # 使用临时主配置与独立 settings；这两个展示回归用例不执行安装目录同步。
     monkeypatch.setattr("config.BASE_DIR", tmp_path)
+    monkeypatch.setattr("config.settings", SimpleNamespace(LIGHTAI_API_KEY=""))
+    monkeypatch.setattr(llm_client, "api_key", "")
     (tmp_path / ".env").write_text(
         "LLM_API_FORMAT=cli\n"
         "LLM_MODEL=hy4-stale\n"
@@ -32,8 +33,6 @@ def app_client(monkeypatch, tmp_path):
         "LLM_CLI_CMD=codebuddy\n",
         encoding="utf-8",
     )
-    # 关掉会写外部 env.json 的 LightAI 同步分支
-    monkeypatch.setattr(settings, "LIGHTAI_API_KEY", "", raising=False)
     app = FastAPI()
     # 只挂需要的端点，避免把整个 main 的 lifespan 拉起来
     from fastapi.routing import APIRoute
