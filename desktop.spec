@@ -114,6 +114,8 @@ hiddenimports = [
     "api",
     "api.tickets",
     "api.system",
+    "api.llm_config",
+    "services.llm_config",
     "api.metrics",
     "services.metrics",
     "api.sop_config",

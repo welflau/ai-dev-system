@@ -404,6 +404,12 @@ from api.image_gen import router as image_gen_router
 from api.cloud_video_config import router as cloud_video_config_router
 from api.ai_gen_tasks import router as ai_gen_tasks_router
 from api.metrics import router as metrics_router
+from api.llm_config import (
+    router as llm_config_router,
+    llm_status as llm_status,
+    llm_agents as llm_agents,
+)
+from services.llm_config import public_llm_fields as _public_llm_fields
 from api.system import (
     router as system_router,
     health_check as health_check,
@@ -528,37 +534,7 @@ async def get_preview_url(project_id: str):
     return {"preview_url": None}
 
 
-@app.get("/api/llm/status")
-async def llm_status():
-    """LLM 状态。
-
-    display_model = 当前**实际生效**的模型名：CLI 模式用 cli_model，API 模式用 model。
-    顶栏徽标、聊天头像等「展示当前模型」的位置一律用它，不要用 model —— CLI 模式下
-    model 只是 API 模式遗留的主模型名（例如切到 CLI 前留下的 hy4），并不参与实际调用，
-    直接展示会误导用户以为在用 hy4。model 字段保留原语义供 API 模式输入框回填。
-    """
-    from llm_client import llm_client, get_cli_model_options, _CLI_ADAPTERS
-    is_cli = llm_client.api_format == "cli"
-    display_model = (
-        (llm_client.cli_model or llm_client.model) if is_cli else llm_client.model
-    )
-    return {
-        "configured":  llm_client.is_configured,
-        "api_format":  llm_client.api_format,
-        "base_url":    llm_client.base_url if not is_cli else None,
-        "model":       llm_client.model,
-        "display_model": display_model,
-        "timeout":     llm_client.timeout,
-        "max_retries": llm_client.max_retries,
-        # CLI 专属字段（非 CLI 模式时为 None）
-        "cli_type":    llm_client.cli_type    if is_cli else None,
-        "cli_cmd":     llm_client.cli_cmd     if is_cli else None,
-        "cli_model":   llm_client.cli_model   if is_cli else None,
-        "cli_timeout": llm_client.cli_timeout if is_cli else None,
-        # 前端联动用：各 CLI 工具的模型列表 + 默认命令名（始终返回，方便弹窗初始化）
-        "cli_model_options": get_cli_model_options(),
-        "cli_default_cmds":  {k: v["default_cmd"] for k, v in _CLI_ADAPTERS.items()},
-    }
+app.include_router(llm_config_router)
 
 
 @app.post("/api/llm/cli-models/refresh")
@@ -739,62 +715,6 @@ async def llm_test():
 
 
 # ==================== Agent 级 LLM 配置 ====================
-
-def _public_llm_fields(client, has_api_key: bool = False) -> dict:
-    """暴露给前端的 LLM 配置字段（api_key 不外泄，只给 has_api_key 标记）"""
-    api_format = getattr(client, "api_format", None)
-    model = getattr(client, "model", None)
-    cli_model = getattr(client, "cli_model", None)
-    display_model = (cli_model or model) if api_format == "cli" else model
-    return {
-        "api_format": api_format,
-        "base_url": getattr(client, "base_url", None),
-        "model": model,
-        "display_model": display_model,
-        "cli_type": getattr(client, "cli_type", None),
-        "cli_cmd": getattr(client, "cli_cmd", None),
-        "cli_model": cli_model,
-        "cli_timeout": getattr(client, "cli_timeout", None),
-        "has_api_key": has_api_key,
-    }
-
-
-@app.get("/api/llm/agents")
-async def llm_agents():
-    """枚举所有 Agent + 各自 LLM 生效配置（覆盖 or 继承全局）"""
-    from agent_registry import discover_agents, get_registry
-    from llm_client import (
-        LLMClient, llm_client, get_agent_llm_config, get_cli_model_options, _CLI_ADAPTERS,
-    )
-
-    discover_agents()
-    names = sorted(get_registry().keys())
-
-    agents = []
-    for name in names:
-        override = await get_agent_llm_config(name)
-        if override is not None:
-            effective = _public_llm_fields(
-                LLMClient(config=override),
-                has_api_key=bool(override.get("api_key")),
-            )
-            has_override = True
-        else:
-            effective = _public_llm_fields(llm_client, has_api_key=bool(llm_client.api_key))
-            has_override = False
-        agents.append({
-            "agent_type": name,
-            "has_override": has_override,
-            "effective": effective,
-        })
-
-    return {
-        "agents": agents,
-        "global": _public_llm_fields(llm_client, has_api_key=bool(llm_client.api_key)),
-        "cli_model_options": get_cli_model_options(),
-        "cli_default_cmds": {k: v["default_cmd"] for k, v in _CLI_ADAPTERS.items()},
-    }
-
 
 @app.post("/api/llm/agents/{agent_type}/config")
 async def llm_agent_config(agent_type: str, body: dict):
