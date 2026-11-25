@@ -403,6 +403,9 @@ from api.ue_framework import router as ue_framework_router
 from api.image_gen import router as image_gen_router
 from api.cloud_video_config import router as cloud_video_config_router
 from api.ai_gen_tasks import router as ai_gen_tasks_router
+from api.metrics import router as metrics_router
+# 保留这两个原有的 Python 调用入口。
+from api.metrics import get_asyncio_tasks_detail as get_asyncio_tasks_detail, get_system_metrics as get_system_metrics
 from api.art_assets import router as art_assets_router
 from api.efficiency import router as efficiency_router
 from api.competitor import router as competitor_router
@@ -941,166 +944,7 @@ async def llm_agent_config_delete(agent_type: str):
     return {"status": "ok", "agent_type": agent_type}
 
 
-def _asyncio_task_details(loop, current=None):
-    """枚举未完成的 asyncio Task 明细。
-
-    /api/metrics 的 asyncio_tasks 计数与 /api/metrics/asyncio-tasks 的列表共用此函数，
-    保证「数字 ↔ 列表条数」口径严格一致。current 仅用于标记当前请求自身的 task，
-    **不排除**（它确实是活跃协程之一，排除会让列表比数字少 1）。
-
-    只取 stack 帧的文件名/函数名/行号，不读取局部变量，避免泄漏敏感信息。
-    """
-    import asyncio as _asyncio
-
-    out = []
-    for t in _asyncio.all_tasks(loop):
-        if t.done():
-            continue
-        try:
-            name = t.get_name()
-        except Exception:
-            name = ""
-        try:
-            coro = t.get_coro()
-            coro_name = getattr(coro, "__qualname__", None) or type(coro).__name__
-        except Exception:
-            coro_name = ""
-        frame = ""
-        try:
-            stack = t.get_stack()
-            if stack:
-                f = stack[-1]
-                fname = str(f.f_code.co_filename).replace("\\", "/").rsplit("/", 1)[-1]
-                frame = f"{fname}:{f.f_code.co_name}:{f.f_lineno}"
-        except Exception:
-            pass
-        try:
-            cancelling = t.cancelling()
-        except Exception:
-            cancelling = 0
-        out.append({
-            "name": name or "",
-            "coro": coro_name or "",
-            "done": False,
-            "cancelling": cancelling,
-            "stack": frame,
-            "self": t is current,
-        })
-    return out
-
-
-@app.get("/api/metrics/asyncio-tasks")
-async def get_asyncio_tasks_detail():
-    """顶栏「异步任务」明细：进程内未完成的 asyncio 协程列表。
-
-    与 /api/metrics 的 asyncio_tasks 同一枚举口径；按 coro 聚合出 summary 便于阅读。
-    """
-    import asyncio as _asyncio
-    from collections import Counter
-
-    loop = _asyncio.get_event_loop()
-    tasks = _asyncio_task_details(loop, current=_asyncio.current_task())
-    grouped = Counter(t["coro"] or "(unknown)" for t in tasks)
-    return {
-        "count": len(tasks),
-        "tasks": tasks,
-        "summary": [
-            {"coro": k, "count": v} for k, v in grouped.most_common()
-        ],
-    }
-
-
-@app.get("/api/metrics")
-async def get_system_metrics():
-    """系统性能指标：用于顶栏实时监控"""
-    import asyncio as _asyncio
-    import os as _os
-    from pathlib import Path as _Path
-
-    # asyncio 活跃任务数（轻量计数，每 5s 调一次；明细走 /api/metrics/asyncio-tasks）
-    # 口径：all_tasks 里所有未完成 task，含当前请求自身 —— 与明细端点严格一致。
-    loop = _asyncio.get_event_loop()
-    active_tasks = sum(1 for t in _asyncio.all_tasks(loop) if not t.done())
-
-    # 内存占用（psutil 优先，不可用时 fallback 到 /proc 或 0）
-    mem_mb = 0
-    try:
-        import psutil as _psutil
-        proc = _psutil.Process(_os.getpid())
-        mem_mb = proc.memory_info().rss // (1024 * 1024)
-    except ImportError:
-        try:
-            with open(f"/proc/{_os.getpid()}/status") as f:
-                for line in f:
-                    if line.startswith("VmRSS:"):
-                        mem_mb = int(line.split()[1]) // 1024
-                        break
-        except Exception:
-            pass
-
-    # SQLite WAL 文件大小
-    from config import BASE_DIR
-    db_file = BASE_DIR / "ai_dev_system.db"
-    wal_file = BASE_DIR / "ai_dev_system.db-wal"
-    wal_kb = int(wal_file.stat().st_size / 1024) if wal_file.exists() else 0
-
-    # Orchestrator 处理中工单数
-    processing = 0
-    try:
-        from orchestrator import orchestrator
-        processing = len(orchestrator._processing)
-    except Exception:
-        pass
-
-    # LLM 在途请求数
-    llm_pending = 0
-    try:
-        from llm_client import llm_client
-        llm_pending = getattr(llm_client, "_pending_requests", 0)
-    except Exception:
-        pass
-
-    # DB 响应时间（简单探测）
-    db_ms = 0
-    try:
-        import time as _time
-        t0 = _time.monotonic()
-        await db.fetch_one("SELECT 1")
-        db_ms = round((_time.monotonic() - t0) * 1000, 1)
-    except Exception:
-        pass
-
-    # 今日 LLM 费用（USD，从 llm_conversations 累加）
-    cost_today = 0.0
-    try:
-        from datetime import datetime, timezone
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        row = await db.fetch_one(
-            "SELECT COALESCE(SUM(cost_usd), 0) as total FROM llm_conversations "
-            "WHERE created_at >= ?", (today + "T00:00:00",)
-        )
-        cost_today = round(row["total"] if row else 0.0, 4)
-    except Exception:
-        pass
-
-    # AI 生成任务总数（顶栏「AI 任务」徽标；轻量计数，明细走 /api/ai-gen-tasks）
-    ai_gen_tasks_total = 0
-    try:
-        from ai_gen_tasks import total as _ai_total
-        ai_gen_tasks_total = await _ai_total()
-    except Exception:
-        pass
-
-    return {
-        "processing": processing,
-        "asyncio_tasks": active_tasks,
-        "mem_mb": mem_mb,
-        "wal_kb": wal_kb,
-        "llm_pending": llm_pending,
-        "db_ms": db_ms,
-        "cost_today_usd": cost_today,
-        "ai_gen_tasks": ai_gen_tasks_total,
-    }
+app.include_router(metrics_router)
 
 
 # ==================== Agent 技能系统开关 ====================

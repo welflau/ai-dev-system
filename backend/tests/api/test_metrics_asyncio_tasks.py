@@ -83,10 +83,25 @@ async def test_multiple_pending_tasks_are_listed():
         await asyncio.gather(*created, return_exceptions=True)
 
 
-def test_metrics_endpoint_uses_same_enumeration():
-    """/api/metrics 与明细端点共用「未完成 all_tasks」口径（轻量计数分支）。"""
-    src = open("main.py", encoding="utf-8").read()
-    i = src.find("async def get_system_metrics")
-    body = src[i:i + 900]
-    assert "all_tasks(loop) if not t.done()" in body
-    assert "_asyncio_task_details" not in body or "len(_asyncio_task_details" not in body
+@pytest.mark.asyncio
+async def test_metrics_endpoint_uses_same_enumeration(monkeypatch):
+    """摘要只数未完成任务；请求明细时才读取栈。无需启动应用或连接数据库。"""
+    from unittest.mock import AsyncMock, Mock
+    import ai_gen_tasks
+    import database
+
+    active, finished = Mock(), Mock()
+    active.done.return_value, finished.done.return_value = False, True
+    active.get_stack.return_value = []
+    monkeypatch.setattr(asyncio, "all_tasks", lambda loop: [active, finished])
+    db = Mock(fetch_one=AsyncMock(return_value={"total": 2.5}))
+    monkeypatch.setattr(database, "db", db)
+    monkeypatch.setattr(main_mod, "db", db)
+    monkeypatch.setattr(ai_gen_tasks, "total", AsyncMock(return_value=3))
+    metrics = await main_mod.get_system_metrics()
+    assert (metrics["asyncio_tasks"], metrics["cost_today_usd"], metrics["ai_gen_tasks"]) == (1, 2.5, 3)
+    active.get_stack.assert_not_called()
+    detail = await main_mod.get_asyncio_tasks_detail()
+    assert detail["count"] == metrics["asyncio_tasks"]
+    active.get_stack.assert_called_once()
+    finished.get_stack.assert_not_called()

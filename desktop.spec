@@ -113,6 +113,8 @@ hiddenimports = [
     "session_logger",
     "api",
     "api.tickets",
+    "api.metrics",
+    "services.metrics",
     "api.chat",
     "api.projects",
     # pywebview 后端

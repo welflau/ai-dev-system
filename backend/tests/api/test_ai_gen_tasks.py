@@ -11,7 +11,7 @@ import asyncio
 
 import pytest
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
+from httpx import ASGITransport, AsyncClient
 
 import ai_gen_tasks as agt
 import database as database_mod
@@ -32,8 +32,11 @@ def _scenario(db, body):
     """单 loop 内：connect → init → 跑业务协程 → 返回结果。"""
     async def main():
         await db.connect()
-        await db.init_tables()
-        return await body()
+        try:
+            await db.init_tables()
+            return await body()
+        finally:
+            await db.disconnect()
     return asyncio.run(main())
 
 
@@ -125,25 +128,22 @@ def test_api_list_and_summary(tmp_db):
     app = FastAPI()
     app.include_router(router)
 
-    async def seed():
+    async def body():
         for st in ("waiting", "running", "done"):
             await agt.record_task(kind="video", provider="minimax_h3", status=st,
                                   prompt="cat video")
-    _scenario(tmp_db, seed)
-
-    client = TestClient(app)   # TestClient 自带线程/loop，与 _scenario 的 loop 隔离
-    d = client.get("/api/ai-gen-tasks").json()
-    assert d["total"] == 3 and d["active"] == 2
-    assert d["counts"] == {"waiting": 1, "running": 1, "done": 1, "failed": 0}
-    assert len(d["tasks"]) == 3
-    assert d["tasks"][0]["prompt"] == "cat video"
-
-    s = client.get("/api/ai-gen-tasks/summary").json()
-    assert s["total"] == 3 and s["done"] == 1
-    assert "tasks" not in s
-
-    d2 = client.get("/api/ai-gen-tasks?limit=1").json()
-    assert len(d2["tasks"]) == 1 and d2["total"] == 3
+        async with AsyncClient(transport=ASGITransport(app), base_url="http://test") as client:
+            d = (await client.get("/api/ai-gen-tasks")).json()
+            assert d["total"] == 3 and d["active"] == 2
+            assert d["counts"] == {"waiting": 1, "running": 1, "done": 1, "failed": 0}
+            assert len(d["tasks"]) == 3
+            assert d["tasks"][0]["prompt"] == "cat video"
+            s = (await client.get("/api/ai-gen-tasks/summary")).json()
+            assert s["total"] == 3 and s["done"] == 1
+            assert "tasks" not in s
+            d2 = (await client.get("/api/ai-gen-tasks?limit=1")).json()
+            assert len(d2["tasks"]) == 1 and d2["total"] == 3
+    _scenario(tmp_db, body)
 
 
 def test_metrics_includes_ai_gen_tasks(tmp_db):
@@ -151,7 +151,15 @@ def test_metrics_includes_ai_gen_tasks(tmp_db):
     async def body():
         for _ in range(2):
             await agt.record_task(kind="image", provider="lightai", status="done")
-        d = await main_mod.get_system_metrics()
-        assert "ai_gen_tasks" in d
-        assert d["ai_gen_tasks"] == 2
+        async with AsyncClient(transport=ASGITransport(main_mod.app), base_url="http://test") as client:
+            response = await client.get("/api/metrics")
+            response.raise_for_status()
+            d = response.json()
+            assert set(d) == {"processing", "asyncio_tasks", "mem_mb", "wal_kb", "llm_pending",
+                              "db_ms", "cost_today_usd", "ai_gen_tasks"}
+            assert d["ai_gen_tasks"] == 2
+            detail = await client.get("/api/metrics/asyncio-tasks")
+            detail.raise_for_status()
+            listing = detail.json()
+            assert listing["count"] == len(listing["tasks"]) > 0
     _scenario(tmp_db, body)
