@@ -108,6 +108,7 @@ DELEGATES = [
     ("_diagnose_blocked_ticket", "blocked_diagnosis", "diagnose_blocked_ticket", "async", True),
     ("_poll_once", "poll_cycle", "poll_once", "async", True),
     ("_check_subtasks_complete", "poll_cycle", "check_subtasks_complete", "async", True),
+    ("_build_context", "context_assembly", "build_context", "async", True),
 ]
 # (类属性, 模块, 模块里的名字)
 CONSTANTS = [

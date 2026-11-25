@@ -1,7 +1,6 @@
 """Agent 执行上下文的几块原料：打回原因，历史经验，知识库文档，仓库里已有的代码。
 
-这些函数由 `orch._build_context` 调用。`_build_context` 本身还留在 `orchestrator.py`：它在函数里
-导入 L3 的 `actions.ue_editor_control`，搬进这个包会让分层守卫多出新的违规项。
+上下文由同包的 `context_assembly.build_context` 组装；它经编排器实例调用这里的辅助方法。
 
 约定（`orchestration` 包里按职责拆出的模块都一样）：
 

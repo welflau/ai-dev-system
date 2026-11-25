@@ -7,8 +7,7 @@
 `ticket_held_by_this_process`、`zombie_rewind_status`、`repair_status_outside_sop` 给轮询判断
 一张停在执行中状态的工单是还在跑、该回退重跑、还是状态不在当前 SOP 里需要修。
 
-单次轮询的主体 `_poll_once` 和 `_check_subtasks_complete` 还留在 `orchestrator.py`：它们在函数里
-导入 L3 的 `actions.chat.dispatch_subtask`，搬进这个包会让分层守卫多出新的违规项。
+单次轮询与子工单完成检查在同包的 `poll_cycle`；轮询循环经 `orch._poll_once` 调用。
 
 约定（`orchestration` 包里按职责拆出的模块都一样）：
 
