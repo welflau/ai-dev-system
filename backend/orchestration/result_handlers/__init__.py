@@ -1,20 +1,19 @@
 """Agent 结果处理器：每个 Agent 一个函数，加一张注册表。
 
 从 `TicketOrchestrator._handle_agent_result` 拆出（重构方案 R2 第 1 步）。
-公共前置（终态门闩、error 止血、媒体与 Git、片段 closeout）和尾部（发状态事件、
-继续流转）仍在 orchestrator.py。
+编排器负责终态、Git 和片段收尾，错误处理和结果序列化见同包上层的 result_flow。
 
 分发顺序和拆分前一致：
 
 1. `pre_skill_handler`：按 (Agent, action) 精确匹配，排在 skill 判断之前；
-2. `handle_skill`：调用方用 `is_skill_run_result` 认出 skill 结果后直接取它，不查表；
+2. `handle_skill`：`select_handler` 用 `is_skill_run_result` 认出 skill 结果后直接取它，不查表；
 3. `agent_handler`：按 Agent 名查，个别 Agent 还要求 action 匹配。
 
 三步都没命中时，调用方保持原状态并照常走尾部，和拆分前的 `else` 分支一样。
 
 新增 Agent 时在这里登记处理器。漏登记的后果是状态不推进、同一条规则反复命中。
 """
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from orchestration.result_handlers.architect import handle_architect
 from orchestration.result_handlers.art import handle_art
@@ -36,7 +35,7 @@ from orchestration.result_handlers.ux import handle_ux
 
 __all__ = [
     "HANDLED", "ResultContext", "ResultHandler",
-    "pre_skill_handler", "handle_skill", "agent_handler",
+    "pre_skill_handler", "handle_skill", "agent_handler", "is_skill_run_result", "select_handler",
     "skill_gate_file_paths", "skill_produces_satisfied",
 ]
 
@@ -76,3 +75,28 @@ def agent_handler(agent_name: str, action: str) -> Optional[ResultHandler]:
     if handler is not None:
         return handler
     return _AGENT_ACTION_HANDLERS.get((agent_name, action))
+
+
+def is_skill_run_result(agent_name: str, result: Any) -> bool:
+    """skill 阶段的结果必须走 `result_handlers.handle_skill`。
+
+    不能只看 `agent_name == "SkillAgent"`：`x-workflow.agent` 可以点名
+    PlannerAgent 等宿主 Role，执行引擎仍是 SkillRunner。只认名字的话，
+    那些结果会落到 `_handle_agent_result` 末尾的 `else` —— 状态不推进，
+    同一条 rule 反复命中，skill 被无限重跑烧 token。
+    """
+    if agent_name == "SkillAgent":
+        return True
+    if not isinstance(result, dict):
+        return False
+    return bool(result.get("skill_id") or result.get("skill_status"))
+
+
+def select_handler(agent_name: str, action: str, result: Any) -> Optional[ResultHandler]:
+    """精确匹配优先；其次是 skill；其余结果按 Agent 注册表处理。"""
+    handler = pre_skill_handler(agent_name, action)
+    if handler is not None:
+        return handler
+    if is_skill_run_result(agent_name, result):
+        return handle_skill
+    return agent_handler(agent_name, action)

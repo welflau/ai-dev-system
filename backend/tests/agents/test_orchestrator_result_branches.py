@@ -308,6 +308,35 @@ def test_error_result_blocks_ticket(tmp_path, monkeypatch, result, expected_erro
     _run(body, tmp_path, monkeypatch, initial_status="architecture_done")
 
 
+def test_late_error_does_not_reopen_a_terminal_ticket(tmp_path, monkeypatch):
+    async def body(env):
+        await _call(env, "DevAgent", "develop", {"status": "error", "error": "too late"})
+        assert (await _ticket(env))["status"] == "deployed"
+        assert [row["action"] for row in await _logs(env)] == ["stale_ignored"]
+        assert [event for event, _ in env.sse] == ["log_added"]
+        assert env.dispatched == []
+        assert not env.calls["hook"] and not env.calls["diagnose"]
+    _run(body, tmp_path, monkeypatch, initial_status="deployed")
+
+
+def test_failed_error_hook_still_schedules_diagnosis(tmp_path, monkeypatch):
+    from hooks.registry import hook_registry
+
+    async def body(env):
+        observed = []
+
+        async def fail(ctx):
+            observed.append(((await _ticket(env))["status"], [event for event, _ in env.sse]))
+            raise RuntimeError("hook offline")
+
+        monkeypatch.setattr(hook_registry, "emit", fail)
+        await _call(env, "DevAgent", "develop", {"status": "error"})
+        assert observed == [("blocked", ["log_added", "ticket_blocked"])]
+        assert [call["current_ticket"]["status"] for call in env.calls["diagnose"]] == ["pending"]
+        _assert_no_tail(env)
+    _run(body, tmp_path, monkeypatch)
+
+
 def test_media_files_kept_out_of_saved_result(tmp_path, monkeypatch):
     """二进制媒体不进 `tickets.result`，只留路径；但要原样交给 Git 写入。"""
     async def body(env):
@@ -326,6 +355,7 @@ def test_fragment_closeout_short_circuits_branches(tmp_path, monkeypatch):
     """`_apply_fragment_closeout` 返回 True 时，后面的 Agent 分支一律不跑。"""
     async def body(env):
         async def closeout(*a, **kw):
+            assert len(env.calls["git"]) == 1  # 片段收尾之前已处理产物
             return True
         env.orch._apply_fragment_closeout = closeout
         await _call(env, "DevAgent", "develop", {"status": "success", "files": {}})
@@ -786,6 +816,45 @@ def test_unhandled_agent_keeps_status_but_still_reaches_tail(tmp_path, monkeypat
         _assert_tail(env, "development_done", "development_done", agent)
     _run(body, tmp_path, monkeypatch, initial_status="development_done")
 
+
+@pytest.mark.parametrize("after_event", ["ready", "unmatched", None])
+def test_tail_dispatches_using_the_row_after_the_event(tmp_path, monkeypatch, after_event):
+    """通知之后工单可能改态或被删除；按重新读取的行派单。"""
+    async def body(env):
+        steps = []
+        sleep = asyncio.sleep
+
+        async def publish(pid, event, payload):
+            steps.append((event, payload["from"], payload["to"]))
+
+        async def change_during_wait(delay):
+            if delay == 0.5:
+                steps.append("wait")
+                if after_event is None:
+                    await env.db.delete("tickets", "id = ?", (TICKET_ID,))
+                else:
+                    await env.db.update("tickets", {"status": after_event}, "id = ?", (TICKET_ID,))
+            await sleep(0)
+
+        async def rules(pid):
+            steps.append("rules")
+            return {"ready"}
+
+        async def dispatch(pid, tid):
+            steps.append(("dispatch", pid, tid))
+
+        monkeypatch.setattr(orch_module.event_manager, "publish_to_project", publish)
+        monkeypatch.setattr(asyncio, "sleep", change_during_wait)
+        env.orch._get_rules_for_project = rules
+        env.orch.process_ticket = dispatch
+        await _call(env, "MysteryAgent", "finish", {})
+        expected = [("ticket_status_changed", "pending", "pending"), "wait"]
+        if after_event is not None:
+            expected.append("rules")
+        if after_event == "ready":
+            expected.append(("dispatch", PROJECT_ID, TICKET_ID))
+        assert steps == expected
+    _run(body, tmp_path, monkeypatch)
 
 # ════════════════ TestAgent ════════════════
 

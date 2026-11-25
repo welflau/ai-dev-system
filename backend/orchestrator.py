@@ -2,7 +2,6 @@
 AI 自动开发系统 - Orchestrator 工单编排器
 核心调度引擎：管理工单在 Agent 之间的流转
 """
-import json
 import asyncio
 import logging
 import time
@@ -36,6 +35,7 @@ from orchestration import (
     polling,
     reporting,
     requirement_pipeline,
+    result_flow,
     result_handlers,
     rewind,
     sop_rules,
@@ -43,6 +43,8 @@ from orchestration import (
     ticket_pipeline,
 )
 from orchestration.result_handlers import HANDLED, ResultContext
+# 保留旧导入路径；skill 归属和处理器优先级由同一张注册表所在模块决定。
+from orchestration.result_handlers import is_skill_run_result  # noqa: F401
 # 心跳文案跟着需求分析的步骤搬到了 requirement_pipeline，原来的导入路径继续可用。
 from orchestration.requirement_pipeline import analysis_progress_message  # noqa: F401
 # 片段收尾用的纯函数搬到了 orchestration/sop_rules，tests/plugins/test_ue5_closeout.py 从这里导入
@@ -59,21 +61,6 @@ logger = logging.getLogger("orchestrator")
 
 # Agent 注册中心（自动发现 + 自定义 Agent）
 from agent_registry import instantiate_agents
-
-
-def is_skill_run_result(agent_name: str, result: Any) -> bool:
-    """skill 阶段的结果必须走 `result_handlers.handle_skill`。
-
-    不能只看 `agent_name == "SkillAgent"`：`x-workflow.agent` 可以点名
-    PlannerAgent 等宿主 Role，执行引擎仍是 SkillRunner。只认名字的话，
-    那些结果会落到 `_handle_agent_result` 末尾的 `else` —— 状态不推进，
-    同一条 rule 反复命中，skill 被无限重跑烧 token。
-    """
-    if agent_name == "SkillAgent":
-        return True
-    if not isinstance(result, dict):
-        return False
-    return bool(result.get("skill_id") or result.get("skill_status"))
 
 
 class TicketOrchestrator:
@@ -569,79 +556,15 @@ class TicketOrchestrator:
             )
             return
 
-        # === 止血：Agent 返回 error 直接标记 blocked，阻止 orchestrator 再次分派 ===
-        # 典型场景：fragment 声明的 action（如 run_engine_compile）未在 Agent 中实现，
-        # execute() 走 fallthrough 返回 {"status": "error", "message": "未知任务: xxx"}。
-        # 之前 orchestrator 无视此 error，按 agent_name 分支强写下一状态（如 DevAgent 一律
-        # 写成 development_done），导致 ticket 在同一状态反复触发同一规则，死循环 + 烧 token。
         if isinstance(result, dict) and result.get("status") == "error":
-            err_msg = str(result.get("message") or result.get("error") or "Agent 返回 error")
-            blocked_status = TicketStatus.BLOCKED.value
-            await db.update("tickets", {
-                "status": blocked_status,
-                "result": json.dumps(result, ensure_ascii=False),
-                "updated_at": now_iso(),
-            }, "id = ?", (ticket_id,))
-            await self._log(
-                project_id, requirement_id, ticket_id, agent_name,
-                "blocked", current_status, blocked_status,
-                f"{agent_name}.{action} 返回 error，工单已标记 blocked 等待人工介入 | {err_msg[:300]}",
-                "error",
-                detail_data={"action": action, "error": err_msg, "raw_result": result},
+            await result_flow.block_agent_error(
+                self, db, project_id=project_id, ticket_id=ticket_id, requirement_id=requirement_id,
+                ticket_snapshot=current_ticket or ticket, agent_name=agent_name, action=action,
+                result=result, current_status=current_status,
             )
-            await event_manager.publish_to_project(
-                project_id,
-                "ticket_blocked",
-                {
-                    "ticket_id": ticket_id,
-                    "from": current_status,
-                    "to": blocked_status,
-                    "agent": agent_name,
-                    "action": action,
-                    "error": err_msg[:300],
-                },
-            )
-            logger.warning(
-                "🚧 工单 blocked: %s %s.%s → %s",
-                ticket_id[:12], agent_name, action, err_msg[:120],
-            )
-
-            # Hook emit：让 chat_alert_hook 把错误推到 AI 聊天面板
-            try:
-                from hooks.registry import hook_registry
-                from hooks.types import HookEvent, ToolHookContext
-                await hook_registry.emit(ToolHookContext(
-                    event=HookEvent.TOOL_ERROR,
-                    tool_name=f"agent:{agent_name}.{action}",
-                    input={},
-                    error=RuntimeError(err_msg[:300]),
-                    project_id=project_id,
-                    ticket_id=ticket_id,
-                    agent_type=agent_name,
-                ))
-            except Exception:
-                pass
-
-            # fire-and-forget：后台跑 LLM 诊断，不阻塞主 poll 循环
-            # 结果写回 tickets.diagnosis，SSE 推前端
-            asyncio.create_task(self._diagnose_blocked_ticket(
-                project_id=project_id,
-                ticket_id=ticket_id,
-                current_ticket=dict(current_ticket) if current_ticket else dict(ticket),
-                agent_name=agent_name,
-                action=action,
-                error_msg=err_msg,
-                blocked_from_status=current_status,
-            ))
             return
 
-        # 保存执行结果（先 pop 二进制媒体文件，避免 JSON 序列化失败；但把图片路径记入 result["media_paths"] 供时间轴展示缩略图与打开 Tab）
-        media_files_temp = result.pop("_media_files", None)  # 暂存，稍后写入 Git
-        if isinstance(media_files_temp, dict) and media_files_temp:
-            result["media_paths"] = list(media_files_temp.keys())
-        result_json = json.dumps(result, ensure_ascii=False)
-        if media_files_temp:
-            result["_media_files"] = media_files_temp  # 写完 JSON 后放回，供 _handle_git_files 使用
+        result_json = result_flow.serialize_result(result)
 
         # === 通用：处理 Agent 返回的 files，写入 Git 仓库 ===
         git_result = await self._handle_git_files(
@@ -668,17 +591,7 @@ class TicketOrchestrator:
             synthesize_blocked_diagnosis=_synthesize_blocked_diagnosis,
         )
 
-        # 各 Agent 的分支在 orchestration/result_handlers/。分发顺序和拆分前一致：
-        # (Agent, action) 精确匹配 → skill → 按 Agent 名。
-        handler = result_handlers.pre_skill_handler(agent_name, action)
-
-        if handler is None and is_skill_run_result(agent_name, result):
-            # 自己发状态事件、自己决定要不要继续派单，总是返回 HANDLED。
-            handler = result_handlers.handle_skill
-
-        if handler is None:
-            handler = result_handlers.agent_handler(agent_name, action)
-
+        handler = result_handlers.select_handler(agent_name, action, result)
         if handler is None:
             # 没有专属处理器：状态不变，照常走尾部。
             new_status = current_status
@@ -688,6 +601,10 @@ class TicketOrchestrator:
                 # 处理器已收尾：不发状态事件，也不在这里继续派单。
                 return
 
+        await self._publish_result_and_continue(project_id, ticket_id, agent_name, current_status, new_status)
+
+    async def _publish_result_and_continue(self, project_id, ticket_id, agent_name, current_status, new_status):
+        """发布状态事件；等待之后重新读库，只对仍匹配规则的工单派单。"""
         # 发 SSE 事件
         await event_manager.publish_to_project(
             project_id,
