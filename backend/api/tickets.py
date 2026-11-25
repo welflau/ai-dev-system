@@ -6,6 +6,7 @@ import logging
 from datetime import datetime
 from typing import List
 from fastapi import APIRouter, HTTPException, BackgroundTasks, Body
+from api.event_streams import scoped_router, project_events as project_events, ticket_events as ticket_events
 from database import db
 from models import (
     TicketStatus,
@@ -3092,30 +3093,7 @@ async def get_requirement_artifacts(req_id: str):
     return {"artifacts": artifacts, "total": len(artifacts)}
 
 
-# ==================== SSE 事件 ====================
-
-
-@router.get("/api/projects/{project_id}/events")
-async def project_events(project_id: str):
-    """项目事件流（SSE）"""
-    from sse_starlette.sse import EventSourceResponse
-
-    return EventSourceResponse(
-        event_manager.event_generator(f"project:{project_id}")
-    )
-
-
-@router.get("/api/tickets/{ticket_id}/events")
-async def ticket_events(ticket_id: str):
-    """工单事件流（SSE）"""
-    from sse_starlette.sse import EventSourceResponse
-
-    return EventSourceResponse(
-        event_manager.event_generator(f"ticket:{ticket_id}")
-    )
-
-
-    # 全局 SSE 端点已移至 main.py（/api/events/global）
+router.include_router(scoped_router)
 
 
 # ==================== 内部方法 ====================

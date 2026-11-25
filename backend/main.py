@@ -405,6 +405,7 @@ from api.image_gen import router as image_gen_router
 from api.cloud_video_config import router as cloud_video_config_router
 from api.ai_gen_tasks import router as ai_gen_tasks_router
 from api.metrics import router as metrics_router
+from api.event_streams import global_router as global_events_router, global_events_stream as global_events_stream
 from api.llm_config import (
     router as llm_config_router,
     llm_config as llm_config,
@@ -485,17 +486,10 @@ app.include_router(plugins_router)
 app.include_router(external_sessions_router)
 app.include_router(session_materials_project_router)
 app.include_router(session_materials_global_router)
+app.include_router(global_events_router)
 
 
 # ==================== 系统端点 ====================
-
-
-@app.get("/api/events/global")
-async def global_events_stream():
-    """全局 SSE 频道——全局聊天 AI 工具日志、跨项目事件"""
-    from sse_starlette.sse import EventSourceResponse
-    from events import event_manager
-    return EventSourceResponse(event_manager.event_generator("global"))
 
 
 @app.post("/api/system/open_path")

@@ -113,6 +113,7 @@ hiddenimports = [
     "session_logger",
     "api",
     "api.tickets",
+    "api.event_streams",
     "api.system",
     "services.agent_tools_settings",
     "api.llm_config",
