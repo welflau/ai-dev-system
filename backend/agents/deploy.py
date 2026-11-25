@@ -24,6 +24,10 @@ ENV_CONFIG = {
 _ENGINE_TRAIT_PREFIXES = ("engine:ue", "engine:unity", "engine:godot")
 
 
+def _builtin_preview_url(project_id: str, env: str, port: int) -> str:
+    return f"http://localhost:{port}/api/projects/{project_id}/preview/{env}/index.html"
+
+
 def preview_skip_kind(traits) -> Optional[str]:
     """HTTP 试玩该不该起。None=可以起网页预览；video/content/engine=跳过。
 
@@ -59,7 +63,10 @@ class DeployAgent(BaseAgent):
         for env in ("dev", "test", "prod"):
             key = (project_id, env)
             if key in cls._preview_servers:
-                return {**cls._preview_servers[key], "env": env}
+                record = cls._preview_servers[key]
+                port = record["port"]
+                url = _builtin_preview_url(project_id, env, port) if record.get("builtin") else f"http://localhost:{port}"
+                return {**record, "env": env, "preview_url": url}
         return None
 
     async def execute(self, task_name: str, context: Dict[str, Any]) -> Dict[str, Any]:
@@ -379,7 +386,7 @@ class DeployAgent(BaseAgent):
             # 端口跟随后端实际配置（.env PORT 可改），不能硬编码
             from config import settings as _settings
             port = _settings.PORT
-            url = f"http://localhost:{port}/api/projects/{project_id}/preview/{env_type}/index.html"
+            url = _builtin_preview_url(project_id, env_type, port)
             cls._preview_servers[key] = {
                 "port": port,
                 "process": None,

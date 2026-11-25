@@ -382,6 +382,7 @@ async def global_exception_handler(request, exc):
 
 # 注册 API 路由
 from api.projects import router as projects_router
+from api.project_preview import router as project_preview_router, get_preview_url as get_preview_url
 from api.repos import router as repos_router
 from api.workspace_roots import router as workspace_roots_router
 from api.requirements import router as requirements_router
@@ -529,16 +530,7 @@ app.include_router(system_router)
 app.include_router(sop_config_router)
 
 
-@app.get("/api/projects/{project_id}/preview")
-async def get_preview_url(project_id: str):
-    """获取项目的本地预览 URL（兼容旧接口，优先返回 dev 环境）"""
-    from agents.deploy import DeployAgent
-    info = DeployAgent.get_preview(project_id)
-    if info:
-        return {"preview_url": f"http://localhost:{info['port']}", "port": info["port"], "env": info.get("env")}
-    return {"preview_url": None}
-
-
+app.include_router(project_preview_router)
 app.include_router(llm_config_router)
 
 

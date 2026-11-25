@@ -123,6 +123,7 @@ hiddenimports = [
     "services.sop_config",
     "api.chat",
     "api.projects",
+    "api.project_preview",
     # pywebview 后端
     "webview",
     "webview.guilib",
