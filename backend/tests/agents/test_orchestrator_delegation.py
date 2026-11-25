@@ -104,6 +104,7 @@ DELEGATES = [
     ("_agent_to_owner", "context_builder", "agent_to_owner", "sync", False),
     ("_maybe_openspec_verify", "openspec_closeout", "maybe_openspec_verify", "async", True),
     ("_finalize_openspec_after_done", "openspec_closeout", "finalize_openspec_after_done", "async", True),
+    ("_handle_git_files", "git_persist", "handle_git_files", "async", True),
 ]
 # (类属性, 模块, 模块里的名字)
 CONSTANTS = [
@@ -118,6 +119,7 @@ CONSTANTS = [
     ("_NON_UI_MODULES", "sop_rules", "NON_UI_MODULES"),
     ("_TERMINAL_STATUSES", "sop_rules", "TERMINAL_STATUSES"),
     ("LOCAL_TOOL_ACTIONS", "ticket_log", "LOCAL_TOOL_ACTIONS"),
+    ("_MEDIA_COMMIT_LABELS", "git_persist", "MEDIA_COMMIT_LABELS"),
 ]
 # (从 orchestrator 导入的名字, 模块)
 REEXPORTS = [

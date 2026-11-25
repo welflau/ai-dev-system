@@ -83,6 +83,7 @@ hiddenimports = [
     "orchestration.ticket_log",
     "orchestration.context_builder",
     "orchestration.openspec_closeout",
+    "orchestration.git_persist",
     "orchestration.ticket_pipeline",
     "llm_client",
     "agent_registry",
