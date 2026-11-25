@@ -2360,7 +2360,7 @@ async function api(path, options = {}) {
             else if (Array.isArray(detail)) msg = detail.map(d => d.msg || JSON.stringify(d)).join('; ');
             else if (detail) msg = JSON.stringify(detail);
             else msg = err.message || `请求失败 (${resp.status})`;
-            throw new Error(msg);
+            throw Object.assign(new Error(msg), { status: resp.status });
         }
         return await resp.json();
     } catch (e) {
@@ -29249,10 +29249,18 @@ function openWebTabFromChat(url, customTitle) {
 }
 
 /** 系统默认浏览器打开 URL：走后端 webbrowser.open，比 window.open 在应用壳里更可靠 */
-function _openUrlInSystemBrowser(url) {
+async function _openUrlInSystemBrowser(url) {
     if (!/^https?:\/\//i.test(url || '')) return;
-    api(`/open-in-browser?url=${encodeURIComponent(url)}`)
-        .catch(() => { try { window.open(url, '_blank'); } catch {} });
+    try {
+        await api(`/open-in-browser?url=${encodeURIComponent(url)}`, { cache: 'no-store' });
+    } catch (e) {
+        if (e.status >= 400 && e.status < 500) {
+            showToast(e.message, 'error');
+            return;
+        }
+        try { window.open(url, '_blank', 'noopener'); }
+        catch { showToast('无法打开浏览器', 'error'); }
+    }
 }
 
 function openRepoFileFromChat(filePath, lineStart, lineEnd) {

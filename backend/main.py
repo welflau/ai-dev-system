@@ -8,7 +8,7 @@ import os
 import sys
 from pathlib import Path
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -426,6 +426,7 @@ from api.system import (
     health_check as health_check,
     get_available_paths as get_available_paths,
     open_path_in_explorer as open_path_in_explorer,
+    open_in_browser as open_in_browser,
     get_agent_tools_status as get_agent_tools_status,
     set_agent_tools_status as set_agent_tools_status,
 )
@@ -589,17 +590,6 @@ async def serve_local_file(path: str):
         raise HTTPException(400, "不支持的文件类型")
     mt = mimetypes.types_map.get(ext, "image/png")
     return FileResponse(str(fp), media_type=mt)
-
-
-@app.get("/api/open-in-browser")
-async def open_in_browser(url: str):
-    """用系统默认浏览器打开 URL（网页 Tab 被 X-Frame-Options 拒绝内嵌时的兜底出口）"""
-    import webbrowser
-    if not (url.startswith("http://") or url.startswith("https://")):
-        raise HTTPException(400, "仅支持 http/https URL")
-    if not webbrowser.open(url):
-        raise HTTPException(500, "无法调起系统浏览器")
-    return {"ok": True}
 
 
 app.include_router(frontend_pages_router)

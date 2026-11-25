@@ -1,8 +1,9 @@
-"""系统健康状态、本地目录、文件管理器与 Agent 工具开关。"""
+"""系统健康状态、本地目录、桌面应用与 Agent 工具开关。"""
 from pathlib import Path
+import webbrowser
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import AnyHttpUrl, BaseModel, TypeAdapter, ValidationError
 from starlette.concurrency import run_in_threadpool
 
 from config import APP_VERSION, agent_tools_enabled
@@ -10,6 +11,7 @@ from services.agent_tools_settings import save_agent_tools_enabled
 from services.file_manager import RevealPathNotFound, reveal_path
 
 router = APIRouter(prefix="/api")
+_WEB_URL = TypeAdapter(AnyHttpUrl)
 
 PROJECT_PATH_SUGGESTIONS = (
     Path("D:/Projects"), Path("D:/AIProjects"), Path("D:/MyProjects"),
@@ -52,6 +54,27 @@ async def open_path_in_explorer(body: OpenPathRequest):
     except OSError as exc:
         raise HTTPException(500, f"打开失败: {exc}") from exc
     return {"ok": True, "opened": str(folder)}
+
+
+@router.get("/open-in-browser")
+async def open_in_browser(url: str):
+    """用系统默认浏览器打开 URL（网页 Tab 被 X-Frame-Options 拒绝内嵌时的兜底出口）"""
+    scheme, sep, rest = url.partition("://")
+    if not sep or scheme.lower() not in {"http", "https"}:
+        raise HTTPException(400, "仅支持 http/https URL")
+    try:
+        _WEB_URL.validate_python(url, strict=True)
+    except ValidationError:
+        raise HTTPException(400, "http/https URL 格式无效") from None
+    # 只统一协议大小写；保留调用方的路径、查询编码及片段。
+    target = f"{scheme.lower()}://{rest}"
+    try:
+        opened = await run_in_threadpool(webbrowser.open, target)
+    except (webbrowser.Error, OSError) as exc:
+        raise HTTPException(500, "无法调起系统浏览器") from exc
+    if not opened:
+        raise HTTPException(500, "无法调起系统浏览器")
+    return {"ok": True}
 
 
 class AgentToolsUpdate(BaseModel):
