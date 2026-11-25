@@ -24,6 +24,7 @@ from llm_client import llm_client
 from git_manager import git_manager
 from orchestration import (
     agent_state,
+    blocked_diagnosis,
     bug_flow,
     change_flows,
     context_builder,
@@ -1114,146 +1115,11 @@ class TicketOrchestrator:
         error_msg: str,
         blocked_from_status: str,
     ):
-        """后台跑一次 LLM 诊断，写回 tickets.diagnosis 并发 SSE 事件。
-        fire-and-forget：任何异常都只打日志，绝不冒泡到 poll 循环。
-        """
-        try:
-            # 收集上下文
-            import json as _json
-            proj_row = await db.fetch_one(
-                "SELECT traits FROM projects WHERE id = ?", (project_id,)
-            )
-            traits: List[str] = []
-            if proj_row:
-                try:
-                    raw = proj_row.get("traits") or "[]"
-                    parsed = _json.loads(raw) if isinstance(raw, str) else raw
-                    if isinstance(parsed, list):
-                        traits = [str(t) for t in parsed]
-                except Exception:
-                    pass
-
-            # 最近 10 条日志（最新在前）
-            recent_logs = await db.fetch_all(
-                "SELECT agent_type, action, from_status, to_status, detail, created_at "
-                "FROM ticket_logs WHERE ticket_id = ? "
-                "ORDER BY created_at DESC LIMIT 10",
-                (ticket_id,),
-            )
-
-            # 定位该 action 对应的 SOP 阶段定义（若能 compose）
-            sop_stage: Dict[str, Any] = {}
-            try:
-                from sop.loader import compose_sop
-                cfg = compose_sop(traits=traits, ticket_type=None)
-                for s in (cfg.get("stages") or []):
-                    if s.get("action") == action and s.get("agent") == agent_name:
-                        sop_stage = dict(s)
-                        break
-            except Exception:
-                pass
-
-            context = {
-                "ticket_id": ticket_id,
-                "ticket_title": current_ticket.get("title", ""),
-                "ticket_description": current_ticket.get("description", ""),
-                "project_id": project_id,
-                "project_traits": traits,
-                "current_status": blocked_from_status,
-                "failed_agent": agent_name,
-                "failed_action": action,
-                "failed_error_message": error_msg,
-                "recent_logs": recent_logs,
-                "sop_stage": sop_stage,
-            }
-
-            parsed_result: Dict[str, Any] = {}
-            try:
-                raw_result = current_ticket.get("result")
-                parsed_result = (
-                    _json.loads(raw_result) if isinstance(raw_result, str)
-                    else (raw_result or {})
-                )
-                if not isinstance(parsed_result, dict):
-                    parsed_result = {}
-            except Exception:
-                parsed_result = {}
-            skill_id = str(parsed_result.get("skill_id") or "")
-            skill_status = str(parsed_result.get("skill_status") or "")
-            extra_files = []
-            try:
-                art_rows = await db.fetch_all(
-                    "SELECT path FROM artifacts WHERE ticket_id = ? "
-                    "ORDER BY created_at DESC LIMIT 20",
-                    (ticket_id,),
-                )
-                extra_files = [r.get("path") for r in (art_rows or []) if r.get("path")]
-            except Exception:
-                extra_files = []
-
-            import runtime_facade
-            diag_mod = runtime_facade.actions_diagnose_ticket()
-            if diag_mod._is_timeout_block(skill_status, error_msg):
-                diagnosis = diag_mod.synthesize_blocked_diagnosis(
-                    skill_id=skill_id,
-                    skill_status=skill_status,
-                    error_msg=error_msg,
-                    action=action,
-                    outputs=parsed_result.get("outputs") or [],
-                    artifacts=parsed_result.get("artifacts") or [],
-                    extra_files=extra_files,
-                )
-            else:
-                action_obj = diag_mod.DiagnoseTicketAction()
-                result = await action_obj.run(context)
-                diagnosis = (result.data or {}).get("diagnosis") or {}
-
-            # 写回 ticket
-            await db.update(
-                "tickets",
-                {
-                    "diagnosis": _json.dumps(diagnosis, ensure_ascii=False),
-                    "updated_at": now_iso(),
-                },
-                "id = ?",
-                (ticket_id,),
-            )
-
-            # 日志 + SSE
-            await self._log(
-                project_id,
-                current_ticket.get("requirement_id"),
-                ticket_id,
-                "System",
-                "diagnose",
-                None,
-                None,
-                f"🩺 诊断完成: {(diagnosis.get('symptom') or '')[:80]} | "
-                f"根因: {(diagnosis.get('root_cause') or '')[:100]} | "
-                f"置信度={diagnosis.get('confidence', 0):.2f}",
-                "info",
-                detail_data={"diagnosis": diagnosis},
-            )
-
-            await event_manager.publish_to_project(
-                project_id,
-                "ticket_diagnosed",
-                {
-                    "ticket_id": ticket_id,
-                    "diagnosis": diagnosis,
-                },
-            )
-
-            logger.info(
-                "🩺 工单 %s 诊断完成 | %s",
-                ticket_id[:12],
-                (diagnosis.get("root_cause") or "")[:120],
-            )
-        except Exception as e:
-            logger.error(
-                "🩺 诊断后台任务失败 ticket=%s: %s",
-                ticket_id[:12], e, exc_info=True,
-            )
+        """后台跑一次 LLM 诊断，写回 tickets.diagnosis 并发 SSE 事件。"""
+        return await blocked_diagnosis.diagnose_blocked_ticket(
+            self, db, project_id, ticket_id, current_ticket, agent_name, action, error_msg,
+            blocked_from_status,
+        )
 
     async def _write_memory(
         self,
