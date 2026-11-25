@@ -149,7 +149,8 @@ banner("7. 僵尸工单回退（不再替死掉的阶段宣布成功）")
 import orchestrator as orch_mod
 
 Orch = orch_mod.TicketOrchestrator
-poll_src = inspect.getsource(Orch._poll_once)
+from orchestration.poll_cycle import poll_once
+poll_src = inspect.getsource(poll_once)
 check("已删除 fast-forward 的 reset_map（不再把 in_progress 推成 done）",
       "reset_map" not in poll_src)
 check("_poll_once 调用 _zombie_rewind_status", "_zombie_rewind_status" in poll_src)

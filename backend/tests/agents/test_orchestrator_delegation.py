@@ -106,6 +106,8 @@ DELEGATES = [
     ("_finalize_openspec_after_done", "openspec_closeout", "finalize_openspec_after_done", "async", True),
     ("_handle_git_files", "git_persist", "handle_git_files", "async", True),
     ("_diagnose_blocked_ticket", "blocked_diagnosis", "diagnose_blocked_ticket", "async", True),
+    ("_poll_once", "poll_cycle", "poll_once", "async", True),
+    ("_check_subtasks_complete", "poll_cycle", "check_subtasks_complete", "async", True),
 ]
 # (类属性, 模块, 模块里的名字)
 CONSTANTS = [

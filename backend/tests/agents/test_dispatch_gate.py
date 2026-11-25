@@ -100,7 +100,8 @@ def test_held_by_agent_working_status():
 
 def test_zombie_idle_threshold_is_not_sixty_seconds():
     import inspect
-    src = inspect.getsource(TicketOrchestrator._poll_once)
+    from orchestration import poll_cycle
+    src = inspect.getsource(poll_cycle.poll_once)
     assert "age < 300" in src
     assert "age < 60" not in src
 
@@ -108,7 +109,8 @@ def test_zombie_idle_threshold_is_not_sixty_seconds():
 def test_poll_once_skips_held_tickets_before_zombie():
     """活 write_prd 等首包时 updated_at 可能 89s 不动，门禁必须先看占槽/CLI。"""
     import inspect
-    src = inspect.getsource(TicketOrchestrator._poll_once)
+    from orchestration import poll_cycle
+    src = inspect.getsource(poll_cycle.poll_once)
     assert "_ticket_held_by_this_process" in src
     assert "本轮不再立刻派单" in src
     # 心跳在 process_ticket 的「执行 Agent」这一步里起，步骤已搬到 ticket_pipeline。
@@ -131,7 +133,8 @@ def test_director_visual_in_progress_is_zombie_candidate():
 def test_poll_once_scans_dynamic_in_progress_statuses():
     """视频 SOP 的 *_in_progress 不在 trigger 集合里，必须靠 GLOB 扫到才能僵尸回收。"""
     import inspect
-    src = inspect.getsource(TicketOrchestrator._poll_once)
+    from orchestration import poll_cycle
+    src = inspect.getsource(poll_cycle.poll_once)
     assert "GLOB '*_in_progress'" in src
     assert "_status_is_executing" in src
     assert "僵尸工单无法回退" in src
