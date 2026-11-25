@@ -102,6 +102,8 @@ DELEGATES = [
     ("_load_knowledge_docs", "context_builder", "load_knowledge_docs", "sync", False),
     ("_collect_existing_code", "context_builder", "collect_existing_code", "async", False),
     ("_agent_to_owner", "context_builder", "agent_to_owner", "sync", False),
+    ("_maybe_openspec_verify", "openspec_closeout", "maybe_openspec_verify", "async", True),
+    ("_finalize_openspec_after_done", "openspec_closeout", "finalize_openspec_after_done", "async", True),
 ]
 # (类属性, 模块, 模块里的名字)
 CONSTANTS = [

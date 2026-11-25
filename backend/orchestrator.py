@@ -28,6 +28,7 @@ from orchestration import (
     change_flows,
     context_builder,
     failure_counters,
+    openspec_closeout,
     polling,
     reporting,
     requirement_pipeline,
@@ -1565,84 +1566,16 @@ class TicketOrchestrator:
     async def _maybe_openspec_verify(
         self, project_id: str, ticket_id: str, *, stage_label: str = "",
     ) -> bool:
-        """测试阶段通过后触发 OpenSpec Verify（规范层，可选增强）。
-
-        为什么放 orchestrator 而不是 Agent 里：Verify 失败要把工单打成 blocked，
-        而 orchestrator 在 Agent 返回之后才写状态 —— Agent 内部写的 blocked 会被
-        随后的 play_test_passed 覆盖掉。run_tests 那条路径侥幸没踩到是因为它写
-        状态的时机恰好在后面，但同一件事分两处实现迟早走样，所以统一收口到这里。
-
-        幂等：openspec_stage 已经是 verified / archived 就不重跑。
-        """
-        try:
-            row = await db.fetch_one(
-                "SELECT openspec_stage FROM tickets WHERE id = ?", (ticket_id,),
-            )
-            stage = ((row or {}).get("openspec_stage") or "").strip()
-            # 没有 OpenSpec（空）→ _run_openspec_verify 自己会静默跳过；
-            # 已 verified/archived → 重复 validate 没意义，还会多发一条里程碑评论
-            if stage in ("verified", "archived"):
-                return True
-
-            import runtime_facade
-            ctx = {"project_id": project_id, "ticket_id": ticket_id}
-            ok = await runtime_facade.agents_test().TestAgent()._run_openspec_verify(ctx)
-            if ok and stage_label:
-                logger.info(
-                    "📐 OpenSpec Verify 由 %s 阶段触发并通过（ticket=%s）",
-                    stage_label, ticket_id[:12],
-                )
-            return ok
-        except Exception as e:
-            logger.debug("_maybe_openspec_verify 失败（忽略）: %s", e)
-            return False
+        """测试阶段通过后触发 OpenSpec Verify（规范层，可选增强）。"""
+        return await openspec_closeout.maybe_openspec_verify(
+            self, db, project_id, ticket_id, stage_label=stage_label,
+        )
 
     async def _finalize_openspec_after_done(
         self, project_id: str, ticket_id: str,
     ) -> None:
-        """工单已到 testing_done/deployed 但 OpenSpec 停在 applied 时，软收尾 Verify→Archive。
-
-        用于历史单（含旧 force_pass）打开详情时补跑；新路径 reject 上限改为 blocked，不再走此收尾。
-        Verify 失败不回 blocked（block_on_fail=False）。
-        """
-        row = await db.fetch_one(
-            "SELECT openspec_stage, status FROM tickets WHERE id = ?", (ticket_id,),
-        )
-        if not row:
-            return
-        stage = (row.get("openspec_stage") or "").strip()
-        if stage in ("", "archived"):
-            return
-        if stage not in ("proposed", "applied", "verified"):
-            return
-
-        ctx = {"project_id": project_id, "ticket_id": ticket_id}
-        if stage in ("proposed", "applied"):
-            import runtime_facade
-            ok = await runtime_facade.agents_test().TestAgent()._run_openspec_verify(ctx, block_on_fail=False)
-            if not ok:
-                logger.info(
-                    "📐 OpenSpec 终态收尾：Verify 未通过，跳过 Archive（ticket=%s）",
-                    ticket_id[:12],
-                )
-                return
-            row = await db.fetch_one(
-                "SELECT openspec_stage FROM tickets WHERE id = ?", (ticket_id,),
-            )
-            stage = ((row or {}).get("openspec_stage") or "").strip()
-
-        if stage == "verified":
-            import runtime_facade
-            await runtime_facade.agents_deploy().DeployAgent()._run_openspec_archive(ctx)
-            # archive 成功时 DeployAgent 会写 openspec_stage=archived；补一条 layer 日志便于时间轴跳转
-            row2 = await db.fetch_one(
-                "SELECT openspec_stage FROM tickets WHERE id = ?", (ticket_id,),
-            )
-            if (row2 or {}).get("openspec_stage") == "archived":
-                await self._add_layer_log(
-                    ticket_id, project_id, action="openspec_archive",
-                    layer="spec", detail={"message": "终态收尾 Archive 完成"},
-                )
+        """工单已到 testing_done/deployed 但 OpenSpec 停在 applied 时，软收尾 Verify→Archive。"""
+        return await openspec_closeout.finalize_openspec_after_done(self, db, project_id, ticket_id)
 
     async def post_milestone_comment(
         self,
