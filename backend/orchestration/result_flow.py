@@ -14,9 +14,11 @@ class StaleAgentResult(Exception):
     """在途结果已失去写入权；由编排入口结束本轮，不走错误处理。"""
 
 
-async def update_current_ticket(db, ticket_id: str, expected_status: str, changes: dict) -> None:
-    """用同一条 UPDATE 比较来源状态并写入；0 行也包括工单已删除。"""
-    count = await db.update("tickets", changes, "id = ? AND status = ?", (ticket_id, expected_status))
+async def update_current_ticket(db, ticket_id: str, expected_status: str, changes: dict, *, run_id) -> None:
+    """核对状态和批次；同态收尾也消费本次派单。无批次直调只匹配 NULL。"""
+    count = await db.update("tickets", {**changes, "active_run_id": None},
+                            "id = ? AND status = ? AND active_run_id IS ?",
+                            (ticket_id, expected_status, run_id))
     if count == 0:
         raise StaleAgentResult
 
@@ -34,7 +36,7 @@ def serialize_result(result: dict) -> str:
 
 async def block_agent_error(
     orch, db, *, project_id, ticket_id, requirement_id, ticket_snapshot,
-    agent_name, action, result, current_status,
+    agent_name, action, result, current_status, run_id,
 ) -> None:
     """先落库并发布阻塞事件，再尝试错误 Hook，最后启动后台诊断。"""
     err_msg = str(result.get("message") or result.get("error") or "Agent 返回 error")
@@ -43,7 +45,7 @@ async def block_agent_error(
         "status": blocked_status,
         "result": json.dumps(result, ensure_ascii=False),
         "updated_at": now_iso(),
-    })
+    }, run_id=run_id)
     await orch._log(
         project_id, requirement_id, ticket_id, agent_name,
         "blocked", current_status, blocked_status,

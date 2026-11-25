@@ -437,6 +437,7 @@ async def apply_fragment_closeout(
     result_json: str,
     current_status: str,
     requirement_id: Optional[str],
+    run_id: Optional[str] = None,
 ) -> bool:
     """阶段声明了 closeout: status 时，按片段写状态并跑钩子。
 
@@ -469,7 +470,7 @@ async def apply_fragment_closeout(
             "status": new_status,
             "result": result_json,
             "updated_at": now_iso(),
-        })
+        }, run_id=run_id)
         await orch._log(
             project_id, requirement_id, ticket_id, agent_name,
             "complete", current_status, new_status,
@@ -484,8 +485,9 @@ async def apply_fragment_closeout(
     notes: List[str] = []
     for name in stage_hook_names(stage, "on_failure"):
         # 钩子决定是否回退，必须先执行；之后的条件更新仍负责裁决写入权。
-        row = await db.fetch_one("SELECT status FROM tickets WHERE id = ?", (ticket_id,))
-        if row is None or row["status"] != current_status:
+        row = await db.fetch_one("SELECT 1 FROM tickets WHERE id = ? AND status = ? AND active_run_id IS ?",
+                                 (ticket_id, current_status, run_id))
+        if row is None:
             raise StaleAgentResult
         outcome = await orch._invoke_stage_hook(name, ctx)
         if not outcome:
@@ -503,7 +505,7 @@ async def apply_fragment_closeout(
                 continue
             await update_current_ticket(db, ticket_id, current_status, {
                 "status": trigger, "updated_at": now_iso(),
-            })
+            }, run_id=run_id)
             await orch._log(
                 project_id, requirement_id, ticket_id, agent_name,
                 "action", current_status, trigger,
@@ -522,7 +524,7 @@ async def apply_fragment_closeout(
         "status": new_status,
         "result": result_json,
         "updated_at": now_iso(),
-    })
+    }, run_id=run_id)
     await orch._log(
         project_id, requirement_id, ticket_id, agent_name,
         "reject", current_status, new_status,

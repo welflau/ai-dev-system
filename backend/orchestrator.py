@@ -187,11 +187,12 @@ class TicketOrchestrator:
         result_json: str,
         current_status: str,
         requirement_id: Optional[str],
+        run_id: Optional[str] = None,
     ) -> bool:
         """阶段声明了 closeout: status 时，按片段写状态并跑钩子。"""
         return await sop_rules.apply_fragment_closeout(
             self, db, project_id, ticket_id, ticket, agent_name, action, result, result_json,
-            current_status, requirement_id,
+            current_status, requirement_id, run_id,
         )
 
     def invalidate_project_rules(self, project_id: str):
@@ -531,7 +532,7 @@ class TicketOrchestrator:
         agent_name: str,
         action: str,
         result: Dict,
-        *, assigned_status: Optional[str] = None,
+        *, assigned_status: Optional[str] = None, run_id: Optional[str] = None,
     ) -> bool:
         """返回 False 表示工单已删除或结果已过期，管线应跳过本轮收尾。"""
         requirement_id = ticket["requirement_id"]
@@ -559,6 +560,9 @@ class TicketOrchestrator:
             )
             return False
 
+        if current_ticket["active_run_id"] != run_id:
+            logger.info("忽略迟到的 %s.%s：工单 %s 的派单批次不匹配", agent_name, action, ticket_id)
+            return False
         if (assigned_status is not None and current_status != assigned_status
                 and result_handlers.requires_assigned_status(agent_name, action, result)):
             logger.info("忽略迟到的 %s.%s：工单 %s 已离开派单状态 %s（当前 %s）",
@@ -570,20 +574,20 @@ class TicketOrchestrator:
                 await result_flow.block_agent_error(
                     self, db, project_id=project_id, ticket_id=ticket_id, requirement_id=requirement_id,
                     ticket_snapshot=current_ticket, agent_name=agent_name, action=action,
-                    result=result, current_status=current_status,
+                    result=result, current_status=current_status, run_id=run_id,
                 )
             else:
                 await self._route_agent_result(
-                    project_id, ticket_id, ticket, agent_name, action, result, current_status,
+                    project_id, ticket_id, ticket, agent_name, action, result, current_status, run_id,
                 )
         except result_flow.StaleAgentResult:
-            logger.info("忽略迟到的 %s.%s：工单 %s 已删除或已离开 %s",
+            logger.info("忽略迟到的 %s.%s：工单 %s 已删除或原 %s 派单失效",
                         agent_name, action, ticket_id, current_status)
             return False
         return True
 
     async def _route_agent_result(self, project_id, ticket_id, ticket, agent_name, action,
-                                  result, current_status):
+                                  result, current_status, run_id):
         requirement_id = ticket["requirement_id"]
         result_json = result_flow.serialize_result(result)
 
@@ -597,7 +601,7 @@ class TicketOrchestrator:
         # 不能落到后面的 develop 产物落库，否则测试生成会把状态写回 development_done。
         if await self._apply_fragment_closeout(
             project_id, ticket_id, ticket, agent_name, action,
-            result, result_json, current_status, requirement_id,
+            result, result_json, current_status, requirement_id, run_id,
         ):
             return
 
@@ -607,7 +611,7 @@ class TicketOrchestrator:
             agent_name=agent_name, action=action,
             result=result, result_json=result_json,
             current_status=current_status, requirement_id=requirement_id,
-            git_result=git_result,
+            git_result=git_result, run_id=run_id,
             fire_knowledge_distill=_fire_knowledge_distill,
             synthesize_blocked_diagnosis=_synthesize_blocked_diagnosis,
         )

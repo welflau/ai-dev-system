@@ -26,6 +26,7 @@ import logging
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
+from uuid import uuid4
 
 from events import event_manager
 from git_manager import git_manager
@@ -66,6 +67,7 @@ class TicketRun:
     result: Any = None
     stopped_at: str = ""                    # 停在哪一步（函数名），走完全程时为空
     stop_reason: Optional[str] = None
+    run_id: Optional[str] = None
 
 
 async def load_ticket(run: TicketRun) -> Optional[str]:
@@ -502,16 +504,20 @@ async def assign_ticket(run: TicketRun) -> Optional[str]:
     # 标记 Agent 忙碌
     orch._set_agent_busy(agent_name, ticket_id, ticket["title"][:50], action)
 
-    # 更新到进行中状态
+    # 无中间态的 SOP 也须登记批次；有中间态时，状态和批次一并生效。
+    run.run_id = uuid4().hex
+    changes = {"active_run_id": run.run_id}
     if next_status:
-        await db.update("tickets", {
+        changes.update({
             "status": next_status,
             "assigned_agent": agent_name,
             "current_owner": orch._agent_to_owner(agent_name),
             "started_at": ticket["started_at"] or now_iso(),
             "updated_at": now_iso(),
-        }, "id = ?", (ticket_id,))
+        })
+    await db.update("tickets", changes, "id = ?", (ticket_id,))
 
+    if next_status:
         await orch._log(
             project_id, ticket["requirement_id"], ticket_id, agent_name,
             "assign", current_status, next_status,
@@ -801,7 +807,7 @@ async def handle_result(run: TicketRun) -> Optional[str]:
     # 处理结果
     applied = await orch._handle_agent_result(
         project_id, ticket_id, ticket, agent_name, action, result,
-        assigned_status=run.next_status or run.current_status,
+        assigned_status=run.next_status or run.current_status, run_id=run.run_id,
     )
     if not applied:
         return "stale_result"

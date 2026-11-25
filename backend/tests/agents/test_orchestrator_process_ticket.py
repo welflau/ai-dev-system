@@ -238,7 +238,7 @@ async def _env(tmp_path, monkeypatch, *, status="pending", ticket_extra=None):
             raise
     orch._ticket_heartbeat = fake_heartbeat
 
-    async def fake_handle_result(pid, tid, ticket, agent_name, action, result, *, assigned_status):
+    async def fake_handle_result(pid, tid, ticket, agent_name, action, result, *, assigned_status, run_id):
         env.calls["result"].append({
             "ticket_status": ticket["status"], "agent": agent_name,
             "action": action, "result": result,

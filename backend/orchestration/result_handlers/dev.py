@@ -75,7 +75,7 @@ async def handle_dev(ctx: ResultContext) -> Optional[str]:
 async def _save_result(ctx: ResultContext, status: str) -> None:
     await update_current_ticket(ctx.db, ctx.ticket_id, ctx.current_status, {
         "status": status, "result": ctx.result_json, "updated_at": now_iso(),
-    })
+    }, run_id=ctx.run_id)
 
 
 async def _record_typecheck(ctx: ResultContext) -> None:

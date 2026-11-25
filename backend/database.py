@@ -189,6 +189,8 @@ class Database:
             # 工单/需求级 AI 生图开关：用户在创建卡片上勾选，覆盖 SOP 的 use_aigc 默认
             ("tickets", "use_aigc", "INTEGER DEFAULT 0"),
             ("requirements", "use_aigc", "INTEGER DEFAULT 0"),
+            # 当前派单，旧工单保留 NULL。
+            ("tickets", "active_run_id", "TEXT"),
             # 生图回填：AIGC 完成后把真图覆盖到 ArtistAgent 的占位图路径
             ("image_requests", "callback_media_path", "TEXT"),
         ]
@@ -201,6 +203,17 @@ class Database:
                         f"ALTER TABLE {table} ADD COLUMN {column} {col_def}"
                     )
                     logger.info("数据库迁移: 已添加列 %s.%s (%s)", table, column, col_def)
+            # 普通改态使旧派单失效；派单本身会在同一条 UPDATE 换上新批次。
+            # 放在补列之后，使旧库也能安装触发器。仅写描述/心跳不触发。
+            await self._db.execute("""
+                CREATE TRIGGER IF NOT EXISTS tickets_invalidate_run_on_status_change
+                AFTER UPDATE OF status ON tickets
+                WHEN OLD.status IS NOT NEW.status AND NEW.active_run_id IS NOT NULL
+                     AND OLD.active_run_id IS NEW.active_run_id
+                BEGIN
+                    UPDATE tickets SET active_run_id = NULL WHERE id = NEW.id;
+                END
+            """)
             await self._db.commit()
 
         # 群聊会话标记回填：含群聊发言（kind=utterance）的会话归为 group，
@@ -390,6 +403,7 @@ CREATE TABLE IF NOT EXISTS tickets (
     sort_order      INTEGER NOT NULL DEFAULT 0,
     status          TEXT NOT NULL DEFAULT 'pending',
     assigned_agent  TEXT,
+    active_run_id   TEXT,
     current_owner   TEXT,
     estimated_hours REAL,
     actual_hours    REAL,

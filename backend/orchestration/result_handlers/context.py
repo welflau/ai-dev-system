@@ -41,6 +41,7 @@ class ResultContext:
     git_result: Optional[Dict[str, Any]]
     fire_knowledge_distill: Callable[[str, str], None]
     synthesize_blocked_diagnosis: Callable[..., Dict[str, Any]]   # 只有 skill 处理器用
+    run_id: Optional[str] = None
 
 
 ResultHandler = Callable[[ResultContext], Awaitable[Optional[str]]]
