@@ -1,0 +1,19 @@
+<!DOCTYPE html><html lang="zh-CN"><meta charset="utf-8"><title>编排收尾验证</title>
+<style>*{box-sizing:border-box}body{margin:0;padding:32px 42px;background:#15252e;color:#e6efed;font:16px "Microsoft YaHei",sans-serif}main{max-width:1020px}h1{margin:8px 0 18px;font-size:27px}small{color:#a9c5c0}h2{margin:18px 0 6px;font:600 18px Consolas,"Microsoft YaHei",monospace;color:#84d8c3}pre{margin:0;padding:11px 16px;background:#1e343d;border-left:3px solid #539e91;font:16px/1.5 Consolas,monospace;white-space:pre-wrap}</style>
+<main><small>DEVNOTES / 2026-11-25</small><h1>两组搬移的实测输出</h1><h2>poll_cycle</h2><pre>RESULT ALL PASS
+workers 4, exit codes [0, 0, 0, 0], baselines green 4/4, worktree files restored 4/4
+main working tree untouched: True
+killed 26, survived 0, of 26 mutants, 106s wall
+1667 passed, 1 warning in 538.87s (0:08:58)</pre><h2>context_assembly</h2><pre>RESULT ALL PASS
+workers 4, exit codes [0, 0, 0, 0], baselines green 4/4, worktree files restored 4/4
+main working tree untouched: True
+killed 14, survived 0, of 14 mutants, 96s wall
+1672 passed, 1 warning in 521.48s (0:08:41)</pre><h2>HTTP / 新进程</h2><pre>/api/health               HTTP 200   0.30s
+/app                      HTTP 200   0.01s
+/api/metrics              HTTP 200   5.70s
+/api/agents/status        HTTP 200   0.00s
+/api/agents               HTTP 200   0.03s
+/api/projects             HTTP 200   0.00s
+/api/llm/status           HTTP 200   0.00s
+/api/hooks/status         HTTP 200   0.08s
+/api/agents/orchestrator  HTTP 200   0.02s</pre></main></html>
