@@ -635,6 +635,56 @@ def test_dev_agent_self_test_blocking(tmp_path, monkeypatch):
     _run(body, tmp_path, monkeypatch, initial_status="architecture_done")
 
 
+@pytest.mark.parametrize("action,status,other_status", [
+    ("run_h5_typecheck", "h5_typecheck_failed", "development_failed"),
+    ("fix_issues", "development_failed", "self_test_failed"),
+])
+def test_dev_overlapping_failures_count_only_selected_rejection(
+    tmp_path, monkeypatch, action, status, other_status,
+):
+    """同一回传同时表示生成失败和自检阻塞，实际选择的阶段只消耗一次重试额度。"""
+    async def body(env):
+        result = {"status": "development_failed", "message": "无有效产出",
+                  "self_test": {"ue_blocking_issues": [{"rule": "R1"}]}}
+        await _call(env, "DevAgent", action, result)
+        row = await _ticket(env)
+        assert (row["status"], json.loads(row["result"])) == (status, result)
+        assert await env.orch._reject_count_since_reset(TICKET_ID) == 1
+        assert await env.orch._reject_count_since_reset(TICKET_ID, status) == 1
+        assert await env.orch._reject_count_since_reset(TICKET_ID, other_status) == 0
+        assert await _artifacts(env) == []
+        assert await _comments(env) == []
+        _assert_no_tail(env)
+    _run(body, tmp_path, monkeypatch, initial_status="developing")
+
+
+def test_dev_completion_observers_see_artifact_before_dispatch(tmp_path, monkeypatch):
+    """日志和评论先可见；订阅状态变化或接到派单时，代码产物已经可以查询。"""
+    async def body(env):
+        seen = []
+
+        async def observe(pid, event, payload):
+            ticket = await _ticket(env)
+            seen.append((event, ticket["status"], len(await _artifacts(env))))
+
+        async def dispatch(pid, tid):
+            assert (pid, tid) == (PROJECT_ID, TICKET_ID)
+            await observe(pid, "dispatch", {})
+
+        monkeypatch.setattr(orch_module.event_manager, "publish_to_project", observe)
+        env.orch.process_ticket = dispatch
+        result = {"status": "success", "files": {"src/a.py": "pass"}}
+        await _call(env, "DevAgent", "rework", result)
+        assert seen == [
+            ("log_added", "development_done", 0), ("comment_added", "development_done", 0),
+            ("ticket_status_changed", "development_done", 1), ("dispatch", "development_done", 1),
+        ]
+        art, = await _artifacts(env)
+        assert json.loads(art["content"]) == result
+        assert art["metadata"] is None
+    _run(body, tmp_path, monkeypatch, initial_status="developing")
+
+
 def test_dev_agent_success(tmp_path, monkeypatch):
     async def body(env):
         env.git_result = {"commit_hash": "d1", "files": ["src/a.py", "src/b.py"]}
