@@ -1,5 +1,5 @@
-"""LLM 配置展示、CLI 模型刷新与连接测试接口。"""
-from fastapi import APIRouter
+"""LLM 配置展示与 Agent 覆盖、CLI 模型刷新及连接测试接口。"""
+from fastapi import APIRouter, HTTPException
 
 from services import llm_config
 
@@ -42,3 +42,27 @@ async def llm_test():
     from llm_client import llm_client
 
     return await llm_client.test_connection()
+
+
+def _agent_name(agent_type: str) -> str:
+    name = (agent_type or "").strip()
+    if not name:
+        raise HTTPException(400, "agent_type 不能为空")
+    return name
+
+
+@router.post("/agents/{agent_type}/config")
+async def llm_agent_config(agent_type: str, body: dict):
+    """写/更新某 Agent 的 LLM 覆盖（upsert）。空 body 各字段为空串 = 显式继承全局语义不再适用，
+    调用方要"恢复继承"请用 DELETE。"""
+    name = _agent_name(agent_type)
+    await llm_config.save_agent_override(name, body)
+    return {"status": "ok", "agent_type": name}
+
+
+@router.delete("/agents/{agent_type}/config")
+async def llm_agent_config_delete(agent_type: str):
+    """删除某 Agent 的覆盖 = 恢复继承全局配置"""
+    name = _agent_name(agent_type)
+    await llm_config.delete_agent_override(name)
+    return {"status": "ok", "agent_type": name}

@@ -1,4 +1,4 @@
-"""供顶栏和 Agent 配置编辑器展示的 LLM 只读数据。"""
+"""顶栏 LLM 状态、Agent 生效配置及其覆盖的持久化。"""
 
 
 def _display_model(api_format, model, cli_model):
@@ -71,3 +71,34 @@ async def agent_config_view():
         "global": public_llm_fields(llm_client, has_api_key=bool(llm_client.api_key)),
         **_cli_choices(),
     }
+
+
+async def save_agent_override(agent_type: str, body: dict) -> None:
+    from database import db
+    from llm_client import _invalidate_agent_client
+    from utils import generate_id, now_iso
+
+    columns = ("api_format", "base_url", "api_key", "model", "cli_type", "cli_cmd", "cli_model")
+    values = [(body.get(name) or "").strip() for name in columns]
+    timeout = body.get("cli_timeout")
+    # 空凭据在新行存为空串；更新时保留写入瞬间的已有值，不读出后再写回。
+    await db.execute(
+        """INSERT INTO agent_llm_config
+           (id, agent_type, api_format, base_url, api_key, model, cli_type, cli_cmd, cli_model, cli_timeout, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(agent_type) DO UPDATE SET
+               api_format=excluded.api_format, base_url=excluded.base_url,
+               api_key=COALESCE(NULLIF(excluded.api_key, ''), agent_llm_config.api_key),
+               model=excluded.model, cli_type=excluded.cli_type, cli_cmd=excluded.cli_cmd,
+               cli_model=excluded.cli_model, cli_timeout=excluded.cli_timeout, updated_at=excluded.updated_at""",
+        (generate_id("ALC"), agent_type, *values, int(timeout) if timeout else None, now_iso()),
+    )
+    _invalidate_agent_client(agent_type)
+
+
+async def delete_agent_override(agent_type: str) -> None:
+    from database import db
+    from llm_client import _invalidate_agent_client
+
+    await db.execute("DELETE FROM agent_llm_config WHERE agent_type = ?", (agent_type,))
+    _invalidate_agent_client(agent_type)

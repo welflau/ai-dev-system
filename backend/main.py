@@ -410,6 +410,8 @@ from api.llm_config import (
     llm_agents as llm_agents,
     llm_cli_models_refresh as llm_cli_models_refresh,
     llm_test as llm_test,
+    llm_agent_config as llm_agent_config,
+    llm_agent_config_delete as llm_agent_config_delete,
 )
 from services.llm_config import public_llm_fields as _public_llm_fields
 from api.system import (
@@ -691,77 +693,6 @@ async def llm_config(body: dict):
         "model":              llm_client.model,
         "lightai_configured": bool(settings.LIGHTAI_API_KEY),
     }
-
-
-# ==================== Agent 级 LLM 配置 ====================
-
-@app.post("/api/llm/agents/{agent_type}/config")
-async def llm_agent_config(agent_type: str, body: dict):
-    """写/更新某 Agent 的 LLM 覆盖（upsert）。空 body 各字段为空串 = 显式继承全局语义不再适用，
-    调用方要"恢复继承"请用 DELETE。"""
-    from llm_client import _invalidate_agent_client
-    from database import db
-    from utils import generate_id, now_iso
-
-    agent_type = (agent_type or "").strip()
-    if not agent_type:
-        raise HTTPException(400, "agent_type 不能为空")
-
-    fields = {
-        "api_format": (body.get("api_format") or "").strip(),
-        "base_url": (body.get("base_url") or "").strip(),
-        "api_key": (body.get("api_key") or "").strip(),
-        "model": (body.get("model") or "").strip(),
-        "cli_type": (body.get("cli_type") or "").strip(),
-        "cli_cmd": (body.get("cli_cmd") or "").strip(),
-        "cli_model": (body.get("cli_model") or "").strip(),
-        "cli_timeout": body.get("cli_timeout"),
-    }
-    # api_key 留空 = 沿用已有的（更新时）；新增且留空 = 继承全局（表里存空串）
-    existing = await db.fetch_one(
-        "SELECT id, api_key FROM agent_llm_config WHERE agent_type = ?", (agent_type,)
-    )
-    if existing:
-        await db.execute(
-            "UPDATE agent_llm_config SET api_format=?, base_url=?, api_key=?, model=?, "
-            "cli_type=?, cli_cmd=?, cli_model=?, cli_timeout=?, updated_at=? WHERE agent_type=?",
-            (fields["api_format"], fields["base_url"],
-             fields["api_key"] if fields["api_key"] else existing.get("api_key"),
-             fields["model"], fields["cli_type"], fields["cli_cmd"], fields["cli_model"],
-             int(fields["cli_timeout"]) if fields["cli_timeout"] else None,
-             now_iso(), agent_type),
-        )
-    else:
-        await db.insert("agent_llm_config", {
-            "id": generate_id("ALC"),
-            "agent_type": agent_type,
-            "api_format": fields["api_format"],
-            "base_url": fields["base_url"],
-            "api_key": fields["api_key"],
-            "model": fields["model"],
-            "cli_type": fields["cli_type"],
-            "cli_cmd": fields["cli_cmd"],
-            "cli_model": fields["cli_model"],
-            "cli_timeout": int(fields["cli_timeout"]) if fields["cli_timeout"] else None,
-            "updated_at": now_iso(),
-        })
-
-    _invalidate_agent_client(agent_type)
-    return {"status": "ok", "agent_type": agent_type}
-
-
-@app.delete("/api/llm/agents/{agent_type}/config")
-async def llm_agent_config_delete(agent_type: str):
-    """删除某 Agent 的覆盖 = 恢复继承全局配置"""
-    from llm_client import _invalidate_agent_client
-    from database import db
-
-    agent_type = (agent_type or "").strip()
-    if not agent_type:
-        raise HTTPException(400, "agent_type 不能为空")
-    await db.execute("DELETE FROM agent_llm_config WHERE agent_type = ?", (agent_type,))
-    _invalidate_agent_client(agent_type)
-    return {"status": "ok", "agent_type": agent_type}
 
 
 app.include_router(metrics_router)
