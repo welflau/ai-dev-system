@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 
 from events import event_manager
 from models import TicketStatus
+from orchestration.result_flow import update_current_ticket
 from orchestration.result_handlers.context import HANDLED, ResultContext
 from utils import now_iso
 
@@ -81,9 +82,9 @@ def _classify_status(status: str, skill_id: str, cfg: Dict, artifacts: List[Dict
 
 async def _save_status(ctx: ResultContext, new_status: str, **fields) -> None:
     # 保留收到时的 JSON 快照；人审缺产物时，诊断会使用后来补写的错误原因。
-    await ctx.db.update("tickets", {
+    await update_current_ticket(ctx.db, ctx.ticket_id, ctx.current_status, {
         "status": new_status, "result": ctx.result_json, **fields, "updated_at": now_iso(),
-    }, "id = ?", (ctx.ticket_id,))
+    }, run_id=ctx.run_id)
 
 
 async def _record_waiting(ctx: ResultContext, run: _SkillRun, new_status: str) -> None:

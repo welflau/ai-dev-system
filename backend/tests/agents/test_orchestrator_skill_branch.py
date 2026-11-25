@@ -173,7 +173,7 @@ async def _call(orch, result, *, current_status="pending"):
 
 
 async def _call_via_dispatcher(orch, result, *, current_status="pending",
-                               agent_name="SkillAgent"):
+                               agent_name="SkillAgent", run_id=None):
     """走 `_handle_agent_result` 这个**真实入口**，而不是直接调分支函数。
 
     为什么必须有这条路径：直接调 `handle_skill` 测不出
@@ -190,8 +190,8 @@ async def _call_via_dispatcher(orch, result, *, current_status="pending",
 
     ticket = {"id": TICKET_ID, "requirement_id": REQ_ID, "title": "写技术博客",
               "type": "feature", "status": current_status}
-    await orch._handle_agent_result(
-        PROJECT_ID, TICKET_ID, ticket, agent_name, ACTION, result,
+    return await orch._handle_agent_result(
+        PROJECT_ID, TICKET_ID, ticket, agent_name, ACTION, result, run_id=run_id,
     )
 
 
@@ -396,7 +396,7 @@ def test_waiting_human_without_declared_produces_blocks(tmp_path, monkeypatch):
         ), current_status="director_clip_trial_in_progress")
         assert await _status(db) == TicketStatus.BLOCKED.value
         assert dispatched == []
-    _run(body, tmp_path, monkeypatch)
+    _run(body, tmp_path, monkeypatch, initial_status="director_clip_trial_in_progress")
 
 
 def test_waiting_human_with_primary_produce_ignores_optional_kinds(tmp_path, monkeypatch):
@@ -424,7 +424,7 @@ def test_waiting_human_with_primary_produce_ignores_optional_kinds(tmp_path, mon
         ), current_status="director_clip_trial_in_progress")
         assert await _status(db) == "director_clip_trial_ready"
         assert dispatched == []
-    _run(body, tmp_path, monkeypatch)
+    _run(body, tmp_path, monkeypatch, initial_status="director_clip_trial_in_progress")
 
 
 def test_waiting_human_lists_outputs_and_stays_ready(tmp_path, monkeypatch):
@@ -460,7 +460,7 @@ def test_waiting_human_lists_outputs_and_stays_ready(tmp_path, monkeypatch):
         assert len(comments) == 1
         assert "works/第一集/video_brief.json" in comments[0]["content"]
         assert "确认卡" in comments[0]["content"]
-    _run(body, tmp_path, monkeypatch)
+    _run(body, tmp_path, monkeypatch, initial_status="director_brief_in_progress")
 
 
 def test_success_logs_and_comments(tmp_path, monkeypatch):
