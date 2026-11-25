@@ -1,4 +1,6 @@
 """走实际 HTTP 路由，只替换刷新模型和测试连接的外部调用。"""
+import asyncio
+import shutil
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -21,6 +23,37 @@ def probes(monkeypatch):
 def http():
     transport = ASGITransport(app=main.app, raise_app_exceptions=False)
     return AsyncClient(transport=transport, base_url="http://test")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exit_code,stdout,stderr", [
+    (0, b"fixture v1", b""),
+    (0, b"", b"fixture v1"),
+    (7, b"fixture v1", b"fixture diagnostic"),
+])
+async def test_cli_version_exit_code(monkeypatch, exit_code, stdout, stderr):
+    client = llm.llm_client
+    monkeypatch.setattr(client, "api_format", "cli")
+    monkeypatch.setattr(client, "cli_type", "demo")
+    monkeypatch.setattr(client, "cli_cmd", "fixture-cli")
+    monkeypatch.setattr(shutil, "which", lambda cmd: cmd)
+    monkeypatch.setattr(client, "_resolve_cmd", lambda cmd, kind: [cmd])
+    proc = SimpleNamespace(returncode=exit_code, communicate=AsyncMock(return_value=(stdout, stderr)))
+    spawn = AsyncMock(return_value=proc)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", spawn)
+    async with http() as transport:
+        response = await transport.post("/api/llm/test")
+    spawn.assert_awaited_once()
+    assert spawn.await_args.args == ("fixture-cli", "--version")
+    assert response.status_code == 200
+    result = response.json()
+    if exit_code:
+        assert result["status"] == "error"
+        assert str(exit_code) in result["message"]
+        assert "response" not in result
+    else:
+        assert result["status"] == "ok"
+        assert result["response"] == "fixture v1"
 
 
 @pytest.mark.asyncio

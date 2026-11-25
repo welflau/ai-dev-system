@@ -3336,6 +3336,8 @@ class LLMClient:
                     stderr=_asyncio.subprocess.PIPE,
                 )
                 stdout, stderr = await _asyncio.wait_for(proc.communicate(), timeout=10)
+                if proc.returncode != 0:
+                    return {"status": "error", "message": f"CLI --version 失败（退出码 {proc.returncode}）"}
                 version_str = (stdout or stderr).decode("utf-8", errors="replace").strip()[:100]
                 logger.info("🖥️  CLI 连接测试通过: %s", version_str)
                 return {
