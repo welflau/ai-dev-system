@@ -10,7 +10,7 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import JSONResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import APP_VERSION, settings
@@ -405,6 +405,10 @@ from api.image_gen import router as image_gen_router
 from api.cloud_video_config import router as cloud_video_config_router
 from api.ai_gen_tasks import router as ai_gen_tasks_router
 from api.metrics import router as metrics_router
+from api.frontend_pages import (
+    router as frontend_pages_router, frontend_dir,
+    favicon as favicon, serve_frontend as serve_frontend,
+)
 from api.event_streams import global_router as global_events_router, global_events_stream as global_events_stream
 from api.llm_config import (
     router as llm_config_router,
@@ -503,9 +507,6 @@ app.include_router(metrics_router)
 
 # ==================== 前端静态文件 ====================
 
-# 挂载前端静态文件
-frontend_dir = Path(settings.FRONTEND_DIR)
-
 # 开发环境：禁用静态文件缓存
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -540,16 +541,6 @@ app.add_middleware(ArtResGuardMiddleware)
 
 if frontend_dir.exists():
     app.mount("/static", StaticFiles(directory=str(frontend_dir)), name="static")
-
-@app.get("/favicon.ico", include_in_schema=False)
-async def favicon():
-    svg = (
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">'
-        '<rect width="32" height="32" rx="6" fill="#7c6af7"/>'
-        '<text x="16" y="23" font-size="20" text-anchor="middle" fill="white">🤖</text>'
-        '</svg>'
-    )
-    return Response(content=svg, media_type="image/svg+xml")
 
 # 挂载聊天图片目录（用于历史消息图片回显）
 from config import BASE_DIR as _BASE_DIR
@@ -611,17 +602,7 @@ async def open_in_browser(url: str):
     return {"ok": True}
 
 
-@app.get("/app")
-@app.get("/app/{path:path}")
-async def serve_frontend(path: str = ""):
-    """提供前端页面"""
-    index_file = frontend_dir / "index.html"
-    if index_file.exists():
-        return FileResponse(str(index_file), headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
-    return JSONResponse(
-        {"message": "前端文件未找到，请确保 frontend/ 目录存在"},
-        status_code=404,
-    )
+app.include_router(frontend_pages_router)
 
 
 # ==================== 启动入口 ====================

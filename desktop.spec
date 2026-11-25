@@ -114,6 +114,7 @@ hiddenimports = [
     "api",
     "api.tickets",
     "api.event_streams",
+    "api.frontend_pages",
     "api.system",
     "services.agent_tools_settings",
     "services.file_manager",
