@@ -33235,41 +33235,41 @@ async function deleteKnowledgeDoc(scope, projectId, filename) {
 
 // ==================== Agent 技能系统（Tool Use）====================
 
-/** 读取后端 agent-tools 状态并同步 UI 开关 */
-async function loadAgentToolsStatus() {
+async function syncAgentToolsState(enabled) {
     const toggle = document.getElementById('agentToolsToggle');
-    const label  = document.getElementById('agentToolsLabel');
-    if (!toggle) return;
+    const label = document.getElementById('agentToolsLabel');
+    if (!toggle || !label || toggle.dataset.pending) return;
+    toggle.dataset.pending = '1';
+    toggle.disabled = true;
     try {
-        const res = await api('/settings/agent-tools');
-        const enabled = res && res.enabled;
-        toggle.checked = !!enabled;
-        label.textContent = enabled ? '已开启（Agentic 模式）' : '已关闭（One-shot 模式）';
-        label.style.color = enabled ? 'var(--accent)' : 'var(--text-muted)';
-    } catch (e) {
-        // 后端未实现此接口时静默
-        label.textContent = '（需后端 ENABLE_AGENT_TOOLS=true）';
+        let state;
+        if (typeof enabled === 'boolean') {
+            label.textContent = '正在保存…';
+            try {
+                state = await api('/settings/agent-tools', { method: 'POST', body: { enabled } });
+                showToast('开关已保存', 'success');
+            } catch (err) {
+                showToast('保存失败：' + err.message, 'warning');
+                // 若响应在保存后丢失，不能假设服务仍是上一次的状态。
+            }
+        }
+        state = state ?? await api('/settings/agent-tools');
+        toggle.checked = state.enabled;
+        toggle.indeterminate = false;
+        label.textContent = state.enabled ? '已开启' : '已关闭';
+        label.style.color = state.enabled ? 'var(--accent)' : 'var(--text-muted)';
+        toggle.disabled = false;
+    } catch {
+        toggle.indeterminate = true;
+        label.textContent = '状态未知，重新打开设置可重试';
+        label.style.color = 'var(--text-muted)';
+    } finally {
+        delete toggle.dataset.pending;
     }
 }
 
-/** 切换 Agent Tool Use 开关（同步设置到后端） */
-async function toggleAgentTools(enabled) {
-    const label = document.getElementById('agentToolsLabel');
-    try {
-        await api('/settings/agent-tools', {
-            method: 'POST',
-            body: JSON.stringify({ enabled }),
-        });
-        label.textContent = enabled ? '已开启（Agentic 模式）' : '已关闭（One-shot 模式）';
-        label.style.color = enabled ? 'var(--accent)' : 'var(--text-muted)';
-        showToast(enabled ? 'Agentic 模式已开启' : 'One-shot 模式已开启', 'success');
-    } catch (e) {
-        showToast('切换失败：' + e.message + '（请在后端设置 ENABLE_AGENT_TOOLS 环境变量）', 'warning');
-        // 回滚 UI
-        const toggle = document.getElementById('agentToolsToggle');
-        if (toggle) toggle.checked = !enabled;
-    }
-}
+function loadAgentToolsStatus() { return syncAgentToolsState(); }
+function toggleAgentTools(enabled) { return syncAgentToolsState(enabled); }
 
 // ==================== 系统指标条 ====================
 let _processingPanelOpen = false;

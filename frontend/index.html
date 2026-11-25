@@ -1459,20 +1459,15 @@
                                 <div class="settings-card" style="margin-top:16px;">
                                     <h3 class="settings-card-title">🔧 Agent 技能系统（Tool Use）</h3>
                                     <p class="settings-description" style="margin:8px 0 14px;">
-                                        开启后，DevAgent 将进入 Agentic 模式：LLM 通过调用
-                                        <code>read_file</code>、<code>write_file</code>、<code>list_files</code>、<code>run_command</code>
-                                        等工具迭代完成开发任务，代码质量更高但耗时更长。
+                                        此处保存 Agent 工具开关。当前版本的 DevAgent 不根据这项设置切换执行模式。
                                     </p>
                                     <div style="display:flex; align-items:center; gap:12px;">
-                                        <label class="toggle-switch" title="需要 LLM 支持 function calling">
-                                            <input type="checkbox" id="agentToolsToggle" onchange="toggleAgentTools(this.checked)">
+                                        <label class="toggle-switch">
+                                            <input type="checkbox" id="agentToolsToggle" aria-label="Agent 工具开关" disabled onchange="toggleAgentTools(this.checked)">
                                             <span class="toggle-slider"></span>
                                         </label>
-                                        <span id="agentToolsLabel" style="font-size:13px; color:var(--text-muted);">已关闭（One-shot 模式）</span>
+                                        <span id="agentToolsLabel" aria-live="polite" style="font-size:13px; color:var(--text-muted);">正在读取…</span>
                                     </div>
-                                    <p style="margin-top:10px; font-size:12px; color:var(--text-muted);">
-                                        ⚠️ 需要后端设置环境变量 <code>ENABLE_AGENT_TOOLS=true</code> 方可生效，此开关仅作状态展示。
-                                    </p>
                                 </div>
                             </div>
 

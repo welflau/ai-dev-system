@@ -27,9 +27,9 @@ else:
 # load_dotenv() 加载的是根目录 .env（只有基础 LLM 配置），而 ART_ASSETS_LOCAL_PATH、
 # GLOBAL_KNOWLEDGE_LOCAL_PATH、LIGHTAI_* 等都在 backend/.env 里，会读不到。
 # 因此这里强制用 backend/.env 覆盖全部非空变量，确保配置一致、可读。
-_ENV_PATH = (_APP_DIR if _FROZEN else BASE_DIR) / ".env"
+ENV_PATH = (_APP_DIR if _FROZEN else BASE_DIR) / ".env"
 try:
-    _dotenv = dotenv_values(str(_ENV_PATH))
+    _dotenv = dotenv_values(str(ENV_PATH))
     for _k, _v in _dotenv.items():
         if _v:
             os.environ[_k] = _v
@@ -42,6 +42,13 @@ DATA_DIR.mkdir(exist_ok=True)
 # 应用版本号的唯一来源：启动日志、FastAPI 文档、/api/health 都读这里。
 # 发版时只改这一处，并同步 README 顶部徽章与「版本历史」表。
 APP_VERSION = "0.22.0"
+
+
+AGENT_TOOLS_ENV_KEY = "ENABLE_AGENT_TOOLS"
+
+
+def agent_tools_enabled() -> bool:
+    return os.getenv(AGENT_TOOLS_ENV_KEY, "false").lower() in ("1", "true", "yes")
 
 
 class Settings:
@@ -88,7 +95,7 @@ class Settings:
     LLM_CLI_TIMEOUT: int = int(os.getenv("LLM_CLI_TIMEOUT", "1800")) # 子进程超时（秒），UBT/hy3等长任务需要更长时间
 
     # Agent 技能系统（Tool Use）
-    ENABLE_AGENT_TOOLS: bool = os.getenv("ENABLE_AGENT_TOOLS", "false").lower() in ("1", "true", "yes")
+    ENABLE_AGENT_TOOLS: bool = agent_tools_enabled()
 
     # AI 助手走 ChatAssistantAgent + tool_use 新路径
     # P3 起默认开启；新路径内部异常会自动降级到旧 [ACTION:XXX] 文本协议路径

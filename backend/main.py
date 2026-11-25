@@ -420,6 +420,8 @@ from api.system import (
     router as system_router,
     health_check as health_check,
     get_available_paths as get_available_paths,
+    get_agent_tools_status as get_agent_tools_status,
+    set_agent_tools_status as set_agent_tools_status,
 )
 from api.sop_config import (
     router as sop_config_router,
@@ -535,47 +537,6 @@ app.include_router(llm_config_router)
 
 
 app.include_router(metrics_router)
-
-
-# ==================== Agent 技能系统开关 ====================
-
-@app.get("/api/settings/agent-tools")
-async def get_agent_tools_status():
-    """获取 Agent Tool Use 开关状态"""
-    import os
-    enabled = os.getenv("ENABLE_AGENT_TOOLS", "false").lower() in ("1", "true", "yes")
-    return {"enabled": enabled}
-
-
-@app.post("/api/settings/agent-tools")
-async def set_agent_tools_status(body: dict):
-    """运行时切换 Agent Tool Use 开关（写入 .env 持久化）"""
-    import os
-    from config import BASE_DIR
-    enabled = bool(body.get("enabled", False))
-    os.environ["ENABLE_AGENT_TOOLS"] = "true" if enabled else "false"
-
-    # 持久化到 .env
-    env_path = BASE_DIR / ".env"
-    key = "ENABLE_AGENT_TOOLS"
-    value = "true" if enabled else "false"
-    if env_path.exists():
-        lines = env_path.read_text(encoding="utf-8").splitlines()
-        found = False
-        new_lines = []
-        for line in lines:
-            if line.startswith(f"{key}=") or line.startswith(f"{key} ="):
-                new_lines.append(f"{key}={value}")
-                found = True
-            else:
-                new_lines.append(line)
-        if not found:
-            new_lines.append(f"{key}={value}")
-        env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
-    else:
-        env_path.write_text(f"{key}={value}\n", encoding="utf-8")
-
-    return {"enabled": enabled, "message": f"Agent Tool Use {'已开启' if enabled else '已关闭'}"}
 
 
 # ==================== 前端静态文件 ====================
