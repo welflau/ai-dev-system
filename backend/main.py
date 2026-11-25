@@ -405,6 +405,7 @@ from api.image_gen import router as image_gen_router
 from api.cloud_video_config import router as cloud_video_config_router
 from api.ai_gen_tasks import router as ai_gen_tasks_router
 from api.metrics import router as metrics_router
+from api.local_images import router as local_images_router, serve_local_file as serve_local_file
 from api.frontend_pages import (
     router as frontend_pages_router, frontend_dir,
     favicon as favicon, serve_frontend as serve_frontend,
@@ -576,22 +577,7 @@ _mimetypes.add_type("model/gltf+json", ".gltf")
 _mimetypes.add_type("image/webp", ".webp")
 
 
-@app.get("/api/local-file")
-async def serve_local_file(path: str):
-    """按需读取本地文件并以图片形式返回（仅限图片格式，供前端预览 AI 生成图片）"""
-    import pathlib, mimetypes
-    from fastapi.responses import FileResponse
-    from fastapi import HTTPException
-    fp = pathlib.Path(path)
-    if not fp.exists() or not fp.is_file():
-        raise HTTPException(404, "文件不存在")
-    ext = fp.suffix.lower()
-    if ext not in (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"):
-        raise HTTPException(400, "不支持的文件类型")
-    mt = mimetypes.types_map.get(ext, "image/png")
-    return FileResponse(str(fp), media_type=mt)
-
-
+app.include_router(local_images_router)
 app.include_router(frontend_pages_router)
 
 
