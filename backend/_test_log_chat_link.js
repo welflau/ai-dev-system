@@ -5,7 +5,7 @@
 // 什么，得自己去「工单对话」里按时间翻。这个链接把两个视角接起来。
 //
 // 设计上只有一条硬规则：**链接只在对话里真有对应条目时才出现**。
-// 判断依据（Feed 收哪些 action）写在 backend/api/chat.py::FEED_LOG_ACTIONS，
+// 判断依据（Feed 收哪些 action）写在 backend/api/chat/__init__.py::FEED_LOG_ACTIONS，
 // 由 tickets.py 的 /timeline 直接 import 并标成 _chat_anchor，前端只认这个字段。
 // 前端自己抄一份 action 白名单 = 两份判据各改各的 —— 「📟 后台记录」链接刚因为
 // 这个翻车过（判据和建表规则一致地错，测试全绿，真实 UE 工单一条链接都没有）。
@@ -19,7 +19,7 @@ const norm = s => s.replace(/\r\n/g, '\n');
 const src = norm(fs.readFileSync('../frontend/app.js', 'utf8'));
 const css = norm(fs.readFileSync('../frontend/styles.css', 'utf8'));
 const py = norm(fs.readFileSync('api/tickets.py', 'utf8'));
-const pyChat = norm(fs.readFileSync('api/chat.py', 'utf8'));
+const pyChat = norm(fs.readFileSync('api/chat/__init__.py', 'utf8'));
 
 let pass = 0, fail = 0;
 function check(name, cond, detail = '') {

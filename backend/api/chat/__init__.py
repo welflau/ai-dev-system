@@ -18,6 +18,10 @@ from typing import Optional, List, Dict, Any, Union
 from database import db
 from utils import generate_id, now_iso
 from events import event_manager
+from .session_lists import (
+    global_router as global_session_lists, project_router as project_session_lists,
+    list_global_sessions as list_global_sessions, list_sessions as list_sessions,
+)
 
 # 全局聊天思考日志：session_id → asyncio.Queue（fire-and-forget SSE 频道）
 _THINKING_QUEUES: Dict[str, asyncio.Queue] = {}
@@ -2475,21 +2479,7 @@ async def cancel_cli_task(project_id: str, task_id: str):
     return await _cancel_cli_task_impl(task_id, project_id)
 
 
-@router.get("/sessions")
-async def list_sessions(project_id: str, limit: int = 50):
-    """列出项目的会话列表（按最新活跃倒序）"""
-    rows = await db.fetch_all(
-        """SELECT s.id, s.title, s.source, s.created_at, s.updated_at,
-                  COUNT(m.id) as message_count
-           FROM chat_sessions s
-           LEFT JOIN chat_messages m ON m.session_id = s.id
-           WHERE s.project_id = ?
-           GROUP BY s.id
-           ORDER BY s.updated_at DESC
-           LIMIT ?""",
-        (project_id, limit),
-    )
-    return {"sessions": [dict(r) for r in rows]}
+router.include_router(project_session_lists)
 
 
 @router.post("/sessions")
@@ -4536,20 +4526,7 @@ async def _global_chat_via_agent(req: GlobalChatRequest) -> GlobalChatResponse:
 
 # ---- 全局会话管理端点 ----
 
-@global_chat_router.get("/sessions")
-async def list_global_sessions(limit: int = 50):
-    """列出全局会话（project_id IS NULL）"""
-    rows = await db.fetch_all(
-        """SELECT s.id, s.title, s.source, s.created_at, s.updated_at,
-                  COUNT(m.id) as message_count
-           FROM chat_sessions s
-           LEFT JOIN chat_messages m ON m.session_id = s.id AND m.project_id = '__global__'
-           WHERE s.project_id IS NULL
-           GROUP BY s.id
-           ORDER BY s.updated_at DESC LIMIT ?""",
-        (limit,),
-    )
-    return {"sessions": [dict(r) for r in rows]}
+global_chat_router.include_router(global_session_lists)
 
 
 @global_chat_router.post("/sessions")

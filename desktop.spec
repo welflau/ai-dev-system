@@ -129,6 +129,8 @@ hiddenimports = [
     "api.sop_config",
     "services.sop_config",
     "api.chat",
+    "api.chat.session_lists",
+    "services.chat.session_lists",
     "api.projects",
     "api.project_preview",
     # pywebview 后端

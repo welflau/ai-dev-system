@@ -7,7 +7,7 @@ const path = require('path');
 
 const root = path.join(__dirname, '..');
 const app = fs.readFileSync(path.join(root, 'frontend/app.js'), 'utf8').replace(/\r\n/g, '\n');
-const chat = fs.readFileSync(path.join(root, 'backend/api/chat.py'), 'utf8').replace(/\r\n/g, '\n');
+const chat = fs.readFileSync(path.join(root, 'backend/api/chat/__init__.py'), 'utf8').replace(/\r\n/g, '\n');
 const registry = fs.readFileSync(path.join(root, 'backend/materials/registry.py'), 'utf8').replace(/\r\n/g, '\n');
 const smApi = fs.readFileSync(path.join(root, 'backend/api/session_materials.py'), 'utf8').replace(/\r\n/g, '\n');
 
