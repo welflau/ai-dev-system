@@ -1,0 +1,91 @@
+<!doctype html>
+<!-- 由 scripts/docs-html/export.mjs 生成，请编辑 Markdown 原稿。 -->
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>代码重构：Agent 工具开关，写入成功后才改变状态 · ADS 文档</title><link rel="stylesheet" href="../docs/assets/refactor-docs/reader.css"></head>
+<body><nav class="bar" aria-label="主导航"><b>ADS · 开发文档</b><a href="../docs/%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%96%87%E6%A1%A3%E7%B4%A2%E5%BC%95.html">系列索引</a></nav>
+<main><header><p class="meta">开发笔记 · DevNote · <a href="2026-11-25_15_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_Agent%E5%B7%A5%E5%85%B7%E5%BC%80%E5%85%B3.md">Markdown 原稿</a></p>
+<h1>代码重构：Agent 工具开关，写入成功后才改变状态</h1></header><details><summary>本页目录（3 节）</summary><ol><li><a href="#section-1">输入怎么处理</a></li><li><a href="#section-2">修改顺序和文件位置</a></li><li><a href="#section-3">怎样验证</a></li></ol></details>
+<article><p>2026-11-25 · <a href="2026-11-25_14_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E9%A1%B9%E7%9B%AE%E9%A2%84%E8%A7%88%E6%9F%A5%E8%AF%A2.html">上期：项目预览查询</a> · <a href="../docs/20261124_01_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84%E6%96%B9%E6%A1%88.html">项目重构方案</a></p>
+<p>旧版有两个容易误判的结果：客户端提交 <code>{&quot;enabled&quot;:&quot;false&quot;}</code> 会得到“已开启”；配置写入失败返回 500，随后的 GET 却也能读到“已开启”。现在先校验布尔值并保存文件，成功后才更新进程环境和 settings。页面根据服务端确认的状态显示结果。</p>
+<p>GET 和 POST <code>/api/settings/agent-tools</code> 已迁入<a href="../backend/api/system.py">系统路由</a>，<a href="../backend/services/agent_tools_settings.py">保存服务</a>处理持久化。<a href="../backend/main.py">main.py</a> 从 <strong>720 行降到 681 行</strong>，R3 累计迁出 <strong>18 个接口</strong>。本期基线 <code>12b34e3</code>，代码提交 <code>34bf80f</code>。</p>
+<h2 id="section-1">输入怎么处理</h2>
+<p><a href="../frontend/index.html">设置页面</a>提交的是复选框的 <code>checked</code>，即 JSON 布尔值。API 同时接受 Pydantic 能识别的布尔写法，并在 OpenAPI 中把 <code>enabled</code> 标成默认值为 false 的布尔字段。</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>请求体示例</th>
+<th>新行为</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>{&quot;enabled&quot;:true}</code> / <code>{&quot;enabled&quot;:false}</code></td>
+<td>按布尔值保存，响应仍包含 <code>enabled</code> 和原有中文消息。</td>
+</tr>
+<tr>
+<td><code>{&quot;enabled&quot;:&quot;false&quot;}</code>、<code>&quot;OFF&quot;</code>、<code>&quot;0&quot;</code>；或 <code>&quot;YES&quot;</code>、数字 1</td>
+<td>前一组关闭，后一组开启。文件和进程环境统一写为小写 <code>true</code> / <code>false</code>。</td>
+</tr>
+<tr>
+<td><code>{}</code></td>
+<td>保留旧客户端语义：保存为关闭。</td>
+</tr>
+<tr>
+<td><code>enabled</code> 为 <code>&quot;unknown&quot;</code>、null、数组或数字 2</td>
+<td>返回 422，不写文件，不改开关。</td>
+</tr>
+</tbody>
+</table></div>
+<p>GET 继续读取当前进程环境，沿用既有规则：忽略大小写，<code>1</code>、<code>true</code>、<code>yes</code> 为开启。POST 保存成功也会更新 <code>settings.ENABLE_AGENT_TOOLS</code>。按仓库内现有 DevAgent 执行代码核对，没有找到它读取此开关来选择执行模式；页面已删去“开启即切换模式”的说明，本轮没有改变 Agent 的执行方式。</p>
+<h2 id="section-2">修改顺序和文件位置</h2>
+<figure><a href="../docs/assets/refactor-docs/2026-11-25_15_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_Agent%E5%B7%A5%E5%85%B7%E5%BC%80%E5%85%B3_%E5%9B%BE1.svg"><img src="../docs/assets/refactor-docs/2026-11-25_15_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_Agent%E5%B7%A5%E5%85%B7%E5%BC%80%E5%85%B3_%E5%9B%BE1.svg" alt="流程图：修改顺序和文件位置"></a><figcaption>流程图：修改顺序和文件位置 · <a href="../docs/assets/refactor-docs/2026-11-25_15_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_Agent%E5%B7%A5%E5%85%B7%E5%BC%80%E5%85%B3_%E5%9B%BE1.svg">查看原图</a></figcaption></figure>
+<p>旧代码自行逐行匹配设置名，会改到其他变量的多行字符串中，也会漏掉带 <code>export</code> 的赋值。新代码使用项目已有的 python-dotenv 更新同名赋值。保存位置直接取自<a href="../backend/config.py">启动配置</a>的 <code>ENV_PATH</code>：在源码模式下位于后端目录；打包模式下位于可执行文件旁，与可写数据的 <code>runtime</code> 目录不同。用临时目录验证了这种分离，新服务模块已加入<a href="../desktop.spec">打包清单</a>，本轮未重建桌面包，也未验证多进程并发写同一配置文件。</p>
+<h2 id="section-3">怎样验证</h2>
+<p><a href="../backend/tests/api/test_agent_tools_settings.py">HTTP 测试</a>使用临时目录、独立 settings 和可恢复的进程环境，不启动 Agent 或应用生命周期。最初 16 个场景在旧版为 <strong>15 失败、1 通过（1.74 秒）</strong>：失败数包含对同一问题的多组输入，不能当成 15 个独立缺陷。之后新增“启动文件与运行目录分离”用例，最终为 17 个场景。</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>检查</th>
+<th>实际验证</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>读取与保存</td>
+<td>GET 不创建文件。保存时从相反状态开始，同时核对响应、后续 GET、进程环境、settings 和 dotenv 解析出的持久值。</td>
+</tr>
+<tr>
+<td>无效值、写入异常</td>
+<td>422 时原文件逐字节相同。把临时目标设为同名目录模拟不能写入，返回 500，随后 GET 与 settings 都仍为关闭。</td>
+</tr>
+<tr>
+<td>配置文件兼容</td>
+<td>同名的普通和 <code>export</code> 赋值一同更新；其他变量里形似赋值的多行文本、注释和包含等号的值保留。目标变量不存在时可追加。</td>
+</tr>
+<tr>
+<td>浏览器交互</td>
+<td>用真实卡片、CSS、请求函数和<a href="../frontend/app.js">开关 JS</a>，将请求转发到隔离的真实系统路由。验证初始关闭、开启成功、关闭成功、再次开启失败后重新 GET，以及网络中断后禁用控件。</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>浏览器保存成功：</strong> POST 200，控件根据返回值显示“已开启”。</p>
+<p><img src="assets/2026-11-25_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_Agent%E5%B7%A5%E5%85%B7%E5%BC%80%E5%85%B3_%E6%88%AA%E5%9B%BE_%E5%B7%B2%E4%BF%9D%E5%AD%98.png" alt="隔离浏览器中，服务确认已保存，工具开关显示已开启"></p>
+<p><strong>浏览器保存失败：</strong> 从关闭尝试开启，POST 500 后页面重新 GET，确认仍关闭。截图来自真实控件的隔离验证页；底部文字展示该控件传给提示函数的消息。</p>
+<p><img src="assets/2026-11-25_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_Agent%E5%B7%A5%E5%85%B7%E5%BC%80%E5%85%B3_%E6%88%AA%E5%9B%BE_%E4%BF%9D%E5%AD%98%E5%A4%B1%E8%B4%A5.png" alt="隔离浏览器中，保存失败后重新读取，工具开关仍关闭"></p>
+<pre><code class="language-powershell"># backend/：迁移前用第一条复现；第二条为修改后的相关回归
+python -m pytest -p no:cacheprovider --tb=line tests/api/test_agent_tools_settings.py
+python -m pytest -p no:cacheprovider --tb=line tests/api/test_agent_tools_settings.py tests/api/test_system_read_routes.py tests/api/test_global_llm_config_routes.py tests/api/test_main_hardening.py
+python -m pytest -p no:cacheprovider
+uvx --python 3.14 --from flake8==7.3.0 flake8 --select=E9,F63,F7,F82 --exclude=skills/marketplace,skills/packs,skills/use_skills,projects .
+
+# 仓库根目录；重跑浏览器验证需安装 Playwright 和 Edge
+node --check frontend/app.js
+python scripts/check_layers.py --json
+python &quot;dev-notes/assets/2026-11-25_代码重构_Agent工具开关_截图.py&quot;
+</code></pre>
+<p>相关回归 <strong>48 通过（5.08 秒）</strong>；JS 语法和指定 flake8 检查通过。分层检查扫描 517 个模块，历史违规 86，新增违规、解析错误与循环依赖组均为 0。GET/POST 均只注册一次，两处 <code>main</code> 旧 Python 入口仍指向对应处理函数。主文件其余 8 个顶层函数与基线语法树一致。</p>
+<p><strong>后端全量：1,777 项全部通过，291.16 秒（4 分 51 秒）。</strong> 进程退出码 0，pytest 未报告警告。</p>
+<p><strong>运行中的服务。</strong> 停止旧进程（PID 85868）前，队列、执行中工单及活动 Agent 均为 0。新进程（PID 89864）在 8001 就绪后，16 个只读地址均返回 HTTP 200；开关 GET 的响应值和 OpenAPI 定义与重启前相同。POST 的 OpenAPI 请求体已改为具名模型，其他操作元数据保持不变。现场只发 GET，开关写入都在临时配置上完成。上面是开发时主动运行的检查，远端自动回归触发条件见 <a href="../.github/workflows/ci.yml">CI 工作流</a>。</p>
+<p>下一项建议拆出全局事件流 <code>GET /api/events/global</code>。<a href="../backend/events.py">事件生成器</a>在开始迭代时订阅，断开后在 <code>finally</code> 中清理。项目和工单的流则在 <a href="../backend/api/tickets.py">tickets.py</a> 中使用各自的频道。下一批可向隔离的事件管理器投递不同频道的标记消息，断言全局流只收到自己的消息、关闭后不再持有订阅。主文件仍有 7 个 HTTP 路径装饰器，257 行的应用生命周期尚未拆分。</p>
+</article><nav class="adjacent" aria-label="相邻文档"><a href="2026-11-25_14_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E9%A1%B9%E7%9B%AE%E9%A2%84%E8%A7%88%E6%9F%A5%E8%AF%A2.html">上一篇：代码重构：拆出项目预览查询，让内置预览链接打开对应页面</a>
+<a href="2026-11-25_16_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E5%85%A8%E5%B1%80%E4%BA%8B%E4%BB%B6%E6%B5%81.html">下一篇：代码重构：拆出全局事件流，验证三个 SSE 频道</a></nav></main></body></html>

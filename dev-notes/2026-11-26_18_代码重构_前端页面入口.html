@@ -1,0 +1,68 @@
+<!doctype html>
+<!-- 由 scripts/docs-html/export.mjs 生成，请编辑 Markdown 原稿。 -->
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>代码重构：拆出前端入口，验证深链接刷新与首页缺失 · ADS 文档</title><link rel="stylesheet" href="../docs/assets/refactor-docs/reader.css"></head>
+<body><nav class="bar" aria-label="主导航"><b>ADS · 开发文档</b><a href="../docs/%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%96%87%E6%A1%A3%E7%B4%A2%E5%BC%95.html">系列索引</a></nav>
+<main><header><p class="meta">开发笔记 · DevNote · <a href="2026-11-26_18_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E5%89%8D%E7%AB%AF%E9%A1%B5%E9%9D%A2%E5%85%A5%E5%8F%A3.md">Markdown 原稿</a></p>
+<h1>代码重构：拆出前端入口，验证深链接刷新与首页缺失</h1></header><details><summary>本页目录（2 节）</summary><ol><li><a href="#section-1">从地址到响应</a></li><li><a href="#section-2">用什么证据验证</a></li></ol></details>
+<article><p>2026-11-26 · <a href="2026-11-25_17_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E7%B3%BB%E7%BB%9F%E8%B7%AF%E5%BE%84%E6%89%93%E5%BC%80.html">上期：系统路径打开</a> · <a href="../docs/20261124_01_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84%E6%96%B9%E6%A1%88.html">项目重构方案</a></p>
+<p>浏览器直接打开一个多级 <code>/app/…</code> 地址时，服务需要返回首页，由前端接管后续导航。迁移前这条主线已经正常。测试发现两个偏差：OpenAPI 把首页标成 JSON；部署目录中如果有一个叫 <code>index.html</code> 的<strong>目录</strong>，旧服务会尝试把它作为文件发送，最终返回 500。</p>
+<p>本期把 <code>/app</code>、<code>/app/{path:path}</code> 和 <code>/favicon.ico</code> 集中到<a href="../backend/api/frontend_pages.py">页面路由</a>。缺少可用首页时统一返回原有中文 JSON 404；正常部署时不改变页面字节、缓存头或文件响应能力。基线 <code>497e03f</code>，代码提交 <code>de10788</code>。</p>
+<h2 id="section-1">从地址到响应</h2>
+<figure><a href="../docs/assets/refactor-docs/2026-11-26_18_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E5%89%8D%E7%AB%AF%E9%A1%B5%E9%9D%A2%E5%85%A5%E5%8F%A3_%E5%9B%BE1.svg"><img src="../docs/assets/refactor-docs/2026-11-26_18_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E5%89%8D%E7%AB%AF%E9%A1%B5%E9%9D%A2%E5%85%A5%E5%8F%A3_%E5%9B%BE1.svg" alt="流程图：从地址到响应"></a><figcaption>流程图：从地址到响应 · <a href="../docs/assets/refactor-docs/2026-11-26_18_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E5%89%8D%E7%AB%AF%E9%A1%B5%E9%9D%A2%E5%85%A5%E5%8F%A3_%E5%9B%BE1.svg">查看原图</a></figcaption></figure>
+<p>两个页面 GET 仍共用一个处理函数。即便子路径与前端目录中的其他文件同名，也只读取配置目录下的 <code>index.html</code>。成功时继续用 <code>FileResponse</code>，所以字节范围请求仍能拿到 206 部分响应；首页缺失或同名目录都返回 <code>{&quot;message&quot;:&quot;前端文件未找到，请确保 frontend/ 目录存在&quot;}</code>。图标独立返回 SVG，沿用原来的图案，不进入 OpenAPI。</p>
+<p><a href="../backend/main.py">main.py</a> 保留 <code>serve_frontend</code> 和 <code>favicon</code> 两个 Python 名称。三个 GET 各注册一次，静态目录的挂载和中间件均没有移动。页面路由与 <code>/static</code> 使用同一个启动目录。OpenAPI 的两个 GET 现在声明成功类型为 <code>text/html</code>，并补充了 404 的 <code>application/json</code>；操作标识、参数和其余响应保持原样。</p>
+<h2 id="section-2">用什么证据验证</h2>
+<ol>
+<li><strong>先在旧版跑 <a href="../backend/tests/api/test_frontend_pages.py">10 项测试</a>。</strong> 在临时目录放入内容不同的首页和子页面，分别请求 <code>/app</code>、<code>/app/</code> 和指向真实子页面名字的深链接，再检查字节范围请求、缺失文件、同名目录、图标和 OpenAPI。结果 <strong>7 通过、3 失败（1.18 秒）</strong>：同名目录得到了 500，两个页面入口都误报 JSON。普通首页缺失本来就返回 404。</li>
+<li><strong>迁移后重跑。</strong> 同一组业务断言在真实应用的 ASGI 入口运行，不启动生命周期、不修改项目首页。最终采用 HTTPX 连接测试应用：最低版本临时环境里的 Starlette 没有提供 <code>starlette.testclient</code> 模块，最初的测试适配器无法导入；改为 HTTPX 后，两个环境都可执行这组测试。</li>
+<li><strong>浏览器直达与刷新。</strong> <a href="assets/2026-11-26_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E5%89%8D%E7%AB%AF%E9%A1%B5%E9%9D%A2%E5%85%A5%E5%8F%A3_%E6%88%AA%E5%9B%BE.py">截图脚本</a>将仓库里的真实首页和 CSS 复制到临时目录，在随机本机端口挂载页面路由。Edge 先打开首页，再直达多级深链接并刷新，核对三次 HTML 的每一个字节、缓存头、文档标题和样式表。最后以同名目录替换临时首页，验证 404，同时确认图标仍可解析为 SVG。</li>
+</ol>
+<p><img src="assets/2026-11-26_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E5%89%8D%E7%AB%AF%E9%A1%B5%E9%9D%A2%E5%85%A5%E5%8F%A3_%E6%88%AA%E5%9B%BE.png" alt="Edge 直达并刷新深链接后的真实顶栏，三次 HTML 完全相同；同名目录返回 JSON 404，图标仍可读取"></p>
+<p>截图中的顶栏来自刷新后的真实页面；表格取自浏览器收到的响应，摘要仅展示前 12 位。测试没有加载业务 JS、远程脚本或用户数据，验证范围是后端交付页面，不覆盖前端恢复某个项目或标签页的状态。</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>检查</th>
+<th>实测结果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>本机相关回归</td>
+<td>页面入口、应用加固、项目预览查询共 <strong>40 项通过（1.57 秒）</strong>。</td>
+</tr>
+<tr>
+<td>后端全量</td>
+<td><strong>1,806 项全部通过（225.74 秒）</strong>，pytest 退出码 0，未报告警告。上期 1,796 项，本期新增 10 项。</td>
+</tr>
+<tr>
+<td>最低 FastAPI 版本</td>
+<td>在 FastAPI 0.141.0 / Starlette 0.52.1 临时环境中，页面入口 <strong>10 项通过（1.28 秒）</strong>。</td>
+</tr>
+<tr>
+<td>静态检查</td>
+<td>指定 flake8 规则通过。分层检查扫描 520 个模块，历史方向违规 86，新增违规、解析错误、循环依赖组均为 0。</td>
+</tr>
+<tr>
+<td>现场只读对照</td>
+<td>对首页、尾斜杠首页、多级深链接、图标和样式表逐一比较 HTTP 状态、响应类型、缓存头及完整内容摘要，重启前后均一致。常规的 16 个只读地址及 3 条 SSE 流也都返回 200。</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>运行中的服务。</strong> 切换前队列、处理中工单与活动 Agent 均为 0。旧进程 90664 报告应用关闭完成并退出，新进程 41832 在 8001 就绪。本次没有复现上期的退出滞留，也没有更改生命周期代码。</p>
+<pre><code class="language-powershell"># backend/：单跑新用例、相关回归和后端全量
+python -m pytest -p no:cacheprovider --tb=line tests/api/test_frontend_pages.py
+python -m pytest -p no:cacheprovider --tb=line tests/api/test_frontend_pages.py tests/api/test_main_hardening.py tests/api/test_project_preview_route.py
+python -m pytest -p no:cacheprovider
+uvx --python 3.14 --from flake8==7.3.0 flake8 --select=E9,F63,F7,F82 --exclude=skills/marketplace,skills/packs,skills/use_skills,projects .
+
+# 仓库根目录；截图需要 Playwright 和 Edge
+python scripts/check_layers.py --json
+python &quot;dev-notes/assets/2026-11-26_代码重构_前端页面入口_截图.py&quot;
+</code></pre>
+<p>新增 pytest 用例在<a href="../.github/workflows/ci.yml">远端 CI</a>的全量收集范围内；截图按需重跑。已更新<a href="../desktop.spec">桌面打包清单</a>，本轮未重建安装包。</p>
+<p><code>main.py</code> 从 <strong>643 行降至 624 行</strong>，除迁出的两个函数外，其余顶层函数与类的语法树未变。R3 按 HTTP 路径累计迁出 <strong>23 个接口</strong>，还剩 <code>/api/open-in-browser</code> 和 <code>/api/local-file</code> 两个路由装饰器。下一批建议先拆系统浏览器入口，用替身验证成功、拒绝 URL 和无法启动的响应；257 行的应用生命周期仍需单独处理。</p>
+<p>下期已有一个可复现的输入差异：<a href="../frontend/app.js">前端</a>判断 HTTP(S) 时忽略大小写，后端却区分。以替身拦截系统调用，对同一个示例地址，<code>https://</code> 返回成功，<code>HTTPS://</code> 返回 400；没有启动实际浏览器或访问外部站点。</p>
+</article><nav class="adjacent" aria-label="相邻文档"><a href="2026-11-25_17_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E7%B3%BB%E7%BB%9F%E8%B7%AF%E5%BE%84%E6%89%93%E5%BC%80.html">上一篇：代码重构：从详情页打开文件所在目录</a>
+<a href="2026-11-26_19_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E7%B3%BB%E7%BB%9F%E6%B5%8F%E8%A7%88%E5%99%A8%E5%85%A5%E5%8F%A3.html">下一篇：代码重构：拆出系统浏览器入口，区分地址错误与启动失败</a></nav></main></body></html>

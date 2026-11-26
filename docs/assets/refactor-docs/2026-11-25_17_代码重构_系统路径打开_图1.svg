@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 604.6416666666667 786.79" width="604.6416666666667" height="786.79" style="--bg:#ffffff;--fg:#1d3839;--accent:#12645e;--border:#608781;background:var(--bg)">
+<style>
+
+  text { font-family: 'Microsoft YaHei', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          var(--fg);
+    --_text-sec:      var(--muted, color-mix(in srgb, var(--fg) 60%, var(--bg)));
+    --_text-muted:    var(--muted, color-mix(in srgb, var(--fg) 40%, var(--bg)));
+    --_text-faint:    color-mix(in srgb, var(--fg) 25%, var(--bg));
+    --_line:          var(--line, color-mix(in srgb, var(--fg) 50%, var(--bg)));
+    --_arrow:         var(--accent, color-mix(in srgb, var(--fg) 85%, var(--bg)));
+    --_node-fill:     var(--surface, color-mix(in srgb, var(--fg) 3%, var(--bg)));
+    --_node-stroke:   var(--border, color-mix(in srgb, var(--fg) 20%, var(--bg)));
+    --_group-fill:    var(--bg);
+    --_group-hdr:     color-mix(in srgb, var(--fg) 5%, var(--bg));
+    --_inner-stroke:  color-mix(in srgb, var(--fg) 12%, var(--bg));
+    --_key-badge:     color-mix(in srgb, var(--fg) 10%, var(--bg));
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<polyline class="edge" data-from="B" data-to="P" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="176.76000000000005,76.9 176.76000000000005,124.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="P" data-to="V" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="176.76000000000005,161.8 176.76000000000002,209.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="V" data-to="A" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="缺失或空白" points="125.85300000000001,328.58299999999997 125.85300000000001,427.48999999999995 75.00000000000003,427.48999999999995 75.00000000000003,540.0899999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="V" data-to="T" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="字段类型不对" points="159.79100000000003,362.521 159.79100000000003,459.78999999999996 126.50000000000003,459.78999999999996 126.50000000000003,636.99" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="V" data-to="M" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="目标不存在" points="193.72900000000004,362.52099999999996 193.72900000000004,459.78999999999996 227.02000000000004,459.78999999999996 227.02000000000004,540.0899999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="V" data-to="O" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="文件或目录" points="227.66700000000003,328.58299999999997 227.66700000000003,391.49 421.98266666666666,391.49 421.98266666666666,471.79" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="O" data-to="S" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="系统调用成功" points="392.761,508.69 392.761,544.69 337.4716666666667,544.69 337.4716666666667,636.99" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="O" data-to="F" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="桌面程序不存在或拒绝启动" points="451.20433333333335,508.69 451.20433333333335,544.69 488.9316666666667,544.69 488.93166666666673,636.99" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="A" data-to="E" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="75.00000000000003,576.9899999999999 75.00000000000003,691.8899999999999 185.54100000000003,691.8899999999999 185.54100000000003,709.8899999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="T" data-to="E" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="126.50000000000003,673.89 126.50000000000003,691.8899999999999 185.54100000000003,691.8899999999999 185.54100000000003,709.8899999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="M" data-to="E" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="227.02000000000007,576.9899999999999 227.02000000000007,691.8899999999999 185.54100000000003,691.8899999999999 185.54100000000003,709.8899999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="F" data-to="E" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="488.9316666666667,673.89 488.9316666666667,691.8899999999999 185.54100000000003,691.8899999999999 185.54100000000003,709.8899999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="V" data-to="A" data-label="缺失或空白">
+  <rect x="36.00000000000003" y="434.48999999999995" width="77.05000000000001" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="74.52500000000003" y="449.63999999999993" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">缺失或空白</text>
+</g>
+<g class="edge-label" data-from="V" data-to="T" data-label="字段类型不对">
+  <rect x="82.00000000000003" y="466.78999999999996" width="88.93" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="126.46500000000003" y="481.93999999999994" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">字段类型不对</text>
+</g>
+<g class="edge-label" data-from="V" data-to="M" data-label="目标不存在">
+  <rect x="188.02000000000004" y="466.78999999999996" width="77.05000000000001" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="226.54500000000004" y="481.93999999999994" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">目标不存在</text>
+</g>
+<g class="edge-label" data-from="V" data-to="O" data-label="文件或目录">
+  <rect x="382.98266666666666" y="398.49" width="77.05000000000001" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="421.50766666666664" y="413.64" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">文件或目录</text>
+</g>
+<g class="edge-label" data-from="O" data-to="S" data-label="系统调用成功">
+  <rect x="292.9716666666667" y="551.69" width="88.93" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="337.4366666666667" y="566.84" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">系统调用成功</text>
+</g>
+<g class="edge-label" data-from="O" data-to="F" data-label="桌面程序不存在或拒绝启动">
+  <rect x="408.4316666666667" y="551.69" width="160.21" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="488.5366666666667" y="566.84" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">桌面程序不存在或拒绝启动</text>
+</g>
+<g class="node" data-id="B" data-label="点击文件按钮或图片定位链接" data-shape="rectangle">
+  <rect x="59.45500000000004" y="40" width="234.60999999999999" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="176.76000000000005" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">点击文件按钮或图片定位链接</text>
+</g>
+<g class="node" data-id="P" data-label="POST path" data-shape="rectangle">
+  <rect x="124.29250000000005" y="124.9" width="104.93499999999999" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="176.76000000000005" y="143.35000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">POST path</text>
+</g>
+<g class="node" data-id="V" data-label="检查请求和路径" data-shape="diamond">
+  <polygon points="176.76000000000002,209.79999999999998 261.605,294.645 176.76000000000002,379.49 91.91500000000002,294.645" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="176.76000000000002" y="294.645" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">检查请求和路径</text>
+</g>
+<g class="node" data-id="A" data-label="400" data-shape="rectangle">
+  <rect x="42.910000000000025" y="540.0899999999999" width="64.17999999999999" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="75.00000000000003" y="558.54" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">400</text>
+</g>
+<g class="node" data-id="T" data-label="422" data-shape="rectangle">
+  <rect x="94.41000000000003" y="636.99" width="64.17999999999999" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="126.50000000000003" y="655.44" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">422</text>
+</g>
+<g class="node" data-id="M" data-label="404" data-shape="rectangle">
+  <rect x="194.93000000000006" y="540.0899999999999" width="64.17999999999999" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="227.02000000000007" y="558.54" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">404</text>
+</g>
+<g class="node" data-id="O" data-label="调用系统文件管理器" data-shape="rectangle">
+  <rect x="334.3176666666667" y="471.79" width="175.32999999999998" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="421.98266666666666" y="490.24" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">调用系统文件管理器</text>
+</g>
+<g class="node" data-id="S" data-label="200：显示已请求打开" data-shape="rectangle">
+  <rect x="246.10166666666672" y="636.99" width="182.73999999999998" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="337.4716666666667" y="655.44" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">200：显示已请求打开</text>
+</g>
+<g class="node" data-id="F" data-label="500" data-shape="rectangle">
+  <rect x="456.8416666666667" y="636.99" width="64.17999999999999" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="488.9316666666667" y="655.44" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">500</text>
+</g>
+<g class="node" data-id="E" data-label="页面显示错误" data-shape="rectangle">
+  <rect x="120.10600000000002" y="709.8899999999999" width="130.87" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="185.54100000000003" y="728.3399999999999" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">页面显示错误</text>
+</g>
+</svg>

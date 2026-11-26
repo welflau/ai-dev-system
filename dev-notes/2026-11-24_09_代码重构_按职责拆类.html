@@ -1,0 +1,740 @@
+<!doctype html>
+<!-- 由 scripts/docs-html/export.mjs 生成，请编辑 Markdown 原稿。 -->
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>按职责拆类：TicketOrchestrator 的 72 个方法搬到 10 个模块（2026-11-24） · ADS 文档</title><link rel="stylesheet" href="../docs/assets/refactor-docs/reader.css"></head>
+<body><nav class="bar" aria-label="主导航"><b>ADS · 开发文档</b><a href="../docs/%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%96%87%E6%A1%A3%E7%B4%A2%E5%BC%95.html">系列索引</a></nav>
+<main><header><p class="meta">开发笔记 · DevNote · <a href="2026-11-24_09_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%8C%89%E8%81%8C%E8%B4%A3%E6%8B%86%E7%B1%BB.md">Markdown 原稿</a></p>
+<h1>按职责拆类：TicketOrchestrator 的 72 个方法搬到 10 个模块（2026-11-24）</h1></header><details><summary>本页目录（11 节）</summary><ol><li><a href="#section-1">背景</a></li><li><a href="#section-2">结果</a></li><li><a href="#section-3">做法</a></li><li><a href="#section-4">验证</a></li><li><a href="#section-5">重启服务和冒烟</a></li><li><a href="#section-6">还留在 orchestrator.py 里的</a></li><li><a href="#section-7">和方案的偏差</a></li><li><a href="#section-8">没有验证的部分</a></li><li><a href="#section-9">下一步</a></li><li><a href="#section-10">复核命令</a></li><li><a href="#section-11">文件</a></li></ol></details>
+<article><blockquote>
+<p>关联方案：<code>docs/20261124_01_代码重构方案.md</code>（第五节 R2 第 3 条、第十一节执行进度）
+前一篇：<code>dev-notes/2026-11-24_08_代码重构_提交记录.md</code>
+提交基线：<code>22eafa4</code>；本篇记录的 10 个代码提交是 <code>41a2b36</code> 到 <code>bb2fd7f</code>，已在本地 <code>main</code>，<strong>尚未推送</strong>。</p>
+</blockquote>
+<h2 id="section-1">背景</h2>
+<p>R2 的前两步把 <code>_handle_agent_result</code> 的分支和 <code>process_ticket</code>、<code>handle_requirement</code> 的流程搬出了
+<code>orchestrator.py</code>，文件从 6,694 行降到 4,493 行。剩下的 89 个方法仍然挤在 <code>TicketOrchestrator</code> 一个类里：
+SOP 规则、轮询、状态回退、止损计数、工单日志、报告生成，互相之间没有边界。</p>
+<p>方案 R2 第 3 条要求把这些方法按职责分出去，<code>TicketOrchestrator</code> 保留原有方法名并委托过去，
+这样 <code>runtime_facade</code> 和直接导入它的 7 个模块都不用改。本篇记录这一步的做法、验证和没有做到的部分。</p>
+<h2 id="section-2">结果</h2>
+<p>72 个方法分 10 组搬进了 <code>backend/orchestration/</code> 下的 10 个新模块，每组一个提交。
+<code>orchestrator.py</code> 从 4,493 行降到 1,818 行。<strong>方案定的四项验收指标都没有达到</strong>，原因见「和方案的偏差」。</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>组（新模块）</th>
+<th>职责</th>
+<th>提交</th>
+<th>方法数</th>
+<th>新文件行数</th>
+<th>搬完后 <code>orchestrator.py</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>rewind</code></td>
+<td>阶段重置与状态回退</td>
+<td><code>41a2b36</code></td>
+<td>7（其中 1 个静态）+ 4 个常量</td>
+<td>378</td>
+<td>4,224</td>
+</tr>
+<tr>
+<td><code>sop_rules</code></td>
+<td>SOP 规则与片段收尾</td>
+<td><code>a95c68f</code></td>
+<td>13（其中 1 个静态）+ 6 个常量 + 5 个纯函数重导出</td>
+<td>604</td>
+<td>3,765</td>
+</tr>
+<tr>
+<td><code>change_flows</code></td>
+<td>评论回复与变更影响流程</td>
+<td><code>ef463b3</code></td>
+<td>6</td>
+<td>562</td>
+<td>3,318</td>
+</tr>
+<tr>
+<td><code>reporting</code></td>
+<td>需求完成检查与总结报告</td>
+<td><code>9925969</code></td>
+<td>3</td>
+<td>437</td>
+<td>2,924</td>
+</tr>
+<tr>
+<td><code>polling</code></td>
+<td>工单认领、事件总线与轮询兜底</td>
+<td><code>b1b9abb</code></td>
+<td>13</td>
+<td>350</td>
+<td>2,680</td>
+</tr>
+<tr>
+<td><code>bug_flow</code></td>
+<td>BUG 修复流程</td>
+<td><code>2470384</code></td>
+<td>7</td>
+<td>305</td>
+<td>2,449</td>
+</tr>
+<tr>
+<td><code>agent_state</code></td>
+<td>Agent 忙闲状态与工单当前进度</td>
+<td><code>2a52790</code></td>
+<td>6</td>
+<td>150</td>
+<td>2,354</td>
+</tr>
+<tr>
+<td><code>failure_counters</code></td>
+<td>止损计数</td>
+<td><code>c566f08</code></td>
+<td>5（其中 1 个静态）</td>
+<td>138</td>
+<td>2,259</td>
+</tr>
+<tr>
+<td><code>ticket_log</code></td>
+<td>工单日志、评论与命令记录</td>
+<td><code>37be326</code></td>
+<td>7 + 常量 <code>LOCAL_TOOL_ACTIONS</code></td>
+<td>370</td>
+<td>2,039</td>
+</tr>
+<tr>
+<td><code>context_builder</code></td>
+<td>执行上下文的原料函数</td>
+<td><code>bb2fd7f</code></td>
+<td>5</td>
+<td>271</td>
+<td>1,818</td>
+</tr>
+<tr>
+<td>合计</td>
+<td></td>
+<td>10 个提交</td>
+<td>72</td>
+<td>3,565</td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<p><img src="assets/2026-11-24_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%8C%89%E8%81%8C%E8%B4%A3%E6%8B%86%E7%B1%BB_01_orchestrator%E8%A1%8C%E6%95%B0.png" alt="每搬一组之后 orchestrator.py 的行数"></p>
+<p><img src="assets/2026-11-24_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%8C%89%E8%81%8C%E8%B4%A3%E6%8B%86%E7%B1%BB_02_%E6%96%B0%E6%A8%A1%E5%9D%97%E5%A4%A7%E5%B0%8F.png" alt="orchestration 下新增的 10 个模块"></p>
+<p>下面这张截图是提交之后在仓库根目录实际执行的结果，行数用 <code>Get-Content</code> 数，和上表一致：</p>
+<p><img src="assets/2026-11-24_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%8C%89%E8%81%8C%E8%B4%A3%E6%8B%86%E7%B1%BB_%E6%88%AA%E5%9B%BE_04_%E6%8F%90%E4%BA%A4%E4%B8%8E%E8%A1%8C%E6%95%B0.png" alt="最近 10 个提交和各文件行数"></p>
+<h2 id="section-3">做法</h2>
+<h3>形态：模块级函数加转发方法</h3>
+<p>每个方法的函数体原样搬成新模块里的一个函数，类上留同名方法，只有一句转发。以止损计数里的一个为例：</p>
+<pre><code class="language-python"># backend/orchestrator.py，类里留下的
+async def _acceptance_retry_count(self, ticket_id: str) -&gt; int:
+    &quot;&quot;&quot;本工单因「验收 LLM 降级」已重派验收的次数（自最近一次 unblock 起）。&quot;&quot;&quot;
+    return await failure_counters.acceptance_retry_count(self, db, ticket_id)
+
+_failure_fingerprint = staticmethod(failure_counters.failure_fingerprint)
+</code></pre>
+<pre><code class="language-python"># backend/orchestration/failure_counters.py，搬过去的
+async def acceptance_retry_count(orch, db, ticket_id: str) -&gt; int:
+    ...  # 函数体和原来一样，self 写成 orch
+</code></pre>
+<p>十个模块遵守同一套约定，写在每个模块开头的说明里：</p>
+<ul>
+<li>函数体从同名方法原样搬来，函数名去掉前导下划线，<code>self</code> 写成 <code>orch</code>。</li>
+<li>新模块不导入 <code>database</code>，也不导入 <code>orchestrator</code>。<code>db</code> 由转发方法在调用那一刻传入。
+测试用 <code>monkeypatch.setattr(orchestrator, &quot;db&quot;, test_db)</code> 换库，这样函数拿到的才是同一个对象。</li>
+<li>搬过去的函数之间互相调用，以及调用别的模块里的逻辑，都走 <code>orch.xxx</code>。测试给实例打的桩照旧生效。</li>
+<li>状态都放在 <code>orch</code> 上，模块自己不存状态。</li>
+<li>函数里的延迟导入保持原样，测试的打桩是打在这些源模块上的。</li>
+<li>日志器沿用 <code>logging.getLogger(&quot;orchestrator&quot;)</code>，日志器名没有变。</li>
+<li>新模块里没有依赖 <code>__file__</code> 这类文件位置的代码。</li>
+</ul>
+<figure><a href="../docs/assets/refactor-docs/2026-11-24_09_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%8C%89%E8%81%8C%E8%B4%A3%E6%8B%86%E7%B1%BB_%E5%9B%BE1.svg"><img src="../docs/assets/refactor-docs/2026-11-24_09_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%8C%89%E8%81%8C%E8%B4%A3%E6%8B%86%E7%B1%BB_%E5%9B%BE1.svg" alt="流程图：做法"></a><figcaption>流程图：做法 · <a href="../docs/assets/refactor-docs/2026-11-24_09_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%8C%89%E8%81%8C%E8%B4%A3%E6%8B%86%E7%B1%BB_%E5%9B%BE1.svg">查看原图</a></figcaption></figure>
+<h3>每组走的 11 步</h3>
+<p>十组用的是同一套流程，前两组串行跑改坏检查，后八组改成 4 个 worktree 并行。</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>步</th>
+<th>命令</th>
+<th>做什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><code>gen_split.py &lt;组&gt; --dry</code></td>
+<td>预演，看要搬哪些方法、哪些名字需要改写</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>gen_split.py &lt;组&gt;</code></td>
+<td>从快照生成新模块，把类里的方法改成转发</td>
+</tr>
+<tr>
+<td>3</td>
+<td><code>verify_split.py &lt;组&gt;</code></td>
+<td>搬移核对，和生成脚本分开写，用语法树比对</td>
+</tr>
+<tr>
+<td>4</td>
+<td><code>mk_table.py &lt;组&gt;</code></td>
+<td>把这一组的转发、常量、重导出写进接线测试 <code>tests/agents/test_orchestrator_delegation.py</code> 的表</td>
+</tr>
+<tr>
+<td>5</td>
+<td><code>spec_add.py &lt;模块&gt;</code></td>
+<td>把 <code>orchestration.&lt;模块&gt;</code> 加进 <code>desktop.spec</code> 的 <code>hiddenimports</code>，桌面版打包时才会带上新模块</td>
+</tr>
+<tr>
+<td>6</td>
+<td>pytest 跑接线测试</td>
+<td>确认新加的行全绿</td>
+</tr>
+<tr>
+<td>7</td>
+<td><code>mutate_split.py</code> 或 <code>mutate_par.py &lt;组&gt; 4</code></td>
+<td>改坏检查：逐处改坏转发层，看测试能不能抓到</td>
+</tr>
+<tr>
+<td>8</td>
+<td><code>python -m pytest -p no:cacheprovider</code></td>
+<td>全量测试</td>
+</tr>
+<tr>
+<td>9</td>
+<td><code>python scripts/check_layers.py --json</code></td>
+<td>分层守卫</td>
+</tr>
+<tr>
+<td>10</td>
+<td>flake8</td>
+<td>语法类错误</td>
+</tr>
+<tr>
+<td>11</td>
+<td><code>commit_group.py &lt;组&gt;</code></td>
+<td>按路径 <code>git add</code> 这一组的 4 个文件（<code>orchestrator.py</code>、新模块、接线测试、<code>desktop.spec</code>）再提交</td>
+</tr>
+</tbody>
+</table></div>
+<p>生成脚本只做这几种改写：去掉 4 列缩进（多行字符串的续行不动，字符串的值不会变），<code>self</code> 改成 <code>orch</code>，
+读了模块级 <code>db</code> 的方法加一个 <code>db</code> 参数，函数名去掉前导下划线，再加上配置里逐条列出的替换。</p>
+<h2 id="section-4">验证</h2>
+<h3>为什么主要靠语法树比对</h3>
+<p>拆分之前 <code>orchestrator.py</code> 的语句覆盖率是 24%。待搬的方法体大多没有行为测试，
+跑测试证明不了搬移前后行为一样。所以等价性由 <code>verify_split.py</code> 核对，测试只负责新写出来的转发层。</p>
+<p><code>verify_split.py</code> 每组检查的内容（以 <code>polling</code> 那次的输出为例，十组都是 <code>RESULT ALL PASS</code>）：</p>
+<ul>
+<li>重新生成一遍，和磁盘上的两个文件完全一致；</li>
+<li>被搬的方法和新函数的语法树相等；</li>
+<li>字符串常量逐个相同，方法里的注释都带过去了；</li>
+<li>类常量在新模块里是同一个值，类属性指向它；</li>
+<li>转发方法的签名和原来一样，函数体只有一句转发；</li>
+<li><code>orchestrator.py</code> 里其余的语句没有变化、顺序没有变化，其余的非空行逐行相同；</li>
+<li>两个模块都能导入，被搬代码读到的全局名字和 <code>orchestrator</code> 里的是同一个对象，日志器是同一个对象；</li>
+<li>新模块不导入 <code>database</code> 和 <code>orchestrator</code>，没有 L3 导入。</li>
+</ul>
+<p>各组的细项：</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>组</th>
+<th>字符串常量</th>
+<th>其中多行的</th>
+<th>注释</th>
+<th><code>orchestrator.py</code> 其余不变的非空行</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>rewind</code></td>
+<td>90</td>
+<td>当时没有单独统计</td>
+<td>14</td>
+<td>3,754</td>
+</tr>
+<tr>
+<td><code>sop_rules</code></td>
+<td>135</td>
+<td>当时没有单独统计</td>
+<td>12</td>
+<td>3,313</td>
+</tr>
+<tr>
+<td><code>change_flows</code></td>
+<td>223</td>
+<td>24</td>
+<td>39</td>
+<td>2,921</td>
+</tr>
+<tr>
+<td><code>reporting</code></td>
+<td>360</td>
+<td>46</td>
+<td>33</td>
+<td>2,619</td>
+</tr>
+<tr>
+<td><code>polling</code></td>
+<td>100</td>
+<td>3</td>
+<td>5</td>
+<td>2,350</td>
+</tr>
+<tr>
+<td><code>bug_flow</code></td>
+<td>210</td>
+<td>5</td>
+<td>19</td>
+<td>2,148</td>
+</tr>
+<tr>
+<td><code>agent_state</code></td>
+<td>49</td>
+<td>0</td>
+<td>2</td>
+<td>2,068</td>
+</tr>
+<tr>
+<td><code>failure_counters</code></td>
+<td>24</td>
+<td>2</td>
+<td>4</td>
+<td>1,984</td>
+</tr>
+<tr>
+<td><code>ticket_log</code></td>
+<td>188</td>
+<td>0</td>
+<td>10</td>
+<td>1,682</td>
+</tr>
+<tr>
+<td><code>context_builder</code></td>
+<td>140</td>
+<td>17</td>
+<td>8</td>
+<td>1,574</td>
+</tr>
+</tbody>
+</table></div>
+<p>函数体有改动的只有一处：<code>rewind.seq_index</code> 原来读 <code>TicketOrchestrator._STATUS_SUFFIXES</code>，
+现在读本模块的 <code>STATUS_SUFFIXES</code>。这个函数在搬之前先在原实现上补了特征测试。其余九组的函数体没有改动。</p>
+<h3>接线测试</h3>
+<p><code>backend/tests/agents/test_orchestrator_delegation.py</code>，321 行，12 个测试函数，表里有 72 行转发、
+11 个常量、5 个重导出，参数化之后是 385 条。它测的是转发层：</p>
+<ol>
+<li>新函数的参数表等于原方法的参数表，前面多 <code>orch</code>，读库的再多 <code>db</code>；</li>
+<li>转发时每个参数落在同名位置上，按位置传、按关键字传、只传必填三种方式都测；</li>
+<li><code>db</code> 取的是调用那一刻 <code>orchestrator</code> 模块里的 <code>db</code>；</li>
+<li>返回值原样带回，协程方法仍然是协程方法；</li>
+<li>搬走的类常量和模块级函数，从原来的位置还能取到同一个对象。</li>
+</ol>
+<p><img src="assets/2026-11-24_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%8C%89%E8%81%8C%E8%B4%A3%E6%8B%86%E7%B1%BB_%E6%88%AA%E5%9B%BE_01_%E6%8E%A5%E7%BA%BF%E6%B5%8B%E8%AF%95.png" alt="接线测试 385 条通过"></p>
+<p><code>test_static_method_is_the_module_function</code> 这条结构测试在 <code>_seq_index</code> 的原实现快照上是失败的。
+这是预期结果：它断言的就是「类上的静态方法是模块里的那个函数」，搬之前这句话不成立。</p>
+<h3>改坏检查</h3>
+<p>对转发层逐处改坏：调换两个参数、漏传一个参数、把 <code>db</code> 换成别的对象、改掉常量别名、改掉重导出、
+调换新函数开头的 <code>orch</code> 和 <code>db</code>。每组另有对照组：不改语义、只把转发方法改写成一行，测试必须仍然通过，
+否则说明测试变红和改坏无关。</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>组</th>
+<th>改坏处</th>
+<th>存活</th>
+<th>对照组</th>
+<th>耗时</th>
+<th>跑法</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>rewind</code></td>
+<td>132</td>
+<td>0</td>
+<td>6 全绿</td>
+<td>475 秒</td>
+<td>串行</td>
+</tr>
+<tr>
+<td><code>sop_rules</code></td>
+<td>159</td>
+<td>0</td>
+<td>12 全绿</td>
+<td>524 秒</td>
+<td>串行</td>
+</tr>
+<tr>
+<td><code>change_flows</code></td>
+<td>146</td>
+<td>0</td>
+<td>6 全绿</td>
+<td>189 秒</td>
+<td>4 路并行</td>
+</tr>
+<tr>
+<td><code>reporting</code></td>
+<td>42</td>
+<td>0</td>
+<td>3 全绿</td>
+<td>71 秒</td>
+<td>4 路并行</td>
+</tr>
+<tr>
+<td><code>polling</code></td>
+<td>139</td>
+<td>0</td>
+<td>13 全绿</td>
+<td>194 秒</td>
+<td>4 路并行</td>
+</tr>
+<tr>
+<td><code>bug_flow</code></td>
+<td>104</td>
+<td>0</td>
+<td>7 全绿</td>
+<td>154 秒</td>
+<td>4 路并行</td>
+</tr>
+<tr>
+<td><code>agent_state</code></td>
+<td>67</td>
+<td>0</td>
+<td>6 全绿</td>
+<td>110 秒</td>
+<td>4 路并行</td>
+</tr>
+<tr>
+<td><code>failure_counters</code></td>
+<td>47</td>
+<td>0</td>
+<td>4 全绿</td>
+<td>89 秒</td>
+<td>4 路并行</td>
+</tr>
+<tr>
+<td><code>ticket_log</code></td>
+<td>266</td>
+<td>0</td>
+<td>7 全绿</td>
+<td>388 秒</td>
+<td>4 路并行</td>
+</tr>
+<tr>
+<td><code>context_builder</code></td>
+<td>54</td>
+<td>0</td>
+<td>5 全绿</td>
+<td>99 秒</td>
+<td>4 路并行</td>
+</tr>
+<tr>
+<td>合计</td>
+<td>1,156</td>
+<td>0</td>
+<td>69 全绿</td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<p>并行的做法是在 <code>%TEMP%\ads_mut_wt</code> 下建 4 个 detached worktree，每个 worktree 跑四分之一的改坏项，
+主工作区只读。每次 4 个 worktree 的基线都是绿的，结束后核对主工作区的文件哈希没有变化。
+这 4 个 worktree 已经用 <code>git worktree remove --force</code> 删除并 <code>prune</code>。</p>
+<p><strong>这项检查只覆盖转发层，包括别名和重导出。函数体里的逻辑没有被改坏过</strong>，它们靠的是上一小节的语法树比对。</p>
+<p><img src="assets/2026-11-24_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%8C%89%E8%81%8C%E8%B4%A3%E6%8B%86%E7%B1%BB_03_%E6%94%B9%E5%9D%8F%E6%A3%80%E6%9F%A5%E4%B8%8E%E5%85%A8%E9%87%8F%E6%B5%8B%E8%AF%95.png" alt="改坏检查和全量测试"></p>
+<h3>全量测试、分层守卫、flake8</h3>
+<p>每组提交之前都跑一遍，十组的结果：</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>组</th>
+<th>全量 pytest</th>
+<th>模块数</th>
+<th>项目内边</th>
+<th>延迟导入占比</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>rewind</code></td>
+<td>1,127 通过、1 跳过，217.44 秒</td>
+<td>490</td>
+<td>2,319</td>
+<td>没有记录</td>
+</tr>
+<tr>
+<td><code>sop_rules</code></td>
+<td>1,199 通过，178.44 秒</td>
+<td>491</td>
+<td>2,322</td>
+<td>41.91%</td>
+</tr>
+<tr>
+<td><code>change_flows</code></td>
+<td>1,229 通过，178.13 秒</td>
+<td>492</td>
+<td>2,323</td>
+<td>41.87%</td>
+</tr>
+<tr>
+<td><code>reporting</code></td>
+<td>1,244 通过，188.81 秒</td>
+<td>493</td>
+<td>2,327</td>
+<td>41.81%</td>
+</tr>
+<tr>
+<td><code>polling</code></td>
+<td>1,309 通过，193.52 秒</td>
+<td>494</td>
+<td>2,331</td>
+<td>41.74%</td>
+</tr>
+<tr>
+<td><code>bug_flow</code></td>
+<td>1,344 通过，189.81 秒</td>
+<td>495</td>
+<td>2,334</td>
+<td>41.69%</td>
+</tr>
+<tr>
+<td><code>agent_state</code></td>
+<td>1,374 通过，191.38 秒</td>
+<td>496</td>
+<td>2,335</td>
+<td>41.66%</td>
+</tr>
+<tr>
+<td><code>failure_counters</code></td>
+<td>1,395 通过，198.86 秒</td>
+<td>497</td>
+<td>2,335</td>
+<td>41.64%</td>
+</tr>
+<tr>
+<td><code>ticket_log</code></td>
+<td>1,431 通过，202.21 秒</td>
+<td>498</td>
+<td>2,337</td>
+<td>41.60%</td>
+</tr>
+<tr>
+<td><code>context_builder</code></td>
+<td>1,456 通过，193.24 秒</td>
+<td>499</td>
+<td>2,338</td>
+<td>41.56%</td>
+</tr>
+</tbody>
+</table></div>
+<ul>
+<li>全量 pytest 十次都是 0 失败。通过数从 1,071 涨到 1,456，增加的都是接线测试的参数化行。</li>
+<li>分层守卫十次都是：相对基线新增 0，方向违规 92，未归层模块 230。<code>orchestration.*</code> 自身的方向违规是 0。</li>
+<li>flake8 十次都是 0 条。</li>
+</ul>
+<p><img src="assets/2026-11-24_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%8C%89%E8%81%8C%E8%B4%A3%E6%8B%86%E7%B1%BB_%E6%88%AA%E5%9B%BE_02_%E5%88%86%E5%B1%82%E5%AE%88%E5%8D%AB.png" alt="分层守卫"></p>
+<p>flake8 有一处和 CI 不一样：本地命令多排除了 <code>projects</code> 目录。CI 的那条命令在本机会报 3 条 F824，
+都在 <code>backend/projects/PRJ-20260424-f650c9/app.py</code>。这个目录被 <code>.gitignore</code> 忽略，CI 上不存在。
+前几轮的记录里同一条命令是 0 条，这次为什么出现没有查清。</p>
+<h3>两个靠读源码做检查的根目录脚本</h3>
+<p>根目录有些 <code>_*.py</code> 脚本是靠读 <code>orchestrator.py</code> 的源码文本来做断言的，代码搬走之后它们会找不到目标。
+这次随组改了两个：</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>脚本</th>
+<th>改动</th>
+<th>随哪组提交</th>
+<th>跑了没有</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>backend/_test_command_log.py:131</code></td>
+<td>改成读 <code>orchestration/ticket_pipeline.py</code></td>
+<td><code>change_flows</code></td>
+<td><strong>没有跑完整脚本</strong>。它后半段会连真实库做写入和删除，而服务正在运行。只单独验证了那一条的条件：pipeline 里有 <code>requirement_id=ticket.get</code>，<code>orchestrator.py</code> 里已经没有</td>
+</tr>
+<tr>
+<td><code>backend/_test_false_success_gates.py</code> 第 7 段</td>
+<td>改成读 <code>orchestration.polling.zombie_rewind_status</code></td>
+<td><code>polling</code></td>
+<td>这个脚本只读源码，完整跑过，53 通过、0 失败。类上的转发方法里已经没有那三个标记，所以这处改动是必需的</td>
+</tr>
+</tbody>
+</table></div>
+<p>另外发现 <code>backend/_test_openspec_verify_trigger.py:82</code> 读 <code>orchestrator.py</code> 找 <code>new_status = &quot;play_test_passed&quot;</code>。
+这段代码在基线 <code>7b9e7f0</code> 时就已经不在那个文件里了，和这一步无关。只记录在这里，没有修。</p>
+<h2 id="section-5">重启服务和冒烟</h2>
+<p>十组提交完之后重启了服务，让它加载新代码。</p>
+<ul>
+<li>旧进程 PID 13808 所在的会话 stdin 已经关闭，发不了 Ctrl+C，改用 <code>taskkill /PID 13808 /T /F</code> 停掉。
+<code>/T</code> 把它拉起的两个 MCP 子进程（node 的 rules-bridge-mcp、graphify-mcp）一并结束了。</li>
+<li>新进程 PID 77200，22:00:10 启动，监听 <code>127.0.0.1:8001</code>，版本 0.22.0。</li>
+<li>22:10 查了一次，新进程名下没有子进程，也就是那两个 MCP 子进程当时没有被重新拉起。它们是否按需启动没有查。</li>
+</ul>
+<p>9 个接口都返回 200：<code>/api/health</code>、<code>/app</code>（205,016 字节）、<code>/api/metrics</code>、<code>/api/agents/status</code>（13 个 Agent，
+经过 <code>get_agent_status</code> 转发）、<code>/api/agents</code>、<code>/api/agents/orchestrator</code>（经过 <code>_get_all_actionable_statuses</code> 转发，
+<code>processing_count</code> 和 <code>queue_count</code> 都是 0）、<code>/api/projects</code>、<code>/api/llm/status</code>、<code>/api/hooks/status</code>。</p>
+<p><img src="assets/2026-11-24_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%8C%89%E8%81%8C%E8%B4%A3%E6%8B%86%E7%B1%BB_%E6%88%AA%E5%9B%BE_03_%E9%87%8D%E5%90%AF%E5%90%8E%E5%86%92%E7%83%9F.png" alt="重启后的冒烟"></p>
+<p>启动日志里「SOP 配置已加载 (8 条规则)」「内部事件总线已启动」「工单轮询调度器已启动」都出现了，
+轮询每 30 秒一次。<code>server.log</code> 从这次启动到 22:10 一共 244 行：Traceback 0 条，ERROR 14 条，WARNING 3 条。</p>
+<p>14 条 ERROR 都是 <code>[sop] skill stage '…' 与已有阶段重名 → 跳过</code>，涉及 <code>engine_compile</code>（6 条）、
+<code>h5_typecheck</code>（4 条）、<code>h5_playtest</code>（4 条）。对比了 02:32 和 19:25 两次旧代码启动的日志，同样是这 14 条，
+所以和这次改动无关。它是这次才注意到的既有现象，已列进待决定事项。
+3 条 WARNING 里有 1 条是 <code>ux_knowledge</code> 表缺 <code>subcategory</code> 列，之前就有。</p>
+<p>截图说明：窗口用 <code>conhost.exe</code> 打开，用 PrintWindow 只截这一个窗口的内容区。每条命令前的提示符和命令后的
+灰色时间行是截图脚本打印的，其余是命令自己的输出。脚本是
+<code>dev-notes/assets/2026-11-24_代码重构_按职责拆类_shots.ps1</code>。</p>
+<h2 id="section-6">还留在 orchestrator.py 里的</h2>
+<p>类里现在有 82 个 <code>def</code> 方法：69 个只做转发，13 个还有实际函数体，共 1,128 行。</p>
+<p><img src="assets/2026-11-24_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%8C%89%E8%81%8C%E8%B4%A3%E6%8B%86%E7%B1%BB_04_%E5%89%A9%E4%BD%99%E6%96%B9%E6%B3%95.png" alt="还有实际函数体的 13 个方法"></p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>留下的原因</th>
+<th>方法（行数）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>函数里导入了 L3（<code>agents</code> / <code>actions</code>），原样搬进 L1 的 <code>orchestration</code> 会新增方向违规</td>
+<td><code>_build_context</code> 176、<code>_handle_git_files</code> 167、<code>_diagnose_blocked_ticket</code> 153、<code>_poll_once</code> 142、<code>_finalize_openspec_after_done</code> 46、<code>_maybe_openspec_verify</code> 34、<code>_check_subtasks_complete</code> 26</td>
+</tr>
+<tr>
+<td>流程入口和驱动，本步不搬</td>
+<td><code>_handle_agent_result</code> 166、<code>process_ticket</code> 77、<code>__init__</code> 51、<code>handle_requirement</code> 45、<code>_execute_assigned_agent</code> 26、<code>_try_uproject_heal</code> 19</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>orchestrator</code> 到 L3 的 6 条方向违规原样还在：<code>actions.knowledge_distill</code>（第 1808 行）、<code>actions.diagnose_ticket</code>（1791）、
+<code>agents.deploy</code>（1638）、<code>agents.test</code>（1624）、<code>actions.ue_editor_control</code>（1244）、<code>actions.chat.dispatch_subtask</code>（478）。</p>
+<h2 id="section-7">和方案的偏差</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>方案写的</th>
+<th>实际做的</th>
+<th>原因</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>分到 <code>SopRules</code>、<code>Poller</code>、<code>RewindService</code> 等协作者<strong>类</strong>里</td>
+<td>模块级函数，第一个参数是 <code>orch</code></td>
+<td>方法之间通过 <code>self</code> 互相调用很密，现有测试又是给实例打桩。做成类需要先理清谁持有哪些状态，这一步只做能用语法树证明等价的搬移</td>
+</tr>
+<tr>
+<td>模块名 <code>ChangeImpactFlow</code></td>
+<td><code>change_flows.py</code></td>
+<td><code>backend/change_impact.py</code> 已经存在并且有模块在导入它，避免重名</td>
+</tr>
+<tr>
+<td>7 个协作者</td>
+<td>10 个模块</td>
+<td>多出 <code>bug_flow</code>、<code>agent_state</code>、<code>failure_counters</code>、<code>ticket_log</code> 四组，方案里没有列。方案里的 <code>RequirementFlow</code> 对应的是此前拆出的 <code>requirement_pipeline.py</code></td>
+</tr>
+<tr>
+<td>顺带清掉 <code>orchestrator</code> 到 L3 的 6 条方向违规</td>
+<td>没有做</td>
+<td>含 L3 导入的 7 个方法没有搬，需要先改成经注册表取 Agent 和 action</td>
+</tr>
+<tr>
+<td>验收：<code>orchestrator.py</code> 不超过 1,500 行</td>
+<td>1,818 行，差 318 行</td>
+<td>同上，那 7 个方法共 744 行</td>
+</tr>
+<tr>
+<td>验收：没有超过 150 行的函数</td>
+<td>还有 4 个：<code>_build_context</code> 176、<code>_handle_git_files</code> 167、<code>_handle_agent_result</code> 166、<code>_diagnose_blocked_ticket</code> 153</td>
+<td>这一步只搬不拆，拆长函数需要先补行为测试</td>
+</tr>
+<tr>
+<td>验收：<code>agent_name ==</code> 比较为 0</td>
+<td>还有 2 处</td>
+<td>没有动</td>
+</tr>
+</tbody>
+</table></div>
+<p>行为上有一处细微变化，提交信息里也写了：<code>agent_state.make_ticket_progress_callback</code> 返回的闭包，
+现在用的是<strong>创建闭包时</strong>传进来的 <code>db</code>；原来是在闭包执行时读 <code>orchestrator</code> 模块的全局 <code>db</code>。
+只有在创建和调用之间替换了全局 <code>db</code> 才会有差别。调用它的地方是 <code>_build_context</code>（<code>orchestrator.py:1116</code>）和
+根目录脚本 <code>_test_v019_ticket_progress.py:109</code>，后者没有跑。</p>
+<p>结构上的小变化：<code>_failure_fingerprint</code> 变成 <code>staticmethod</code> 别名之后，类里的 <code>def</code> 方法数从 83 变成 82。</p>
+<p>全仓的度量：超过 200 行的函数从 30 个变成 29 个；最长的函数仍是 <code>query_engine/engine.py</code> 的 <code>run</code>（559 行）；
+最大的文件仍是 <code>api/chat.py</code>（5,566 行）。<code>generate_requirement_report</code>（206 行）只是换到了 <code>reporting.py</code>，没有变短。
+新模块里较长的函数还有 <code>change_flows.reply_to_comment</code> 146 行、<code>change_flows.partial_flow</code> 129 行、
+<code>sop_rules.apply_fragment_closeout</code> 102 行、<code>ticket_log.log_agent_thought</code> 102 行。</p>
+<h2 id="section-8">没有验证的部分</h2>
+<ol>
+<li><strong>搬走的函数体没有行为测试。</strong> 等价性靠语法树比对，改坏检查只覆盖转发层。</li>
+<li><strong>重启后没有真实工单走完一个阶段。</strong> <code>processing</code> 一直是 0，搬走的函数在真实运行里只触发了启动、轮询和状态查询这几条路径。</li>
+<li><strong>CI 没有在这批改动上跑过。</strong> <code>main</code> 没有推送，Ubuntu 加 Python 3.12 下的结果没有见过。</li>
+<li><strong><code>_test_command_log.py</code> 没有完整跑。</strong> 原因见上。</li>
+<li><strong>根目录其余的 <code>_*.py</code> 脚本没有跑。</strong> 它们不在 pytest 的 <code>testpaths</code> 里，其中靠读源码文本做检查的会随拆分失效。</li>
+<li><strong>两个 MCP 子进程重启后的状态没有确认。</strong> 依赖 rules-bridge-mcp 和 graphify-mcp 的功能没有试。
+桌面版也没有重新打包，<code>desktop.spec</code> 里新加的 10 行 <code>hiddenimports</code> 没有经过打包验证。</li>
+<li><strong>flake8 的 3 条 F824 为什么这次才出现，没有查清。</strong></li>
+<li><strong>工具脚本没有入库。</strong> <code>gen_split.py</code>、<code>verify_split.py</code>、<code>mutate_split.py</code>、<code>mutate_par.py</code>、<code>mk_table.py</code>、
+<code>spec_add.py</code>、<code>commit_group.py</code>、<code>split_cfg.py</code> 都在 <code>%TEMP%\ads_r2_3</code>，换一台机器无法重跑搬移核对和改坏检查。
+<code>verify_split.py</code> 还依赖每组搬移前的快照，只在该组刚生成时有效，后面的组改了 <code>orchestrator.py</code> 之后重跑会失败。</li>
+</ol>
+<h2 id="section-9">下一步</h2>
+<ol>
+<li>那 7 个含 L3 导入的方法，改成经注册表取 Agent 和 action。这样它们可以搬走，6 条方向违规也能清掉。
+7 个方法共 744 行，按每个转发方法留 4 行估算，搬完之后 <code>orchestrator.py</code> 大约 1,100 行，能过 1,500 行这条线。</li>
+<li>长函数先补行为测试再拆：<code>_handle_agent_result</code>、<code>generate_requirement_report</code>、<code>reply_to_comment</code>、<code>handle_skill</code>。</li>
+<li>2 处 <code>agent_name ==</code> 比较，和结果处理器的注册方式一起处理。</li>
+<li>把核对、改坏、度量脚本收进 <code>scripts/</code>（方案 R0 第 1 步）。</li>
+<li>推送，让 CI 跑一遍。</li>
+</ol>
+<h2 id="section-10">复核命令</h2>
+<pre><code class="language-powershell"># 接线测试（backend 目录下），预期 385 passed
+python -m pytest -p no:cacheprovider tests/agents/test_orchestrator_delegation.py
+
+# 全量测试（backend 目录下），预期 1456 passed
+python -m pytest -p no:cacheprovider
+
+# 分层守卫（仓库根），预期 相对基线新增 0、方向违规 92、未归层 230
+python scripts/check_layers.py --json
+
+# flake8（backend 目录下），预期 0
+python -m flake8 . --count --select=E9,F63,F7,F82 --statistics --exclude=skills/marketplace,skills/packs,skills/use_skills,projects
+
+# 重新出图、重新截图
+python dev-notes/assets/2026-11-24_代码重构_按职责拆类_charts.py
+powershell -NoProfile -ExecutionPolicy Bypass -File dev-notes/assets/2026-11-24_代码重构_按职责拆类_shots.ps1
+</code></pre>
+<h2 id="section-11">文件</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>类别</th>
+<th>路径</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>新模块（10 个）</td>
+<td><code>backend/orchestration/</code> 下的 <code>rewind.py</code>、<code>sop_rules.py</code>、<code>change_flows.py</code>、<code>reporting.py</code>、<code>polling.py</code>、<code>bug_flow.py</code>、<code>agent_state.py</code>、<code>failure_counters.py</code>、<code>ticket_log.py</code>、<code>context_builder.py</code></td>
+</tr>
+<tr>
+<td>改动</td>
+<td><code>backend/orchestrator.py</code>、<code>desktop.spec</code>、<code>backend/_test_command_log.py</code>、<code>backend/_test_false_success_gates.py</code></td>
+</tr>
+<tr>
+<td>新测试</td>
+<td><code>backend/tests/agents/test_orchestrator_delegation.py</code></td>
+</tr>
+<tr>
+<td>本篇的图和脚本</td>
+<td><code>dev-notes/assets/2026-11-24_代码重构_按职责拆类_*</code>（4 张图表、4 张截图、<code>charts.py</code>、<code>shots.ps1</code>）</td>
+</tr>
+</tbody>
+</table></div>
+</article><nav class="adjacent" aria-label="相邻文档"><a href="2026-11-24_08_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%8F%90%E4%BA%A4%E8%AE%B0%E5%BD%95.html">上一篇：重构系列的提交记录（2026-11-24）</a>
+<a href="2026-11-25_01_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E7%BC%96%E6%8E%92%E6%94%B6%E5%B0%BE.html">下一篇：代码重构：七个编排方法解除 L3 依赖并完成搬移</a></nav></main></body></html>

@@ -1,0 +1,136 @@
+<!doctype html>
+<!-- 由 scripts/docs-html/export.mjs 生成，请编辑 Markdown 原稿。 -->
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>代码重构：拆开开发工单的结果处理 · ADS 文档</title><link rel="stylesheet" href="../docs/assets/refactor-docs/reader.css"></head>
+<body><nav class="bar" aria-label="主导航"><b>ADS · 开发文档</b><a href="../docs/%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%96%87%E6%A1%A3%E7%B4%A2%E5%BC%95.html">系列索引</a></nav>
+<main><header><p class="meta">开发笔记 · DevNote · <a href="2026-11-25_04_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E5%BC%80%E5%8F%91%E7%BB%93%E6%9E%9C%E5%88%86%E6%94%AF.md">Markdown 原稿</a></p>
+<h1>代码重构：拆开开发工单的结果处理</h1></header><details><summary>本页目录（4 节）</summary><ol><li><a href="#section-1">哪个分支接手</a></li><li><a href="#section-2">迟到结果：重读保护了哪些情况</a></li><li><a href="#section-3">测试怎么跑</a></li><li><a href="#section-4">服务检查</a></li></ol></details>
+<article><p>2026-11-25 · <a href="2026-11-25_03_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_Skill%E7%BB%93%E6%9E%9C%E5%88%86%E6%94%AF.html">上一期：Skill 结果分支</a> · <a href="../docs/20261124_01_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84%E6%96%B9%E6%A1%88.html">重构方案</a></p>
+<p>原来的 <a href="../backend/orchestration/result_handlers/dev.py">handle_dev</a> 在 207 行里处理类型检查、生成失败、自检阻塞和正常完成。拆分后的 24 行入口直接给出分支优先级，以及哪个分支会把新状态交回编排器。保留原模块和注册入口，无需新增打包模块。</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Python AST 度量</th>
+<th style="text-align:right">旧版 <code>b573d5e</code></th>
+<th style="text-align:right">本次</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>dev.py</code> 文件行数（含空行）</td>
+<td style="text-align:right">267</td>
+<td style="text-align:right">222</td>
+</tr>
+<tr>
+<td><code>handle_dev</code> 函数行数</td>
+<td style="text-align:right">207</td>
+<td style="text-align:right">24</td>
+</tr>
+<tr>
+<td>模块内最长函数</td>
+<td style="text-align:right">207</td>
+<td style="text-align:right">40（原有 HTML 原型处理器）；本次拆出的函数最长 37</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="section-1">哪个分支接手</h2>
+<figure><a href="../docs/assets/refactor-docs/2026-11-25_04_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E5%BC%80%E5%8F%91%E7%BB%93%E6%9E%9C%E5%88%86%E6%94%AF_%E5%9B%BE1.svg"><img src="../docs/assets/refactor-docs/2026-11-25_04_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E5%BC%80%E5%8F%91%E7%BB%93%E6%9E%9C%E5%88%86%E6%94%AF_%E5%9B%BE1.svg" alt="流程图：哪个分支接手"></a><figcaption>流程图：哪个分支接手 · <a href="../docs/assets/refactor-docs/2026-11-25_04_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E5%BC%80%E5%8F%91%E7%BB%93%E6%9E%9C%E5%88%86%E6%94%AF_%E5%9B%BE1.svg">查看原图</a></figcaption></figure>
+<p><strong>重试计数。</strong> 处理器写 <code>reject</code> 日志；派单流程之后用<a href="../backend/orchestration/failure_counters.py">计数器</a>查询全局次数或指定失败状态的次数。同一回传同时含生成失败和自检阻塞时，普通修复只记为生成失败；若 action 是 H5 类型检查，先走类型检查。不能凭日志里出现了“失败”就断定扣了哪一阶段的重试额度。</p>
+<p><strong>产物何时可查。</strong> 正常完成先写工单，再写日志和评论，最后插入代码产物。日志的文件数包括去重后的媒体路径，评论只数代码文件。日志和评论的订阅者此时未必能查到代码产物；通用状态通知和派单发生时则已经可以查到。</p>
+<h2 id="section-2">迟到结果：重读保护了哪些情况</h2>
+<p>在旧版和本版各跑一次相同的临时 SQLite 实验：先将工单设为 <code>developing</code>，公共入口检查过初始状态后，在 Git 替身的 <code>on_git</code> 回调内改态，再让真实处理器接收结果。五组结果逐项一致。</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>回传类型</th>
+<th>Git 期间工单变为</th>
+<th>处理完的状态（旧 / 新相同）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>开发成功</td>
+<td><code>deployed</code></td>
+<td><code>deployed</code>，丢弃回传</td>
+</tr>
+<tr>
+<td>代码生成失败</td>
+<td><code>deployed</code></td>
+<td><code>development_failed</code>，覆盖终态</td>
+</tr>
+<tr>
+<td>有阻塞的 UE 自检</td>
+<td><code>deployed</code></td>
+<td><code>self_test_failed</code>，覆盖终态</td>
+</tr>
+<tr>
+<td>H5 类型检查成功，无自定义 SOP 状态</td>
+<td><code>deployed</code></td>
+<td><code>h5_typecheck_passed</code>，覆盖终态</td>
+</tr>
+<tr>
+<td>开发成功</td>
+<td><code>review_passed</code></td>
+<td><code>development_done</code>，回退到开发完成</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>已确认的缺口：</strong> 公共入口能忽略一开始就处于终态的工单；之后的第二次状态检查仅在普通开发成功写入前执行，且只识别列出的状态。<code>SELECT</code> 和 <code>UPDATE</code> 也不是一次条件写入。故“所有迟到结果都会被丢弃”不成立。本次未改变并发策略，也没把错误覆盖终态的行为写成必须长期满足的测试。后续应独立修复：先确定允许完成的来源状态，再让写入带上前置状态条件；条件不匹配时应同时跳过后续日志、产物和派单。Git 在这些检查之前执行，其副作用需另行评估。</p>
+<h2 id="section-3">测试怎么跑</h2>
+<ol>
+<li><strong>先测旧代码。</strong> 在<a href="../backend/tests/agents/test_orchestrator_result_branches.py">结果分支测试</a>中增加 3 个场景：两种冲突回传分别读取真实的全局、分阶段拒绝计数；另一种在每条通知及派单时读取工单和产物表。连同已有的 H5 成败、自检失败、成功和三个迟到成功用例，旧实现上的 13 项通过。</li>
+<li><strong>拆函数后复测。</strong> 使用相同编排入口与临时 SQLite 库，Git、外部通知和递归派单用替身。两组相关测试共 112 通过。单纯保存文件不会自动运行全套；开发过程中主动运行以下命令。</li>
+</ol>
+<pre><code class="language-powershell"># backend/：旧实现先跑针对 DevAgent 的特征测试，拆分后跑相关与全量
+python -m pytest -p no:cacheprovider tests/agents/test_orchestrator_result_branches.py -k 'dev_agent or dev_overlapping or dev_completion'
+python -m pytest -p no:cacheprovider tests/agents/test_orchestrator_result_branches.py tests/agents/test_orchestrator_skill_branch.py
+python -m pytest -p no:cacheprovider
+
+# 根目录：分层守卫；下面的 flake8 在 backend/ 下用装有 flake8 的环境运行
+python scripts/check_layers.py --json
+python -m flake8 --select=E9,F63,F7,F82 --exclude=skills/marketplace,skills/packs,skills/use_skills,projects .
+</code></pre>
+<p><strong>断言能否抓住改错？</strong> 在独立进程中拦截模块导入，只替换一段代码，再跑相应测试；工作区文件没有被改错。以下四个版本均触发预期断言：</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>故意改错</th>
+<th>变红的检查</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>带有 <code>development_failed</code> 的 H5 结果不走类型检查</td>
+<td>应进入 H5 失败态，而非开发失败态</td>
+</tr>
+<tr>
+<td>生成失败写普通错误日志，不写 <code>reject</code></td>
+<td>全局和分阶段的拒绝计数</td>
+</tr>
+<tr>
+<td>删除写入成功前的重读</td>
+<td>已部署状态不能被成功开发结果覆盖</td>
+</tr>
+<tr>
+<td>把产物插入提到阶段评论前</td>
+<td>评论通知时可见的产物数</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>回归结果（代码提交 <code>7ae53bf</code>）。</strong> 后端全量 <code>1686 passed, 1 warning in 317.94s (0:05:17)</code>，退出码 0。警告是 <code>aiosqlite</code> 后台连接线程遇到已关闭的事件循环；pytest 在 <code>test_status_never_returns_secret</code> 执行期间报告，尚未定位是哪处创建的连接。全库分层检查有 86 条历史违规，新增 0、解析错误 0；上述 flake8 规则通过。</p>
+<p><img src="assets/2026-11-25_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E5%BC%80%E5%8F%91%E7%BB%93%E6%9E%9C%E5%88%86%E6%94%AF_%E9%AA%8C%E8%AF%81.png" alt="开发结果处理器的行数、全量测试和分层检查"></p>
+<p>截图由本地浏览器渲染，数据取自此次 pytest 原始摘要、分层检查 JSON 及新旧代码的 AST。</p>
+<h2 id="section-4">服务检查</h2>
+<p>重启前，处理数、队列和活动 Agent 数均为 0。新进程（PID 50680）启动完成后，先确认 <code>/api/health</code> 返回 <code>ok</code>，再运行只读探测。探测检查了页面类型及 JSON 响应，未投递真实工单、调用模型或重打桌面包。</p>
+<pre><code class="language-text">/api/health               HTTP 200   0.45s
+/app                      HTTP 200   0.01s
+/api/metrics              HTTP 200   4.33s
+/api/agents/status        HTTP 200   0.01s
+/api/agents               HTTP 200   0.04s
+/api/projects             HTTP 200   1.87s
+/api/llm/status           HTTP 200   0.01s
+/api/hooks/status         HTTP 200   0.00s
+/api/agents/orchestrator  HTTP 200   0.01s
+</code></pre>
+</article><nav class="adjacent" aria-label="相邻文档"><a href="2026-11-25_03_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_Skill%E7%BB%93%E6%9E%9C%E5%88%86%E6%94%AF.html">上一篇：代码重构：把 Skill 工单的四条结果路径拆开</a>
+<a href="2026-11-25_05_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E8%BF%9F%E5%88%B0%E5%BC%80%E5%8F%91%E7%BB%93%E6%9E%9C.html">下一篇：代码重构：阻止迟到的开发结果覆盖新状态</a></nav></main></body></html>

@@ -1,0 +1,71 @@
+<!doctype html>
+<!-- 由 scripts/docs-html/export.mjs 生成，请编辑 Markdown 原稿。 -->
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>代码重构：拆出系统浏览器入口，区分地址错误与启动失败 · ADS 文档</title><link rel="stylesheet" href="../docs/assets/refactor-docs/reader.css"></head>
+<body><nav class="bar" aria-label="主导航"><b>ADS · 开发文档</b><a href="../docs/%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%96%87%E6%A1%A3%E7%B4%A2%E5%BC%95.html">系列索引</a></nav>
+<main><header><p class="meta">开发笔记 · DevNote · <a href="2026-11-26_19_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E7%B3%BB%E7%BB%9F%E6%B5%8F%E8%A7%88%E5%99%A8%E5%85%A5%E5%8F%A3.md">Markdown 原稿</a></p>
+<h1>代码重构：拆出系统浏览器入口，区分地址错误与启动失败</h1></header><details><summary>本页目录（2 节）</summary><ol><li><a href="#section-1">一次点击怎样处理</a></li><li><a href="#section-2">测试顺序与结果</a></li></ol></details>
+<article><p>2026-11-26 · <a href="2026-11-26_18_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E5%89%8D%E7%AB%AF%E9%A1%B5%E9%9D%A2%E5%85%A5%E5%8F%A3.html">上期：前端页面入口</a> · <a href="../docs/20261124_01_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84%E6%96%B9%E6%A1%88.html">项目重构方案</a></p>
+<p>网页标签页的“在系统浏览器打开”按钮原本接受大写 <code>HTTPS://</code>，后端却只识别小写。页面收到 400 后还会尝试打开新窗口，因此即便用户最后看到了网页，也不能说明系统浏览器接口成功。现在协议名不区分大小写，地址无效会显示原因；桌面程序不可用或请求断网时仍保留新窗口后备方式。</p>
+<p><code>GET /api/open-in-browser</code> 已从 <a href="../backend/main.py">main.py</a> 迁入<a href="../backend/api/system.py">系统路由</a>。基线 <code>14f546d</code>，代码提交 <code>52862cb</code>。</p>
+<h2 id="section-1">一次点击怎样处理</h2>
+<figure><a href="../docs/assets/refactor-docs/2026-11-26_19_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E7%B3%BB%E7%BB%9F%E6%B5%8F%E8%A7%88%E5%99%A8%E5%85%A5%E5%8F%A3_%E5%9B%BE1.svg"><img src="../docs/assets/refactor-docs/2026-11-26_19_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E7%B3%BB%E7%BB%9F%E6%B5%8F%E8%A7%88%E5%99%A8%E5%85%A5%E5%8F%A3_%E5%9B%BE1.svg" alt="流程图：一次点击怎样处理"></a><figcaption>流程图：一次点击怎样处理 · <a href="../docs/assets/refactor-docs/2026-11-26_19_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E7%B3%BB%E7%BB%9F%E6%B5%8F%E8%A7%88%E5%99%A8%E5%85%A5%E5%8F%A3_%E5%9B%BE1.svg">查看原图</a></figcaption></figure>
+<ul>
+<li><strong>地址。</strong> 用 Pydantic 的 HTTP URL 类型严格校验，只把协议名转为小写。传给桌面程序时保留原始主机名大小写、路径、查询编码及片段。例如 <code>HTTPS://Example.org/Docs%2FOne?q=A%26B&amp;q=Two#Top</code> 只会把开头改成 <code>https://</code>。缺少主机、主机含空格或端口越界返回 400；省略必填查询参数仍为 422。</li>
+<li><strong>桌面程序。</strong> <code>webbrowser.open</code> 是同步调用，已移入线程池。返回假、抛出浏览器错误或系统错误时统一返回 500 和「无法调起系统浏览器」。200 与 <code>{&quot;ok&quot;:true}</code> 表示系统接受了调用，不保证网页已经加载。</li>
+<li><strong>页面。</strong> <a href="../frontend/app.js">前端请求函数</a>在原有错误对象上保留 HTTP 状态码，地址栏据此区分 4xx 与启动失败。客户端明确禁用这次 GET 的缓存。后备新窗口使用 <code>noopener</code>；浏览器是否允许弹窗仍由客户端决定。</li>
+</ul>
+<p>路径、方法、参数和成功响应不变。<code>main.open_in_browser</code> 仍指向原名处理函数，整个应用只注册了一条对应 GET；重启前后的 OpenAPI 操作定义相同。沿用了已有的系统模块，无需增加桌面打包清单条目，本轮未重建安装包。</p>
+<h2 id="section-2">测试顺序与结果</h2>
+<ol>
+<li><strong>旧版基线。</strong> <a href="../backend/tests/api/test_open_in_browser.py">15 项 HTTP 回归</a>先在旧版执行，<strong>7 通过、8 失败（6.50 秒）</strong>。两组有效地址被大小写判断拒绝，三组格式错误的地址被交给桌面替身，两类启动异常与原有的失败响应不一致；最后一项是健康检查要等桌面调用结束才能处理。失败数按用例计。</li>
+<li><strong>验证并发。</strong> 测试让桌面替身等待释放信号，确认它已进入等待后才发 <code>/api/health</code>。健康检查必须在替身仍等待时返回 200，再释放替身，让原请求正常结束。判断依据是先后顺序，不是机器恰好在多少毫秒内完成。</li>
+<li><strong>验证用户动作。</strong> <a href="assets/2026-11-26_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E7%B3%BB%E7%BB%9F%E6%B5%8F%E8%A7%88%E5%99%A8%E5%85%A5%E5%8F%A3_%E6%88%AA%E5%9B%BE.py">可重跑的截图脚本</a>在隔离的 Edge 页面加载实际地址栏、系统浏览器和 API 函数，点击按钮后，把请求转交真实的系统路由。系统调用和 <code>window.open</code> 都替换为记录器，因此能区分 HTTP 成功、桌面调用和页面重试三件事，不会打开目标站点。</li>
+</ol>
+<p><img src="assets/2026-11-26_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E7%B3%BB%E7%BB%9F%E6%B5%8F%E8%A7%88%E5%99%A8%E5%85%A5%E5%8F%A3_%E6%88%AA%E5%9B%BE.png" alt="Edge 验证四种输入或状态，对比 HTTP、系统调用次数和页面处理"></p>
+<p>截图表格的状态码来自路由响应，调用数来自替身。合法的混合大小写地址只交给系统一次；缺少主机时两种打开动作均为零。系统拒绝启动时有一次桌面尝试和一次页面后备请求；断网时只有后者。这里验证的是应用决定做什么，没有实际检查某台机器的浏览器关联、弹窗许可或网络可达性。</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>检查</th>
+<th>实际结果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>本机相关回归</td>
+<td>系统浏览器、文件管理器、系统只读路由与应用加固共 <strong>55 项通过（4.10 秒）</strong>。</td>
+</tr>
+<tr>
+<td>后端全量</td>
+<td><strong>1,821 项全部通过（289.70 秒）</strong>，pytest 退出码 0，未报告警告。上期 1,806 项，本期新增 15 项。</td>
+</tr>
+<tr>
+<td>最低 FastAPI 版本</td>
+<td>在 FastAPI 0.141.0 / Starlette 0.52.1 临时环境下，15 个新增用例全部通过（3.75 秒）。</td>
+</tr>
+<tr>
+<td>静态与分层检查</td>
+<td>JS 语法和指定 flake8 规则通过。扫描 520 个模块，历史方向违规 86，新增违规、解析错误、循环依赖组均为 0。</td>
+</tr>
+<tr>
+<td>本地服务</td>
+<td>重启前队列、处理中工单及活动 Agent 均为 0。旧进程 41832 报告关闭完成，新进程 36616 在 8001 就绪。16 个普通只读地址、3 条 SSE 流均返回 200。仅从 OpenAPI 对照浏览器接口，未在实际服务上请求打开网页。</td>
+</tr>
+</tbody>
+</table></div>
+<pre><code class="language-powershell"># backend/：单跑本期用例、相关回归和后端全量
+python -m pytest -p no:cacheprovider --tb=line tests/api/test_open_in_browser.py
+python -m pytest -p no:cacheprovider --tb=line tests/api/test_open_in_browser.py tests/api/test_open_path.py tests/api/test_system_read_routes.py tests/api/test_main_hardening.py
+python -m pytest -p no:cacheprovider
+uvx --python 3.14 --from flake8==7.3.0 flake8 --select=E9,F63,F7,F82 --exclude=skills/marketplace,skills/packs,skills/use_skills,projects .
+
+# 仓库根目录；截图需要 Playwright 和 Edge
+node --check frontend/app.js
+python scripts/check_layers.py --json
+python &quot;dev-notes/assets/2026-11-26_代码重构_系统浏览器入口_截图.py&quot;
+</code></pre>
+<p>新增的 pytest 用例已纳入<a href="../.github/workflows/ci.yml">远端 CI</a>的全量收集范围，截图按需重跑。<code>main.py</code> 从 <strong>624 行降至 614 行</strong>，其余顶层函数和类的语法树未变。R3 累计迁出 <strong>24 个 HTTP 路径</strong>，剩下一个本地图片预览接口 <code>GET /api/local-file</code>。下一批建议用临时图片固定成功响应的字节、MIME 类型，以及缺失图片和不支持格式的响应，再迁移最后一个路由。257 行的应用生命周期仍待单独拆分。</p>
+<p>下期已留基线：隔离应用中，临时生成的 <code>Sample.PNG</code> 返回 200、<code>image/png</code>，响应字节与原图一致；缺失图片和目录均返回 JSON 404，普通文本文件返回 JSON 400。未读取用户图片，也未调用 8001 的本地文件接口。</p>
+</article><nav class="adjacent" aria-label="相邻文档"><a href="2026-11-26_18_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E5%89%8D%E7%AB%AF%E9%A1%B5%E9%9D%A2%E5%85%A5%E5%8F%A3.html">上一篇：代码重构：拆出前端入口，验证深链接刷新与首页缺失</a>
+<a href="2026-11-26_20_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%9C%AC%E5%9C%B0%E5%9B%BE%E7%89%87%E9%A2%84%E8%A7%88.html">下一篇：代码重构：拆出本地图片预览，完成主入口的 25 个 HTTP 路径迁移</a></nav></main></body></html>

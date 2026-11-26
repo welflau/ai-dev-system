@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 519.29225 880.9999999999999" width="519.29225" height="880.9999999999999" style="--bg:#ffffff;--fg:#1d3839;--accent:#12645e;--border:#608781;background:var(--bg)">
+<style>
+
+  text { font-family: 'Microsoft YaHei', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          var(--fg);
+    --_text-sec:      var(--muted, color-mix(in srgb, var(--fg) 60%, var(--bg)));
+    --_text-muted:    var(--muted, color-mix(in srgb, var(--fg) 40%, var(--bg)));
+    --_text-faint:    color-mix(in srgb, var(--fg) 25%, var(--bg));
+    --_line:          var(--line, color-mix(in srgb, var(--fg) 50%, var(--bg)));
+    --_arrow:         var(--accent, color-mix(in srgb, var(--fg) 85%, var(--bg)));
+    --_node-fill:     var(--surface, color-mix(in srgb, var(--fg) 3%, var(--bg)));
+    --_node-stroke:   var(--border, color-mix(in srgb, var(--fg) 20%, var(--bg)));
+    --_group-fill:    var(--bg);
+    --_group-hdr:     color-mix(in srgb, var(--fg) 5%, var(--bg));
+    --_inner-stroke:  color-mix(in srgb, var(--fg) 12%, var(--bg));
+    --_key-badge:     color-mix(in srgb, var(--fg) 10%, var(--bg));
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<polyline class="edge" data-from="A" data-to="B" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="292.68533333333335,76.9 292.68533333333335,112.9 256.52549999999997,112.9 256.52549999999997,124.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="B" data-to="C" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="256.52549999999997,161.8 256.52549999999997,209.8" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="C" data-to="D" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="256.52549999999997,246.70000000000002 256.52549999999997,294.70000000000005" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="D" data-to="E" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="221.49933333333334,331.6 221.49933333333334,367.6 181.017,367.6 181.017,379.6" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="E" data-to="F" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="181.017,416.5 181.017,464.5" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="F" data-to="G" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="181.017,501.4 181.017,549.4" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="G" data-to="H" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="181.017,586.3 181.017,622.3 207.54383333333334,622.3 207.54383333333334,634.3" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="D" data-to="H" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="启动中取消" points="291.5516666666666,331.6 291.5516666666666,367.6 332.034,367.6 332.034,622.3 305.50716666666665,622.3 305.50716666666665,634.3" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="H" data-to="I" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="256.52549999999997,671.1999999999999 256.52549999999997,719.1999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="I" data-to="J" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="256.52549999999997,756.0999999999999 256.52549999999997,792.0999999999999 321.8930833333333,792.0999999999999 321.8930833333333,804.0999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="A" data-to="J" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="建表失败" points="375.82866666666666,76.9 375.82866666666666,197.8 419.70724999999993,197.8 419.70724999999993,792.0999999999999 360.57641666666666,792.0999999999999 360.57641666666666,804.0999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="D" data-to="H" data-label="启动中取消">
+  <rect x="293.034" y="476.09999999999997" width="77.05000000000001" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="331.55899999999997" y="491.24999999999994" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">启动中取消</text>
+</g>
+<g class="edge-label" data-from="A" data-to="J" data-label="建表失败">
+  <rect x="386.70724999999993" y="561" width="65.17" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="419.2922499999999" y="576.15" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">建表失败</text>
+</g>
+<g class="node" data-id="A" data-label="登记数据库清理，再连接和建表" data-shape="rectangle">
+  <rect x="209.54199999999997" y="40" width="249.42999999999998" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="334.25699999999995" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">登记数据库清理，再连接和建表</text>
+</g>
+<g class="node" data-id="B" data-label="恢复项目和索引，同步资源" data-shape="rectangle">
+  <rect x="146.6305" y="124.9" width="219.78999999999996" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="256.52549999999997" y="143.35000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">恢复项目和索引，同步资源</text>
+</g>
+<g class="node" data-id="C" data-label="启动事件、工单、CI、图片四个调度器" data-shape="rectangle">
+  <rect x="111.06250000000003" y="209.8" width="290.92599999999993" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="256.52549999999997" y="228.25" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">启动事件、工单、CI、图片四个调度器</text>
+</g>
+<g class="node" data-id="D" data-label="登记 MCP 清理，启动 MCP" data-shape="rectangle">
+  <rect x="151.44700000000003" y="294.70000000000005" width="210.15699999999995" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="256.5255" y="313.15000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">登记 MCP 清理，启动 MCP</text>
+</g>
+<g class="node" data-id="E" data-label="启动自动化、Checkpoint GC、素材 GC" data-shape="rectangle">
+  <rect x="40" y="379.6" width="282.034" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="181.017" y="398.05" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">启动自动化、Checkpoint GC、素材 GC</text>
+</g>
+<g class="node" data-id="F" data-label="就绪，处理请求" data-shape="rectangle">
+  <rect x="108.172" y="464.5" width="145.69" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="181.017" y="482.95" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">就绪，处理请求</text>
+</g>
+<g class="node" data-id="G" data-label="停止监听，进入 lifespan 清理" data-shape="rectangle">
+  <rect x="68.15799999999999" y="549.4" width="225.718" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="181.017" y="567.85" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">停止监听，进入 lifespan 清理</text>
+</g>
+<g class="node" data-id="H" data-label="取消并等待本次已创建的全部直属任务" data-shape="rectangle">
+  <rect x="109.5805" y="634.3" width="293.89" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="256.52549999999997" y="652.75" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">取消并等待本次已创建的全部直属任务</text>
+</g>
+<g class="node" data-id="I" data-label="如已尝试启动 MCP，则停止 MCP" data-shape="rectangle">
+  <rect x="130.32850000000002" y="719.1999999999999" width="252.39399999999998" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="256.5255" y="737.65" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">如已尝试启动 MCP，则停止 MCP</text>
+</g>
+<g class="node" data-id="J" data-label="断开数据库" data-shape="rectangle">
+  <rect x="283.20975" y="804.0999999999999" width="116.05" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="341.23474999999996" y="822.55" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">断开数据库</text>
+</g>
+</svg>

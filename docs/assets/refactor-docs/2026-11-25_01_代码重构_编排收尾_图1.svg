@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1109.06 239.55" width="1109.06" height="239.55" style="--bg:#ffffff;--fg:#1d3839;--accent:#12645e;--border:#608781;background:var(--bg)">
+<style>
+
+  text { font-family: 'Microsoft YaHei', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          var(--fg);
+    --_text-sec:      var(--muted, color-mix(in srgb, var(--fg) 60%, var(--bg)));
+    --_text-muted:    var(--muted, color-mix(in srgb, var(--fg) 40%, var(--bg)));
+    --_text-faint:    color-mix(in srgb, var(--fg) 25%, var(--bg));
+    --_line:          var(--line, color-mix(in srgb, var(--fg) 50%, var(--bg)));
+    --_arrow:         var(--accent, color-mix(in srgb, var(--fg) 85%, var(--bg)));
+    --_node-fill:     var(--surface, color-mix(in srgb, var(--fg) 3%, var(--bg)));
+    --_node-stroke:   var(--border, color-mix(in srgb, var(--fg) 20%, var(--bg)));
+    --_group-fill:    var(--bg);
+    --_group-hdr:     color-mix(in srgb, var(--fg) 5%, var(--bg));
+    --_inner-stroke:  color-mix(in srgb, var(--fg) 12%, var(--bg));
+    --_key-badge:     color-mix(in srgb, var(--fg) 10%, var(--bg));
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<polyline class="edge" data-from="Timer" data-to="P" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="196.805,90.9 244.805,90.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="P" data-to="Cycle" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="390.495,90.9 438.495,90.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Cycle" data-to="Children" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="等待子工单" points="657.544,84.75 693.5440000000001,84.75 693.5440000000001,58.45 816.654,58.45" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Cycle" data-to="Queue" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="依赖满足" points="657.544,97.05000000000001 693.544,97.05000000000001 693.544,123.35000000000001 816.654,123.35000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Pipe" data-to="B" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="141.23000000000002,181.10000000000002 189.23000000000002,181.10000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="B" data-to="Build" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="355.668,181.10000000000002 403.668,181.10000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="Build" data-to="Helpers" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="702.0039999999999,181.10000000000002 750.0039999999999,181.10000000000002" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="Cycle" data-to="Children" data-label="等待子工单">
+  <rect x="701.5440000000001" y="42.45" width="77.05000000000001" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="740.0690000000001" y="57.6" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">等待子工单</text>
+</g>
+<g class="edge-label" data-from="Cycle" data-to="Queue" data-label="依赖满足">
+  <rect x="701.544" y="107.35000000000001" width="65.17" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="734.129" y="122.50000000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">依赖满足</text>
+</g>
+<g class="node" data-id="Timer" data-label="poll_loop 定时扫描" data-shape="rectangle">
+  <rect x="40" y="72.45" width="156.805" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="118.4025" y="90.9" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">poll_loop 定时扫描</text>
+</g>
+<g class="node" data-id="P" data-label="orch._poll_once()" data-shape="rectangle">
+  <rect x="244.805" y="72.45" width="145.69" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="317.65" y="90.9" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">orch._poll_once()</text>
+</g>
+<g class="node" data-id="Cycle" data-label="poll_cycle.poll_once(orch, db)" data-shape="rectangle">
+  <rect x="438.495" y="72.45" width="219.04899999999998" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="548.0195" y="90.9" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">poll_cycle.poll_once(orch, db)</text>
+</g>
+<g class="node" data-id="Children" data-label="orch._check_subtasks_complete()" data-shape="rectangle">
+  <rect x="816.654" y="40" width="246.46599999999995" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="939.887" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">orch._check_subtasks_complete()</text>
+</g>
+<g class="node" data-id="Queue" data-label="orch._enqueue_ticket()" data-shape="rectangle">
+  <rect x="816.654" y="104.9" width="178.29399999999998" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="905.8009999999999" y="123.35000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">orch._enqueue_ticket()</text>
+</g>
+<g class="node" data-id="Pipe" data-label="工单管线" data-shape="rectangle">
+  <rect x="40.00000000000003" y="162.65" width="101.22999999999999" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="90.61500000000002" y="181.10000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">工单管线</text>
+</g>
+<g class="node" data-id="B" data-label="orch._build_context()" data-shape="rectangle">
+  <rect x="189.23000000000002" y="162.65" width="166.438" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="272.449" y="181.10000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">orch._build_context()</text>
+</g>
+<g class="node" data-id="Build" data-label="context_assembly.build_context(orch, db, …)" data-shape="rectangle">
+  <rect x="403.668" y="162.65" width="298.3359999999999" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="552.836" y="181.10000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">context_assembly.build_context(orch, db, …)</text>
+</g>
+<g class="node" data-id="Helpers" data-label="实例辅助方法 / 记忆 / 知识库" data-shape="rectangle">
+  <rect x="750.0039999999999" y="162.65" width="221.272" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="860.6399999999999" y="181.10000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">实例辅助方法 / 记忆 / 知识库</text>
+</g>
+</svg>

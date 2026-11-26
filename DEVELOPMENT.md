@@ -69,6 +69,22 @@ ai-dev-system/
 
 ## 快速开始
 
+### 重构文档与 DevNote 的 HTML 副本
+
+从[代码重构文档索引](docs/代码重构_文档索引.html)浏览项目体检、重构方案和按日期排列的开发笔记。可以直接用浏览器打开本地文件，无需启动后端。分享整套文档时保留 `docs/` 和 `dev-notes/` 的相对位置及各自的 `assets/` 目录。
+
+新增或修改文档时，保留 Markdown 原稿，并在同一目录交付同名 HTML。重构系列的文件名统一含「代码重构」；导出器自动收集 `docs/` 和 `dev-notes/` 中含此关键词的 Markdown。其他需要同时交付的笔记可登记到 `scripts/docs-html/export.mjs` 的 `extra` 列表中。
+
+在仓库根目录使用 Node.js 22 或更高版本，首次执行第一个命令。修改原稿后，运行生成和校验命令，再一起提交原稿、HTML、索引与图像：
+
+```sh
+npm --prefix scripts/docs-html ci --ignore-scripts
+npm --prefix scripts/docs-html run build
+npm --prefix scripts/docs-html run check
+```
+
+生成时在本地把 Mermaid 转为 SVG，并确认原稿中的截图可用。校验命令只读；副本缺失或内容过期时会列出文件并返回非零退出码。相关文档和工具推送到 `main`、`develop` 或提交到这两个分支的 PR 时，[文档工作流](.github/workflows/docs-html.yml)会运行同一项检查。
+
 ### 环境要求
 - Python 3.8+
 - pip

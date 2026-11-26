@@ -1,0 +1,150 @@
+<!doctype html>
+<!-- 由 scripts/docs-html/export.mjs 生成，请编辑 Markdown 原稿。 -->
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>代码重构方案分析（度量、结论与校对记录）（2026-11-24） · ADS 文档</title><link rel="stylesheet" href="../docs/assets/refactor-docs/reader.css"></head>
+<body><nav class="bar" aria-label="主导航"><b>ADS · 开发文档</b><a href="../docs/%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%96%87%E6%A1%A3%E7%B4%A2%E5%BC%95.html">系列索引</a></nav>
+<main><header><p class="meta">开发笔记 · DevNote · <a href="2026-11-24_02_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%96%B9%E6%A1%88%E5%88%86%E6%9E%90.md">Markdown 原稿</a></p>
+<h1>代码重构方案分析（度量、结论与校对记录）（2026-11-24）</h1></header><details><summary>本页目录（8 节）</summary><ol><li><a href="#section-1">背景</a></li><li><a href="#section-2">分析方法</a></li><li><a href="#section-3">主要发现</a></li><li><a href="#section-4">方案摘要</a></li><li><a href="#section-5">校对中修正的问题</a></li><li><a href="#section-6">基线验证</a></li><li><a href="#section-7">遗留与后续</a></li><li><a href="#section-8">复核命令</a></li></ol></details>
+<article><blockquote>
+<p>关联方案：<code>docs/20261124_01_代码重构方案.md</code>
+前一篇：<code>dev-notes/2026-11-24_01_项目体检问题修复第一批.md</code>
+提交基线：<code>7b9e7f0</code>；本篇只新增和修改文档，<strong>没有改代码</strong>，文档尚未提交。</p>
+</blockquote>
+<h2 id="section-1">背景</h2>
+<p>体检文档 <code>docs/20261123_01_项目问题与缺失分析.md</code> 的第 10、11、12 条（核心文件过大、宽泛 <code>except</code>、
+分层治理只完成一部分）在第一批修复里标成了「长期项」。本轮把这三条展开成一份可以分阶段执行的重构方案。</p>
+<h2 id="section-2">分析方法</h2>
+<p>全部用一次性脚本对工作区做静态统计，外加一轮带覆盖率的全量 pytest：</p>
+<ul>
+<li>AST 统计函数长度、圈复杂度、嵌套深度、宽泛 <code>except</code>。</li>
+<li>正则统计 <code>db.</code> 调用、SQL 字面量、<code>json.loads</code>、时间调用、工单状态写入点。</li>
+<li><code>python scripts/check_layers.py --json</code> 取延迟导入、未归层模块、方向违规。</li>
+<li><code>git log --since=2026-08-24 --name-only</code> 统计近三个月的改动分布。</li>
+<li><code>python -m pytest --cov=. --cov-report=json:&lt;文件&gt;</code> 取覆盖率，再按文件范围过滤。</li>
+<li><code>frontend/app.js</code> 只做正则计数。</li>
+</ul>
+<p>脚本和覆盖率数据放在系统临时目录，没有入库。方案的 R0 第 1 步会把度量固化成 <code>scripts/code_metrics.py</code>。</p>
+<h2 id="section-3">主要发现</h2>
+<ol>
+<li><strong>最该拆的函数几乎没有测试。</strong> 自有后端代码语句覆盖率 26.9%（12,646 / 46,998）。
+<code>process_ticket</code>（682 行）0%，<code>_handle_agent_result</code>（1,026 行，圈复杂度 153）6%，
+<code>_call_cli_stream</code>（493 行）0%。</li>
+<li><strong>改动集中在大文件。</strong> 近三个月 112 个提交里 58 个碰了 11 个大文件，<code>frontend/app.js</code> 占 38 个。</li>
+<li><strong>没有数据访问层。</strong> 业务代码里 <code>db.</code> 调用 1,038 处、114 个文件，其中 <code>api/</code> 543 处、
+<code>orchestrator.py</code> 185 处；工单状态写入点 54 处。<code>Database</code> 没有事务接口。</li>
+<li><strong>前端是单个脚本。</strong> <code>app.js</code> 35,912 行，1,079 个顶层函数，163 个可变全局变量，767 处内联 <code>onclick</code>。</li>
+<li><strong>分层守卫有盲区。</strong> 230 个未归层模块里有 83 个是真实业务模块，不受方向律约束；
+存量 92 条方向违规里，47 条是 <code>api.*</code> 直接导入 L3，27 条是 L3 导入 <code>llm_client</code>，
+其余 18 条分散在 <code>orchestrator</code>、<code>plugins.registry</code>、<code>sop</code> 等处。</li>
+</ol>
+<h2 id="section-4">方案摘要</h2>
+<p>顺序的依据是第 1 条发现：先补测试，再动结构。</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>阶段</th>
+<th>内容</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>R0</td>
+<td>度量脚本加基线棘轮，CI 加覆盖率，给巨型函数补特征测试，83 个业务模块补进 <code>layers.toml</code>，根目录 77 个下划线脚本归位</td>
+</tr>
+<tr>
+<td>R1</td>
+<td>新增 <code>repositories/</code>，<code>Database.transaction()</code>，<code>ticket_state.transition()</code> 收口状态写入，<code>PRAGMA user_version</code> 迁移</td>
+</tr>
+<tr>
+<td>R2</td>
+<td>拆 <code>orchestrator.py</code>：结果处理器注册表，<code>process_ticket</code> 分步管线，按职责拆协作者类；清 6 条方向违规</td>
+</tr>
+<tr>
+<td>R3</td>
+<td><code>main.py</code> 的 25 个路由迁出，<code>api/chat.py</code> 等改成包，路由不写 SQL；清 API 层的 50 条方向违规</td>
+</tr>
+<tr>
+<td>R4</td>
+<td><code>llm_client.py</code> 拆成 <code>llm/</code> 包并保留兼容层，清 <code>llm_client</code> 相关的 28 条方向违规</td>
+</tr>
+<tr>
+<td>R5</td>
+<td>前端先加 <code>node --check</code>、ESLint、Playwright 冒烟，再按分节拆文件，最后转 ES 模块</td>
+</tr>
+<tr>
+<td>R6</td>
+<td>异常处理、延迟导入、UE action 公共基类、时间处理、状态判断；清剩余 8 条方向违规</td>
+</tr>
+</tbody>
+</table></div>
+<p>R2、R3、R4 在 R1 之后可以并行，R5 独立。</p>
+<h2 id="section-5">校对中修正的问题</h2>
+<p>方案初稿写完后复核，改了五处：</p>
+<ol>
+<li>
+<p><strong>把 <code>elif</code> 链误读成了嵌套。</strong> 初稿写「<code>ArchitectAgent</code> 分支 654 行，里面嵌着 <code>DevAgent</code> 和 <code>ReviewAgent</code>」。
+AST 里 <code>elif</code> 表示成 <code>orelse</code> 中的 <code>If</code> 节点，取 <code>end_lineno - lineno</code> 得到的是从该分支到链尾的长度。
+沿 <code>orelse</code> 逐段量之后的实际结构：前面 5 个独立 <code>if</code> 块（<code>ArtistAgent</code> 53 行、<code>ArtAgent</code> 28 行、
+<code>UXAgent</code> 28 行、<code>PlannerAgent</code> 31 行、<code>UEEditorAgent</code> 56 行），后面一条 654 行的链
+（<code>ArchitectAgent</code> 74、<code>DevAgent</code> 187、<code>ReviewAgent</code> 50、<code>ProductAgent</code> 验收 72、<code>TestAgent</code> 178、<code>DeployAgent</code> 85）。</p>
+</li>
+<li>
+<p><strong>数据访问的统计混了两个范围。</strong> 初稿的 1,190 处 <code>db.</code> 调用、154 个含 SQL 的文件、76 个查 <code>projects</code> 的文件
+都把根目录 77 个下划线脚本算了进去，而「去重后 486 种」又是不含脚本的口径。统一成不含脚本：
+<code>db.</code> 调用 1,038 处、114 个文件；SQL 字面量 804 处、107 个文件、去重 489 种；
+直接查询 <code>projects</code> / <code>tickets</code> / <code>ticket_logs</code> / <code>requirements</code> 的文件 55 / 37 / 34 / 19 个。</p>
+</li>
+<li>
+<p><strong><code>traits</code> 的 <code>json.loads</code> 计数偏大。</strong> 初稿的 45 处来自一个同时匹配 <code>traits</code> 和 <code>.get(</code> 的正则。
+改成：<code>json.loads</code> 共 203 处、66 个文件，其中至少 18 处是在解 <code>traits</code>。</p>
+</li>
+<li>
+<p><strong>时间调用的描述不完整。</strong> 31 个文件是 <code>datetime.now(</code> 和 <code>utcnow()</code> 合计且含脚本的结果。
+改成不含脚本的 46 处、29 个文件，并写明两种调用都算。</p>
+</li>
+<li>
+<p><strong>方向违规的归因错了。</strong> 初稿和体检文档都写 92 条方向违规全部（或大多）是 L3 → <code>llm_client</code>，
+方案据此把「清掉 92 条」整个放进了 R4。这个说法是看守卫输出的前十几行得出的，那几行按字母序排，
+恰好都是 <code>actions.*</code> → <code>llm_client</code>。跑基线验证时读了 <code>--json</code> 的完整列表，实际分布是：
+<code>api.*</code> → L3 47 条，L3 → <code>llm_client</code> 27 条，<code>orchestrator</code> → L3 6 条，<code>plugins.registry</code> → L3 / L2 5 条，
+L3 → L1 其他模块 4 条，<code>sop.*</code> → L3 2 条，<code>llm_client</code> → L3 1 条。
+修正后违规按归属分到四个阶段：R2 清 6 条，R3 清 50 条，R4 清 28 条，R6 清 8 条。
+R3 因此多了一步，并且带出一条约束：<code>services/</code> 归 L1，把代码从 <code>api/</code> 挪过去不会让违规消失，
+要经注册表或 <code>runtime_facade</code> 取 action 和 Agent。
+同一处还改了两个引用：<code>ProviderRegistry</code> 在六层方案里属于 P2，初稿写成了 P3；
+L3 里导入 <code>llm_client</code> 的语句实测是 41 条、27 个模块，初稿的 62 处没能复现，已替换。</p>
+</li>
+</ol>
+<p>教训：同一张表里的数字要出自同一个文件范围；统计 <code>if / elif</code> 时要沿 <code>orelse</code> 分段；
+守卫的截断输出不能用来下「全部是」的结论，要读完整列表。</p>
+<h2 id="section-6">基线验证</h2>
+<p>动手重构前对当前工作区（HEAD <code>7b9e7f0</code> 加全部未提交改动）跑了一遍，作为 R0 的起点：</p>
+<ul>
+<li>全量 pytest：868 个用例全部通过，退出码 0，Windows、Python 3.14.3，连续跑了两遍，结果一致。</li>
+<li>分层守卫：退出码 0；SCC 0 组，方向违规 92 条，相对基线新增 0 条，未归层模块 230 个，延迟导入占比 43.0%。</li>
+</ul>
+<p>没有验证的部分：Linux 和 CI 上的实际运行、真实服务启动、浏览器端到端、桌面版打包。
+868 个用例的覆盖率是 26.9%，所以「全部通过」对 <code>process_ticket</code> 这类零覆盖的函数没有保护作用。</p>
+<h2 id="section-7">遗留与后续</h2>
+<ul>
+<li>方案第九节列了 5 个需要评审决定的事项：目标数值、根目录脚本归档还是删除、R4 的协议下沉时机、
+前端是否接受「不引入构建工具」、R2–R4 的先后顺序。</li>
+<li>重构要从干净的工作区开始。目前工作区里还有 <code>ai_gen_tasks</code> 改动和第一批修复，都没有提交。</li>
+<li>覆盖率只在 Windows、Python 3.14.3 下量过一次。</li>
+<li>圈复杂度是按 AST 分支节点数自算的，和 <code>radon</code>、<code>mccabe</code> 会有小的出入。</li>
+<li>没有审读业务逻辑的正确性，方案只基于结构和度量。</li>
+</ul>
+<h2 id="section-8">复核命令</h2>
+<pre><code class="language-powershell"># 分层守卫（延迟导入、未归层模块、方向违规），在仓库根目录执行
+python scripts/check_layers.py --json
+
+# 覆盖率，在 backend/ 下执行；输出文件放到仓库外，避免留在工作区
+cd backend
+python -m pytest --cov=. --cov-report=json:$env:TEMP\cov.json
+cd ..
+
+# 近三个月的改动分布
+git log --since=2026-08-24 --name-only --pretty=format:
+</code></pre>
+</article><nav class="adjacent" aria-label="相邻文档"><a href="2026-11-24_01_%E9%A1%B9%E7%9B%AE%E4%BD%93%E6%A3%80%E9%97%AE%E9%A2%98%E4%BF%AE%E5%A4%8D%E7%AC%AC%E4%B8%80%E6%89%B9.html">上一篇：项目体检问题修复（第一批：路由 / 拆环 / CI / 安全收紧 / 一致性）（2026-11-24）</a>
+<a href="2026-11-24_03_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%8B%86%E5%88%86%E7%BB%93%E6%9E%9C%E5%A4%84%E7%90%86%E5%99%A8.html">下一篇：拆分 `_handle_agent_result` 结果处理器（2026-11-24）</a></nav></main></body></html>

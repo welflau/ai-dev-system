@@ -1,0 +1,41 @@
+<!doctype html>
+<!-- 由 scripts/docs-html/export.mjs 生成，请编辑 Markdown 原稿。 -->
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>代码重构：拆出本地图片预览，完成主入口的 25 个 HTTP 路径迁移 · ADS 文档</title><link rel="stylesheet" href="../docs/assets/refactor-docs/reader.css"></head>
+<body><nav class="bar" aria-label="主导航"><b>ADS · 开发文档</b><a href="../docs/%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%96%87%E6%A1%A3%E7%B4%A2%E5%BC%95.html">系列索引</a></nav>
+<main><header><p class="meta">开发笔记 · DevNote · <a href="2026-11-26_20_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%9C%AC%E5%9C%B0%E5%9B%BE%E7%89%87%E9%A2%84%E8%A7%88.md">Markdown 原稿</a></p>
+<h1>代码重构：拆出本地图片预览，完成主入口的 25 个 HTTP 路径迁移</h1></header><details><summary>本页目录（4 节）</summary><ol><li><a href="#section-1">一次图片预览</a></li><li><a href="#section-2">测试怎么跑</a></li><li><a href="#section-3">开发服务切换</a></li><li><a href="#section-4">进度与下一步</a></li></ol></details>
+<article><p>2026-11-26 · <a href="2026-11-26_19_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E7%B3%BB%E7%BB%9F%E6%B5%8F%E8%A7%88%E5%99%A8%E5%85%A5%E5%8F%A3.html">上期：系统浏览器入口</a> · <a href="../docs/20261124_01_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84%E6%96%B9%E6%A1%88.html">项目重构方案</a></p>
+<p>聊天面板打开本地图片时，浏览器要收到原图字节和对应的图片类型。旧版能显示正常样本，但接口文档把成功响应声明为 JSON；此外，系统 MIME 表如果缺少 JPEG 项，即使读出的是 JPEG，也会发出 <code>image/png</code>。这两个问题分别通过现场 OpenAPI 和隔离测试确认。</p>
+<p>基线 <code>fcbcd60</code>，代码提交 <code>a159e8b</code>。<a href="../backend/api/local_images.py">本地图片路由</a>现在用同一张扩展名表决定允许的格式、实际响应类型及 OpenAPI 的成功类型。六种扩展名对应五种 MIME：<code>.jpg</code>、<code>.jpeg</code> 都是 <code>image/jpeg</code>。图片按原样传输，不做内容识别或转码，也未改变原有的文件访问范围。</p>
+<h2 id="section-1">一次图片预览</h2>
+<figure><a href="../docs/assets/refactor-docs/2026-11-26_20_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%9C%AC%E5%9C%B0%E5%9B%BE%E7%89%87%E9%A2%84%E8%A7%88_%E5%9B%BE1.svg"><img src="../docs/assets/refactor-docs/2026-11-26_20_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%9C%AC%E5%9C%B0%E5%9B%BE%E7%89%87%E9%A2%84%E8%A7%88_%E5%9B%BE1.svg" alt="流程图：一次图片预览"></a><figcaption>流程图：一次图片预览 · <a href="../docs/assets/refactor-docs/2026-11-26_20_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%9C%AC%E5%9C%B0%E5%9B%BE%E7%89%87%E9%A2%84%E8%A7%88_%E5%9B%BE1.svg">查看原图</a></figcaption></figure>
+<p>存在性检查在类型检查之前，所以缺失的 <code>.txt</code> 返回 404，已存在的普通文本返回 400。目录即使叫 <code>directory.png</code> 也返回 404。范围处理继续交给 Starlette 的 <code>FileResponse</code>。本批没有修改<a href="../frontend/app.js">前端</a>、静态文件挂载、全局 MIME 注册或应用生命周期。</p>
+<h2 id="section-2">测试怎么跑</h2>
+<ol>
+<li><strong>改代码前固定行为。</strong> <a href="../backend/tests/api/test_local_images.py">新增的 14 项 pytest 用例</a>直接请求已装配的应用，但不启动业务生命周期。Pillow 在临时目录生成六种扩展名的图片，HTTPX 对照状态、完整字节、类型和长度，同时覆盖错误与 Range。旧版 12 项通过，2 项失败：去掉测试进程的 <code>.jpg</code> MIME 项后，JPEG 错标 PNG；OpenAPI 只列出 JSON。前者是模拟条件，未在开发机上发现默认 JPEG 映射缺失。</li>
+<li><strong>迁移后验证兼容性。</strong> 加入桌面打包清单，在 <a href="../backend/main.py">main.py</a> 原位置挂载路由。应用只注册一个对应 GET，处理函数与旧的 Python 入口 <code>main.serve_local_file</code> 指向同一对象。相关回归 48 项通过（5.61 秒）；在项目声明的最低 FastAPI 版本 0.141.0、Starlette 0.52.1 环境，新增 14 项全部通过（4.62 秒）。本机常规测试用的是 FastAPI 0.135.1、Starlette 1.0.0；未重建桌面安装包。</li>
+<li><strong>验证图片真的可显示。</strong> <a href="assets/2026-11-26_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%9C%AC%E5%9C%B0%E5%9B%BE%E7%89%87%E9%A2%84%E8%A7%88_%E6%88%AA%E5%9B%BE.py">截图脚本</a>让 Edge 执行前端原有的 <code>_renderChatFileBody</code>，将该标签页的请求转给真实图片路由。样本名含中文、空格与 <code>&amp;</code>。脚本同时检查响应字节与临时文件一致、浏览器能解码成 480 × 72 像素，并核对范围请求和两种错误的实际响应。不需要读取用户图片或在开发服务上请求本地文件。</li>
+</ol>
+<p><img src="assets/2026-11-26_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%9C%AC%E5%9C%B0%E5%9B%BE%E7%89%87%E9%A2%84%E8%A7%88_%E6%88%AA%E5%9B%BE.png" alt="Edge 中的临时色卡及完整预览、字节范围、文本文件和缺失文件四种请求的实测结果"></p>
+<p>从仓库根目录运行：</p>
+<pre><code class="language-powershell">Push-Location backend
+python -m pytest -p no:cacheprovider --tb=line tests/api/test_local_images.py tests/api/test_frontend_pages.py tests/api/test_main_hardening.py
+python -m pytest -p no:cacheprovider
+uvx --python 3.14 --from flake8==7.3.0 flake8 --select=E9,F63,F7,F82 --exclude=skills/marketplace,skills/packs,skills/use_skills,projects .
+Pop-Location
+python scripts/check_layers.py --json
+# 截图需要 Playwright、Edge 和项目依赖 Pillow
+python &quot;dev-notes/assets/2026-11-26_代码重构_本地图片预览_截图.py&quot;
+</code></pre>
+<p>后端全量 <strong>1,835 项通过（279.58 秒）</strong>，退出码 0；比上期增加 14 项。新用例在 <a href="../.github/workflows/ci.yml">CI</a> 的后端 pytest 自动收集范围内；截图脚本按需运行。本地指定 flake8 规则通过，分层检查扫描 521 个模块，既有方向违规 86 条，新增违规、解析错误、循环依赖组均为 0。</p>
+<h2 id="section-3">开发服务切换</h2>
+<ul>
+<li><strong>关闭旧服务。</strong> 切换前排队数、处理中工单数和活动 Agent 数均为 0。旧进程 36616 收到关闭信号后停止监听 8001，但再次发送中断、等待后仍未退出。复核 PID、启动命令和端口状态后单独结束该进程，未观察到正常关闭完成。现有证据不能定位是哪一步在等待。</li>
+<li><strong>验证新服务。</strong> 新进程 87256 在 8001 就绪。16 个普通只读 GET 和 3 条 SSE 的响应头检查全部通过。现场对照重启前后 OpenAPI：操作标识、说明、必填参数与 422 定义相同；200 从 JSON 改为五种二进制图片类型，并补上 400、404。图片字节、显示和错误正文均在前述隔离环境验证。</li>
+</ul>
+<h2 id="section-4">进度与下一步</h2>
+<p><code>main.py</code> 从 614 行降至 <strong>600 行</strong>，不再直接声明 HTTP 路由。累计迁出计划中的 <strong>25 个 HTTP 路径</strong>；全局异常处理器仍在，其他顶层函数和类的语法树未变。R3 还有 257 行的 <code>lifespan</code> 及其他 API 文件待拆分。</p>
+<p>下一批先用隔离服务固定启动顺序和退出行为，分别观察后台任务取消、MCP 客户端停止和数据库断开，再提取有名字的步骤。验收要覆盖子进程是否最终退出；仅凭端口不再监听，不能判定关闭完成。</p>
+</article><nav class="adjacent" aria-label="相邻文档"><a href="2026-11-26_19_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E7%B3%BB%E7%BB%9F%E6%B5%8F%E8%A7%88%E5%99%A8%E5%85%A5%E5%8F%A3.html">上一篇：代码重构：拆出系统浏览器入口，区分地址错误与启动失败</a>
+<a href="2026-11-26_21_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E5%BA%94%E7%94%A8%E7%94%9F%E5%91%BD%E5%91%A8%E6%9C%9F.html">下一篇：代码重构：应用停机后，确认 Python 进程也退出</a></nav></main></body></html>

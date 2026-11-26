@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 581.2955 831.1999999999999" width="581.2955" height="831.1999999999999" style="--bg:#ffffff;--fg:#1d3839;--accent:#12645e;--border:#608781;background:var(--bg)">
+<style>
+
+  text { font-family: 'Microsoft YaHei', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          var(--fg);
+    --_text-sec:      var(--muted, color-mix(in srgb, var(--fg) 60%, var(--bg)));
+    --_text-muted:    var(--muted, color-mix(in srgb, var(--fg) 40%, var(--bg)));
+    --_text-faint:    color-mix(in srgb, var(--fg) 25%, var(--bg));
+    --_line:          var(--line, color-mix(in srgb, var(--fg) 50%, var(--bg)));
+    --_arrow:         var(--accent, color-mix(in srgb, var(--fg) 85%, var(--bg)));
+    --_node-fill:     var(--surface, color-mix(in srgb, var(--fg) 3%, var(--bg)));
+    --_node-stroke:   var(--border, color-mix(in srgb, var(--fg) 20%, var(--bg)));
+    --_group-fill:    var(--bg);
+    --_group-hdr:     color-mix(in srgb, var(--fg) 5%, var(--bg));
+    --_inner-stroke:  color-mix(in srgb, var(--fg) 12%, var(--bg));
+    --_key-badge:     color-mix(in srgb, var(--fg) 10%, var(--bg));
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<polyline class="edge" data-from="R" data-to="P" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="315.79391666666663,76.9 315.79391666666663,124.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="P" data-to="W" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="转换成功" points="281.63225,161.8 281.63225,197.8 239.75641666666664,197.8 239.75641666666664,278.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="P" data-to="E" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="转换失败" points="349.95558333333327,161.8 349.95558333333327,351 450.0011666666666,351 450.0011666666666,431.30000000000007" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="W" data-to="E" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="写入失败" points="271.44808333333333,315 271.44808333333333,351 344.1623333333333,351 344.1623333333333,419.30000000000007 358.7068333333333,419.30000000000007 358.7068333333333,431.30000000000007" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="W" data-to="C" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="写入成功" points="208.06474999999998,315 208.06474999999998,351 149.89499999999998,351 149.89499999999998,431.30000000000007" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="C" data-to="S" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="149.89499999999998,468.20000000000005 149.89499999999998,516.2" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="S" data-to="OK" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="成功或无需同步" points="113.26333333333332,553.1 113.26333333333332,589.1 96.85749999999999,589.1 96.85749999999999,742.3 128.08333333333331,742.3 128.08333333333331,754.3" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="S" data-to="L" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="外部同步失败" points="186.52666666666664,553.1 186.52666666666664,589.1 202.93249999999998,589.1 202.93249999999998,669.4" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="L" data-to="OK" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="202.93249999999998,706.3 202.93249999999998,742.3 171.70666666666665,742.3 171.70666666666665,754.3" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="P" data-to="W" data-label="转换成功">
+  <rect x="206.75641666666664" y="204.8" width="65.17" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="239.34141666666665" y="219.95000000000002" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">转换成功</text>
+</g>
+<g class="edge-label" data-from="P" data-to="E" data-label="转换失败">
+  <rect x="417.0011666666666" y="358" width="65.17" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="449.5861666666666" y="373.15" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">转换失败</text>
+</g>
+<g class="edge-label" data-from="W" data-to="E" data-label="写入失败">
+  <rect x="311.1623333333333" y="358" width="65.17" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="343.7473333333333" y="373.15" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">写入失败</text>
+</g>
+<g class="edge-label" data-from="W" data-to="C" data-label="写入成功">
+  <rect x="116.89499999999998" y="358" width="65.17" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="149.48" y="373.15" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">写入成功</text>
+</g>
+<g class="edge-label" data-from="S" data-to="OK" data-label="成功或无需同步">
+  <rect x="46.35749999999998" y="596.1" width="100.81000000000002" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="96.76249999999999" y="611.25" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">成功或无需同步</text>
+</g>
+<g class="edge-label" data-from="S" data-to="L" data-label="外部同步失败">
+  <rect x="158.43249999999998" y="596.1" width="88.93" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="202.89749999999998" y="611.25" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">外部同步失败</text>
+</g>
+<g class="node" data-id="R" data-label="收到全局配置保存请求" data-shape="rectangle">
+  <rect x="220.71891666666664" y="40" width="190.14999999999998" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="315.79391666666663" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">收到全局配置保存请求</text>
+</g>
+<g class="node" data-id="P" data-label="准备候选配置并转换数值" data-shape="rectangle">
+  <rect x="213.30891666666665" y="124.9" width="204.96999999999997" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="315.79391666666663" y="143.35000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">准备候选配置并转换数值</text>
+</g>
+<g class="node" data-id="W" data-label="合并并写入主配置文件" data-shape="rectangle">
+  <rect x="144.68141666666665" y="278.1" width="190.14999999999998" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="239.75641666666664" y="296.55" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">合并并写入主配置文件</text>
+</g>
+<g class="node" data-id="E" data-label="返回 500：不改运行时，不启动同步" data-shape="rectangle">
+  <rect x="267.41249999999997" y="431.30000000000007" width="273.883" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="404.3539999999999" y="449.75000000000006" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">返回 500：不改运行时，不启动同步</text>
+</g>
+<g class="node" data-id="C" data-label="更新客户端和 settings" data-shape="rectangle">
+  <rect x="60.3775" y="431.30000000000007" width="179.03499999999997" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="149.89499999999998" y="449.75000000000006" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">更新客户端和 settings</text>
+</g>
+<g class="node" data-id="S" data-label="按现有配置同步已安装技能" data-shape="rectangle">
+  <rect x="40" y="516.2" width="219.78999999999996" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="149.89499999999998" y="534.6500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">按现有配置同步已安装技能</text>
+</g>
+<g class="node" data-id="OK" data-label="返回保存成功" data-shape="rectangle">
+  <rect x="84.45999999999998" y="754.3" width="130.87" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="149.89499999999998" y="772.75" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">返回保存成功</text>
+</g>
+<g class="node" data-id="L" data-label="记录警告，保留主配置" data-shape="rectangle">
+  <rect x="107.85749999999999" y="669.4" width="190.14999999999998" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="202.93249999999998" y="687.85" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">记录警告，保留主配置</text>
+</g>
+</svg>

@@ -1,0 +1,136 @@
+<!doctype html>
+<!-- 由 scripts/docs-html/export.mjs 生成，请编辑 Markdown 原稿。 -->
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>代码重构：七个编排方法解除 L3 依赖并完成搬移 · ADS 文档</title><link rel="stylesheet" href="../docs/assets/refactor-docs/reader.css"></head>
+<body><nav class="bar" aria-label="主导航"><b>ADS · 开发文档</b><a href="../docs/%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%96%87%E6%A1%A3%E7%B4%A2%E5%BC%95.html">系列索引</a></nav>
+<main><header><p class="meta">开发笔记 · DevNote · <a href="2026-11-25_01_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E7%BC%96%E6%8E%92%E6%94%B6%E5%B0%BE.md">Markdown 原稿</a></p>
+<h1>代码重构：七个编排方法解除 L3 依赖并完成搬移</h1></header><details><summary>本页目录（5 节）</summary><ol><li><a href="#section-1">为什么先改导入</a></li><li><a href="#section-2">先给旧行为留凭据</a></li><li><a href="#section-3">按组搬移并测试</a></li><li><a href="#section-4">三处容易被“搬完能跑”掩盖的问题</a></li><li><a href="#section-5">收尾验证与下一步</a></li></ol></details>
+<article><p>2026-11-25 · <a href="2026-11-24_09_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%8C%89%E8%81%8C%E8%B4%A3%E6%8B%86%E7%B1%BB.html">上一期：按职责拆类</a> · <a href="../docs/20261124_01_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84%E6%96%B9%E6%A1%88.html">总方案</a></p>
+<p>原先留下的七个方法已分到五个模块。工单派发、轮询、手动诊断 API 和已有测试仍可调用 <code>TicketOrchestrator</code> 上的同名方法。本期验收看两件不同的事：入口是否变薄，以及原有行为是否保留。缩短入口不会缩短搬走的函数。</p>
+<p><img src="assets/2026-11-25_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E7%BC%96%E6%8E%92%E6%94%B6%E5%B0%BE_%E8%A1%8C%E6%95%B0.png" alt="按提交统计的入口文件行数"></p>
+<h2 id="section-1">为什么先改导入</h2>
+<p>直接把七个函数搬到 <code>orchestration/</code>，会让同一条非法依赖换一个文件名重新出现。第一段（<code>7627834</code>）先把等待子任务的状态常量提到 L0 的 <code>contracts</code>，旧导入路径仍可用。其余调用改用 <code>runtime_facade</code> 的 <code>agents_test()</code>、<code>agents_deploy()</code>、<code>actions_diagnose_ticket()</code>、<code>actions_knowledge_distill()</code>、<code>actions_ue_editor_control()</code>，用到时再取源模块的属性。这样测试仍能替换源模块的方法，TestAgent、DeployAgent 的创建时机也不变。</p>
+<p>方法内延迟导入门面；模块级的诊断和知识蒸馏函数沿用已有的 <code>_runtime_facade</code> 别名。两个模块入口留在原处，调用方和测试仍可替换它们。<code>desktop.spec</code> 显式列出动态加载的五个模块，并逐组加入新的编排模块。桌面包本期没有重新构建。</p>
+<p>两个最常走的入口现在这样接线。数据库对象在调用当下传入，实例仍能覆写子步骤：</p>
+<figure><a href="../docs/assets/refactor-docs/2026-11-25_01_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E7%BC%96%E6%8E%92%E6%94%B6%E5%B0%BE_%E5%9B%BE1.svg"><img src="../docs/assets/refactor-docs/2026-11-25_01_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E7%BC%96%E6%8E%92%E6%94%B6%E5%B0%BE_%E5%9B%BE1.svg" alt="流程图：为什么先改导入"></a><figcaption>流程图：为什么先改导入 · <a href="../docs/assets/refactor-docs/2026-11-25_01_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E7%BC%96%E6%8E%92%E6%94%B6%E5%B0%BE_%E5%9B%BE1.svg">查看原图</a></figcaption></figure>
+<h2 id="section-2">先给旧行为留凭据</h2>
+<p><code>test_orchestrator_l3_seams.py</code> 用临时 SQLite 库，经编排器调用真实函数体，只替换外部依赖。它覆盖没有子项的父工单如何恢复、依赖未完成能否入队、坏 JSON 的回退值、同类产物取哪一个等细节。第一段最终特征测试 <strong>180 通过</strong>，后端全量 <strong>1,636 通过</strong>。</p>
+<p>对原行为设计了 218 个单点改动。第一轮测试抓到 208 个，逐个检查剩下的 10 个，新增 9 条回归用例后只重跑这 10 个，抓到 9 个。也就是说 217 个可区分的改动被抓到；最后一个是把缺省优先级 medium 换成 low：真实查询返回的 priority 列非空且默认 medium，这条路径不会使用字典的缺省值。</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>漏过的行为</th>
+<th>补上的断言</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>OpenSpec 验证失败但阶段已变</td>
+<td>仍须停止归档</td>
+</tr>
+<tr>
+<td>Git 对非 Markdown 文档路径的处理、推送失败时的需求级标签</td>
+<td>分别核对输出文件名、日志内容</td>
+</tr>
+<tr>
+<td>BUG 修复备注、同类产物的顺序、架构与测试产物含坏 JSON、空的 UE 配置列</td>
+<td>分别核对字段值、后写覆盖、两个空字典以及空列不入上下文</td>
+</tr>
+<tr>
+<td>诊断匹配到了错误 action 的 SOP 阶段</td>
+<td>同时核对 agent 和 action</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="section-3">按组搬移并测试</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>新模块</th>
+<th style="text-align:right">方法数</th>
+<th style="text-align:right">主文件行数</th>
+<th style="text-align:right">接线测试</th>
+<th style="text-align:right">故意改坏：抓到 / 总数</th>
+<th style="text-align:right">后端全量</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>openspec_closeout · c0aeea2</td>
+<td style="text-align:right">2</td>
+<td style="text-align:right">1,747</td>
+<td style="text-align:right">395</td>
+<td style="text-align:right">31 / 31</td>
+<td style="text-align:right">1,646</td>
+</tr>
+<tr>
+<td>git_persist · 2403571</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">1,584</td>
+<td style="text-align:right">401</td>
+<td style="text-align:right">30 / 30</td>
+<td style="text-align:right">1,652</td>
+</tr>
+<tr>
+<td>blocked_diagnosis · 66aee5b</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">1,450</td>
+<td style="text-align:right">406</td>
+<td style="text-align:right">33 / 33</td>
+<td style="text-align:right">1,657</td>
+</tr>
+<tr>
+<td>poll_cycle · 6a49432</td>
+<td style="text-align:right">2</td>
+<td style="text-align:right">1,291</td>
+<td style="text-align:right">416</td>
+<td style="text-align:right">26 / 26</td>
+<td style="text-align:right">1,667</td>
+</tr>
+<tr>
+<td>context_assembly · e2e4c2b</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">1,119</td>
+<td style="text-align:right">421</td>
+<td style="text-align:right">14 / 14</td>
+<td style="text-align:right">1,672</td>
+</tr>
+</tbody>
+</table></div>
+<p>每组以搬移前的独立快照为输入，按以下顺序验收。生成、差异核对和故意改坏的工具在本机临时目录；进仓的是产品代码、pytest 用例、打包清单与本文。仅保存代码不会触发本地全套检查。下列测试在开发过程中主动执行，各组的接线用例也会被常规 pytest 收集。推送到 main、develop 或向它们提 PR 时，仓库配置的 CI 会再跑 pytest、flake8 和分层守卫。</p>
+<ol>
+<li>预演生成；检查要移动的方法、参数、导入和行数。正式生成后用 <code>--check</code> 比对磁盘文件。</li>
+<li><code>verify_split.py</code> 核对规范化后的语法树、字符串、注释、未搬代码、签名、依赖及旧入口。五组均为 <code>RESULT ALL PASS</code>。每组新模块先单独跑 flake8，避免遗漏注解里的名字。</li>
+<li>用全部历史组更新接线表，补 <code>desktop.spec</code>。从 <code>backend/</code> 跑 <code>python -m pytest -p no:cacheprovider tests/agents/test_orchestrator_delegation.py</code>。测试检查转发参数、异步等待、返回值与调用时取到的数据库对象。</li>
+<li>在四个独立工作树中故意改坏转发：漏传 db、参数换位、去掉 await 等。各工作树先跑原版，对照变体应通过；改坏变体应失败。最后检查工作树已还原，主工作区受监视的文件哈希未变。表里只统计改坏点，不计对照。</li>
+<li>从 <code>backend/</code> 跑 <code>python -m pytest -p no:cacheprovider</code>。在仓库根跑 <code>python scripts/check_layers.py --json</code>，最后检查 <code>flake8 --select=E9,F63,F7,F82 --exclude=skills/marketplace,skills/packs,skills/use_skills,projects .</code>（backend 下）并按组提交。各组方向违规都是 86，新增 0，未重写基线。Git 组全量有一次后台线程的 <code>Event loop is closed</code> 警告，原因未定位。</li>
+</ol>
+<p>轮询组第一次跑全量时，PowerShell 在处理原生进程 stderr 时将 <code>Windows fatal exception: code 0x80320012</code> 提升为终止错误；日志停在 77%，没有 pytest 汇总，这一轮不计入通过数。重跑改用 Python 子进程把 stdout/stderr 写入同一日志，同时检查 pytest 自身的退出码。没有更改用例、忽略失败或按比例换算结果。</p>
+<h2 id="section-4">三处容易被“搬完能跑”掩盖的问题</h2>
+<p><strong>后台诊断有四个入口。</strong> 工单管线的阻塞、连续失败超限，以及编排器处理 Agent error，这三处在转 blocked 后自动触发。第四处是 <code>POST /api/projects/{project_id}/tickets/{ticket_id}/diagnose</code>：检查工单存在即可手动触发。为此改了模块说明首句，直接描述“收集上下文，生成诊断，写回 tickets.diagnosis 并发事件”，触发条件另说。</p>
+<p><strong>局部注解也需要静态检查。</strong> 诊断模块首次生成时，flake8 在三处报 F821：<code>traits: List[str]</code>、<code>sop_stage: Dict[str, Any]</code>、<code>parsed_result: Dict[str, Any]</code>。当时的生成器收集了签名里的 Dict，却漏掉只出现在局部注解中的 List 和 Any；搬移校验第 9b 项也没有列出它们。生成器增加 AST 扫描，读取 <code>AnnAssign.annotation</code> 中的名字，重新生成后 flake8 通过。没有重新生成已提交的旧组来验证这一补丁对它们的文本影响。</p>
+<p><strong>源码检查要跟着实现迁移。</strong> 三条派单测试现在检查 <code>poll_cycle.poll_once</code>，覆盖 300 秒门限、回退当轮不再派单、扫描动态执行态等规则。否则检查“没有 age &lt; 60”的断言可能对空转发也通过。根目录排查脚本也改用新实现；真正的行为测试仍经旧入口调用。组装上下文时写 <code>traits</code>、UCP 判定读 <code>project_traits</code> 的既有差异保留，避免在搬移提交里改变探测行为。</p>
+<p>换行也做了核对：本机生成器按主文件的 CRLF 快照写回，新 Python 模块用 LF，Git 依 <code>.gitattributes</code> 以 LF 入库。字节级对比针对同组快照，函数体内容另外按语法树比较。</p>
+<h2 id="section-5">收尾验证与下一步</h2>
+<p><img src="assets/2026-11-25_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E7%BC%96%E6%8E%92%E6%94%B6%E5%B0%BE_%E9%AA%8C%E8%AF%81.png" alt="从校验日志与 HTTP 输出生成的报告截图"></p>
+<p><a href="assets/2026-11-25_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E7%BC%96%E6%8E%92%E6%94%B6%E5%B0%BE_%E9%AA%8C%E8%AF%81.html">查看截图的 HTML 原文</a>。截图摘录实际输出；<a href="assets/2026-11-25_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E7%BC%96%E6%8E%92%E6%94%B6%E5%B0%BE_%E8%A1%8C%E6%95%B0.py">行数图的生成脚本</a> 直接读取对应的 Git 提交。</p>
+<ul>
+<li><strong>轮询组</strong>：保留 60 个字符串和 30 条注释；主文件两处保留异步转发。派单检查 12 通过，根目录假成功排查脚本 53 通过。全量复跑报告一条 PytestUnhandledThreadExceptionWarning：数据库连接工作线程遇到已关闭的事件循环，根因未确定。全量：<code>1667 passed, 1 warning in 538.87s (0:08:58)</code>。</li>
+<li><strong>上下文组</strong>：139 个字符串、18 条注释和规范化语法树均匹配；25 条上下文行为测试单独通过。原 polling 与 context_builder 的过时说明已更新，并与各自快照重新生成的模块文本逐字节一致。工单管线沿用实例方法，同一份带替身的数据库由转发层传入。全量：<code>1672 passed, 1 warning in 521.48s (0:08:41)</code>。</li>
+<li><strong>验收</strong>：五组转发共 134 个改坏点，存活 0。主文件 1,119 行，编排层直接方向违规 0，两项达标。主文件仍有一个长函数 <code>_handle_agent_result</code>（166 行）和一处可执行的 <code>agent_name == &quot;SkillAgent&quot;</code> 比较。旧的文本检索报 2 处，其中一处是同一函数文档串里的例子。新模块内的长函数也需另拆；下一处建议拆结果处理公共流程：现有 test_terminal_ticket_ignores_late_result、test_error_result_blocks_ticket、test_html_prototype_wins_over_skill_dispatch 已覆盖三条关键分支。先核对事件发布、继续派单的调用顺序，缺什么断言补什么，再依次提取终态/错误处理、结果写入和通知。保留“精确匹配 → skill → Agent 名”的分发顺序；每个提交单独跑上述分支和完整回归。</li>
+<li><strong>验证边界</strong>：没有推送或运行远端 CI，没有重打桌面包，也没有让真实工单跑完整个阶段。旧进程曾有一次访问项目列表 20 秒超时、重试 0.71 秒成功，未定位原因。</li>
+</ul>
+<p><strong>服务就绪要单独判断。</strong> 之前记录的进程已不在。新进程 PID 18336 启动后，第一次探测过早，前几个地址连接失败；到项目列表时才成功。确认 Uvicorn 报告 <code>Application startup complete</code> 并开始监听后，重测九个地址全部 HTTP 200。启动仍提示 <code>ux_knowledge</code> 缺少 <code>subcategory</code> 列，本期没有改表。最终全量测试那一条警告和轮询组一样，是连接工作线程报告事件循环已关闭；没有据此判断是哪个用例导致。</p>
+<p>新代码服务就绪后的只读探测（状态与耗时，不记录业务数据）：</p>
+<pre><code class="language-text">/api/health               HTTP 200   0.30s
+/app                      HTTP 200   0.01s
+/api/metrics              HTTP 200   5.70s
+/api/agents/status        HTTP 200   0.00s
+/api/agents               HTTP 200   0.03s
+/api/projects             HTTP 200   0.00s
+/api/llm/status           HTTP 200   0.00s
+/api/hooks/status         HTTP 200   0.08s
+/api/agents/orchestrator  HTTP 200   0.02s
+</code></pre>
+</article><nav class="adjacent" aria-label="相邻文档"><a href="2026-11-24_09_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%8C%89%E8%81%8C%E8%B4%A3%E6%8B%86%E7%B1%BB.html">上一篇：按职责拆类：TicketOrchestrator 的 72 个方法搬到 10 个模块（2026-11-24）</a>
+<a href="2026-11-25_02_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E7%BB%93%E6%9E%9C%E5%A4%84%E7%90%86.html">下一篇：代码重构：把 Agent 结果处理拆到 79 行</a></nav></main></body></html>

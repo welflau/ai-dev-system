@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1061.376 246.70000000000002" width="1061.376" height="246.70000000000002" style="--bg:#ffffff;--fg:#1d3839;--accent:#12645e;--border:#608781;background:var(--bg)">
+<style>
+
+  text { font-family: 'Microsoft YaHei', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          var(--fg);
+    --_text-sec:      var(--muted, color-mix(in srgb, var(--fg) 60%, var(--bg)));
+    --_text-muted:    var(--muted, color-mix(in srgb, var(--fg) 40%, var(--bg)));
+    --_text-faint:    color-mix(in srgb, var(--fg) 25%, var(--bg));
+    --_line:          var(--line, color-mix(in srgb, var(--fg) 50%, var(--bg)));
+    --_arrow:         var(--accent, color-mix(in srgb, var(--fg) 85%, var(--bg)));
+    --_node-fill:     var(--surface, color-mix(in srgb, var(--fg) 3%, var(--bg)));
+    --_node-stroke:   var(--border, color-mix(in srgb, var(--fg) 20%, var(--bg)));
+    --_group-fill:    var(--bg);
+    --_group-hdr:     color-mix(in srgb, var(--fg) 5%, var(--bg));
+    --_inner-stroke:  color-mix(in srgb, var(--fg) 12%, var(--bg));
+    --_key-badge:     color-mix(in srgb, var(--fg) 10%, var(--bg));
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<polyline class="edge" data-from="T" data-to="A" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="256.826,123.35000000000001 274.826,123.35000000000001 274.826,58.45 292.826,58.45" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="T" data-to="B" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="256.826,123.35000000000001 274.826,123.35000000000001 274.826,123.35000000000001 292.826,123.35000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="T" data-to="C" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="256.826,123.35000000000001 274.826,123.35000000000001 274.826,188.25 292.826,188.25" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="A" data-to="A1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="411.09900000000005,58.45 457.1025,58.45" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="A1" data-to="A2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="543.5125,58.45 581.509,58.45" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="A2" data-to="A3" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="720.53,58.45 756.9,58.45" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="B" data-to="B1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="352.826,123.35000000000001 412.826,123.35000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="B1" data-to="B2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="655.587,123.35000000000001 703.587,123.35000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="C" data-to="C1" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="431.106,188.25 457.1025,188.25" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="C1" data-to="C2" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="687.2665,188.25 756.9,188.25" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="node" data-id="T" data-label="push 或 PR 到 main、develop" data-shape="rectangle">
+  <rect x="40" y="104.9" width="216.826" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="148.413" y="123.35000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">push 或 PR 到 main、develop</text>
+</g>
+<g class="node" data-id="A" data-label="backend-test" data-shape="rectangle">
+  <rect x="292.826" y="40" width="118.273" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="351.96250000000003" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">backend-test</text>
+</g>
+<g class="node" data-id="B" data-label="lint" data-shape="rectangle">
+  <rect x="292.826" y="104.9" width="60" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="322.826" y="123.35000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">lint</text>
+</g>
+<g class="node" data-id="C" data-label="layer-dag-guard" data-shape="rectangle">
+  <rect x="292.826" y="169.8" width="138.28" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="361.966" y="188.25" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">layer-dag-guard</text>
+</g>
+<g class="node" data-id="A1" data-label="装依赖" data-shape="rectangle">
+  <rect x="457.1025" y="40" width="86.41" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="500.3075" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">装依赖</text>
+</g>
+<g class="node" data-id="A2" data-label="验证一条 import" data-shape="rectangle">
+  <rect x="581.509" y="40" width="139.02100000000002" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="651.0195" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">验证一条 import</text>
+</g>
+<g class="node" data-id="A3" data-label="全量 pytest（未提交）" data-shape="rectangle">
+  <rect x="756.9" y="40" width="183.481" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="848.6405" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">全量 pytest（未提交）</text>
+</g>
+<g class="node" data-id="B1" data-label="flake8 E9,F63,F7,F82：有就失败" data-shape="rectangle">
+  <rect x="412.826" y="104.9" width="242.76099999999997" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="534.2065" y="123.35000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">flake8 E9,F63,F7,F82：有就失败</text>
+</g>
+<g class="node" data-id="B2" data-label="flake8 复杂度和行宽：只统计" data-shape="rectangle">
+  <rect x="703.587" y="104.9" width="227.94099999999997" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="817.5575" y="123.35000000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">flake8 复杂度和行宽：只统计</text>
+</g>
+<g class="node" data-id="C1" data-label="断言 layers_baseline.json 存在" data-shape="rectangle">
+  <rect x="457.1025" y="169.8" width="230.16399999999996" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="572.1845" y="188.25" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">断言 layers_baseline.json 存在</text>
+</g>
+<g class="node" data-id="C2" data-label="check_layers.py：相对基线只许减少" data-shape="rectangle">
+  <rect x="756.9" y="169.8" width="276.106" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="894.953" y="188.25" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">check_layers.py：相对基线只许减少</text>
+</g>
+</svg>

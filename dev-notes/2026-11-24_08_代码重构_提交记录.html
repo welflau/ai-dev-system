@@ -1,0 +1,186 @@
+<!doctype html>
+<!-- 由 scripts/docs-html/export.mjs 生成，请编辑 Markdown 原稿。 -->
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>重构系列的提交记录（2026-11-24） · ADS 文档</title><link rel="stylesheet" href="../docs/assets/refactor-docs/reader.css"></head>
+<body><nav class="bar" aria-label="主导航"><b>ADS · 开发文档</b><a href="../docs/%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%96%87%E6%A1%A3%E7%B4%A2%E5%BC%95.html">系列索引</a></nav>
+<main><header><p class="meta">开发笔记 · DevNote · <a href="2026-11-24_08_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%8F%90%E4%BA%A4%E8%AE%B0%E5%BD%95.md">Markdown 原稿</a></p>
+<h1>重构系列的提交记录（2026-11-24）</h1></header><details><summary>本页目录（7 节）</summary><ol><li><a href="#section-1">背景</a></li><li><a href="#section-2">提交清单</a></li><li><a href="#section-3">怎么分的</a></li><li><a href="#section-4">每个提交单独验证</a></li><li><a href="#section-5">踩过的坑</a></li><li><a href="#section-6">没有验证的部分</a></li><li><a href="#section-7">下一步</a></li></ol></details>
+<article><blockquote>
+<p>关联方案：<code>docs/20261124_01_代码重构方案.md</code>（第十一节执行进度）
+前一篇：<code>dev-notes/2026-11-24_07_代码重构_测试流程.md</code>
+提交基线：<code>7b9e7f0</code>；本篇记录的 5 个提交已在本地 <code>main</code>，<strong>尚未推送</strong>。</p>
+</blockquote>
+<h2 id="section-1">背景</h2>
+<p>02 到 07 六篇笔记写的时候，改动都叠在工作区里：顶栏指标面板、AI 生成任务记录层、体检修复第一批、
+四轮重构，一共 73 项。各篇都写着「提交时建议分开」。本篇记录实际是怎么分的，以及每个提交单独验证的结果。</p>
+<h2 id="section-2">提交清单</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>顺序</th>
+<th>哈希</th>
+<th>标题</th>
+<th>文件数</th>
+<th>行数</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><code>371aac3</code></td>
+<td>docs: 修正会话内容整理文件名日期（202611101 → 20261101）</td>
+<td>1（纯改名）</td>
+<td>0</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>a099133</code></td>
+<td>feat(metrics): 顶栏指标明细面板 + AI 生成任务统一记录层</td>
+<td>17</td>
+<td>+1406 / −20</td>
+</tr>
+<tr>
+<td>3</td>
+<td><code>d1f478a</code></td>
+<td>fix: 项目体检第一批修复（路由、安全默认值、cloud_video 拆环、CI 跑 pytest）</td>
+<td>25</td>
+<td>+1168 / −54</td>
+</tr>
+<tr>
+<td>4</td>
+<td><code>2f46494</code></td>
+<td>refactor(orchestrator): 拆分结果处理器与分步管线到 orchestration 包</td>
+<td>27</td>
+<td>+7060 / −2452</td>
+</tr>
+<tr>
+<td>5</td>
+<td><code>5a84621</code></td>
+<td>docs: 代码重构方案与「代码重构_」DevNote 系列（02–07）</td>
+<td>20</td>
+<td>+2180</td>
+</tr>
+</tbody>
+</table></div>
+<p>提交后 <code>git status --short</code> 为空，<code>main</code> 比 <code>origin/main</code> 超前 11 个提交（原有 6 个加这 5 个）。
+本篇和 docs 的同步更新另成一个 <code>docs:</code> 提交，加上它是 12 个。</p>
+<figure><a href="../docs/assets/refactor-docs/2026-11-24_08_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%8F%90%E4%BA%A4%E8%AE%B0%E5%BD%95_%E5%9B%BE1.svg"><img src="../docs/assets/refactor-docs/2026-11-24_08_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%8F%90%E4%BA%A4%E8%AE%B0%E5%BD%95_%E5%9B%BE1.svg" alt="流程图：提交清单"></a><figcaption>流程图：提交清单 · <a href="../docs/assets/refactor-docs/2026-11-24_08_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%8F%90%E4%BA%A4%E8%AE%B0%E5%BD%95_%E5%9B%BE1.svg">查看原图</a></figcaption></figure>
+<h2 id="section-3">怎么分的</h2>
+<p>依据是各篇笔记的「改动清单」。大部分文件只属于一批，直接按路径 <code>git add</code>。有交叠的是下面几个：</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>文件</th>
+<th>交叠情况</th>
+<th>处理</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>frontend/app.js</code>、<code>index.html</code>、<code>styles.css</code></td>
+<td>指标面板和 AI 任务面板的改动交错在同一段代码里</td>
+<td>两批合成提交 2</td>
+</tr>
+<tr>
+<td><code>backend/main.py</code></td>
+<td>11 个 hunk，6 个属于指标和 AI 任务，5 个属于体检修复</td>
+<td>按 hunk 拆：第 5、6、8、9、10、11 个进提交 2，其余进提交 3</td>
+</tr>
+<tr>
+<td><code>backend/cloud_video/client.py</code></td>
+<td>3 个 hunk，第 3 个是 <code>record_task</code> / <code>update_task</code>，前 2 个是异常类下沉</td>
+<td>第 3 个进提交 2，前 2 个进提交 3</td>
+</tr>
+<tr>
+<td><code>docs/20261123_01_项目问题与缺失分析.md</code></td>
+<td>整份是新文件，内容以体检为主，后来补了指向 07 的引用</td>
+<td>整份进提交 3</td>
+</tr>
+</tbody>
+</table></div>
+<p>按 hunk 拆用的是补丁方式，因为这个环境用不了交互式的 <code>git add -p</code>：</p>
+<pre><code class="language-powershell"># 1. 取整份补丁
+git diff HEAD -- backend/main.py &gt; full.patch
+# 2. 用脚本按 &quot;@@ &quot; 行切开，保留文件头和选中的 hunk，写成 partial.patch
+# 3. 只应用到暂存区，工作区文件不动
+git apply --cached --recount partial.patch
+# 4. 核对：暂存区和工作区各剩哪些 hunk
+git diff --cached -- backend/main.py
+git diff -- backend/main.py
+</code></pre>
+<p><code>.gitattributes</code> 把 <code>*.py</code> 设成了 <code>eol=lf</code>，<code>git diff</code> 输出的补丁已经是 LF，可以直接套到暂存区。
+补丁文件要按字节读写，经过 PowerShell 的 <code>&gt;</code> 重定向会被转成 UTF-16，上面第 1 步实际是用 Python 的 <code>subprocess</code> 取的。</p>
+<p><code>client.py</code> 第 3 个 hunk 里带着一行 <code>import cloud_video.lightai as lightai</code>，它是体检修复里拆环的一部分。
+这一行和 <code>record_task</code> 的改动在同一个 hunk 里拆不开，就跟着提交 2 走了。</p>
+<h2 id="section-4">每个提交单独验证</h2>
+<p>最终提交的树和提交前的工作区完全一致，所以 07 里的结果直接适用于 <code>5a84621</code>。
+前面几个提交的树是拆出来的，之前没有单独存在过，所以用 <code>git worktree</code> 各检出一份跑全量 pytest：</p>
+<pre><code class="language-powershell">git worktree add --detach $env:TEMP\wt_ab a099133
+cd $env:TEMP\wt_ab\backend
+python -m pytest -p no:cacheprovider
+</code></pre>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>提交</th>
+<th>全量 pytest</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>7b9e7f0</code>（基线）</td>
+<td>只跑了 <code>tests/architecture/test_layer_dag.py</code>：2 条失败</td>
+<td>用来确认下一行的 2 条失败是不是基线就有</td>
+</tr>
+<tr>
+<td><code>a099133</code></td>
+<td>762 通过，2 失败</td>
+<td>失败的是 <code>test_no_new_violations_vs_baseline</code> 和 <code>test_main_ring_eliminated</code>，原因是 <code>cloud_video.client</code>、<code>lightai</code>、<code>queue</code> 三个模块成环。基线上同样失败，这个提交没有引入新的失败</td>
+</tr>
+<tr>
+<td><code>d1f478a</code></td>
+<td>868 通过，0 失败</td>
+<td>拆环之后那 2 条通过；新增的 5 个测试文件加 2 条修好的，共多 106 条</td>
+</tr>
+<tr>
+<td><code>2f46494</code></td>
+<td>没有单独跑</td>
+<td>它和 <code>5a84621</code> 只差文档，代码树相同，适用下一行的结果</td>
+</tr>
+<tr>
+<td><code>5a84621</code></td>
+<td>1,071 通过，0 失败（07 里跑了两遍）</td>
+<td>另有分层守卫退出码 0、CI 那组 flake8 规则 0 条</td>
+</tr>
+</tbody>
+</table></div>
+<p>762 和 868 这两个数字和 <code>docs/20261123_01_项目问题与缺失分析.md</code> 第九节记的「修复前 762 通过、2 失败，修复后 868 通过」一致。</p>
+<p>两个 worktree 是同时跑的，各用了 5 到 6 分钟，比单独跑慢。worktree 里没有 <code>backend/.env</code> 和 <code>backend/projects/</code>，
+测试不依赖这两样。跑完后用 <code>git worktree remove --force</code> 删掉了。</p>
+<h2 id="section-5">踩过的坑</h2>
+<ul>
+<li><strong><code>pytest.ini</code> 里已有 <code>-q</code>，命令行再加一个就不打印汇总行。</strong> 这次 worktree 里多加了 <code>-q</code>，输出里没有「N passed」，
+通过数是数进度行里的 <code>.</code> 和 <code>F</code> 得到的。07 的复核命令里已经写了这一条，这次还是踩了。</li>
+<li><strong>提交信息文件不能带 BOM。</strong> PowerShell 5.1 的 <code>Set-Content -Encoding utf8</code> 会写 BOM，BOM 会进到提交标题里。
+这次用 Python 写文件再 <code>git commit -F</code>。</li>
+<li><strong>中文路径。</strong> <code>git status</code> 默认把非 ASCII 路径显示成八进制转义，加 <code>-c core.quotepath=false</code> 才能看到原文件名。
+<code>git add</code> 时把路径作为参数列表传给 <code>subprocess</code>，没有经过 shell 拼接。</li>
+</ul>
+<h2 id="section-6">没有验证的部分</h2>
+<ul>
+<li><strong>没有推送，CI 没有跑。</strong> <code>ci.yml</code> 里的 pytest 步骤在提交 3 里，要推送后才会第一次执行。Ubuntu 加 Python 3.12 下的结果还没有见过。</li>
+<li><strong>提交时没有触发任何检查。</strong> 本机没有装提交钩子，上面的验证都是手工跑的。</li>
+<li><strong><code>a099133</code> 和 <code>d1f478a</code> 只跑了 pytest。</strong> 分层守卫和 flake8 没有在这两个中间提交上单独跑。
+按那 2 条失败的测试推断，<code>a099133</code> 上分层守卫会报 <code>cloud_video</code> 那个环，没有实际跑过确认。</li>
+<li><strong><code>a099133</code> 上的前端没有在浏览器里看过。</strong> 前端三个文件整份进了这个提交，内容和最终提交一样。</li>
+</ul>
+<h2 id="section-7">下一步</h2>
+<ol>
+<li>决定是否推送。推送后看 CI 第一次跑 pytest 的结果，重点是 Python 3.12 和 Linux 下有没有差异。</li>
+<li>之后的重构每一步单独提交，从干净的工作区开始，对应方案第七节第 5 条。</li>
+<li>其余待定事项不变：<code>handle_requirement</code> 的 12 条可疑现状、<code>process_ticket</code> 的 3 条、脚本是否收进 <code>scripts/</code>、
+是否启用 <code>pre-commit</code>、R2 第 3 步按职责拆类。</li>
+</ol>
+</article><nav class="adjacent" aria-label="相邻文档"><a href="2026-11-24_07_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%B5%8B%E8%AF%95%E6%B5%81%E7%A8%8B.html">上一篇：重构过程的测试流程（2026-11-24）</a>
+<a href="2026-11-24_09_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%8C%89%E8%81%8C%E8%B4%A3%E6%8B%86%E7%B1%BB.html">下一篇：按职责拆类：TicketOrchestrator 的 72 个方法搬到 10 个模块（2026-11-24）</a></nav></main></body></html>

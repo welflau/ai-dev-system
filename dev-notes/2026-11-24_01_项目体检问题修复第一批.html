@@ -1,0 +1,457 @@
+<!doctype html>
+<!-- 由 scripts/docs-html/export.mjs 生成，请编辑 Markdown 原稿。 -->
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>项目体检问题修复（第一批：路由 / 拆环 / CI / 安全收紧 / 一致性）（2026-11-24） · ADS 文档</title><link rel="stylesheet" href="../docs/assets/refactor-docs/reader.css"></head>
+<body><nav class="bar" aria-label="主导航"><b>ADS · 开发文档</b><a href="../docs/%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%96%87%E6%A1%A3%E7%B4%A2%E5%BC%95.html">系列索引</a></nav>
+<main><header><p class="meta">开发笔记 · DevNote · <a href="2026-11-24_01_%E9%A1%B9%E7%9B%AE%E4%BD%93%E6%A3%80%E9%97%AE%E9%A2%98%E4%BF%AE%E5%A4%8D%E7%AC%AC%E4%B8%80%E6%89%B9.md">Markdown 原稿</a></p>
+<h1>项目体检问题修复（第一批：路由 / 拆环 / CI / 安全收紧 / 一致性）（2026-11-24）</h1></header><details><summary>本页目录（9 节）</summary><ol><li><a href="#section-1">背景</a></li><li><a href="#section-2">调研结论</a></li><li><a href="#section-3">改动清单</a></li><li><a href="#section-4">关键设计</a></li><li><a href="#section-5">实现坑</a></li><li><a href="#section-6">验证</a></li><li><a href="#section-7">行为变化（升级后需要知道）</a></li><li><a href="#section-8">遗留与后续</a></li><li><a href="#section-9">复核命令</a></li></ol></details>
+<article><blockquote>
+<p>关联方案：<code>docs/20261123_01_项目问题与缺失分析.md</code>（第七节「建议处理顺序」的第 1–5 步）
+前一篇：<code>dev-notes/2026-11-21_01_AI任务指标与生成任务记录层落地.md</code>
+提交基线：<code>7b9e7f0</code>（hy4 修复）；本篇全部改动<strong>尚未提交</strong>，与工作区里原有的 <code>ai_gen_tasks</code> 等未提交改动并存。</p>
+</blockquote>
+<h2 id="section-1">背景</h2>
+<p>2026-11-23 的体检文档列了 14 条问题并给了处理顺序。本轮按顺序做前 5 步里改动量小、
+能用测试锁住的部分：修掉两个会让功能 / 门禁直接失败的问题（第 1、2 条），把测试接进 CI（第 3 条），
+收紧默认暴露面（第 4、5、6 条），统一版本号、配置模板和文档口径（第 7、8 条的一部分）。</p>
+<p>开发过程中又查出体检文档没有覆盖到的三个问题，一并修了，见「调研结论」第 3、4、5 点。</p>
+<h2 id="section-2">调研结论</h2>
+<ol>
+<li>
+<p><strong><code>POST /api/projects</code> 挂在辅助函数上</strong>（体检第 1 条）。<code>@router.post(&quot;&quot;)</code> 下面紧跟的是
+<code>_auto_init_ads_dir</code>，<code>create_project</code> 没有注册成路由，请求体被当成辅助函数的参数解析，返回 422。
+对整个应用枚举路由后确认：以下划线开头的 endpoint 只有这一处，也没有重复的 method + path。</p>
+</li>
+<li>
+<p><strong><code>cloud_video</code> 包内成环</strong>（体检第 2 条）。环是 <code>cloud_video ⇄ client ⇄ queue</code>：
+<code>client</code> 顶层导入 <code>queue</code>，<code>queue</code> 排队超时要抛 <code>client</code> 里定义的 <code>CloudVideoUnavailable</code>，
+<code>lightai</code> 要抛 <code>client</code> 里的 <code>CloudVideoError</code>，<code>client</code> 又通过 <code>from cloud_video import lightai</code>
+依赖包本身。根因是两个异常类放在了依赖最多的模块里。</p>
+</li>
+<li>
+<p><strong>shell 黑名单比体检文档描述的更糟</strong>（新发现）。体检文档只说「覆盖不到 PowerShell 写法」，
+实测旧正则连最典型的 bash / cmd 写法都拦不住：</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>命令</th>
+<th>旧正则</th>
+<th>新正则</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>rm -r dir</code></td>
+<td>拦</td>
+<td>拦</td>
+</tr>
+<tr>
+<td><code>rm -rf /</code></td>
+<td><strong>放行</strong></td>
+<td>拦</td>
+</tr>
+<tr>
+<td><code>rm -fr x</code></td>
+<td><strong>放行</strong></td>
+<td>拦</td>
+</tr>
+<tr>
+<td><code>format c:</code>、<code>format c: /q</code></td>
+<td><strong>放行</strong></td>
+<td>拦</td>
+</tr>
+<tr>
+<td><code>Remove-Item -Recurse -Force .</code></td>
+<td><strong>放行</strong></td>
+<td>拦</td>
+</tr>
+<tr>
+<td><code>del /f a.txt</code>、<code>rd /s /q build</code>、<code>shutdown /s</code></td>
+<td>拦</td>
+<td>拦</td>
+</tr>
+</tbody>
+</table></div>
+<p>原因：旧正则把所有分支包在 <code>\b( ... )\b</code> 里，结尾的 <code>\b</code> 要求匹配末尾落在单词边界上。
+<code>rm -rf</code> 在 <code>-r</code> 处匹配结束，后面紧跟 <code>f</code>，不是边界；<code>format c:</code> 在冒号处结束，
+后面是空格或行尾，两侧都不是单词字符，也不是边界。
+这个正则同时被 <code>actions/generic_cli.py</code> 复用，两处一起受影响。</p>
+</li>
+<li>
+<p><strong>Python 3.14 以下后端起不来</strong>（新发现）。<code>backend/api/tickets.py</code> 第 1455 行的函数注解用了 <code>List</code>，
+文件里却没有 <code>from typing import List</code>。3.14 的注解是延迟求值的（PEP 649），所以本机一直正常；
+在 3.12 上 <code>import main</code> 直接 <code>NameError: name 'List' is not defined</code>。
+CI 用的正是 3.12，但 <code>backend-test</code> 只 import 了 <code>models</code>，碰不到这个文件。
+按 CI 的 flake8 命令在本地复现，报 4 条 <code>F821 undefined name 'List'</code>（第 1455、1466、1474、1578 行），
+引入提交是 <code>a40cba43</code>（2026-11-12）。GitHub 上 lint job 的实际运行记录没有查看。</p>
+</li>
+<li>
+<p><strong><code>chat_assistant.py</code> 还有一处非法转义</strong>（新发现）。体检文档只记了 <code>api/chat.py</code> 的 <code>\A</code>，
+新加的编译检查测试又抓到 <code>agents/chat_assistant.py</code> 提示词里的 <code>\`</code> 和 <code>F:\A_Works\BigShot</code>。</p>
+</li>
+<li>
+<p><strong>监听地址的实际生效值</strong>。从脚本入口启动（<code>python main.py</code>、<code>start-backend.bat</code> 都是）时，
+python-dotenv 从 <code>config.py</code> 所在目录向上找 <code>.env</code>，先命中 <code>backend/.env</code>，根目录 <code>.env</code> 不会被加载。
+本机 <code>backend/.env</code> 没有 <code>HOST</code>，所以实际生效的是代码缺省值，改之前就是 <code>0.0.0.0</code>。
+桌面版 <code>desktop.py</code> 自己绑定 <code>127.0.0.1:18000</code>，不受影响（体检文档里这句「未核实」已更新）。</p>
+</li>
+</ol>
+<h2 id="section-3">改动清单</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>文件</th>
+<th>内容</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>M backend/api/projects.py</code></td>
+<td><code>@router.post(&quot;&quot;)</code> 从 <code>_auto_init_ads_dir</code> 挪到 <code>create_project</code> 上方</td>
+</tr>
+<tr>
+<td><code>A backend/cloud_video/errors.py</code></td>
+<td>叶子模块，定义 <code>CloudVideoUnavailable</code> / <code>CloudVideoError</code>，零项目内 import</td>
+</tr>
+<tr>
+<td><code>M backend/cloud_video/client.py</code></td>
+<td>异常类改从 <code>errors</code> 导入并保留重导出；<code>from cloud_video import lightai</code> 改成 <code>import cloud_video.lightai as lightai</code></td>
+</tr>
+<tr>
+<td><code>M backend/cloud_video/queue.py</code></td>
+<td>顶层从 <code>errors</code> 导入，删掉函数内对 <code>client</code> 的延迟导入</td>
+</tr>
+<tr>
+<td><code>M backend/cloud_video/lightai.py</code></td>
+<td>改从 <code>errors</code> 导入</td>
+</tr>
+<tr>
+<td><code>M backend/cloud_video/__init__.py</code></td>
+<td>异常类改从 <code>errors</code> 导入，<code>__all__</code> 不变</td>
+</tr>
+<tr>
+<td><code>M backend/api/tickets.py</code></td>
+<td>补 <code>from typing import List</code></td>
+</tr>
+<tr>
+<td><code>M backend/actions/chat/shell_exec.py</code></td>
+<td>黑名单正则重写：修掉 <code>\b</code> 收尾问题，补 PowerShell 写法、磁盘 cmdlet、编码命令</td>
+</tr>
+<tr>
+<td><code>M backend/config.py</code></td>
+<td>新增 <code>APP_VERSION</code>；<code>HOST</code> 缺省值 <code>0.0.0.0</code> → <code>127.0.0.1</code>；新增 <code>CORS_ALLOW_ORIGINS</code></td>
+</tr>
+<tr>
+<td><code>M backend/main.py</code></td>
+<td>CORS 收紧到本机来源；兜底 500 按来源决定是否回显异常文本；三处版本号改读 <code>APP_VERSION</code>；事件循环策略调用包进 <code>catch_warnings</code></td>
+</tr>
+<tr>
+<td><code>M backend/api/chat.py</code></td>
+<td>提示词里写死的 <code>F:\A_Works\...\generated-images</code> 改成 <code>BASE_DIR / &quot;generated-images&quot;</code> 插值</td>
+</tr>
+<tr>
+<td><code>M backend/agents/chat_assistant.py</code></td>
+<td><code>deploy_ucp.py</code> 的路径改为按 <code>__file__</code> 推导；两处非法转义改成 <code>\\</code></td>
+</tr>
+<tr>
+<td><code>M backend/actions/diagnose_ticket.py</code></td>
+<td>4 处 <code>datetime.utcnow()</code> 换成 <code>_utc_now_z()</code></td>
+</tr>
+<tr>
+<td><code>M .github/workflows/ci.yml</code></td>
+<td><code>backend-test</code> 增加 <code>python -m pytest</code> 一步（<code>timeout-minutes: 20</code>）</td>
+</tr>
+<tr>
+<td><code>M backend/.env.example</code></td>
+<td><code>HOST=127.0.0.1</code> + 说明；新增 <code>CORS_ALLOW_ORIGINS</code> 示例</td>
+</tr>
+<tr>
+<td><code>M .env.example</code></td>
+<td>标明权威模板是 <code>backend/.env.example</code>；补 <code>LLM_API_FORMAT=openai</code>；<code>HOST=127.0.0.1</code></td>
+</tr>
+<tr>
+<td><code>M README.md</code></td>
+<td>Python 口径 3.10+ → 3.11+；配置步骤改为 <code>cp backend/.env.example backend/.env</code>；说明默认只监听本机</td>
+</tr>
+<tr>
+<td><code>M DEVELOPMENT.md</code></td>
+<td>去掉 <code>uvicorn --reload --host 0.0.0.0</code>；<code>/health</code> → <code>/api/health</code></td>
+</tr>
+<tr>
+<td><code>A backend/tests/api/test_projects_route.py</code></td>
+<td>3 项</td>
+</tr>
+<tr>
+<td><code>A backend/tests/test_cloud_video_errors.py</code></td>
+<td>4 项</td>
+</tr>
+<tr>
+<td><code>A backend/tests/test_shell_blacklist.py</code></td>
+<td>68 项（42 条必须拦 + 25 条不能误伤的参数化用例 + 1 条 Action 级用例）</td>
+</tr>
+<tr>
+<td><code>A backend/tests/api/test_main_hardening.py</code></td>
+<td>24 项</td>
+</tr>
+<tr>
+<td><code>A backend/tests/test_runtime_paths_and_time.py</code></td>
+<td>5 项</td>
+</tr>
+<tr>
+<td><code>M docs/20261123_01_项目问题与缺失分析.md</code></td>
+<td>状态行 + 第九节「处理进度」</td>
+</tr>
+<tr>
+<td><code>A dev-notes/2026-11-24_01_...md</code></td>
+<td>本篇</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="section-4">关键设计</h2>
+<ul>
+<li>
+<p><strong>异常类下沉到叶子模块，旧路径保持可用</strong>。<code>from cloud_video import CloudVideoError</code> 和
+<code>from cloud_video.client import CloudVideoUnavailable</code> 仍然成立，而且拿到的是同一个类对象，
+<code>except</code> 不会漏接从另一条路径抛出来的异常。测试里同时断言了 <code>errors.py</code> 只 import <code>__future__</code>，
+以及 <code>queue</code> / <code>lightai</code> 不再 import <code>client</code>，防止环被接回去。
+没有用更新 <code>layers_baseline.json</code> 的办法消违规，基线文件未动。</p>
+</li>
+<li>
+<p><strong>黑名单定位是兜底，不是安全边界</strong>。命令串可以用变量拼接、.NET API、脚本文件绕过，
+主要防线仍是 Tier 1 的用户确认和权限审批，这一点写进了代码注释。规则的写法：</p>
+<ul>
+<li>开头统一用 <code>(?&lt;![\w-])</code>，所以 <code>--rm</code>、<code>graceful-shutdown</code> 这类不会被当成命令词；</li>
+<li>每条规则自带收尾断言 <code>(?![\w-])</code>，不再依赖外层的 <code>\b</code>；</li>
+<li>删除类规则在「同一条命令内」（不跨 <code>|</code> <code>;</code> <code>&amp;</code>）找递归 / 强制开关，开关可以出现在路径后面；</li>
+<li>PowerShell 的参数缩写（<code>-r</code>、<code>-rec</code>、<code>-fo</code>、<code>-for</code>）单独列出，bash 的短选项簇限定在 <code>rfdiv</code> 这几个字母，
+避免 <code>-LiteralPath</code> 这类正常参数因为含字母 <code>r</code> 被误判；</li>
+<li><code>powershell -enc / -EncodedCommand</code> 直接拦：Base64 之后的内容对确认界面和黑名单都不可见。</li>
+<li><code>_DANGEROUS_PATTERNS</code> 的名字和 <code>.search()</code> 用法不变，<code>generic_cli.py</code> 不用改。</li>
+</ul>
+</li>
+<li>
+<p><strong>监听地址和 CORS 是「缩小暴露面」，不是鉴权</strong>。</p>
+<ul>
+<li><code>HOST</code> 缺省 <code>127.0.0.1</code>：局域网内其他机器连不上了，需要对外时在 <code>backend/.env</code> 显式写 <code>HOST=0.0.0.0</code>。</li>
+<li>CORS 用 <code>allow_origin_regex</code> 放行 <code>localhost</code> / <code>127.0.0.1</code> / <code>[::1]</code> 的任意端口，
+另加 <code>CORS_ALLOW_ORIGINS</code> 逗号分隔的显式白名单。前端由后端同源托管（<code>const API = '/api'</code>），
+同源请求不走 CORS，所以页面功能不受影响；用局域网 IP 打开页面时同样是同源。</li>
+<li>CORS 只阻止浏览器里的跨域<strong>读取</strong>。恶意网页仍然可以向本机发出不需要预检的请求，
+非浏览器客户端也完全不受限制。真正的鉴权（本地 token）本轮没有做，见「遗留」。</li>
+</ul>
+</li>
+<li>
+<p><strong>兜底 500 按来源区分</strong>。本机调用方照旧拿到 <code>str(exc)</code>，界面上能直接看到原因，日常使用体验不变；
+非回环来源只拿到通用提示和 12 位 <code>error_id</code>，详情凭 <code>error_id</code> 在 <code>server.log</code> 里查。
+响应体新增了 <code>error_id</code> 字段，<code>detail</code> 字段保留。前面如果挂了同机反向代理，所有请求都会被当成本机。</p>
+</li>
+<li>
+<p><strong>版本号单一来源</strong>。<code>config.APP_VERSION = &quot;0.22.0&quot;</code>，启动日志、FastAPI 文档、<code>/api/health</code> 都读它。
+取值依据是 README 徽章和版本历史表里最新的 v0.22（此前代码里是 <code>0.10.0</code> 和 <code>0.13.0</code> 两个过期值）。
+测试把 README 徽章和这个常量绑在了一起，以后只改一边会红。</p>
+</li>
+<li>
+<p><strong>事件循环策略保留行为，只消警告</strong>。没有直接删掉 <code>set_event_loop_policy</code>：旧版 uvicorn 在
+<code>--reload</code> / 多 worker 模式下会先设置 Selector 策略，这行代码的作用是把它盖回 Proactor，
+删掉可能让那种启动方式下的子进程调用失败。现在的写法是放进 <code>catch_warnings</code>，
+并用 <code>getattr</code> 兜住 3.16 移除该类之后的 <code>AttributeError</code>。</p>
+</li>
+<li>
+<p><strong>提示词里的路径改成运行时推导</strong>。<code>generated-images</code> 与 <code>main.py</code> 挂载静态目录用的是同一个 <code>BASE_DIR</code>，
+打包版会自动指向 <code>runtime/</code> 下；<code>deploy_ucp.py</code> 按 <code>chat_assistant.py</code> 自身位置推导，
+和 <code>pack_installer._PACKS_DIR</code> 是同一个目录，没有为此新增跨层 import。命令里顺手给脚本路径加了引号。</p>
+</li>
+<li>
+<p><strong><code>_utc_now_z()</code> 保持字符串格式</strong>。<code>datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + &quot;Z&quot;</code>，
+输出和原来逐字符同形，不会多出 <code>+00:00</code>。</p>
+</li>
+</ul>
+<h2 id="section-5">实现坑</h2>
+<ol>
+<li>
+<p><strong>行尾混用</strong>。仓库里 <code>main.py</code>、<code>config.py</code>、<code>api/*.py</code>、<code>ci.yml</code>、根目录 <code>.env.example</code> 是 CRLF，
+<code>cloud_video/*</code>、<code>actions/*</code>、<code>docs/</code>、<code>dev-notes/</code> 是 LF。全程用「精确匹配 + 保持原行尾」的小脚本改文件，
+每次替换都校验命中次数，避免整文件被改写成另一种行尾、diff 里全是噪音。</p>
+</li>
+<li>
+<p><strong>提示词改动要证明没改内容</strong>。<code>chat_assistant.py</code> 的 <code>\`</code> 改成 <code>\\`</code> 之后，
+用 AST 把改动前后（<code>git show HEAD:</code> 对比工作区）所有字符串常量取出来比对：
+除了 <code>deploy_ucp</code> 那几行，其余常量完全一致，说明运行时的提示词文本没有变化。</p>
+</li>
+<li>
+<p><strong>测试文件自己也会触发 SyntaxWarning</strong>。回归测试的 docstring 里一开始直接写了 <code>F:\A_Works\...</code>，
+等于把要消灭的问题又写了一遍，改成文字描述。</p>
+</li>
+<li>
+<p><strong><code>utcnow</code> 的回归断言不能用字符串搜索</strong>。新 helper 的 docstring 里就有 <code>utcnow()</code> 字样，
+改用 AST 查 <code>Attribute(attr=&quot;utcnow&quot;)</code>。</p>
+</li>
+<li>
+<p><strong>3.12 下 pytest 的报错会被掩盖</strong>。<code>import main</code> 失败时，pytest 最后抛的是
+<code>ValueError: I/O operation on closed file</code>，真正的 <code>NameError</code> 要单独 <code>python -c &quot;import main&quot;</code> 才看得到。
+推测与 <code>main.py</code> 开头把 <code>sys.stdout.buffer</code> 包成新的 <code>TextIOWrapper</code> 有关（模块导入失败后包装对象被回收，
+连带关掉了 pytest 的捕获文件），没有进一步验证，也没有改，记在「遗留」里。</p>
+</li>
+<li>
+<p><strong><code>python -c</code> 和脚本入口加载的 <code>.env</code> 不一样</strong>。<code>python -c &quot;from config import settings&quot;</code> 在仓库根目录执行时
+加载的是根目录 <code>.env</code>（得到 <code>HOST=0.0.0.0</code>），而脚本入口加载的是 <code>backend/.env</code>。
+验证监听地址时必须用脚本入口，否则会得出相反的结论。</p>
+</li>
+<li>
+<p><strong>运行期间审批服务出过一次故障</strong>。有一轮只读命令被自动审批复核拦下，原因是复核服务自身报错
+（不是命令被判为不安全）。原样重试一次仍失败后停下等待，审批配置恢复后继续，没有换别的方式绕过。</p>
+</li>
+</ol>
+<h2 id="section-6">验证</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>项</th>
+<th>环境</th>
+<th>结果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>全量 pytest</td>
+<td>Windows，Python 3.14.3，本机已装依赖（fastapi 0.135.1）</td>
+<td><strong>868 通过，0 失败</strong>（159s）；改之前是 762 通过、2 失败</td>
+</tr>
+<tr>
+<td>全量 pytest</td>
+<td>Windows，Python 3.12.13，按 <code>requirements.txt</code> 新装（fastapi 0.163.2 / starlette 0.52.1 / uvicorn 0.54.0）</td>
+<td><strong>868 通过</strong>（170s）</td>
+</tr>
+<tr>
+<td>全量 pytest（干净检出模拟）</td>
+<td>同上；只拷贝会入库的 7,452 个文件到临时目录，没有 <code>.env</code>、数据库和本地数据</td>
+<td><strong>868 通过</strong>（153s）</td>
+</tr>
+<tr>
+<td>分层守卫 <code>python scripts/check_layers.py</code></td>
+<td>3.14.3</td>
+<td>退出码 0；SCC 0 组、双向对 0、相对基线新增 0；存量违规 92 条全部是 DIRECTION</td>
+</tr>
+<tr>
+<td>CI 同款 flake8（<code>--select=E9,F63,F7,F82</code>）</td>
+<td>3.12.13</td>
+<td>入库文件 0 条；改之前 4 条 F821</td>
+</tr>
+<tr>
+<td>自有 Python 文件编译检查（736 个，不含内置插件市场）</td>
+<td>3.14.3</td>
+<td>0 条 SyntaxWarning</td>
+</tr>
+<tr>
+<td>全应用路由探测（<code>TestClient</code>，不触发 lifespan）</td>
+<td>3.14.3</td>
+<td><code>POST /api/projects → create_project</code>；下划线 endpoint 0 个；<code>/api/health</code> 返回 <code>0.22.0</code></td>
+</tr>
+<tr>
+<td>CORS 实测</td>
+<td>同上</td>
+<td><code>http://localhost:8001</code> 来源有 <code>Access-Control-Allow-Origin</code>；<code>https://evil.example</code> 没有，预检返回 400</td>
+</tr>
+<tr>
+<td>监听地址</td>
+<td>脚本入口，cwd 分别为仓库根和 <code>backend/</code></td>
+<td><code>HOST=127.0.0.1</code>，<code>PORT=8001</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>新增 104 项用例：762 + 2（原失败的两项架构测试转绿）+ 104 = 868。</p>
+<p><strong>没有验证的部分：</strong></p>
+<ul>
+<li><strong>Linux 没跑过</strong>。CI 是 <code>ubuntu-latest</code>，本机 WSL 探测命令无响应，放弃了。上面三轮都在 Windows 上，
+路径分隔符、<code>sys.platform</code> 分支在 Linux 上的表现没有验证，CI 首次跑 pytest 有可能暴露平台差异。</li>
+<li><strong>没有启动真实服务，没有做浏览器端到端验证</strong>。启动会走 lifespan：连接真实数据库、拉起后台任务和 MCP 服务，
+可能恢复在途工单并产生 LLM 调用，所以只用 <code>TestClient</code> 在不触发 lifespan 的前提下验证。
+「新建项目」「导入项目」在界面上的完整流程、SSE 流式输出、图片预览都没有在浏览器里点过。</li>
+<li><strong>CI 改动没有在 GitHub 上实际跑过</strong>（未提交、未推送）。</li>
+<li><strong>shell 黑名单没有真正执行过危险命令</strong>，只验证了匹配结果和 Action 在黑名单处返回。</li>
+</ul>
+<h2 id="section-7">行为变化（升级后需要知道）</h2>
+<ol>
+<li><strong>服务默认只监听 <code>127.0.0.1</code></strong>。本机此前实际监听的是 <code>0.0.0.0:8001</code>。如果有从其他机器、手机或虚拟机
+访问这个后端的用法，需要在 <code>backend/.env</code> 里加 <code>HOST=0.0.0.0</code>。</li>
+<li><strong>跨域调用只放行本机来源</strong>。如果有别的站点（非本机来源）的网页在调这个后端，
+需要把它的来源写进 <code>CORS_ALLOW_ORIGINS</code>。</li>
+<li><strong><code>/api/health</code> 的 <code>version</code> 从 <code>0.13.0</code> 变成 <code>0.22.0</code></strong>，FastAPI 文档页的版本同步变化。</li>
+<li><strong>shell 工具会拒绝更多命令</strong>，包括此前能通过的 <code>rm -rf</code>、<code>format c:</code> 和各种 PowerShell 递归 / 强制删除。
+<code>openspec</code> 这类 skill 的 <code>--description</code> / <code>--goal</code> 自由文本也会过同一个黑名单，
+文本里出现 <code>format c:</code>、<code>rm -rf</code> 这类字样会被拒绝（旧规则对 <code>shutdown</code>、<code>reboot</code> 等词已有同样的行为）。</li>
+<li><strong>非本机来源的 500 响应不再带异常文本</strong>，多了 <code>error_id</code> 字段。</li>
+</ol>
+<h2 id="section-8">遗留与后续</h2>
+<p><strong>本轮刻意没做：</strong></p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>项</th>
+<th>原因</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>本地 token 鉴权（体检第 4 条第 3 步）</td>
+<td>要同时改 SSE（<code>EventSource</code> 不能带请求头）、<code>&lt;img&gt;</code> 直链、<code>/generated-images</code> 等静态挂载和 3.5 万行的 <code>app.js</code>，没有浏览器端到端验证手段，改坏的概率高。建议单独立项，先定 token 的传递方式（Cookie / 查询参数 / 请求头）。</td>
+</tr>
+<tr>
+<td><code>/api/local-file</code> 限制根目录（第 4 条第 4 步）</td>
+<td>前端把它用于任意绝对路径的图片：拖入的本地图片、Markdown 里的本地路径、AI 输出的截图。允许的根目录范围需要先和实际用法对齐，否则会让预览功能失效。监听地址和 CORS 收紧后，它的暴露面已经缩到「本机进程 + 无法读取响应的跨域请求」。</td>
+</tr>
+<tr>
+<td><code>/api/system/open_path</code>、<code>/api/open-in-browser</code>、<code>/api/llm/config</code>、<code>/api/sop/config</code></td>
+<td>同属无鉴权的敏感接口，等 token 方案一起处理。</td>
+</tr>
+<tr>
+<td>日志轮转（第 9 条）</td>
+<td>Windows 上 <code>RotatingFileHandler</code> 在文件被其他进程占用时（桌面版双进程、<code>Get-Content -Wait</code>）轮转会失败，需要单独评估方案。</td>
+</tr>
+<tr>
+<td>依赖锁定文件（第 7 条）</td>
+<td>本机环境与 <code>requirements.txt</code> 已经脱节，不适合拿来生成 lock。这次建的 3.12 环境解析出的版本可作为参考：fastapi 0.163.2、starlette 0.52.1、uvicorn 0.54.0。</td>
+</tr>
+<tr>
+<td>仓库清理（第 13 条）</td>
+<td>涉及删除已入库文件，属于不可逆操作，清单在体检文档第 13 条，需要确认后再动。</td>
+</tr>
+<tr>
+<td>大文件拆分、宽泛 <code>except</code>、分层治理（第 10–12 条）</td>
+<td>长期项，不在本批范围。</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>顺带发现、没有处理的：</strong></p>
+<ul>
+<li><code>main.py</code> 包装 <code>sys.stdout.buffer</code> 的写法在导入失败时会掩盖 pytest 的真实报错（见「实现坑」第 5 点）。</li>
+<li><code>GET /api/filesystem/available-paths</code> 里写死了 <code>D:/A_Works/</code>、<code>C:/Users/admin/Documents/</code> 等候选目录。</li>
+<li><code>desktop.py:229</code> 有一条 <code>F821 undefined name 'pystray'</code>（在 <code>backend/</code> 之外，CI 的 flake8 不扫）。</li>
+<li>pytest-asyncio 提示 <code>asyncio_default_fixture_loop_scope</code> 未设置，目前只是警告。</li>
+<li>Python 版本口径这次定为 3.11+（分层检查脚本用 <code>tomllib</code>），上限没有写。3.12 和 3.14 实测可用，3.11 和 3.13 没有跑过。</li>
+</ul>
+<p><strong>提交建议：</strong></p>
+<p>本批改动与工作区里原有的 <code>ai_gen_tasks</code> 改动在 <code>backend/main.py</code>、<code>backend/cloud_video/client.py</code> 两个文件里有交叠，
+提交时这两个文件需要用 <code>git add -p</code> 分开，或者先提交 <code>ai_gen_tasks</code> 再提交本批。
+5 个新测试文件和 <code>backend/cloud_video/errors.py</code> 都是未跟踪文件，漏提交会让 CI 直接失败。</p>
+<h2 id="section-9">复核命令</h2>
+<pre><code class="language-powershell"># 全量测试（本机约 2 分 40 秒）
+cd backend
+python -m pytest
+
+# 只跑本批新增的用例
+python -m pytest tests/api/test_projects_route.py tests/test_cloud_video_errors.py tests/test_shell_blacklist.py tests/api/test_main_hardening.py tests/test_runtime_paths_and_time.py
+
+# 分层守卫
+cd ..
+python scripts/check_layers.py
+
+# 用 3.12 + 声明依赖复现 CI 环境（Windows）
+uv venv --python 3.12 $env:TEMP\ads312
+uv pip install --python $env:TEMP\ads312\Scripts\python.exe -r backend\requirements.txt pytest pytest-asyncio pytest-cov flake8
+cd backend
+&amp; $env:TEMP\ads312\Scripts\python.exe -m pytest
+# 本地要多排除 projects：backend/projects 是未入库的本地数据，里面有 3 条 F824，CI 上没有这个目录
+&amp; $env:TEMP\ads312\Scripts\python.exe -m flake8 . --count --select=E9,F63,F7,F82 --exclude=skills/marketplace,skills/packs,skills/use_skills,projects
+</code></pre>
+</article><nav class="adjacent" aria-label="相邻文档"><a href="2026-11-24_02_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%96%B9%E6%A1%88%E5%88%86%E6%9E%90.html">下一篇：代码重构方案分析（度量、结论与校对记录）（2026-11-24）</a></nav></main></body></html>

@@ -1,0 +1,71 @@
+<!doctype html>
+<!-- 由 scripts/docs-html/export.mjs 生成，请编辑 Markdown 原稿。 -->
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>代码重构：应用停机后，确认 Python 进程也退出 · ADS 文档</title><link rel="stylesheet" href="../docs/assets/refactor-docs/reader.css"></head>
+<body><nav class="bar" aria-label="主导航"><b>ADS · 开发文档</b><a href="../docs/%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%96%87%E6%A1%A3%E7%B4%A2%E5%BC%95.html">系列索引</a></nav>
+<main><header><p class="meta">开发笔记 · DevNote · <a href="2026-11-26_21_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E5%BA%94%E7%94%A8%E7%94%9F%E5%91%BD%E5%91%A8%E6%9C%9F.md">Markdown 原稿</a></p>
+<h1>代码重构：应用停机后，确认 Python 进程也退出</h1></header><details><summary>本页目录（3 节）</summary><ol><li><a href="#section-1">旧版到底漏了什么</a></li><li><a href="#section-2">为什么先停任务，再关库</a></li><li><a href="#section-3">运行与验证</a></li></ol></details>
+<article><p>2026-11-26 · <a href="2026-11-26_20_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%9C%AC%E5%9C%B0%E5%9B%BE%E7%89%87%E9%A2%84%E8%A7%88.html">上期：本地图片预览</a> · <a href="../docs/20261124_01_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84%E6%96%B9%E6%A1%88.html">项目重构方案</a></p>
+<p>上次服务停止监听 8001 后，旧 PID 仍然存在。本批分别观测了 HTTP 是否就绪、后台任务是否结束、SQLite 是否关闭，以及父进程能否等到子进程退出。隔离环境复现了两条会漏关数据库的启动路径；实际开发服务验证了一次正常退出。上次旧进程已不在，无法追溯它具体等在哪一步。</p>
+<p>基线 <code>7b31b04</code>，代码 <code>0a9020f</code>。原来 <a href="../backend/main.py">main.py</a> 的生命周期有 257 行。现在由<a href="../backend/app_runtime/lifecycle.py">27 行的生命周期主流程</a>控制资源顺序；<a href="../backend/app_runtime/startup_data.py">启动数据模块</a>负责恢复项目配置、重置遗留的预览状态、补录两个搜索索引及同步资源库。<code>main.py</code> 从 <strong>600 行减至 344 行</strong>，保留原 <code>main.lifespan(app)</code> 入口。新模块归入 L1，并已列入桌面打包清单；本批未重建安装包。</p>
+<h2 id="section-1">旧版到底漏了什么</h2>
+<p>用同一份<a href="../backend/tests/lifespan_probe.py">子进程探针</a>先跑旧版。每个样本用独立的临时 SQLite、随机的本地端口和真实 Uvicorn 生命周期；工单、图片、CI 等业务循环换成可以观测清理顺序的替身。子进程把事件写进临时目录，父进程另外检查操作系统的退出码。发生启动失败时，端口原本就没有进入监听，不能把它记为成功停过一次 HTTP 服务。</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>条件</th>
+<th>旧版观察</th>
+<th>新版验收</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>就绪后正常停机</td>
+<td>开始关库时五个业务循环均未完成清理。Uvicorn 返回后图片循环仍在，随后由事件循环退出时取消。</td>
+<td>七个直属任务在关库前均已结束。就绪请求返回 200，关库时已不能连接端口，最后子进程退出。</td>
+</tr>
+<tr>
+<td>MCP 停止报错</td>
+<td>仍会关库，但同样没有等调度器收尾。</td>
+<td>任务先清完，MCP 的错误不阻止关库和退出。</td>
+</tr>
+<tr>
+<td>已连接 SQLite，建表失败</td>
+<td>只有连接事件，没有关闭事件；Uvicorn 返回后，父进程再等 5 秒仍等不到退出。</td>
+<td>不进入就绪状态，不启动 MCP；关闭已取得的连接，子进程自行退出。</td>
+</tr>
+<tr>
+<td>在 MCP 启动期间取消</td>
+<td>已启动的四个调度器未被清理，数据库也未关闭；子进程同样超时。</td>
+<td>回收四个任务，停止已尝试启动的 MCP，然后关库退出。</td>
+</tr>
+</tbody>
+</table></div>
+<p>旧版四个验收用例均失败（25.35 秒）；超时只结束测试创建的子进程。新版的 <a href="../backend/tests/test_app_lifespan.py">pytest 用例</a>会区分“没就绪”和“正常提供过服务”，四种探针退出码均为 0。这里的 0 表示<strong>诊断脚本自行退出</strong>；是否成功启动另由就绪请求和事件判断。</p>
+<p><img src="assets/2026-11-26_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E5%BA%94%E7%94%A8%E7%94%9F%E5%91%BD%E5%91%A8%E6%9C%9F_%E6%88%AA%E5%9B%BE.png" alt="四个隔离 Uvicorn 子进程的就绪、任务、MCP 清理、数据库与退出码实测表"></p>
+<h2 id="section-2">为什么先停任务，再关库</h2>
+<figure><a href="../docs/assets/refactor-docs/2026-11-26_21_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E5%BA%94%E7%94%A8%E7%94%9F%E5%91%BD%E5%91%A8%E6%9C%9F_%E5%9B%BE1.svg"><img src="../docs/assets/refactor-docs/2026-11-26_21_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E5%BA%94%E7%94%A8%E7%94%9F%E5%91%BD%E5%91%A8%E6%9C%9F_%E5%9B%BE1.svg" alt="流程图：为什么先停任务，再关库"></a><figcaption>流程图：为什么先停任务，再关库 · <a href="../docs/assets/refactor-docs/2026-11-26_21_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E5%BA%94%E7%94%A8%E7%94%9F%E5%91%BD%E5%91%A8%E6%9C%9F_%E5%9B%BE1.svg">查看原图</a></figcaption></figure>
+<p>以前六个任务只调用 <code>cancel()</code>，图片调度器连句柄都没有保留。现在显式保存七个任务，退出时先取消，再等待它们的异步清理完成；即使某个任务已经报错，也会回收其余任务。数据库和 MCP 的清理在尝试取得资源之前登记，建表出错或 MCP 启动中断也能清理。停机日志给出任务结束、MCP 停止开始、数据库断开开始和完成四个观测点。</p>
+<p>这批只管理生命周期直接创建的七个循环。调度器内部另行派发的工单、图片或构建任务，不在“七个已结束”的含义内；本次现场停机也只验证了空闲服务，不能推断带活跃业务时的排空耗时。</p>
+<h2 id="section-3">运行与验证</h2>
+<ul>
+<li><strong>启动数据。</strong> 把旧版本的初始化语句与六个新步骤按顺序作语法树对照，统一 <code>json</code> 的导入别名后，六组语句均一致。<a href="../backend/tests/test_startup_data.py">两项合成数据测试</a>另行检查非默认仓库路径、旧远端迁移、已有远端保留，以及反思 JSON 损坏时继续索引下一条工单。首次测试把 SQL 的 <code>description</code> 列漏掉，也误写了索引函数的参数形状。按实际查询和函数签名修正了样本，没有为适配测试改动业务逻辑。</li>
+<li><strong>回归与分层。</strong> 生命周期、启动数据、入口加固和生成任务共 38 项通过（20.74 秒）。在 FastAPI 0.141.0 / Starlette 0.52.1 环境，本批 6 项通过（17.43 秒）。分层检查扫描 524 个模块，既有方向违规 86 条，新增违规、解析错误、循环依赖组均为 0。指定 flake8 规则通过。</li>
+<li><strong>开发服务。</strong> 本轮开始检查服务时，旧 PID 87256 不存在，8001 无监听者。启动新版 PID 38828，确认健康检查 200、排队数/处理中工单/活动 Agent 都为 0，再发送一次 Ctrl+C。观察到七个后台任务结束、数据库关闭、Uvicorn 报告关闭完成；Windows 终端会话返回 1，另外核实操作系统中 PID 和监听均已消失，没有强制结束。随后用隐藏窗口启动 PID 88336，继续在 8001 提供服务。首次烟测三条 SSE 头通过，一次普通 GET 超时；随后逐项复核，16 个普通只读地址均为 200。未读取事件正文。</li>
+</ul>
+<p>最终本机后端全量 <strong>1,841 项通过（344.01 秒，退出码 0）</strong>，含本批新增的 6 项。修正测试样本前的全量为 1,840 项通过、上述索引测试 1 项失败（302.85 秒）。</p>
+<p>从仓库根目录重跑：</p>
+<pre><code class="language-powershell">Push-Location backend
+python -m pytest -p no:cacheprovider tests/test_app_lifespan.py tests/test_startup_data.py
+python -m pytest -p no:cacheprovider tests/test_app_lifespan.py tests/test_startup_data.py tests/api/test_main_hardening.py tests/api/test_ai_gen_tasks.py
+python -m pytest -p no:cacheprovider
+uvx --python 3.14 --from flake8==7.3.0 flake8 --select=E9,F63,F7,F82 --exclude=skills/marketplace,skills/packs,skills/use_skills,projects .
+Pop-Location
+python scripts/check_layers.py --json
+# 需要 Edge 和 Playwright；重新启动四个隔离子进程并按实测数据生成图片
+python &quot;dev-notes/assets/2026-11-26_代码重构_应用生命周期_截图.py&quot;
+</code></pre>
+<p>六项测试已纳入现有 <a href="../.github/workflows/ci.yml">CI 全量收集</a>；<a href="assets/2026-11-26_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E5%BA%94%E7%94%A8%E7%94%9F%E5%91%BD%E5%91%A8%E6%9C%9F_%E6%88%AA%E5%9B%BE.py">截图脚本</a>按需执行。R3 的主入口拆分项完成。下一批转向当时 5,566 行的 <code>api/chat.py</code>（<a href="../backend/api/chat/__init__.py">现聊天包入口</a>），先为项目、全局会话列表固定响应和作用域，再拆只读会话路由。</p>
+<p>下期基线已用内存 SQLite 验证：只插入四个合成会话，分别属于两个项目和全局。四次 GET 均为 200；项目列表按更新时间倒序，<code>limit=1</code> 只返回最新会话，未知项目返回空数组，全局列表只返回全局会话；无消息的项目会话计数为 0。未请求实际服务上的聊天记录。</p>
+</article><nav class="adjacent" aria-label="相邻文档"><a href="2026-11-26_20_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%9C%AC%E5%9C%B0%E5%9B%BE%E7%89%87%E9%A2%84%E8%A7%88.html">上一篇：代码重构：拆出本地图片预览，完成主入口的 25 个 HTTP 路径迁移</a>
+<a href="2026-11-26_22_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E8%81%8A%E5%A4%A9%E4%BC%9A%E8%AF%9D%E5%88%97%E8%A1%A8.html">下一篇：代码重构：拆出聊天会话列表，按项目归属统计消息</a></nav></main></body></html>

@@ -1,0 +1,118 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1095.9160666666667 1456.472" width="1095.9160666666667" height="1456.472" style="--bg:#ffffff;--fg:#1d3839;--accent:#12645e;--border:#608781;background:var(--bg)">
+<style>
+
+  text { font-family: 'Microsoft YaHei', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          var(--fg);
+    --_text-sec:      var(--muted, color-mix(in srgb, var(--fg) 60%, var(--bg)));
+    --_text-muted:    var(--muted, color-mix(in srgb, var(--fg) 40%, var(--bg)));
+    --_text-faint:    color-mix(in srgb, var(--fg) 25%, var(--bg));
+    --_line:          var(--line, color-mix(in srgb, var(--fg) 50%, var(--bg)));
+    --_arrow:         var(--accent, color-mix(in srgb, var(--fg) 85%, var(--bg)));
+    --_node-fill:     var(--surface, color-mix(in srgb, var(--fg) 3%, var(--bg)));
+    --_node-stroke:   var(--border, color-mix(in srgb, var(--fg) 20%, var(--bg)));
+    --_group-fill:    var(--bg);
+    --_group-hdr:     color-mix(in srgb, var(--fg) 5%, var(--bg));
+    --_inner-stroke:  color-mix(in srgb, var(--fg) 12%, var(--bg));
+    --_key-badge:     color-mix(in srgb, var(--fg) 10%, var(--bg));
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<polyline class="edge" data-from="A" data-to="T" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="436.0469,76.9 436.04690000000005,124.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="T" data-to="H" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="是" points="409.6177333333334,257.04583333333335 409.6177333333334,935.6719999999997 169.5315,935.6719999999997 169.5315,1015.9719999999996" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="T" data-to="F" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="否" points="462.47606666666667,257.04583333333335 462.47606666666667,295.475 557.23515,295.475 557.23515,375.775" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="F" data-to="R" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="是" points="528.9534833333333,517.1833333333333 528.9534833333333,1020.5719999999997 351.66116666666665,1020.5719999999997 351.66116666666665,1100.8719999999996" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="F" data-to="B" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="否" points="585.5168166666667,517.1833333333332 585.5168166666667,557.465 691.9466500000001,557.465 691.94665,637.7650000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="B" data-to="U" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="是" points="657.8604833333334,808.1958333333332 657.8604833333334,1105.4719999999998 541.8183333333334,1105.4719999999998 541.8183333333334,1185.7719999999997" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="B" data-to="G" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="否" points="726.0328166666666,808.1958333333334 726.0328166666666,854.2819999999999 833.8829,854.2819999999999 833.8829,934.5819999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="G" data-to="X" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="是" points="793.2512333333333,1137.7403333333332 793.2512333333333,1258.6719999999998 522.7650166666666,1258.6719999999998 522.7650166666666,1282.6719999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="H" data-to="X" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="169.5315,1052.8719999999996 169.5315,1258.6719999999998 325.53481666666664,1258.6719999999998 325.53481666666664,1282.6719999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="R" data-to="X" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="351.66116666666665,1137.7719999999997 351.66116666666665,1258.6719999999998 391.27821666666665,1258.6719999999998 391.27821666666665,1282.6719999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="U" data-to="X" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="541.8183333333334,1222.6719999999998 541.8183333333334,1246.6719999999998 457.02161666666666,1246.6719999999998 457.02161666666666,1282.6719999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="G" data-to="C" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="否" points="874.5145666666666,1137.7403333333332 874.5145666666666,1282.6719999999998" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="C" data-to="P" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="874.5145666666666,1319.572 874.5145666666667,1379.572" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="T" data-to="H" data-label="是">
+  <rect x="154.5315" y="942.6719999999997" width="29.53" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="169.29649999999998" y="957.8219999999997" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">是</text>
+</g>
+<g class="edge-label" data-from="T" data-to="F" data-label="否">
+  <rect x="542.23515" y="302.475" width="29.53" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="557.00015" y="317.625" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">否</text>
+</g>
+<g class="edge-label" data-from="F" data-to="R" data-label="是">
+  <rect x="336.66116666666665" y="1027.5719999999997" width="29.53" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="351.42616666666663" y="1042.7219999999998" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">是</text>
+</g>
+<g class="edge-label" data-from="F" data-to="B" data-label="否">
+  <rect x="676.9466500000001" y="564.465" width="29.53" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="691.7116500000001" y="579.615" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">否</text>
+</g>
+<g class="edge-label" data-from="B" data-to="U" data-label="是">
+  <rect x="526.8183333333334" y="1112.4719999999998" width="29.53" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="541.5833333333334" y="1127.6219999999998" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">是</text>
+</g>
+<g class="edge-label" data-from="B" data-to="G" data-label="否">
+  <rect x="818.8829" y="861.2819999999999" width="29.53" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="833.6478999999999" y="876.4319999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">否</text>
+</g>
+<g class="edge-label" data-from="G" data-to="X" data-label="是">
+  <rect x="778.2512333333333" y="1221.3719999999998" width="29.53" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="793.0162333333333" y="1236.522" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">是</text>
+</g>
+<g class="edge-label" data-from="G" data-to="C" data-label="否">
+  <rect x="859.5145666666666" y="1221.3719999999998" width="29.53" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="874.2795666666666" y="1236.522" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">否</text>
+</g>
+<g class="node" data-id="A" data-label="进入 handle_dev" data-shape="rectangle">
+  <rect x="364.3134" y="40" width="143.467" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="436.0469" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">进入 handle_dev</text>
+</g>
+<g class="node" data-id="T" data-label="H5 类型检查？" data-shape="diamond">
+  <polygon points="436.04690000000005,124.9 515.3344000000001,204.1875 436.04690000000005,283.475 356.7594,204.1875" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="436.04690000000005" y="204.1875" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">H5 类型检查？</text>
+</g>
+<g class="node" data-id="H" data-label="按 SOP 或默认状态记录通过 / 拒绝" data-shape="rectangle">
+  <rect x="40" y="1015.9719999999996" width="259.063" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="169.5315" y="1034.4219999999996" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">按 SOP 或默认状态记录通过 / 拒绝</text>
+</g>
+<g class="node" data-id="F" data-label="代码生成失败？" data-shape="diamond">
+  <polygon points="557.23515,375.775 642.08015,460.62 557.23515,545.465 472.39014999999995,460.62" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="557.23515" y="460.62" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">代码生成失败？</text>
+</g>
+<g class="node" data-id="R" data-label="写 development_failed，记 reject / error" data-shape="rectangle">
+  <rect x="212.49666666666667" y="1100.8719999999996" width="278.329" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="351.66116666666665" y="1119.3219999999997" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">写 development_failed，记 reject / error</text>
+</g>
+<g class="node" data-id="B" data-label="UE 自检有阻塞问题？" data-shape="diamond">
+  <polygon points="691.9466500000001,637.765 794.2051500000001,740.0235 691.9466500000001,842.282 589.6881500000001,740.0235" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="691.9466500000001" y="740.0235" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">UE 自检有阻塞问题？</text>
+</g>
+<g class="node" data-id="U" data-label="写 self_test_failed，记 reject / warning" data-shape="rectangle">
+  <rect x="407.84083333333336" y="1185.7719999999997" width="267.9549999999999" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="541.8183333333334" y="1204.2219999999998" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">写 self_test_failed，记 reject / warning</text>
+</g>
+<g class="node" data-id="G" data-label="重读到终态或受保护状态？" data-shape="diamond">
+  <polygon points="833.8829,934.5819999999999 955.7778999999999,1056.4769999999999 833.8829,1178.3719999999998 711.9879,1056.4769999999999" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="833.8829" y="1056.4769999999999" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">重读到终态或受保护状态？</text>
+</g>
+<g class="node" data-id="X" data-label="返回 HANDLED，无公共状态通知或即时派单" data-shape="rectangle">
+  <rect x="259.7914166666667" y="1282.6719999999998" width="328.7169999999999" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="424.1499166666666" y="1301.1219999999998" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">返回 HANDLED，无公共状态通知或即时派单</text>
+</g>
+<g class="node" data-id="C" data-label="写 development_done，再写日志、评论、代码产物" data-shape="rectangle">
+  <rect x="693.1130666666667" y="1282.6719999999998" width="362.80299999999994" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="874.5145666666666" y="1301.1219999999998" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">写 development_done，再写日志、评论、代码产物</text>
+</g>
+<g class="node" data-id="P" data-label="返回新状态，公共入口发状态通知并按规则继续" data-shape="rectangle">
+  <rect x="697.9295666666667" y="1379.572" width="353.16999999999996" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="874.5145666666667" y="1398.022" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">返回新状态，公共入口发状态通知并按规则继续</text>
+</g>
+</svg>

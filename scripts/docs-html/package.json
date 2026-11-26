@@ -1,0 +1,13 @@
+{
+  "name": "ai-dev-system-docs-html",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node export.mjs",
+    "check": "node export.mjs --check"
+  },
+  "dependencies": {
+    "beautiful-mermaid": "1.1.3",
+    "markdown-it": "15.0.3"
+  }
+}

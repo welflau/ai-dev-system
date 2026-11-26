@@ -1,0 +1,76 @@
+<!doctype html>
+<!-- 由 scripts/docs-html/export.mjs 生成，请编辑 Markdown 原稿。 -->
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>代码重构：迁出健康检查与本地路径列表 · ADS 文档</title><link rel="stylesheet" href="../docs/assets/refactor-docs/reader.css"></head>
+<body><nav class="bar" aria-label="主导航"><b>ADS · 开发文档</b><a href="../docs/%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%96%87%E6%A1%A3%E7%B4%A2%E5%BC%95.html">系列索引</a></nav>
+<main><header><p class="meta">开发笔记 · DevNote · <a href="2026-11-25_09_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E7%B3%BB%E7%BB%9F%E5%8F%AA%E8%AF%BB%E8%B7%AF%E7%94%B1.md">Markdown 原稿</a></p>
+<h1>代码重构：迁出健康检查与本地路径列表</h1></header><details><summary>本页目录（2 节）</summary><ol><li><a href="#section-1">目录建议里的 exists 是什么意思</a></li><li><a href="#section-2">怎样确认搬移没有改变行为</a></li></ol></details>
+<article><p>2026-11-25 · <a href="2026-11-25_08_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_SOP%E9%85%8D%E7%BD%AE%E8%B7%AF%E7%94%B1.html">上期：SOP 配置路由</a> · <a href="../docs/20261124_01_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84%E6%96%B9%E6%A1%88.html">项目重构方案</a></p>
+<p>R3 本期将 <code>GET /api/health</code> 和 <code>GET /api/filesystem/available-paths</code> 迁入 <a href="../backend/api/system.py">api/system.py</a>。<a href="../backend/main.py">main.py</a> 只挂载这组路由，保留 <code>main.health_check</code>、<code>main.get_available_paths</code> 两个 Python 入口。主文件从 <strong>1,090 行减到 1,051 行</strong>；加上指标和 SOP，R3 累计迁出 8 个接口。</p>
+<h2 id="section-1">目录建议里的 exists 是什么意思</h2>
+<p>健康检查返回 <code>{&quot;status&quot;: &quot;ok&quot;, &quot;version&quot;: APP_VERSION}</code>，继续使用应用配置中的版本号。路径接口的 <code>exists</code> 表示“现在是可用目录”。即使路径指向普通文件或尚不存在，它也应出现在原位置，供调用方显示为建议。多个路径都叫 <code>Projects</code>，不能只比较标签或用集合检查顺序。</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>同一个 GET 请求中的候选项</th>
+<th>预期值</th>
+<th>再次请求</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>已存在的目录</td>
+<td><code>exists: true</code></td>
+<td>按当前磁盘状态重新判断</td>
+</tr>
+<tr>
+<td>普通文件</td>
+<td><code>exists: false</code></td>
+<td>仍返回原路径和标签</td>
+</tr>
+<tr>
+<td>尚不存在的路径</td>
+<td><code>exists: false</code></td>
+<td>如果创建为目录，原位置变为 <code>true</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>新模块只保存固定的 8 个候选路径，每次请求重新判断状态。原有候选项、顺序、平台路径格式和 docstring 均保留。路由没有增加单独的服务层；<a href="../desktop.spec">桌面打包清单</a>补录 <code>api.system</code>。本次未重建桌面包。</p>
+<h2 id="section-2">怎样确认搬移没有改变行为</h2>
+<ol>
+<li><strong>先测试旧路由。</strong> <a href="../backend/tests/api/test_system_read_routes.py">两个 HTTP 用例</a>从 ASGI 访问实际应用。一个核对健康响应；另一个把候选路径的磁盘查询转到临时目录，在同一客户端连续请求两次，中间创建一个目录。两次均核对八条记录的字段、顺序及真假值。</li>
+<li><strong>先排除测试本身的问题。</strong> 第一版测试只替换了 <code>Path.stat</code>，在本机 Python 3.14 下得到 1 通过、1 失败。检查标准库后发现 <code>Path.exists()</code> 和 <code>is_dir()</code> 默认走 <code>os.path</code>，没有经过被替换的调用。改在这两个公开方法上把查询映射到真实的临时目录，未修改业务代码，旧版基线变为 <strong>2 passed in 6.42s</strong>。</li>
+<li><strong>拆分后做相关回归。</strong> 同时运行主入口、SOP 和指标测试，<strong>39 passed in 8.63s</strong>。单独核对两个 <code>main</code> 导出均指向新路由中的同一函数。分层守卫检查 512 个模块，历史违规 86、新增 0、解析错误 0、循环依赖组 0。</li>
+<li><strong>在服务边界再比一次。</strong> 重启前保存两个 GET 的完整 JSON 响应和 OpenAPI 的 GET 操作定义。旧服务 PID 26736 的队列、执行中工单、活动 Agent 均为 0 时停止。新服务 PID 85532 就绪后，13 个只读地址返回 200；两个接口的响应（含数组顺序）和操作定义分别与旧服务完全一致。磁盘状态本来就会变化，因此响应对照在同一台机器、同一批候选目录状态下进行。</li>
+</ol>
+<pre><code class="language-powershell"># backend/：第一条在搬移前运行，其余在搬移后运行
+python -m pytest -p no:cacheprovider tests/api/test_system_read_routes.py
+python -m pytest -p no:cacheprovider tests/api/test_system_read_routes.py tests/api/test_main_hardening.py tests/api/test_sop_config_routes.py tests/api/test_metrics_asyncio_tasks.py
+python -m pytest -p no:cacheprovider
+uvx --python 3.14 --from flake8==7.3.0 flake8 --select=E9,F63,F7,F82 --exclude=skills/marketplace,skills/packs,skills/use_skills,projects .
+
+# 仓库根目录
+python scripts/check_layers.py --json
+</code></pre>
+<p>这些是开发时实际执行的测试阶段；保存文件或本地提交本身不会触发全量测试。</p>
+<p><strong>静态检查的解释器也要匹配。</strong> 默认的 <code>python</code> 是 3.14，未安装 flake8；直接调用 PATH 上的 <code>flake8</code> 又使用 3.10，对旧文件中的新版 f-string 和 <code>BaseExceptionGroup</code> 报了 5 项。改用上面单独的 3.14 工具环境，同一组规则通过，无须修改那些业务文件。这是本地检查；仓库 CI 的 lint 作业使用 3.12。</p>
+<p>若要复查服务差异，可在替换版本前后各运行一次下面的 Python 片段。它只读取这两个接口及其文档，对字典键排序、保留数组顺序。本轮两份数据直接比较相等，按下述方式计算的摘要也相同（前 12 位 <code>943c44e0d5cf</code>）。换机器或候选目录状态改变时摘要可能不同。</p>
+<pre><code class="language-python">import hashlib, json
+from urllib.request import urlopen
+
+def get(path):
+    with urlopen(&quot;http://127.0.0.1:8001&quot; + path, timeout=6) as response:
+        return json.load(response)
+
+paths = get(&quot;/openapi.json&quot;)[&quot;paths&quot;]
+sample = {p: {&quot;operation&quot;: paths[p][&quot;get&quot;], &quot;response&quot;: get(p)}
+          for p in (&quot;/api/health&quot;, &quot;/api/filesystem/available-paths&quot;)}
+data = json.dumps(sample, sort_keys=True, separators=(&quot;,&quot;, &quot;:&quot;), ensure_ascii=False).encode()
+print(hashlib.sha256(data).hexdigest())
+</code></pre>
+<p><strong>后端全量：</strong> <code>1726 passed in 521.86s (0:08:41)</code>，退出码 0，pytest 未报告警告。拆分基线：<code>647c26f</code>；本期代码：<code>9d6dd42</code>。</p>
+<p><img src="assets/2026-11-25_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E7%B3%BB%E7%BB%9F%E5%8F%AA%E8%AF%BB%E8%B7%AF%E7%94%B1_%E9%AA%8C%E8%AF%81.png" alt="系统只读路由拆分验证：基线、相关及全量测试、主文件变化、服务响应和分层结果"></p>
+<p>图为本地浏览器截图，取数自本期 pytest 输出、Git 基线与当前文件行数、分层 JSON 及 HTTP 对照记录。图中“可用”是本机当时的目录数，不是测试预设值。</p>
+<p>下一批建议先检查 <code>GET /api/llm/status</code> 和 <code>GET /api/llm/agents</code>。<a href="../backend/tests/api/test_llm_status_display.py">现有的模型显示测试</a>可以作为起点；用虚构配置覆盖 API/CLI 两种模式、Agent 覆盖和默认值，再决定哪些逻辑需要下沉。五个会测试连接、刷新模型或更改配置的 LLM 操作另行处理。</p>
+</article><nav class="adjacent" aria-label="相邻文档"><a href="2026-11-25_08_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_SOP%E9%85%8D%E7%BD%AE%E8%B7%AF%E7%94%B1.html">上一篇：代码重构：拆出 SOP 配置路由，用临时 YAML 验证写入和回滚</a>
+<a href="2026-11-25_10_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_LLM%E5%8F%AA%E8%AF%BB%E8%B7%AF%E7%94%B1.html">下一篇：代码重构：拆出 LLM 状态和 Agent 生效配置</a></nav></main></body></html>

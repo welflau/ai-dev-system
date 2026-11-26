@@ -1,0 +1,97 @@
+<!doctype html>
+<!-- 由 scripts/docs-html/export.mjs 生成，请编辑 Markdown 原稿。 -->
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>代码重构：拆出 CLI 模型刷新与 LLM 连接测试 · ADS 文档</title><link rel="stylesheet" href="../docs/assets/refactor-docs/reader.css"></head>
+<body><nav class="bar" aria-label="主导航"><b>ADS · 开发文档</b><a href="../docs/%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%96%87%E6%A1%A3%E7%B4%A2%E5%BC%95.html">系列索引</a></nav>
+<main><header><p class="meta">开发笔记 · DevNote · <a href="2026-11-25_11_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_LLM%E6%A8%A1%E5%9E%8B%E5%88%B7%E6%96%B0%E4%B8%8E%E8%BF%9E%E6%8E%A5%E6%B5%8B%E8%AF%95.md">Markdown 原稿</a></p>
+<h1>代码重构：拆出 CLI 模型刷新与 LLM 连接测试</h1></header><details><summary>本页目录（3 节）</summary><ol><li><a href="#section-1">迁移时保留的行为</a></li><li><a href="#section-2">测试如何隔离外部调用</a></li><li><a href="#section-3">额外发现：CLI 非零退出可能仍显示连接正常</a></li></ol></details>
+<article><p>2026-11-25 · <a href="2026-11-25_10_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_LLM%E5%8F%AA%E8%AF%BB%E8%B7%AF%E7%94%B1.html">上期：LLM 只读路由</a> · <a href="../docs/20261124_01_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84%E6%96%B9%E6%A1%88.html">项目重构方案</a></p>
+<p>R3 本期把 <code>POST /api/llm/cli-models/refresh</code> 和 <code>POST /api/llm/test</code> 从 <a href="../backend/main.py">main.py</a> 迁到已有的 <a href="../backend/api/llm_config.py">LLM 路由模块</a>。主文件从 <strong>971 行减到 950 行</strong>，R3 累计迁出 12 个接口。原有 <code>main.llm_cli_models_refresh</code> 和 <code>main.llm_test</code> 均保留，已核对它们指向新路由中的同一函数。</p>
+<h2 id="section-1">迁移时保留的行为</h2>
+<p>刷新模型时，CLI 类型和命令<strong>分别</strong>取值。比如请求只选择类型，命令仍取当前客户端配置；类型和命令都未提供、客户端也没有配置时，路由传给查询函数的是 <code>(&quot;claude&quot;, &quot;&quot;)</code>。命令为空时，由<a href="../backend/llm_client.py">现有客户端</a>决定使用什么命令。返回体包含所选类型和命令，以及查询函数给出的模型列表、来源等字段。</p>
+<p>测试连接时，路由原样返回客户端结果。因此 HTTP 200 只表示接口正常返回；调用方要看响应里的 <code>status</code> 才能判断连接成功、未配置还是失败。如果底层直接抛出未处理异常，两个路由都交由应用已有的 500 处理器处理。</p>
+<figure><a href="../docs/assets/refactor-docs/2026-11-25_11_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_LLM%E6%A8%A1%E5%9E%8B%E5%88%B7%E6%96%B0%E4%B8%8E%E8%BF%9E%E6%8E%A5%E6%B5%8B%E8%AF%95_%E5%9B%BE1.svg"><img src="../docs/assets/refactor-docs/2026-11-25_11_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_LLM%E6%A8%A1%E5%9E%8B%E5%88%B7%E6%96%B0%E4%B8%8E%E8%BF%9E%E6%8E%A5%E6%B5%8B%E8%AF%95_%E5%9B%BE1.svg" alt="流程图：迁移时保留的行为"></a><figcaption>流程图：迁移时保留的行为 · <a href="../docs/assets/refactor-docs/2026-11-25_11_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_LLM%E6%A8%A1%E5%9E%8B%E5%88%B7%E6%96%B0%E4%B8%8E%E8%BF%9E%E6%8E%A5%E6%B5%8B%E8%AF%95_%E5%9B%BE1.svg">查看原图</a></figcaption></figure>
+<p>执行 CLI、读取模型列表和连接供应商的逻辑都继续由原客户端负责。两个处理函数很短，直接使用现有实现，没有增加中间服务。本次复用已在桌面清单登记的模块，未重新构建桌面包。</p>
+<h2 id="section-2">测试如何隔离外部调用</h2>
+<p><a href="../backend/tests/api/test_llm_probe_routes.py">新增 HTTP 测试</a>用 HTTPX 的 ASGI transport 访问实际应用路由。替换 <code>fetch_cli_models</code> 和当前客户端的 <code>test_connection</code>，核对收到的参数和等待次数。测试既不启动本机 CLI，也不向供应商发送连接请求。</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>场景</th>
+<th>验证点</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>刷新参数（4 例）</td>
+<td>无请求体、两个字段都指定、只指定类型且命令为空、只指定命令；逐项核对底层收到的参数与实际 HTTP 响应。</td>
+</tr>
+<tr>
+<td>没有客户端默认值（1 例）</td>
+<td>使用内置类型与空命令；即使替身返回 <code>ok: false</code> 和内置列表，也保留查询结果并返回 200。</td>
+</tr>
+<tr>
+<td>请求体类型错误（1 例）</td>
+<td>返回 422，刷新函数没有被调用。</td>
+</tr>
+<tr>
+<td>连接结果（3 例）</td>
+<td>对 <code>ok</code>、<code>not_configured</code>、<code>error</code> 三类返回值逐项比较完整 JSON，均为 HTTP 200。</td>
+</tr>
+<tr>
+<td>未处理异常（2 例）</td>
+<td>两个外部调用分别抛错，回环请求均收到 HTTP 500、错误详情和 <code>error_id</code>。</td>
+</tr>
+</tbody>
+</table></div>
+<p>先在旧路由运行新增场景：<strong>11 passed in 7.30s</strong>。再迁移处理函数，并与上期 LLM 查询、模型显示及主入口测试一起运行：<strong>45 passed in 7.09s</strong>。分层守卫检查 514 个模块，历史违规 86、新增 0、解析错误 0、循环依赖组 0；指定的 flake8 规则通过。</p>
+<pre><code class="language-powershell"># backend/；第一条也用于迁移前的基线
+python -m pytest -p no:cacheprovider tests/api/test_llm_probe_routes.py
+python -m pytest -p no:cacheprovider tests/api/test_llm_probe_routes.py tests/api/test_llm_read_routes.py tests/api/test_llm_status_display.py tests/api/test_main_hardening.py
+python -m pytest -p no:cacheprovider
+uvx --python 3.14 --from flake8==7.3.0 flake8 --select=E9,F63,F7,F82 --exclude=skills/marketplace,skills/packs,skills/use_skills,projects .
+
+# 仓库根目录
+python scripts/check_layers.py --json
+</code></pre>
+<p>以上测试是本轮开发主动运行的；保存文件或本地提交本身不会触发全量测试。</p>
+<p><strong>运行中的服务。</strong> 旧服务 PID 86672 停止前，队列、执行中工单和活动 Agent 均为 0。新服务 PID 89204 就绪后，14 个只读地址全部返回 HTTP 200。分别从重启前后的 <code>/openapi.json</code> 取出两个 POST 的完整操作定义，两份相同。没有对运行中服务发这两个 POST；默认参数、响应和异常路径是在前述 ASGI 测试中验证的。主文件中余下三个 LLM 配置写入/删除处理函数（含装饰器）与基线语法树一致。</p>
+<p><strong>后端全量：</strong> <code>1741 passed in 534.62s (0:08:54)</code>，退出码 0，pytest 未报告警告。拆分基线 <code>96c4242</code>，代码提交 <code>06c79be</code>。</p>
+<p><img src="assets/2026-11-25_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_LLM%E6%A8%A1%E5%9E%8B%E5%88%B7%E6%96%B0%E4%B8%8E%E8%BF%9E%E6%8E%A5%E6%B5%8B%E8%AF%95_%E9%AA%8C%E8%AF%81.png" alt="CLI 模型刷新与连接测试验证：旧版基线、相关回归、全量测试、分层和服务对照"></p>
+<p>截图汇总本轮三份 pytest 输出、Git 基线与当前主文件行数、分层检查 JSON 及服务探测记录。</p>
+<h2 id="section-3">额外发现：CLI 非零退出可能仍显示连接正常</h2>
+<p>HTTP 路由按约定透传 <code>status</code>，但底层 <code>LLMClient.test_connection</code> 在 CLI 模式下等到版本查询结束，直接把输出当作成功结果，没有检查进程退出码。为排除路由的影响，另用模拟进程直接调用这个客户端方法：</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>模拟版本查询</th>
+<th>客户端实际返回</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>退出码 0，标准输出有版本号</td>
+<td><code>status: ok</code></td>
+</tr>
+<tr>
+<td>退出码 7，只有标准错误输出</td>
+<td>仍为 <code>status: ok</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>此次对照没有启动真实进程。它说明“HTTP 层能正确转发错误”和“客户端能识别进程失败”是两个不同的问题。后者是已有行为，本次仅迁移路由。建议单列修复：非零退出码应返回业务错误，同时保留退出码为 0、版本信息写到标准错误流的合法情况。</p>
+<p>复查非零退出分支时，可在 <code>backend/</code> 的 Python 环境中运行以下片段。它只调用客户端的方法，进程查找、创建与输出均由替身提供：</p>
+<pre><code class="language-python">import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock, patch
+from llm_client import LLMClient
+
+client = SimpleNamespace(is_configured=True, api_format=&quot;cli&quot;, cli_type=&quot;demo&quot;,
+                         cli_cmd=&quot;fixture-cli&quot;, _resolve_cmd=Mock(return_value=[&quot;fixture-cli&quot;]))
+proc = SimpleNamespace(returncode=7, communicate=AsyncMock(return_value=(b&quot;&quot;, b&quot;fixture version failed&quot;)))
+with patch(&quot;shutil.which&quot;, return_value=&quot;fixture-cli&quot;), \
+     patch(&quot;asyncio.create_subprocess_exec&quot;, AsyncMock(return_value=proc)):
+    print(asyncio.run(LLMClient.test_connection(client))[&quot;status&quot;])  # 本次基线输出 ok
+</code></pre>
+</article><nav class="adjacent" aria-label="相邻文档"><a href="2026-11-25_10_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_LLM%E5%8F%AA%E8%AF%BB%E8%B7%AF%E7%94%B1.html">上一篇：代码重构：拆出 LLM 状态和 Agent 生效配置</a>
+<a href="2026-11-25_12_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_CLI%E9%80%80%E5%87%BA%E7%A0%81%E4%B8%8EAgent%E9%85%8D%E7%BD%AE%E8%A6%86%E7%9B%96.html">下一篇：代码重构：修正 CLI 退出码判定，拆出 Agent 配置覆盖的保存和删除</a></nav></main></body></html>

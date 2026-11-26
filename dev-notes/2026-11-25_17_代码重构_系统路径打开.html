@@ -1,0 +1,91 @@
+<!doctype html>
+<!-- 由 scripts/docs-html/export.mjs 生成，请编辑 Markdown 原稿。 -->
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>代码重构：从详情页打开文件所在目录 · ADS 文档</title><link rel="stylesheet" href="../docs/assets/refactor-docs/reader.css"></head>
+<body><nav class="bar" aria-label="主导航"><b>ADS · 开发文档</b><a href="../docs/%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%96%87%E6%A1%A3%E7%B4%A2%E5%BC%95.html">系列索引</a></nav>
+<main><header><p class="meta">开发笔记 · DevNote · <a href="2026-11-25_17_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E7%B3%BB%E7%BB%9F%E8%B7%AF%E5%BE%84%E6%89%93%E5%BC%80.md">Markdown 原稿</a></p>
+<h1>代码重构：从详情页打开文件所在目录</h1></header><details><summary>本页目录（2 节）</summary><ol><li><a href="#section-1">文件和目录分别怎样处理</a></li><li><a href="#section-2">如何验证</a></li></ol></details>
+<article><p>2026-11-25 · <a href="2026-11-25_16_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E5%85%A8%E5%B1%80%E4%BA%8B%E4%BB%B6%E6%B5%81.html">上期：全局事件流</a> · <a href="../docs/20261124_01_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84%E6%96%B9%E6%A1%88.html">项目重构方案</a></p>
+<p>图片已经不存在时，旧页面仍可能提示“已在文件管理器中打开”。原因是 <code>fetch</code> 收到 HTTP 404 也会正常返回，图片入口只等请求结束，没有检查响应码。用旧版函数模拟 404，确实得到了成功提示。另一个问题在服务端：macOS 打开目录时，在目录名之前多传了一个空参数。</p>
+<p>本期把 <code>POST /api/system/open_path</code> 从 <a href="../backend/main.py">main.py</a> 迁到<a href="../backend/api/system.py">系统路由</a>。<a href="../backend/services/file_manager.py">文件管理器服务</a>负责检查路径、选择系统调用；<a href="../frontend/app.js">前端</a>用现有的 API 请求函数统一处理成功或失败。基线 <code>8f7ad2e</code>，代码提交 <code>9249e9f</code>。</p>
+<h2 id="section-1">文件和目录分别怎样处理</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>分支</th>
+<th>输入是文件</th>
+<th>输入是目录</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Windows</td>
+<td>启动 Explorer，使用 <code>/select,</code> 定位文件</td>
+<td>用 <code>os.startfile</code> 打开目录</td>
+</tr>
+<tr>
+<td>macOS</td>
+<td><code>open -R</code> 定位文件</td>
+<td><code>open</code> 后只传目录，移除旧版的空参数</td>
+</tr>
+<tr>
+<td>Linux</td>
+<td>用 <code>xdg-open</code> 打开文件的父目录</td>
+<td>用 <code>xdg-open</code> 打开目录</td>
+</tr>
+</tbody>
+</table></div>
+<p>传给桌面程序的是绝对路径，各个参数独立传递。响应继续返回 <code>{&quot;ok&quot;:true,&quot;opened&quot;:所在目录}</code>，保留相对路径的原有返回形式：传入当前目录下的 <code>note.txt</code>，<code>opened</code> 仍是 <code>&quot;.&quot;</code>。文件检查和桌面调用交给线程池，路由不等待桌面程序退出。HTTP 200 表示系统调用已发出，不能据此断言桌面窗口已显示，因此页面现在提示“已请求在文件管理器中打开”。</p>
+<figure><a href="../docs/assets/refactor-docs/2026-11-25_17_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E7%B3%BB%E7%BB%9F%E8%B7%AF%E5%BE%84%E6%89%93%E5%BC%80_%E5%9B%BE1.svg"><img src="../docs/assets/refactor-docs/2026-11-25_17_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E7%B3%BB%E7%BB%9F%E8%B7%AF%E5%BE%84%E6%89%93%E5%BC%80_%E5%9B%BE1.svg" alt="流程图：文件和目录分别怎样处理"></a><figcaption>流程图：文件和目录分别怎样处理 · <a href="../docs/assets/refactor-docs/2026-11-25_17_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E7%B3%BB%E7%BB%9F%E8%B7%AF%E5%BE%84%E6%89%93%E5%BC%80_%E5%9B%BE1.svg">查看原图</a></figcaption></figure>
+<p>接口仍支持旧调用方传字典；<code>main.open_path_in_explorer</code> 和新模块指向同一函数，应用只注册一个 POST。请求体已在 OpenAPI 中声明 <code>path</code> 是字符串或 null。空对象、null 字段和纯空白保留 400；数字和数组字段返回 422。目标文件不存在返回 404；目标存在但桌面程序不可用，则是启动失败，返回 500。</p>
+<h2 id="section-2">如何验证</h2>
+<ol>
+<li><strong>先跑旧版。</strong> <a href="../backend/tests/api/test_open_path.py">14 项路由用例</a>先在迁移前运行，<strong>10 通过、4 失败（1.67 秒）</strong>。失败项是 macOS 目录多一个参数、Linux 相对路径直接传给桌面程序，以及数字和数组都导致 500。相对路径那项固定的是新约定；没有证据表明旧版在所有桌面上都会打不开。</li>
+<li><strong>迁路由和系统调用。</strong> 同一组请求覆盖三种系统的文件与目录组合，核对精确参数、HTTP 返回值，以及拒绝请求时没有启动桌面程序。缺失文件的测试刻意让父目录存在；缺失桌面程序的测试则让目标目录存在，区分 404 与 500。测试用临时目录和替身，不依赖三个桌面都可用。</li>
+<li><strong>在浏览器重放。</strong> 两个详情按钮改从 <code>data-filepath</code> 取路径，保留反斜杠、单引号、空格和中文。<a href="assets/2026-11-25_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E7%B3%BB%E7%BB%9F%E8%B7%AF%E5%BE%84%E6%89%93%E5%BC%80_%E6%88%AA%E5%9B%BE.py">截图脚本</a>在 Edge 中加载实际的文件按钮、图片入口函数和 API 函数，请求只转发到隔离的系统路由。逐条核对浏览器发出的路径、HTTP 状态、服务收到的桌面参数以及提示类型。</li>
+<li><strong>检查提示是否属实。</strong> 定位缺失图片时返回 404，不调用桌面程序，也不改剪贴板。图片入口遇到断网才尝试复制路径：替身确认复制后显示警告；模拟剪贴板拒绝时显示错误。截图表格中的 HTTP、桌面调用、页面提示均取自这次重放，仅将临时根目录缩写。</li>
+</ol>
+<p><img src="assets/2026-11-25_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E7%B3%BB%E7%BB%9F%E8%B7%AF%E5%BE%84%E6%89%93%E5%BC%80_%E6%88%AA%E5%9B%BE.png" alt="浏览器验证：文件和目录返回 200，缺失图片返回 404 且未调用桌面程序"></p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>验证层次</th>
+<th>实际结果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>本机相关回归</td>
+<td>路径打开、系统只读路由、Agent 工具开关和应用加固共 <strong>57 项通过（4.83 秒）</strong>。</td>
+</tr>
+<tr>
+<td>后端全量</td>
+<td><strong>1,796 项全部通过（281.57 秒）</strong>，pytest 退出码 0，无警告。比上期多 14 项。</td>
+</tr>
+<tr>
+<td>最低 FastAPI 版本</td>
+<td>在临时环境 FastAPI 0.141.0 / Starlette 0.52.1 下单跑 14 项打开路径测试，全部通过（1.35 秒）。</td>
+</tr>
+<tr>
+<td>静态检查</td>
+<td>JS 语法和指定 flake8 规则通过。分层检查扫描 519 个模块，历史方向违规 86，新增违规、解析错误和循环依赖组均为 0。</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>运行中的服务。</strong> 重启前队列、处理中工单和活动 Agent 均为 0。旧进程 23828 接到停止信号后释放监听端口，但再次中断后仍未退出；核实是本次要替换的进程且已不再监听，定向结束了它。新进程 90664 在 8001 就绪，16 个普通只读 GET 与 3 条 SSE 流均返回 200。迁移前后对照，打开路径的 OpenAPI 操作仅请求体声明变化；现场未发送打开路径的 POST。旧进程未自行退出的原因尚未定位，可在拆生命周期时补充关闭阶段的观测。</p>
+<pre><code class="language-powershell"># backend/：新增用例、相关回归、后端全量
+python -m pytest -p no:cacheprovider --tb=line tests/api/test_open_path.py
+python -m pytest -p no:cacheprovider --tb=line tests/api/test_open_path.py tests/api/test_system_read_routes.py tests/api/test_agent_tools_settings.py tests/api/test_main_hardening.py
+python -m pytest -p no:cacheprovider
+uvx --python 3.14 --from flake8==7.3.0 flake8 --select=E9,F63,F7,F82 --exclude=skills/marketplace,skills/packs,skills/use_skills,projects .
+
+# 仓库根目录；截图需要 Playwright 和 Edge
+node --check frontend/app.js
+python scripts/check_layers.py --json
+python &quot;dev-notes/assets/2026-11-25_代码重构_系统路径打开_截图.py&quot;
+</code></pre>
+<p>以上为本次开发主动运行的检查。新 pytest 用例也在<a href="../.github/workflows/ci.yml">远端 CI</a>的全量收集范围内。桌面服务模块已加到<a href="../desktop.spec">打包清单</a>；本轮没有重建安装包，也没有在三个操作系统上实际启动文件管理器。</p>
+<p><code>main.py</code> 从 <strong>675 行降至 643 行</strong>，其余 6 个顶层函数的语法树未变。R3 累计从主文件迁出 <strong>20 个接口</strong>，还剩 5 个 HTTP 路径装饰器。下一批建议把只读的前端入口 <code>/app</code>、<code>/app/{path:path}</code> 和图标 <code>/favicon.ico</code> 放在一起：先固定深链接返回首页、缓存响应头和首页文件缺失时的 404，再迁移路由。257 行的应用生命周期仍待单独拆分。</p>
+<p>已为下期留下一条现场基线：<code>/app</code> 与 <code>/app/devnote-route-check</code> 返回字节相同的 HTML，两者的缓存头均为 <code>no-cache, no-store, must-revalidate</code>；图标返回 <code>image/svg+xml</code>，没有显式缓存头。首页缺失的场景应在临时目录验证。</p>
+</article><nav class="adjacent" aria-label="相邻文档"><a href="2026-11-25_16_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E5%85%A8%E5%B1%80%E4%BA%8B%E4%BB%B6%E6%B5%81.html">上一篇：代码重构：拆出全局事件流，验证三个 SSE 频道</a>
+<a href="2026-11-26_18_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E5%89%8D%E7%AB%AF%E9%A1%B5%E9%9D%A2%E5%85%A5%E5%8F%A3.html">下一篇：代码重构：拆出前端入口，验证深链接刷新与首页缺失</a></nav></main></body></html>

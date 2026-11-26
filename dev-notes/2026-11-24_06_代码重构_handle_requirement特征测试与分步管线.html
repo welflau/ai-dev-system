@@ -1,0 +1,448 @@
+<!doctype html>
+<!-- 由 scripts/docs-html/export.mjs 生成，请编辑 Markdown 原稿。 -->
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>`handle_requirement` 特征测试与分步管线（2026-11-24） · ADS 文档</title><link rel="stylesheet" href="../docs/assets/refactor-docs/reader.css"></head>
+<body><nav class="bar" aria-label="主导航"><b>ADS · 开发文档</b><a href="../docs/%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%96%87%E6%A1%A3%E7%B4%A2%E5%BC%95.html">系列索引</a></nav>
+<main><header><p class="meta">开发笔记 · DevNote · <a href="2026-11-24_06_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_handle_requirement%E7%89%B9%E5%BE%81%E6%B5%8B%E8%AF%95%E4%B8%8E%E5%88%86%E6%AD%A5%E7%AE%A1%E7%BA%BF.md">Markdown 原稿</a></p>
+<h1>`handle_requirement` 特征测试与分步管线（2026-11-24）</h1></header><details><summary>本页目录（10 节）</summary><ol><li><a href="#section-1">背景</a></li><li><a href="#section-2">做了什么</a></li><li><a href="#section-3">和原文的差别</a></li><li><a href="#section-4">验证</a></li><li><a href="#section-5">度量变化</a></li><li><a href="#section-6">钉住的可疑现状</a></li><li><a href="#section-7">这一轮没有解决的事</a></li><li><a href="#section-8">没有验证的部分</a></li><li><a href="#section-9">遗留与后续</a></li><li><a href="#section-10">复核命令</a></li></ol></details>
+<article><blockquote>
+<p>关联方案：<code>docs/20261124_01_代码重构方案.md</code>（R0 第 3 步的 <code>handle_requirement</code> 部分、R2 第 2 步的延续）
+前一篇：<code>dev-notes/2026-11-24_05_代码重构_skill结果处理器搬移.md</code>
+提交基线：<code>7b9e7f0</code>；本篇的代码和文档都在工作区，<strong>尚未提交</strong>。</p>
+</blockquote>
+<h2 id="section-1">背景</h2>
+<p><code>TicketOrchestrator.handle_requirement</code> 负责需求分析和拆单：调 ProductAgent、把回传的工单落库、回填依赖、
+建开发分支、逐张派单。上一篇结束时它是 <code>orchestrator.py</code> 里最长的函数：456 行，圈复杂度 65，行覆盖率 1%。
+没有测试就没法动它，所以本轮分两段做：先补特征测试并确认测试抓得住错误，再按 <code>process_ticket</code> 的做法拆成分步管线。</p>
+<h2 id="section-2">做了什么</h2>
+<h3>1. 特征测试</h3>
+<p>新增 <code>backend/tests/agents/test_orchestrator_handle_requirement.py</code>，44 个测试函数，参数化后 63 条：60 条写在拆分之前，3 条是拆分之后补的（原因见「验证」一节）。
+特征测试只记录现在的行为，不评判对错。</p>
+<p><strong>夹具。</strong> 沿用 <code>test_orchestrator_process_ticket.py</code> 的做法：真实 SQLite 加 <code>init_tables()</code>，
+用 <code>TicketOrchestrator.__new__</code> 造实例，只设 <code>_analyzing_reqs</code> 和一个假的 ProductAgent。
+需求初始状态是 <code>analyzing</code>。</p>
+<p>真跑的部分：<code>_log</code>、建工单、建子任务、建子工单、回填依赖、需求状态改写、PRD 产物入库。</p>
+<p>打桩的部分：</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>桩</th>
+<th>作用</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>event_manager.publish_to_project</code></td>
+<td>记下发出的 SSE</td>
+</tr>
+<tr>
+<td><code>orchestrator.llm_client</code></td>
+<td>换成只有几个属性的对象，用来拼开场文案和超时</td>
+</tr>
+<tr>
+<td><code>memory.AgentMemory</code></td>
+<td>返回指定的代码上下文，或抛指定的异常</td>
+</tr>
+<tr>
+<td><code>api.milestones.auto_associate_requirement</code></td>
+<td>记下调用参数和当时的需求状态</td>
+</tr>
+<tr>
+<td><code>git_manager</code> 的四个方法</td>
+<td>记下调用顺序，返回值可调</td>
+</tr>
+<tr>
+<td><code>session_logger.log_event</code></td>
+<td>不往 <code>backend/logs/</code> 写文件</td>
+</tr>
+<tr>
+<td><code>_log_agent_thought</code>、<code>_handle_git_files</code>、<code>process_ticket</code></td>
+<td>记下调用；<code>process_ticket</code> 可以设成抛异常</td>
+</tr>
+<tr>
+<td><code>asyncio.sleep</code></td>
+<td>心跳的 20 秒等待改成由测试放行</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>八组用例：</strong></p>
+<ol>
+<li>入口：已在分析、需求不存在、分析途中再次调度。</li>
+<li>准备和执行：开场文案、模型名和超时的取值顺序、代码上下文、项目 traits、<code>on_step</code> 进度、心跳、心跳失败被吞。</li>
+<li>Agent 失败：回传非 success、抛异常、被取消、取消后被轮询续跑、错误兜底自身失败。</li>
+<li>记录结果：PRD 入库、产物、规则引擎降级告警、投票留痕、PRD 文件走 Git。</li>
+<li>建工单：按规模定初始状态（7 种组合）、字段默认值、<code>use_aigc</code> 继承、子任务、子工单。</li>
+<li>回填依赖：下标换工单号、自引用、越界、字符串依赖、夹了坏数据时的下标。</li>
+<li>收尾：状态、里程碑、分支（成功、切换失败、创建失败、Git 抛异常）、零工单、派单顺序。</li>
+<li>拆单中途出错。</li>
+</ol>
+<p>44 个测试函数里有 14 个在结束前查占用标记已释放、没有残留的心跳任务，覆盖正常走完、重复调度、Agent 失败、
+异常兜底、取消、零工单这几种出口。其余 30 个只查各自关心的结果。</p>
+<h3>2. 确认测试抓得住错误</h3>
+<p><strong>覆盖率。</strong> 首版 56 条跑完，<code>handle_requirement</code>（原第 1552–2007 行）的 190 条语句全部执行到，
+54 个分支走到 52 个。漏的两个分支都在依赖处理里：依赖全是认不出的值时建单日志不带依赖信息；
+字符串形式的工单号指向自己。补 2 条之后是 190/190 条语句、54/54 个分支。此前的行覆盖率是 1%。</p>
+<p><strong>改坏检查。</strong> 覆盖率只说明代码被执行过。在原函数上逐个做 105 处故意的错误改动
+（条件取反、事件改名、默认值改掉、字段丢弃、顺序对调等），每处只跑这一个测试文件，结束后恢复并核对哈希。
+第一遍发现 104 处，漏 1 处：把「查不到需求就返回」的判断去掉。去掉之后函数会往下走、
+在取标题时出错、进异常兜底；兜底里写日志撞外键，被最外层的 <code>except</code> 吞掉。库里和事件上都看不出痕迹，
+原用例只查了这两处。给 <code>test_missing_requirement_returns_quietly</code> 加一条「没有 error 级日志」的断言后，这一处也被发现。</p>
+<p>检查过程中又补了 2 条用例，记的是读代码时注意到的行为：</p>
+<ul>
+<li><code>test_cancelled_analysis_is_picked_up_by_resume_poll</code>：分析被取消后，下一轮 <code>_resume_stuck_analyses</code> 会重新拆单；</li>
+<li><code>test_dependency_indexes_follow_filtered_list</code>：回传里夹一条坏数据时，依赖下标整体错一位。</li>
+</ul>
+<p>另有一条用例重写了造数据的方式。<code>test_string_dependency_on_itself_is_dropped</code> 原来靠替换
+<code>orchestrator.generate_id</code> 拿到固定工单号，这等于把测试绑在「拆单代码住在 <code>orchestrator.py</code>」上，
+拆分之后就会失效。改成在建单日志写入时把真实工单号追加进依赖列表，不再依赖代码位置。
+改完后重跑了和依赖有关的 3 处改动，都被发现。</p>
+<p>到这里测试文件是 60 条。拆分期间没有改它；拆分后的改坏检查又补了 3 条，见「验证」一节。</p>
+<h3>3. 拆成分步管线</h3>
+<p>新增 <code>backend/orchestration/requirement_pipeline.py</code>，678 行。结构和 <code>ticket_pipeline.py</code> 相同：
+<code>RequirementRun</code> 承载步骤之间共享的状态，12 个步骤函数登记在 <code>STEPS</code> 里，<code>run_pipeline</code> 按顺序执行，
+每个步骤返回 <code>CONTINUE</code> 或停止原因。</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>步骤</th>
+<th>原行号</th>
+<th>行数</th>
+<th>做什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>load_requirement</code></td>
+<td>1559–1567</td>
+<td>17</td>
+<td>取需求，查不到就停</td>
+</tr>
+<tr>
+<td><code>announce_start</code></td>
+<td>1569–1612</td>
+<td>58</td>
+<td>开场进度、<code>agent_working</code>、设 LLM 上下文</td>
+</tr>
+<tr>
+<td><code>read_code_context</code></td>
+<td>1614–1631</td>
+<td>27</td>
+<td>读项目已有代码</td>
+</tr>
+<tr>
+<td><code>run_analysis</code></td>
+<td>1633–1685</td>
+<td>70</td>
+<td>调 ProductAgent，期间写心跳</td>
+</tr>
+<tr>
+<td><code>check_analysis_result</code></td>
+<td>1687–1698</td>
+<td>22</td>
+<td>回传非 success 时退回已提交并停</td>
+</tr>
+<tr>
+<td><code>record_analysis</code></td>
+<td>1700–1732</td>
+<td>44</td>
+<td>降级告警、投票留痕、PRD 入库、PRD 文件走 Git</td>
+</tr>
+<tr>
+<td><code>create_tickets</code></td>
+<td>1734–1864</td>
+<td>144</td>
+<td>建父工单、子任务、子工单</td>
+</tr>
+<tr>
+<td><code>backfill_dependencies</code></td>
+<td>1866–1886</td>
+<td>29</td>
+<td>依赖下标换成工单号</td>
+</tr>
+<tr>
+<td><code>mark_decomposed</code></td>
+<td>1888–1922</td>
+<td>47</td>
+<td>需求改成已拆单、发事件、存 PRD 产物</td>
+</tr>
+<tr>
+<td><code>associate_milestone</code></td>
+<td>1924–1933</td>
+<td>19</td>
+<td>关联里程碑</td>
+</tr>
+<tr>
+<td><code>create_feature_branch</code></td>
+<td>1935–1971</td>
+<td>46</td>
+<td>建开发分支</td>
+</tr>
+<tr>
+<td><code>dispatch_tickets</code></td>
+<td>1973–1981</td>
+<td>19</td>
+<td>需求改成进行中，逐张派单</td>
+</tr>
+</tbody>
+</table></div>
+<p>行数是新文件里的函数长度，含文档字符串和从 <code>run</code> 取值、往 <code>run</code> 存值的那几行。</p>
+<p><code>orchestrator.py</code> 这边：</p>
+<ul>
+<li><code>handle_requirement</code> 从 456 行降到 45 行，圈复杂度从 65 降到 4。留下的是占用标记、异常兜底和释放，
+<code>try</code> 里只有两句：造 <code>RequirementRun</code>，调 <code>run_pipeline</code>。</li>
+<li>心跳文案函数 <code>analysis_progress_message</code> 跟着搬到了新文件，<code>orchestrator.py</code> 里改成导入，
+<code>from orchestrator import analysis_progress_message</code> 照常可用。</li>
+<li>顶部的 <code>set_llm_context</code>、<code>clear_llm_context</code> 导入只有搬走的那段在用，一并去掉。另一处使用点自己在函数内导入。</li>
+<li>文件从 4,907 行降到 4,493 行。</li>
+</ul>
+<p>新文件由脚本按行号区间从拆分前的 <code>orchestrator.py</code> 生成，生成后没有手改。</p>
+<p><code>db</code> 和 <code>llm_client</code> 由 <code>handle_requirement</code> 在调用时从模块全局取出、经 <code>RequirementRun</code> 传入，新文件不导入这两个对象。
+测试靠 <code>monkeypatch.setattr(orchestrator, &quot;db&quot;, ...)</code> 换库，步骤必须拿到同一个对象。</p>
+<h3>4. 配套</h3>
+<ul>
+<li><code>desktop.spec</code>：<code>hiddenimports</code> 补 <code>orchestration.requirement_pipeline</code>。</li>
+</ul>
+<h2 id="section-3">和原文的差别</h2>
+<p>原函数体（<code>try</code> 里的第 1559–1981 行）共 423 行：412 行搬进步骤，其中 397 行原样、15 行有替换；
+另外 11 行是步骤交界处的空行。替换只有两种：</p>
+<ol>
+<li>13 处 <code>self.</code> 写成 <code>orch.</code>；</li>
+<li>2 处 <code>return</code> 带上停止原因：<code>&quot;requirement_not_found&quot;</code> 和 <code>&quot;analysis_failed&quot;</code>。</li>
+</ol>
+<p>步骤函数里新增的行有三类，共 82 行：开头从 <code>run</code> 取局部变量、结尾往 <code>run</code> 存、<code>return CONTINUE</code>。</p>
+<p>有步骤停止时 <code>run_pipeline</code> 多打一条 debug 级日志，这是唯一新增的可观察行为，和 <code>ticket_pipeline</code> 一样。</p>
+<p>原文里两处没用到的东西原样带了过去，没有清：<code>record_analysis</code> 里赋值后没人读的 <code>git_result</code>，
+<code>create_feature_branch</code> 里导入后没用的 <code>re</code>。</p>
+<h2 id="section-4">验证</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>检查</th>
+<th>结果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>特征测试首版，原实现</td>
+<td>56 条通过；190/190 条语句，52/54 个分支</td>
+</tr>
+<tr>
+<td>补 2 条后，原实现</td>
+<td>58 条通过；190/190 条语句，54/54 个分支</td>
+</tr>
+<tr>
+<td>改坏检查，原实现</td>
+<td>105 处，第一遍发现 104 处；补断言后 105 处全部发现</td>
+</tr>
+<tr>
+<td>定稿后，原实现</td>
+<td>60 条通过；190/190 条语句，54/54 个分支</td>
+</tr>
+<tr>
+<td>全量 pytest，拆分前</td>
+<td>1,068 条通过</td>
+</tr>
+<tr>
+<td>拆分后，同一个测试文件（哈希未变）</td>
+<td>60 条通过；这一次跑在清理顶部导入之前</td>
+</tr>
+<tr>
+<td>搬移核对脚本</td>
+<td>通过</td>
+</tr>
+<tr>
+<td>改坏检查，拆分后</td>
+<td>129 处，第一遍发现 126 处；补 3 条用例后漏掉的 3 处全部发现</td>
+</tr>
+<tr>
+<td>补的 3 条放回拆分前的实现</td>
+<td>通过</td>
+</tr>
+<tr>
+<td>拆分后的覆盖率（63 条）</td>
+<td>新文件 311/311 条语句、56/56 个分支；<code>handle_requirement</code> 17/17 条语句、2/2 个分支</td>
+</tr>
+<tr>
+<td>全量 pytest，拆分后</td>
+<td>1,071 条通过，退出码 0</td>
+</tr>
+<tr>
+<td>分层守卫</td>
+<td>退出码 0，新增违规 0</td>
+</tr>
+<tr>
+<td>CI 那组 flake8 规则</td>
+<td>0 条</td>
+</tr>
+</tbody>
+</table></div>
+<p>表里从「改坏检查，拆分后」往下的各行，加上搬移核对脚本，都是在清理完 <code>orchestrator.py</code> 顶部导入之后跑的；
+覆盖率、全量 pytest、分层守卫、flake8 和搬移核对脚本还在补完 3 条用例之后又跑了一遍，表里是最后这一遍的结果。</p>
+<p><strong>搬移核对脚本</strong>检查这几件事：</p>
+<ol>
+<li>重新生成的 <code>requirement_pipeline.py</code> 和磁盘上的文件逐字节相同；</li>
+<li><code>orchestrator.py</code> 仍是 CRLF，新文件是 LF、无 BOM；</li>
+<li><code>orchestrator.py</code> 被删的行都落在切掉的区间里，新增 16 行；</li>
+<li>原函数体 387 行非空代码，做完上一节的两种替换后，全部按原顺序出现在新文件里；</li>
+<li>把步骤函数里的取值、存值、<code>return CONTINUE</code> 去掉后，逐词元和原函数体比对，2,415 个词元完全一致；</li>
+<li><code>STEPS</code> 的顺序和函数定义顺序一致，共 12 步；</li>
+<li>新文件不导入 <code>orchestrator</code>、<code>actions</code>、<code>agents</code>、<code>database</code>；</li>
+<li><code>handle_requirement</code> 的 <code>try</code> 里只剩两句，<code>except</code> 和 <code>finally</code> 和拆分前逐字相同。</li>
+</ol>
+<p>这个脚本第一次运行报了两处失败、崩了一次，三处都是脚本自己的问题：相邻的空行在 difflib 里可以互换，
+脚本把其中一行算成了区间外的删除；切 <code>async def f():</code> 前缀时少切一个冒号，12 个步骤比原文多出 11 个词元；
+一处打印格式写错。改掉之后通过，期间被核对的代码没有动。</p>
+<p><strong>拆分后的改坏检查。</strong> 原实现上的 105 处改动按新位置重新定位（96 处落在新文件，9 处落在 <code>handle_requirement</code> 留下的骨架里），
+另加 24 处针对拆分本身：让停止原因不生效、去掉某一步、对调相邻两步、让某个共享值不往 <code>run</code> 上存、
+调用时不传 <code>llm_client</code>、改心跳文案。共 129 处，每处跑特征测试和 <code>test_prd_analysis_progress.py</code>，用时约 20 分钟，
+结束后两个文件的哈希和开始前一致。没有定位不到的改动。</p>
+<p>第一遍发现 126 处。重新定位的 105 处全部发现；漏的 3 处都在新加的 24 处里：</p>
+<ol>
+<li><strong>对调「关联里程碑」和「建分支」。</strong> 这两步互不依赖，对调后库里的最终结果一样。
+原用例只记了关联里程碑时的需求状态，两种顺序下都是 <code>decomposed</code>。</li>
+<li><strong>对调「回填依赖」和「标记已拆单」。</strong> 最终结果也一样，差别在 <code>requirement_decomposed</code> 发出的那一刻：
+对调后，这时库里的依赖还是占位的 <code>[]</code>。收到事件就去读工单的一方会读到空依赖。</li>
+<li><strong>改心跳文案。</strong> 心跳用例拿 <code>analysis_progress_message</code> 自己的返回值当期望，文案改了两边一起变；
+<code>test_prd_analysis_progress.py</code> 只查了几个子串。</li>
+</ol>
+<p>针对这 3 处补了 3 条用例：</p>
+<ul>
+<li><code>test_milestone_is_associated_before_branch_is_created</code>：关联里程碑时还没有任何 Git 调用，需求上也没有分支名；</li>
+<li><code>test_dependencies_are_backfilled_before_decomposed_event</code>：事件发出时依赖已经换成工单号；</li>
+<li><code>test_heartbeat_text_is_pinned</code>：写死心跳文案的原文。</li>
+</ul>
+<p>这 3 条是拆分之后写的，所以单独做了一步：把 <code>orchestrator.py</code> 临时换回拆分前的版本，63 条加文案用例 2 条全部通过，
+说明它们记的是原来就有的行为。换回拆分后的版本，只重跑漏掉的 3 处，都被发现。其余 126 处没有重跑：
+这一步只加了用例，没有改已有的断言，已经发现的不会变成漏掉。</p>
+<p>写第三条时自己先错了一次：以为只有空白的步骤名会回落到「等待 LLM」，实际不会，用例第一次跑就红了。
+按实际行为改了断言，这个现状记在下面第 12 条。</p>
+<p><strong>全量 pytest。</strong> 1,071 条通过，退出码 0，用时约 3 分钟。拆分前是 1,068 条，多出的 3 条就是上面补的。</p>
+<p><strong>分层守卫。</strong> 模块 489（多了 <code>requirement_pipeline.py</code>），未归层 230，方向违规 92，相对基线新增 0，延迟导入占比 42.0%。</p>
+<h2 id="section-5">度量变化</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>指标</th>
+<th>本轮之前</th>
+<th>本轮之后</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>orchestrator.py</code> 行数</td>
+<td>4,907</td>
+<td>4,493</td>
+</tr>
+<tr>
+<td><code>handle_requirement</code> 行数 / 圈复杂度</td>
+<td>456 / 65</td>
+<td>45 / 4</td>
+</tr>
+<tr>
+<td><code>handle_requirement</code> 及其步骤的行覆盖率</td>
+<td>1%</td>
+<td>100%（分支 58/58）</td>
+</tr>
+<tr>
+<td><code>orchestrator.py</code> 里超过 200 行的函数</td>
+<td>2</td>
+<td>1</td>
+</tr>
+<tr>
+<td>全仓超过 200 行的函数</td>
+<td>30</td>
+<td>29</td>
+</tr>
+<tr>
+<td><code>orchestration/</code> 里最长的步骤函数</td>
+<td><code>run_agent</code> 76 行</td>
+<td><code>create_tickets</code> 144 行</td>
+</tr>
+<tr>
+<td>模块总数（守卫口径）</td>
+<td>488</td>
+<td>489</td>
+</tr>
+<tr>
+<td>未归层模块</td>
+<td>230</td>
+<td>230</td>
+</tr>
+<tr>
+<td>方向违规</td>
+<td>92</td>
+<td>92</td>
+</tr>
+<tr>
+<td>延迟导入占比</td>
+<td>42.1%</td>
+<td>42.0%</td>
+</tr>
+</tbody>
+</table></div>
+<p>从 <code>7b9e7f0</code> 算起，<code>orchestrator.py</code> 从 6,694 行降到 4,493 行。最大的 Python 文件仍是 <code>api/chat.py</code>（5,566 行），
+最长的函数仍是 <code>query_engine/engine.py</code> 的 <code>run</code>（559 行），这两项本轮没有变化。
+<code>orchestrator.py</code> 里超过 200 行的函数只剩 <code>_generate_requirement_report</code>（206 行）；
+<code>orchestration/</code> 里还有两个：<code>handle_skill</code>（256 行）和 <code>handle_dev</code>（207 行）。</p>
+<p>新文件里圈复杂度最高的是 <code>create_tickets</code>（26）和 <code>backfill_dependencies</code>（11），其余步骤都在 8 以内。
+原函数的 65 没有消失，只是分到了各个步骤里。</p>
+<h2 id="section-6">钉住的可疑现状</h2>
+<p>下面这些都按现在的样子写进了断言，本轮没有修。前三条会直接影响用户。</p>
+<ol>
+<li><strong>拆单不在事务里，重试会重复建单。</strong> 建工单到一半出错时，已经建好的工单留在库里，需求退回 <code>submitted</code>。
+用户点重试，会把全部工单再建一遍。触发方式之一：Agent 回传的某张工单 <code>subtasks</code> 是 <code>None</code>。</li>
+<li><strong>派单出错会把需求退回已提交。</strong> 逐张派单时任何一张抛异常，都走同一个兜底：需求从 <code>in_progress</code> 退回 <code>submitted</code>，
+工单和分支留着，排在后面的工单这一轮不再派。日志写的是「从 analyzing 到 submitted」，和当时的真实状态不符。</li>
+<li><strong>零工单照样进行中。</strong> Agent 一张工单都没拆出来（空列表、<code>None</code>、不是列表、全是坏数据），
+需求照样走到 <code>in_progress</code>，开发分支照建。</li>
+<li><strong>依赖下标按过滤后的列表算。</strong> 回传里不是字典的条目会被滤掉，依赖下标却是 Agent 按原始列表写的。
+夹一条坏数据，它后面的依赖就整体错一位，可能指向别的工单，也可能指向自己后被当成自引用丢掉。</li>
+<li><strong>规模按原始条数算。</strong> 同一批数据里，被滤掉的条目不建工单，但计入条数，影响工单的起始状态。</li>
+<li><strong>异常路径不清 LLM 上下文。</strong> Agent 抛异常时跳过了 <code>clear_llm_context</code>，上下文里留着这条需求的信息。</li>
+<li><strong>取消时需求停在分析中。</strong> <code>CancelledError</code> 原样抛出，不写日志也不发事件。占用标记会释放，
+所以下一轮 <code>_resume_stuck_analyses</code> 会把它重新拆一遍。续跑日志固定写「进程重启后中断」，被取消的情况也用这句话。</li>
+<li><strong>建单日志的目标状态固定写 <code>pending</code></strong>，和工单真实的起始状态（可能是 <code>architecture_done</code> 或 <code>planning_done</code>）无关。</li>
+<li><strong>建单日志里的依赖不滤自引用。</strong> 落库的依赖滤了，日志里会把自己也列进去。</li>
+<li><strong>子工单的处理和父工单不一致。</strong> 不继承需求级 <code>use_aigc</code>，不写建单日志，不计入拆单数量，不在这里派单，起始状态固定 <code>pending</code>。</li>
+<li><strong>Agent 回传非 success 时不发 <code>requirement_error</code></strong>，Agent 抛异常时才发。全仓只有 <code>orchestrator.py</code> 发这个事件，
+<code>frontend/</code> 里没有任何地方监听它，所以目前两种情况在界面上都只能从日志（<code>log_added</code>）看出来。</li>
+<li><strong>只有空白的步骤名不回落到默认文案。</strong> <code>analysis_progress_message</code> 对空字符串和 <code>None</code> 会写「等待 LLM」，
+对 <code>&quot;  &quot;</code> 这样的值不会，去掉空白后心跳文案的冒号后面什么都没有。</li>
+</ol>
+<h2 id="section-7">这一轮没有解决的事</h2>
+<ol>
+<li><strong>步骤内部没有整理。</strong> <code>create_tickets</code> 144 行，接近 150 行的目标上限；父工单、子任务、子工单三段没有再拆。
+建工单的字段字典和子工单的字段字典大半相同，也没有合并。</li>
+<li><strong>步骤仍调用 <code>orch</code> 的 4 个成员</strong>：<code>_log</code>、<code>_log_agent_thought</code>、<code>_handle_git_files</code>、<code>process_ticket</code>，前三个是私有方法。</li>
+<li><strong>到 <code>api.milestones</code> 和 <code>memory</code> 的延迟导入原样保留。</strong> 守卫没有报新增违规。</li>
+<li><strong>上面 12 条现状都没有修。</strong> 修任何一条都要同时改对应的用例。</li>
+</ol>
+<h2 id="section-8">没有验证的部分</h2>
+<ul>
+<li><strong>真实服务和真实 LLM 拆单。</strong> 没有起服务提交一条真实需求。测试里 ProductAgent、Git、里程碑、派单都是桩。</li>
+<li><strong>桌面版打包。</strong> <code>desktop.spec</code> 只确认了语法能解析，没有实际打包和启动。</li>
+<li><strong>Linux 和 CI。</strong> 只在本机 Windows、Python 3.14.3 上跑过；flake8 用的是 Python 3.12 的环境。</li>
+<li><strong>根目录的 <code>_test_*.py</code> 脚本。</strong> 没有跑。</li>
+</ul>
+<h2 id="section-9">遗留与后续</h2>
+<ol>
+<li>R2 第 3 步按职责拆类。<code>orchestrator.py</code> 现在 4,493 行，离 1,500 行的目标还远；剩下的体量主要是 <code>TicketOrchestrator</code> 的 85 个方法本身。</li>
+<li><code>orchestrator.py</code> 里最后一个超过 200 行的函数是 <code>_generate_requirement_report</code>（206 行）。</li>
+<li>上面 12 条可疑现状要不要修，建议先定前 4 条。</li>
+<li>核对脚本、改坏检查脚本和度量脚本仍只在 <code>%TEMP%\ads_r2_3</code>，没有进仓库。</li>
+<li>工作区现在叠了六批未提交改动，提交时建议分开。</li>
+</ol>
+<h2 id="section-10">复核命令</h2>
+<pre><code class="language-powershell"># 相关用例，在 backend/ 下执行
+cd backend
+python -m pytest tests/agents/test_orchestrator_handle_requirement.py tests/agents/test_prd_analysis_progress.py -p no:cacheprovider
+
+# 全量。pytest.ini 里已有 -q，再加 -q 不会打印汇总行，这时看点数和退出码
+python -m pytest -p no:cacheprovider
+cd ..
+
+# 分层守卫，在仓库根目录执行
+python scripts/check_layers.py
+</code></pre>
+</article><nav class="adjacent" aria-label="相邻文档"><a href="2026-11-24_05_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_skill%E7%BB%93%E6%9E%9C%E5%A4%84%E7%90%86%E5%99%A8%E6%90%AC%E7%A7%BB.html">上一篇：skill 结果处理器搬进 `result_handlers`（2026-11-24）</a>
+<a href="2026-11-24_07_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%B5%8B%E8%AF%95%E6%B5%81%E7%A8%8B.html">下一篇：重构过程的测试流程（2026-11-24）</a></nav></main></body></html>

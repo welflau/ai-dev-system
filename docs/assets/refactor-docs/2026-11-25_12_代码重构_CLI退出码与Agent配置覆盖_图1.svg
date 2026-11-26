@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 986.067 593.1" width="986.067" height="593.1" style="--bg:#ffffff;--fg:#1d3839;--accent:#12645e;--border:#608781;background:var(--bg)">
+<style>
+
+  text { font-family: 'Microsoft YaHei', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          var(--fg);
+    --_text-sec:      var(--muted, color-mix(in srgb, var(--fg) 60%, var(--bg)));
+    --_text-muted:    var(--muted, color-mix(in srgb, var(--fg) 40%, var(--bg)));
+    --_text-faint:    color-mix(in srgb, var(--fg) 25%, var(--bg));
+    --_line:          var(--line, color-mix(in srgb, var(--fg) 50%, var(--bg)));
+    --_arrow:         var(--accent, color-mix(in srgb, var(--fg) 85%, var(--bg)));
+    --_node-fill:     var(--surface, color-mix(in srgb, var(--fg) 3%, var(--bg)));
+    --_node-stroke:   var(--border, color-mix(in srgb, var(--fg) 20%, var(--bg)));
+    --_group-fill:    var(--bg);
+    --_group-hdr:     color-mix(in srgb, var(--fg) 5%, var(--bg));
+    --_inner-stroke:  color-mix(in srgb, var(--fg) 12%, var(--bg));
+    --_key-badge:     color-mix(in srgb, var(--fg) 10%, var(--bg));
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<polyline class="edge" data-from="A" data-to="W" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="237.86216666666667,76.9 237.86216666666667,100.9 356.5784166666667,100.9 356.5784166666667,124.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="B" data-to="W" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="504.1771666666666,76.9 504.1771666666666,100.9 356.5784166666667,100.9 356.5784166666667,124.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="W" data-to="I" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="先写的请求" points="299.03741666666673,161.8 299.03741666666673,221.79999999999998 112.845,221.79999999999998 112.845,290.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="W" data-to="U" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="随后写的请求" points="356.5784166666667,161.8 356.5784166666667,197.8 375.0845,197.8 375.0845,290.1" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="I" data-to="C" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="提交成功" points="112.845,327 112.845,419.30000000000007 309.67733333333337,419.30000000000007 309.67733333333337,431.30000000000007" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="U" data-to="C" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="提交成功" points="375.0845,327 375.0845,419.30000000000007 385.37283333333335,419.30000000000007 385.37283333333335,431.30000000000007" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="D" data-to="C" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="成功提交后" points="844.0965833333333,254.10000000000005 844.0965833333333,375 886.542,375 886.542,419.30000000000007 461.0683333333334,419.30000000000007 461.0683333333334,431.30000000000007" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="C" data-to="N" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="385.37283333333335,468.20000000000005 385.37283333333335,516.2" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="W" data-to="F" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="数据库拒绝本次写入" points="414.11941666666667,161.8 414.11941666666667,197.8 629.7254999999999,197.8 629.7254999999999,358.4000000000001 650.8333333333333,358.4000000000001 650.8333333333333,370.4000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="D" data-to="F" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="数据库拒绝本次删除" points="805.41325,254.10000000000005 805.41325,290.1 758.2955000000001,290.1 758.2955000000001,358.4000000000001 737.1876666666666,358.4000000000001 737.1876666666666,370.4000000000001" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="W" data-to="I" data-label="先写的请求">
+  <rect x="73.84500000000001" y="228.79999999999998" width="77.05000000000001" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="112.37000000000002" y="243.95" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">先写的请求</text>
+</g>
+<g class="edge-label" data-from="W" data-to="U" data-label="随后写的请求">
+  <rect x="330.58449999999993" y="204.8" width="88.93" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="375.04949999999997" y="219.95000000000002" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">随后写的请求</text>
+</g>
+<g class="edge-label" data-from="I" data-to="C" data-label="提交成功">
+  <rect x="79.845" y="382" width="65.17" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="112.43" y="397.15" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">提交成功</text>
+</g>
+<g class="edge-label" data-from="U" data-to="C" data-label="提交成功">
+  <rect x="342.0845" y="358" width="65.17" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="374.66949999999997" y="373.15" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">提交成功</text>
+</g>
+<g class="edge-label" data-from="D" data-to="C" data-label="成功提交后">
+  <rect x="847.542" y="382" width="77.05000000000001" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="886.067" y="397.15" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">成功提交后</text>
+</g>
+<g class="edge-label" data-from="W" data-to="F" data-label="数据库拒绝本次写入">
+  <rect x="567.2254999999999" y="297.1" width="124.57000000000001" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="629.5104999999999" y="312.25" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">数据库拒绝本次写入</text>
+</g>
+<g class="edge-label" data-from="D" data-to="F" data-label="数据库拒绝本次删除">
+  <rect x="695.7955000000001" y="297.1" width="124.57000000000001" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="758.0805" y="312.25" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">数据库拒绝本次删除</text>
+</g>
+<g class="node" data-id="A" data-label="请求 A：首次保存，提供凭据" data-shape="rectangle">
+  <rect x="122.40966666666668" y="40" width="230.90499999999997" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="237.86216666666667" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">请求 A：首次保存，提供凭据</text>
+</g>
+<g class="node" data-id="W" data-label="SQLite：一条语句插入或更新" data-shape="rectangle">
+  <rect x="241.49641666666673" y="124.9" width="230.16399999999996" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="356.5784166666667" y="143.35000000000002" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">SQLite：一条语句插入或更新</text>
+</g>
+<g class="node" data-id="B" data-label="请求 B：首次保存，不提供凭据" data-shape="rectangle">
+  <rect x="381.31466666666665" y="40" width="245.72499999999997" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="504.1771666666666" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">请求 B：首次保存，不提供凭据</text>
+</g>
+<g class="node" data-id="I" data-label="创建唯一覆盖行" data-shape="rectangle">
+  <rect x="40" y="290.1" width="145.69" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="112.845" y="308.55" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">创建唯一覆盖行</text>
+</g>
+<g class="node" data-id="U" data-label="更新同一行：保留 ID，空凭据不覆盖已有值" data-shape="rectangle">
+  <rect x="213.69000000000003" y="290.1" width="322.78899999999993" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="375.0845" y="308.55" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">更新同一行：保留 ID，空凭据不覆盖已有值</text>
+</g>
+<g class="node" data-id="C" data-label="仅清除当前进程中该 Agent 的客户端缓存" data-shape="rectangle">
+  <rect x="233.98183333333336" y="431.30000000000007" width="302.782" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="385.37283333333335" y="449.75000000000006" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">仅清除当前进程中该 Agent 的客户端缓存</text>
+</g>
+<g class="node" data-id="D" data-label="删除覆盖行" data-shape="rectangle">
+  <rect x="766.7299166666667" y="217.20000000000005" width="116.05" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="824.7549166666666" y="235.65000000000003" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">删除覆盖行</text>
+</g>
+<g class="node" data-id="N" data-label="下次取客户端时重新选择覆盖或继承" data-shape="rectangle">
+  <rect x="245.83783333333338" y="516.2" width="279.06999999999994" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="385.37283333333335" y="534.6500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">下次取客户端时重新选择覆盖或继承</text>
+</g>
+<g class="node" data-id="F" data-label="保留原行和原缓存，接口返回 500" data-shape="rectangle">
+  <rect x="564.4789999999999" y="370.4000000000001" width="259.063" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="694.0104999999999" y="388.8500000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">保留原行和原缓存，接口返回 500</text>
+</g>
+</svg>

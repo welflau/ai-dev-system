@@ -1,0 +1,102 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 793.8879999999999 860.2769999999999" width="793.8879999999999" height="860.2769999999999" style="--bg:#ffffff;--fg:#1d3839;--accent:#12645e;--border:#608781;background:var(--bg)">
+<style>
+
+  text { font-family: 'Microsoft YaHei', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          var(--fg);
+    --_text-sec:      var(--muted, color-mix(in srgb, var(--fg) 60%, var(--bg)));
+    --_text-muted:    var(--muted, color-mix(in srgb, var(--fg) 40%, var(--bg)));
+    --_text-faint:    color-mix(in srgb, var(--fg) 25%, var(--bg));
+    --_line:          var(--line, color-mix(in srgb, var(--fg) 50%, var(--bg)));
+    --_arrow:         var(--accent, color-mix(in srgb, var(--fg) 85%, var(--bg)));
+    --_node-fill:     var(--surface, color-mix(in srgb, var(--fg) 3%, var(--bg)));
+    --_node-stroke:   var(--border, color-mix(in srgb, var(--fg) 20%, var(--bg)));
+    --_group-fill:    var(--bg);
+    --_group-hdr:     color-mix(in srgb, var(--fg) 5%, var(--bg));
+    --_inner-stroke:  color-mix(in srgb, var(--fg) 12%, var(--bg));
+    --_key-badge:     color-mix(in srgb, var(--fg) 10%, var(--bg));
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<polyline class="edge" data-from="A" data-to="B" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="271.9374999999999,76.9 271.9374999999999,124.9" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="B" data-to="X" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="不能" points="242.79133333333326,270.6308333333334 242.79133333333326,380.0770000000001 138.77999999999997,380.0770000000001 138.77999999999997,460.37700000000007" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="B" data-to="C" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="能" points="301.0836666666666,270.6308333333333 301.0836666666666,311.77700000000004 405.0949999999999,311.77700000000004 405.0949999999999,392.077" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="C" data-to="D" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="成功" points="358.58333333333326,428.977 358.58333333333326,464.9770000000001 290.0919999999999,464.9770000000001 290.0919999999999,545.277" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="D" data-to="E" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="290.0919999999999,582.177 290.0919999999999,630.177" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="C" data-to="F" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="失败" points="451.60666666666657,428.977 451.60666666666657,464.9770000000001 520.098,464.9770000000001 520.098,545.277" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="F" data-to="G" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="520.098,582.177 520.098,630.177" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="G" data-to="H" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="读取成功" points="493.0993333333332,667.077 493.0993333333332,703.077 403.61299999999994,703.077 403.6129999999999,783.377" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="G" data-to="I" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="读取也失败" points="547.0966666666666,667.077 547.0966666666666,703.077 636.5829999999999,703.077 636.5829999999999,783.377" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="B" data-to="X" data-label="不能">
+  <rect x="117.77999999999996" y="387.0770000000001" width="41.41" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="138.48499999999996" y="402.2270000000001" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">不能</text>
+</g>
+<g class="edge-label" data-from="B" data-to="C" data-label="能">
+  <rect x="390.0949999999999" y="318.77700000000004" width="29.53" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="404.8599999999999" y="333.927" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">能</text>
+</g>
+<g class="edge-label" data-from="C" data-to="D" data-label="成功">
+  <rect x="269.0919999999999" y="471.9770000000001" width="41.41" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="289.7969999999999" y="487.12700000000007" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">成功</text>
+</g>
+<g class="edge-label" data-from="C" data-to="F" data-label="失败">
+  <rect x="499.0979999999999" y="471.9770000000001" width="41.41" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="519.8029999999999" y="487.12700000000007" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">失败</text>
+</g>
+<g class="edge-label" data-from="G" data-to="H" data-label="读取成功">
+  <rect x="370.61299999999994" y="710.077" width="65.17" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="403.1979999999999" y="725.227" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">读取成功</text>
+</g>
+<g class="edge-label" data-from="G" data-to="I" data-label="读取也失败">
+  <rect x="597.5829999999999" y="710.077" width="77.05000000000001" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="636.1079999999998" y="725.227" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">读取也失败</text>
+</g>
+<g class="node" data-id="A" data-label="POST 开关设置" data-shape="rectangle">
+  <rect x="202.4269999999999" y="40" width="139.021" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="271.9374999999999" y="58.45" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">POST 开关设置</text>
+</g>
+<g class="node" data-id="B" data-label="能否识别 enabled" data-shape="diamond">
+  <polygon points="271.9374999999999,124.9 359.37599999999986,212.3385 271.9374999999999,299.77700000000004 184.49899999999988,212.3385" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="271.9374999999999" y="212.3385" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">能否识别 enabled</text>
+</g>
+<g class="node" data-id="X" data-label="422：保留原文件与状态" data-shape="rectangle">
+  <rect x="39.99999999999997" y="460.37700000000007" width="197.55999999999997" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="138.77999999999997" y="478.82700000000006" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">422：保留原文件与状态</text>
+</g>
+<g class="node" data-id="C" data-label="在启动时读取的配置文件中更新开关" data-shape="rectangle">
+  <rect x="265.55999999999995" y="392.077" width="279.06999999999994" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="405.0949999999999" y="410.527" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">在启动时读取的配置文件中更新开关</text>
+</g>
+<g class="node" data-id="D" data-label="更新当前进程环境和 settings" data-shape="rectangle">
+  <rect x="178.34449999999995" y="545.277" width="223.49499999999995" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="290.0919999999999" y="563.7270000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">更新当前进程环境和 settings</text>
+</g>
+<g class="node" data-id="E" data-label="200：页面显示服务端确认的值" data-shape="rectangle">
+  <rect x="169.08199999999994" y="630.177" width="242.01999999999998" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="290.0919999999999" y="648.6270000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">200：页面显示服务端确认的值</text>
+</g>
+<g class="node" data-id="F" data-label="500：不更新运行时" data-shape="rectangle">
+  <rect x="436.1379999999999" y="545.277" width="167.92" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="520.098" y="563.7270000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">500：不更新运行时</text>
+</g>
+<g class="node" data-id="G" data-label="页面重新 GET 状态" data-shape="rectangle">
+  <rect x="439.10199999999986" y="630.177" width="161.992" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="520.0979999999998" y="648.6270000000001" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">页面重新 GET 状态</text>
+</g>
+<g class="node" data-id="H" data-label="显示服务端实际状态" data-shape="rectangle">
+  <rect x="315.9479999999999" y="783.377" width="175.32999999999998" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="403.61299999999994" y="801.827" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">显示服务端实际状态</text>
+</g>
+<g class="node" data-id="I" data-label="标记状态未知，暂时禁用开关" data-shape="rectangle">
+  <rect x="519.2779999999999" y="783.377" width="234.60999999999999" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="636.5829999999999" y="801.827" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">标记状态未知，暂时禁用开关</text>
+</g>
+</svg>

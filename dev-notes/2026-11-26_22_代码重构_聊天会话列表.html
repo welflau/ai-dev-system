@@ -1,0 +1,85 @@
+<!doctype html>
+<!-- 由 scripts/docs-html/export.mjs 生成，请编辑 Markdown 原稿。 -->
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>代码重构：拆出聊天会话列表，按项目归属统计消息 · ADS 文档</title><link rel="stylesheet" href="../docs/assets/refactor-docs/reader.css"></head>
+<body><nav class="bar" aria-label="主导航"><b>ADS · 开发文档</b><a href="../docs/%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%96%87%E6%A1%A3%E7%B4%A2%E5%BC%95.html">系列索引</a></nav>
+<main><header><p class="meta">开发笔记 · DevNote · <a href="2026-11-26_22_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E8%81%8A%E5%A4%A9%E4%BC%9A%E8%AF%9D%E5%88%97%E8%A1%A8.md">Markdown 原稿</a></p>
+<h1>代码重构：拆出聊天会话列表，按项目归属统计消息</h1></header><details><summary>本页目录（2 节）</summary><ol><li><a href="#section-1">两个列表怎样计算</a></li><li><a href="#section-2">测试从哪里开始</a></li></ol></details>
+<article><p>2026-11-26 · <a href="2026-11-26_21_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E5%BA%94%E7%94%A8%E7%94%9F%E5%91%BD%E5%91%A8%E6%9C%9F.html">上期：应用生命周期</a> · <a href="../docs/20261124_01_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84%E6%96%B9%E6%A1%88.html">项目重构方案</a></p>
+<p>聊天追踪面板会在每个会话标题旁标出消息条数。旧的项目列表只按会话 ID 统计：在合成样本里，「分镜讨论」有两条属于本项目的消息，却因为另一条项目归属不一致的记录，显示成三条。全局列表原本就限定了消息归属。现在两个列表共用一条查询，各自只计算本范围内的消息。没有改动历史数据，也没有查询实际聊天内容。</p>
+<p>基线 <code>7ee969a</code>，代码 <code>0dbce15</code>。原 <code>backend/api/chat.py</code> 已改成同名 Python 包。<a href="../backend/api/chat/__init__.py">包入口</a>保留原有路由对象和函数导入名；<a href="../backend/api/chat/session_lists.py">列表路由</a>接收参数、组装响应，<a href="../backend/services/chat/session_lists.py">查询服务</a>负责 SQLite 统计。原大文件从 5,566 行变为 <strong>5,543 行</strong>。这是聊天拆分的第一批：入口仍直接声明 <strong>46 个路由</strong>，其他 137 个顶层函数与类的语法树未变。</p>
+<h2 id="section-1">两个列表怎样计算</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>请求</th>
+<th>筛选会话</th>
+<th>统计消息</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET /api/projects/{project_id}/chat/sessions</code></td>
+<td>只选给定项目的会话</td>
+<td>只计该项目下、会话 ID 匹配的消息</td>
+</tr>
+<tr>
+<td><code>GET /api/chat/sessions</code></td>
+<td>只选项目列为 <code>NULL</code> 的全局会话</td>
+<td>只计项目标记为 <code>__global__</code>、会话 ID 匹配的消息</td>
+</tr>
+</tbody>
+</table></div>
+<p>先筛选属于当前范围的消息，按会话 ID 计数，再与会话做左连接，因此从未发过消息的会话也会出现在列表中，条数为 0。默认返回最近 50 个会话；更新时间相同时按会话 ID 升序，使截止第 50 条的选择稳定。返回字段仍是 <code>id</code>、<code>title</code>、<code>source</code>、<code>created_at</code>、<code>updated_at</code> 和 <code>message_count</code>。</p>
+<figure><a href="../docs/assets/refactor-docs/2026-11-26_22_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E8%81%8A%E5%A4%A9%E4%BC%9A%E8%AF%9D%E5%88%97%E8%A1%A8_%E5%9B%BE1.svg"><img src="../docs/assets/refactor-docs/2026-11-26_22_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E8%81%8A%E5%A4%A9%E4%BC%9A%E8%AF%9D%E5%88%97%E8%A1%A8_%E5%9B%BE1.svg" alt="流程图：两个列表怎样计算"></a><figcaption>流程图：两个列表怎样计算 · <a href="../docs/assets/refactor-docs/2026-11-26_22_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E8%81%8A%E5%A4%A9%E4%BC%9A%E8%AF%9D%E5%88%97%E8%A1%A8_%E5%9B%BE1.svg">查看原图</a></figcaption></figure>
+<h2 id="section-2">测试从哪里开始</h2>
+<ol>
+<li><strong>先跑旧版。</strong> <a href="../backend/tests/api/test_chat_session_lists.py">9 项 HTTP 回归</a>经完整应用的路由发请求，把数据读取替换成内存 SQLite。<a href="../backend/tests/api/fixtures/chat_session_lists.sql">SQL 样本</a>包括两个项目、全局会话、空会话、归属不一致的记录，以及用来验证默认数量的 51 个同时间会话。样本导入后开启 SQLite 只读模式。旧版 8 项通过，1 项失败（1.11 秒）：预期 2 条，实际 3 条。</li>
+<li><strong>迁移后对照。</strong> 新版项目与全局两条 GET 各只注册一次，旧 Python 名称仍指向相同的处理函数。把两条路径下 GET 和 POST 的完整 OpenAPI 定义和迁移前的运行服务逐项对照，结果相同。创建会话的 POST 只核对定义，没在实际服务上创建数据。</li>
+<li><strong>让页面显示结果。</strong> <a href="assets/2026-11-26_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E8%81%8A%E5%A4%A9%E4%BC%9A%E8%AF%9D%E5%88%97%E8%A1%A8_%E6%88%AA%E5%9B%BE.py">截图脚本</a>在 Edge 中运行前端原有的 <code>loadChatTrace</code> 和 <code>loadGlobalChatTrace</code>。两次列表请求都经过真实路由，返回 200。脚本检查下拉框选项：项目列出「分镜讨论 · 2 条」和「空白草案 · 0 条」，全局只列「全局备忘 · 1 条」。详情加载替换为空操作，截图只验证列表。</li>
+</ol>
+<p><img src="assets/2026-11-26_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E8%81%8A%E5%A4%A9%E4%BC%9A%E8%AF%9D%E5%88%97%E8%A1%A8_%E6%88%AA%E5%9B%BE.png" alt="Edge 中项目和全局的两个会话下拉框，实测消息计数分别为 2、0 和 1"></p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>检查</th>
+<th>实测结果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>后端全量</td>
+<td><strong>1,850 项通过（263.18 秒）</strong>，pytest 退出码 0，比上期新增 9 项。</td>
+</tr>
+<tr>
+<td>相关回归</td>
+<td>列表、运行路径和应用入口加固共 <strong>38 项通过（4.05 秒）</strong>。FastAPI 0.141.0 / Starlette 0.52.1 环境中，新增 9 项全部通过（3.80 秒）。</td>
+</tr>
+<tr>
+<td>包迁移</td>
+<td>两个按源码位置运行的 JS 检查改用新路径，分别 <strong>35/35、7/7</strong> 通过。Python 的路径与语法检查现在覆盖整个聊天包。已更新桌面打包清单，未重建安装包。</td>
+</tr>
+<tr>
+<td>静态与分层</td>
+<td>指定 flake8 规则通过。扫描 527 个模块，既有方向违规 86 条，新增违规、解析错误与循环依赖组均为 0。</td>
+</tr>
+<tr>
+<td>开发服务</td>
+<td>切换前队列、处理中工单及活动 Agent 均为 0。向独立服务控制台发送一次 Ctrl+C，确认旧 PID 88336 与监听消失；新 PID 8532 在 8001 就绪。新服务 16 个普通只读 GET 和 3 条事件流响应头检查通过，两个列表路径的 OpenAPI 与旧版一致。</td>
+</tr>
+</tbody>
+</table></div>
+<p>在仓库根目录重跑：</p>
+<pre><code class="language-powershell">Push-Location backend
+python -m pytest -p no:cacheprovider --tb=line tests/api/test_chat_session_lists.py tests/test_runtime_paths_and_time.py tests/api/test_main_hardening.py
+python -m pytest -p no:cacheprovider
+node _test_log_chat_link.js
+node _test_session_materials_docs.js
+uvx --python 3.14 --from flake8==7.3.0 flake8 --select=E9,F63,F7,F82 --exclude=skills/marketplace,skills/packs,skills/use_skills,projects .
+Pop-Location
+python scripts/check_layers.py --json
+# 需要 Playwright 与 Edge；只连接隔离的应用和数据库
+python &quot;dev-notes/assets/2026-11-26_代码重构_聊天会话列表_截图.py&quot;
+</code></pre>
+<p>新增用例已纳入<a href="../.github/workflows/ci.yml">现有 CI</a>的全量收集。下一批是项目与全局的会话消息详情。它们虽然都是 GET，行为却不同：用临时库实测，全局读取不写库；项目中的待确认工单卡若已有匹配工单，第一次读取会把卡片回填为已执行，第二次读取不再写。下一批应先把这两种行为写成回归测试，再拆详情路由。</p>
+</article><nav class="adjacent" aria-label="相邻文档"><a href="2026-11-26_21_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E5%BA%94%E7%94%A8%E7%94%9F%E5%91%BD%E5%91%A8%E6%9C%9F.html">上一篇：代码重构：应用停机后，确认 Python 进程也退出</a></nav></main></body></html>

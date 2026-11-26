@@ -1,0 +1,94 @@
+<!doctype html>
+<!-- 由 scripts/docs-html/export.mjs 生成，请编辑 Markdown 原稿。 -->
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>代码重构：拆出全局事件流，验证三个 SSE 频道 · ADS 文档</title><link rel="stylesheet" href="../docs/assets/refactor-docs/reader.css"></head>
+<body><nav class="bar" aria-label="主导航"><b>ADS · 开发文档</b><a href="../docs/%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%96%87%E6%A1%A3%E7%B4%A2%E5%BC%95.html">系列索引</a></nav>
+<main><header><p class="meta">开发笔记 · DevNote · <a href="2026-11-25_16_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E5%85%A8%E5%B1%80%E4%BA%8B%E4%BB%B6%E6%B5%81.md">Markdown 原稿</a></p>
+<h1>代码重构：拆出全局事件流，验证三个 SSE 频道</h1></header><details><summary>本页目录（3 节）</summary><ol><li><a href="#section-1">入口怎么拆</a></li><li><a href="#section-2">一条消息怎样到达浏览器</a></li><li><a href="#section-3">测试顺序与结果</a></li></ol></details>
+<article><p>2026-11-25 · <a href="2026-11-25_15_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_Agent%E5%B7%A5%E5%85%B7%E5%BC%80%E5%85%B3.html">上期：Agent 工具开关</a> · <a href="../docs/20261124_01_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84%E6%96%B9%E6%A1%88.html">项目重构方案</a></p>
+<p>浏览器订阅全局、项目和工单事件时，旧服务已经能按频道投递消息，也能在断开后清理队列。发现的问题在接口文档：三个 GET 实际返回持续推送的 <code>text/event-stream</code>，OpenAPI 却告诉调用方会得到一份 <code>application/json</code>。这对使用原生 EventSource 的页面没有影响，但会误导按接口文档选择读取方式的客户端。</p>
+<p>本期把三个处理函数集中到<a href="../backend/api/event_streams.py">事件流路由</a>，并让 OpenAPI 声明真实的响应类型。基线 <code>0240cd0</code>，代码提交 <code>dbe7f29</code>。</p>
+<h2 id="section-1">入口怎么拆</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>GET 路径</th>
+<th>实际订阅的频道</th>
+<th>保留的 Python 入口</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/api/events/global</code></td>
+<td><code>global</code></td>
+<td><code>main.global_events_stream</code></td>
+</tr>
+<tr>
+<td><code>/api/projects/{project_id}/events</code></td>
+<td><code>project:{project_id}</code></td>
+<td><code>api.tickets.project_events</code></td>
+</tr>
+<tr>
+<td><code>/api/tickets/{ticket_id}/events</code></td>
+<td><code>ticket:{ticket_id}</code></td>
+<td><code>api.tickets.ticket_events</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>全局流在 <a href="../backend/main.py">main.py</a> 挂载。项目和工单流仍挂在 <a href="../backend/api/tickets.py">tickets.router</a> 下，因此单独挂载工单路由时仍可用，两条接口也保留了原来的 <code>tickets</code> 标签。每个 GET 在应用里仅注册一次，三个旧 Python 名称均指向新模块中的同一处理函数。响应类显式设置了 FastAPI 生成文档时读取的媒体类型；实际传输继续使用 sse-starlette。</p>
+<p><code>main.py</code> 从 <strong>681 行降至 675 行</strong>；<code>api/tickets.py</code> 从 <strong>3,443 行降至 3,421 行</strong>。比较语法树，两份文件其余顶层函数均未变。R3 累计从主文件迁出 <strong>19 个接口</strong>；本次另两个接口原本在工单文件，不重复计入。新模块已加入<a href="../desktop.spec">桌面打包清单</a>，本轮未构建桌面包。</p>
+<h2 id="section-2">一条消息怎样到达浏览器</h2>
+<figure><a href="../docs/assets/refactor-docs/2026-11-25_16_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E5%85%A8%E5%B1%80%E4%BA%8B%E4%BB%B6%E6%B5%81_%E5%9B%BE1.svg"><img src="../docs/assets/refactor-docs/2026-11-25_16_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E5%85%A8%E5%B1%80%E4%BA%8B%E4%BB%B6%E6%B5%81_%E5%9B%BE1.svg" alt="时序图：一条消息怎样到达浏览器"></a><figcaption>时序图：一条消息怎样到达浏览器 · <a href="../docs/assets/refactor-docs/2026-11-25_16_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E5%85%A8%E5%B1%80%E4%BA%8B%E4%BB%B6%E6%B5%81_%E5%9B%BE1.svg">查看原图</a></figcaption></figure>
+<p><a href="../backend/events.py">事件管理器</a>给同一频道的每个连接单独建队列，最后一个连接断开后才删除频道。<a href="../frontend/app.js">前端</a>按事件名监听，再解析 <code>e.data</code>。例如中文消息中的换行会被编码进 JSON；浏览器解析后仍是带换行的一条消息。频道隔离验证的是投递范围，不代表访问者身份或权限已通过校验。</p>
+<h2 id="section-3">测试顺序与结果</h2>
+<ol>
+<li><strong>先在旧版验证。</strong> 对运行中的三个 GET 仅读取响应头，并与 OpenAPI 对照。新增的 <a href="../backend/tests/api/test_event_stream_routes.py">5 项回归测试</a>在迁移前 <strong>2 项通过，3 项失败</strong>。通过的是消息和断开行为；三个失败分别对应三个接口的媒体类型声明。</li>
+<li><strong>再迁移并校验。</strong> 自动测试通过真实应用的 ASGI 入口建立长连接，不启动应用生命周期，发布者使用测试专属的事件管理器。项目和工单故意用同一个 ID，三个频道连续两轮发送同名、不同内容的事件，逐帧校验事件名、中文、换行和 JSON 内容。另建两条全局连接，确认两者都收到第一条消息；断开其中一条后，另一条仍收到第二条；最终没有残留订阅。</li>
+<li><strong>用浏览器重放。</strong> <a href="assets/2026-11-25_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E5%85%A8%E5%B1%80%E4%BA%8B%E4%BB%B6%E6%B5%81_%E6%88%AA%E5%9B%BE.py">截图脚本</a>在随机本机端口挂载真实路由，以 Edge 原生 EventSource 建立三条连接。发布合成日志后，每个频道再发一条批次结束标记；三条标记都到达才核对消息，没有用固定延时猜测“没有串台”。截图的消息来自浏览器回调，订阅数来自服务端管理器。这是隔离验证页，没有向实际用户频道发消息。</li>
+</ol>
+<p><img src="assets/2026-11-25_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E5%85%A8%E5%B1%80%E4%BA%8B%E4%BB%B6%E6%B5%81_%E6%88%AA%E5%9B%BE.png" alt="Edge 同时监听全局、项目和工单三个频道；全局中文消息的换行被保留，关闭后订阅从 3 降至 0"></p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>检查</th>
+<th>结果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>本机相关回归</td>
+<td>SSE、应用加固和系统只读路由共 <strong>31 项通过（2.00 秒）</strong>。</td>
+</tr>
+<tr>
+<td>本机后端全量</td>
+<td><strong>1,782 项全部通过（380.74 秒，约 6 分 21 秒）</strong>。pytest 退出码 0，未报告警告。上期 1,777 项，本期新增 5 项。</td>
+</tr>
+<tr>
+<td>框架版本差异</td>
+<td>本机使用 FastAPI 0.135.1 / Starlette 1.0.0，与项目声明范围不同。在临时环境换为 FastAPI <strong>0.141.0</strong> / Starlette <strong>0.52.1</strong>，同样使用 sse-starlette 3.3.3；5 项 SSE 测试全部通过（4.22 秒）。</td>
+</tr>
+<tr>
+<td>分层与静态检查</td>
+<td>扫描 518 个模块，历史方向违规 86，新增违规、循环依赖组和解析错误均为 0。指定 flake8 规则通过。</td>
+</tr>
+<tr>
+<td>运行中的服务</td>
+<td>重启前队列、处理中工单与活动 Agent 均为 0。旧进程 89864 正常退出，新进程 23828 在 8001 就绪。16 个普通只读地址与 3 条 SSE 流均返回 200；三个流均返回 <code>text/event-stream</code> 和 <code>X-Accel-Buffering: no</code>。与重启前相比，三个 OpenAPI 操作仅成功响应的内容声明变化。未读取现场事件正文。</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>重跑命令</strong>（全量在本机环境跑；CI 的触发条件见<a href="../.github/workflows/ci.yml">工作流</a>）：</p>
+<pre><code class="language-powershell"># backend/：单跑新用例、跑相关回归、跑后端全量
+python -m pytest -p no:cacheprovider --tb=line tests/api/test_event_stream_routes.py
+python -m pytest -p no:cacheprovider --tb=line tests/api/test_event_stream_routes.py tests/api/test_main_hardening.py tests/api/test_system_read_routes.py
+python -m pytest -p no:cacheprovider
+uvx --python 3.14 --from flake8==7.3.0 flake8 --select=E9,F63,F7,F82 --exclude=skills/marketplace,skills/packs,skills/use_skills,projects .
+
+# 仓库根目录；截图需要 Playwright 和 Edge
+python scripts/check_layers.py --json
+python &quot;dev-notes/assets/2026-11-25_代码重构_全局事件流_截图.py&quot;
+</code></pre>
+<p>本轮没有覆盖长时间空闲心跳、断线重连或代理层超时。主文件仍有 6 个 HTTP 路径装饰器，应用生命周期仍有 257 行。</p>
+<p>下一批建议拆出 <code>POST /api/system/open_path</code>。先用临时文件和目录，模拟 macOS 分支并拦截 <code>subprocess.Popen</code>：文件生成 <code>[&quot;open&quot;, &quot;-R&quot;, 文件路径]</code>，目录却生成 <code>[&quot;open&quot;, &quot;&quot;, 目录路径]</code>，中间多出一个空参数。这个预检验证了参数构造，没有启动 Finder，也不能据此断言实际 macOS 桌面的执行结果。下期可先固定文件与目录各自应传的参数，再迁移路由。</p>
+</article><nav class="adjacent" aria-label="相邻文档"><a href="2026-11-25_15_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_Agent%E5%B7%A5%E5%85%B7%E5%BC%80%E5%85%B3.html">上一篇：代码重构：Agent 工具开关，写入成功后才改变状态</a>
+<a href="2026-11-25_17_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E7%B3%BB%E7%BB%9F%E8%B7%AF%E5%BE%84%E6%89%93%E5%BC%80.html">下一篇：代码重构：从详情页打开文件所在目录</a></nav></main></body></html>

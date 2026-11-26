@@ -1,0 +1,481 @@
+<!doctype html>
+<!-- 由 scripts/docs-html/export.mjs 生成，请编辑 Markdown 原稿。 -->
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ADS 项目问题与缺失分析（2026-11-23 体检） · ADS 文档</title><link rel="stylesheet" href="assets/refactor-docs/reader.css"></head>
+<body><nav class="bar" aria-label="主导航"><b>ADS · 开发文档</b><a href="%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%96%87%E6%A1%A3%E7%B4%A2%E5%BC%95.html">系列索引</a></nav>
+<main><header><p class="meta">项目文档 · <a href="20261123_01_%E9%A1%B9%E7%9B%AE%E9%97%AE%E9%A2%98%E4%B8%8E%E7%BC%BA%E5%A4%B1%E5%88%86%E6%9E%90.md">Markdown 原稿</a></p>
+<h1>ADS 项目问题与缺失分析（2026-11-23 体检）</h1></header><details><summary>本页目录（10 节）</summary><ol><li><a href="#section-1">一、范围与方法</a></li><li><a href="#section-2">二、结论摘要</a></li><li><a href="#section-3">三、需要先修的问题</a></li><li><a href="#section-4">四、安全缺口</a></li><li><a href="#section-5">五、工程化缺失</a></li><li><a href="#section-6">六、可维护性</a></li><li><a href="#section-7">七、建议处理顺序</a></li><li><a href="#section-8">八、本次没有覆盖的范围</a></li><li><a href="#section-9">九、处理进度（2026-11-24）</a></li><li><a href="#section-10">附：复核命令</a></li></ol></details>
+<article><p>日期：2026-11-23
+状态：部分已修（2026-11-24 第一批，已提交为 <code>d1f478a</code>，未推送）。逐条进度见第九节，实现细节见 <code>dev-notes/2026-11-24_01_项目体检问题修复第一批.md</code>。第一至八节保留 2026-11-23 只读分析时的原始结论。
+关联：<code>docs/20261117_01_六层架构改造方案.md</code>、<code>scripts/check_layers.py</code>、<code>.github/workflows/ci.yml</code>、<code>backend/layers_baseline.json</code></p>
+<hr>
+<h2 id="section-1">一、范围与方法</h2>
+<p>分析对象是 <code>main</code> 分支的工作区：HEAD 为 <code>7b9e7f0</code>，领先 <code>origin/main</code> 6 个提交，另有 12 个已修改或删除的文件和 7 个未跟踪文件。下面的结论都基于这个工作区状态。</p>
+<p>实际执行的检查：</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>检查</th>
+<th>结果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>全量 pytest（<code>backend/</code> 下，Python 3.14.3）</td>
+<td>762 通过、2 失败，耗时 324 秒</td>
+</tr>
+<tr>
+<td>分层守卫 <code>python scripts/check_layers.py</code></td>
+<td>退出码非 0，相对基线新增 1 条违规</td>
+</tr>
+<tr>
+<td>单独挂载 <code>api.projects</code> 的 router，<code>POST /api/projects</code></td>
+<td>返回 422</td>
+</tr>
+<tr>
+<td>静态阅读</td>
+<td><code>main.py</code>、<code>config.py</code>、<code>api/projects.py</code>、<code>actions/chat/shell_exec.py</code>、<code>cloud_video/</code>、CI 与 pre-commit 配置、README、两份 <code>.env.example</code></td>
+</tr>
+<tr>
+<td>统计</td>
+<td><code>git ls-files</code>、<code>git grep</code>、文件行数与体积</td>
+</tr>
+</tbody>
+</table></div>
+<p>没有做的事情见第八节。</p>
+<hr>
+<h2 id="section-2">二、结论摘要</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>编号</th>
+<th>问题</th>
+<th>级别</th>
+<th>改动量</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><code>POST /api/projects</code> 路由挂到了辅助函数上，新建/导入项目接口返回 422</td>
+<td>高</td>
+<td>小</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>cloud_video</code> 包内出现循环导入，分层守卫和 2 个架构测试失败</td>
+<td>高</td>
+<td>小</td>
+</tr>
+<tr>
+<td>3</td>
+<td>CI 不跑 pytest，762 个用例只在本地运行</td>
+<td>高</td>
+<td>小</td>
+</tr>
+<tr>
+<td>4</td>
+<td>全部 API 无鉴权，默认监听 <code>0.0.0.0</code>，CORS 全开</td>
+<td>高</td>
+<td>中</td>
+</tr>
+<tr>
+<td>5</td>
+<td>shell 工具黑名单覆盖不到 PowerShell 写法</td>
+<td>中</td>
+<td>小</td>
+</tr>
+<tr>
+<td>6</td>
+<td>500 响应直接返回异常文本</td>
+<td>低</td>
+<td>小</td>
+</tr>
+<tr>
+<td>7</td>
+<td>依赖无锁定，Python 版本口径不一致</td>
+<td>中</td>
+<td>小</td>
+</tr>
+<tr>
+<td>8</td>
+<td>版本号、<code>.env</code> 模板与代码不一致</td>
+<td>中</td>
+<td>小</td>
+</tr>
+<tr>
+<td>9</td>
+<td>无部署方案，日志不轮转</td>
+<td>中</td>
+<td>中</td>
+</tr>
+<tr>
+<td>10</td>
+<td>核心文件过大</td>
+<td>中</td>
+<td>大</td>
+</tr>
+<tr>
+<td>11</td>
+<td>大量宽泛 <code>except</code> 吞掉异常</td>
+<td>中</td>
+<td>大</td>
+</tr>
+<tr>
+<td>12</td>
+<td>分层治理只完成一部分</td>
+<td>中</td>
+<td>大</td>
+</tr>
+<tr>
+<td>13</td>
+<td>仓库混入大量非源码文件</td>
+<td>低</td>
+<td>中</td>
+</tr>
+<tr>
+<td>14</td>
+<td>工作区未提交改动较多</td>
+<td>低</td>
+<td>小</td>
+</tr>
+</tbody>
+</table></div>
+<hr>
+<h2 id="section-3">三、需要先修的问题</h2>
+<h3>1. <code>POST /api/projects</code> 路由挂错了函数</h3>
+<p><code>backend/api/projects.py</code> 第 57 行的 <code>@router.post(&quot;&quot;)</code> 下面紧跟的是辅助函数 <code>_auto_init_ads_dir(repo_path, project_name, traits)</code>（第 58 行），真正的 <code>create_project</code> 在第 99 行，前面没有装饰器，没有注册成路由。</p>
+<p>证据：</p>
+<ul>
+<li>枚举路由得到 <code>['POST'] /api/projects -&gt; _auto_init_ads_dir</code>，<code>create_project</code> 不在路由表里。</li>
+<li>单独挂这个 router 后 <code>POST /api/projects</code>（JSON body）返回 422：缺 query 参数 <code>repo_path</code>、<code>project_name</code>，缺 body 字段 <code>traits</code>。</li>
+<li>前端「新建项目」（<code>frontend/app.js:8118</code>）和「导入项目」（<code>frontend/app.js:8383</code>）都调用这个接口。</li>
+</ul>
+<p>来源：提交 <code>e37d619</code>（2026-05-19，「新建项目自动初始化 .ads/ 目录」）把新函数插在了装饰器和 <code>create_project</code> 之间。</p>
+<p>修法：把 <code>@router.post(&quot;&quot;)</code> 挪到 <code>async def create_project</code> 上方；补一个回归测试，断言 <code>POST /api/projects</code> 的 endpoint 是 <code>create_project</code>。</p>
+<p>说明：聊天里的「确认创建」走 <code>api/chat.py</code> 的 <code>confirm_create_project</code> → <code>CreateProjectAction</code>，是另一条路径，本次没有测试。现有日志里也没有找到 <code>POST /api/projects</code> 的访问记录，所以线上实际受影响的程度没有从运行数据上得到印证。</p>
+<h3>2. <code>cloud_video</code> 包内循环导入，分层守卫变红</h3>
+<p>分层守卫输出：</p>
+<pre><code>模块 471 | 项目内边 2251 | import 语句 4590 (延迟 1974, 43.0%)
+SCC&gt;1: 1 组 (最大 3) | 双向对 2 | 动态导入 11 | 未归层模块 229
+违规 93 条 {'DIRECTION': 92, 'CYCLE': 1} | 基线 已登记 | 相对基线新增 1
+[新增违规] CYCLE:cloud_video,cloud_video.client,cloud_video.queue
+</code></pre>
+<p>因此这两个测试失败：</p>
+<ul>
+<li><code>tests/architecture/test_layer_dag.py::test_no_new_violations_vs_baseline</code></li>
+<li><code>tests/architecture/test_layer_dag.py::test_main_ring_eliminated</code></li>
+</ul>
+<p>环上的导入：</p>
+<ul>
+<li><code>cloud_video/client.py:32</code> 顶层导入 <code>cloud_video.queue</code></li>
+<li><code>cloud_video/queue.py:120</code> 函数内导入 <code>cloud_video.client.CloudVideoUnavailable</code></li>
+<li><code>cloud_video/client.py:509</code> 函数内 <code>from cloud_video import lightai</code>，使 <code>client</code> 依赖包本身，而 <code>cloud_video/__init__.py</code> 又导入 <code>client</code> 和 <code>queue</code></li>
+<li><code>cloud_video/lightai.py:28</code> 顶层导入 <code>cloud_video.client.CloudVideoError</code></li>
+</ul>
+<p>这些导入在 HEAD 里已经存在，基线 <code>layers_baseline.json</code> 是 <code>9864edc</code> 时生成的，早于 <code>cloud_video</code> 包的引入。本地 6 个提交推送后，CI 的 <code>layer-dag-guard</code> 会失败。</p>
+<p>修法建议：把异常类抽到 <code>cloud_video/errors.py</code>，<code>client</code>、<code>queue</code>、<code>lightai</code> 都从它导入（<code>client</code> 里保留重导出以兼容旧引用）；<code>client.py:509</code> 改为直接导入 <code>cloud_video.lightai</code> 子模块。改完以 <code>python scripts/check_layers.py</code> 的结果为准，不要用更新基线的方式消掉这条违规。</p>
+<h3>3. CI 不跑测试</h3>
+<p><code>.github/workflows/ci.yml</code> 的 <code>backend-test</code> job 安装了 <code>pytest pytest-asyncio pytest-cov</code>，但唯一的验证步骤是：</p>
+<pre><code>python -c &quot;from models import TicketStatus; print('Import OK')&quot;
+</code></pre>
+<p>其余情况：</p>
+<ul>
+<li>flake8 第一遍只查 <code>E9,F63,F7,F82</code>，第二遍带 <code>--exit-zero</code>，不会拦提交。</li>
+<li>前端没有 lint、构建或测试步骤。</li>
+<li><code>backend/</code> 根目录下 78 个入库的 <code>_test_*.py</code> / <code>_test_*.js</code> 脚本不在 <code>pytest.ini</code> 的收集范围内（<code>testpaths = tests</code>、<code>python_files = test_*.py</code>），CI 和 pytest 都不会执行它们。</li>
+</ul>
+<p>修法：在 <code>backend-test</code> 里加 <code>python -m pytest</code>（<code>working-directory: backend</code>）。全量约 5 分半，可以接受；若嫌慢，再拆出慢用例标记。</p>
+<hr>
+<h2 id="section-4">四、安全缺口</h2>
+<h3>4. 全部 API 无鉴权</h3>
+<ul>
+<li><code>backend/config.py</code> 默认 <code>HOST=0.0.0.0</code>、<code>DEBUG=true</code>。</li>
+<li><code>backend/main.py:334</code> 起的 CORS 配置是 <code>allow_origins=[&quot;*&quot;]</code>、<code>allow_credentials=True</code>、方法和请求头全放开。</li>
+<li>在 <code>backend/*.py</code> 与 <code>backend/api/*.py</code> 中搜索 <code>Depends(</code>、<code>HTTPBearer</code>、<code>APIKeyHeader</code>、<code>verify_token</code>、<code>client.host</code>，只有 <code>api/projects.py:38</code> 的用户级 ConfigPack 守卫做了本机限制，其余接口没有任何身份校验。</li>
+</ul>
+<p>后果是局域网内的机器，或者用户浏览器打开的任意网页，都可以调用并读取这些接口：</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>接口</th>
+<th>位置</th>
+<th>能做什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET /api/local-file?path=</code></td>
+<td><code>main.py:1234</code></td>
+<td>按绝对路径读取本机任意图片文件</td>
+</tr>
+<tr>
+<td><code>POST /api/system/open_path</code></td>
+<td><code>main.py:437</code></td>
+<td>在资源管理器中打开任意路径</td>
+</tr>
+<tr>
+<td><code>GET /api/open-in-browser?url=</code></td>
+<td><code>main.py:1250</code></td>
+<td>让本机浏览器打开任意 http(s) 地址</td>
+</tr>
+<tr>
+<td><code>POST /api/llm/config</code></td>
+<td><code>main.py:620</code></td>
+<td>改写 LLM 配置并写回 <code>.env</code></td>
+</tr>
+<tr>
+<td><code>PUT /api/sop/config</code></td>
+<td><code>main.py:498</code></td>
+<td>改写 SOP 流程配置</td>
+</tr>
+<tr>
+<td>聊天与工单接口</td>
+<td><code>api/chat.py</code>、<code>api/tickets.py</code></td>
+<td>驱动 Agent 调用工具，包括 shell</td>
+</tr>
+</tbody>
+</table></div>
+<p>修法建议（由易到难）：</p>
+<ol>
+<li>默认监听改为 <code>127.0.0.1</code>，需要对外时显式配置。</li>
+<li>CORS 白名单收紧到本机来源。</li>
+<li>加一个启动时生成的本地 token，前端和桌面壳带上，后端用全局依赖校验。</li>
+<li><code>/api/local-file</code> 限制在项目目录、<code>chat_images</code>、<code>generated-images</code> 等已知根目录之内。</li>
+</ol>
+<p>桌面版已核实（2026-11-24）：<code>desktop.py:29</code> 的 <code>APP_HOST = &quot;127.0.0.1&quot;</code>，<code>desktop.py:119</code> 用它调用 <code>uvicorn.run</code>，绑定的是 <code>127.0.0.1:18000</code>，不对局域网开放。</p>
+<h3>5. shell 工具黑名单覆盖不到 PowerShell 写法</h3>
+<p><code>backend/actions/chat/shell_exec.py:27</code> 的黑名单正则列的是 <code>rm -rf</code>、<code>del /f</code>、<code>rd /s</code>、<code>format X:</code> 这类写法，而 Windows 上命令通过 <code>powershell -Command</code> 执行。<code>Remove-Item -Recurse -Force</code>、<code>ri -r -fo</code> 等 PowerShell 写法不在正则里。工作目录虽然限制在项目内，但命令文本本身可以引用任意绝对路径。</p>
+<p>该工具文档标注为「Tier 1（需用户确认）」，确认流程本次没有核实。建议把黑名单当作辅助手段，主要依靠确认流程和权限系统；同时把 PowerShell 的删除、格式化、关机类 cmdlet 补进规则。</p>
+<h3>6. 500 响应返回异常文本</h3>
+<p><code>backend/main.py:342</code> 的全局异常处理把 <code>str(exc)</code> 放进响应体。异常信息里可能带本机路径、SQL 片段或上游返回内容。建议响应里只给通用提示和一个可检索的错误 ID，详情留在日志。</p>
+<hr>
+<h2 id="section-5">五、工程化缺失</h2>
+<h3>7. 依赖与 Python 版本没有锁定</h3>
+<ul>
+<li><code>backend/requirements.txt</code> 只有下限约束，仓库里没有 lock 文件，也没有 <code>pyproject.toml</code>。</li>
+<li>本机环境的 fastapi 是 0.135.1，低于 <code>requirements.txt</code> 要求的 <code>&gt;=0.141.0</code>，测试仍然通过，说明本机环境和声明的依赖已经脱节。</li>
+<li>Python 版本有四种口径：README 徽章写 3.10+；<code>scripts/check_layers.py</code> 用 <code>tomllib</code>，需要 3.11+；CI 用 3.12；本机是 3.14.3；<code>backend/tools/*/vendor/</code> 里的 wheel 是 cp311。</li>
+<li>3.14 下已出现的警告：
+<ul>
+<li><code>backend/api/chat.py:3550</code> 附近有非法转义 <code>\A</code>（SyntaxWarning，后续版本会变成错误）。</li>
+<li><code>backend/main.py:63</code> 使用的 <code>asyncio.set_event_loop_policy</code> / <code>WindowsProactorEventLoopPolicy</code> 已弃用，3.16 移除。</li>
+<li><code>backend/actions/diagnose_ticket.py:185</code>、<code>:198</code> 使用已弃用的 <code>datetime.utcnow()</code>。</li>
+</ul>
+</li>
+</ul>
+<p>建议：确定一个受支持的版本区间（例如 3.11–3.13）写进 README 和 CI；生成锁定文件；修掉上述三处警告。</p>
+<h3>8. 版本号和配置文档对不上</h3>
+<ul>
+<li>版本号有三个值：README 徽章 <code>v0.22</code>，<code>backend/main.py:328</code> 的 FastAPI 应用 <code>0.10.0</code>，<code>backend/main.py:470</code> 的 <code>/api/health</code> 返回 <code>0.13.0</code>。建议收敛到一个常量。</li>
+<li><code>.env</code> 模板有两份。根目录 <code>.env.example</code> 给的是 OpenAI 地址和 <code>gpt-4</code>，没有 <code>LLM_API_FORMAT</code>；代码里 <code>LLM_API_FORMAT</code> 默认是 <code>anthropic</code>，照这份模板填会得到格式和地址不匹配的配置。<code>backend/.env.example</code> 更完整，<code>config.py</code> 的注释也说明 <code>backend/.env</code> 是权威配置源。</li>
+<li>README 的安装步骤先 <code>cd backend</code> 再 <code>cp .env.example .env</code>，没有说明两份模板的关系。建议删除根目录那份，或让它只指向 <code>backend/.env.example</code>。</li>
+</ul>
+<h3>9. 没有部署方案，日志不轮转</h3>
+<ul>
+<li>仓库里没有 Dockerfile、docker-compose 或其他部署描述（自有代码范围内只有 <code>backend/requirements.txt</code>）。</li>
+<li>未入库的运行产物持续增长：<code>backend/server.log</code> 约 63.8MB，<code>backend/logs/</code> 198 个文件约 55.6MB，<code>backend/data/</code> 约 7.9GB，<code>backend/projects/</code> 约 4.8GB。日志没有轮转或清理策略。</li>
+<li>根目录还有 10 个左右的散落日志文件和一个 0 字节的 <code>ai_dev_system.db</code>（均已被 <code>.gitignore</code> 忽略）。</li>
+</ul>
+<hr>
+<h2 id="section-6">六、可维护性</h2>
+<h3>10. 核心文件过大</h3>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>文件</th>
+<th>行数</th>
+<th>体积</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>frontend/app.js</code></td>
+<td>35,912</td>
+<td>1.73MB</td>
+</tr>
+<tr>
+<td><code>frontend/styles.css</code></td>
+<td>—</td>
+<td>401KB</td>
+</tr>
+<tr>
+<td><code>frontend/index.html</code></td>
+<td>—</td>
+<td>205KB</td>
+</tr>
+<tr>
+<td><code>backend/orchestrator.py</code></td>
+<td>6,694</td>
+<td>319KB</td>
+</tr>
+<tr>
+<td><code>backend/api/chat.py</code></td>
+<td>5,561</td>
+<td>245KB</td>
+</tr>
+<tr>
+<td><code>backend/api/projects.py</code></td>
+<td>3,921</td>
+<td>169KB</td>
+</tr>
+<tr>
+<td><code>backend/llm_client.py</code></td>
+<td>3,446</td>
+<td>156KB</td>
+</tr>
+<tr>
+<td><code>backend/api/tickets.py</code></td>
+<td>3,442</td>
+<td>138KB</td>
+</tr>
+<tr>
+<td><code>backend/agents/chat_assistant.py</code></td>
+<td>2,380</td>
+<td>122KB</td>
+</tr>
+</tbody>
+</table></div>
+<p>前端是单文件脚本，没有模块化、构建、类型检查和自动化测试。自有 Python 代码（不含测试、内置插件市场、<code>config_packs</code>、<code>tools</code>、<code>_</code> 开头的脚本）共 327 个文件、约 9.9 万行。</p>
+<h3>11. 异常被大量吞掉</h3>
+<p>在自有后端代码范围内（排除 <code>skills</code>、<code>config_packs</code>、<code>tools</code>、<code>tests</code>、<code>_</code> 开头的文件），<code>except Exception:</code> 或裸 <code>except:</code> 约 556 处，其中约 335 处下一行直接是 <code>pass</code>。这是 <code>git grep</code> 的粗略统计。数量最多的是 <code>api/projects.py</code>、<code>orchestrator.py</code>、<code>api/chat.py</code>、<code>api/tickets.py</code>、<code>llm_client.py</code>。</p>
+<p>第 1 条那类问题能长期存在，和这种写法加上 CI 不跑测试有直接关系。建议从 <code>orchestrator.py</code> 和 <code>api/</code> 开始，至少把静默吞掉改成 <code>logger.debug(..., exc_info=True)</code>。</p>
+<h3>12. 分层治理只完成一部分</h3>
+<p>按 <code>check_layers.py</code> 当前输出：471 个模块里 229 个还没有归层；存量违规 93 条，其中 92 条是方向违规：47 条是 L1 的 <code>api.*</code> 直接导入 L3 的 action 和 Agent，27 条是 L3 直接导入 L1 的 <code>llm_client</code>，其余 18 条分散在 <code>orchestrator</code>、<code>plugins.registry</code>、<code>sop</code> 等处；4,590 条 import 语句里 43% 是函数内延迟导入，说明不少环是靠延迟导入绕开的。后续安排见 <code>docs/20261117_01_六层架构改造方案.md</code>。</p>
+<h3>13. 仓库里混了大量非源码</h3>
+<ul>
+<li>入库文件共 7,440 个，其中 <code>backend/skills/marketplace/</code> 下整包拷入的两个插件市场占 5,388 个（<code>codebuddy-plugins-official</code> 3,763，<code>cb_teams_marketplace</code> 1,625）。可以考虑改成 submodule 或按需下载。</li>
+<li><code>backend/</code> 根目录有 152 个入库文件，其中 104 个以 <code>_</code> 开头，包括调试输出、日志 fixture 和上面提到的 78 个 <code>_test_*</code> 脚本。有价值的应迁入 <code>backend/tests/</code>，其余删除。</li>
+<li><code>pywin32</code>、<code>cryptography</code>、<code>pydantic_core</code> 三个 wheel 在 <code>backend/tools/ue_editor_mcp/Python/vendor/</code> 和 <code>backend/tools/memory_mcp/vendor/</code> 各存一份，合计约 30MB。</li>
+<li><code>backend/llm</code>、<code>backend/models</code>、<code>backend/orchestrator</code>、<code>backend/utils</code> 四个目录在磁盘上是空的，其中 <code>models</code>、<code>orchestrator</code> 与同名的 <code>.py</code> 模块重名，容易引起导入歧义，建议删除。</li>
+<li>根目录有 <code>test.ps1</code>、<code>测试脚本.ps1</code>、<code>测试报告.md</code>、<code>演示指南.md</code>、<code>SETUP_GITHUB.md</code> 等早期文件，建议归档到 <code>docs/</code> 或删除。</li>
+</ul>
+<h3>14. 工作区未提交改动较多</h3>
+<p>12 个文件已修改或删除，7 个未跟踪，包含新的 <code>ai_gen_tasks</code> 记录层（<code>backend/ai_gen_tasks.py</code>、<code>backend/api/ai_gen_tasks.py</code> 及两份测试）。<code>docs/202611101_01_会话内容整理.md</code> 被删除、<code>docs/20261101_01_会话内容整理.md</code> 未跟踪，看起来是改正文件名里的日期。建议尽快分批提交。</p>
+<hr>
+<h2 id="section-7">七、建议处理顺序</h2>
+<ol>
+<li>修第 1 条的装饰器位置，并补回归测试。</li>
+<li>解开第 2 条的 <code>cloud_video</code> 循环导入，让分层守卫恢复通过。</li>
+<li>在 CI 里加上 <code>pytest</code>（第 3 条），之后同类问题能在合并前暴露。</li>
+<li>默认监听改为 <code>127.0.0.1</code>，收紧 CORS，加本地 token（第 4 条）。</li>
+<li>统一版本号、<code>.env</code> 模板和 Python 版本口径（第 7、8 条）。</li>
+<li>清理仓库里的临时文件和重复文件（第 13 条）。</li>
+<li>大文件拆分、异常处理整改、分层治理作为持续项推进（第 10、11、12 条）。</li>
+</ol>
+<p>前三项改动都很小，可以放在同一个提交批次里完成。</p>
+<hr>
+<h2 id="section-8">八、本次没有覆盖的范围</h2>
+<ul>
+<li>没有启动服务，没有做浏览器端到端验证；第 1 条是通过单独挂载 router 确认的。</li>
+<li>没有逐个通读业务模块，<code>orchestrator.py</code>、<code>api/chat.py</code>、<code>llm_client.py</code> 的内部逻辑正确性不在本次结论内。</li>
+<li>没有检查数据库迁移策略、并发与任务恢复、前端交互问题。</li>
+<li>没有审查 <code>backend/skills/marketplace/</code>、<code>backend/config_packs/</code>、<code>backend/tools/</code> 里的第三方或打包内容。</li>
+<li>没有检查桌面版打包产物（<code>desktop.spec</code>、<code>dist/</code>）。</li>
+<li>没有扫描 git 历史中的密钥；对当前入库文件做了常见密钥格式的搜索，没有命中，<code>.env</code> 没有入库。</li>
+</ul>
+<hr>
+<h2 id="section-9">九、处理进度（2026-11-24）</h2>
+<p>第一批修复按第七节的顺序做了第 1–5 步里改动小、能用测试锁住的部分。改动已提交为 <code>d1f478a</code>，尚未推送。实现细节、踩过的坑和验证过程见 <code>dev-notes/2026-11-24_01_项目体检问题修复第一批.md</code>。</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>编号</th>
+<th>状态</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>已修</td>
+<td><code>@router.post(&quot;&quot;)</code> 挪回 <code>create_project</code> 上方；回归测试 <code>backend/tests/api/test_projects_route.py</code></td>
+</tr>
+<tr>
+<td>2</td>
+<td>已修</td>
+<td>新增叶子模块 <code>backend/cloud_video/errors.py</code>，包内其他模块改从它导入，旧导入路径保留；分层守卫退出码 0，SCC 0 组</td>
+</tr>
+<tr>
+<td>3</td>
+<td>已修</td>
+<td><code>.github/workflows/ci.yml</code> 的 <code>backend-test</code> 增加 <code>python -m pytest</code>；这一步还没有在 GitHub 上实际跑过。本机改代码和提交时都不会自动触发测试，现状和手动流程见 <code>dev-notes/2026-11-24_07_代码重构_测试流程.md</code></td>
+</tr>
+<tr>
+<td>4</td>
+<td>部分完成</td>
+<td>已做：<code>HOST</code> 默认值改为 <code>127.0.0.1</code>；CORS 只放行本机来源，另加 <code>CORS_ALLOW_ORIGINS</code> 白名单。未做：本地 token 鉴权、<code>/api/local-file</code> 根目录限制，以及 <code>open_path</code>、<code>open-in-browser</code>、<code>llm/config</code>、<code>sop/config</code> 几个敏感接口的保护</td>
+</tr>
+<tr>
+<td>5</td>
+<td>已修</td>
+<td>黑名单正则重写，补了 PowerShell 删除写法、磁盘 cmdlet 和编码命令；确认流程本轮没有改动</td>
+</tr>
+<tr>
+<td>6</td>
+<td>已修</td>
+<td>兜底 500 只对回环来源回显异常文本，其他来源返回通用提示；响应体新增 <code>error_id</code>，详情写日志</td>
+</tr>
+<tr>
+<td>7</td>
+<td>部分完成</td>
+<td>已做：Python 口径统一为 3.11+；三处弃用告警已修（事件循环策略、<code>datetime.utcnow()</code>、非法转义）。未做：依赖锁定文件</td>
+</tr>
+<tr>
+<td>8</td>
+<td>已修</td>
+<td>版本号统一到 <code>config.APP_VERSION = &quot;0.22.0&quot;</code>；两份 <code>.env.example</code> 对齐，权威模板是 <code>backend/.env.example</code></td>
+</tr>
+<tr>
+<td>9</td>
+<td>未动</td>
+<td>部署方案和日志轮转都没做</td>
+</tr>
+<tr>
+<td>10</td>
+<td>已开始</td>
+<td><code>_handle_agent_result</code> 已拆成 <code>backend/orchestration/result_handlers/</code>，<code>process_ticket</code> 已拆成 <code>backend/orchestration/ticket_pipeline.py</code> 的分步管线，skill 结果处理器已搬成 <code>result_handlers/skill.py</code>，<code>handle_requirement</code> 已拆成 <code>backend/orchestration/requirement_pipeline.py</code> 的分步管线，<code>orchestrator.py</code> 从 6,694 行降到 4,493 行；其余见 <code>docs/20261124_01_代码重构方案.md</code> 的 R2–R5 和第十一节，过程记录在 <code>dev-notes/2026-11-24_03_代码重构_拆分结果处理器.md</code>、<code>dev-notes/2026-11-24_04_代码重构_process_ticket分步管线.md</code>、<code>dev-notes/2026-11-24_05_代码重构_skill结果处理器搬移.md</code>、<code>dev-notes/2026-11-24_06_代码重构_handle_requirement特征测试与分步管线.md</code></td>
+</tr>
+<tr>
+<td>11</td>
+<td>未动</td>
+<td>长期项；方案见 <code>docs/20261124_01_代码重构方案.md</code> 的 R6</td>
+</tr>
+<tr>
+<td>12</td>
+<td>未动</td>
+<td>长期项；本轮没有新增违规，存量 92 条仍在。方案见 <code>docs/20261124_01_代码重构方案.md</code> 的 R0 第 4 步和 R4</td>
+</tr>
+<tr>
+<td>13</td>
+<td>未动</td>
+<td>涉及删除已入库文件，需要确认后再动</td>
+</tr>
+<tr>
+<td>14</td>
+<td>已处理</td>
+<td>2026-11-24 分 5 个提交入库，工作区已干净，尚未推送。本批是 <code>d1f478a</code>，<code>ai_gen_tasks</code> 是 <code>a099133</code>，分批方式见 <code>dev-notes/2026-11-24_08_代码重构_提交记录.md</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>修复过程中又查出三个本文档原先没有覆盖的问题，已一并修掉：</p>
+<ol>
+<li><code>backend/api/tickets.py</code> 用了 <code>List</code> 却没有导入。Python 3.12 下 <code>import main</code> 直接报 <code>NameError</code>，服务起不来；3.14 因为注解延迟求值没有暴露。CI 的 Python 版本是 3.12，lint 那一步的 flake8 会报 4 条 F821 并失败。</li>
+<li>shell 黑名单旧正则以 <code>\b</code> 收尾，<code>rm -rf /</code>、<code>format c:</code> 这类以非单词字符结尾的命令匹配不上。第 5 条当时只指出了 PowerShell 写法缺失，实际上原本列出的写法也有一部分拦不住。</li>
+<li><code>backend/agents/chat_assistant.py</code> 里有两处非法转义序列，Python 3.12 起会报 <code>SyntaxWarning</code>；同一文件和 <code>backend/api/chat.py</code> 里还各有一处写死的本机绝对路径，已改成按运行位置推导。</li>
+</ol>
+<p>验证结果：全量 pytest 868 通过、0 失败（修复前是 762 通过、2 失败），在 Windows 的 Python 3.14.3、Python 3.12.13（按 <code>requirements.txt</code> 新装依赖）和只含入库文件的干净目录下各跑了一轮。Linux、真实服务启动和浏览器端到端没有验证。</p>
+<hr>
+<h2 id="section-10">附：复核命令</h2>
+<pre><code class="language-powershell"># 分层守卫
+python scripts/check_layers.py
+python scripts/check_layers.py --json
+
+# 全量测试（约 5 分半）
+cd backend
+python -m pytest
+
+# 路由探测：确认 POST /api/projects 指向哪个函数
+python -c &quot;import sys; sys.path.insert(0,'.'); from api.projects import router; [print(sorted(r.methods), r.path, '-&gt;', r.endpoint.__name__) for r in router.routes if r.path == '/api/projects']&quot;
+</code></pre>
+</article><nav class="adjacent" aria-label="相邻文档"><a href="20261124_01_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84%E6%96%B9%E6%A1%88.html">下一篇：ADS 代码重构方案（2026-11-24）</a></nav></main></body></html>

@@ -1,0 +1,99 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 580 584" width="580" height="584" style="--bg:#ffffff;--fg:#1d3839;--accent:#12645e;--border:#608781;background:var(--bg)">
+<style>
+
+  text { font-family: 'Microsoft YaHei', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          var(--fg);
+    --_text-sec:      var(--muted, color-mix(in srgb, var(--fg) 60%, var(--bg)));
+    --_text-muted:    var(--muted, color-mix(in srgb, var(--fg) 40%, var(--bg)));
+    --_text-faint:    color-mix(in srgb, var(--fg) 25%, var(--bg));
+    --_line:          var(--line, color-mix(in srgb, var(--fg) 50%, var(--bg)));
+    --_arrow:         var(--accent, color-mix(in srgb, var(--fg) 85%, var(--bg)));
+    --_node-fill:     var(--surface, color-mix(in srgb, var(--fg) 3%, var(--bg)));
+    --_node-stroke:   var(--border, color-mix(in srgb, var(--fg) 20%, var(--bg)));
+    --_group-fill:    var(--bg);
+    --_group-hdr:     color-mix(in srgb, var(--fg) 5%, var(--bg));
+    --_inner-stroke:  color-mix(in srgb, var(--fg) 12%, var(--bg));
+    --_key-badge:     color-mix(in srgb, var(--fg) 10%, var(--bg));
+  }
+</style>
+<defs>
+  <marker id="seq-arrow" markerWidth="8" markerHeight="5" refX="8" refY="2.5" orient="auto-start-reverse">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" />
+  </marker>
+  <marker id="seq-arrow-open" markerWidth="8" markerHeight="5" refX="8" refY="2.5" orient="auto-start-reverse">
+    <polyline points="0 0, 8 2.5, 0 5" fill="none" stroke="var(--_arrow)" stroke-width="1" />
+  </marker>
+</defs>
+<g class="block" data-type="alt" data-label="重载成功">
+  <rect x="30" y="330" width="520" height="204" rx="0" ry="0" fill="none" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="30" y="330" width="90.91" height="18" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="36" y="339" font-size="11" font-weight="600" fill="var(--_text-sec)" dy="3.8499999999999996">alt [重载成功]</text>
+  <line x1="30" y1="406" x2="550" y2="406" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
+  <text x="38" y="420" font-size="11" text-anchor="start" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">[重载抛错且有备份]</text>
+</g>
+<g class="block" data-type="alt" data-label="业务校验失败">
+  <rect x="30" y="118" width="520" height="416" rx="0" ry="0" fill="none" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="30" y="118" width="117.31" height="18" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="36" y="127" font-size="11" font-weight="600" fill="var(--_text-sec)" dy="3.8499999999999996">alt [业务校验失败]</text>
+  <line x1="30" y1="194" x2="550" y2="194" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
+  <text x="38" y="208" font-size="11" text-anchor="start" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">[校验通过]</text>
+</g>
+<line class="lifeline" data-actor="E" x1="80" y1="70" x2="80" y2="554" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
+<line class="lifeline" data-actor="S" x1="220" y1="70" x2="220" y2="554" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
+<line class="lifeline" data-actor="F" x1="360" y1="70" x2="360" y2="554" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
+<line class="lifeline" data-actor="O" x1="500" y1="70" x2="500" y2="554" stroke="var(--_line)" stroke-width="0.75" stroke-dasharray="6 4" />
+<g class="message" data-from="E" data-to="S" data-label="提交配置" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="80" y1="90" x2="220" y2="90" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="150" y="80" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">提交配置</text>
+</g>
+<g class="message" data-from="S" data-to="E" data-label="400，不写文件、不重载" data-line-style="dashed" data-arrow-head="filled" data-self="false">
+  <line x1="220" y1="158" x2="80" y2="158" stroke="var(--_line)" stroke-width="1" stroke-dasharray="6 4" marker-end="url(#seq-arrow)" />
+  <text x="150" y="148" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">400，不写文件、不重载</text>
+</g>
+<g class="message" data-from="S" data-to="F" data-label="如有旧文件，备份原文本（含注释）" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="220" y1="222" x2="360" y2="222" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="290" y="212" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">如有旧文件，备份原文本（含注释）</text>
+</g>
+<g class="message" data-from="S" data-to="F" data-label="写入新 YAML" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="220" y1="262" x2="360" y2="262" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="290" y="252" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">写入新 YAML</text>
+</g>
+<g class="message" data-from="S" data-to="O" data-label="重载新配置" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="220" y1="302" x2="500" y2="302" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="360" y="292" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">重载新配置</text>
+</g>
+<g class="message" data-from="S" data-to="E" data-label="200，返回名称、阶段数及备份名" data-line-style="dashed" data-arrow-head="filled" data-self="false">
+  <line x1="220" y1="370" x2="80" y2="370" stroke="var(--_line)" stroke-width="1" stroke-dasharray="6 4" marker-end="url(#seq-arrow)" />
+  <text x="150" y="360" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">200，返回名称、阶段数及备份名</text>
+</g>
+<g class="message" data-from="S" data-to="F" data-label="用备份恢复旧文本" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="220" y1="434" x2="360" y2="434" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="290" y="424" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">用备份恢复旧文本</text>
+</g>
+<g class="message" data-from="S" data-to="O" data-label="再次重载，此次读取旧配置" data-line-style="solid" data-arrow-head="filled" data-self="false">
+  <line x1="220" y1="474" x2="500" y2="474" stroke="var(--_line)" stroke-width="1" marker-end="url(#seq-arrow)" />
+  <text x="360" y="464" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">再次重载，此次读取旧配置</text>
+</g>
+<g class="message" data-from="S" data-to="E" data-label="恢复并重载成功后，向本次请求返回 500" data-line-style="dashed" data-arrow-head="filled" data-self="false">
+  <line x1="220" y1="514" x2="80" y2="514" stroke="var(--_line)" stroke-width="1" stroke-dasharray="6 4" marker-end="url(#seq-arrow)" />
+  <text x="150" y="504" font-size="11" text-anchor="middle" font-weight="400" fill="var(--_text-muted)" dy="3.8499999999999996">恢复并重载成功后，向本次请求返回 500</text>
+</g>
+<g class="actor" data-id="E" data-label="编辑器" data-type="participant">
+  <rect x="40" y="30" width="80" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="80" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">编辑器</text>
+</g>
+<g class="actor" data-id="S" data-label="配置服务" data-type="participant">
+  <rect x="173.385" y="30" width="93.22999999999999" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="220" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">配置服务</text>
+</g>
+<g class="actor" data-id="F" data-label="YAML 文件" data-type="participant">
+  <rect x="308.198" y="30" width="103.60399999999998" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="360" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">YAML 文件</text>
+</g>
+<g class="actor" data-id="O" data-label="编排器" data-type="participant">
+  <rect x="460" y="30" width="80" height="40" rx="4" ry="4" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="500" y="50" font-size="13" text-anchor="middle" font-weight="500" fill="var(--_text)" dy="4.55">编排器</text>
+</g>
+</svg>

@@ -1,0 +1,113 @@
+<!doctype html>
+<!-- 由 scripts/docs-html/export.mjs 生成，请编辑 Markdown 原稿。 -->
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>代码重构：把 Skill 工单的四条结果路径拆开 · ADS 文档</title><link rel="stylesheet" href="../docs/assets/refactor-docs/reader.css"></head>
+<body><nav class="bar" aria-label="主导航"><b>ADS · 开发文档</b><a href="../docs/%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%96%87%E6%A1%A3%E7%B4%A2%E5%BC%95.html">系列索引</a></nav>
+<main><header><p class="meta">开发笔记 · DevNote · <a href="2026-11-25_03_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_Skill%E7%BB%93%E6%9E%9C%E5%88%86%E6%94%AF.md">Markdown 原稿</a></p>
+<h1>代码重构：把 Skill 工单的四条结果路径拆开</h1></header><details><summary>本页目录（3 节）</summary><ol><li><a href="#section-1">哪些顺序不能改</a></li><li><a href="#section-2">如何验证</a></li><li><a href="#section-3">服务验证与下一步</a></li></ol></details>
+<article><p>2026-11-25 · <a href="2026-11-25_02_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E7%BB%93%E6%9E%9C%E5%A4%84%E7%90%86.html">上一期：结果处理</a> · <a href="../docs/20261124_01_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84%E6%96%B9%E6%A1%88.html">重构方案</a></p>
+<p>一张工单执行完 skill，可能继续流转、等待确认，也可能需要人工诊断。以前这几条路径的数据库更新、日志、评论和通知都在同一个 256 行的函数里。本次把每条路径的记录操作放在一起，让 <a href="../backend/orchestration/result_handlers/skill.py">handle_skill</a> 的 31 行入口只负责读取结果、选择分支和收尾。</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>范围</th>
+<th style="text-align:right">拆分前（<code>e6291ac</code>）</th>
+<th style="text-align:right">拆分后</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>skill.py</code> 文件行数</td>
+<td style="text-align:right">361</td>
+<td style="text-align:right">294</td>
+</tr>
+<tr>
+<td><code>handle_skill</code> 函数行数</td>
+<td style="text-align:right">256</td>
+<td style="text-align:right">31</td>
+</tr>
+<tr>
+<td>模块内最长函数</td>
+<td style="text-align:right">256</td>
+<td style="text-align:right">41（<code>_record_blocked</code>）</td>
+</tr>
+</tbody>
+</table></div>
+<p>函数行数取 Python AST 的 <code>end_lineno - lineno + 1</code>，包括签名和注释。只改了原有处理器模块，没有增加打包入口。上一期完成的 R2 主文件验收不重复计入本次。</p>
+<h2 id="section-1">哪些顺序不能改</h2>
+<figure><a href="../docs/assets/refactor-docs/2026-11-25_03_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_Skill%E7%BB%93%E6%9E%9C%E5%88%86%E6%94%AF_%E5%9B%BE1.svg"><img src="../docs/assets/refactor-docs/2026-11-25_03_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_Skill%E7%BB%93%E6%9E%9C%E5%88%86%E6%94%AF_%E5%9B%BE1.svg" alt="流程图：哪些顺序不能改"></a><figcaption>流程图：哪些顺序不能改 · <a href="../docs/assets/refactor-docs/2026-11-25_03_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_Skill%E7%BB%93%E6%9E%9C%E5%88%86%E6%94%AF_%E5%9B%BE1.svg">查看原图</a></figcaption></figure>
+<ul>
+<li><strong>产物规则不同。</strong> 超预算要满足全部声明的产物类型，才能按部分成功处理。等待人审时，只要有一种声明的产物就可以让人确认；有声明却一个都没产出时，补写原因并走阻塞分支。工单的 <code>result</code> 保留进入处理器时的 JSON，诊断使用补写后的原因。</li>
+<li><strong>等待人审不一定进入待确认状态。</strong> 先取 SOP 的 <code>_ready_status</code>，再取回传的 <code>success_status</code>，最后按阶段名推导 <code>_ready</code>。若实际落在有规则的成功态，现有行为是继续派单。若产品要求所有人审都停下，应单独评估这条例外。</li>
+<li><strong>订阅者能立即读到状态。</strong> 写日志会发 <code>log_added</code>，写评论会发 <code>comment_added</code>。第一条通知发出时，工单必须已可查；阻塞时诊断也必须已落库。最后返回 <code>HANDLED</code>，防止公共入口再通知、派单一次。</li>
+</ul>
+<h2 id="section-2">如何验证</h2>
+<ol>
+<li>在<a href="../backend/tests/agents/test_orchestrator_skill_branch.py">原有测试文件</a>增加 6 个场景，走真实编排入口。每个场景创建独立临时 SQLite 库；Git、事件接收方和递归派单使用测试替身。接收方在每次通知时查询工单，而非只检查最终行。旧实现先通过；加强规则桩后，在独立进程载入旧提交中的处理器，再次确认 6 项均通过。</li>
+<li>对同一模块拆函数：归一化执行状态，分别记录人审、完成、跳过、阻塞四种结果，再统一通知和判断是否派单。阻塞分支仍用现有本地诊断；没有修改日志、评论或事件协议。</li>
+<li>从 <code>backend/</code> 跑相关测试，再故意改错四处验证断言。改错只在独立 Python 进程加载模块时生效，工作区源码保持原状。四个版本都使预期测试失败。</li>
+</ol>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>新场景</th>
+<th>检查的行为</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>成功</td>
+<td>日志 → 评论 → 状态通知 → 派单</td>
+</tr>
+<tr>
+<td>跳过</td>
+<td>日志 → 状态通知 → 派单，不写评论</td>
+</tr>
+<tr>
+<td>人审进入 <code>_ready</code></td>
+<td>日志 → 评论 → 状态通知；即使配了规则也不派单</td>
+</tr>
+<tr>
+<td>人审回退到有规则的成功态</td>
+<td>与成功路径一样，在状态通知后派单</td>
+</tr>
+<tr>
+<td>超预算且没有所需产物</td>
+<td>先能查到诊断，再依次收到日志、评论、阻塞、诊断、状态通知，不派单</td>
+</tr>
+<tr>
+<td>状态通知后工单被暂停</td>
+<td>保留新的 <code>paused</code> 状态，不按旧成功态的规则派单</td>
+</tr>
+</tbody>
+</table></div>
+<p>四个被识别的错误：使用旧状态派单、允许 <code>_ready</code> 派单、用重复的阻塞通知代替诊断通知、漏发预期的状态通知。</p>
+<p>本地开发时主动运行以下命令；仅保存文件不会触发全套测试：</p>
+<pre><code class="language-powershell"># backend/：相关测试和全量测试
+python -m pytest -p no:cacheprovider tests/agents/test_orchestrator_result_branches.py tests/agents/test_orchestrator_skill_branch.py
+python -m pytest -p no:cacheprovider
+
+# 仓库根目录：分层守卫
+python scripts/check_layers.py --json
+
+# backend/：使用装有 flake8 的 Python 环境
+python -m flake8 --select=E9,F63,F7,F82 --exclude=skills/marketplace,skills/packs,skills/use_skills,projects .
+</code></pre>
+<p><strong>本次实测（代码提交 <code>f647329</code>）：</strong> 两组相关测试 109 通过；后端全量 <code>1683 passed in 404.07s (0:06:44)</code>，pytest 退出码为 0，本次未报告警告。全库分层守卫 86 条历史违规，新增 0，解析错误 0；所列 flake8 规则通过。</p>
+<p><img src="assets/2026-11-25_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_Skill%E7%BB%93%E6%9E%9C%E5%88%86%E6%94%AF_%E9%AA%8C%E8%AF%81.png" alt="Skill 结果处理的函数行数、pytest 摘要和分层检查结果"></p>
+<p>图为本地浏览器渲染的测试报告截图，直接取本次 pytest 日志、分层 JSON 和新旧代码的 AST 度量。</p>
+<h2 id="section-3">服务验证与下一步</h2>
+<p>重启前确认处理中的工单为 0、队列为 0、活动 Agent 列表为空。新版服务 PID 为 61040。第一轮探测启动得过早，前五个地址两次连接失败；等到监听端口并确认 <code>/api/health</code> 返回 <code>ok</code> 后，重新从头运行，以下九个地址均返回 HTTP 200。检查了页面类型、JSON 响应和健康状态，未创建真实工单，也未调用模型验证端到端执行。</p>
+<pre><code class="language-text">/api/health               HTTP 200   0.19s
+/app                      HTTP 200   0.01s
+/api/metrics              HTTP 200   0.22s
+/api/agents/status        HTTP 200   0.00s
+/api/agents               HTTP 200   0.03s
+/api/projects             HTTP 200   0.03s
+/api/llm/status           HTTP 200   0.01s
+/api/hooks/status         HTTP 200   0.02s
+/api/agents/orchestrator  HTTP 200   0.02s
+</code></pre>
+<p>下一批建议拆 <a href="../backend/orchestration/result_handlers/dev.py">handle_dev</a>（207 行）。先确认开发失败是否计入重试、自检发现阻塞问题时走哪条分支，以及迟到结果能否覆盖已经推进的状态。桌面重新打包和远端 CI 均不在本次验证范围内。</p>
+</article><nav class="adjacent" aria-label="相邻文档"><a href="2026-11-25_02_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E7%BB%93%E6%9E%9C%E5%A4%84%E7%90%86.html">上一篇：代码重构：把 Agent 结果处理拆到 79 行</a>
+<a href="2026-11-25_04_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E5%BC%80%E5%8F%91%E7%BB%93%E6%9E%9C%E5%88%86%E6%94%AF.html">下一篇：代码重构：拆开开发工单的结果处理</a></nav></main></body></html>

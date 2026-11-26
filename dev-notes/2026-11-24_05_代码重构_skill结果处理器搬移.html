@@ -1,0 +1,294 @@
+<!doctype html>
+<!-- 由 scripts/docs-html/export.mjs 生成，请编辑 Markdown 原稿。 -->
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>skill 结果处理器搬进 `result_handlers`（2026-11-24） · ADS 文档</title><link rel="stylesheet" href="../docs/assets/refactor-docs/reader.css"></head>
+<body><nav class="bar" aria-label="主导航"><b>ADS · 开发文档</b><a href="../docs/%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%96%87%E6%A1%A3%E7%B4%A2%E5%BC%95.html">系列索引</a></nav>
+<main><header><p class="meta">开发笔记 · DevNote · <a href="2026-11-24_05_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_skill%E7%BB%93%E6%9E%9C%E5%A4%84%E7%90%86%E5%99%A8%E6%90%AC%E7%A7%BB.md">Markdown 原稿</a></p>
+<h1>skill 结果处理器搬进 `result_handlers`（2026-11-24）</h1></header><details><summary>本页目录（11 节）</summary><ol><li><a href="#section-1">背景</a></li><li><a href="#section-2">做了什么</a></li><li><a href="#section-3">和原文的差别</a></li><li><a href="#section-4">验证</a></li><li><a href="#section-5">度量变化</a></li><li><a href="#section-6">这一轮没有解决的事</a></li><li><a href="#section-7">钉住的可疑现状</a></li><li><a href="#section-8">临时目录里的备份和脚本丢了</a></li><li><a href="#section-9">没有验证的部分</a></li><li><a href="#section-10">遗留与后续</a></li><li><a href="#section-11">复核命令</a></li></ol></details>
+<article><blockquote>
+<p>关联方案：<code>docs/20261124_01_代码重构方案.md</code>（R2 第 1 步的收尾）
+前一篇：<code>dev-notes/2026-11-24_04_代码重构_process_ticket分步管线.md</code>
+提交基线：<code>7b9e7f0</code>；本篇的代码和文档都在工作区，<strong>尚未提交</strong>。</p>
+</blockquote>
+<h2 id="section-1">背景</h2>
+<p>R2 第 1 步把 <code>_handle_agent_result</code> 里按 Agent 名分的 12 个分支搬进了 <code>orchestration/result_handlers/</code>，
+skill 阶段的分支当时留在 <code>orchestrator.py</code>：<code>_handle_skill_agent_result</code>（255 行）加三个辅助方法。
+它自己发状态事件、自己决定要不要继续派单，和其他处理器的收尾方式不同，所以单独留到这一轮。
+本轮把它搬过去，外部行为不变。</p>
+<h2 id="section-2">做了什么</h2>
+<h3>1. 先在原实现上补用例</h3>
+<p><code>tests/agents/test_orchestrator_skill_branch.py</code> 原有 31 条用例，原第 2406–2736 行的 112 条语句漏 8 条
+（92.9%），50 个分支走到 40 个。搬之前先补 7 条，全部在原实现上跑通：</p>
+<ul>
+<li><code>test_skill_gate_file_paths_all_sources</code>：确认卡预览路径、预览 URL、产物总线、skill 相对路径四个来源和去重；</li>
+<li><code>test_skill_gate_file_paths_tolerates_bad_shapes</code>：字段不是预期类型时不报错，结果截到 20 条；</li>
+<li><code>test_skill_gate_file_paths_strips_leading_dots</code>：钉住一处可疑现状，见下文；</li>
+<li><code>test_waiting_human_non_dict_and_no_files</code>：<code>waiting_human</code> 不是字典、没有产物文件；</li>
+<li><code>test_waiting_human_ready_status_fallbacks</code>：待确认状态的回退；</li>
+<li><code>test_blocked_survives_artifact_query_failure</code>：查产物表出错时 blocked 收尾照常完成；</li>
+<li><code>test_no_dispatch_when_ticket_vanishes</code>：状态推进后查不到工单时不派单。</li>
+</ul>
+<p>补完后这段代码是 112/112 条语句、50/50 个分支。</p>
+<h3>2. 搬移</h3>
+<p>新增 <code>backend/orchestration/result_handlers/skill.py</code>，361 行，四个函数：</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>新位置</th>
+<th>原位置</th>
+<th>行数</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>handle_skill(ctx)</code></td>
+<td><code>TicketOrchestrator._handle_skill_agent_result</code></td>
+<td>256</td>
+</tr>
+<tr>
+<td><code>_resolve_skill_success_status(orch, …)</code></td>
+<td><code>TicketOrchestrator._resolve_skill_success_status</code></td>
+<td>25</td>
+</tr>
+<tr>
+<td><code>skill_produces_satisfied</code></td>
+<td><code>TicketOrchestrator._skill_produces_satisfied</code>（静态方法）</td>
+<td>14</td>
+</tr>
+<tr>
+<td><code>skill_gate_file_paths</code></td>
+<td><code>TicketOrchestrator._skill_gate_file_paths</code>（静态方法）</td>
+<td>32</td>
+</tr>
+</tbody>
+</table></div>
+<p>文件由脚本按行号区间从搬移前的 <code>orchestrator.py</code> 生成，生成后没有手改。</p>
+<p><code>orchestrator.py</code> 这边：</p>
+<ul>
+<li>删掉这四个方法和小节注释，5,236 行降到 4,907 行。</li>
+<li>分发处原来直接 <code>await self._handle_skill_agent_result(...)</code> 然后 <code>return</code>，现在取
+<code>result_handlers.handle_skill</code> 作为处理器，走和其他处理器相同的 <code>new_status = await handler(ctx)</code> 和
+<code>HANDLED</code> 判断。分发顺序没有变：（Agent, action）精确匹配，然后 skill，最后按 Agent 名。</li>
+<li>新增模块级函数 <code>_synthesize_blocked_diagnosis(**kwargs)</code>，函数内延迟导入 <code>actions.diagnose_ticket</code>，
+通过 <code>ResultContext.synthesize_blocked_diagnosis</code> 交给处理器。</li>
+</ul>
+<p><code>handle_skill</code> 没有登记进按 Agent 名查的注册表。skill 结果靠 <code>is_skill_run_result</code> 识别，宿主 Role 可以是任何 Agent。</p>
+<h3>3. 配套</h3>
+<ul>
+<li><code>result_handlers/context.py</code>：<code>ResultContext</code> 加字段 <code>synthesize_blocked_diagnosis</code>。</li>
+<li><code>result_handlers/__init__.py</code>：导出 <code>handle_skill</code>、<code>skill_gate_file_paths</code>、<code>skill_produces_satisfied</code>。</li>
+<li><code>tests/agents/test_orchestrator_skill_branch.py</code>：<code>_call</code> 改成构造 <code>ResultContext</code> 后调 <code>handle_skill</code>；
+两处静态方法引用改成新函数；新增 <code>test_dispatcher_publishes_status_event_once</code>，
+走真实入口确认状态事件只发一次、只派一次单。</li>
+<li><code>tests/e2e/test_demo_chain.py</code>：<code>_drive_chain</code> 改调新入口。</li>
+<li><code>actions/gen_image.py</code>：文档字符串里的函数引用改成新位置。</li>
+<li><code>desktop.spec</code>：<code>hiddenimports</code> 补 <code>orchestration.result_handlers.skill</code>。</li>
+</ul>
+<h2 id="section-3">和原文的差别</h2>
+<p>原第 2406–2736 行共 331 行。308 行原样搬走，其中 15 行有词元替换；23 行没有搬，其中 20 行非空，
+是四个函数的签名、两个 <code>@staticmethod</code> 和那条 <code>actions.diagnose_ticket</code> 的导入。替换只有四种：</p>
+<ol>
+<li><code>self</code> 写成 <code>orch</code>；</li>
+<li>辅助方法去掉 <code>self.</code> 和下划线前缀；</li>
+<li><code>_resolve_skill_success_status</code> 多一个 <code>orch</code> 参数；</li>
+<li>诊断函数改成 <code>ctx.synthesize_blocked_diagnosis</code>。</li>
+</ol>
+<p>另外函数开头加了从 <code>ctx</code> 取局部变量的 11 行，末尾加了 <code>return HANDLED</code>。</p>
+<h2 id="section-4">验证</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>检查</th>
+<th>结果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>搬移前，三个相关测试文件</td>
+<td>98 条通过</td>
+</tr>
+<tr>
+<td>补 7 条用例后，仍在原实现上</td>
+<td>105 条通过；112/112 条语句，50/50 个分支</td>
+</tr>
+<tr>
+<td>搬移后，同三个文件</td>
+<td>106 条通过（多 1 条分发用例）；再补 2 条优先级用例后 108 条</td>
+</tr>
+<tr>
+<td>搬移后 <code>skill.py</code> 覆盖率</td>
+<td>130 条语句漏 0 条，50/50 个分支</td>
+</tr>
+<tr>
+<td>搬移核对脚本</td>
+<td>通过</td>
+</tr>
+<tr>
+<td>改坏检查</td>
+<td>22 处，第一遍发现 20 处；补 2 条用例后 22 处全部发现</td>
+</tr>
+<tr>
+<td>全量 pytest</td>
+<td>1,008 条通过</td>
+</tr>
+<tr>
+<td>分层守卫</td>
+<td>退出码 0，新增违规 0</td>
+</tr>
+<tr>
+<td>CI 那组 flake8 规则</td>
+<td>0 条</td>
+</tr>
+</tbody>
+</table></div>
+<p>三个相关测试文件是 <code>test_orchestrator_skill_branch.py</code>、<code>test_demo_chain.py</code>、<code>test_orchestrator_result_branches.py</code>。</p>
+<p><strong>搬移核对脚本</strong>检查六件事：</p>
+<ol>
+<li>重新生成的 <code>skill.py</code> 和磁盘上的文件逐字节相同；</li>
+<li>原区间每一行要么原样搬走，要么在上一节列出的「没有搬」之内；</li>
+<li>有改动的 15 行，逐词元比对后只剩上一节的四种替换；</li>
+<li><code>orchestrator.py</code> 在切掉的区间之外只删 9 行、加 14 行；</li>
+<li><code>skill.py</code> 不导入 <code>actions</code>、<code>agents</code>、<code>orchestrator</code>；</li>
+<li><code>handle_skill</code> 只有一个 <code>return</code>，返回 <code>HANDLED</code>。</li>
+</ol>
+<p>这个脚本先报过两次失败，两次都是脚本自己的预期写错：一次是按字符比对太脆，一次是把删除行数记成了别的数。
+改成按词元比对、行数改对之后通过，期间被核对的代码没有动。</p>
+<p><strong>改坏检查。</strong> 在 <code>skill.py</code> 上逐个做 22 处故意的错误改动（条件取反、事件改名、优先级对调、截断长度改 19 等），
+每处跑一遍三个测试文件，结束后恢复文件并核对哈希。第一遍有 2 处没被发现，都是「两个来源同时给出不同值时谁优先」：</p>
+<ul>
+<li>待确认状态：<code>sop_config._ready_status</code> 和回传的 <code>success_status</code>；</li>
+<li>成功状态：回传的 <code>success_status</code> 和 <code>sop_config._success_status</code>。</li>
+</ul>
+<p>这段代码的语句和分支覆盖率已经是 100%，这两条优先级仍然没有用例钉住。补了
+<code>test_waiting_human_ready_status_prefers_sop_config</code> 和 <code>test_success_status_result_beats_sop_config</code>，
+再跑这两处改动，都被发现。这两条是搬移之后写的，没有在原实现上跑过；它们断言的行为由核对脚本的逐行比对保证和原实现一致。</p>
+<p><strong>全量 pytest。</strong> 1,008 条通过，退出码 0，用时约 3 分钟。上一篇是 998 条，多出的 10 条是本轮补的 7 条边角用例、1 条分发用例和 2 条优先级用例。</p>
+<p><strong>分层守卫。</strong> 模块 488（多了 <code>skill.py</code>），未归层 230，方向违规 92，相对基线新增 0，延迟导入占比 42.1%。</p>
+<h2 id="section-5">度量变化</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>指标</th>
+<th>搬移前</th>
+<th>搬移后</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>orchestrator.py</code> 行数</td>
+<td>5,236</td>
+<td>4,907</td>
+</tr>
+<tr>
+<td><code>orchestrator.py</code> 里超过 200 行的函数</td>
+<td>3</td>
+<td>2</td>
+</tr>
+<tr>
+<td>全仓超过 200 行的函数</td>
+<td>30</td>
+<td>30</td>
+</tr>
+<tr>
+<td>最大 Python 文件</td>
+<td><code>api/chat.py</code> 5,566 行</td>
+<td>不变</td>
+</tr>
+<tr>
+<td>全仓最长函数</td>
+<td><code>query_engine/engine.py</code> 的 <code>run</code> 559 行</td>
+<td>不变</td>
+</tr>
+<tr>
+<td><code>result_handlers/</code> 文件数</td>
+<td>13</td>
+<td>14</td>
+</tr>
+<tr>
+<td>模块总数（守卫口径）</td>
+<td>487</td>
+<td>488</td>
+</tr>
+<tr>
+<td>未归层模块</td>
+<td>230</td>
+<td>230</td>
+</tr>
+<tr>
+<td>方向违规</td>
+<td>92</td>
+<td>92</td>
+</tr>
+<tr>
+<td>延迟导入占比</td>
+<td>42.2%</td>
+<td>42.1%</td>
+</tr>
+</tbody>
+</table></div>
+<p>从 <code>7b9e7f0</code> 算起，<code>orchestrator.py</code> 从 6,694 行降到 4,907 行。<code>orchestrator.py</code> 里剩下的两个超过 200 行的函数是
+<code>handle_requirement</code>（456 行，圈复杂度 65）和 <code>_generate_requirement_report</code>（206 行，圈复杂度 37）。
+<code>result_handlers/</code> 里超过 200 行的是 <code>handle_skill</code>（256 行，圈复杂度 53）和 <code>handle_dev</code>（207 行，圈复杂度 36）。</p>
+<p>度量是本轮重写的临时脚本按方案附录的口径算的。第一次算出 46 个超过 200 行的函数，
+原因是没有排除 <code>tests/</code>、<code>config_packs/</code>、<code>tools/</code>；按附录的范围排除后是 30 个，和上一篇对得上。</p>
+<h2 id="section-6">这一轮没有解决的事</h2>
+<ol>
+<li><strong><code>handle_skill</code> 只是换了位置。</strong> 它仍是 256 行、圈复杂度 53，内部三条路径（待确认、成功、blocked）没有拆。
+全仓超过 200 行的函数数因此没有变化。</li>
+<li><strong>到 L3 的依赖没有消除。</strong> <code>actions.diagnose_ticket</code> 的导入从处理器里移到了 <code>orchestrator.py</code> 的
+<code>_synthesize_blocked_diagnosis</code>，仍是一条 L1 到 L3 的延迟导入，已在守卫基线里。
+方案要求的「经注册表取得 action」要等 R2 第 3 步或 <code>ProviderRegistry</code>。</li>
+<li><strong>处理器仍调用 <code>orch</code> 的 5 个成员</strong>：<code>_log</code>、<code>_write_phase_comment</code>、<code>_sop_stage_for</code>、
+<code>_get_rules_for_project</code>、<code>process_ticket</code>，其中 4 个是私有方法。</li>
+</ol>
+<h2 id="section-7">钉住的可疑现状</h2>
+<p><code>skill_gate_file_paths</code> 用 <code>lstrip(&quot;./&quot;)</code> 清理路径开头。<code>lstrip</code> 的参数是字符集合，
+所以开头连续的点和斜杠会被全部去掉：</p>
+<ul>
+<li><code>.ads/notes.md</code> 变成 <code>works/ads/notes.md</code>，点开头的目录名丢了那个点；</li>
+<li><code>../up/a.md</code> 变成 <code>up/a.md</code>。</li>
+</ul>
+<p>受影响的是人审节点展示给用户的产物路径列表。<code>test_skill_gate_file_paths_strips_leading_dots</code> 按现状断言，
+本轮没有修。要修的话把 <code>lstrip(&quot;./&quot;)</code> 换成只去掉 <code>./</code> 前缀，同时更新这条用例。</p>
+<h2 id="section-8">临时目录里的备份和脚本丢了</h2>
+<p>前两步（结果处理器、分步管线）的备份文件和核对脚本放在 <code>%TEMP%\ads_fix</code>。本轮开始时发现这个目录下的文件
+都不在了，只剩四个子目录，原因没有查到。后果：</p>
+<ul>
+<li>上一篇写的搬移核对脚本、改坏检查脚本、度量脚本无法重跑；</li>
+<li>前两步搬移前的 <code>orchestrator.py</code> 备份没有了。要回退那两步，只能从 <code>git show 7b9e7f0:backend/orchestrator.py</code>
+出发手工处理，因为工作区里同一个文件叠着三步改动。</li>
+</ul>
+<p>本轮的备份和脚本在 <code>%TEMP%\ads_r2_3</code>，同样没有进仓库，同样可能丢。
+把核对脚本和度量脚本收进 <code>scripts/</code>，或者尽快分批提交，都能消掉这个风险，需要确认。</p>
+<h2 id="section-9">没有验证的部分</h2>
+<ul>
+<li><strong>桌面版打包。</strong> <code>desktop.spec</code> 只确认了语法能解析，没有实际打包和启动。</li>
+<li><strong>真实服务启动和端到端流程。</strong> 没有起服务跑一张真实的 skill 工单。测试里 <code>process_ticket</code>、SSE 都是桩。</li>
+<li><strong>Linux 和 CI。</strong> 只在本机 Windows 上跑过。</li>
+<li><strong>根目录的 <code>_test_*.py</code> 脚本。</strong> 没有跑。查过两处读 <code>orchestrator.py</code> 源码的检查：
+<code>_test_command_log.py</code> 找的 <code>requirement_id=ticket.get</code> 仍有 1 处匹配；
+<code>_test_openspec_verify_trigger.py</code> 找的 <code>async def _maybe_openspec_verify</code> 还在，
+它另一条「play_test 成功分支已接 Verify」的检查在 <code>2026-11-19_01</code> 那篇里就记为早已失败，和本轮无关。</li>
+</ul>
+<h2 id="section-10">遗留与后续</h2>
+<ol>
+<li><code>handle_requirement</code>（456 行，覆盖率 1%）补特征测试，它是 <code>orchestrator.py</code> 里剩下的最长函数。</li>
+<li>R2 第 3 步按职责拆类。<code>handle_skill</code> 和 <code>handle_dev</code> 的内部整理、处理器对 <code>orch</code> 私有方法的依赖到时一起处理。</li>
+<li>可疑现状是否要修：上一篇的三处，加本篇的 <code>lstrip</code> 一处。</li>
+<li>核对脚本和度量脚本是否收进 <code>scripts/</code>。</li>
+<li>工作区现在叠了五批未提交改动（<code>ai_gen_tasks</code>、体检修复第一批、结果处理器、分步管线、本轮），提交时建议分开。</li>
+</ol>
+<h2 id="section-11">复核命令</h2>
+<pre><code class="language-powershell"># 相关用例，在 backend/ 下执行
+cd backend
+python -m pytest tests/agents/test_orchestrator_skill_branch.py tests/e2e/test_demo_chain.py tests/agents/test_orchestrator_result_branches.py -p no:cacheprovider
+
+# 全量。pytest.ini 里已有 -q，再加 -q 不会打印汇总行，这时看点数和退出码
+python -m pytest -p no:cacheprovider
+cd ..
+
+# 分层守卫，在仓库根目录执行
+python scripts/check_layers.py
+</code></pre>
+</article><nav class="adjacent" aria-label="相邻文档"><a href="2026-11-24_04_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_process_ticket%E5%88%86%E6%AD%A5%E7%AE%A1%E7%BA%BF.html">上一篇：`process_ticket` 改成分步管线（2026-11-24）</a>
+<a href="2026-11-24_06_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_handle_requirement%E7%89%B9%E5%BE%81%E6%B5%8B%E8%AF%95%E4%B8%8E%E5%88%86%E6%AD%A5%E7%AE%A1%E7%BA%BF.html">下一篇：`handle_requirement` 特征测试与分步管线（2026-11-24）</a></nav></main></body></html>

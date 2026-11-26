@@ -1,0 +1,118 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1118.143 760.9999999999999" width="1118.143" height="760.9999999999999" style="--bg:#ffffff;--fg:#1d3839;--accent:#12645e;--border:#608781;background:var(--bg)">
+<style>
+
+  text { font-family: 'Microsoft YaHei', system-ui, sans-serif; }
+  svg {
+    /* Derived from --bg and --fg (overridable via --line, --accent, etc.) */
+    --_text:          var(--fg);
+    --_text-sec:      var(--muted, color-mix(in srgb, var(--fg) 60%, var(--bg)));
+    --_text-muted:    var(--muted, color-mix(in srgb, var(--fg) 40%, var(--bg)));
+    --_text-faint:    color-mix(in srgb, var(--fg) 25%, var(--bg));
+    --_line:          var(--line, color-mix(in srgb, var(--fg) 50%, var(--bg)));
+    --_arrow:         var(--accent, color-mix(in srgb, var(--fg) 85%, var(--bg)));
+    --_node-fill:     var(--surface, color-mix(in srgb, var(--fg) 3%, var(--bg)));
+    --_node-stroke:   var(--border, color-mix(in srgb, var(--fg) 20%, var(--bg)));
+    --_group-fill:    var(--bg);
+    --_group-hdr:     color-mix(in srgb, var(--fg) 5%, var(--bg));
+    --_inner-stroke:  color-mix(in srgb, var(--fg) 12%, var(--bg));
+    --_key-badge:     color-mix(in srgb, var(--fg) 10%, var(--bg));
+  }
+</style>
+<defs>
+  <marker id="arrowhead" markerWidth="8" markerHeight="5" refX="7" refY="2.5" orient="auto">
+    <polygon points="0 0, 8 2.5, 0 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+  <marker id="arrowhead-start" markerWidth="8" markerHeight="5" refX="1" refY="2.5" orient="auto-start-reverse">
+    <polygon points="8 0, 0 2.5, 8 5" fill="var(--_arrow)" stroke="var(--_arrow)" stroke-width="0.75" stroke-linejoin="round" />
+  </marker>
+</defs>
+<g class="subgraph" data-id="O" data-label="backend/orchestrator.py（1,818 行）">
+  <rect x="446.62800000000004" y="406.19999999999993" width="296.25" height="229.4" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="446.62800000000004" y="406.19999999999993" width="296.25" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="458.62800000000004" y="420.19999999999993" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">backend/orchestrator.py（1,818 行）</text>
+</g>
+<g class="subgraph" data-id="N" data-label="backend/orchestration/（本步新增，3,565 行）">
+  <rect x="40" y="40" width="191.02800000000002" height="680.9999999999999" rx="0" ry="0" fill="var(--_group-fill)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <rect x="40" y="40" width="191.02800000000002" height="28" rx="0" ry="0" fill="var(--_group-hdr)" stroke="var(--_node-stroke)" stroke-width="1" />
+  <text x="52" y="54" font-size="12" font-weight="600" fill="var(--_text-sec)" dy="4.199999999999999">backend/orchestration/（本步新增，3,565 行）</text>
+</g>
+<polyline class="edge" data-from="T" data-to="N" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="转发，带上 self 和 db" points="681.3065,493.99999999999994 760.878,493.99999999999994 760.878,267 231.02800000000002,267" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="N" data-to="T" data-style="dotted" data-arrow-start="false" data-arrow-end="true" data-label="互相调用走 orch.xxx" points="231.02800000000002,493.99999999999994 508.19950000000006,493.99999999999994" fill="none" stroke="var(--_line)" stroke-width="1" stroke-dasharray="4 4" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="K" data-to="E" data-style="solid" data-arrow-start="false" data-arrow-end="true" points="726.878,583.7333333333332 784.878,583.7333333333332 784.878,551.3 796.878,551.3" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<polyline class="edge" data-from="K" data-to="L3" data-style="solid" data-arrow-start="false" data-arrow-end="true" data-label="函数内导入" points="726.878,601.6666666666666 784.8780000000002,601.6666666666666 784.8780000000002,634.0999999999999 913.9280000000001,634.0999999999999" fill="none" stroke="var(--_line)" stroke-width="1" marker-end="url(#arrowhead)" />
+<g class="edge-label" data-from="T" data-to="N" data-label="转发，带上 self 和 db">
+  <rect x="630.09" y="250.99999999999997" width="122.78800000000004" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="691.484" y="266.15" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">转发，带上 self 和 db</text>
+</g>
+<g class="edge-label" data-from="N" data-to="T" data-label="互相调用走 orch.xxx">
+  <rect x="275.028" y="477.99999999999994" width="121.60000000000001" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="335.82800000000003" y="493.1499999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">互相调用走 orch.xxx</text>
+</g>
+<g class="edge-label" data-from="K" data-to="L3" data-label="函数内导入">
+  <rect x="792.8780000000002" y="618.0999999999999" width="77.05000000000001" height="30.3" rx="2" ry="2" fill="var(--bg)" stroke="var(--_inner-stroke)" stroke-width="1" />
+  <text x="831.4030000000001" y="633.2499999999999" text-anchor="middle" font-size="11" font-weight="400" fill="var(--_text-sec)" dy="3.8499999999999996">函数内导入</text>
+</g>
+<g class="node" data-id="E" data-label="此前已拆出
+ticket_pipeline
+requirement_pipeline
+result_handlers" data-shape="rectangle">
+  <rect x="796.878" y="507.49999999999994" width="166.438" height="87.60000000000001" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="880.097" y="551.3" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="880.097" dy="-20.8">此前已拆出</tspan><tspan x="880.097" dy="16.900000000000002">ticket_pipeline</tspan><tspan x="880.097" dy="16.900000000000002">requirement_pipeline</tspan><tspan x="880.097" dy="16.900000000000002">result_handlers</tspan></text>
+</g>
+<g class="node" data-id="L3" data-label="L3：agents / actions" data-shape="rectangle">
+  <rect x="913.9280000000001" y="615.6499999999999" width="164.21499999999997" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="996.0355000000001" y="634.0999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">L3：agents / actions</text>
+</g>
+<g class="node" data-id="T" data-label="TicketOrchestrator
+69 个转发方法
+3 个 staticmethod 别名
+11 个常量别名" data-shape="rectangle">
+  <rect x="508.19950000000006" y="450.19999999999993" width="173.107" height="87.60000000000001" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="594.753" y="493.99999999999994" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="594.753" dy="-20.8">TicketOrchestrator</tspan><tspan x="594.753" dy="16.900000000000002">69 个转发方法</tspan><tspan x="594.753" dy="16.900000000000002">3 个 staticmethod 别名</tspan><tspan x="594.753" dy="16.900000000000002">11 个常量别名</tspan></text>
+</g>
+<g class="node" data-id="K" data-label="留在原处、还有函数体的 13 个方法
+共 1,128 行" data-shape="rectangle">
+  <rect x="462.62800000000004" y="565.8" width="264.25" height="53.800000000000004" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="594.753" y="592.6999999999999" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)"><tspan x="594.753" dy="-3.9000000000000012">留在原处、还有函数体的 13 个方法</tspan><tspan x="594.753" dy="16.900000000000002">共 1,128 行</tspan></text>
+</g>
+<g class="node" data-id="M1" data-label="rewind · 7" data-shape="rectangle">
+  <rect x="70.4495" y="148.89999999999998" width="101.22999999999999" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="121.0645" y="167.34999999999997" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">rewind · 7</text>
+</g>
+<g class="node" data-id="M2" data-label="sop_rules · 13" data-shape="rectangle">
+  <rect x="70.4495" y="343.59999999999997" width="124.94200000000001" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="132.9205" y="362.04999999999995" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">sop_rules · 13</text>
+</g>
+<g class="node" data-id="M3" data-label="change_flows · 6" data-shape="rectangle">
+  <rect x="70.4495" y="84" width="142.726" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="141.8125" y="102.45" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">change_flows · 6</text>
+</g>
+<g class="node" data-id="M4" data-label="reporting · 3" data-shape="rectangle">
+  <rect x="70.4495" y="538.3" width="116.05" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="128.4745" y="556.75" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">reporting · 3</text>
+</g>
+<g class="node" data-id="M5" data-label="polling · 13" data-shape="rectangle">
+  <rect x="70.4495" y="603.1999999999999" width="102.71199999999999" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="121.8055" y="621.65" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">polling · 13</text>
+</g>
+<g class="node" data-id="M6" data-label="bug_flow · 7" data-shape="rectangle">
+  <rect x="70.4495" y="213.79999999999998" width="113.086" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="126.9925" y="232.25" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">bug_flow · 7</text>
+</g>
+<g class="node" data-id="M7" data-label="agent_state · 6" data-shape="rectangle">
+  <rect x="70.82" y="278.7" width="129.38800000000003" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="135.514" y="297.15" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">agent_state · 6</text>
+</g>
+<g class="node" data-id="M8" data-label="failure_counters · 5" data-shape="rectangle">
+  <rect x="70.4495" y="473.3999999999999" width="159.02800000000002" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="149.9635" y="491.8499999999999" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">failure_counters · 5</text>
+</g>
+<g class="node" data-id="M9" data-label="ticket_log · 7" data-shape="rectangle">
+  <rect x="70.4495" y="668.0999999999999" width="117.53200000000001" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="129.21550000000002" y="686.55" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">ticket_log · 7</text>
+</g>
+<g class="node" data-id="M10" data-label="context_builder · 5" data-shape="rectangle">
+  <rect x="70.4495" y="408.49999999999994" width="153.10000000000002" height="36.900000000000006" rx="0" ry="0" fill="var(--_node-fill)" stroke="var(--_node-stroke)" stroke-width="0.75" />
+  <text x="146.9995" y="426.94999999999993" text-anchor="middle" font-size="13" font-weight="500" fill="var(--_text)" dy="4.55">context_builder · 5</text>
+</g>
+</svg>

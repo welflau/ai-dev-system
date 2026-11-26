@@ -1,0 +1,1470 @@
+<!doctype html>
+<!-- 由 scripts/docs-html/export.mjs 生成，请编辑 Markdown 原稿。 -->
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ADS 代码重构方案（2026-11-24） · ADS 文档</title><link rel="stylesheet" href="assets/refactor-docs/reader.css"></head>
+<body><nav class="bar" aria-label="主导航"><b>ADS · 开发文档</b><a href="%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%96%87%E6%A1%A3%E7%B4%A2%E5%BC%95.html">系列索引</a></nav>
+<main><header><p class="meta">项目文档 · <a href="20261124_01_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84%E6%96%B9%E6%A1%88.md">Markdown 原稿</a></p>
+<h1>ADS 代码重构方案（2026-11-24）</h1></header><details><summary>本页目录（12 节）</summary><ol><li><a href="#section-1">一、结论</a></li><li><a href="#section-2">二、现状数据</a></li><li><a href="#section-3">三、原则</a></li><li><a href="#section-4">四、目标结构</a></li><li><a href="#section-5">五、分阶段路线</a></li><li><a href="#section-6">六、度量与目标</a></li><li><a href="#section-7">七、风险与对策</a></li><li><a href="#section-8">八、与六层方案的关系</a></li><li><a href="#section-9">九、需要评审决定的事项</a></li><li><a href="#section-10">十、本次没有覆盖的范围</a></li><li><a href="#section-11">十一、执行进度</a></li><li><a href="#section-12">附：度量口径</a></li></ol></details>
+<article><p>日期：2026-11-24
+状态：执行中。R0 第 3 步的 <code>_handle_agent_result</code>、<code>process_ticket</code>、<code>handle_requirement</code> 三部分和 R2 第 1、2 步已完成，skill 结果处理器已搬入 <code>result_handlers/</code>，<code>handle_requirement</code> 也已拆成分步管线；R2 第 3 步的 79 个方法已搬到 15 个模块。结果处理公共流程也已拆分，主文件 1,036 行；R2 第 3 步的四项主文件验收均已达标（见第十一节），其余阶段待评审
+关联：<code>docs/20261123_01_项目问题与缺失分析.md</code>（第 10、11、12 条）、<code>docs/20261117_01_六层架构改造方案.md</code>、<code>backend/layers.toml</code>、<code>scripts/check_layers.py</code></p>
+<hr>
+<h2 id="section-1">一、结论</h2>
+<p>六层方案已经消掉了模块之间的循环依赖（SCC 为 0），方向违规还剩 92 条。现在的主要问题在模块内部：逻辑堆在少数几个巨型文件和函数里，而这些地方几乎没有测试。</p>
+<ol>
+<li><strong>最该拆的代码恰好是最没有测试的代码。</strong> 自有后端代码的语句覆盖率是 26.9%。最大的几个函数覆盖率接近 0：<code>process_ticket</code>（682 行）0%，<code>_handle_agent_result</code>（1,026 行）6%，<code>_call_cli_stream</code>（493 行）0%。直接拆这些函数没有任何回归保护。</li>
+<li><strong>改动集中在大文件上。</strong> 近三个月 112 个提交里，58 个（52%）至少改了 11 个大文件中的一个；<code>frontend/app.js</code> 单个文件就占 38 个。</li>
+<li><strong>没有数据访问层。</strong> 业务代码里有 804 处 SQL 字面量，分布在 107 个文件；<code>projects</code> 表被 55 个文件直接查询，同一句 <code>SELECT * FROM projects WHERE id = ?</code> 重复了 45 次。工单状态有 54 个写入点。</li>
+<li><strong>前端是一个 35,912 行的脚本。</strong> 1,079 个全局函数、163 个可变全局变量，没有模块、没有 lint、没有测试。</li>
+</ol>
+<p>所以重构顺序是：先补安全网和度量（R0），再收口数据访问（R1），然后才拆 <code>orchestrator</code>、API 层和 LLM 客户端（R2–R4），前端模块化（R5）可以独立并行。每一步都不改变外部行为，都能单独回滚。</p>
+<hr>
+<h2 id="section-2">二、现状数据</h2>
+<p>口径见附录。除特别说明外，统计范围是 <code>backend/</code> 下的自有 Python 代码，不含 <code>tests/</code>、<code>skills/marketplace|packs|use_skills</code>、<code>config_packs/</code>、<code>tools/</code>、<code>projects/</code>。</p>
+<h3>2.1 规模</h3>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>项</th>
+<th>数值</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>自有后端代码</td>
+<td>110,098 行，3,099 个函数，343 个类</td>
+</tr>
+<tr>
+<td>前端</td>
+<td><code>app.js</code> 35,912 行（1.73 MB）、<code>styles.css</code> 15,974 行、<code>index.html</code> 2,875 行</td>
+</tr>
+<tr>
+<td>测试</td>
+<td><code>backend/tests/</code> 下 868 项，全部通过</td>
+</tr>
+</tbody>
+</table></div>
+<p>最大的后端文件：</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>文件</th>
+<th>行数</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>orchestrator.py</code></td>
+<td>6,694</td>
+<td>一个类 <code>TicketOrchestrator</code>，89 个方法，占第 186–6658 行</td>
+</tr>
+<tr>
+<td><code>api/chat.py</code></td>
+<td>5,566</td>
+<td>48 个路由 + 67 个辅助函数 + 12 个模块级可变状态</td>
+</tr>
+<tr>
+<td><code>api/projects.py</code></td>
+<td>3,921</td>
+<td>60 个路由</td>
+</tr>
+<tr>
+<td><code>llm_client.py</code></td>
+<td>3,446</td>
+<td><code>LLMClient</code> 36 个方法 + 31 个模块级函数 + 10 个模块级可变状态</td>
+</tr>
+<tr>
+<td><code>api/tickets.py</code></td>
+<td>3,443</td>
+<td>45 个路由 + 39 个辅助函数</td>
+</tr>
+<tr>
+<td><code>agents/chat_assistant.py</code></td>
+<td>2,386</td>
+<td></td>
+</tr>
+<tr>
+<td><code>api/commands.py</code></td>
+<td>2,333</td>
+<td>4 个路由 + 36 个辅助函数</td>
+</tr>
+<tr>
+<td><code>main.py</code></td>
+<td>1,325</td>
+<td>25 个路由直接写在入口里，另挂了 37 个 router</td>
+</tr>
+</tbody>
+</table></div>
+<h3>2.2 函数</h3>
+<p>函数长度的中位数是 15 行，问题集中在长尾：</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>阈值</th>
+<th>函数数</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>超过 100 行</td>
+<td>168</td>
+</tr>
+<tr>
+<td>超过 200 行</td>
+<td>31</td>
+</tr>
+<tr>
+<td>超过 300 行</td>
+<td>11</td>
+</tr>
+<tr>
+<td>超过 500 行</td>
+<td>3</td>
+</tr>
+<tr>
+<td>圈复杂度超过 30</td>
+<td>103</td>
+</tr>
+<tr>
+<td>圈复杂度超过 100</td>
+<td>4</td>
+</tr>
+</tbody>
+</table></div>
+<p>最需要处理的函数：</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>函数</th>
+<th>行数</th>
+<th>圈复杂度</th>
+<th>最大嵌套</th>
+<th>行覆盖率</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>orchestrator.py</code> <code>_handle_agent_result</code></td>
+<td>1,026</td>
+<td>153</td>
+<td>8</td>
+<td>6%</td>
+</tr>
+<tr>
+<td><code>orchestrator.py</code> <code>process_ticket</code></td>
+<td>682</td>
+<td>113</td>
+<td>6</td>
+<td>0%</td>
+</tr>
+<tr>
+<td><code>query_engine/engine.py</code> <code>run</code></td>
+<td>559</td>
+<td>99</td>
+<td>11</td>
+<td>17%</td>
+</tr>
+<tr>
+<td><code>llm_client.py</code> <code>_call_cli_stream</code></td>
+<td>493</td>
+<td>147</td>
+<td>14</td>
+<td>0%</td>
+</tr>
+<tr>
+<td><code>orchestrator.py</code> <code>handle_requirement</code></td>
+<td>456</td>
+<td>65</td>
+<td>7</td>
+<td>1%</td>
+</tr>
+<tr>
+<td><code>agents/chat_assistant.py</code> <code>_build_system_prompt</code></td>
+<td>409</td>
+<td>57</td>
+<td>5</td>
+<td>1%</td>
+</tr>
+<tr>
+<td><code>api/requirements.py</code> <code>get_requirement_pipeline</code></td>
+<td>397</td>
+<td>96</td>
+<td>8</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>api/chat.py</code> <code>_chat_stream_generator</code></td>
+<td>312</td>
+<td>79</td>
+<td>14</td>
+<td>1%</td>
+</tr>
+<tr>
+<td><code>api/tickets.py</code> <code>_annotate_media_previews</code></td>
+<td>279</td>
+<td>181</td>
+<td>8</td>
+<td>0%</td>
+</tr>
+<tr>
+<td><code>agents/chat_assistant.py</code> <code>chat_stream</code></td>
+<td>279</td>
+<td>76</td>
+<td>17</td>
+<td>1%</td>
+</tr>
+</tbody>
+</table></div>
+<h3>2.3 测试覆盖率</h3>
+<p>在 Python 3.14.3 下跑全量 pytest 加 <code>--cov</code> 得到：</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>范围</th>
+<th>覆盖 / 语句</th>
+<th>覆盖率</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>自有代码合计（323 个文件）</td>
+<td>12,646 / 46,998</td>
+<td>26.9%</td>
+</tr>
+<tr>
+<td><code>api/</code></td>
+<td>2,147 / 12,219</td>
+<td>17.6%</td>
+</tr>
+<tr>
+<td><code>agents/</code></td>
+<td>518 / 3,352</td>
+<td>15.5%</td>
+</tr>
+<tr>
+<td><code>actions/</code></td>
+<td>1,692 / 6,469</td>
+<td>26.2%</td>
+</tr>
+<tr>
+<td><code>plugins/</code></td>
+<td>2,587 / 6,683</td>
+<td>38.7%</td>
+</tr>
+<tr>
+<td><code>sop/</code></td>
+<td>581 / 876</td>
+<td>66.3%</td>
+</tr>
+<tr>
+<td><code>artifacts/</code></td>
+<td>330 / 351</td>
+<td>94.0%</td>
+</tr>
+<tr>
+<td><code>orchestrator.py</code></td>
+<td>415 / 2,732</td>
+<td>15.2%</td>
+</tr>
+<tr>
+<td><code>api/chat.py</code></td>
+<td>354 / 2,892</td>
+<td>12.2%</td>
+</tr>
+<tr>
+<td><code>api/projects.py</code></td>
+<td>201 / 2,267</td>
+<td>8.9%</td>
+</tr>
+<tr>
+<td><code>api/commands.py</code></td>
+<td>59 / 1,188</td>
+<td>5.0%</td>
+</tr>
+<tr>
+<td><code>llm_client.py</code></td>
+<td>326 / 1,831</td>
+<td>17.8%</td>
+</tr>
+</tbody>
+</table></div>
+<p>48 个文件完全没有被测试执行到（3,944 条语句）。</p>
+<p>有一个正面例子：<code>_handle_skill_agent_result</code>（255 行，现已搬成 <code>result_handlers/skill.py</code> 的 <code>handle_skill</code>）覆盖率 95%，来自 <code>tests/agents/test_orchestrator_skill_branch.py</code>。它用真实 SQLite 加上对递归派单和 SSE 的打桩来测状态推进，这个做法可以直接复制到其他分支。</p>
+<h3>2.4 数据访问</h3>
+<p>本节数字不含根目录的 77 个下划线脚本。这些脚本里另有 157 处 <code>db.</code> 调用，R0 会把它们归档，不属于要收口的范围。</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>项</th>
+<th>数值</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>db.fetch_one/fetch_all/execute/insert/update/delete</code> 调用</td>
+<td>1,038 处，114 个文件</td>
+</tr>
+<tr>
+<td>其中 <code>api/</code></td>
+<td>543 处</td>
+</tr>
+<tr>
+<td>其中 <code>orchestrator.py</code></td>
+<td>185 处</td>
+</tr>
+<tr>
+<td>SQL 字面量</td>
+<td>804 处，107 个文件；压缩空白后去重为 489 种</td>
+</tr>
+<tr>
+<td>直接查询 <code>projects</code> 表的文件</td>
+<td>55 个</td>
+</tr>
+<tr>
+<td>直接查询 <code>tickets</code> / <code>ticket_logs</code> / <code>requirements</code> 的文件</td>
+<td>37 / 34 / 19 个</td>
+</tr>
+<tr>
+<td>工单状态写入点</td>
+<td>54 处，7 个文件（<code>orchestrator.py</code> 占 40 处）</td>
+</tr>
+</tbody>
+</table></div>
+<p>重复最多的查询：</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>SQL</th>
+<th>次数</th>
+<th>文件数</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>SELECT * FROM projects WHERE id = ?</code></td>
+<td>45</td>
+<td>11</td>
+</tr>
+<tr>
+<td><code>SELECT git_repo_path FROM projects WHERE id = ?</code>（含 <code>id=?</code> 写法）</td>
+<td>35</td>
+<td>19</td>
+</tr>
+<tr>
+<td><code>SELECT traits FROM projects WHERE id = ?</code></td>
+<td>19</td>
+<td>11</td>
+</tr>
+<tr>
+<td><code>SELECT id FROM projects WHERE id = ?</code></td>
+<td>18</td>
+<td>8</td>
+</tr>
+<tr>
+<td><code>SELECT * FROM tickets WHERE id = ? AND project_id = ?</code></td>
+<td>16</td>
+<td>4</td>
+</tr>
+</tbody>
+</table></div>
+<p>另外两点：</p>
+<ul>
+<li><code>Database</code> 没有事务接口，<code>execute</code>、<code>insert</code>、<code>update</code>、<code>delete</code> 每次调用各自提交。「改状态 + 写日志」这类多步操作中途失败会留下半截数据。</li>
+<li>表结构迁移靠 <code>_auto_migrate</code> 里的一张补列清单，没有版本号。测试里已经有注释提醒：只执行 <code>SCHEMA_SQL</code> 不跑迁移会缺列。</li>
+</ul>
+<h3>2.5 编排器</h3>
+<ul>
+<li><code>_handle_agent_result</code> 的主体按 Agent 名字分支，分成两段。前一段是 5 个各自独立的 <code>if</code> 块：<code>ArtistAgent</code> 53 行、<code>ArtAgent</code> 28 行、<code>UXAgent</code> 28 行、<code>PlannerAgent</code> 31 行、<code>UEEditorAgent</code> 56 行。后一段是一条 654 行的 <code>if / elif</code> 链，依次是 <code>ArchitectAgent</code>（74 行）、<code>DevAgent</code>（187 行）、<code>ReviewAgent</code>（50 行）、<code>ProductAgent</code> 的验收评审（72 行）、<code>TestAgent</code>（178 行）、<code>DeployAgent</code>（85 行），末尾的 <code>else</code> 保持原状态不变。</li>
+<li>文件里有 15 处 <code>agent_name == &quot;XxxAgent&quot;</code> 比较，涉及 12 个 Agent；<code>&quot;XxxAgent&quot;</code> 字面量共 52 处。六层方案 §3.1 要求 L1 不得硬编码具体 Agent，这一条还没有落地。</li>
+<li><code>tests/agents/test_orchestrator_skill_branch.py</code> 的文件头注释记录了一个反复出现的坑：新增 Agent 时漏加分支，结果落到函数末尾的 <code>else</code>，状态不推进，同一条规则被反复命中。注释里写明 <code>ArtistAgent</code> 和 <code>UEEditorAgent</code> 的分支都是出了问题之后才补的，<code>SkillAgent</code> 是第三个要专门防这个问题的 Agent。</li>
+</ul>
+<h3>2.6 LLM 客户端</h3>
+<ul>
+<li><code>LLMClient</code> 一个类同时负责 OpenAI 协议、Anthropic 协议、CLI 子进程管理、流式解析、对话落库、费用计算和工具调用循环。</li>
+<li>进程表、中断事件、实时流缓存等 10 个模块级可变状态和它混在一个文件里。</li>
+<li>分层守卫剩下的 92 条方向违规里，有 27 条是 L3 模块直接导入 L1 的 <code>llm_client</code>（<code>actions</code> 15 个、<code>plugins</code> 7 个、<code>agents</code> 4 个、<code>skills.runner</code> 1 个）。完整分布见 2.8 节。</li>
+<li>外部代码直接读它的配置字段（<code>model</code> 19 处、<code>api_format</code> 15 处、<code>cli_model</code> 10 处）。</li>
+</ul>
+<h3>2.7 前端</h3>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>项</th>
+<th>数值</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>顶层函数</td>
+<td>1,079 个，没有 <code>import</code> / <code>export</code>，没有 class</td>
+</tr>
+<tr>
+<td>顶层 <code>let</code> / <code>var</code></td>
+<td>163 个</td>
+</tr>
+<tr>
+<td><code>innerHTML</code> 赋值</td>
+<td>651 处</td>
+</tr>
+<tr>
+<td>内联 <code>onclick=</code></td>
+<td><code>app.js</code> 模板里 515 处，<code>index.html</code> 里 252 处</td>
+</tr>
+<tr>
+<td><code>document.getElementById</code></td>
+<td>1,273 处</td>
+</tr>
+<tr>
+<td>空的 <code>catch {}</code></td>
+<td>123 处</td>
+</tr>
+<tr>
+<td>直接 <code>fetch(</code></td>
+<td>76 处（另有 272 处走统一的 <code>api()</code> 封装）</td>
+</tr>
+<tr>
+<td>超过 400 行的函数</td>
+<td>5 个；<code>connectSSE</code> 977 行，里面注册了 51 个事件监听</td>
+</tr>
+<tr>
+<td>工程化</td>
+<td>没有构建、没有 lint、没有测试；版本靠手改 <code>?v=20261120d</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>文件里已有 102 个带名字的分节横幅（「看板」「SSE 实时推送」「Roadmap 甘特图」等），可以作为拆分边界。</p>
+<h3>2.8 其他</h3>
+<ul>
+<li>
+<p><strong>延迟导入</strong>：4,598 条导入语句里有 1,976 条（43.0%）写在函数体内，约七成指向项目内模块（<code>database</code> 157 处、<code>llm_client</code> 79 处、<code>utils</code> 71 处、<code>git_manager</code> 70 处）。它们原本用来绕开循环导入，现在 SCC 已经是 0，大部分不再需要。延迟导入会把导入错误推迟到运行时才暴露。</p>
+</li>
+<li>
+<p><strong>宽泛异常</strong>：<code>except Exception</code> 或裸 <code>except</code> 共 1,314 处。其中 393 处的处理体只有 <code>pass</code> 或 <code>continue</code>，另有 328 处既不记日志也不重新抛出（多数是返回兜底值）。</p>
+</li>
+<li>
+<p><strong>未归层模块</strong>：分层守卫统计到 230 个未归层模块。77 个是 <code>backend/</code> 根目录的下划线脚本，70 个在 <code>tools/</code>，剩下 83 个是真实业务模块（<code>external_sessions</code>、<code>query_engine</code>、<code>cloud_video</code>、<code>ci</code>、<code>checkpoint</code>、<code>hooks</code>、<code>engines</code>、<code>materials</code>、<code>models</code>、<code>main</code> 等），它们不受方向律约束。</p>
+</li>
+<li>
+<p><strong>方向违规</strong>：分层守卫登记在基线里的 92 条，按来源分成下面几组。</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>来源</th>
+<th>条数</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>api.*</code> → L3</td>
+<td>47</td>
+<td><code>api.chat</code> 18、<code>api.projects</code> 8、<code>api.agent_test</code> 6、<code>api.commands</code> 5、<code>api.tickets</code> 4，其余 5 个文件共 6 条；目标是 <code>actions.chat.*</code>、<code>agents.*</code>、<code>skills</code></td>
+</tr>
+<tr>
+<td>L3 → <code>llm_client</code></td>
+<td>27</td>
+<td>见 2.6 节</td>
+</tr>
+<tr>
+<td><code>orchestrator</code> → L3</td>
+<td>6</td>
+<td><code>agents.deploy</code>、<code>agents.test</code>、3 个 action、<code>actions.chat.dispatch_subtask</code></td>
+</tr>
+<tr>
+<td><code>plugins.registry</code>（L0）→ L3 / L2</td>
+<td>5</td>
+<td>4 个 action 加 <code>database</code></td>
+</tr>
+<tr>
+<td>L3 → L1 的其他模块</td>
+<td>4</td>
+<td><code>actions.chat.create_project</code> → <code>api.milestones</code>、<code>api.system_settings</code>；<code>actions.knowledge_distill</code> → <code>api.knowledge</code>；<code>actions.chat.get_requirement_pipeline</code> → <code>sop.loader</code></td>
+</tr>
+<tr>
+<td><code>sop.*</code> → L3</td>
+<td>2</td>
+<td>都指向 <code>skills.executable_loader</code></td>
+</tr>
+<tr>
+<td><code>llm_client</code> → L3</td>
+<td>1</td>
+<td><code>agents.skills</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>最大的一组是 API 层直接导入 action 和 Agent，占一半以上。</p>
+</li>
+<li>
+<p><strong>根目录脚本</strong>：<code>backend/</code> 根目录有 117 个 <code>.py</code>，其中 77 个是 <code>_test_*</code>、<code>_verify_*</code>、<code>_probe_*</code>、<code>_fix_*</code> 这类一次性脚本，共 11,751 行。pytest 不收集它们，另有 <code>test_import.py</code>、<code>test_port.py</code> 两个同类文件。</p>
+</li>
+<li>
+<p><strong>近似重复</strong>：完全相同的函数只有 9 组，问题在近似重复。UE 插件的 <code>ue_compile_check</code> 与 <code>ue_package</code> 的 <code>run</code> 有 60% 的行相同；<code>_log</code> 在 5 个 UE action 里各有一份，<code>_reader_thread</code> 有 3 份；项目聊天和全局聊天的两个流式生成器有 46% 的行相同；<code>actions/chat/read_local_file.py</code> 同一个文件里有两份 <code>_is_safe_path</code>。</p>
+</li>
+<li>
+<p><strong>状态字符串</strong>：<code>TicketStatus</code> 枚举只在 7 个文件里使用，状态字符串字面量却出现在 54 个文件里（380 处）。SOP 片段会动态产生 <code>xxx_done</code> 这类状态，枚举覆盖不全，各处用 <code>endswith(&quot;_in_progress&quot;)</code> 之类的写法各自判断。</p>
+</li>
+</ul>
+<hr>
+<h2 id="section-3">三、原则</h2>
+<ol>
+<li><strong>先有测试再动刀。</strong> 要拆的函数先补特征测试，把现有行为固定下来，再做搬移。</li>
+<li><strong>搬移和改行为分开提交。</strong> 纯搬移的提交不改任何逻辑，评审时只需要确认「没变」。</li>
+<li><strong>旧入口保留。</strong> 拆出去的名字在原模块保留重导出，和 <code>cloud_video/errors.py</code> 那次的做法一致。</li>
+<li><strong>用基线棘轮代替一次性达标。</strong> 和 <code>layers_baseline.json</code> 同样的机制：度量值登记基线，CI 只允许变好。</li>
+<li><strong>按改动频率排优先级。</strong> 先处理改得最多的文件，收益最大。</li>
+<li><strong>前端不换框架。</strong> 在现有原生 JS 上做模块化，避免一次重写 3.6 万行。</li>
+</ol>
+<hr>
+<h2 id="section-4">四、目标结构</h2>
+<pre><code>backend/
+  repositories/          L2  按表封装的数据访问，SQL 只出现在这里
+    projects.py tickets.py requirements.py ticket_logs.py chat.py ...
+    ticket_state.py      工单状态迁移：写状态 + 写日志 + 发事件，一个事务
+  services/              L1  用例逻辑，供路由和编排器调用
+    tickets.py requirements.py projects.py chat/ media_previews.py
+  orchestration/         L1  从 orchestrator.py 拆出的协作者
+    sop_rules.py polling.py requirement_flow.py ticket_pipeline.py
+    context_builder.py rewind.py change_impact.py reporting.py
+    result_handlers/     每个 Agent 一个处理器 + 注册表
+  orchestrator.py        保留：TicketOrchestrator 外壳和单例，方法委托给 orchestration/
+  llm/                   从 llm_client.py 拆出
+    providers/openai.py providers/anthropic.py
+    cli/runner.py cli/stream_parser.py cli/adapters.py cli/settings_args.py
+    conversation_store.py pricing.py process_registry.py context.py
+  llm_client.py          保留：兼容层，重导出现有 18 个被外部使用的名字
+  api/
+    chat/ projects/ tickets/   大路由文件改成包，按功能分文件
+    system.py llm_config.py sop_config.py metrics.py   从 main.py 迁出
+  main.py                只做应用装配和生命周期
+  scripts/dev/           根目录一次性脚本的归档位置
+
+frontend/
+  js/
+    state.js api.js sse.js dom.js      公共层
+    board.js ticket-drawer.js chat.js roadmap.js settings.js ...   按现有分节拆
+  css/                   按同样的边界拆 styles.css
+</code></pre>
+<p><code>orchestrator.py</code> 和 <code>llm_client.py</code> 这两个文件名保留，原因是现有代码和测试按这两个模块名导入并打桩（见第七节风险 1）。新包用 <code>orchestration/</code>、<code>llm/</code> 这两个不同的名字，避免模块和包重名。</p>
+<hr>
+<h2 id="section-5">五、分阶段路线</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>阶段</th>
+<th>内容</th>
+<th>规模</th>
+<th>依赖</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>R0</td>
+<td>安全网与度量</td>
+<td>中</td>
+<td>无</td>
+</tr>
+<tr>
+<td>R1</td>
+<td>数据访问收口</td>
+<td>中</td>
+<td>R0</td>
+</tr>
+<tr>
+<td>R2</td>
+<td>拆 <code>orchestrator.py</code></td>
+<td>大</td>
+<td>R0、R1</td>
+</tr>
+<tr>
+<td>R3</td>
+<td>API 层瘦身</td>
+<td>大</td>
+<td>R1</td>
+</tr>
+<tr>
+<td>R4</td>
+<td>拆 <code>llm_client.py</code></td>
+<td>中</td>
+<td>R0</td>
+</tr>
+<tr>
+<td>R5</td>
+<td>前端模块化</td>
+<td>大</td>
+<td>只依赖自己的第 0 步</td>
+</tr>
+<tr>
+<td>R6</td>
+<td>横切清理</td>
+<td>持续</td>
+<td>随各阶段顺带做</td>
+</tr>
+</tbody>
+</table></div>
+<p>R2、R3、R4 之间没有先后依赖，可以按人手并行。R5 和后端完全独立。</p>
+<h3>R0 安全网与度量</h3>
+<p>不改业务逻辑。</p>
+<ol>
+<li><strong>度量脚本和基线。</strong> 新增 <code>scripts/code_metrics.py</code> 和 <code>backend/metrics_baseline.json</code>，登记第六节的指标，CI 里只允许变好。本文的数字是用临时脚本算的，这一步把它们变成可复现的。</li>
+<li><strong>CI 加覆盖率。</strong> <code>pytest</code> 加 <code>--cov</code>，产出报告。先登记 26.9% 的基线，不设硬门槛。
+现状：修改过程中没有任何测试会自动触发，CI 的 pytest 步骤也还没提交，见第十一节「测试流程和自动化现状」。</li>
+<li><strong>特征测试。</strong> 沿用 <code>test_orchestrator_skill_branch.py</code> 的做法（真实 SQLite + 打桩派单和 SSE），补这几处：
+<ul>
+<li><code>_handle_agent_result</code>：每个 Agent 分支至少覆盖成功和失败两条路径，加上终态门闩和 error 止血两段前置逻辑。<strong>（已完成，57 条用例，见第十一节）</strong></li>
+<li><code>process_ticket</code>：熔断、返工重试、跳过、找不到 Agent 这几条提前返回的路径。<strong>（已完成，73 条用例，见第十一节）</strong></li>
+<li><code>handle_requirement</code>：拆单成功和失败。<strong>（已完成，63 条用例，见第十一节）</strong></li>
+<li><code>_call_cli_stream</code>：把真实 CLI 的输出录成文本，用假进程回放，验证解析出的事件序列。</li>
+<li>两个聊天流式生成器：用假的 LLM 流验证 SSE 事件顺序。</li>
+</ul>
+</li>
+<li><strong>补归层。</strong> 把 83 个未归层的业务模块写进 <code>layers.toml</code>。这一步可能冒出新的方向违规，按现有规则登记进基线。</li>
+<li><strong>根目录脚本归位。</strong> 77 个下划线脚本里仍有价值的改写成 pytest 用例，其余移到 <code>backend/scripts/dev/</code>。是否直接删除需要确认。</li>
+</ol>
+<p>验收：<code>_handle_agent_result</code>、<code>process_ticket</code>、<code>_call_cli_stream</code> 的行覆盖率各自达到 70%；未归层模块数为 0（归档脚本目录除外）。</p>
+<h3>R1 数据访问收口</h3>
+<ol>
+<li><strong>新增 <code>repositories/</code>。</strong> 先做 <code>projects</code>、<code>tickets</code>、<code>requirements</code>、<code>ticket_logs</code> 四张表。返回值保持 <code>dict</code>，调用方不用改数据结构；<code>traits</code> 这类 JSON 列的解码放进 repository（业务代码里 <code>json.loads</code> 共 203 处、66 个文件，其中至少 18 处是在解 <code>traits</code>）。</li>
+<li><strong>先替换重复最多的查询。</strong> <code>get_project(id)</code>、<code>get_repo_path(id)</code>、<code>get_traits(id)</code>、<code>project_exists(id)</code> 四个函数能替换掉约 120 处。</li>
+<li><strong>事务。</strong> <code>Database</code> 增加 <code>transaction()</code> 异步上下文，内部复用现有写锁。</li>
+<li><strong>状态迁移收口。</strong> 新增 <code>repositories/ticket_state.py</code>，一个 <code>transition()</code> 完成写状态、更新时间、写 <code>ticket_logs</code>、发 <code>ticket_status_changed</code> 事件，放在同一个事务里。它只依赖 <code>database</code> 和 <code>events</code>，归 L2，L1 和 L3 都能调用。54 个写入点逐个迁过来。</li>
+<li><strong>迁移版本号。</strong> 用 <code>PRAGMA user_version</code> 加一张有序迁移表；现有 <code>_auto_migrate</code> 的补列清单整体作为第 1 版保留。</li>
+</ol>
+<p>验收：<code>api/</code> 和 <code>orchestrator.py</code> 里的 SQL 字面量相对基线下降一半以上；工单状态写入点只剩 <code>ticket_state.py</code> 一处。</p>
+<h3>R2 拆 <code>orchestrator.py</code></h3>
+<p>按风险从低到高分三步，每步单独合并。</p>
+<ol>
+<li><strong>结果处理器。</strong> 把 <code>_handle_agent_result</code> 里每个 Agent 的分支搬成 <code>orchestration/result_handlers/</code> 下的独立函数，签名统一为 <code>async def handle(ctx: ResultContext) -&gt; None</code>，用字典按 Agent 名注册。终态门闩和 error 止血留在公共前置里。找不到处理器时显式报错并把工单标成 blocked，替代现在的「落到末尾 else、状态不推进」。<strong>（搬移已完成，skill 阶段的处理器也已搬入；签名和「无处理器即 blocked」与本条有偏差，见第十一节）</strong></li>
+<li><strong><code>process_ticket</code> 改成分步管线。</strong> 拆成加载、熔断检查、返工与重试判定、规则匹配、选 Agent、构建上下文、执行、反思这几步，每步一个不超过 80 行的方法，返回「继续」或「停止（原因）」。<strong>（已完成；步骤数和落点与本条有偏差，见第十一节。<code>handle_requirement</code> 之后也按同样的方式拆成了 12 步）</strong></li>
+<li><strong>按职责拆类。</strong> 把 89 个方法分到 <code>SopRules</code>、<code>Poller</code>、<code>RequirementFlow</code>、<code>ContextBuilder</code>、<code>RewindService</code>、<code>ChangeImpactFlow</code>、<code>Reporter</code> 几个协作者里。<code>TicketOrchestrator</code> 保留现有公开方法并委托过去，<code>runtime_facade</code> 和 7 个直接导入它的模块不受影响。<strong>（搬移已完成，形态是模块级函数加转发方法，共 15 个模块；原先受 L3 导入阻碍的 7 个方法也已搬完。结果处理公共流程拆分后四项验收均已达标，偏差见第十一节）</strong></li>
+</ol>
+<p>第 1 步做完后，处理器的注册可以交给六层方案的 <code>ProviderRegistry</code>（由 <code>plugins/registry.py</code> 演进而来），由插件自己注册，届时 L1 里的 Agent 名字面量就能清零。这一点和六层方案的排期一起定。</p>
+<p>拆分时顺带处理 <code>orchestrator</code> 直接导入 L3 的 6 条方向违规，改成经注册表取得 Agent 和 action。</p>
+<p>验收：<code>orchestrator.py</code> 不超过 1,500 行；其中没有超过 150 行的函数；<code>agent_name ==</code> 比较为 0；<code>orchestrator</code> 到 L3 的方向违规为 0。</p>
+<h3>R3 API 层瘦身</h3>
+<ol>
+<li><strong><code>main.py</code>。</strong> 25 个路由迁到 <code>api/system.py</code>、<code>api/llm_config.py</code>、<code>api/sop_config.py</code>、<code>api/metrics.py</code>。257 行的 <code>lifespan</code> 拆成有名字的启动步骤。</li>
+<li><strong><code>api/chat.py</code>。</strong> 改成包，按功能分成项目聊天、全局聊天、群聊看板、会话管理、确认类动作、对话记录、CLI 任务、后台命令、环境服务几个路由文件。67 个辅助函数移到 <code>services/chat/</code>。两个流式生成器抽出公共循环，项目和全局的差异做成参数。<code>_CLI_TASKS</code>、<code>_BG_COMMAND_PROCS</code> 等模块级状态收进明确的状态对象。<code>api/chat/__init__.py</code> 继续导出 <code>runtime_facade</code> 用到的名字。</li>
+<li><strong><code>api/projects.py</code>、<code>api/tickets.py</code>、<code>api/commands.py</code>。</strong> 同样处理。<code>_annotate_media_previews</code>（279 行，圈复杂度 181）改成规则表驱动，放到 <code>services/media_previews.py</code>。</li>
+<li><strong>约定。</strong> 路由函数只做参数校验、调用 service、组装响应，不写 SQL，不超过 40 行。</li>
+<li><strong>清掉 API 层的 50 条方向违规。</strong> 其中 47 条是 <code>api.*</code> 直接导入 <code>actions.chat.*</code>、<code>agents.*</code>、<code>skills</code>，另外 3 条是 action 反过来导入 <code>api.milestones</code>、<code>api.system_settings</code>、<code>api.knowledge</code>。这里有一条约束要先说清：<code>services/</code> 归 L1，同样不能导入 L3，所以把代码从 <code>api/</code> 挪到 <code>services/</code> 并不会让这些违规消失。API 和 service 要经 <code>plugins.registry</code> 或 <code>runtime_facade</code> 取得 action 和 Agent；被 action 和 API 共用的逻辑要落到 L2（<code>repositories/</code> 或 <code>utils</code>），两边都从 L2 导入。具体写法在 R3 开工时按六层方案 §3.1 的跨层律定。</li>
+</ol>
+<p>验收：<code>api/</code> 内 <code>db.</code> 调用为 0；没有超过 1,500 行的路由文件；<code>api.*</code> 相关的方向违规为 0。</p>
+<h3>R4 拆 <code>llm_client.py</code></h3>
+<ol>
+<li><strong>按职责拆文件。</strong> 结构见第四节。<code>llm_client.py</code> 保留为兼容层。</li>
+<li><strong><code>_call_cli_stream</code> 拆成四块。</strong> 进程管理（启动、超时、杀进程树）、逐行读取、事件解析、副作用（推 SSE、落库）。事件解析做成纯函数，输入文本行，输出事件，用 R0 录制的样本直接测。</li>
+<li><strong>清掉 <code>llm_client</code> 相关的 28 条方向违规。</strong> 27 条是 L3 导入 <code>llm_client</code>（27 个模块、41 条导入语句），1 条是 <code>llm_client</code> 反过来导入 <code>agents.skills</code>。在 L0 定义 LLM 调用的协议，L3 的 action 通过基类拿到实例，不再 <code>from llm_client import llm_client</code>。六层方案 §11 第 1 项当时决定暂缓 <code>ModelPolicy</code>，这一步是否现在做需要评审决定；不做的话前两步仍然可以独立完成。</li>
+<li><strong>配置字段只读化。</strong> 外部读 <code>llm_client.model</code> 之类的地方改成读一个配置快照对象。</li>
+</ol>
+<p>验收：<code>llm_client.py</code> 不超过 300 行；<code>llm_client</code> 相关的方向违规从 28 降到 0（如果第 3 步获批）。</p>
+<h3>R5 前端模块化</h3>
+<ol start="0">
+<li><strong>先加工具。</strong> CI 里加 <code>node --check</code> 和 ESLint（只开 <code>no-undef</code>、<code>no-unused-vars</code>、<code>no-redeclare</code>）。用 Playwright 写三四条冒烟用例：打开项目列表、打开工单抽屉、发一条聊天消息（后端打桩）。</li>
+<li><strong>按分节横幅拆文件，仍用普通脚本加载。</strong> 把 <code>app.js</code> 按现有 102 个分节拆成 <code>frontend/js/*.js</code>，在 <code>index.html</code> 里按顺序用 <code>&lt;script&gt;</code> 引入。普通脚本的顶层函数和顶层 <code>let</code> / <code>const</code> 本来就是跨文件共享的，这一步不改变语义。需要留意的只有加载时立即执行的顶层语句，它们依赖的函数必须在更早的文件里。</li>
+<li><strong>抽公共层。</strong>
+<ul>
+<li><code>api.js</code>：76 处直接 <code>fetch</code> 收进统一封装。这一步做完后，体检文档第 4 条的本地 token 只需要在一处加请求头。</li>
+<li><code>sse.js</code>：<code>connectSSE</code> 里的 51 个监听改成注册表，各功能模块自己注册处理函数。</li>
+<li><code>state.js</code>：163 个可变全局变量按功能归到几个状态对象。</li>
+<li><code>dom.js</code>：转义和模板辅助函数。</li>
+</ul>
+</li>
+<li><strong>逐步转成 ES 模块。</strong> 公共层稳定后，按文件把 <code>&lt;script&gt;</code> 改成 <code>type=&quot;module&quot;</code>，显式 <code>import</code> / <code>export</code>。</li>
+<li><strong>去掉内联事件。</strong> 767 处 <code>onclick=</code> 改成 <code>data-action</code> 加事件委托，按模块逐个做。</li>
+<li><strong>静态资源版本号自动化。</strong> <code>?v=</code> 改成后端按文件内容哈希注入，拆文件后不用手改十几个版本号。</li>
+</ol>
+<p>验收：没有超过 3,000 行的 JS 文件；ESLint 的 <code>no-undef</code> 为 0；冒烟用例在 CI 里通过。</p>
+<h3>R6 横切清理</h3>
+<p>这些不单独立项，拆到哪个文件就顺手处理哪个文件。</p>
+<ul>
+<li><strong>异常处理。</strong> 分三类处理：尽力而为的副作用（推事件、写日志）改用统一的「记录后忽略」辅助函数；解析兜底改成捕获具体异常类型；不该吞的直接删掉 <code>try</code>。</li>
+<li><strong>延迟导入。</strong> 指向项目内模块的延迟导入提到文件顶部。可选的重依赖（<code>playwright</code>、<code>onnxruntime</code>、<code>numpy</code>）保持延迟。</li>
+<li><strong>UE action 公共基类。</strong> 把日志、读线程、杀进程树、心跳抽成基类，<code>ue_compile_check</code>、<code>ue_package</code>、<code>ue_playtest</code>、<code>ue_screenshot</code> 共用。</li>
+<li><strong>时间处理。</strong> <code>now_iso()</code> 写的是本地无时区时间，另一些地方写 UTC。统一成一组「生成 + 解析」函数，替换直接调用 <code>datetime.now()</code> 或 <code>utcnow()</code> 的 46 处（29 个文件）。</li>
+<li><strong>剩余的 8 条方向违规。</strong> <code>plugins.registry</code>（L0）导入 4 个 action 和 <code>database</code> 共 5 条，<code>sop.loader</code>、<code>sop.workflow_composer</code> 导入 <code>skills.executable_loader</code> 共 2 条，<code>actions.chat.get_requirement_pipeline</code> 导入 <code>sop.loader</code> 1 条。它们不在 R2–R4 的拆分范围里，放在这里单独处理。加上 R2 的 6 条、R3 的 50 条、R4 的 28 条，合计 92 条。</li>
+<li><strong>状态判断。</strong> 新增一组状态辅助函数（是否执行中、某阶段的完成态等），替换各处的字符串后缀判断。</li>
+</ul>
+<hr>
+<h2 id="section-6">六、度量与目标</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>指标</th>
+<th>基线</th>
+<th>R0 后</th>
+<th>最终目标</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>语句覆盖率（自有代码）</td>
+<td>26.9%</td>
+<td>35%</td>
+<td>50%</td>
+</tr>
+<tr>
+<td>最长函数</td>
+<td>1,026 行</td>
+<td>—</td>
+<td>150 行</td>
+</tr>
+<tr>
+<td>超过 200 行的函数</td>
+<td>31</td>
+<td>—</td>
+<td>0</td>
+</tr>
+<tr>
+<td>最大 Python 文件</td>
+<td>6,694 行</td>
+<td>—</td>
+<td>1,500 行</td>
+</tr>
+<tr>
+<td><code>api/</code> 内 <code>db.</code> 调用</td>
+<td>543</td>
+<td>—</td>
+<td>0</td>
+</tr>
+<tr>
+<td>工单状态写入点</td>
+<td>54</td>
+<td>—</td>
+<td>1</td>
+</tr>
+<tr>
+<td>未归层模块</td>
+<td>230</td>
+<td>70（只剩 <code>tools/</code>）</td>
+<td>0</td>
+</tr>
+<tr>
+<td>方向违规</td>
+<td>92</td>
+<td>可能上升（补归层后）</td>
+<td>0（R2 清 6、R3 清 50、R4 清 28、R6 清 8）</td>
+</tr>
+<tr>
+<td>延迟导入占比</td>
+<td>43.0%</td>
+<td>—</td>
+<td>15%</td>
+</tr>
+<tr>
+<td>只有 <code>pass</code> / <code>continue</code> 的宽泛 <code>except</code></td>
+<td>393</td>
+<td>—</td>
+<td>100</td>
+</tr>
+<tr>
+<td>最大 JS 文件</td>
+<td>35,912 行</td>
+<td>—</td>
+<td>3,000 行</td>
+</tr>
+<tr>
+<td>内联 <code>onclick=</code></td>
+<td>767</td>
+<td>—</td>
+<td>0</td>
+</tr>
+</tbody>
+</table></div>
+<p>目标值是建议，评审时可以调整。新写的代码建议另加一条约束：单个函数不超过 80 行。</p>
+<p>R2 第 1 步之后的实测值：最大 Python 文件仍是 <code>orchestrator.py</code>，5,841 行；最长函数变成 <code>process_ticket</code>，682 行；超过 200 行的函数仍是 31 个；未归层模块 230、方向违规 92 都没有变化；延迟导入占比 42.3%。</p>
+<p>R2 第 2 步之后的实测值：<code>orchestrator.py</code> 5,236 行，最大 Python 文件变成 <code>api/chat.py</code>（工作区里 5,566 行）；最长函数变成 <code>query_engine/engine.py</code> 的 <code>run</code>，559 行；超过 200 行的函数 30 个；未归层模块 230、方向违规 92 没有变化；延迟导入占比 42.2%。</p>
+<p>skill 结果处理器搬移之后的实测值：<code>orchestrator.py</code> 4,907 行，其中超过 200 行的函数剩 2 个（<code>handle_requirement</code> 456 行、<code>_generate_requirement_report</code> 206 行）；全仓超过 200 行的函数仍是 30 个，因为 <code>handle_skill</code>（256 行）只是换了文件；最大 Python 文件和最长函数没有变化；未归层模块 230、方向违规 92 没有变化；延迟导入占比 42.1%。</p>
+<p><code>handle_requirement</code> 拆分之后的实测值：<code>orchestrator.py</code> 4,493 行，其中超过 200 行的函数只剩 <code>_generate_requirement_report</code>（206 行）；全仓超过 200 行的函数 29 个；最大 Python 文件仍是 <code>api/chat.py</code>（5,566 行），最长函数仍是 <code>query_engine/engine.py</code> 的 <code>run</code>（559 行）；<code>TicketOrchestrator</code> 的方法数是 85；未归层模块 230、方向违规 92 没有变化；延迟导入占比 42.0%。</p>
+<p>按职责拆类之后的实测值：<code>orchestrator.py</code> 1,818 行，其中超过 200 行的函数为 0，超过 150 行的还有 4 个（<code>_build_context</code> 176、<code>_handle_git_files</code> 167、<code>_handle_agent_result</code> 166、<code>_diagnose_blocked_ticket</code> 153）；<code>TicketOrchestrator</code> 有 82 个 <code>def</code> 方法，69 个只做转发，13 个还有函数体（共 1,128 行）；全仓超过 200 行的函数仍是 29 个，<code>generate_requirement_report</code>（206 行）只是换到了 <code>orchestration/reporting.py</code>；最大 Python 文件仍是 <code>api/chat.py</code>（5,566 行），最长函数仍是 <code>query_engine/engine.py</code> 的 <code>run</code>（559 行）；模块 499 个，项目内边 2,338 条；未归层模块 230、方向违规 92 没有变化，其中 <code>orchestrator</code> 到 L3 的 6 条还在；延迟导入占比 41.56%。</p>
+<hr>
+<h2 id="section-7">七、风险与对策</h2>
+<ol>
+<li><strong>测试按模块属性打桩。</strong> 现有测试用 <code>monkeypatch.setattr(orchestrator, &quot;db&quot;, tmp_db)</code> 这类写法替换依赖。如果拆出去的模块自己 <code>from database import db</code>，这个桩就不再生效，测试会写到真实数据库。对策：拆出的函数通过参数或上下文对象接收 <code>db</code>、<code>event_manager</code>，不自己导入；每次搬移后确认相关测试仍然用的是临时库。</li>
+<li><strong>功能开发不会停。</strong> 过半提交会碰大文件，长期分支必然冲突。对策：每个搬移提交控制在一个文件、一天内合并；纯搬移的提交登记到 <code>.git-blame-ignore-revs</code>，保住 <code>git blame</code>。</li>
+<li><strong>部分路径无法在 CI 里跑。</strong> CLI 流式调用、UE 工具链依赖本机环境。对策：用录制样本回放；每个阶段合并前按一张手工冒烟清单在本机走一遍（建项目、提需求、跑完一张工单、聊天、桌面版启动）。</li>
+<li><strong>桌面版打包。</strong> <code>desktop.spec</code> 的 <code>hiddenimports</code> 按名字列了 <code>orchestrator</code>、<code>llm_client</code> 等模块。新增的包如果是通过 <code>runtime_facade</code> 动态解析的，需要同步加进去。对策：每个阶段结束后打一次包并启动验证。</li>
+<li><strong>工作区有大量未提交改动。</strong> 重构必须从干净的工作区开始。对策：先把现有两批改动（<code>ai_gen_tasks</code> 和体检修复第一批）提交。</li>
+<li><strong>数据库事务改动。</strong> 给写操作加事务会改变失败时的行为（从「留下半截数据」变成「整体回滚」）。对策：R1 的事务先只用在状态迁移上，其余写操作保持原样。</li>
+</ol>
+<hr>
+<h2 id="section-8">八、与六层方案的关系</h2>
+<p>六层方案管的是模块之间谁能导入谁，本方案管的是模块内部怎么组织。两者有三个交点：</p>
+<ul>
+<li><strong>R0 的补归层</strong>是六层方案 P0 的遗留工作。</li>
+<li><strong>R2 的结果处理器注册表</strong>要和六层方案的 <code>ProviderRegistry</code> 对齐。六层方案 §11 第 1 项暂缓了 <code>AgentProvider</code>，处理器是否由插件注册需要一起评审。</li>
+<li><strong>R3 第 5 步</strong>是在落实六层方案 §3.1 的跨层律（L1 和 L3 之间只能经 L0 契约）。六层方案 P2 的验收写的是 <code>orchestrator</code> 的出边不再包含 <code>agents/</code>、<code>actions/</code>、<code>api/</code>，守卫目前仍报 6 条 <code>orchestrator</code> → L3，R2 会一并收掉。</li>
+<li><strong>R4 的 LLM 协议</strong>涉及六层方案 §11 第 1 项暂缓的 <code>ModelPolicy</code>，需要一起评审。</li>
+</ul>
+<p>本方案新增的 <code>repositories/</code> 归 L2，<code>services/</code>、<code>orchestration/</code>、<code>llm/</code> 归 L1，都需要在 <code>layers.toml</code> 里登记。</p>
+<hr>
+<h2 id="section-9">九、需要评审决定的事项</h2>
+<ol>
+<li>目标数值（第六节）是否接受。</li>
+<li><code>backend/</code> 根目录 77 个一次性脚本：归档还是删除。</li>
+<li>R4 第 3 步（LLM 协议下沉到 L0）现在做，还是继续暂缓。</li>
+<li>前端是否接受「不引入构建工具、原生 ES 模块」这条路线。</li>
+<li>R2、R3、R4 的先后顺序。按改动频率建议先做 R2。</li>
+<li>没有登记结果处理器的 Agent：保持现状（状态不变、照常走尾部），还是改成显式标 blocked。</li>
+<li><code>process_ticket</code> 的三处可疑现状要不要修：切分支失败且停在主分支时工单卡在进行中；Agent 抛异常后工单停在进行中、LLM 上下文不清；选出 Agent 之后、标忙碌之前出错也给它记一次失败。详见第十一节。</li>
+<li><code>skill_gate_file_paths</code> 用 <code>lstrip(&quot;./&quot;)</code> 清理路径，会把点开头的目录名的点也去掉（<code>.ads/notes.md</code> 变成 <code>works/ads/notes.md</code>）。要不要改成只去掉 <code>./</code> 前缀。</li>
+<li>搬移核对脚本和度量脚本目前只放在临时目录，前两步的那一批已经丢失。是否收进 <code>scripts/</code>。</li>
+<li><code>handle_requirement</code> 的可疑现状要不要修。特征测试钉住了 12 条，建议先定这 4 条：拆单不在事务里，中途出错后重试会重复建单；派单抛异常会把已经进行中的需求退回已提交；Agent 一张工单都没拆出来时需求照样进行中、分支照建；回传里夹了坏数据时依赖下标整体错位。详见第十一节。</li>
+</ol>
+<hr>
+<h2 id="section-10">十、本次没有覆盖的范围</h2>
+<ul>
+<li>没有逐行审读业务逻辑的正确性，方案只基于结构和度量。</li>
+<li>覆盖率只在 Windows、Python 3.14.3 下量过一次。</li>
+<li><code>backend/tools/</code>（70 个模块，约 2.4 万行）和 <code>skills/marketplace</code> 等第三方或打包内容不在范围内。</li>
+<li>前端只做了静态计数，没有分析运行时性能和内存。</li>
+<li>没有评估 <code>styles.css</code> 里的重复和失效规则。</li>
+<li>圈复杂度是自己按 AST 分支节点数估算的，和 <code>radon</code>、flake8 的 <code>mccabe</code> 口径会有小的出入。</li>
+</ul>
+<hr>
+<h2 id="section-11">十一、执行进度</h2>
+<h3>2026-11-24：R0 第 3 步（部分）和 R2 第 1 步</h3>
+<p>实现细节和验证过程见 <code>dev-notes/2026-11-24_03_代码重构_拆分结果处理器.md</code>。改动都在工作区，尚未提交。</p>
+<p>已完成：</p>
+<ul>
+<li><strong>特征测试。</strong> 新增 <code>backend/tests/agents/test_orchestrator_result_branches.py</code>，57 条用例，覆盖公共前置、
+每个 Agent 分支的成功和失败路径，以及没有处理器时的兜底。新测试单独跑时 <code>_handle_agent_result</code> 的行覆盖率是 92.2%。</li>
+<li><strong>结果处理器。</strong> 新增 <code>backend/orchestration/result_handlers/</code>，12 个处理器函数分在 11 个文件里，
+外加 <code>context.py</code> 和注册表。<code>_handle_agent_result</code> 从 1,026 行降到 171 行，圈复杂度从 153 降到 22；
+<code>orchestrator.py</code> 从 6,694 行降到 5,841 行。</li>
+<li><strong>配套。</strong> <code>orchestration</code> 在 <code>layers.toml</code> 里归入 L1；<code>desktop.spec</code> 的 <code>hiddenimports</code> 补了新包。</li>
+</ul>
+<p>验证：57 条特征测试在拆分前后都通过；12 个处理器的函数体和原分支做了 AST 对比，全部一致；
+全量 pytest 925 条通过；分层守卫退出码 0，新增违规 0；CI 那组 flake8 规则在改动文件上为 0 条。
+桌面版打包、真实服务启动、Linux 和 CI 上的运行都没有验证。</p>
+<p>和方案的偏差：</p>
+<ol>
+<li>处理器签名是 <code>async def handle(ctx: ResultContext) -&gt; Optional[str]</code>。返回状态字符串表示由调用方发
+<code>ticket_status_changed</code> 并继续流转，返回 <code>HANDLED</code> 表示处理器已经收尾。这样尾部逻辑仍然只有一份。</li>
+<li>「找不到处理器时标成 blocked」没有做。它会改变现有行为，本步只做等价搬移。是否要改列入第九节。</li>
+<li><code>orchestrator.py</code> 里的 Agent 名比较只剩 <code>SkillAgent</code> 一处和一处 <code>agent_name in (...)</code>，
+其余名字集中到了 <code>result_handlers/__init__.py</code> 的注册表。交给插件注册仍要等 <code>ProviderRegistry</code>。</li>
+<li><code>handle_dev</code>（207 行）和 <code>handle_test</code>（197 行）超过 150 行的目标，内部整理留到后面。</li>
+<li>第七节第 5 条要求从干净的工作区开始。本步是在叠着两批未提交改动的工作区上做的，
+<code>orchestrator.py</code> 在这之前没有未提交改动，所以这一步的 diff 是独立的；提交时要和另外两批分开。</li>
+</ol>
+<p>R0 的其余部分（度量脚本和基线、CI 覆盖率、其他几个函数的特征测试、补归层、根目录脚本归位）都还没做。</p>
+<p>下一步建议：给 <code>process_ticket</code> 补特征测试，然后做 R2 第 2 步；<code>_handle_skill_agent_result</code>（255 行）
+可以先按同样的方式搬进 <code>result_handlers/</code>，它已有测试保护。（后者已完成，见本节最后一个小节。）</p>
+<h3>2026-11-24：R0 第 3 步（<code>process_ticket</code> 部分）和 R2 第 2 步</h3>
+<p>实现细节和验证过程见 <code>dev-notes/2026-11-24_04_代码重构_process_ticket分步管线.md</code>。改动都在工作区，尚未提交。</p>
+<p>已完成：</p>
+<ul>
+<li><strong>特征测试。</strong> 新增 <code>backend/tests/agents/test_orchestrator_process_ticket.py</code>，73 条用例：59 条行为用例
+覆盖入口门闩、两级止损、前置依赖、规则匹配、跳过阶段、Agent 未注册、正常派单、切分支、反思记录、
+排队回退、异常和取消；14 条管线约定用例核对步骤顺序和停止原因。59 条行为用例在拆分前单独跑时，
+<code>process_ticket</code> 的行覆盖率是 94.1%（此前为 0%）。</li>
+<li><strong>分步管线。</strong> 新增 <code>backend/orchestration/ticket_pipeline.py</code>：<code>TicketRun</code> 承载步骤间共享的状态，
+17 个步骤函数登记在 <code>STEPS</code> 里，<code>run_pipeline</code> 按顺序执行。每个步骤返回 <code>CONTINUE</code> 或停止原因。
+<code>process_ticket</code> 从 682 行降到 77 行，圈复杂度从 113 降到 19，只保留占用处理权、异常处理、释放和清理；
+<code>orchestrator.py</code> 从 5,841 行降到 5,236 行。最长的步骤是 <code>run_agent</code>，76 行。</li>
+<li><strong>配套。</strong> 两条读 <code>process_ticket</code> 源码的断言改成读 <code>ticket_pipeline</code>；<code>desktop.spec</code> 的 <code>hiddenimports</code> 补了新模块。</li>
+</ul>
+<p>验证：59 条行为用例在拆分前后都通过，测试代码没有改；15 处故意改错全部被这份测试发现；
+搬移核对脚本确认原函数体每一行恰好搬走一次、跨步骤的变量都经 <code>TicketRun</code> 传递；全量 pytest 998 条通过；
+分层守卫退出码 0，新增违规 0；CI 那组 flake8 规则为 0 条。
+桌面版打包、真实服务启动、Linux 和 CI 上的运行都没有验证。</p>
+<p>和方案的偏差：</p>
+<ol>
+<li>方案列了 8 步，实际是 17 步。多出来的是原函数里本来就有、方案没有单列的段落
+（入口门闩、前置依赖、跳过阶段、Agent 未注册、派单、切分支、结果处理、排队回退、续跑）。</li>
+<li>步骤是 <code>orchestration/ticket_pipeline.py</code> 里的模块级函数，没有做成 <code>TicketOrchestrator</code> 的方法。
+做成方法会让这个类再多 20 个方法，和第 3 步按职责拆类的方向相反。</li>
+<li>步骤仍然调用 <code>orch</code> 上的 24 个私有方法。这层耦合留到第 3 步拆出协作者时解开。</li>
+<li>步骤内部没有整理。两处止损的收尾代码相似但没有合并。</li>
+<li>原来靠 <code>'agent_name' in dir()</code> 判断要不要给 Agent 记失败，现在改成 <code>TicketRun.agent_chosen</code>，语义相同。</li>
+<li>有步骤停止时多打一条 debug 级日志，这是唯一新增的可观察行为。</li>
+</ol>
+<p>特征测试钉住了三处可疑的现状，本步没有修，列入第九节第 7 项：</p>
+<ol>
+<li>切分支失败且停在主分支时，工单已经改成进行中、Agent 已标忙碌，这条路径不会改回去，靠僵尸检测兜底。</li>
+<li>Agent 抛异常后，工单停在进行中，LLM 上下文不清。</li>
+<li>选出 Agent 之后、标忙碌之前出错，也会给这个 Agent 记一次失败。</li>
+</ol>
+<p>下一步建议：<code>_handle_skill_agent_result</code>（255 行）搬进 <code>result_handlers/</code>；给 <code>handle_requirement</code>（456 行）
+补特征测试；然后进入 R2 第 3 步。（第一项已完成，见下一小节。）</p>
+<h3>2026-11-24：R2 第 1 步收尾（skill 结果处理器）</h3>
+<p>实现细节和验证过程见 <code>dev-notes/2026-11-24_05_代码重构_skill结果处理器搬移.md</code>。改动都在工作区，尚未提交。</p>
+<p>已完成：</p>
+<ul>
+<li><strong>补用例。</strong> 搬之前先在原实现上给 <code>test_orchestrator_skill_branch.py</code> 补 7 条边角用例，
+这段代码的覆盖率从 92.9%（分支 40/50）补到语句和分支都是 100%。</li>
+<li><strong>搬移。</strong> 新增 <code>backend/orchestration/result_handlers/skill.py</code>（361 行）：<code>handle_skill</code>、
+<code>_resolve_skill_success_status</code>、<code>skill_produces_satisfied</code>、<code>skill_gate_file_paths</code>。
+<code>orchestrator.py</code> 从 5,236 行降到 4,907 行，分发处改走和其他处理器相同的 <code>HANDLED</code> 约定，分发顺序不变。</li>
+<li><strong>配套。</strong> <code>ResultContext</code> 加 <code>synthesize_blocked_diagnosis</code> 字段；两个测试文件改调新入口；
+新增 1 条分发用例和 2 条优先级用例；<code>desktop.spec</code> 的 <code>hiddenimports</code> 补了新模块。</li>
+</ul>
+<p>验证：搬移核对脚本确认原 331 行里 308 行原样搬走，有改动的 15 行只有 <code>self</code> 换 <code>orch</code> 这一类替换；
+22 处故意改错第一遍发现 20 处，补 2 条优先级用例后全部发现；全量 pytest 1,008 条通过；
+分层守卫退出码 0，新增违规 0；CI 那组 flake8 规则为 0 条。
+桌面版打包、真实服务启动、Linux 和 CI 上的运行都没有验证。</p>
+<p>和方案的偏差：</p>
+<ol>
+<li><code>handle_skill</code> 只是搬了位置，仍是 256 行、圈复杂度 53，超过 150 行的目标。内部整理留到第 3 步。</li>
+<li>它不在按 Agent 名查的注册表里，由 <code>is_skill_run_result</code> 识别后单独取用。</li>
+<li>到 <code>actions.diagnose_ticket</code> 的依赖没有消除，只是从处理器里移到了 <code>orchestrator.py</code> 的
+<code>_synthesize_blocked_diagnosis</code>，经 <code>ResultContext</code> 传入。方向违规数因此没有变化。</li>
+<li>处理器仍调用 <code>orch</code> 的 4 个私有方法和 <code>process_ticket</code>。</li>
+</ol>
+<p>用例钉住了一处可疑现状，本步没有修，列入第九节第 8 项：<code>skill_gate_file_paths</code> 的 <code>lstrip(&quot;./&quot;)</code>
+会把点开头的目录名的点去掉。</p>
+<p>另有一件事要记：前两步放在临时目录的备份和核对脚本丢了，那两步的核对无法重跑，
+回退也只能从 <code>7b9e7f0</code> 出发手工处理。列入第九节第 9 项。</p>
+<p>下一步建议：给 <code>handle_requirement</code>（456 行）补特征测试；然后进入 R2 第 3 步按职责拆类。（前一项已完成，见下一小节。）</p>
+<h3>2026-11-24：R0 第 3 步（<code>handle_requirement</code> 部分）和它的分步管线</h3>
+<p>实现细节和验证过程见 <code>dev-notes/2026-11-24_06_代码重构_handle_requirement特征测试与分步管线.md</code>。改动都在工作区，尚未提交。</p>
+<p>已完成：</p>
+<ul>
+<li><strong>特征测试。</strong> 新增 <code>backend/tests/agents/test_orchestrator_handle_requirement.py</code>，63 条用例，
+覆盖入口、准备和执行、Agent 失败、记录结果、建工单、回填依赖、收尾、拆单中途出错。
+60 条写在拆分之前，在原实现上跑到 190/190 条语句、54/54 个分支（此前行覆盖率 1%）；另外 3 条是拆分之后补的。</li>
+<li><strong>分步管线。</strong> 新增 <code>backend/orchestration/requirement_pipeline.py</code>（678 行）：<code>RequirementRun</code> 承载步骤间共享的状态，
+12 个步骤函数登记在 <code>STEPS</code> 里，<code>run_pipeline</code> 按顺序执行，约定和 <code>ticket_pipeline</code> 相同。
+<code>handle_requirement</code> 从 456 行降到 45 行，圈复杂度从 65 降到 4，只保留占用标记、异常兜底和释放；
+<code>orchestrator.py</code> 从 4,907 行降到 4,493 行。</li>
+<li><strong>配套。</strong> 心跳文案函数 <code>analysis_progress_message</code> 跟着搬到新文件，<code>orchestrator.py</code> 里保留导入；
+<code>desktop.spec</code> 的 <code>hiddenimports</code> 补了新模块。</li>
+</ul>
+<p>验证：60 条用例在拆分前后都通过，期间测试文件没有改；搬移核对脚本确认原函数体 423 行里 412 行搬进步骤
+（397 行原样，15 行只有 <code>self</code> 换 <code>orch</code> 和 <code>return</code> 带原因两类替换），逐词元比对 2,415 个词元一致。
+故意改错做了两轮：原实现上 105 处，第一遍发现 104 处，补一条断言后全部发现；拆分后 129 处
+（那 105 处重新定位，加 24 处针对拆分本身），第一遍发现 126 处，漏的 3 处是两处相邻步骤对调和一处心跳文案，
+补 3 条用例后全部发现，这 3 条放回拆分前的实现上也通过。拆分后新文件 311/311 条语句、56/56 个分支。
+全量 pytest 1,071 条通过；分层守卫退出码 0，新增违规 0；CI 那组 flake8 规则为 0 条。
+桌面版打包、真实服务和真实 LLM 拆单、Linux 和 CI 上的运行都没有验证。</p>
+<p>和方案的偏差：</p>
+<ol>
+<li>方案的 R2 第 2 步只写了 <code>process_ticket</code>，<code>handle_requirement</code> 原本归在第 3 步的 <code>RequirementFlow</code> 里。
+本轮先把它拆成了管线，第 3 步建 <code>RequirementFlow</code> 时可以直接收这个模块。</li>
+<li><code>create_tickets</code> 有 144 行、圈复杂度 26，超过「每步不超过 80 行」。父工单、子任务、子工单三段没有再拆，
+步骤内部没有整理。</li>
+<li>步骤仍调用 <code>orch</code> 的 4 个成员：<code>_log</code>、<code>_log_agent_thought</code>、<code>_handle_git_files</code>、<code>process_ticket</code>。</li>
+<li>从建工单到标记已拆单的落库没有放进事务。R1 第 3 步的 <code>transaction()</code> 还没做，这一步只做等价搬移。</li>
+<li>有步骤停止时多打一条 debug 级日志，这是唯一新增的可观察行为。</li>
+</ol>
+<p>特征测试钉住了 12 条可疑现状，本步都没有修，列入第九节第 10 项。前 4 条会直接影响用户：</p>
+<ol>
+<li>拆单不在事务里。建工单到一半出错时，已建的工单留在库里，需求退回已提交，用户重试会把全部工单再建一遍。</li>
+<li>派单抛异常和分析失败走同一个兜底。需求从进行中退回已提交，工单和分支留着，排在后面的工单这一轮不再派。</li>
+<li>Agent 一张工单都没拆出来时，需求照样走到进行中，开发分支照建。</li>
+<li>依赖下标按过滤后的列表算。回传里夹一条不是字典的条目，它后面的依赖整体错一位。</li>
+</ol>
+<p>其余 8 条（规模按原始条数算、异常路径不清 LLM 上下文、取消后需求停在分析中、日志里的状态和依赖与实际不符、
+子工单和父工单处理不一致、<code>requirement_error</code> 只在抛异常时发且前端没有监听、空白步骤名的心跳文案）见上面那篇 dev-note。</p>
+<p>下一步建议：先定第九节第 10 项的前 4 条要不要修，修的话在现有用例上改断言；然后进入 R2 第 3 步按职责拆类。</p>
+<h3>2026-11-24：测试流程和自动化现状</h3>
+<p>完整记录、图表和运行截图见 <code>dev-notes/2026-11-24_07_代码重构_测试流程.md</code>。本条只做记录，没有改钩子和 CI 配置。</p>
+<p><strong>修改过程中没有任何测试会自动触发。</strong> 前面四步的特征测试、覆盖率、改坏检查、搬移核对、全量 pytest、分层守卫、flake8 都是手动跑的。</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>什么时候</th>
+<th>会跑什么</th>
+<th>现状</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>改代码、保存文件</td>
+<td>没有</td>
+<td>仓库里没有文件监听式的测试</td>
+</tr>
+<tr>
+<td><code>git commit</code></td>
+<td>分层守卫（<code>.pre-commit-config.yaml</code>）</td>
+<td>本机没装 <code>pre-commit</code>，<code>.git/hooks</code> 里只有 <code>.sample</code>，不会触发</td>
+</tr>
+<tr>
+<td>push 或 PR 到 <code>main</code>、<code>develop</code></td>
+<td>全量 pytest、flake8、分层守卫（<code>.github/workflows/ci.yml</code>）</td>
+<td>pytest 步骤已随 <code>d1f478a</code> 提交；截至本期最后的代码提交 <code>e2e4c2b</code>，本地超前 29 个提交，尚未推送；本批未跑远端 CI</td>
+</tr>
+</tbody>
+</table></div>
+<p>每轮的流程是：原实现上写特征测试并量覆盖率，原实现上做改坏检查，脚本生成新文件，同一份测试在新实现上再跑，
+搬移核对，新实现上再做改坏检查，全量 pytest，分层守卫，flake8，度量。03 到 05 三步没有做原实现上的改坏检查，03 用的是 AST 对比。</p>
+<p>写那篇笔记时在当前工作区重新跑了两遍：全量 pytest 1,071 条通过（217.60 秒和 155.30 秒），分层守卫退出码 0、相对基线新增 0，
+CI 那组 flake8 规则 0 条。相关测试文件约 13 秒，改坏检查 129 处约 20 分钟。</p>
+<p>和 R0 有关的缺口：</p>
+<ol>
+<li>推送之后 CI 才会跑测试，Ubuntu 加 Python 3.12 下的结果还没有见过。</li>
+<li>提交钩子没有启用，启用后也只跑分层守卫。</li>
+<li>改坏检查、搬移核对、度量脚本仍只在临时目录（第九节第 9 项）。</li>
+<li>CI 没有覆盖率（R0 第 2 步）。</li>
+<li>没有一条命令能跑完本地这几项检查。</li>
+</ol>
+<h3>2026-11-24：提交</h3>
+<p>工作区的全部改动分成 5 个提交进了本地 <code>main</code>，没有推送；记录这次提交的笔记和本段另成一个文档提交。分批方式、<code>main.py</code> 和 <code>client.py</code> 按 hunk 拆分的做法、每个提交单独验证的结果见 <code>dev-notes/2026-11-24_08_代码重构_提交记录.md</code>。</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>哈希</th>
+<th>内容</th>
+<th>全量 pytest</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>371aac3</code></td>
+<td>文档改名</td>
+<td>没有代码改动</td>
+</tr>
+<tr>
+<td><code>a099133</code></td>
+<td>顶栏指标明细面板和 AI 生成任务记录层</td>
+<td>762 通过，2 失败（基线 <code>7b9e7f0</code> 上同样失败的 <code>cloud_video</code> 成环）</td>
+</tr>
+<tr>
+<td><code>d1f478a</code></td>
+<td>体检修复第一批</td>
+<td>868 通过，0 失败</td>
+</tr>
+<tr>
+<td><code>2f46494</code></td>
+<td><code>orchestrator.py</code> 拆分（本节前四段的全部代码改动）</td>
+<td>代码树和下一行相同</td>
+</tr>
+<tr>
+<td><code>5a84621</code></td>
+<td>本方案和 02 到 07 六篇笔记</td>
+<td>1,071 通过，0 失败</td>
+</tr>
+</tbody>
+</table></div>
+<p>本节前面各段写的「改动都在工作区，尚未提交」是当时的状态。第七节第 5 条要求的干净工作区现在满足了，后面的步骤每一步单独提交。</p>
+<h3>2026-11-24：R2 第 3 步（按职责拆类）</h3>
+<p><code>TicketOrchestrator</code> 的 72 个方法分 10 组搬进 <code>backend/orchestration/</code> 下的 10 个新模块，类上留同名方法做转发，每组一个提交。<code>orchestrator.py</code> 从 4,493 行降到 1,818 行。做法、验证、截图和偏差见 <code>dev-notes/2026-11-24_09_代码重构_按职责拆类.md</code>。</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>哈希</th>
+<th>新模块</th>
+<th>方法数</th>
+<th>新文件行数</th>
+<th>搬完后 <code>orchestrator.py</code></th>
+<th>转发层改坏检查（改坏处 / 存活）</th>
+<th>全量 pytest</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>41a2b36</code></td>
+<td><code>rewind</code></td>
+<td>7</td>
+<td>378</td>
+<td>4,224</td>
+<td>132 / 0</td>
+<td>1,127 通过，0 失败</td>
+</tr>
+<tr>
+<td><code>a95c68f</code></td>
+<td><code>sop_rules</code></td>
+<td>13</td>
+<td>604</td>
+<td>3,765</td>
+<td>159 / 0</td>
+<td>1,199 通过，0 失败</td>
+</tr>
+<tr>
+<td><code>ef463b3</code></td>
+<td><code>change_flows</code></td>
+<td>6</td>
+<td>562</td>
+<td>3,318</td>
+<td>146 / 0</td>
+<td>1,229 通过，0 失败</td>
+</tr>
+<tr>
+<td><code>9925969</code></td>
+<td><code>reporting</code></td>
+<td>3</td>
+<td>437</td>
+<td>2,924</td>
+<td>42 / 0</td>
+<td>1,244 通过，0 失败</td>
+</tr>
+<tr>
+<td><code>b1b9abb</code></td>
+<td><code>polling</code></td>
+<td>13</td>
+<td>350</td>
+<td>2,680</td>
+<td>139 / 0</td>
+<td>1,309 通过，0 失败</td>
+</tr>
+<tr>
+<td><code>2470384</code></td>
+<td><code>bug_flow</code></td>
+<td>7</td>
+<td>305</td>
+<td>2,449</td>
+<td>104 / 0</td>
+<td>1,344 通过，0 失败</td>
+</tr>
+<tr>
+<td><code>2a52790</code></td>
+<td><code>agent_state</code></td>
+<td>6</td>
+<td>150</td>
+<td>2,354</td>
+<td>67 / 0</td>
+<td>1,374 通过，0 失败</td>
+</tr>
+<tr>
+<td><code>c566f08</code></td>
+<td><code>failure_counters</code></td>
+<td>5</td>
+<td>138</td>
+<td>2,259</td>
+<td>47 / 0</td>
+<td>1,395 通过，0 失败</td>
+</tr>
+<tr>
+<td><code>37be326</code></td>
+<td><code>ticket_log</code></td>
+<td>7</td>
+<td>370</td>
+<td>2,039</td>
+<td>266 / 0</td>
+<td>1,431 通过，0 失败</td>
+</tr>
+<tr>
+<td><code>bb2fd7f</code></td>
+<td><code>context_builder</code></td>
+<td>5</td>
+<td>271</td>
+<td>1,818</td>
+<td>54 / 0</td>
+<td>1,456 通过，0 失败</td>
+</tr>
+</tbody>
+</table></div>
+<p>每组提交前都过了同一套检查：搬移核对（语法树、字符串常量、注释、<code>orchestrator.py</code> 其余行逐行不变）全部通过；接线测试 <code>tests/agents/test_orchestrator_delegation.py</code> 最终 385 条；转发层改坏检查合计 1,156 处，存活 0，对照组 69 个全绿；分层守卫相对基线新增 0，方向违规 92、未归层 230 不变；flake8 0 条（本地比 CI 多排除了 <code>projects</code> 目录）。测试通过数从 1,071 涨到 1,456，增加的 385 条就是接线测试。</p>
+<p>提交之后重启了服务，9 个接口返回 200，启动日志里 Traceback 0 条。</p>
+<p>和第五节 R2 第 3 条的偏差：</p>
+<ol>
+<li><strong>形态。</strong> 方案写的是协作者类，实际是模块级函数，第一个参数是 <code>orch</code>，<code>db</code> 由转发方法传入。新模块不导入 <code>database</code> 和 <code>orchestrator</code>。</li>
+<li><strong>分组。</strong> 10 个模块，多出 <code>bug_flow</code>、<code>agent_state</code>、<code>failure_counters</code>、<code>ticket_log</code>；<code>ChangeImpactFlow</code> 落在 <code>change_flows.py</code>，因为 <code>backend/change_impact.py</code> 已经存在；<code>RequirementFlow</code> 对应此前的 <code>requirement_pipeline.py</code>。</li>
+<li><strong>四项验收都没有达到。</strong></li>
+</ol>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>验收项</th>
+<th>目标</th>
+<th>实测</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>orchestrator.py</code> 行数</td>
+<td>不超过 1,500</td>
+<td>1,818</td>
+</tr>
+<tr>
+<td>超过 150 行的函数</td>
+<td>0</td>
+<td>4（<code>_build_context</code> 176、<code>_handle_git_files</code> 167、<code>_handle_agent_result</code> 166、<code>_diagnose_blocked_ticket</code> 153）</td>
+</tr>
+<tr>
+<td><code>agent_name ==</code> 比较</td>
+<td>0</td>
+<td>2</td>
+</tr>
+<tr>
+<td><code>orchestrator</code> 到 L3 的方向违规</td>
+<td>0</td>
+<td>6</td>
+</tr>
+</tbody>
+</table></div>
+<p>没有达到的直接原因是 7 个方法在函数里导入了 L3（<code>_build_context</code>、<code>_handle_git_files</code>、<code>_diagnose_blocked_ticket</code>、<code>_poll_once</code>、<code>_finalize_openspec_after_done</code>、<code>_maybe_openspec_verify</code>、<code>_check_subtasks_complete</code>，共 744 行），原样搬进 L1 的 <code>orchestration</code> 会新增方向违规，所以留在原处。把它们改成经注册表取 Agent 和 action 之后可以搬走，行数和方向违规两项能一起解决。
+4. <strong>一处行为上的细微变化。</strong> <code>make_ticket_progress_callback</code> 返回的闭包现在用创建时传入的 <code>db</code>，原来是执行时读 <code>orchestrator</code> 模块的全局 <code>db</code>。只有在创建和调用之间替换了全局 <code>db</code> 才有差别。</p>
+<p>这一步没有验证的部分：</p>
+<ol>
+<li>搬走的函数体没有行为测试（拆分前 <code>orchestrator.py</code> 语句覆盖率 24%），等价性靠语法树比对；改坏检查只覆盖转发层。</li>
+<li>重启之后没有真实工单走完一个阶段。</li>
+<li>CI 没有在这批改动上跑过；桌面版没有重新打包，<code>desktop.spec</code> 新加的 10 行 <code>hiddenimports</code> 没有经过打包验证。</li>
+<li>根目录的 <code>_*.py</code> 脚本不在 pytest 的 <code>testpaths</code> 里。随组改了两个靠读源码做检查的脚本，其中 <code>_test_false_success_gates.py</code> 完整跑过（53 通过），<code>_test_command_log.py</code> 因为会写真实库没有跑。<code>_test_openspec_verify_trigger.py:82</code> 在基线时就已经失效，没有修。</li>
+<li>搬移、核对、改坏检查的脚本仍在临时目录（第九节第 9 项）。</li>
+</ol>
+<p>这次重启时注意到一个既有现象：每次启动有 14 条 <code>[sop] ERROR</code>，skill stage <code>engine_compile</code>、<code>h5_typecheck</code>、<code>h5_playtest</code> 与已有阶段重名被跳过。旧代码启动时同样存在，和拆分无关，没有排查。</p>
+<h3>2026-11-25：R2 第 3 步收尾（去 L3 导入并搬移）方案</h3>
+<p>上一小节留下 7 个方法没有搬，原因是它们的函数体里导入了 L3 模块（<code>actions.*</code>、<code>agents.*</code>）。带着这些导入搬到 <code>orchestration/</code> 会给分层守卫增加新的违规 key。这一步分两段做，每段单独提交。</p>
+<p><strong>涉及的 10 处导入</strong>（<code>orchestrator.py</code>，行号是动手前的）：</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>行</th>
+<th>所在函数</th>
+<th>导入的 L3 名字</th>
+<th>处理</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>332</td>
+<td><code>_poll_once</code></td>
+<td><code>actions.chat.dispatch_subtask.WAITING_SUBTASKS_STATUS</code></td>
+<td>改从 L0 的 <code>contracts</code> 取</td>
+</tr>
+<tr>
+<td>478</td>
+<td><code>_check_subtasks_complete</code></td>
+<td>同上（导入后没有用到）</td>
+<td>改从 <code>contracts</code> 取，保留这条导入</td>
+</tr>
+<tr>
+<td>1034</td>
+<td><code>_handle_git_files</code></td>
+<td><code>agents.deploy.DeployAgent</code></td>
+<td>经 <code>runtime_facade</code> 取模块</td>
+</tr>
+<tr>
+<td>1244</td>
+<td><code>_build_context</code></td>
+<td><code>actions.ue_editor_control.probe_ucp</code></td>
+<td>经 <code>runtime_facade</code> 取模块</td>
+</tr>
+<tr>
+<td>1356</td>
+<td><code>_diagnose_blocked_ticket</code></td>
+<td><code>actions.diagnose_ticket</code> 的三个名字</td>
+<td>经 <code>runtime_facade</code> 取模块</td>
+</tr>
+<tr>
+<td>1590</td>
+<td><code>_maybe_openspec_verify</code></td>
+<td><code>agents.test.TestAgent</code></td>
+<td>经 <code>runtime_facade</code> 取模块</td>
+</tr>
+<tr>
+<td>1624、1638</td>
+<td><code>_finalize_openspec_after_done</code></td>
+<td><code>agents.test.TestAgent</code>、<code>agents.deploy.DeployAgent</code></td>
+<td>经 <code>runtime_facade</code> 取模块</td>
+</tr>
+<tr>
+<td>1791</td>
+<td>模块级 <code>_synthesize_blocked_diagnosis</code></td>
+<td><code>actions.diagnose_ticket.synthesize_blocked_diagnosis</code></td>
+<td>经 <code>runtime_facade</code> 取模块</td>
+</tr>
+<tr>
+<td>1808</td>
+<td>模块级 <code>_fire_knowledge_distill</code></td>
+<td><code>actions.knowledge_distill.KnowledgeDistillAction</code></td>
+<td>经 <code>runtime_facade</code> 取模块</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>第一段：原地去掉 L3 导入</strong></p>
+<ol>
+<li>新建 <code>backend/contracts.py</code>（<code>layers.toml</code> 里已经把 <code>contracts</code> 列在 L0，文件此前不存在），放 <code>WAITING_SUBTASKS_STATUS = &quot;waiting_subtasks&quot;</code>，不导入任何项目内模块。<code>actions/chat/dispatch_subtask.py</code> 改成从 <code>contracts</code> 导入这个常量，旧的导入路径照常可用。</li>
+<li><code>runtime_facade</code> 仿照已有的 <code>chat_api()</code> 增加按名字惰性解析的取用函数，返回模块对象，调用方在用到的那一刻取属性。模块名放在模块级常量里以变量传给 <code>importlib</code>，和 <code>chat_api()</code> 的做法一致。</li>
+<li><code>orchestrator.py</code> 里 8 处 Agent 和 action 的导入改成经门面取。保持两条原有行为：用到时才解析模块；每次调用新建 Agent 实例。</li>
+<li><code>_MEDIA_COMMIT_LABELS</code> 从模块级字典改成 <code>TicketOrchestrator</code> 的类常量，方法里用 <code>self._MEDIA_COMMIT_LABELS</code>。它在仓库里只有 <code>orchestrator.py</code> 的 3 处引用。</li>
+</ol>
+<p>和上一小节偏差第 3 条的差别：那里写的是「改成经注册表取 Agent 和 action」。实际核对后，<code>plugins.registry.require_action</code> 不认 <code>DiagnoseTicketAction</code>、<code>KnowledgeDistillAction</code> 和 <code>probe_ucp</code>，而且原代码每次调用都新建 <code>TestAgent()</code>、<code>DeployAgent()</code>，和注册表里的共享实例不是一回事。所以改用门面加 L0 常量，行为不变。</p>
+<p>方法体里用函数内的 <code>import runtime_facade</code>。<code>orchestrator.py</code> 顶层没有不带别名的 <code>runtime_facade</code> 导入，拆分生成器也不允许搬走的代码以全局名引用它；函数内导入是局部名，搬移时原样带走。<code>runtime_facade</code> 属于 L0，<code>orchestration</code> 导入它符合 <code>can_import</code>。</p>
+<p><code>runtime_facade.lazy_resolve = False</code> 且目标模块未加载时取用函数返回 <code>None</code>，随后取属性会抛 <code>AttributeError</code>。各调用点原来就包在 <code>try/except Exception</code> 里，原代码导入失败时走的是同一条路。<code>_finalize_openspec_after_done</code> 没有外层 <code>try</code>，原代码导入失败同样会向上抛，这一点保持原样。</p>
+<p><strong>第二段：搬移</strong></p>
+<p>用上一小节的生成器把 7 个方法搬到 <code>orchestration/</code> 的新模块，流程和核对项不变（生成、<code>--check</code>、<code>verify_split.py</code> 的 11 类检查、接线表、改坏检查、全量 pytest、分层守卫、flake8）。新方法必须进新组、新模块：现有组的快照是搬移前的旧文件，目标模块又是整文件覆盖。</p>
+<p><strong>先写特征测试</strong></p>
+<p>这 7 个方法和两个模块级函数在 <code>backend/tests</code> 里没有覆盖真实函数体的测试。动手前先在原实现上写 <code>tests/agents/test_orchestrator_l3_seams.py</code>，打桩打在类或源模块的属性上（例如 <code>TestAgent._run_openspec_verify</code>），这样直接导入和经门面取两种写法下同一组测试都生效。先在原实现上跑通并做改坏检查，再改代码，改完再跑一遍。</p>
+<p><strong>预期</strong>：<code>orchestrator</code> 到 L3 的方向违规 6 → 0，方向违规合计 92 → 86，相对基线新增 0。基线文件不重新生成。</p>
+<h3>2026-11-25：R2 第 3 步收尾结果</h3>
+<p>七个方法已按计划分五组完成；入口保留同名转发，独立提交和测试明细见<a href="../dev-notes/2026-11-25_01_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E7%BC%96%E6%8E%92%E6%94%B6%E5%B0%BE.html">系列 DevNote</a>。</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>验收项（主文件范围）</th>
+<th style="text-align:right">上一批结束</th>
+<th style="text-align:right">本次实测</th>
+<th style="text-align:right">目标</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>orchestrator.py</code> 行数</td>
+<td style="text-align:right">1,818</td>
+<td style="text-align:right">1,119</td>
+<td style="text-align:right">≤ 1,500</td>
+</tr>
+<tr>
+<td>超过 150 行的函数</td>
+<td style="text-align:right">4</td>
+<td style="text-align:right">1（<code>_handle_agent_result</code>，166 行）</td>
+<td style="text-align:right">0</td>
+</tr>
+<tr>
+<td><code>agent_name ==</code> 比较</td>
+<td style="text-align:right">2（文本）</td>
+<td style="text-align:right">1 处可执行比较；文本仍命中 2 次</td>
+<td style="text-align:right">0</td>
+</tr>
+<tr>
+<td>orchestrator 到 L3 的方向违规</td>
+<td style="text-align:right">6</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">0</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>依赖与打包。</strong> <code>7627834</code> 把等待子工单的状态放进 L0 的 <code>contracts</code>，并增加五个门面取用函数：<code>agents_test</code>、<code>agents_deploy</code>、<code>actions_diagnose_ticket</code>、<code>actions_knowledge_distill</code>、<code>actions_ue_editor_control</code>。两个模块级入口沿用 <code>_runtime_facade</code> 别名。桌面打包清单显式加入五个动态目标和五个新编排模块，未重新打包验证。</p>
+<p><strong>回归与边界。</strong> 第一段 180 条特征测试，218 个单点改动中抓到 217 个，余下一个在真实表结构下等价。第二段的五组都通过语法树、接线、全量 pytest、分层守卫和 flake8；134 个转发改坏点全部检出。最后全量：<code>1672 passed, 1 warning in 521.48s (0:08:41)</code>。全库方向违规 86，新增 0；没有修改守卫基线。此次只读 HTTP 探测见 DevNote，未跑真实工单端到端。代码提交截至 <code>e2e4c2b</code>，本地比 <code>origin/main</code> 超前 29 个提交（不计随后的本篇文档），尚未推送。</p>
+<p><strong>下一步。</strong> 先处理剩下的 166 行结果处理公共流程，再用现有 skill 结果测试验证是否可去掉唯一可执行的 Agent 名比较（另一处文本命中来自文档串）。已经挪到新模块的长函数仍需单独排期；<code>traits</code> / <code>project_traits</code> 的差异另立行为修复，不混入这次搬移。</p>
+<h3>2026-11-25：结果处理公共流程与 R2 第 3 步验收</h3>
+<p>代码 <code>1d9391f</code> 保留原实例入口，把出错工单的阻塞和媒体结果序列化提到 <code>result_flow</code>，处理器选择交给原注册表，状态通知和继续派单提到单独方法。未注册 Agent、终态门闩、Hook 异常和等待期间工单改变的行为均保留。实施过程、测试命令和验证截图见<a href="../dev-notes/2026-11-25_02_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E7%BB%93%E6%9E%9C%E5%A4%84%E7%90%86.html">代码重构 DevNote：结果处理</a>。</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>R2 主文件指标</th>
+<th style="text-align:right">上一批</th>
+<th style="text-align:right">本次</th>
+<th style="text-align:right">目标</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>orchestrator.py</code> 行数</td>
+<td style="text-align:right">1,119</td>
+<td style="text-align:right">1,036</td>
+<td style="text-align:right">≤ 1,500</td>
+</tr>
+<tr>
+<td>超过 150 行的函数数</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">0（最长 79 行）</td>
+<td style="text-align:right">0</td>
+</tr>
+<tr>
+<td>可执行的 <code>agent_name ==</code> 比较</td>
+<td style="text-align:right">1</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">0</td>
+</tr>
+<tr>
+<td>编排器直接依赖 L3 的方向违规</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">0</td>
+<td style="text-align:right">0</td>
+</tr>
+</tbody>
+</table></div>
+<p>后端结果与 skill 分支 103 通过；全量 <code>1677 passed, 1 warning in 359.19s (0:05:59)</code>。5 个有意引入的错误全部被对应断言识别。分层守卫全库 86 条，新增 0。注册表仍负责具体 Agent 名到处理器的映射；这里的达标范围是 <code>orchestrator.py</code>。独立模块内的长函数、未匹配处理器的业务策略、桌面包构建和后续其他阶段仍有待处理。</p>
+<h3>2026-11-25：拆分独立模块的 Skill 结果处理器</h3>
+<p><a href="../backend/orchestration/result_handlers/skill.py"><code>handle_skill</code></a> 从 256 行降到 31 行；<code>skill.py</code> 从 361 行降到 294 行，最长函数现在是记录阻塞结果的 41 行。等待人审、成功或部分成功、跳过、阻塞分别处理各自的日志、评论与事件。派单仍在状态通知后重读工单；人审如果回退到有规则的成功态，保留原有的继续派单行为。</p>
+<p>本轮属于 R2 主文件验收之后的独立模块治理。新增 6 个真实编排入口的测试场景，涵盖订阅者可见的落库顺序和中途改态；4 个有意改错的版本均被识别。下一批候选为 207 行的 <code>handle_dev</code>。流程图、测试命令、截图和服务验证见<a href="../dev-notes/2026-11-25_03_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_Skill%E7%BB%93%E6%9E%9C%E5%88%86%E6%94%AF.html">系列 DevNote：Skill 结果分支</a>。</p>
+<p>代码提交 <code>f647329</code>。相关测试 109 通过，全量 1,683 通过（6 分 44 秒），分层违规新增 0，指定 flake8 规则通过。重启后 9 个只读地址全部返回 HTTP 200。</p>
+<h3>2026-11-25：拆分 DevAgent 开发结果处理器</h3>
+<p><a href="../backend/orchestration/result_handlers/dev.py"><code>handle_dev</code></a> 从 207 行降到 24 行，<code>dev.py</code> 从 267 行降到 222 行。入口保留 H5 类型检查、生成失败、UE 自检阻塞、成功写入的先后顺序。新增 3 个真实编排入口的测试场景验证拒绝计数和订阅者可查到代码产物的时点；既有迟到成功用例继续覆盖终态。</p>
+<p><strong>新确认的待修问题：</strong> Git 期间状态变为 <code>deployed</code> 时，成功开发会丢弃迟到结果，但生成失败、自检阻塞、H5 类型检查仍可能覆盖终态；<code>review_passed</code> 也可能被成功开发结果回退。新旧实现用临时库得到相同结果。建议单列并发写入修复，明确合法来源状态后再使用带状态条件的更新。<a href="../dev-notes/2026-11-25_04_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E5%BC%80%E5%8F%91%E7%BB%93%E6%9E%9C%E5%88%86%E6%94%AF.html">本期 DevNote</a> 记录了五组对照、流程图、测试命令和验证截图。</p>
+<p>代码提交 <code>7ae53bf</code>。相关测试 112 通过，后端全量 1,686 通过、1 条后台线程警告（5 分 17 秒）；分层违规新增 0，指定 flake8 规则通过。新版服务就绪后 9 个只读地址均返回 HTTP 200。</p>
+<h3>2026-11-25：修复迟到的开发结果覆盖新状态</h3>
+<p>上一条记录的问题已修复：原生开发回传先核对实际派单状态；Dev 结果、HTML 原型、公共 error 和 SOP 片段使用带来源状态条件的 UPDATE。未命中就停止这一轮，保留胜方写入，不记拒绝、产物或完成检查点，不触发旧结果的后续派单。片段钩子回退也须先成功写入才记录回退日志。</p>
+<p>新增 16 个场景覆盖写入瞬间改态或删除、Agent/Git 期间工单已推进、自定义 SOP 正常完成和片段回退。详见<a href="../dev-notes/2026-11-25_05_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E8%BF%9F%E5%88%B0%E5%BC%80%E5%8F%91%E7%BB%93%E6%9E%9C.html">系列 DevNote：迟到开发结果</a>。仍不覆盖离开后又回到同一状态的不同批次，也不撤销已发生的 Git 或钩子外部操作。</p>
+<p>代码 <code>93ea8c0</code>。相关测试 201 通过，全量 1,702 通过、1 条后台线程警告（5 分 46 秒）；分层新增违规 0，指定 flake8 规则通过。新版服务就绪后，9 个只读地址均返回 HTTP 200。</p>
+<h3>2026-11-25：区分回到同一状态的两次开发执行</h3>
+<p>上期遗留的同态重跑问题已修复。每次派单换用新的批次标识；人工将状态改走再改回，会使原批次失效。原生开发结果、公共 error 及 SOP 片段在最终写工单时同时核对状态和批次，成功时消费批次；新执行可以正常完成，迟到或重复的旧回传不能替它收尾。</p>
+<p>在临时 SQLite 上先复现 9 个失败和 1 个正常对照，再验证重新派单、人工回退、Git/钩子/最终写入期间的竞争，以及旧库升级后再启动。见<a href="../dev-notes/2026-11-25_06_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E5%B7%A5%E5%8D%95%E6%89%A7%E8%A1%8C%E6%89%B9%E6%AC%A1.html">系列 DevNote：工单执行批次（含验证截图）</a>。后续优先检查 Skill 的 <code>_save_status</code>：它已能在结果入口拒绝旧批次，但入口之后的专属写入仍只按工单 ID 匹配。</p>
+<p>代码 <code>eb52e96</code>。五组相关测试 633 通过，最终版批次与迁移用例 11 通过，后端全量 1,713 通过、无警告（8 分 41 秒）。分层新增违规 0，指定 flake8 规则通过；新版服务就绪后 9 个只读地址均返回 HTTP 200。</p>
+<h3>2026-11-25：完成 Skill 结果写入保护，开始 R3 指标路由拆分</h3>
+<p>Skill 的人审、完成、跳过、阻塞四个分支共用带来源状态与批次条件的最终写入；失败诊断也不能覆盖新执行。旧版复现 5 个失败场景。该修复覆盖 Skill 专属收尾，不表示所有 Agent 写入均已完成迁移。</p>
+<p>R3 第 1 步已拆出 <code>GET /api/metrics</code> 与 <code>GET /api/metrics/asyncio-tasks</code>：HTTP 路由在 <code>api/metrics.py</code>，采集逻辑在 <code>services/metrics.py</code>。<code>main.py</code> 从 1,325 行减到 1,169 行，保留两个 Python 入口。新旧服务的两个 OpenAPI 操作定义一致。下一组候选是 SOP 配置路由，生命周期启动流程也尚未拆分。过程、测试命令和截图见<a href="../dev-notes/2026-11-25_07_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_Skill%E5%86%99%E5%85%A5%E4%B8%8E%E6%8C%87%E6%A0%87%E8%B7%AF%E7%94%B1.html">系列 DevNote：Skill 写入与指标路由</a>。</p>
+<p>代码 <code>51567bf</code>、<code>b56c3b7</code>。相关测试 78 通过，全量 1,718 通过、无警告（6 分 21 秒）。分层新增违规 0；指定 flake8 规则通过；新版服务 10 个只读地址均为 HTTP 200。</p>
+<h3>2026-11-25：R3 拆出 SOP 编辑器的四个配置接口</h3>
+<p>本次沿用原路径、函数名、响应与错误结构，将流程视图、完整配置的读写和手动重载迁到 <a href="../backend/api/sop_config.py">api/sop_config.py</a>，校验、备份、保存与回滚放在 <a href="../backend/services/sop_config.py">services/sop_config.py</a>。<code>main.py</code> 从 1,169 行降至 <strong>1,090 行</strong>。连同上期两个指标接口，R3 第 1 步累计迁出 6 个接口。</p>
+<p>先在旧实现固定 6 个 HTTP 场景，再在相同的临时 YAML 上验证新实现。有备份时，重载抛错后恢复原文本，第二次重载读取旧配置；同秒备份重名和首次保存没有备份仍需独立处理。新版服务 12 个只读地址均返回 200，4 个 SOP 操作的 OpenAPI 定义逐项一致。<a href="../dev-notes/2026-11-25_08_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_SOP%E9%85%8D%E7%BD%AE%E8%B7%AF%E7%94%B1.html">系列 DevNote：SOP 配置路由</a>记录测试命令、回滚时序及验证截图。</p>
+<p>代码 <code>b9db636</code>。相关回归 125 通过；后端全量 <strong>1,724 通过，无警告（6 分 46 秒）</strong>。分层违规新增 0，指定 flake8 规则通过。</p>
+<p>下一批建议从系统只读接口 <code>/api/health</code>、<code>/api/filesystem/available-paths</code> 开始，先固定健康响应字段，以及候选路径存在与不存在时的返回值和顺序。LLM 配置接口与 257 行的 <code>lifespan</code> 仍在主文件中。</p>
+<h3>2026-11-25：R3 拆出系统健康检查和目录建议</h3>
+<p>两个 GET 已迁入 <a href="../backend/api/system.py">api/system.py</a>。<code>main.py</code> 从 1,090 行减到 <strong>1,051 行</strong>；连同指标和 SOP，R3 第 1 步累计迁出 <strong>8 个接口</strong>。旧 Python 入口保留，桌面清单已登记新模块。</p>
+<p>路径列表仍按原顺序返回全部 8 个候选，每次请求重新检查是否为目录。旧版基线 2 项通过，拆分后的相关回归 39 项通过；新服务 13 个只读地址均返回 200，两项 GET 的响应和 OpenAPI 操作与旧版一致。测试隔离、可复现的对照方法和截图见<a href="../dev-notes/2026-11-25_09_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E7%B3%BB%E7%BB%9F%E5%8F%AA%E8%AF%BB%E8%B7%AF%E7%94%B1.html">系列 DevNote：系统只读路由</a>。</p>
+<p>下一批建议拆 <code>GET /api/llm/status</code> 与 <code>GET /api/llm/agents</code>：先用虚构配置验证 API/CLI 模式的模型显示、Agent 覆盖与默认值，不启动外部 CLI 或调用模型。其余 5 个 LLM 操作和 257 行的应用生命周期仍留在主文件。</p>
+<p>代码 <code>9d6dd42</code>。后端全量 <strong>1,726 通过，无警告（8 分 41 秒）</strong>；分层违规新增 0，指定的 flake8 规则通过。</p>
+<h3>2026-11-25：R3 拆出 LLM 状态与 Agent 生效配置两个读接口</h3>
+<p><code>GET /api/llm/status</code> 和 <code>GET /api/llm/agents</code> 已迁到 <a href="../backend/api/llm_config.py">api/llm_config.py</a>。<a href="../backend/services/llm_config.py">展示服务</a>共享模型选择和 CLI 选项，分别保留顶栏与编辑器的字段约定。Agent 仍按名称排列，能区分“无覆盖行”和“有覆盖行但字段使用默认值”。<code>main.py</code> 从 1,051 行减到 <strong>971 行</strong>，R3 第 1 步累计迁出 10 个接口。</p>
+<p>旧版 4 个 HTTP 场景通过，拆分后相关回归 49 项通过。重启后 14 个只读地址返回 200；两个 GET 的响应摘要及 OpenAPI 操作与旧版一致。测试数据、步骤和截图见<a href="../dev-notes/2026-11-25_10_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_LLM%E5%8F%AA%E8%AF%BB%E8%B7%AF%E7%94%B1.html">系列 DevNote：LLM 只读路由</a>。</p>
+<p>已确认的边界：底层查询在数据库读取失败时，与“无覆盖行”一样返回 <code>None</code>，页面因而可能把失败显示成继承。若要区分两种状态，需单列行为变更。</p>
+<p>代码 <code>9764e3c</code>。后端全量 <strong>1,730 通过，无警告（4 分 24 秒）</strong>；分层违规新增 0，指定的 flake8 规则通过。</p>
+<p>下一批建议先拆 CLI 模型刷新与测试连接：用替身验证默认参数、返回值和失败传递，不实际执行 CLI 或连接供应商。全局保存和 Agent 覆盖的写入/删除涉及持久化，另设测试边界。应用生命周期尚未拆分。</p>
+<h3>2026-11-25：R3 拆出 CLI 模型刷新与 LLM 连接测试</h3>
+<p><code>POST /api/llm/cli-models/refresh</code> 与 <code>POST /api/llm/test</code> 已迁入现有 <a href="../backend/api/llm_config.py">LLM 路由模块</a>。<code>main.py</code> 从 971 行降至 <strong>950 行</strong>，R3 累计迁出 <strong>12 个接口</strong>。旧版 11 个 HTTP 场景全部通过；拆分后 45 项相关回归通过。新版服务的 14 个只读地址返回 200，两个 POST 的 OpenAPI 操作与旧版一致。流程图、测试命令和验证截图见<a href="../dev-notes/2026-11-25_11_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_LLM%E6%A8%A1%E5%9E%8B%E5%88%B7%E6%96%B0%E4%B8%8E%E8%BF%9E%E6%8E%A5%E6%B5%8B%E8%AF%95.html">系列 DevNote：LLM 模型刷新与连接测试</a>。</p>
+<p>新确认的旧问题：用模拟进程查询 CLI 版本，退出码 0 和 7 均得到 <code>status: ok</code>，说明客户端未区分非零退出；建议作为独立修复。下一组路由候选为 Agent 配置覆盖的保存和删除，需要在临时数据库中核对写入、恢复继承和客户端缓存失效。全局配置保存和应用生命周期仍在主文件。</p>
+<p>代码 <code>06c79be</code>。后端全量 <strong>1,741 通过，无警告（8 分 54 秒）</strong>。分层违规新增 0，指定的 flake8 规则通过。</p>
+<h3>2026-11-25：R3 拆出 Agent 配置保存和删除，修复 CLI 退出码误报</h3>
+<p>同一 Agent 首次并发保存配置，旧实现先查再插，实测一方会因唯一约束冲突返回 500。现由<a href="../backend/services/llm_config.py">配置服务</a>执行单条 SQLite 插入或更新：两个请求均成功，空凭据沿用已写值，更新保留行 ID；数据库拒绝写入时保留原缓存。保存与删除已迁到 <a href="../backend/api/llm_config.py">LLM 路由</a>，代码 <code>a9286b9</code>。<code>main.py</code> 从 950 行降至 <strong>881 行</strong>；R3 累计迁出 <strong>14 个接口</strong>。</p>
+<p>上期记录的 CLI 误报已独立修复（<code>eb353da</code>）：版本查询非零退出时，连接测试返回业务错误和退出码；退出码为 0 时仍兼容版本写到标准错误流。现场 14 个只读地址均返回 200，两项写操作的 OpenAPI 定义与重启前一致。复现步骤、临时数据库的测试方法与结果见<a href="../dev-notes/2026-11-25_12_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_CLI%E9%80%80%E5%87%BA%E7%A0%81%E4%B8%8EAgent%E9%85%8D%E7%BD%AE%E8%A6%86%E7%9B%96.html">系列 DevNote 12：CLI 退出码与 Agent 配置覆盖</a>。</p>
+<p>相关回归 53 项通过；后端全量 <strong>1,749 通过，无警告（5 分 6 秒）</strong>。分层违规新增 0，指定的 flake8 规则通过。</p>
+<p>下一项为留在主文件的全局 LLM 配置保存：先隔离设置和外部同步，再对照 API/CLI 切换、持久化及失败路径。257 行的应用生命周期仍待拆分。</p>
+<h3>2026-11-25：R3 完成 LLM 路由拆分，修复全局保存失败后内存仍生效</h3>
+<p>最后一个 LLM 路由 <code>POST /api/llm/config</code> 已迁到 <a href="../backend/api/llm_config.py">api/llm_config.py</a>。<a href="../backend/services/global_llm_config.py">全局配置服务</a>先转换请求字段、写主配置，成功后再更新内存。旧版在数值转换或主文件拒写时返回 500，但运行时模型已变；两条失败用例现已通过。主保存成功后，外部技能同步失败仍只记录警告。这个调整不提供磁盘文件的原子替换。</p>
+<p>代码 <code>d5f2e46</code>。<code>main.py</code> 从 881 行降至 <strong>728 行</strong>，R3 累计迁出 <strong>15 个接口</strong>。相关测试 58 项通过，分层违规新增 0，指定 flake8 检查通过；新版服务 14 个只读地址均返回 200，全局保存的 OpenAPI 操作与旧版一致。复现步骤、测试命令、流程图和验证截图见<a href="../dev-notes/2026-11-25_13_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E5%85%A8%E5%B1%80LLM%E9%85%8D%E7%BD%AE%E4%BF%9D%E5%AD%98.html">系列 DevNote 13：全局 LLM 配置保存</a>。</p>
+<p>后端全量 <strong>1,754 通过，pytest 无警告（4 分 45 秒）</strong>。</p>
+<p>下一批建议先迁只读项目预览兼容接口，固定未启动及已启动时的响应；主文件中仍有 10 个 HTTP 路径装饰器，257 行的应用生命周期尚未拆分。</p>
+<h3>2026-11-25：R3 拆出项目预览查询，修正内置链接</h3>
+<p><a href="../backend/api/project_preview.py">项目预览路由</a>已迁出，保留旧路径及 Python 入口。旧查询在共用 ADS 端口的内置模式下只返回根地址，打开后无法定位项目页面；现在与部署共用地址生成函数，包含项目、环境和 <code>index.html</code>。独立端口仍用根地址，dev → test → prod 的选择顺序保持不变。代码 <code>262242e</code>；<code>main.py</code> 从 728 行降至 <strong>720 行</strong>，R3 累计迁出 <strong>16 个接口</strong>。</p>
+<p>旧版复现 2 项失败、4 项通过；迁移后相关回归 38 项通过，浏览器能从查询链接打开临时项目的页面。重启后 15 个只读地址返回 200，三个预览 GET 的 OpenAPI 定义均未变。测试命令、实测截图与可重跑的截图脚本见<a href="../dev-notes/2026-11-25_14_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E9%A1%B9%E7%9B%AE%E9%A2%84%E8%A7%88%E6%9F%A5%E8%AF%A2.html">系列 DevNote 14：项目预览查询</a>。</p>
+<p>后端全量 <strong>1,760 通过，pytest 无警告（4 分 7 秒）</strong>。分层违规新增 0，指定的 flake8 规则通过。</p>
+<p>下一批建议迁 Agent 工具开关：在隔离进程中已复现字符串 <code>&quot;false&quot;</code> 被当成开启，以及写文件失败仍改变运行时开关。主文件余下 9 个 HTTP 路径装饰器；应用生命周期尚未拆分。</p>
+<h3>2026-11-25：R3 拆出 Agent 工具开关，修复误开启与保存失败后状态不一致</h3>
+<p>GET/POST <code>/api/settings/agent-tools</code> 已迁入<a href="../backend/api/system.py">系统路由</a>。保存前校验布尔值，<code>&quot;false&quot;</code> 会关闭，无法识别的值返回 422。文件保存成功后才更新进程环境和 settings；失败后设置页重新 GET，以服务端返回值恢复显示。设置页也不再声称这个配置会切换当前 DevAgent 的执行模式。</p>
+<p>代码 <code>34bf80f</code>。<code>main.py</code> 从 720 行降至 <strong>681 行</strong>，R3 累计迁出 <strong>18 个接口</strong>。相关回归 48 项通过，分层违规新增 0；16 个现场只读地址返回 200。隔离浏览器验证了成功、拒写与断网三条路径。复现步骤、两张实测截图及可重跑的脚本见<a href="../dev-notes/2026-11-25_15_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_Agent%E5%B7%A5%E5%85%B7%E5%BC%80%E5%85%B3.html">系列 DevNote 15：Agent 工具开关</a>。</p>
+<p>后端全量 <strong>1,777 通过，pytest 无警告（4 分 51 秒）</strong>。</p>
+<p>下一批建议拆全局 SSE 事件流，先验证事件投递和断开时的订阅清理。主文件余下 7 个 HTTP 路径装饰器，应用生命周期尚未拆分。</p>
+<h3>2026-11-25：R3 集中 SSE 路由，修正三条流的 OpenAPI 声明</h3>
+<p>全局、项目和工单的事件流已集中到 <a href="../backend/api/event_streams.py">api/event_streams.py</a>。旧版按频道投递和断开回收均正常，问题是三个 GET 的 OpenAPI 都声明返回 JSON；现在声明与实际的 <code>text/event-stream</code> 一致。原路径、标签、Python 调用入口及工单路由的挂载方式保留。代码 <code>dbe7f29</code>。</p>
+<p><code>main.py</code> <strong>681 → 675 行</strong>，<code>api/tickets.py</code> <strong>3,443 → 3,421 行</strong>；R3 累计从主文件迁出 <strong>19 个接口</strong>。相关回归 31 项通过，在声明的 FastAPI 最低版本上单跑 5 项 SSE 测试也通过，分层违规新增 0。现场 16 个普通只读地址和 3 条流均返回 200。隔离浏览器验证了同名事件的投递、中文换行和断开后订阅数从 3 降到 0。流程、截图、版本与可复跑命令见<a href="../dev-notes/2026-11-25_16_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E5%85%A8%E5%B1%80%E4%BA%8B%E4%BB%B6%E6%B5%81.html">系列 DevNote 16：全局事件流</a>。</p>
+<p>后端全量 <strong>1,782 项通过，pytest 无警告（380.74 秒）</strong>。</p>
+<p>主文件余下 6 个 HTTP 路径装饰器。下一批建议拆出系统路径打开接口：用替身已确认 macOS 目录分支传给 <code>open</code> 的参数中多出一个空字符串，可先加测试固定期望行为。257 行的应用生命周期仍待单独拆分。</p>
+<h3>2026-11-25：R3 拆出系统路径打开接口，修正 macOS 目录参数与页面反馈</h3>
+<p><code>POST /api/system/open_path</code> 已迁入<a href="../backend/api/system.py">系统路由</a>，<a href="../backend/services/file_manager.py">文件管理器服务</a>处理桌面调用。macOS 打开目录不再带空参数；三端均向桌面程序传绝对路径。成功响应和旧 Python 入口保留。前端详情按钮可传递含单引号或反斜杠的路径，图片入口收到 404 时显示实际错误。代码 <code>9249e9f</code>。</p>
+<p><code>main.py</code> <strong>675 → 643 行</strong>，R3 累计从主文件迁出 <strong>20 个接口</strong>。相关回归 57 项通过；模拟三个系统验证文件与目录调用，浏览器验证了成功、缺失图片和断网复制反馈。分层违规新增 0。新服务 19 个只读地址返回 200，未在运行中的服务上打开文件管理器。迁移前后对照、启动与退出记录、流程图、截图和重跑命令见<a href="../dev-notes/2026-11-25_17_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E7%B3%BB%E7%BB%9F%E8%B7%AF%E5%BE%84%E6%89%93%E5%BC%80.html">系列 DevNote 17：系统路径打开</a>。</p>
+<p>主文件余下 5 个 HTTP 路径装饰器。下一批建议拆前端入口与图标，验证深链接、缓存头和找不到首页时的 404。拆 257 行应用生命周期时，另查旧进程释放端口后未自行退出的问题。</p>
+<p>后端全量 <strong>1,796 项通过，pytest 无警告（281.57 秒）</strong>。</p>
+<h3>2026-11-26：R3 拆出前端入口与图标，修正同名目录的 500</h3>
+<p><code>/app</code>、<code>/app/{path:path}</code> 和 <code>/favicon.ico</code> 已集中到<a href="../backend/api/frontend_pages.py">页面路由</a>。深链接仍返回同一份首页，支持字节范围请求；当 <code>index.html</code> 是目录时，改为与文件缺失一致的 JSON 404。两个页面 GET 的 OpenAPI 已按实际响应声明 HTML 和 JSON 错误。代码 <code>de10788</code>。</p>
+<p><code>main.py</code> <strong>643 → 624 行</strong>；R3 累计迁出 <strong>23 个 HTTP 路径</strong>。相关回归 40 项通过；最低 FastAPI 版本下 10 个入口用例通过；分层违规新增 0。浏览器实测直达深链接和刷新后仍收到相同首页。重启前后五个页面或静态资源地址的内容、状态与缓存头逐项一致。复现步骤、实测截图与重跑命令见<a href="../dev-notes/2026-11-26_18_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E5%89%8D%E7%AB%AF%E9%A1%B5%E9%9D%A2%E5%85%A5%E5%8F%A3.html">系列 DevNote 18：前端页面入口</a>。</p>
+<p>后端全量 <strong>1,806 项通过，pytest 无警告（225.74 秒）</strong>。</p>
+<p>主文件剩下系统浏览器、本地图片两个 HTTP 路由装饰器。下一批先拆系统浏览器入口：替身预检已确认前端接受大写 <code>HTTPS://</code> 而后端返回 400。257 行的应用生命周期仍待拆分；上期的退出滞留在本次重启未复现。</p>
+<h3>2026-11-26：R3 拆出系统浏览器入口，修正协议大小写和错误回退</h3>
+<p><code>GET /api/open-in-browser</code> 已迁入<a href="../backend/api/system.py">系统路由</a>，有效 HTTP(S) 地址仅统一协议名的大小写。地址错误返回 400，页面显示原因；桌面启动失败和断网保留新窗口后备行为。同步桌面调用移入线程池，等待启动期间健康检查可以独立返回。原路径、Python 入口、成功响应和 OpenAPI 定义保留。代码 <code>52862cb</code>。</p>
+<p><code>main.py</code> <strong>624 → 614 行</strong>，R3 累计迁出 <strong>24 个 HTTP 路径</strong>。相关回归 55 项通过，最低 FastAPI 版本下新增 15 项通过，分层违规新增 0。隔离 Edge 验证成功、地址错误、桌面不可用与断网四种结果。新版服务 19 个只读地址检查通过。测试流程、截图和重跑命令见<a href="../dev-notes/2026-11-26_19_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E7%B3%BB%E7%BB%9F%E6%B5%8F%E8%A7%88%E5%99%A8%E5%85%A5%E5%8F%A3.html">系列 DevNote 19：系统浏览器入口</a>。</p>
+<p>主文件只剩本地图片预览一个 HTTP 路由装饰器。下一批先用临时图片验证响应内容和错误分支，再迁移该路由；257 行的应用生命周期仍待拆分。</p>
+<p>后端全量 <strong>1,821 项通过，pytest 无警告（289.70 秒）</strong>。</p>
+<h3>2026-11-26：R3 完成主入口的 25 个 HTTP 路径迁移</h3>
+<p>最后一个路径 <code>GET /api/local-file</code> 已迁入<a href="../backend/api/local_images.py">本地图片路由</a>，代码 <code>a159e8b</code>。返回的原图字节、分段读取与错误状态保留。修正了 OpenAPI 把图片声明为 JSON 的问题，也避免系统 MIME 表缺项时把 JPEG 标成 PNG。<code>main.py</code> <strong>614 → 600 行</strong>，直接声明的 HTTP 路由剩 <strong>0 个</strong>。</p>
+<p>相关回归 48 项通过；隔离 Edge 实测聊天面板可显示文件名含中文、空格及 <code>&amp;</code> 的色卡。新版 8001 服务的 19 个只读地址检查通过。切换时旧进程停止监听后未自行退出，已核实身份并单独结束，原因待查。下一批先验证生命周期的启动与退出顺序，再拆分 257 行的 <code>lifespan</code>；R3 仍在进行。测试流程、截图及重跑命令见<a href="../dev-notes/2026-11-26_20_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%9C%AC%E5%9C%B0%E5%9B%BE%E7%89%87%E9%A2%84%E8%A7%88.html">系列 DevNote 20：本地图片预览</a>。</p>
+<p>后端全量 <strong>1,835 项通过（279.58 秒）</strong>，分层检查未引入新违规。</p>
+<h3>2026-11-26：R3 完成主入口生命周期拆分</h3>
+<p>代码 <code>0a9020f</code>。原 257 行生命周期拆成<a href="../backend/app_runtime/lifecycle.py">27 行的资源管理主流程</a>和独立的<a href="../backend/app_runtime/startup_data.py">启动数据步骤</a>。<code>main.py</code> <strong>600 → 344 行</strong>。七个直属后台任务全部保留句柄，关库前取消并等待；建表失败、启动中途取消及 MCP 停止异常也能清理已取得的资源。没有改变项目恢复、索引补录和资源同步的先后顺序。</p>
+<p>旧版隔离验证中，正常停机仍有图片循环存活，且两种启动失败会漏关 SQLite、子进程超过 5 秒不退出。新版四种隔离场景均能自行退出，现场空闲服务也确认进程和监听一同退出。上期旧进程停滞的具体原因仍无法追溯。相关回归 38 项通过，分层违规新增 0。测试流程、观测边界及实测截图见<a href="../dev-notes/2026-11-26_21_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E5%BA%94%E7%94%A8%E7%94%9F%E5%91%BD%E5%91%A8%E6%9C%9F.html">系列 DevNote 21：应用生命周期</a>。</p>
+<p>R3 第 1 项（25 个 HTTP 路径及生命周期）完成。下一批从 5,566 行的 <code>api/chat.py</code> 切入，先固定项目与全局会话列表的作用域，再拆只读查询。</p>
+<p>后端全量 <strong>1,841 项通过（344.01 秒）</strong>，pytest 退出码 0。</p>
+<h3>2026-11-26：R3 开始拆分聊天包，先迁移两个会话列表</h3>
+<p>代码 <code>0dbce15</code>。原 <code>api/chat.py</code> 改为<a href="../backend/api/chat/__init__.py">同名包</a>，项目与全局会话列表迁入<a href="../backend/api/chat/session_lists.py">独立路由</a>，共用<a href="../backend/services/chat/session_lists.py">会话摘要查询</a>。修正了项目列表在消息与会话的项目归属不一致时多计消息的问题；两个路径的 GET/POST 定义和旧 Python 入口保留。聊天入口 <strong>5,566 → 5,543 行</strong>，仍直接声明 46 个路由。</p>
+<p>相关回归 38 项通过，两组按源码位置运行的 JS 检查分别 35、7 项通过；分层违规新增 0。Edge 已验证项目与全局下拉框的真实显示。测试基线、截图和复跑命令见<a href="../dev-notes/2026-11-26_22_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E8%81%8A%E5%A4%A9%E4%BC%9A%E8%AF%9D%E5%88%97%E8%A1%A8.html">系列 DevNote 22：聊天会话列表</a>。下一批拆消息详情，先锁定项目会话读取时回填待确认工单卡的行为。</p>
+<p>后端全量 <strong>1,850 项通过（263.18 秒）</strong>，pytest 退出码 0。</p>
+<hr>
+<h2 id="section-12">附：度量口径</h2>
+<ul>
+<li><strong>文件范围</strong>：<code>git ls-files backend</code> 加上未跟踪但未被忽略的 <code>.py</code>，排除第二节开头列出的目录。「自有代码」的行数和函数数包含根目录的 77 个下划线脚本；覆盖率的分母不包含它们；2.4 节的数据访问统计、<code>json.loads</code> 和时间调用的计数也不包含它们。</li>
+<li><strong>SQL 字面量</strong>：引号后以 <code>SELECT</code>、<code>UPDATE</code>、<code>INSERT INTO</code>、<code>DELETE FROM</code> 开头，长度 10–200 个字符的字符串；压缩空白后按文本去重。f-string 拼接的片段和超过 200 个字符的语句会漏计，所以这是下限。</li>
+<li><strong>函数长度</strong>：<code>end_lineno - lineno + 1</code>，含嵌套函数。</li>
+<li><strong>圈复杂度</strong>：1 加上 <code>if</code>、<code>for</code>、<code>while</code>、<code>except</code>、<code>with</code>、三元表达式、推导式、<code>assert</code>、<code>match case</code> 的个数，再加布尔运算的额外操作数。</li>
+<li><strong>宽泛 <code>except</code></strong>：裸 <code>except</code>，或捕获 <code>Exception</code> / <code>BaseException</code>。</li>
+<li><strong>延迟导入、未归层模块、方向违规</strong>：直接取 <code>python scripts/check_layers.py --json</code> 的输出。</li>
+<li><strong>覆盖率</strong>：在 <code>backend/</code> 下执行 <code>python -m pytest --cov=. --cov-report=json:&lt;文件&gt;</code>，再按文件范围过滤后汇总。</li>
+<li><strong>近似重复</strong>：两个函数去掉空行和注释、压缩空白后，用 <code>difflib.SequenceMatcher</code> 按行比较，取相同行数占较短函数的比例。</li>
+<li><strong>提交统计</strong>：<code>git log --since=2026-08-24 --name-only</code>。</li>
+<li><strong>前端计数</strong>：对 <code>frontend/app.js</code> 做正则计数；顶层函数指行首的 <code>function</code> / <code>async function</code> 声明。</li>
+</ul>
+<p>这些数字来自本次分析用的临时脚本，没有入库。R0 第 1 步会把它们固化成 <code>scripts/code_metrics.py</code>。</p>
+</article><nav class="adjacent" aria-label="相邻文档"><a href="20261123_01_%E9%A1%B9%E7%9B%AE%E9%97%AE%E9%A2%98%E4%B8%8E%E7%BC%BA%E5%A4%B1%E5%88%86%E6%9E%90.html">上一篇：ADS 项目问题与缺失分析（2026-11-23 体检）</a></nav></main></body></html>

@@ -1,0 +1,461 @@
+<!doctype html>
+<!-- 由 scripts/docs-html/export.mjs 生成，请编辑 Markdown 原稿。 -->
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>`process_ticket` 改成分步管线（2026-11-24） · ADS 文档</title><link rel="stylesheet" href="../docs/assets/refactor-docs/reader.css"></head>
+<body><nav class="bar" aria-label="主导航"><b>ADS · 开发文档</b><a href="../docs/%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%96%87%E6%A1%A3%E7%B4%A2%E5%BC%95.html">系列索引</a></nav>
+<main><header><p class="meta">开发笔记 · DevNote · <a href="2026-11-24_04_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_process_ticket%E5%88%86%E6%AD%A5%E7%AE%A1%E7%BA%BF.md">Markdown 原稿</a></p>
+<h1>`process_ticket` 改成分步管线（2026-11-24）</h1></header><details><summary>本页目录（11 节）</summary><ol><li><a href="#section-1">背景</a></li><li><a href="#section-2">做了什么</a></li><li><a href="#section-3">设计决定</a></li><li><a href="#section-4">和方案的偏差</a></li><li><a href="#section-5">验证</a></li><li><a href="#section-6">度量变化</a></li><li><a href="#section-7">特征测试钉住的可疑现状</a></li><li><a href="#section-8">没有验证的部分</a></li><li><a href="#section-9">已知影响</a></li><li><a href="#section-10">遗留与后续</a></li><li><a href="#section-11">复核命令</a></li></ol></details>
+<article><blockquote>
+<p>关联方案：<code>docs/20261124_01_代码重构方案.md</code>（R0 第 3 步、R2 第 2 步）
+前一篇：<code>dev-notes/2026-11-24_03_代码重构_拆分结果处理器.md</code>
+提交基线：<code>7b9e7f0</code>；本篇的代码和文档都在工作区，<strong>尚未提交</strong>。</p>
+</blockquote>
+<h2 id="section-1">背景</h2>
+<p>上一步拆完 <code>_handle_agent_result</code> 之后，全仓最长的函数是 <code>TicketOrchestrator.process_ticket</code>：
+682 行，圈复杂度 113，全量测试下的行覆盖率是 0%。它是每张工单每一轮流转的入口，出口有十几个。
+方案要求先补特征测试再动结构，本轮照这个顺序做：先在原代码上把每个出口钉住，再把函数体搬成分步管线。
+外部行为不变。</p>
+<h2 id="section-2">做了什么</h2>
+<h3>1. 特征测试（R0 第 3 步的 <code>process_ticket</code> 部分）</h3>
+<p>新增 <code>backend/tests/agents/test_orchestrator_process_ticket.py</code>，1,213 行，73 条用例。
+其中 59 条是拆分前写的行为用例，14 条是拆分后补的管线约定用例。</p>
+<ul>
+<li>夹具：真实 SQLite 加 <code>init_tables()</code>，<code>TicketOrchestrator.__new__</code> 造实例，三个假 Agent
+（<code>DevAgent</code>、<code>UXAgent</code>、<code>SkillAgent</code>）。</li>
+<li>真跑的部分：占用和释放处理权、两种止损计数、<code>_log</code>、Agent 忙闲标记、<code>current_action</code> 读写、
+<code>_execute_assigned_agent</code>、非代码工单和无界面工单的判断。断言直接查库里的工单、<code>ticket_logs</code> 和 SSE 记录。</li>
+<li>打桩的部分：规则表、SOP 阶段、上下文构建、结果处理、心跳、阶段回退、诊断、Git、检查点、
+<code>tickets_fts</code>、Failure Library、<code>asyncio.sleep</code>。</li>
+<li>59 条行为用例分十一组：
+<ol>
+<li>入口门闩：已被占用、上一轮 CLI 还在跑、工单不存在、6 个硬终态、需求暂停或取消；</li>
+<li>全局止损：累计打回 5 次、同因连续失败 3 次、验收打回不计入同因、解除阻塞后计数清零；</li>
+<li>前置依赖：未完成时等待、<code>testing_done</code> 和 <code>deployed</code> 算完成、自引用和坏 JSON 被忽略、只对 pending 生效；</li>
+<li>规则匹配：无规则、状态修复后再匹配、阶段级 <code>max_retries</code> 止损、缺 <code>next_status</code> 时的兜底；</li>
+<li>跳过阶段：非代码工单跳过编译类阶段、无界面工单跳过 UX 和美术设计、三种不跳过的情况；</li>
+<li>Agent 未注册；</li>
+<li>正常派单：状态和日志、SSE 顺序、LLM 上下文、心跳、检查点、续跑事件、SOP 配置和人工评论注入、skill 阶段；</li>
+<li>切分支：成功、已在目标分支、失败且停在主分支、失败但不在主分支、Git 抛异常；</li>
+<li>反思记录：三处写入，以及任何一处失败都不影响后续；</li>
+<li>排队中的阶段回退：应用、工单已终态时放弃、会前跳时放弃；</li>
+<li>异常和取消：Agent 抛异常、选出 Agent 前后出错的区别、异常后回退仍生效、取消原样抛出。</li>
+</ol>
+</li>
+<li>每条用例都检查处理权有没有释放。</li>
+</ul>
+<p>59 条在未改动的 <code>process_ticket</code> 上首次运行就全部通过。写之前列了七处可能和现状对不上的地方
+（状态列的约束、同一秒内多条日志的排序、contextvar 的行为等），实际都没有出现。
+首次全绿也可能是断言太松，所以另外做了改坏检查，见「验证」一节。</p>
+<p>拆分前这 59 条单独跑时，<code>process_ticket</code> 的行覆盖率是 94.1%（273 条语句漏 16 条），
+分支 90 条走到 82 条。漏掉的 16 行都是延迟导入失败、日志写入失败这类 <code>except</code> 兜底。</p>
+<h3>2. 拆分（R2 第 2 步）</h3>
+<p>新增 <code>backend/orchestration/ticket_pipeline.py</code>，914 行：</p>
+<ul>
+<li><code>TicketRun</code>：一次 <code>process_ticket</code> 调用里各步骤共享的状态，字段和原来的局部变量同名
+（<code>ticket</code>、<code>current_status</code>、<code>rule</code>、<code>agent_name</code>、<code>action</code>、<code>next_status</code>、<code>context</code>、<code>result</code>），
+另有 <code>agent_chosen</code>、<code>stopped_at</code>、<code>stop_reason</code>。</li>
+<li>17 个步骤函数，签名都是 <code>async def step(run) -&gt; Optional[str]</code>。返回 <code>CONTINUE</code>（即 <code>None</code>）进入下一步，
+返回原因字符串表示本轮到此为止。</li>
+<li><code>STEPS</code> 元组登记执行顺序，<code>run_pipeline(run)</code> 按顺序执行。</li>
+</ul>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>顺序</th>
+<th>步骤</th>
+<th>行数</th>
+<th>可能的停止原因</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><code>load_ticket</code></td>
+<td>35</td>
+<td><code>live_cli</code>、<code>ticket_not_found</code></td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>check_entry_gates</code></td>
+<td>33</td>
+<td><code>hard_terminal</code>、<code>requirement_inactive</code></td>
+</tr>
+<tr>
+<td>3</td>
+<td><code>check_global_circuit_breaker</code></td>
+<td>73</td>
+<td><code>global_circuit_breaker</code></td>
+</tr>
+<tr>
+<td>4</td>
+<td><code>check_dependencies</code></td>
+<td>41</td>
+<td><code>waiting_dependencies</code></td>
+</tr>
+<tr>
+<td>5</td>
+<td><code>match_rule</code></td>
+<td>25</td>
+<td><code>no_rule</code></td>
+</tr>
+<tr>
+<td>6</td>
+<td><code>check_stage_retry_limit</code></td>
+<td>54</td>
+<td><code>stage_retry_limit</code></td>
+</tr>
+<tr>
+<td>7</td>
+<td><code>select_agent</code></td>
+<td>21</td>
+<td>无</td>
+</tr>
+<tr>
+<td>8</td>
+<td><code>skip_inapplicable_stage</code></td>
+<td>74</td>
+<td><code>stage_skipped</code></td>
+</tr>
+<tr>
+<td>9</td>
+<td><code>ensure_agent_registered</code></td>
+<td>39</td>
+<td><code>agent_not_registered</code></td>
+</tr>
+<tr>
+<td>10</td>
+<td><code>assign_ticket</code></td>
+<td>43</td>
+<td>无</td>
+</tr>
+<tr>
+<td>11</td>
+<td><code>switch_to_feature_branch</code></td>
+<td>28</td>
+<td><code>branch_switch_failed_on_main</code></td>
+</tr>
+<tr>
+<td>12</td>
+<td><code>build_agent_context</code></td>
+<td>44</td>
+<td>无</td>
+</tr>
+<tr>
+<td>13</td>
+<td><code>run_agent</code></td>
+<td>76</td>
+<td>无</td>
+</tr>
+<tr>
+<td>14</td>
+<td><code>record_reflection</code></td>
+<td>10</td>
+<td>无</td>
+</tr>
+<tr>
+<td>15</td>
+<td><code>handle_result</code></td>
+<td>24</td>
+<td>无</td>
+</tr>
+<tr>
+<td>16</td>
+<td><code>apply_pending_restart</code></td>
+<td>37</td>
+<td><code>status_rewound</code></td>
+</tr>
+<tr>
+<td>17</td>
+<td><code>publish_next_stage</code></td>
+<td>18</td>
+<td>无</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>record_reflection</code> 下面还有三个小函数：<code>_log_reflection</code>（42 行）、<code>_index_reflection</code>（24 行）、
+<code>_record_failure_case</code>（25 行）。</p>
+<p><code>process_ticket</code> 留在 <code>orchestrator.py</code>，剩 77 行，只做外层骨架：</p>
+<ol>
+<li><code>_try_claim_ticket</code>，失败就返回；</li>
+<li>登记 <code>_running_tasks</code>；</li>
+<li>构造 <code>TicketRun</code>，<code>await ticket_pipeline.run_pipeline(run)</code>；</li>
+<li><code>except CancelledError</code>：记 warning 后原样抛出；</li>
+<li><code>except Exception</code>：<code>run.agent_chosen</code> 为真时给 Agent 记一次失败，写 <code>error</code> 日志，发 <code>ticket_error</code>；</li>
+<li><code>finally</code>：释放处理权，兜底应用排队的阶段回退，清检查点上下文。</li>
+</ol>
+<p>步骤体是用脚本从原函数按行号区间搬出来的，改动有六处：</p>
+<ol>
+<li>缩进减 8 格（反思的三个小函数减 12 格）；</li>
+<li><code>self.</code> 换成 <code>orch.</code>；</li>
+<li>跨步骤的局部变量在步骤开头从 <code>run</code> 取，写入它的步骤在末尾存回 <code>run</code>；</li>
+<li>裸 <code>return</code> 换成带原因的 <code>return &quot;...&quot;</code>，步骤末尾加 <code>return CONTINUE</code>；</li>
+<li><code>load_ticket</code> 里去掉一个没用到的 <code>clear_checkpoint_context</code> 导入；</li>
+<li><code>run_pipeline</code> 在有步骤停止时多打一条 debug 级日志，内容是停在哪一步和原因。</li>
+</ol>
+<p>第 6 处是本轮唯一新增的可观察行为，只在 debug 级别可见。</p>
+<h3>3. 配套改动</h3>
+<ul>
+<li><code>backend/tests/agents/test_dispatch_gate.py</code>：<code>test_poll_once_skips_held_tickets_before_zombie</code> 原来断言
+<code>process_ticket</code> 的源码里有 <code>_ticket_heartbeat</code>，改成断言 <code>ticket_pipeline.run_agent</code> 的源码，
+并确认 <code>run_agent</code> 登记在 <code>STEPS</code> 里。</li>
+<li><code>backend/tests/agents/test_orchestrator_skill_branch.py</code>：<code>test_process_ticket_calls_execute_assigned_agent</code>
+原来在 <code>orchestrator.py</code> 文本里找 <code>await self._execute_assigned_agent(</code>，改成在 <code>ticket_pipeline.py</code> 里找
+<code>await orch._execute_assigned_agent(</code>；「不许出现 <code>agent.execute(action, context)</code>」这条对两个文件都查。</li>
+<li><code>desktop.spec</code>：<code>hiddenimports</code> 增加 <code>orchestration.ticket_pipeline</code>。</li>
+<li><code>backend/layers.toml</code> 不用改，<code>orchestration</code> 前缀上一步已经归入 L1。</li>
+</ul>
+<h2 id="section-3">设计决定</h2>
+<ul>
+<li><strong>步骤是模块级函数，接收 <code>run</code>。</strong> 方案写的是「每步一个方法」。放在类上会让 <code>TicketOrchestrator</code>
+再多 20 个方法，和 R2 第 3 步按职责拆类的方向相反，所以放进 <code>orchestration/</code>，和结果处理器的做法一致。</li>
+<li><strong><code>db</code> 经 <code>run.db</code> 传入。</strong> 和上一步同理：测试用 <code>monkeypatch.setattr(orchestrator, &quot;db&quot;, test_db)</code> 换库，
+步骤里自己导入 <code>db</code> 会让这个桩失效。<code>event_manager</code>、<code>git_manager</code> 是按对象属性打桩的，
+新模块导入的是同一个对象，桩照常生效。</li>
+<li><strong><code>'agent_name' in dir()</code> 换成 <code>run.agent_chosen</code>。</strong> 原来的异常处理靠「局部变量 <code>agent_name</code> 有没有被赋值」
+判断要不要给 Agent 记一次失败。函数体搬走后这个局部变量不存在了。<code>select_agent</code> 取到 <code>rule[&quot;agent&quot;]</code>
+的下一行就把 <code>run.agent_chosen</code> 置真，置真的时机和原来变量被赋值的时机相同。有两条用例钉着这个边界：
+选出 Agent 之前出错不动任何 Agent 的计数，选出之后出错就记一次。</li>
+<li><strong><code>run.ticket</code> 取到就登记。</strong> 外层的 <code>except</code> 和 <code>finally</code> 要读工单的 <code>requirement_id</code> 和 <code>type</code>。
+原来靠函数开头的 <code>ticket = None</code> 兜底，现在是 <code>TicketRun.ticket</code> 的默认值 <code>None</code>。</li>
+<li><strong><code>run.ticket</code> 不刷新。</strong> 派单后数据库里的状态已经改成进行中，<code>run.ticket</code> 仍是派单前读到的那一行。
+<code>trigger_status</code> 和结果处理都依赖这一点，原代码也是这样。</li>
+<li><strong>步骤在同一个协程里直接 <code>await</code>。</strong> 检查点上下文和 LLM 上下文都是 contextvar。
+步骤如果另起任务执行，前面步骤设的上下文对后面的步骤就不可见了。</li>
+<li><strong>延迟导入原样保留。</strong> <code>llm_client</code>、<code>checkpoint</code>、<code>capability_check</code>、<code>api.knowledge</code>、<code>failure_library</code>
+仍在函数内导入。测试的桩打在这些源模块上，位置不变桩就不用动。</li>
+<li><strong>停止原因是字符串。</strong> 目前只有两个用途：debug 日志，以及测试里核对「停在了预期的那一步」。
+没有做成枚举，等有调用方真正按原因分支时再收紧。</li>
+</ul>
+<h2 id="section-4">和方案的偏差</h2>
+<ol>
+<li>方案列了 8 步（加载、熔断检查、返工与重试判定、规则匹配、选 Agent、构建上下文、执行、反思），
+实际是 17 步。多出来的是原函数里本来就有、方案没单列的段落：入口门闩、前置依赖、跳过阶段、
+Agent 未注册、派单、切分支、结果处理、排队回退、续跑。</li>
+<li>方案要求每步不超过 80 行，这一条满足：最长的 <code>run_agent</code> 是 76 行。</li>
+<li>步骤是函数，没有做成方法，理由见上。</li>
+<li>步骤仍然通过 <code>orch._log</code>、<code>orch._set_agent_busy</code> 这样的私有成员干活，一共用到 24 个私有方法和 3 个属性。
+这层耦合要到 R2 第 3 步拆出协作者之后才能解开。</li>
+<li>步骤内部的逻辑没有整理。<code>check_global_circuit_breaker</code> 和 <code>check_stage_retry_limit</code> 里
+「改 blocked、写日志、发事件、起诊断」是两份相似的代码，本轮没有合并，合并会改变搬移的可核对性。</li>
+</ol>
+<h2 id="section-5">验证</h2>
+<p>环境：Windows，Python 3.14.3；flake8 用的是另一个 Python 3.12.13 环境（flake8 7.5.0）。</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>检查</th>
+<th>结果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>59 条行为用例，拆分前</td>
+<td>全部通过</td>
+</tr>
+<tr>
+<td>59 条行为用例，拆分后</td>
+<td>全部通过，测试代码没有改</td>
+</tr>
+<tr>
+<td>14 条管线约定用例</td>
+<td>全部通过（步骤顺序 1 条、停止原因 12 条、走完全程 1 条）</td>
+</tr>
+<tr>
+<td>改坏检查</td>
+<td>15 处故意改错，全部被测试发现</td>
+</tr>
+<tr>
+<td>搬移核对脚本</td>
+<td>7 项全部通过</td>
+</tr>
+<tr>
+<td>相关用例（结果分支、skill 分支、派单门闩、demo 链路）</td>
+<td>通过；两条源码断言按上面的说明改过</td>
+</tr>
+<tr>
+<td>全量 pytest</td>
+<td>998 条通过（原 925 加新增 73），退出码 0</td>
+</tr>
+<tr>
+<td><code>python scripts/check_layers.py</code></td>
+<td>退出码 0；模块 487；方向违规 92 条，相对基线新增 0</td>
+</tr>
+<tr>
+<td><code>flake8 --select=E9,F63,F7,F82</code></td>
+<td>0 条（排除项见下）</td>
+</tr>
+<tr>
+<td><code>py_compile</code></td>
+<td><code>orchestrator.py</code> 和 <code>ticket_pipeline.py</code> 通过</td>
+</tr>
+<tr>
+<td>上一步的 AST 对比脚本</td>
+<td>重跑仍然全部一致</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>改坏检查。</strong> 59 条用例首次运行就全绿，需要确认它们真能发现问题。做法是逐个把代码改错一处，
+跑这份测试文件，看有没有用例变红，然后恢复。15 处是：跳过阶段时先发事件后释放、<code>agent_chosen</code> 不置真、
+两处止损的 <code>&gt;=</code> 改成 <code>&gt;</code>、不清 LLM 上下文、不写 <code>trigger_status</code>、续跑前不释放、依赖检查不限 pending、
+Agent 不标空闲、Failure Library 的失败类型写反、回退生效后不停止、主分支上切换失败后继续执行，
+以及外层骨架的三处（<code>finally</code> 不释放、无条件给 Agent 记失败、吞掉取消）。15 处全部有用例变红。
+这项检查是在拆分后的代码上做的。</p>
+<p><strong>搬移核对脚本。</strong> 这次控制流变了，不能像上一步那样逐分支比 AST。<code>ticket_pipeline.py</code> 是由脚本按行号区间
+从拆分前的 <code>orchestrator.py</code> 生成的，核对脚本检查七件事：</p>
+<ol>
+<li>重新生成的结果和磁盘上的文件逐字节相同，说明生成之后没有手工改动；</li>
+<li>原函数体第 2141 到 2752 行，每一行恰好被搬走一次；没搬的 18 行都是步骤之间的空行；
+<code>STEPS</code> 的顺序和原代码的行序一致；</li>
+<li>每个步骤写过的共享变量都存回了 <code>run</code>；没有步骤读到还没写入的字段；</li>
+<li>原函数里跨越步骤边界的局部变量一共 9 个，8 个在 <code>TicketRun</code> 上，<code>last_reflection</code> 作为参数传递；</li>
+<li>原函数的局部变量和新模块的模块级名字没有重名；</li>
+<li>行数和圈复杂度（见下表）；</li>
+<li><code>orchestrator.py</code> 在 <code>process_ticket</code> 之外的部分，和拆分前只差一行导入。</li>
+</ol>
+<p>生成脚本和核对脚本都放在临时目录，没有进仓库。</p>
+<p><strong>覆盖率。</strong> 73 条用例单独跑时，<code>ticket_pipeline.py</code> 的 422 条语句漏 10 条（97.6%），
+84 条分支有 7 条没走全，语句和分支合计 96.6%。<code>process_ticket</code> 外层骨架的 38 条语句漏 6 条。
+漏掉的仍然都是 <code>except</code> 兜底。</p>
+<p><strong>flake8 的排除项。</strong> CI 的命令排除了 <code>skills/marketplace</code>、<code>skills/packs</code>、<code>skills/use_skills</code>。
+本机 <code>backend/projects/</code> 下有运行时生成的项目代码，其中一个文件有 3 条 F824。这个目录没有被 git 跟踪，
+CI 上不存在，本机检查时一并排除了。</p>
+<h2 id="section-6">度量变化</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>指标</th>
+<th>拆分前</th>
+<th>拆分后</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>orchestrator.py</code> 行数</td>
+<td>5,841</td>
+<td>5,236</td>
+</tr>
+<tr>
+<td><code>process_ticket</code> 行数</td>
+<td>682</td>
+<td>77</td>
+</tr>
+<tr>
+<td><code>process_ticket</code> 圈复杂度</td>
+<td>113</td>
+<td>19</td>
+</tr>
+<tr>
+<td>管线里最长的步骤</td>
+<td>—</td>
+<td><code>run_agent</code> 76 行</td>
+</tr>
+<tr>
+<td>管线里圈复杂度最高的步骤</td>
+<td>—</td>
+<td><code>skip_inapplicable_stage</code> 13</td>
+</tr>
+<tr>
+<td><code>orchestrator.py</code> 里超过 200 行的函数</td>
+<td>4</td>
+<td>3</td>
+</tr>
+<tr>
+<td><code>orchestrator.py</code> 里超过 150 行的函数</td>
+<td>9</td>
+<td>8</td>
+</tr>
+<tr>
+<td>全仓超过 200 行的函数</td>
+<td>31</td>
+<td>30</td>
+</tr>
+<tr>
+<td>全仓超过 300 行的函数</td>
+<td>10</td>
+<td>9</td>
+</tr>
+<tr>
+<td>全仓最长函数</td>
+<td><code>process_ticket</code> 682 行</td>
+<td><code>query_engine/engine.py</code> 的 <code>run</code> 559 行</td>
+</tr>
+<tr>
+<td>最大 Python 文件</td>
+<td><code>orchestrator.py</code> 5,841 行</td>
+<td><code>api/chat.py</code> 5,566 行</td>
+</tr>
+<tr>
+<td>模块总数（守卫口径）</td>
+<td>486</td>
+<td>487</td>
+</tr>
+<tr>
+<td>未归层模块</td>
+<td>230</td>
+<td>230</td>
+</tr>
+<tr>
+<td>延迟导入占比</td>
+<td>42.3%</td>
+<td>42.2%</td>
+</tr>
+</tbody>
+</table></div>
+<p>从 <code>7b9e7f0</code> 算起，<code>orchestrator.py</code> 从 6,694 行降到 5,236 行。全仓的函数统计是本轮用临时脚本按方案附录的
+文件范围重算的；「全仓超过 300 行」的拆分前数字是由拆分后的 9 加回 <code>process_ticket</code> 得到的。
+<code>api/chat.py</code> 有另一批未提交的改动，5,566 是工作区里的行数。</p>
+<h2 id="section-7">特征测试钉住的可疑现状</h2>
+<p>这几处是写测试时读出来的，测试按现状断言，本轮没有修：</p>
+<ol>
+<li><strong>切分支失败且停在主分支时，工单卡在进行中。</strong> 这一步排在派单之后。停止时工单已经是进行中状态、
+Agent 已标忙碌，这条路径不会改回去，也不写日志。目前靠轮询里的僵尸检测兜底。</li>
+<li><strong>Agent 抛异常后，工单停在进行中，LLM 上下文不清。</strong> 异常处理会写 <code>error</code> 日志、发 <code>ticket_error</code>、
+给 Agent 记一次失败，但不改工单状态，<code>clear_llm_context</code> 也被跳过。</li>
+<li><strong>选出 Agent 之后、标忙碌之前出错，也会给这个 Agent 记一次失败。</strong> 例如读 SOP 阶段时抛异常。
+这时 Agent 其实还没开始干活。</li>
+<li><strong>两处止损各写了一份相似的收尾代码</strong>，见「和方案的偏差」第 5 条。</li>
+</ol>
+<p>前三条要不要改、怎么改，需要确认。改之前这些用例会先变红，改的时候同步更新断言即可。</p>
+<h2 id="section-8">没有验证的部分</h2>
+<ul>
+<li><strong>桌面版打包。</strong> <code>desktop.spec</code> 只确认了语法能解析，没有实际打包和启动。</li>
+<li><strong>真实服务启动和端到端流程。</strong> 没有起服务跑一张真实工单。真实的 Git 切分支、检查点、CLI 流式调用
+在测试里都是桩。</li>
+<li><strong>Linux 和 CI。</strong> 只在本机 Windows 上跑过。</li>
+<li><strong>根目录的 <code>_test_*.py</code> 脚本。</strong> 没有跑。搜过一遍，没有脚本读 <code>process_ticket</code> 的源码。
+<code>_test_command_log.py</code> 有一条检查在 <code>orchestrator.py</code> 文本里找 <code>requirement_id=ticket.get</code>，
+原来有 3 处匹配，搬走 2 处后还剩 1 处，检查仍然成立，但它现在匹配到的不一定是当初想锁的那一行。</li>
+</ul>
+<h2 id="section-9">已知影响</h2>
+<ul>
+<li>读 <code>process_ticket</code> 源码做断言的代码要改看 <code>ticket_pipeline</code>。仓库里搜到的两处都已改。</li>
+<li>代码注释和文档里有十来处 <code>orchestrator.py:行号</code> 形式的引用，行号在上一步拆分时就已经对不上，
+本轮没有逐个修。</li>
+<li>往 <code>process_ticket</code> 里加逻辑时，改成往 <code>STEPS</code> 里加步骤或改对应的步骤函数。
+跨步骤要用的值放到 <code>TicketRun</code> 上。</li>
+<li>异常堆栈会多两层（<code>run_pipeline</code> 和步骤函数），日志里的 logger 名仍是 <code>orchestrator</code>。</li>
+</ul>
+<h2 id="section-10">遗留与后续</h2>
+<ol>
+<li><code>_handle_skill_agent_result</code>（255 行）搬进 <code>result_handlers/</code>，它已有 <code>test_orchestrator_skill_branch.py</code> 保护。</li>
+<li><code>handle_requirement</code>（456 行，覆盖率 1%）补特征测试，它是 <code>orchestrator.py</code> 里剩下的最长函数。</li>
+<li>R2 第 3 步按职责拆类。步骤对 <code>orch</code> 私有方法的依赖到时一起整理。</li>
+<li>上面三处可疑现状是否要修。</li>
+<li>R0 的其余几步都还没做：度量脚本和基线、CI 覆盖率、<code>_call_cli_stream</code> 和聊天流的特征测试、
+83 个业务模块补归层、根目录脚本归位。本轮用到的度量脚本和核对脚本可以作为 <code>scripts/code_metrics.py</code> 的起点。</li>
+<li>工作区现在叠了四批未提交改动（<code>ai_gen_tasks</code>、体检修复第一批、结果处理器、本轮管线），提交时建议分开。</li>
+</ol>
+<h2 id="section-11">复核命令</h2>
+<pre><code class="language-powershell"># 特征测试和相关用例，在 backend/ 下执行
+cd backend
+python -m pytest tests/agents/test_orchestrator_process_ticket.py tests/agents/test_orchestrator_result_branches.py tests/agents/test_orchestrator_skill_branch.py tests/agents/test_dispatch_gate.py tests/e2e/test_demo_chain.py -q -p no:cacheprovider
+
+# 全量
+python -m pytest -q -p no:cacheprovider
+cd ..
+
+# 分层守卫，在仓库根目录执行
+python scripts/check_layers.py
+</code></pre>
+</article><nav class="adjacent" aria-label="相邻文档"><a href="2026-11-24_03_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%8B%86%E5%88%86%E7%BB%93%E6%9E%9C%E5%A4%84%E7%90%86%E5%99%A8.html">上一篇：拆分 `_handle_agent_result` 结果处理器（2026-11-24）</a>
+<a href="2026-11-24_05_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_skill%E7%BB%93%E6%9E%9C%E5%A4%84%E7%90%86%E5%99%A8%E6%90%AC%E7%A7%BB.html">下一篇：skill 结果处理器搬进 `result_handlers`（2026-11-24）</a></nav></main></body></html>

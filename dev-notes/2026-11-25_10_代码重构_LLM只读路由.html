@@ -1,0 +1,66 @@
+<!doctype html>
+<!-- 由 scripts/docs-html/export.mjs 生成，请编辑 Markdown 原稿。 -->
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>代码重构：拆出 LLM 状态和 Agent 生效配置 · ADS 文档</title><link rel="stylesheet" href="../docs/assets/refactor-docs/reader.css"></head>
+<body><nav class="bar" aria-label="主导航"><b>ADS · 开发文档</b><a href="../docs/%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%96%87%E6%A1%A3%E7%B4%A2%E5%BC%95.html">系列索引</a></nav>
+<main><header><p class="meta">开发笔记 · DevNote · <a href="2026-11-25_10_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_LLM%E5%8F%AA%E8%AF%BB%E8%B7%AF%E7%94%B1.md">Markdown 原稿</a></p>
+<h1>代码重构：拆出 LLM 状态和 Agent 生效配置</h1></header><details><summary>本页目录（3 节）</summary><ol><li><a href="#section-1">同一套配置，两个响应为什么不同</a></li><li><a href="#section-2">改动与兼容入口</a></li><li><a href="#section-3">测试过程</a></li></ol></details>
+<article><p>2026-11-25 · <a href="2026-11-25_09_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E7%B3%BB%E7%BB%9F%E5%8F%AA%E8%AF%BB%E8%B7%AF%E7%94%B1.html">上期：系统只读路由</a> · <a href="../docs/20261124_01_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84%E6%96%B9%E6%A1%88.html">项目重构方案</a></p>
+<p>R3 本期将 <code>GET /api/llm/status</code> 和 <code>GET /api/llm/agents</code> 迁出 <a href="../backend/main.py">main.py</a>。主文件从 <strong>1,051 行减到 971 行</strong>；加上指标、SOP 和系统只读接口，R3 累计迁出 10 个接口。</p>
+<h2 id="section-1">同一套配置，两个响应为什么不同</h2>
+<p>顶栏要知道“此刻用哪个模型”，编辑器还要回填已有配置。把两处响应共用为同一个字典，会丢失其中一方需要的信息。</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>场景</th>
+<th>顶栏状态 <code>/api/llm/status</code></th>
+<th>Agent 编辑器 <code>/api/llm/agents</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>API 模式</td>
+<td>显示主模型，返回基础 URL；四个 CLI 专属字段为空</td>
+<td>展示主模型，也保留配置中的 CLI 字段供编辑器回填</td>
+</tr>
+<tr>
+<td>CLI 模式</td>
+<td>显示 CLI 模型，缺省时回退主模型；基础 URL 为空，<code>model</code> 仍返回主模型</td>
+<td>用同一规则计算 <code>display_model</code>；保留生效配置的基础 URL</td>
+</tr>
+<tr>
+<td>凭据字段</td>
+<td>返回是否已配置的 <code>configured</code></td>
+<td>全局与各 Agent 的公开字段只含 <code>has_api_key</code> 标记，不返回 <code>api_key</code> 字段</td>
+</tr>
+</tbody>
+</table></div>
+<p>Agent 列表还需区分<strong>字段回退</strong>与<strong>整行继承</strong>。没有覆盖行时，<code>has_override</code> 为假，使用全局客户端；有覆盖行但某字段为空时，该字段可回退到全局默认，<code>has_override</code> 仍为真。两条记录可能看起来完全相同，但编辑器只有对后一条才有覆盖可以删除。读取仍先发现 Agent，按名称排序，依次查询覆盖。</p>
+<figure><a href="../docs/assets/refactor-docs/2026-11-25_10_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_LLM%E5%8F%AA%E8%AF%BB%E8%B7%AF%E7%94%B1_%E5%9B%BE1.svg"><img src="../docs/assets/refactor-docs/2026-11-25_10_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_LLM%E5%8F%AA%E8%AF%BB%E8%B7%AF%E7%94%B1_%E5%9B%BE1.svg" alt="流程图：同一套配置，两个响应为什么不同"></a><figcaption>流程图：同一套配置，两个响应为什么不同 · <a href="../docs/assets/refactor-docs/2026-11-25_10_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_LLM%E5%8F%AA%E8%AF%BB%E8%B7%AF%E7%94%B1_%E5%9B%BE1.svg">查看原图</a></figcaption></figure>
+<p><strong>一个容易误读的旧行为。</strong> <a href="../backend/llm_client.py">配置查询</a>遇到数据库读取异常时也会返回 <code>None</code>。用临时替身分别模拟“查无此行”和“查询抛出异常”，确认两次结果都是 <code>None</code>。因此数据库故障时，页面可能把原本有覆盖的 Agent 显示为继承；<code>has_override: false</code> 不是数据库正常的证明。本期保持现有行为。若要让界面区别“已确认继承”和“读取失败”，需单独设计错误状态。</p>
+<h2 id="section-2">改动与兼容入口</h2>
+<p><a href="../backend/api/llm_config.py">HTTP 路由</a>保留原有路径、操作名和文档说明。<a href="../backend/services/llm_config.py">配置展示服务</a>分别构造顶栏和编辑器的响应，仅共享模型选择规则和 CLI 选项；配置读取仍用原客户端与 Agent 注册表，没有复制查询或新增缓存。<code>main.llm_status</code>、<code>main.llm_agents</code>、<code>main._public_llm_fields</code> 三个原入口均已核对为新模块中的同一函数。</p>
+<p><a href="../desktop.spec">桌面清单</a>已登记两个新模块，本期未构建桌面包。刷新 CLI 模型、测试连接、保存全局配置及保存/删除 Agent 覆盖这五个操作仍在主文件。对照基线提交逐一比较这五个函数（含装饰器）的语法树，均未改变。</p>
+<h2 id="section-3">测试过程</h2>
+<ol>
+<li><strong>先跑旧实现。</strong> <a href="../backend/tests/api/test_llm_read_routes.py">4 个 HTTP 场景</a>通过 ASGI 访问实际应用且不启动生命周期。前三个场景分别验证 API 主模型、CLI 有选择模型、CLI 空值回退，同时核对所有公开字段及缺省值。</li>
+<li><strong>把 Agent 覆盖测到字段级。</strong> 第四个场景提供乱序的虚构 Agent 和三种数据库查询结果：带 CLI 模型的覆盖行、只有空模型的覆盖行、无覆盖行。只替换注册表、查询结果、模型选项和运行配置，保留真实的配置合并和客户端构造；用布尔值模拟凭据存在性。断言完整响应，意外增加未公开字段也会失败。这组场景不调用模型或启动 CLI。</li>
+<li><strong>再跑拆分后的回归。</strong> 相同 4 个场景在旧实现上 <strong>4 passed in 1.35s</strong>。迁移后连同原有模型显示、主入口、系统、SOP 和指标测试，<strong>49 passed in 4.45s</strong>。分层守卫检查 514 个模块：历史违规 86、新增 0、解析错误与循环依赖组均为 0；本轮指定的 flake8 规则通过。</li>
+</ol>
+<pre><code class="language-powershell"># backend/，第一条在拆分前运行
+python -m pytest -p no:cacheprovider tests/api/test_llm_read_routes.py
+python -m pytest -p no:cacheprovider tests/api/test_llm_read_routes.py tests/api/test_llm_status_display.py tests/api/test_system_read_routes.py tests/api/test_main_hardening.py tests/api/test_sop_config_routes.py tests/api/test_metrics_asyncio_tasks.py
+python -m pytest -p no:cacheprovider
+uvx --python 3.14 --from flake8==7.3.0 flake8 --select=E9,F63,F7,F82 --exclude=skills/marketplace,skills/packs,skills/use_skills,projects .
+
+# 仓库根目录
+python scripts/check_layers.py --json
+</code></pre>
+<p>以上检查由本轮开发主动运行；保存文件或本地提交不会自动触发全量测试。</p>
+<p><strong>运行中服务的对照。</strong> 旧服务 PID 85532 停止前，队列、执行中工单和活动 Agent 均为 0。新服务 PID 86672 在 8001 端口就绪后，14 个只读地址全部返回 HTTP 200。对两个 LLM GET 分别做两项比较：一是 OpenAPI 中完整的 GET 操作，二是实际响应 JSON 的 SHA-256（对象键排序，数组顺序保留）。新旧结果均一致。验证脚本只保存接口定义与响应摘要，不保存或展示配置正文。未向运行中的服务发送刷新、测试连接或保存请求。</p>
+<p><strong>后端全量：</strong> <code>1730 passed in 264.39s (0:04:24)</code>，退出码 0，pytest 未报告警告。拆分基线 <code>f513ac7</code>，代码提交 <code>9764e3c</code>。</p>
+<p><img src="assets/2026-11-25_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_LLM%E5%8F%AA%E8%AF%BB%E8%B7%AF%E7%94%B1_%E9%AA%8C%E8%AF%81.png" alt="LLM 只读路由验证：基线、主文件行数、相关回归、全量测试与服务检查"></p>
+<p>截图读取本轮三份 pytest 输出、Git 基线与当前文件行数、分层检查 JSON 及服务复测结果生成。</p>
+<p>下一批建议先迁移 CLI 模型刷新与测试连接。使用可控的异步替身固定默认参数、成功返回及失败传递；全局配置和 Agent 覆盖的持久化另行验证。</p>
+</article><nav class="adjacent" aria-label="相邻文档"><a href="2026-11-25_09_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E7%B3%BB%E7%BB%9F%E5%8F%AA%E8%AF%BB%E8%B7%AF%E7%94%B1.html">上一篇：代码重构：迁出健康检查与本地路径列表</a>
+<a href="2026-11-25_11_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_LLM%E6%A8%A1%E5%9E%8B%E5%88%B7%E6%96%B0%E4%B8%8E%E8%BF%9E%E6%8E%A5%E6%B5%8B%E8%AF%95.html">下一篇：代码重构：拆出 CLI 模型刷新与 LLM 连接测试</a></nav></main></body></html>

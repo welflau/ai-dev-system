@@ -1,0 +1,93 @@
+<!doctype html>
+<!-- 由 scripts/docs-html/export.mjs 生成，请编辑 Markdown 原稿。 -->
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>代码重构：拆出 SOP 配置路由，用临时 YAML 验证写入和回滚 · ADS 文档</title><link rel="stylesheet" href="../docs/assets/refactor-docs/reader.css"></head>
+<body><nav class="bar" aria-label="主导航"><b>ADS · 开发文档</b><a href="../docs/%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%96%87%E6%A1%A3%E7%B4%A2%E5%BC%95.html">系列索引</a></nav>
+<main><header><p class="meta">开发笔记 · DevNote · <a href="2026-11-25_08_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_SOP%E9%85%8D%E7%BD%AE%E8%B7%AF%E7%94%B1.md">Markdown 原稿</a></p>
+<h1>代码重构：拆出 SOP 配置路由，用临时 YAML 验证写入和回滚</h1></header><details><summary>本页目录（3 节）</summary><ol><li><a href="#section-1">路由与保存逻辑各管什么</a></li><li><a href="#section-2">一次保存如何回滚</a></li><li><a href="#section-3">测试怎样运行</a></li></ol></details>
+<article><p>2026-11-25 · <a href="2026-11-25_07_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_Skill%E5%86%99%E5%85%A5%E4%B8%8E%E6%8C%87%E6%A0%87%E8%B7%AF%E7%94%B1.html">上期：Skill 写入与指标路由</a> · <a href="../docs/20261124_01_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84%E6%96%B9%E6%A1%88.html">项目重构方案</a></p>
+<p>R3 本期从 <a href="../backend/main.py">main.py</a> 拆出 SOP 编辑器的四个接口。编辑器仍可读取完整配置、修改后保存并立即看到新的流程视图。<code>main.py</code> 从 <strong>1,169 行降到 1,090 行</strong>。先在旧实现上固定 HTTP、磁盘和重载的预期，再用同一组测试检查新实现。</p>
+<h2 id="section-1">路由与保存逻辑各管什么</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>接口</th>
+<th>调用方能观察到的行为</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET /api/sop</code></td>
+<td>返回流程摘要、阶段和当前转换规则；没有配置时返回内置默认摘要。</td>
+</tr>
+<tr>
+<td><code>GET /api/sop/config</code></td>
+<td>返回编辑器可原样回传的完整结构，保留阶段内嵌配置；没有配置时返回空对象。</td>
+</tr>
+<tr>
+<td><code>PUT /api/sop/config</code></td>
+<td>校验、备份旧文本、写 YAML、重载；成功返回名称、阶段数和备份文件名。</td>
+</tr>
+<tr>
+<td><code>POST /api/sop/reload</code></td>
+<td>单独触发重载，返回配置名称；无配置时返回“内置默认”。</td>
+</tr>
+</tbody>
+</table></div>
+<p><a href="../backend/api/sop_config.py">路由模块</a>通过现有门面取得编排器，将校验和保存异常转成原有 HTTP 错误。<a href="../backend/services/sop_config.py">服务模块</a>接收目标目录和重载函数，先校验再碰磁盘，不依赖 FastAPI。<code>main</code> 在原位置挂载路由，原来的四个 Python 函数名仍指向实际路由处理函数。<a href="../desktop.spec">桌面打包清单</a>已登记两个新模块，本期未重新构建桌面包。</p>
+<h2 id="section-2">一次保存如何回滚</h2>
+<figure><a href="../docs/assets/refactor-docs/2026-11-25_08_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_SOP%E9%85%8D%E7%BD%AE%E8%B7%AF%E7%94%B1_%E5%9B%BE1.svg"><img src="../docs/assets/refactor-docs/2026-11-25_08_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_SOP%E9%85%8D%E7%BD%AE%E8%B7%AF%E7%94%B1_%E5%9B%BE1.svg" alt="时序图：一次保存如何回滚"></a><figcaption>时序图：一次保存如何回滚 · <a href="../docs/assets/refactor-docs/2026-11-25_08_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_SOP%E9%85%8D%E7%BD%AE%E8%B7%AF%E7%94%B1_%E5%9B%BE1.svg">查看原图</a></figcaption></figure>
+<p><strong>回滚的边界。</strong> 首次保存没有旧文件，响应里的备份名只是预定名称。备份名只精确到秒，在同一秒内连续保存可能覆盖备份。写文件也不是原子替换。本期验证了“有旧文件、第一次重载抛错、第二次重载成功”；首次保存后重载失败、写入中断、重载内部自行降级等情形，都不能据此判定已恢复旧配置。这些是原实现的限制，需单独改动保存策略。</p>
+<h2 id="section-3">测试怎样运行</h2>
+<p><a href="../backend/tests/api/test_sop_config_routes.py">6 个 HTTP 场景</a>通过 ASGI 访问实际应用。每个用例有独立的临时目录；使用真实校验器和 YAML 文件，按场景控制重载回调。这样可以从 HTTP 一直检查到磁盘上留下的内容，也可以指定失败发生在哪一步。</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>场景</th>
+<th>关键断言</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>空配置 / 手动重载</td>
+<td>两个读视图各自的默认值正确；重载返回内置名或配置名。</td>
+</tr>
+<tr>
+<td>替换旧配置</td>
+<td>备份保留旧注释；新 YAML 能读回；两个视图均能读到嵌套配置；只重载一次。</td>
+</tr>
+<tr>
+<td>首次保存</td>
+<td>新文件能读回，备份目录为空，响应仍带预定备份名。</td>
+</tr>
+<tr>
+<td>请求无效</td>
+<td>业务校验错误是 400，错误类型的请求体是 422；旧文件未变、未创建备份、未重载。</td>
+</tr>
+<tr>
+<td>重载抛错</td>
+<td>两次回调依次读到新名称、旧名称；最终文件及注释恢复，客户端收到 500。</td>
+</tr>
+<tr>
+<td>YAML 序列化失败</td>
+<td>返回写入错误 500，原文件不变，不调用重载。</td>
+</tr>
+</tbody>
+</table></div>
+<pre><code class="language-powershell"># 在 backend/ 运行；第一条也用于拆分前的基线
+python -m pytest -p no:cacheprovider tests/api/test_sop_config_routes.py
+python -m pytest -p no:cacheprovider tests/api/test_sop_config_routes.py tests/sop tests/api/test_metrics_asyncio_tasks.py
+python -m pytest -p no:cacheprovider
+python -m flake8 --select=E9,F63,F7,F82 --exclude=skills/marketplace,skills/packs,skills/use_skills,projects .
+
+# 在仓库根目录运行
+python scripts/check_layers.py --json
+</code></pre>
+<p>以上是开发时主动运行的检查，保存文件不会自动触发全量测试。拆分前的基线为 <strong>6 passed in 7.53s</strong>；拆分后含 SOP 模块、指标路由在内的相关回归为 <strong>125 passed in 17.73s</strong>。四个 Python 入口均核对为原名指向新处理函数；分层守卫检查 511 个模块，历史违规 86、新增 0、解析错误 0、循环依赖组 0。指定的 flake8 规则通过。</p>
+<p><strong>后端全量：</strong> <code>1724 passed in 406.40s (0:06:46)</code>，退出码 0，本次 pytest 未报告警告。拆分基线 <code>e70fc51</code>，代码提交 <code>b9db636</code>。</p>
+<p><img src="assets/2026-11-25_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_SOP%E9%85%8D%E7%BD%AE%E8%B7%AF%E7%94%B1_%E9%AA%8C%E8%AF%81.png" alt="SOP 配置路由验证：旧版 6 个场景、相关 125 项、全量 1724 项、行数及运行中服务对照"></p>
+<p>图为本次验证汇总页的浏览器截图，读取三份 pytest 实际输出、Git 基线与当前文件行数、分层检查 JSON 和服务探测记录生成。</p>
+<p><strong>服务复测。</strong> 旧服务 PID 83084 停止前，队列、执行中工单、活动 Agent 均为 0。新版 PID 26736 在 8001 端口就绪后，<code>/app</code>、健康、两个 SOP 读接口、两个指标接口和六个状态或列表地址全部返回 HTTP 200（共 12 个）。分别读取重启前后的 OpenAPI，逐项比较三条路径下的四个操作定义，完全一致。在运行中的服务上只发 GET；PUT 和 POST 的行为在上面的临时目录测试。</p>
+<p><strong>下一批。</strong> 先迁出系统只读接口（从健康检查开始），用响应与 OpenAPI 对照确认兼容性。LLM 配置路由和应用生命周期还在 <code>main.py</code> 中；R3 尚未完成。</p>
+</article><nav class="adjacent" aria-label="相邻文档"><a href="2026-11-25_07_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_Skill%E5%86%99%E5%85%A5%E4%B8%8E%E6%8C%87%E6%A0%87%E8%B7%AF%E7%94%B1.html">上一篇：代码重构：守住 Skill 的最后一次写入，拆出系统指标路由</a>
+<a href="2026-11-25_09_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E7%B3%BB%E7%BB%9F%E5%8F%AA%E8%AF%BB%E8%B7%AF%E7%94%B1.html">下一篇：代码重构：迁出健康检查与本地路径列表</a></nav></main></body></html>
