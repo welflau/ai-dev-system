@@ -38,7 +38,7 @@ L0 = ["actions.base", "plugins.registry", "contracts", "models.dto",
       "runtime_facade", "skills.frontmatter", "sop.matching"]
 # orchestration：从 orchestrator.py 拆出的编排子模块（结果处理器等），与 orchestrator 同层。
 L1 = ["orchestrator", "orchestration", "sop.loader", "sop.workflow_composer",
-      "llm_client", "api", "services"]
+      "llm_client", "api", "services", "app_runtime"]
 L2 = ["config", "database", "utils", "events", "event_bus", "session_logger",
       "git_manager", "memory", "tool_catalog"]
 L3 = ["actions", "agents", "plugins", "skills", "config_packs", "pack_installer"]

@@ -53,6 +53,8 @@ hiddenimports = [
     "dotenv",
     # 后端模块（相对导入）
     "main",
+    "app_runtime.lifecycle",
+    "app_runtime.startup_data",
     "config",
     "database",
     "orchestrator",
