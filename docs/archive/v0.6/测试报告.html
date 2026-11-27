@@ -1,0 +1,359 @@
+<!doctype html>
+<!-- 由 scripts/docs-html/export.mjs 生成，请编辑 Markdown 原稿。 -->
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>v0.6.0 系统测试报告（归档） · ADS 文档</title><link rel="stylesheet" href="../../assets/refactor-docs/reader.css"></head>
+<body><nav class="bar" aria-label="主导航"><b>ADS · 开发文档</b><a href="../../%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%96%87%E6%A1%A3%E7%B4%A2%E5%BC%95.html">系列索引</a></nav>
+<main><header><p class="meta">项目文档 · <a href="%E6%B5%8B%E8%AF%95%E6%8A%A5%E5%91%8A.md">Markdown 原稿</a></p>
+<h1>v0.6.0 系统测试报告（归档）</h1></header><details><summary>本页目录（5 节）</summary><ol><li><a href="#section-1">✅ 自动化测试结果</a></li><li><a href="#section-2">✅ 手动测试结果</a></li><li><a href="#section-3">📊 Agent 端到端测试</a></li><li><a href="#section-4">🏗️ CI/CD 测试</a></li><li><a href="#section-5">📝 测试结论</a></li></ol></details>
+<article><p><strong>版本</strong>: v0.6.0
+<strong>测试时间</strong>: 2026-03-23
+<strong>测试框架</strong>: pytest</p>
+<hr>
+<h2 id="section-1">✅ 自动化测试结果</h2>
+<h3>总览</h3>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>指标</th>
+<th>结果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>测试总数</strong></td>
+<td>92</td>
+</tr>
+<tr>
+<td><strong>通过</strong></td>
+<td>92 ✅</td>
+</tr>
+<tr>
+<td><strong>失败</strong></td>
+<td>0</td>
+</tr>
+<tr>
+<td><strong>通过率</strong></td>
+<td>100%</td>
+</tr>
+</tbody>
+</table></div>
+<h3>测试分组详情</h3>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>测试文件</th>
+<th>用例数</th>
+<th>状态</th>
+<th>覆盖范围</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_tools.py</code></td>
+<td>8</td>
+<td>✅ 全部通过</td>
+<td>文件工具 + Git 工具</td>
+</tr>
+<tr>
+<td><code>test_orchestrator.py</code></td>
+<td>21</td>
+<td>✅ 全部通过</td>
+<td>Orchestrator + TaskDecomposer + StateManager</td>
+</tr>
+<tr>
+<td><code>test_agents.py</code></td>
+<td>22+</td>
+<td>✅ 全部通过</td>
+<td>DevAgent + ArchitectAgent + 集成测试</td>
+</tr>
+<tr>
+<td><code>test_agent.py</code></td>
+<td>17</td>
+<td>✅ 全部通过</td>
+<td>Agent 模板生成测试</td>
+</tr>
+<tr>
+<td><code>test_new_agents.py</code></td>
+<td>24</td>
+<td>✅ 全部通过</td>
+<td>ReviewAgent(7) + DeployAgent(7) + ProductAdapter(6) + TestAgent(4)</td>
+</tr>
+</tbody>
+</table></div>
+<h3>运行命令</h3>
+<pre><code class="language-bash">cd backend
+python -m pytest tests/ -v
+</code></pre>
+<hr>
+<h2 id="section-2">✅ 手动测试结果</h2>
+<h3>API 接口测试</h3>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>接口</th>
+<th>方法</th>
+<th>状态</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/health</code></td>
+<td>GET</td>
+<td>✅</td>
+<td>返回健康状态 + 工具数量</td>
+</tr>
+<tr>
+<td><code>/api/process</code></td>
+<td>POST</td>
+<td>✅</td>
+<td>提交需求，返回 project_id</td>
+</tr>
+<tr>
+<td><code>/api/projects</code></td>
+<td>GET</td>
+<td>✅</td>
+<td>获取项目列表</td>
+</tr>
+<tr>
+<td><code>/api/projects/{id}/state</code></td>
+<td>GET</td>
+<td>✅</td>
+<td>获取项目详情 + 任务列表</td>
+</tr>
+<tr>
+<td><code>/api/projects/{id}/execute</code></td>
+<td>POST</td>
+<td>✅</td>
+<td>执行下一个任务</td>
+</tr>
+<tr>
+<td><code>/api/projects/{id}/execute-all</code></td>
+<td>POST</td>
+<td>✅</td>
+<td>一键全量执行</td>
+</tr>
+<tr>
+<td><code>/api/projects/{id}/events</code></td>
+<td>GET</td>
+<td>✅</td>
+<td>SSE 实时推送</td>
+</tr>
+<tr>
+<td><code>/api/projects/{id}/files</code></td>
+<td>GET</td>
+<td>✅</td>
+<td>列出项目文件</td>
+</tr>
+<tr>
+<td><code>/api/projects/{id}/files/{path}</code></td>
+<td>GET</td>
+<td>✅</td>
+<td>读取文件内容</td>
+</tr>
+<tr>
+<td><code>/api/projects/{id}/download</code></td>
+<td>GET</td>
+<td>✅</td>
+<td>ZIP 打包下载</td>
+</tr>
+<tr>
+<td><code>/api/projects/{id}/tasks/{task_id}/logs</code></td>
+<td>GET</td>
+<td>✅</td>
+<td>查询任务日志</td>
+</tr>
+<tr>
+<td><code>/api/llm/status</code></td>
+<td>GET</td>
+<td>✅</td>
+<td>LLM 配置状态</td>
+</tr>
+<tr>
+<td><code>/api/llm/test</code></td>
+<td>POST</td>
+<td>✅</td>
+<td>测试 LLM 连接</td>
+</tr>
+<tr>
+<td><code>/api/llm/config</code></td>
+<td>POST</td>
+<td>✅</td>
+<td>运行时更新 LLM 配置</td>
+</tr>
+<tr>
+<td><code>/tools</code></td>
+<td>GET</td>
+<td>✅</td>
+<td>查看已注册工具 (8个)</td>
+</tr>
+<tr>
+<td><code>/app</code></td>
+<td>GET</td>
+<td>✅</td>
+<td>前端主页面</td>
+</tr>
+</tbody>
+</table></div>
+<h3>前端功能测试</h3>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>功能</th>
+<th>状态</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>首页概览</td>
+<td>✅</td>
+<td>统计信息 + LLM 状态徽章</td>
+</tr>
+<tr>
+<td>提交需求</td>
+<td>✅</td>
+<td>表单验证 + 提交成功跳转</td>
+</tr>
+<tr>
+<td>项目看板</td>
+<td>✅</td>
+<td>项目列表 + 进度条</td>
+</tr>
+<tr>
+<td>Pipeline 看板</td>
+<td>✅</td>
+<td>5 阶段可视化 + 状态颜色 + 连接箭头</td>
+</tr>
+<tr>
+<td>一键执行</td>
+<td>✅</td>
+<td>自动依次执行所有任务</td>
+</tr>
+<tr>
+<td>SSE 实时更新</td>
+<td>✅</td>
+<td>任务状态实时推送 + Toast 通知</td>
+</tr>
+<tr>
+<td>日志抽屉</td>
+<td>✅</td>
+<td>VS Code 风格暗色终端 + 耗时显示</td>
+</tr>
+<tr>
+<td>文件浏览</td>
+<td>✅</td>
+<td>文件树 + 代码高亮预览</td>
+</tr>
+<tr>
+<td>项目下载</td>
+<td>✅</td>
+<td>ZIP 一键打包下载</td>
+</tr>
+<tr>
+<td>LLM 配置</td>
+<td>✅</td>
+<td>配置面板 + 连接测试</td>
+</tr>
+<tr>
+<td>使用指引</td>
+<td>✅</td>
+<td>快速上手 + FAQ</td>
+</tr>
+</tbody>
+</table></div>
+<hr>
+<h2 id="section-3">📊 Agent 端到端测试</h2>
+<p>使用&quot;股票系统&quot;需求进行全流程端到端测试：</p>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>阶段</th>
+<th>Agent</th>
+<th>结果</th>
+<th>输出</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>需求分析</td>
+<td>ProductAgent</td>
+<td>✅</td>
+<td>PRD.md</td>
+</tr>
+<tr>
+<td>架构设计</td>
+<td>ArchitectAgent</td>
+<td>✅</td>
+<td>architecture.md</td>
+</tr>
+<tr>
+<td>代码生成</td>
+<td>DevAgent</td>
+<td>✅</td>
+<td>10 个 .py 文件 (228 行)</td>
+</tr>
+<tr>
+<td>测试生成</td>
+<td>TestAgent</td>
+<td>✅</td>
+<td>pytest 测试用例</td>
+</tr>
+<tr>
+<td>代码审查</td>
+<td>ReviewAgent</td>
+<td>✅</td>
+<td>code_review.md (评分 A，1 个建议)</td>
+</tr>
+<tr>
+<td>部署配置</td>
+<td>DeployAgent</td>
+<td>✅</td>
+<td>Dockerfile + docker-compose + CI/CD + deploy.md</td>
+</tr>
+</tbody>
+</table></div>
+<hr>
+<h2 id="section-4">🏗️ CI/CD 测试</h2>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>平台</th>
+<th>触发条件</th>
+<th>状态</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GitHub Actions</td>
+<td>push/PR 到 main/develop</td>
+<td>✅ 配置就绪</td>
+</tr>
+<tr>
+<td>pytest</td>
+<td>CI 自动运行</td>
+<td>✅ 92 个用例</td>
+</tr>
+<tr>
+<td>flake8</td>
+<td>CI 自动运行</td>
+<td>✅ 代码规范检查</td>
+</tr>
+</tbody>
+</table></div>
+<hr>
+<h2 id="section-5">📝 测试结论</h2>
+<p><strong>总体评估</strong>: 系统功能完整，所有核心功能正常，92 个自动化测试全部通过。</p>
+<p><strong>可用性</strong>: ⭐⭐⭐⭐⭐ (5/5)</p>
+<p><strong>已验证的完整工作流程</strong>:</p>
+<ol>
+<li>✅ 需求提交 → 任务分解</li>
+<li>✅ 一键执行 → 6 Agent 协作完成</li>
+<li>✅ Pipeline 看板实时展示进度</li>
+<li>✅ 代码浏览 + 语法高亮</li>
+<li>✅ 项目 ZIP 打包下载</li>
+<li>✅ LLM 配置 + 连接测试</li>
+</ol>
+<p><strong>推荐测试方式</strong>: 访问 http://localhost:8000/app 前端界面进行交互式体验。</p>
+</article><nav class="adjacent" aria-label="相邻文档"><a href="../../20261124_01_%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84%E6%96%B9%E6%A1%88.html">上一篇：ADS 代码重构方案（2026-11-24）</a>
+<a href="%E6%BC%94%E7%A4%BA%E6%8C%87%E5%8D%97.html">下一篇：v0.6.0 快速演示指南（归档）</a></nav></main></body></html>

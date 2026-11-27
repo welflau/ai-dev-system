@@ -17,6 +17,8 @@ import threading
 import time
 import urllib.request
 import logging
+from html import escape
+from pathlib import Path
 
 # ── 路径修正：打包后资源路径 ──────────────────────────────────────────────────
 def _resource(rel: str) -> str:
@@ -40,13 +42,26 @@ logging.basicConfig(level=logging.INFO,
 logger = logging.getLogger("desktop")
 
 
+def _app_dir() -> str:
+    """exe 所在目录（开发模式则为项目根）"""
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def _desktop_log_dir(*, create: bool = False) -> Path:
+    base = Path(_app_dir())
+    if getattr(sys, "frozen", False):
+        return base
+    directory = base / "logs"
+    if create:
+        directory.mkdir(exist_ok=True)
+    return directory
+
+
 def _setup_desktop_file_log():
-    """打包后无控制台时，把启动日志写到 exe 旁 desktop.log"""
     try:
-        app_dir = os.path.dirname(os.path.abspath(
-            sys.executable if getattr(sys, "frozen", False) else __file__
-        ))
-        fh = logging.FileHandler(os.path.join(app_dir, "desktop.log"),
+        fh = logging.FileHandler(_desktop_log_dir(create=True) / "desktop.log",
                                  encoding="utf-8", mode="w")
         fh.setFormatter(logging.Formatter(
             "%(asctime)s [%(name)s] %(levelname)s  %(message)s"))
@@ -59,17 +74,10 @@ def _setup_desktop_file_log():
 
 # ── 1. 后端启动 ───────────────────────────────────────────────────────────────
 
-def _app_dir() -> str:
-    """exe 所在目录（开发模式则为项目根）"""
-    if getattr(sys, "frozen", False):
-        return os.path.dirname(os.path.abspath(sys.executable))
-    return os.path.dirname(os.path.abspath(__file__))
-
-
 def _log_backend_error(msg: str):
-    """后端启动失败写入 exe 旁日志，便于无控制台时排查"""
+    """后端启动失败时保留诊断信息，供超时页面读取。"""
     try:
-        path = os.path.join(_app_dir(), "desktop-backend-error.log")
+        path = _desktop_log_dir(create=True) / "desktop-backend-error.log"
         with open(path, "a", encoding="utf-8") as f:
             f.write(msg + "\n")
         logger.error(msg)
@@ -97,8 +105,8 @@ def _prepare_backend_env_and_cwd():
 
 def _ensure_stdio():
     """windowed exe 下 sys.stdout/stderr 为 None，uvicorn 日志会崩；挂到文件。"""
-    log_path = os.path.join(_app_dir(), "desktop-backend-stdout.log")
     if sys.stdout is None or sys.stderr is None:
+        log_path = _desktop_log_dir(create=True) / "desktop-backend-stdout.log"
         f = open(log_path, "a", encoding="utf-8", errors="replace")
         if sys.stdout is None:
             sys.stdout = f
@@ -138,22 +146,22 @@ def _spawn_backend_process() -> subprocess.Popen:
         cmd = [sys.executable, os.path.abspath(__file__), "--backend"]
         cwd = os.path.dirname(os.path.abspath(__file__))
 
-    log_path = os.path.join(_app_dir(), "desktop-backend-stdout.log")
-    log_f = open(log_path, "w", encoding="utf-8", errors="replace")
+    log_path = _desktop_log_dir(create=True) / "desktop-backend-stdout.log"
     creationflags = 0
     if sys.platform == "win32":
         # 不弹控制台窗口
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
     logger.info("拉起后端进程: %s", cmd)
-    _backend_proc = subprocess.Popen(
-        cmd,
-        cwd=cwd,
-        env=env,
-        stdout=log_f,
-        stderr=subprocess.STDOUT,
-        creationflags=creationflags,
-    )
+    with open(log_path, "w", encoding="utf-8", errors="replace") as log_f:
+        _backend_proc = subprocess.Popen(
+            cmd,
+            cwd=cwd,
+            env=env,
+            stdout=log_f,
+            stderr=subprocess.STDOUT,
+            creationflags=creationflags,
+        )
     logger.info("后端进程 PID=%s", _backend_proc.pid)
     return _backend_proc
 
@@ -344,15 +352,16 @@ def main():
         else:
             logger.error("后端启动超时")
             err_hint = ""
+            log_dir = _desktop_log_dir()
             for name in ("desktop-backend-error.log", "desktop-backend-stdout.log", "desktop.log"):
-                path = os.path.join(_app_dir(), name)
+                path = log_dir / name
                 if os.path.isfile(path):
                     try:
                         with open(path, "r", encoding="utf-8", errors="replace") as f:
                             err_hint += f"\n----- {name} -----\n" + f.read()[-800:]
                     except Exception:
                         pass
-            detail = (err_hint or "未写入错误日志，可能是端口被占用或依赖缺失").replace("<", "&lt;")
+            detail = escape(err_hint or "未写入错误日志，可能是端口被占用或依赖缺失")
             _window.load_html(f"""
                 <html><body style="background:#0f1117;color:#e5e7eb;
                     display:flex;flex-direction:column;align-items:center;justify-content:center;
@@ -361,7 +370,7 @@ def main():
                     <div style="color:#9ca3af;font-size:13px;margin-bottom:12px;">无需单独 startServer；内嵌后端未能就绪</div>
                     <pre style="max-width:900px;max-height:50vh;overflow:auto;background:#1f2937;
                         padding:12px;border-radius:8px;font-size:11px;white-space:pre-wrap;">{detail}</pre>
-                    <div style="color:#6b7280;font-size:12px;margin-top:12px;">日志在 exe 同目录 desktop*.log</div>
+                    <div style="color:#6b7280;font-size:12px;margin-top:12px;">日志目录：{escape(str(log_dir))}</div>
                 </body></html>
             """)
 

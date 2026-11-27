@@ -16,10 +16,10 @@
 
 ### 步骤2: 推送代码
 
-打开PowerShell,执行以下命令:
+在本机仓库内打开 PowerShell，执行以下命令（仅适用于首次设置远程仓库）：
 
 ```powershell
-cd "C:\Users\admin\WorkBuddy\20260322020138\ai-dev-system"
+Set-Location -LiteralPath (git rev-parse --show-toplevel)
 
 # 添加远程仓库
 git remote add origin https://github.com/welflau/ai-dev-system.git

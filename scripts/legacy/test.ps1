@@ -1,4 +1,5 @@
 # Quick Test Script for AI Dev System
+# Archived March 2026 API demo (/api/process); these endpoints are not part of the current API.
 
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "AI Dev System - Quick Test" -ForegroundColor Cyan
@@ -86,6 +87,6 @@ Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "TIPS:" -ForegroundColor Yellow
 Write-Host "   1. API Docs: http://localhost:8000/docs" -ForegroundColor White
-Write-Host "   2. Frontend: D:\A_Works\ai-dev-system\frontend\index.html" -ForegroundColor White
-Write-Host "   3. Test Report: D:\A_Works\ai-dev-system\test-report.md" -ForegroundColor White
+Write-Host "   2. Frontend: http://localhost:8000/app" -ForegroundColor White
+Write-Host "   3. Archived reports: $PSScriptRoot\..\..\docs\archive\v0.6" -ForegroundColor White
 Write-Host ""

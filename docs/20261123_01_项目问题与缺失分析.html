@@ -348,7 +348,7 @@ SCC&gt;1: 1 组 (最大 3) | 双向对 2 | 动态导入 11 | 未归层模块 229
 <li><code>backend/</code> 根目录有 152 个入库文件，其中 104 个以 <code>_</code> 开头，包括调试输出、日志 fixture 和上面提到的 78 个 <code>_test_*</code> 脚本。有价值的应迁入 <code>backend/tests/</code>，其余删除。</li>
 <li><code>pywin32</code>、<code>cryptography</code>、<code>pydantic_core</code> 三个 wheel 在 <code>backend/tools/ue_editor_mcp/Python/vendor/</code> 和 <code>backend/tools/memory_mcp/vendor/</code> 各存一份，合计约 30MB。</li>
 <li><code>backend/llm</code>、<code>backend/models</code>、<code>backend/orchestrator</code>、<code>backend/utils</code> 四个目录在磁盘上是空的，其中 <code>models</code>、<code>orchestrator</code> 与同名的 <code>.py</code> 模块重名，容易引起导入歧义，建议删除。</li>
-<li>根目录有 <code>test.ps1</code>、<code>测试脚本.ps1</code>、<code>测试报告.md</code>、<code>演示指南.md</code>、<code>SETUP_GITHUB.md</code> 等早期文件，建议归档到 <code>docs/</code> 或删除。</li>
+<li>根目录早期文件已于 2026-11-27 整理：<a href="../scripts/legacy/">两份旧接口脚本</a>、<a href="archive/v0.6/%E6%B5%8B%E8%AF%95%E6%8A%A5%E5%91%8A.html">v0.6 测试报告</a>、<a href="archive/v0.6/%E6%BC%94%E7%A4%BA%E6%8C%87%E5%8D%97.html">演示指南</a>、<a href="setup/SETUP_GITHUB.html">GitHub 建库指南</a>。</li>
 </ul>
 <h3>14. 工作区未提交改动较多</h3>
 <p>12 个文件已修改或删除，7 个未跟踪，包含新的 <code>ai_gen_tasks</code> 记录层（<code>backend/ai_gen_tasks.py</code>、<code>backend/api/ai_gen_tasks.py</code> 及两份测试）。<code>docs/202611101_01_会话内容整理.md</code> 被删除、<code>docs/20261101_01_会话内容整理.md</code> 未跟踪，看起来是改正文件名里的日期。建议尽快分批提交。</p>

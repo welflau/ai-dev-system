@@ -1,0 +1,172 @@
+<!doctype html>
+<!-- 由 scripts/docs-html/export.mjs 生成，请编辑 Markdown 原稿。 -->
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>v0.6.0 快速演示指南（归档） · ADS 文档</title><link rel="stylesheet" href="../../assets/refactor-docs/reader.css"></head>
+<body><nav class="bar" aria-label="主导航"><b>ADS · 开发文档</b><a href="../../%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%96%87%E6%A1%A3%E7%B4%A2%E5%BC%95.html">系列索引</a></nav>
+<main><header><p class="meta">项目文档 · <a href="%E6%BC%94%E7%A4%BA%E6%8C%87%E5%8D%97.md">Markdown 原稿</a></p>
+<h1>v0.6.0 快速演示指南（归档）</h1></header><details><summary>本页目录（5 节）</summary><ol><li><a href="#section-1">🎉 系统概述</a></li><li><a href="#section-2">📋 演示步骤</a></li><li><a href="#section-3">🔧 技术架构</a></li><li><a href="#section-4">📊 当前系统能力</a></li><li><a href="#section-5">📝 注意事项</a></li></ol></details>
+<article><p>以下步骤保留了当时的路径和接口。当前版本的启动方式见 <a href="../../../README.md">README</a>。</p>
+<h2 id="section-1">🎉 系统概述</h2>
+<p>AI 自动开发系统 v0.6.0 — 从自然语言需求到可运行软件的全自动开发平台。6 个 AI Agent 协作完成需求分析、架构设计、代码生成、测试、代码审查和部署配置。</p>
+<h2 id="section-2">📋 演示步骤</h2>
+<h3>第一步：启动后端服务</h3>
+<pre><code class="language-bash">cd D:\A_Works\ai-dev-system\backend
+python main.py
+</code></pre>
+<p>看到以下信息表示启动成功：</p>
+<pre><code>INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+</code></pre>
+<h3>第二步：打开前端界面</h3>
+<p>浏览器访问：<strong>http://localhost:8000/app</strong></p>
+<h3>第三步：体验系统功能</h3>
+<h4>1. 查看系统状态</h4>
+<ul>
+<li>首页显示系统概览、项目统计和 LLM 连接状态</li>
+<li>LLM 状态徽章实时显示是否配置了 AI 引擎</li>
+</ul>
+<h4>2. 提交一个开发需求</h4>
+<ul>
+<li>点击左侧菜单的 <strong>&quot;📝 提交需求&quot;</strong></li>
+<li>在&quot;项目描述&quot;中输入你的需求，例如：<pre><code>我想开发一个简单的待办事项应用，包含以下功能：
+1. 添加新的待办事项
+2. 标记事项为完成状态
+3. 删除已完成的事项
+4. 查看所有待办事项列表
+</code></pre>
+</li>
+<li>在&quot;技术栈偏好&quot;中输入（可选）：<code>Python, FastAPI, HTML</code></li>
+<li>在&quot;项目名称&quot;中输入（可选）：<code>todo-app</code></li>
+<li>点击 <strong>&quot;提交需求&quot;</strong> 按钮</li>
+</ul>
+<h4>3. 查看 Pipeline 看板</h4>
+<ul>
+<li>提交成功后自动跳转到项目详情</li>
+<li><strong>Pipeline 看板</strong>横向展示 5 个阶段：需求 → 架构 → 开发 → 测试 → 部署</li>
+<li>每个阶段带状态颜色：绿色(完成) / 蓝色脉冲(运行中) / 灰色(待执行)</li>
+</ul>
+<h4>4. 一键执行</h4>
+<ul>
+<li>点击 <strong>⚡ 一键全量执行</strong> 按钮</li>
+<li>系统自动依次执行所有任务：
+<ul>
+<li>ProductAgent → 需求分析 + PRD 生成</li>
+<li>ArchitectAgent → 架构设计文档</li>
+<li>DevAgent → 代码生成</li>
+<li>TestAgent → pytest 测试用例</li>
+<li>ReviewAgent → 代码审查报告（评分 A~F）</li>
+<li>DeployAgent → Dockerfile + docker-compose + CI/CD + Nginx</li>
+</ul>
+</li>
+<li>SSE 实时推送，看板自动更新进度</li>
+</ul>
+<h4>5. 查看执行日志</h4>
+<ul>
+<li>点击 Pipeline 看板中的任意步骤</li>
+<li>弹出 VS Code 风格暗色日志抽屉，显示执行详情和耗时</li>
+</ul>
+<h4>6. 浏览生成的文件</h4>
+<ul>
+<li>在项目详情页点击 <strong>&quot;文件&quot;</strong> 标签</li>
+<li>浏览 Agent 生成的所有文件（代码 + 文档 + 配置）</li>
+<li>支持语法高亮预览（Python/JS/HTML/CSS/JSON 等）</li>
+</ul>
+<h4>7. 下载项目</h4>
+<ul>
+<li>点击 <strong>📦 下载项目</strong> 按钮</li>
+<li>一键打包 ZIP 下载全部生成的项目文件</li>
+</ul>
+<h4>8. 配置 LLM（可选但推荐）</h4>
+<ul>
+<li>点击左侧菜单的 <strong>&quot;⚙️ LLM 配置&quot;</strong></li>
+<li>填入 API Base URL、API Key、模型名称</li>
+<li>点击 <strong>&quot;测试连接&quot;</strong> 验证</li>
+<li>配置 LLM 后，Agent 将使用 AI 生成更高质量的内容</li>
+</ul>
+<h2 id="section-3">🔧 技术架构</h2>
+<h3>后端</h3>
+<ul>
+<li><strong>框架</strong>: FastAPI</li>
+<li><strong>语言</strong>: Python 3.8+</li>
+<li><strong>数据存储</strong>: SQLite (持久化)</li>
+<li><strong>实时推送</strong>: SSE (Server-Sent Events)</li>
+<li><strong>工具集成</strong>: 8 个工具（文件操作 + Git 操作）</li>
+<li><strong>API 文档</strong>: http://localhost:8000/docs</li>
+</ul>
+<h3>前端</h3>
+<ul>
+<li><strong>技术</strong>: 纯 HTML5 + CSS3 + JavaScript (ES6+)</li>
+<li><strong>代码高亮</strong>: highlight.js (CDN)</li>
+<li><strong>实时通信</strong>: EventSource (SSE)</li>
+</ul>
+<h2 id="section-4">📊 当前系统能力</h2>
+<h3>6 大 AI Agent</h3>
+<div class="table-scroll"><table>
+<thead>
+<tr>
+<th>Agent</th>
+<th>功能</th>
+<th>模式</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ProductAgent</td>
+<td>需求分析 + PRD 生成</td>
+<td>LLM + 模板降级</td>
+</tr>
+<tr>
+<td>ArchitectAgent</td>
+<td>7 种架构设计方案</td>
+<td>LLM + 模板降级</td>
+</tr>
+<tr>
+<td>DevAgent</td>
+<td>14 种代码生成任务</td>
+<td>LLM + 模板降级</td>
+</tr>
+<tr>
+<td>TestAgent</td>
+<td>pytest 测试用例生成</td>
+<td>LLM + 模板降级</td>
+</tr>
+<tr>
+<td>ReviewAgent</td>
+<td>代码审查（10 种规则）</td>
+<td>LLM + 规则引擎</td>
+</tr>
+<tr>
+<td>DeployAgent</td>
+<td>Docker + CI/CD + Nginx</td>
+<td>LLM + 模板降级</td>
+</tr>
+</tbody>
+</table></div>
+<h3>已注册工具（8个）</h3>
+<ol>
+<li>file_writer - 文件写入</li>
+<li>file_reader - 文件读取</li>
+<li>directory_lister - 目录列表</li>
+<li>git_init - Git 初始化</li>
+<li>git_add - Git 添加文件</li>
+<li>git_commit - Git 提交</li>
+<li>git_push - Git 推送</li>
+<li>git_create_branch - Git 创建分支</li>
+</ol>
+<h3>测试覆盖</h3>
+<ul>
+<li>92 个测试用例全部通过</li>
+<li>GitHub Actions CI 自动运行</li>
+</ul>
+<h2 id="section-5">📝 注意事项</h2>
+<ol>
+<li><strong>后端服务必须先启动</strong>，前端通过 API 与后端通信</li>
+<li><strong>端口冲突</strong>: 如果 8000 端口被占用，需要修改端口配置</li>
+<li><strong>浏览器兼容性</strong>: 建议使用 Chrome、Firefox 或 Edge</li>
+<li><strong>LLM 配置</strong>: 不配置 LLM 也能使用（模板降级模式），但 AI 生成效果更好</li>
+</ol>
+<hr>
+<p><strong>系统版本</strong>: v0.6.0
+<strong>更新时间</strong>: 2026-03-23
+<strong>GitHub</strong>: https://github.com/welflau/ai-dev-system</p>
+</article><nav class="adjacent" aria-label="相邻文档"><a href="%E6%B5%8B%E8%AF%95%E6%8A%A5%E5%91%8A.html">上一篇：v0.6.0 系统测试报告（归档）</a>
+<a href="../../setup/SETUP_GITHUB.html">下一篇：GitHub仓库创建和推送指南</a></nav></main></body></html>

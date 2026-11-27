@@ -18,6 +18,9 @@ const link = (from, to, label) => `<a href="${url(from, to)}">${esc(label)}</a>`
 
 // 这两篇早期记录属于同一轮项目体检，但文件名早于系列命名约定。
 const extra = [
+  'docs/setup/SETUP_GITHUB.md',
+  'docs/archive/v0.6/测试报告.md',
+  'docs/archive/v0.6/演示指南.md',
   'docs/20261123_01_项目问题与缺失分析.md',
   'dev-notes/2026-11-24_01_项目体检问题修复第一批.md',
 ];

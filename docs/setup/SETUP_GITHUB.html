@@ -1,0 +1,76 @@
+<!doctype html>
+<!-- 由 scripts/docs-html/export.mjs 生成，请编辑 Markdown 原稿。 -->
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GitHub仓库创建和推送指南 · ADS 文档</title><link rel="stylesheet" href="../assets/refactor-docs/reader.css"></head>
+<body><nav class="bar" aria-label="主导航"><b>ADS · 开发文档</b><a href="../%E4%BB%A3%E7%A0%81%E9%87%8D%E6%9E%84_%E6%96%87%E6%A1%A3%E7%B4%A2%E5%BC%95.html">系列索引</a></nav>
+<main><header><p class="meta">项目文档 · <a href="SETUP_GITHUB.md">Markdown 原稿</a></p>
+<h1>GitHub仓库创建和推送指南</h1></header><details><summary>本页目录（4 节）</summary><ol><li><a href="#section-1">方式一: 手动创建(推荐)</a></li><li><a href="#section-2">方式二: 安装GitHub CLI(可选)</a></li><li><a href="#section-3">验证推送成功</a></li><li><a href="#section-4">推送后的后续配置</a></li></ol></details>
+<article><h2 id="section-1">方式一: 手动创建(推荐)</h2>
+<h3>步骤1: 在GitHub网站创建仓库</h3>
+<ol>
+<li>访问: https://github.com/new</li>
+<li>填写仓库信息:
+<ul>
+<li><strong>Repository name</strong>: <code>ai-dev-system</code></li>
+<li><strong>Description</strong>: AI驱动的全自动软件开发系统</li>
+<li><strong>Public/Private</strong>: 根据需要选择</li>
+<li><strong>不要勾选</strong> &quot;Initialize this repository with a README&quot;</li>
+<li><strong>不要勾选</strong> &quot;Add a .gitignore&quot;</li>
+<li><strong>不要勾选</strong> &quot;Choose a license&quot;</li>
+</ul>
+</li>
+<li>点击 &quot;Create repository&quot;</li>
+</ol>
+<h3>步骤2: 推送代码</h3>
+<p>在本机仓库内打开 PowerShell，执行以下命令（仅适用于首次设置远程仓库）：</p>
+<pre><code class="language-powershell">Set-Location -LiteralPath (git rev-parse --show-toplevel)
+
+# 添加远程仓库
+git remote add origin https://github.com/welflau/ai-dev-system.git
+
+# 重命名分支为main
+git branch -M main
+
+# 推送到GitHub
+git push -u origin main
+</code></pre>
+<hr>
+<h2 id="section-2">方式二: 安装GitHub CLI(可选)</h2>
+<p>如果你想使用GitHub CLI,可以按以下步骤安装:</p>
+<h3>Windows安装</h3>
+<pre><code class="language-powershell"># 使用winget安装
+winget install --id GitHub.cli
+
+# 或者下载安装包
+# 访问: https://cli.github.com/
+# 下载Windows安装包并运行
+</code></pre>
+<h3>安装后使用</h3>
+<pre><code class="language-powershell"># 登录GitHub
+gh auth login
+
+# 创建仓库
+gh repo create ai-dev-system --public --description &quot;AI驱动的全自动软件开发系统&quot; --source=. --remote=origin --push
+</code></pre>
+<hr>
+<h2 id="section-3">验证推送成功</h2>
+<p>推送完成后,访问:
+https://github.com/welflau/ai-dev-system</p>
+<p>你应该能看到:</p>
+<ul>
+<li>README.md</li>
+<li>.gitignore</li>
+<li>LICENSE</li>
+</ul>
+<hr>
+<h2 id="section-4">推送后的后续配置</h2>
+<p>成功推送后,我们可以:</p>
+<ol>
+<li>✅ 创建GitHub Issues模板</li>
+<li>✅ 配置GitHub Actions CI/CD</li>
+<li>✅ 创建项目结构</li>
+<li>✅ 开发核心功能</li>
+</ol>
+<hr>
+<p><strong>推荐使用方式一</strong>,因为不需要安装额外工具,操作简单直接。</p>
+</article><nav class="adjacent" aria-label="相邻文档"><a href="../archive/v0.6/%E6%BC%94%E7%A4%BA%E6%8C%87%E5%8D%97.html">上一篇：v0.6.0 快速演示指南（归档）</a></nav></main></body></html>

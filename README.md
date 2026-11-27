@@ -191,7 +191,7 @@ pyinstaller desktop.spec
 | 方式 | 主进程 log | 后端 log |
 |------|------------|----------|
 | 双击 exe | 无窗口 → `desktop.log` | `desktop-backend-stdout.log` |
-| `python desktop.py` | 当前终端可见 | 同上（项目根目录） |
+| `python desktop.py` | 当前终端和 `logs/desktop.log` | `logs/desktop-backend-stdout.log` |
 | `console=True` 重打包后 exe | 控制台可见 | 同上（exe 同目录） |
 
 **开发模式（推荐排查问题）：**
@@ -200,15 +200,15 @@ pyinstaller desktop.spec
 python desktop.py
 ```
 
-**实时跟踪后端 log（PowerShell）：**
+**实时跟踪后端 log（PowerShell，从源码根目录运行）：**
 
 ```powershell
-Get-Content desktop-backend-stdout.log -Wait -Tail 50
+Get-Content -LiteralPath .\logs\desktop-backend-stdout.log -Wait -Tail 50
 ```
 
 **打包带控制台窗口的 exe：** 将 `desktop.spec` 中 `console=False` 改为 `console=True`，重新执行 `pyinstaller desktop.spec`。
 
-日志文件（与 exe 或 `desktop.py` 同目录）：
+日志文件（源码模式在仓库的 `logs/`，Windows 打包版在 exe 同目录）：
 
 - `desktop.log` — 主进程（启动、托盘、服务就绪）
 - `desktop-backend-stdout.log` — 后端 uvicorn 输出

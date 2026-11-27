@@ -1,4 +1,5 @@
 # AI 自动开发系统 - 快速测试脚本
+# 归档：适用于 2026 年 3 月含 /api/process 的早期接口，不适用于当前工作台。
 
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "AI 自动开发系统 - 快速测试脚本" -ForegroundColor Cyan
@@ -87,6 +88,6 @@ Write-Host "========================================" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "💡 提示:" -ForegroundColor Yellow
 Write-Host "   1. 查看 API 文档: http://localhost:8000/docs" -ForegroundColor White
-Write-Host "   2. 打开前端界面: D:\A_Works\ai-dev-system\frontend\index.html" -ForegroundColor White
-Write-Host "   3. 查看完整测试报告: D:\A_Works\ai-dev-system\测试报告.md" -ForegroundColor White
+Write-Host "   2. 打开前端界面: http://localhost:8000/app" -ForegroundColor White
+Write-Host "   3. 历史测试报告: $PSScriptRoot\..\..\docs\archive\v0.6\测试报告.md" -ForegroundColor White
 Write-Host ""
